@@ -41,6 +41,23 @@ const STATUS_TONE: Record<RowStatus, string> = {
 
 const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpex: "上櫃" };
 
+/** 資料格與表頭共用的左右 padding。**窄右欄收成 `px-1`**(9 個 cell 各省 8px = 72px)。
+ *
+ *  門檻用 **rem 不用 px**:表格內容是 rem 字級,「塞不塞得下」隨 root font-size 縮放
+ *  (≥1920 → 112.5%、≥2560 → 125%)—— 41rem = 656@100% / 738@112.5% / 820@125%。
+ *  這與 `frontend-conventions` 那條「container query 門檻用 px 任意值」的案例**方向相反**:
+ *  那裡量的是固定 px 的面板寬,這裡量的是「rem 內容塞不塞得下 rem 門檻」。 */
+const CELL_X = "px-2 @max-[41rem]:px-1";
+
+/** 窄右欄下不顯示的欄位(金額(億) / 量比)。`hidden` = `display:none`,對 table-cell
+ *  合法且 th / td 必須成對掛,只掛一邊會讓整張表錯欄。
+ *
+ *  **為什麼藏這兩欄**:1536 兩欄態的捲動容器只有 431px 而九欄表 scrollWidth 612px,
+ *  恆有水平捲軸把狀態徽章推到看不見的地方。只收 padding(→540)或只藏兩欄(→472)
+ *  都還是捲,兩者併用才 ~416 < 431。挑中這兩欄是因為它們的**資料與篩選邏輯照舊**
+ *  (篩選列的「金額(億)」門檻仍在,量比只是輔助排序線索),藏的只是顯示(W-5)。 */
+const NARROW_HIDDEN = "@max-[41rem]:hidden";
+
 /** 表頭儲存格的共用 class(對齊方向逐欄另加)。列表整高內捲後表頭必須黏住,否則
  *  捲兩列就只剩九欄無名數字。
  *
@@ -50,8 +67,7 @@ const MARKET_LABEL: Record<BreadthRow["market"], string> = { twse: "上市", tpe
  *  box-shadow 畫在 th 自己的 box 上,黏到哪畫到哪;`var(--color-line)` 直接取同一顆
  *  token(Tailwind 任意值語法不吃 `theme()` 之外的別名)。
  *  `whitespace-nowrap`:窄右欄(1536 兩欄態 475px)下「金額(億)」會折行把表頭撐高。 */
-const TH =
-  "sticky top-0 z-10 whitespace-nowrap bg-surface px-2 py-1 font-normal shadow-[inset_0_-1px_0_var(--color-line)]";
+const TH = `sticky top-0 z-10 whitespace-nowrap bg-surface ${CELL_X} py-1 font-normal shadow-[inset_0_-1px_0_var(--color-line)]`;
 
 /** 一列的唯一狀態;三者皆無 → null(該列不入表)。
  *
@@ -444,8 +460,8 @@ function LimitListBody({
                 <th className={cn(TH, "text-right")}>現價</th>
                 <th className={cn(TH, "text-right")}>漲跌幅</th>
                 <th className={cn(TH, "text-right")}>連板</th>
-                <th className={cn(TH, "text-right")}>金額(億)</th>
-                <th className={cn(TH, "text-right")}>量比</th>
+                <th className={cn(TH, "text-right", NARROW_HIDDEN)}>金額(億)</th>
+                <th className={cn(TH, "text-right", NARROW_HIDDEN)}>量比</th>
                 <th className={cn(TH, "text-left")}>狀態</th>
               </tr>
             </thead>
@@ -457,32 +473,33 @@ function LimitListBody({
                   onClick={() => onOpenStock?.(row.stock_id)}
                   className="cursor-pointer border-b border-line/50 hover:bg-bg-deep"
                 >
-                  <td className="px-2 py-1 font-mono text-ink">{row.stock_id}</td>
+                  <td className={cn(CELL_X, "py-1 font-mono text-ink")}>{row.stock_id}</td>
                   {/* 名稱與連板兩欄 nowrap:四字檔名(台聯電 / 長榮航太)與「連 4 板」
                       在右欄寬度下會折成兩行,列高從 24 撐到 40px —— 折的是「一屏看得到
                       幾檔」。其餘欄位是數字或兩字標籤,折不了也就不掛。 */}
                   <td
                     data-testid={`limit-name-${row.stock_id}`}
-                    className="px-2 py-1 whitespace-nowrap text-ink"
+                    className={cn(CELL_X, "py-1 whitespace-nowrap text-ink")}
                   >
                     {row.name}
                   </td>
                   <td
                     data-testid={`limit-market-${row.stock_id}`}
-                    className="px-2 py-1 text-ink-muted"
+                    className={cn(CELL_X, "py-1 text-ink-muted")}
                   >
                     {MARKET_LABEL[row.market]}
                   </td>
                   <td
                     data-testid={`limit-close-${row.stock_id}`}
-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
+                    className={cn(CELL_X, "py-1 text-right font-mono tabular-nums text-ink")}
                   >
                     {decimalText(row.close)}
                   </td>
                   <td
                     data-testid={`limit-change-${row.stock_id}`}
                     className={cn(
-                      "px-2 py-1 text-right font-mono tabular-nums",
+                      CELL_X,
+                      "py-1 text-right font-mono tabular-nums",
                       changeTone(row.change_rate),
                     )}
                   >
@@ -490,23 +507,33 @@ function LimitListBody({
                   </td>
                   <td
                     data-testid={`limit-streak-${row.stock_id}`}
-                    className="px-2 py-1 text-right whitespace-nowrap text-ink"
+                    className={cn(CELL_X, "py-1 text-right whitespace-nowrap text-ink")}
                   >
                     {streakText(row)}
                   </td>
+                  {/* 金額 / 量比:窄右欄不顯示(th 同步藏,見 `NARROW_HIDDEN`)。
+                      資料與篩選邏輯不動 —— 兩者的門檻仍在篩選列上。 */}
                   <td
                     data-testid={`limit-amount-${row.stock_id}`}
-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink"
+                    className={cn(
+                      CELL_X,
+                      "py-1 text-right font-mono tabular-nums text-ink",
+                      NARROW_HIDDEN,
+                    )}
                   >
                     {amountText(row.total_amount)}
                   </td>
                   <td
                     data-testid={`limit-ratio-${row.stock_id}`}
-                    className="px-2 py-1 text-right font-mono tabular-nums text-ink-muted"
+                    className={cn(
+                      CELL_X,
+                      "py-1 text-right font-mono tabular-nums text-ink-muted",
+                      NARROW_HIDDEN,
+                    )}
                   >
                     {decimalText(row.volume_ratio)}
                   </td>
-                  <td className="px-2 py-1">
+                  <td className={cn(CELL_X, "py-1")}>
                     <span
                       data-testid={`limit-badge-${row.stock_id}`}
                       // nowrap:窄欄下「觸及未鎖」會被拆成一字一行的直排
@@ -545,7 +572,12 @@ export function LimitListSection({
   active?: boolean;
 }) {
   return (
-    <div data-testid="limit-list" className="flex min-h-0 flex-1 flex-col pt-2">
+    // `@container`:表格降級的 `@max-[41rem]:` 門檻要量的是**右欄自己的寬**。右欄框
+    // 刻意不是 container(它的 `@[1050px]` 量的是頁 root,單欄 / 兩欄的語意),所以
+    // 不自掛的話這裡量到的是頁 root 寬 → 1536 全螢幕永遠 > 41rem,降級永不發生。
+    // 副作用已查(D4):子樹無 absolute / fixed 定位子孫;唯一的 sticky th 其捲動祖先
+    // 是 `limit-list-scroll`(在新容器**之內**),不受 containing block 改變影響。
+    <div data-testid="limit-list" className="@container flex min-h-0 flex-1 flex-col pt-2">
       <LimitListBody onOpenStock={onOpenStock} active={active} />
     </div>
   );
