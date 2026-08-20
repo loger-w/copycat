@@ -92,7 +92,12 @@ function Btn({
       aria-pressed={active}
       aria-disabled={disabled ? "true" : undefined}
       className={cn(
-        "rounded border px-2 py-0.5 text-xs",
+        // `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成
+        // 3 行、吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
+        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,root font-size 在
+        // ≥1920 / ≥2560 放大到 112.5% / 125%,px 門檻在寬螢幕會誤判。
+        // 標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。
+        "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
         disabled
           ? "cursor-not-allowed border-line text-ink-muted opacity-40"
           : active
@@ -409,7 +414,13 @@ export function MarketPane({
       // 兩種版面下的收斂:兩欄態 pane 縮到軌高,figure / wrapper 跟著縮 → 下一輪量測
       // 讓 svg 跟著矮;單欄態 pane 由內容驅動高,沿 `wrapper − 2` 收斂到 figure 的
       // `min-h-48` 地板(每輪只會變矮不會回彈,不形成迴圈)。
-      className="flex min-h-0 min-w-0 flex-col gap-3"
+      // `@container`:週期列的 `@max-[26.5rem]:` 門檻要量的是 **pane 自己的寬**。
+      // 不掛的話最近的 container 祖先是左欄(兩欄態 630–930px),門檻永不成立。
+      // 副作用已查(D4):pane 子樹(MarketChart / CandleChart / StockIntradayChart /
+      // ChartReadout)沒有任何 absolute / fixed 定位子孫會被新的 containing block 接走,
+      // 也沒有別的 `@[…]` 變體會改量到誰;pane 所在 grid 軌是 `minmax(0,1fr)`,
+      // inline-size containment 不改軌算。
+      className="@container flex min-h-0 min-w-0 flex-col gap-3"
     >
       {/* 標的列(SC-2) */}
       <div className="flex flex-wrap items-center gap-3">
@@ -427,8 +438,9 @@ export function MarketPane({
         ) : null}
       </div>
 
-      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6) */}
-      <div className="flex flex-wrap items-center gap-1">
+      {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6)。
+          窄 pane 下與 Btn 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。 */}
+      <div className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5">
         {MARKET_MODES.map(([id, label]) => (
           <Btn
             key={id}
