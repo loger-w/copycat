@@ -68,10 +68,10 @@
 
 ## 2026-08-19(mod/txo-snapshot-no-redundant-push TXO 快照只在內容有變才推 留尾)
 
-- [ ] **`ChainAggregator.route` spot 分支缺 `price_millipts > 0` 閘**(code review C2,既有問題):`_ingest` 有閘
-  (鎖停時 TC4 簿第一檔推市價佇列 0 價),spot 沒有 → 0 價會記成 `spot.price=0.0` 並拿 0 點內插 `spot_pnl`;
-  新的同價短路還讓「0 ↔ 真價」交替每筆都算價變。候選 = spot 分支開頭 `if tick.price_millipts <= 0: return False`
-  (行為改動,另案 /bug 或 /mod)。
+- [x] ~~**`ChainAggregator.route` spot 分支缺 `price_millipts > 0` 閘**(code review C2,既有問題)~~
+  **2026-08-21 修畢(bug/txo-spot-zero-price-gate)**:spot 分支開頭 `<= 0` 整筆早退(比照 `_ingest`
+  既有閘);紅測試 `TestSpotZeroPriceGate` ×4(0 不記價 / 首筆 0 留 None / 負價 / 0↔真價交替只真價算
+  changed),反向驗證過。真鎖停日觀測留待下次鎖停。
 - [ ] **TXO 推播仍是全量整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
   〔2026-08-20 實測:夜盤 60s 收 24 則,每則中位 17.1 KB(min 15B=ping),0.4 則/s ≈ 410 KB/min;
   日盤價變頻率更高,量級成比例放大〕
