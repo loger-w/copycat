@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RiverPanel } from "@/components/corr/RiverPanel";
 import type { RiverState } from "@/types";
@@ -37,7 +37,10 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("RiverPanel", () => {
   it("預設並排:兩顆鈕都在,並排為 accent,各腿名皆出現", () => {
@@ -168,5 +171,97 @@ describe("RiverPanel", () => {
     render(<RiverPanel state={empty} />);
 
     expect(screen.getByText("等待日盤資料…")).toBeTruthy();
+  });
+});
+
+/** S3 memo 邊界的前置 characterization(refactor-plan R1/R17)。
+ *
+ *  拍的是**改動前的現狀**:重疊圖游標移動 → 讀值列即時換成該分鐘的各腿 %。
+ *  之所以要先拍:S3 要把 `buildOverlayGeometry` 與其衍生量包進 `useMemo([entries, win])`,
+ *  只要順手把 `readout`(唯一依賴 `cursor` 的量)一起包進去,讀值列就會被凍在
+ *  `cursor === null` 的那一刻 —— 線照畫、時間照走,只有讀值永遠是「—」,
+ *  而既有 14 條測試沒有任何一條碰過 mouseMove(零訊號)。
+ *
+ *  jsdom 坑:`handleMouseMove` 先取 `getBoundingClientRect()`,jsdom 恆回 0 →
+ *  `rect.width === 0` 早退 → cursor 永遠 null、斷言恆假綠。必須 spy 出真實寬高
+ *  (先例 `MarketChart.test.tsx` hover 節);座標換算假設 svg 等比渲染。
+ */
+describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
+  /** viewBox 寬 = 960(RiverOverlay.SIZE),量測寬取同值 → clientX 即 viewBox x。 */
+  function mockRect(): void {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 960,
+      bottom: 340,
+      width: 960,
+      height: 340,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
+
+  /** offset(分鐘)→ clientX。窗長 300 分、圖寬 960 → 每分鐘 3.2px。 */
+  function xAt(offset: number): number {
+    return (offset / (DAY.end_min - DAY.start_min)) * 960;
+  }
+
+  function overlay(): SVGElement {
+    render(<RiverPanel state={state()} />);
+    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
+    return screen.getByRole("img", { name: "各腿重疊走勢" }) as unknown as SVGElement;
+  }
+
+  it("游標移入 → 讀值列出現各腿 % 與該分鐘時刻", () => {
+    mockRect();
+    const svg = overlay();
+    // 自檢:移入前是提示文案(移入後才會被讀值列取代)
+    expect(screen.getByText("游標移入圖內看各腿讀值")).toBeTruthy();
+
+    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
+
+    expect(screen.getByText("09:05")).toBeTruthy(); // window.start_min 525 + 20
+    expect(screen.getByText("台指 +1.00%")).toBeTruthy();
+    expect(screen.getByText("富台 -1.00%")).toBeTruthy();
+    expect(screen.queryByText("游標移入圖內看各腿讀值")).toBeNull();
+  });
+
+  it("游標移到另一分鐘 → 讀值跟著換(讀值不得被幾何 useMemo 凍住)", () => {
+    mockRect();
+    const svg = overlay();
+
+    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
+    expect(screen.getByText("台指 +1.00%")).toBeTruthy();
+
+    fireEvent.mouseMove(svg, { clientX: xAt(10), clientY: 100 });
+
+    expect(screen.getByText("08:55")).toBeTruthy();
+    expect(screen.getByText("台指 0.00%")).toBeTruthy();
+    expect(screen.getByText("富台 0.00%")).toBeTruthy();
+    expect(screen.queryByText("台指 +1.00%")).toBeNull();
+  });
+
+  it("該分鐘沒有點的腿顯示「—」(全窗無值的道瓊不進讀值列)", () => {
+    mockRect();
+    const svg = overlay();
+
+    fireEvent.mouseMove(svg, { clientX: xAt(15), clientY: 100 });
+
+    expect(screen.getByText("台指 —")).toBeTruthy();
+    expect(screen.getByText("富台 —")).toBeTruthy();
+    // 道瓊全窗無值 → buildOverlayGeometry 不收它,讀值列沒有這一腿(勾選鈕上的字不算)
+    expect(screen.queryByText(/^道瓊 /)).toBeNull();
+  });
+
+  it("游標移出 → 讀值列收回提示文案", () => {
+    mockRect();
+    const svg = overlay();
+    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
+
+    fireEvent.mouseLeave(svg);
+
+    expect(screen.getByText("游標移入圖內看各腿讀值")).toBeTruthy();
+    expect(screen.queryByText("台指 +1.00%")).toBeNull();
   });
 });
