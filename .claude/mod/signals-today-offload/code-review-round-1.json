@@ -1,0 +1,47 @@
+{
+  "round": 1,
+  "lenses": ["asyncio-thread-correctness+whitelist", "test-coverage"],
+  "model": "opus",
+  "diff": "review-diff.txt (master..6f6c9d01)",
+  "whitelist_check": "5/5 PASS(correctness lens 逐條核:回傳形狀/聯集語意、503 在 to_thread 前、legacy 查參、壞行跳過、hub 同步 API 與動態替換手法)",
+  "findings": [
+    {
+      "id": "C-1",
+      "severity": "P2",
+      "claim": "to_thread 走 loop 預設 executor,與 daily_bars / capital close 同池且工作執行緒不可中斷;TC4 半死殭屍執行緒堆積時 today 跟著排隊",
+      "resolution": "accepted(lens 建議的低成本解)— route 註解標明同池耦合與排查方向(commit 97c08d3a);獨立有界 executor 留待真咬到再做"
+    },
+    {
+      "id": "C-2",
+      "severity": "P2",
+      "claim": "spec「與原同步讀等價」措辭不精確:await 點放寬了與 flush worker 的讀寫交錯窗口(半寫入尾行更易撞上、同迭代新訊號可能入列)",
+      "resolution": "accepted — spec edge case 2 改寫為「窗口放寬但失效模式不變(壞行跳過 + WARNING 可觀測)」(amendment)"
+    },
+    {
+      "id": "T-1/TC-1",
+      "severity": "P2",
+      "claim": "probe 斷言鑑別力不足:route 未呼叫 today_signals 時 KeyError 無訊息;缺 hub not None 守門;涵蓋面(同步 def route 也綠)未標",
+      "resolution": "accepted — dict 全等斷言含訊息 + hub 守門 + docstring 標涵蓋面(commit 97c08d3a)"
+    },
+    {
+      "id": "TC-2",
+      "severity": "P2",
+      "claim": "Edge case 3(例外跨 to_thread 傳播 → 502)零覆蓋;最可能的退化(吞例外回空清單)= 零錯誤訊號失效樣態",
+      "resolution": "accepted — 新增 test_unexpected_error_propagates_as_502;mutation 抽驗:route 改吞例外 → 紅(commit 97c08d3a)"
+    },
+    {
+      "id": "C-3",
+      "severity": "P2",
+      "claim": "engine 缺席路徑 trading_calendar._warned_years 的 check-then-add 首次進 worker thread",
+      "resolution": "no_change(lens 自評)— 最壞後果 = 同年份多印一則 WARNING,set.add 本身安全;記錄於此供跨執行緒共享狀態盤點"
+    },
+    {
+      "id": "TC-2b(Edge 1)",
+      "severity": "info",
+      "claim": "hub 缺席 503 已由 test_hub_start_failure_isolates_signals_only 覆蓋",
+      "resolution": "no_change_needed"
+    }
+  ],
+  "p2_summary": "P2 共 5 條:4 accepted 已修(C-1/C-2/T-1+TC-1/TC-2)、1 記錄不動(C-3)",
+  "exit": "無 P0/P1;accepted 全數修復並綠(54/54 檔內;全套 2792+2 lock)"
+}

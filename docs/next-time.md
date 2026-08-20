@@ -1,3 +1,10 @@
+## 2026-08-20(mod/signals-today-offload 留尾)
+
+- [ ] **loop 預設 executor 同池耦合**(review C-1):to_thread 全走同一 ThreadPoolExecutor
+  (daily_bars / capital close / signals-today / hub append),TC4 半死的不可中斷殭屍執行緒
+  堆積時全池排隊。若 prod 觀察到 today / daily_bars 變慢,考慮給「純本機檔案 IO」一個
+  獨立有界 executor;`_warned_years` check-then-add 跨執行緒(review C-3)屆時一併看。
+
 ## 2026-08-20(mod/signal-alert-side-effects 訊號提示副作用留尾)
 
 - [ ] **背景通知 trailing/latest-wins**(code review F3 選項 b):現行 leading-edge 節流 + 固定 tag
