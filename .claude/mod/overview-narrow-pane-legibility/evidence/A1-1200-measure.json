@@ -1,0 +1,141 @@
+{
+ "viewport": [
+  1200,
+  800
+ ],
+ "rootFont": "16px",
+ "panes": [
+  {
+   "id": "market-pane-left",
+   "width": 421,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 46,
+    "gap": "2px",
+    "btnPadL": "4px",
+    "btnH": 22
+   },
+   "candle": {
+    "viewBox": "0 0 353 96",
+    "clientW": 353,
+    "clientH": 96,
+    "yTicks": [
+     {
+      "t": "34825",
+      "fontSize": "10px",
+      "rect": {
+       "x": 52,
+       "y": 341,
+       "w": 28.2,
+       "h": 15
+      }
+     },
+     {
+      "t": "39305",
+      "fontSize": "10px",
+      "rect": {
+       "x": 52,
+       "y": 328,
+       "w": 28.2,
+       "h": 15
+      }
+     },
+     {
+      "t": "43785",
+      "fontSize": "10px",
+      "rect": {
+       "x": 51,
+       "y": 315,
+       "w": 29.2,
+       "h": 15
+      }
+     }
+    ],
+    "yTickOverlap": true,
+    "textCount": 11,
+    "bars": 120,
+    "barW": 2.1
+   }
+  },
+  {
+   "id": "market-pane-right",
+   "width": 421,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 46,
+    "gap": "2px",
+    "btnPadL": "4px",
+    "btnH": 22
+   },
+   "intraday": {
+    "viewBox": "0 0 387 168",
+    "fontSize": "9px"
+   }
+  }
+ ],
+ "allCandles": [
+  {
+   "viewBox": "0 0 353 96",
+   "clientW": 353,
+   "clientH": 96,
+   "fontSize": "10px",
+   "bars": 120
+  }
+ ],
+ "limitList": {
+  "rootW": 852,
+  "container": "inline-size",
+  "scrollW": 820,
+  "clientW": 820,
+  "ok": true,
+  "th": [
+   {
+    "t": "代號",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "名稱",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "市場",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "現價",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "漲跌幅",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "連板",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "金額(億)",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "量比",
+    "display": "table-cell",
+    "padL": "8px"
+   },
+   {
+    "t": "狀態",
+    "display": "table-cell",
+    "padL": "8px"
+   }
+  ],
+  "tdPadL": "8px",
+  "rows": 48
+ }
+}

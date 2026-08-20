@@ -1,0 +1,18 @@
+{
+  "round": 1,
+  "lenses": ["whitelist (opus)", "correctness_testgap (opus)"],
+  "diff": "review-diff.txt (master..HEAD, 8 commits)",
+  "summary": { "P0": 0, "P1": 2, "P2": 6 },
+  "findings": [
+    { "id": "B1", "severity": "P1", "lens": "correctness", "file": "frontend/src/index.css", "claim": "rem 門檻與 SC 的 1920/2560 期望值建立在 root font-size media query(112.5%/125%)上,但 copycat 前端無此機制(root 恆 16px)", "quick_screen": "CONFIRMED(main session 真環境量測 rootFont 16px @1920/2560;index.css 無 @media)。但後果弱於 finding 所述:SC-3 1920 pane 466 > 424 不 compact,週期列仍 48px = 2 行 ✓;SC-2 2560 padL 8px、九欄 ✓ —— 目標全達成,只有 spec 的期望數字(11.25px / 10px / compact)寫錯。", "disposition": "accepted", "resolution": "保留 rem 門檻(理由改寫:內容是 rem 字級,rem 門檻讓「塞不塞得下」對 root 縮放不變;**目前 root 恆 16px,rem = px**);修四處新註解(LimitListSection.tsx / MarketPane.tsx / 兩測試)刪去 112.5%/125% 的說法;spec SC-1/2/3 期望值 amendment 改回 16px 口徑;B5 的「常數假設 root 16px」註記一併寫進 CANDLE_CHROME_Y / CANDLE_INSET_X doc。frontend-conventions skill 那句(neigui 來源)於 8.5 GC。" },
+    { "id": "B2", "severity": "P1", "lens": "testgap", "file": "frontend/src/components/index/MarketPane.size.test.tsx", "line": 174, "claim": "paneCandleBox 期望值用 import 的同一常數重算 → CANDLE_CHROME_Y/INSET_X 改錯測試仍綠(mutation 84/30 存活 71/71)", "quick_screen": "CONFIRMED(reviewer 已做 mutation)", "disposition": "accepted", "resolution": "期望值改字面量 {width: 396, height: 198} 並在註解寫拆解;常數只進註解。[lock] + mutation-verified。" },
+    { "id": "B3", "severity": "P2", "lens": "testgap", "file": "frontend/src/lib/pane-frame.ts", "line": 114, "claim": "round/floor 取整無鑑別力(輸入全整數)", "disposition": "accepted", "resolution": "加小數輸入案例 {430.6, 300.7} → {397, 198}。" },
+    { "id": "B4", "severity": "P2", "lens": "correctness", "file": "frontend/src/lib/pane-frame.ts", "line": 114, "claim": "寬 Math.round 可能讓 viewBox 比渲染寬大 ≤ 0.5px", "quick_screen": "真環境 1536/1920/2560 三檔 viewBox 寬 = clientWidth 逐值相等(282/398/590)", "disposition": "rejected_with_reason", "resolution": "三檔實測零誤差;round 的 ±0.5px 上界 ≈ 0.2% 縮放,視覺不可辨。doc comment 補「1:1 容許 ±0.5px 取整誤差」即可,不改演算法(改 floor 只是把誤差換邊)。" },
+    { "id": "B5", "severity": "P2", "lens": "correctness", "file": "frontend/src/lib/pane-frame.ts", "line": 60, "claim": "CANDLE_CHROME_Y/INSET_X 硬編 px 描述 rem chrome;若日後加 root 縮放會漂", "disposition": "accepted", "resolution": "併入 B1:doc comment 明寫「假設 root = 16px;若加 root 縮放,本兩顆與 INTRADAY_CHROME_Y 需改 rem 反算」。" },
+    { "id": "B6", "severity": "P2", "lens": "testgap", "file": "frontend/src/components/index/MarketPane.tsx", "line": 378, "claim": "candleBox / intradayBox 互斥由建構保證、零測試", "disposition": "accepted", "resolution": "size.test K 線態案例加「分時 svg 不存在」、分時態案例加「candle-figure 不存在」斷言。" },
+    { "id": "B7", "severity": "P2", "lens": "correctness", "file": "frontend/public/__viewport_host.html", "claim": "臨時 host 檔仍在工作區,會隨 build 出貨", "disposition": "accepted", "resolution": "量測完畢後刪檔 + rmdir frontend/public;verification.md 附 git status 證據(已在 spec §6 收尾清單)。" },
+    { "id": "A1", "severity": "P2", "lens": "whitelist", "file": "frontend/src/components/index/LimitListSection.tsx", "line": 580, "claim": "單欄態(容器 < 1050px)兩門檻同樣生效,spec 未建模、無 SC 量測", "disposition": "accepted", "resolution": "spec §3 加 edge 11(單欄態:limit-list = 容器全寬、pane = (容器−12)/2;視窗 < ~1010px 七欄降級為預期);main session 補量 1000×800 一檔當對照。" }
+  ],
+  "p2_summary": { "count": 6, "themes": ["期望值同義反覆 / 取整鑑別力(B2/B3)", "root 16px 前提未機械驗證、px 常數描述 rem chrome(B1/B5)", "建構保證的不變式無鎖 / 臨時檔收尾(B6/B7)", "單欄態未建模(A1)"] },
+  "whitelist_checked_ok": "W-1~W-8 + D4 全數由 whitelist lens 逐條核過(見 lens 回傳 checked_ok),實跑 7 測試檔 229 tests 全綠。"
+}

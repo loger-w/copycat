@@ -1,0 +1,161 @@
+{
+ "viewport": [
+  1536,
+  864
+ ],
+ "rootFont": "16px",
+ "panes": [
+  {
+   "id": "market-pane-left",
+   "width": 350.4,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 46,
+    "gap": "2px",
+    "btnPadL": "4px",
+    "btnH": 22
+   },
+   "candle": {
+    "viewBox": "0 0 282 96",
+    "clientW": 282,
+    "clientH": 81,
+    "yTicks": [
+     {
+      "t": "44295",
+      "fontSize": "10px",
+      "rect": {
+       "x": 73,
+       "y": 379.2,
+       "w": 24.7,
+       "h": 12
+      }
+     },
+     {
+      "t": "44795",
+      "fontSize": "10px",
+      "rect": {
+       "x": 73,
+       "y": 368.2,
+       "w": 24.7,
+       "h": 12
+      }
+     },
+     {
+      "t": "45290",
+      "fontSize": "10px",
+      "rect": {
+       "x": 73,
+       "y": 357.3,
+       "w": 24.7,
+       "h": 12
+      }
+     },
+     {
+      "t": "45790",
+      "fontSize": "10px",
+      "rect": {
+       "x": 73,
+       "y": 346.3,
+       "w": 24.7,
+       "h": 12
+      }
+     },
+     {
+      "t": "46290",
+      "fontSize": "10px",
+      "rect": {
+       "x": 73,
+       "y": 335.4,
+       "w": 24.7,
+       "h": 12
+      }
+     }
+    ],
+    "yTickOverlap": true,
+    "textCount": 13,
+    "bars": 240,
+    "barW": 0.8
+   }
+  },
+  {
+   "id": "market-pane-right",
+   "width": 350.4,
+   "container": "inline-size",
+   "periodRow": {
+    "h": 46,
+    "gap": "2px",
+    "btnPadL": "4px",
+    "btnH": 22
+   },
+   "intraday": {
+    "viewBox": "0 0 316 184",
+    "fontSize": "9px"
+   }
+  }
+ ],
+ "allCandles": [
+  {
+   "viewBox": "0 0 282 96",
+   "clientW": 282,
+   "clientH": 81,
+   "fontSize": "10px",
+   "bars": 240
+  }
+ ],
+ "limitList": {
+  "rootW": 473.2,
+  "container": "inline-size",
+  "scrollW": 431,
+  "clientW": 431,
+  "ok": true,
+  "th": [
+   {
+    "t": "代號",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "名稱",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "市場",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "現價",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "漲跌幅",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "連板",
+    "display": "table-cell",
+    "padL": "4px"
+   },
+   {
+    "t": "金額(億)",
+    "display": "none",
+    "padL": "4px"
+   },
+   {
+    "t": "量比",
+    "display": "none",
+    "padL": "4px"
+   },
+   {
+    "t": "狀態",
+    "display": "table-cell",
+    "padL": "4px"
+   }
+  ],
+  "tdPadL": "4px",
+  "rows": 48
+ }
+}
