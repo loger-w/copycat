@@ -9,6 +9,8 @@
   `client.py:419`)。影響:該部位均價 / pnl_base 恆缺(前端三處損益顯示退化)+ 洗版。
   第一步 = kind miss 的 warning 帶 `parts[_PNL_IDX_KIND]` 原文(現在 raw 標籤沒進 log,
   無從對映)+ 同 key 節流;確認實際字面後補 `_PNL_KIND` 對映屬 🔴 另案 /bug。
+  〔前端可見面(2026-08-20 MCP 實證):單檔 header「均價 —・損益 —」、側欄 chip「1張 —」、
+  閃電梯底「打平 —」三處全退化 — 這不只是 log 噪音,是持倉損益面整組缺值〕
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
@@ -90,6 +92,8 @@
 - [ ] **副圖 1140 根 1 單位寬 rect 每 tick 重建**(KR-4):真環境 hover 目視未見掉幀(TMF 夜盤);若日後 TXF
   日盤高頻 tick 卡,候選 = EnergySub 改單一 path。
 - [ ] 真 TC4 層 user 過目點:對稱域 ±1% 地板讓平靜日線視覺變平(同 index R4);量欄「-」佔位語意。
+  〔2026-08-20 夜盤截圖已存(TMF −0.39% 近全軸、日盤+夜盤線、五檔活跳):docs/specs/
+  next-time-mcp-verification-2026-08-20/screenshots/27-futures-allday-night-session.jpg〕
 
 ## 2026-08-18(fix/tc4-realtime-refcount-kill 開盤全站零推播 root cause 留尾)
 
@@ -134,7 +138,8 @@
 - [ ] **合併列 title 只有整組合併字串**(T-12 partial):kind 段與規則名段的一對一對應在 hover 提示上看不出;
   候選 = 逐段 span 各帶自己的 title「kind(rule)」。
 - [ ] **合併列在 200px rail 內易被 truncate**(真環境過目:「突破 CDP AH・爆量 5.9 倍」被截成「突破 CDP AH・…」),
-  full text 在 title;若嫌難讀,候選 = 合併列允許換行或縮字級。
+  full text 在 title;若嫌難讀,候選 = 合併列允許換行或縮字級。〔2026-08-20 MCP 實測:當日兩條真實
+  合併列雙雙被切 —「跌破 CDP 中軸・爆跌 -2.06%」需 154px 只分到 95px(38% 被切)、規則名段 92→57px〕
 - [x] ~~conftest `TestConftestWatchlistIsolation` 順序脆弱~~ **2026-08-20 修畢**:根因不是測試污染,
   是 pytest 9.1.1 參數順序 bug —— 命令列「server 檔、tests 根檔、server 檔」交錯時,最後那個 server 檔
   的測試在**收集期**就丟失 `tests/server/conftest.py` 的 autouse fixture(與 signal 檔無關,任意檔
@@ -147,6 +152,8 @@
 - [ ] **相關係數 tab 七腿 prod 重啟後過目**:小日經 fuchsia(river-7)與標普薰衣草紫 / accent 桃紅可辨度;
   並排模式三欄格局第 7 卡獨佔第 4 列(1080p 側車截圖 `.claude/mod/corr-nk225m-leg/evidence/SC-3-cards-nk225m.jpg`)—
   若嫌浪費,候選 = 卡片 grid 改 `auto-fit minmax` 或 4 欄;本輪 out of scope。
+  〔2026-08-20 真 TC4 夜盤截圖已存(重疊七腿含「小日經 自 16:01 起算 0%」腿級註記、並排 7 卡
+  小日經獨佔第 3 列):docs/specs/next-time-mcp-verification-2026-08-20/screenshots/43-corr-*.jpg〕
 - [ ] **每日台北 14:45–16:00 小日經腿 stale / corr 三窗依窗長先後轉「—」(w1800 最長 30 分後)/ 江波圖夜盤窗前 60 格空**(OSE 日盤收 → 夜盤開;
   台指夜盤 15:00 已開)= 預期行為非訂閱失效(判別:16:00 後恢復推播)。若覺得刺眼,候選 = 腿級「休市中」
   標示(需 OpenTime/CloseTime 語意,另案)。
@@ -169,7 +176,9 @@
 ## 2026-08-17(mod/index-intraday-core batch3 R4 留尾)
 
 - [ ] **真 TC4 指數推播下的 core 圖 + 個股頁 / 群組圖牆前後對照待 prod 重啟過目**(側車 fake 序列已驗;
-  SC-5 截圖層未做:FakeStockSource 無個股資料)。看點:對稱 autofit 域含 ±1% 地板 —— 加權日振幅 < 1%
+  SC-5 截圖層未做:FakeStockSource 無個股資料)。〔2026-08-20 真 TC4 全日線截圖已存(加權/櫃買
+  分時 + 均價/CDP/MA 全開):docs/specs/next-time-mcp-verification-2026-08-20/screenshots/
+  48-overview-intraday-overlays.jpg,「平不平」你看圖拍板〕看點:對稱 autofit 域含 ±1% 地板 —— 加權日振幅 < 1%
   時線的視覺振幅比舊「hi×1.003 / lo×0.997 緊貼域」小(spec §5);若 user 覺得太平,候選 = index 態
   幾何加「地板 %」參數(core `buildIntradayGeometry` 需開 option,另案)。
 - [ ] **兩欄態較矮視窗(容器 ≥ 1050 但主 grid 高 < ~800px)家數帶 section 溢出走主 grid 捲軸**(KR-3,
@@ -182,7 +191,9 @@
 - [ ] `INTRADAY_CHROME_Y` export 無外部讀者(`MarketPane.size.test` 硬寫 26 / 272)→ 測試改 import 它,
   免常數與註解各漂各的。
 - [ ] 加權 pane 週期列在 ~350px 寬 pane 折 3 行(1536 兩欄態),吃掉 35px 圖高(TWSE svg 121 vs OTC 156);
-  既有折行行為,可考慮週期鈕收窄或折疊。
+  既有折行行為,可考慮週期鈕收窄或折疊。〔2026-08-20 MCP 實測:350px pane 週期列 3 行、總高 74px
+  (單鈕 22px),兩個 pane 皆命中;截圖 docs/specs/next-time-mcp-verification-2026-08-20/screenshots/
+  90-52-overview-dayk-and-3row-periods.jpg〕
 - [ ] claude-in-chrome 驗證教訓(已入 ops-discipline?否 → 本次記這裡,收尾 8.5 併入 skill):`computer.zoom`
   會把 tab 的 device metrics 覆寫成 zoom 區域尺寸且不還原(量到 662×588);`resize_window` 對最大化視窗無效
   → 用同源 iframe host 控 viewport;`taskkill //IM node.exe` 會連 MCP server 一起殺(改用 port → PID)。
@@ -191,7 +202,8 @@
 
 - [ ] **側欄 chip 過長時股名被 truncate 到看不見**(2330 有現股 + 雙契約個股期:`2張 +0.26% · 期 2口/空1口`
   在 240px 側欄把「台積電」整個擠掉;AD-6 拍定「名稱 truncate、chip shrink-0」)。user 過目後若嫌,候選:
-  期段收進 tooltip 只留 `· 期`、或 chip 上限寬 + truncate。
+  期段收進 tooltip 只留 `· 期`、或 chip 上限寬 + truncate。〔2026-08-20 實測:現況純現股短 chip
+  (「1張 —」28px)零 truncation;極端 case 需現股+個股期並存部位才會重現〕
 - [ ] **個股期均價字面兩份**:header / chip 用 `fmt(Math.round(avg*1000))`(`1185`),`StkfutLadder` 部位列用
   `toFixed(2)`(`1185.00`);同值不同字面,收斂時二選一(建議 ladder 改 fmt,🔴 `StkfutLadder.test.tsx` 值斷言該紅)。
 - [ ] **`code` null 的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)三處靜默不顯示**,閃電梯照舊;
@@ -213,8 +225,10 @@
   日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。
 - [ ] **期貨 tab `FuturesChart` 成交點**:另一套幾何,本輪未做;資料源同 `fillPoints`(契約碼 key)。
 - [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。
-- [ ] **▲/▼ 可見度**待 user 盤中過目:尺寸沿 `INTRADAY_MARK`(外緣 3px 級),fake 鋸齒價線下 ▼ 綠疊
+- [ ] **▲/▼ 可見度**待 user 過目:尺寸沿 `INTRADAY_MARK`(外緣 3px 級),fake 鋸齒價線下 ▼ 綠疊
   綠線不易辨識;真盤若仍不顯眼,調 `lib/fill-marks.ts::FILL_MARK` 或 halo 色(一行)。
+  〔2026-08-20 真成交截圖已存:6456 尾盤 ▲、6451 ▲+▼(686px 圖上 6×5px 三角);
+  docs/specs/next-time-mcp-verification-2026-08-20/screenshots/63-fill-mark*.jpg,顯不顯眼你看圖拍板〕
 - [ ] **toggle 關態 `EMPTY_MARKS` identity 無機械閘**(cr1 B-p2-3 rejected:關態沒有可計次函式);
   症狀僅掉幀。若日後改 ChartStatic memo 契約,順手補 render-count 閘。
 
@@ -376,7 +390,9 @@
   升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。
 
 - [ ] **CDP 五個右緣帶標籤自身互疊**(盤中截圖附帶觀察,2330 實證 `2455*`…`2415*` 五個
-  擠成一團字疊字):既有擁擠問題、本輪 out of scope 已列。收斂方向 = 把本輪
+  擠成一團字疊字):既有擁擠問題、本輪 out of scope 已列。〔2026-08-20 MCP 量測:2330 平靜日
+  右緣 11 顆標籤(5 CDP* + MA5/MA20/VWAP/昨收/現價)擠 36px 縱距,**9 對兩兩相疊**;截圖
+  docs/specs/next-time-mcp-verification-2026-08-20/screenshots/102-cdp-label-cluster-2330.jpg〕收斂方向 = 把本輪
   `edgePriceLabels` 的 1D 避讓推廣到右緣帶內 CDP 標籤(同一支函式換 bounds),或
   近價合併顯示;動既有 CDP 標籤位置屬行為改動,獨立 /mod 輪。
 - [ ] **期貨態 POC(D6 若 user 要)**:需 `foldVp` 分鐘窗參數化(現硬編現貨窗)+
