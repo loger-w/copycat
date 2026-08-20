@@ -573,7 +573,8 @@ class IndexEngine:
         已實證的零推播案例發生在夜盤(review P1-2)。
         代價是多了一個**安靜**的新失效態:若 TXF 推播被 futures session 搶走
         (同 symbol 跨 session 只推一邊)或 futures engine 整段零推播(CLAUDE.md §8 的
-        間歇性症狀),`spot` 會恆 `None` —— 右上角台指與 TXO 綜合損益的現貨點位一起
+        間歇性症狀),或 TXF 鎖停只推 0 價市價佇列(aggregate 0 價閘擋掉、冷啟動從未
+        收過真價),`spot` 會恆 `None` —— 右上角台指與 TXO 綜合損益的現貨點位一起
         空白,比亂跳更難察覺。固定字串供 grep:`txo spot 無 TXF 推播`。
         """
         if p is not None:

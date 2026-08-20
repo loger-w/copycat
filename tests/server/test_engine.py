@@ -626,6 +626,33 @@ async def test_snapshots_spot_price_change_pushes_same_price_skips() -> None:
         await rt.close()
 
 
+async def test_snapshots_spot_zero_price_skips_and_keeps_last_real() -> None:
+    """鎖停市價佇列 0 價 spot:route 回 False → 不 bump version、不推;spot_millipts 留最後真價。"""
+    fake = FakeQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    agen = rt.snapshots()
+    task: asyncio.Task[dict] | None = None
+    try:
+        assert fake.on_tick is not None
+        fake.on_tick(tick(C44000.symbol, price=100_000, qty=1, cum=1, t=1))
+        await asyncio.wait_for(agen.__anext__(), timeout=1.0)
+
+        task = asyncio.ensure_future(agen.__anext__())
+        fake.on_tick(tick(TXF, price=43_735_460, qty=1, t=2))
+        snap = await asyncio.wait_for(task, timeout=1.0)
+        assert snap["spot"]["price"] == 43735.46
+
+        task = asyncio.ensure_future(agen.__anext__())
+        fake.on_tick(tick(TXF, price=0, qty=0, t=3))  # 鎖停市價佇列
+        await asyncio.sleep(0.3)
+        assert not task.done(), task.result()
+        assert rt.spot_millipts() == 43_735_460
+    finally:
+        await _drain(task, agen)
+        await rt.close()
+
+
 async def test_content_compare_covers_whole_payload() -> None:
     """SC-2 / W8:內容比對範圍 = 整個 payload 減 `generated_at`,不得再縮。
 

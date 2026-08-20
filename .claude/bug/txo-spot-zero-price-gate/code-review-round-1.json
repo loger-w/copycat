@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "diff": "review-diff.txt (origin/master..198ad1f7, copycat + tests)",
+  "lenses": ["correctness-blast-radius (opus)", "test-coverage (opus)"],
+  "p0": [],
+  "p1": [],
+  "p2_summary": {
+    "count": 6,
+    "themes": ["docstring/註解 False 枚舉缺 spot 0 價 ×2", "靜默 warning 成因歸因補鎖停 0 價情境", "測試補強 ×3:totals 不計數合約 / spot_pnl 不被 0 污染 / parse 層 0 價放行前提 / engine 層 0 價不 bump version"],
+    "disposition": "全部 accepted(低成本、同輪吸收);無 REFUTED"
+  },
+  "findings": [
+    {"severity":"P2","lens":"correctness","file":"copycat/server/index_engine.py","line":592,"claim":"冷啟動於鎖停期間 → spot 恆 None → 『無 TXF 推播』warning 歸因誤導","resolution":"accepted — docstring 補『TXF 鎖停只推 0 價』成因;精確版(0 價丟棄計數分文案)不做"},
+    {"severity":"P2","lens":"correctness","file":"copycat/live/aggregate.py","line":71,"claim":"route docstring 與 engine.py:328 註解的 False 枚舉缺 spot 0 價","resolution":"accepted — 兩處補枚舉"},
+    {"severity":"P2","lens":"test-coverage","file":"tests/server/test_engine.py","line":603,"claim":"engine 層缺 0 價不 bump version 的對稱測","resolution":"accepted — test_snapshots_spot_zero_price_skips_and_keeps_last_real"},
+    {"severity":"P2","lens":"test-coverage","file":"tests/live/test_aggregate.py","line":406,"claim":"未釘『整筆早退不計 totals / 不進 dropped_foreign』合約","resolution":"accepted — 補兩行 assert"},
+    {"severity":"P2","lens":"test-coverage","file":"tests/live/test_aggregate.py","line":411,"claim":"最花錢症狀 spot_pnl 被 0 內插未測","resolution":"accepted — test_zero_price_spot_does_not_poison_spot_pnl"},
+    {"severity":"P2","lens":"test-coverage","file":"tests/live/test_live_models.py","line":120,"claim":"parse 層 0 價放行前提未鎖","resolution":"accepted — test_txf_zero_price_passes_parse_layer"}
+  ],
+  "self_review_head": "post-review fix commit (see git log)"
+}

@@ -68,11 +68,16 @@ class ChainAggregator:
         # spot 獨立於序列(DR-13),reset 不清
 
     def route(self, tick: Tick) -> bool:
-        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價皆 False。
+        """回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價 / spot 0 價皆 False。
 
         呼叫端(EngineRuntime._consume)據此決定要不要標 changed;丟棄計數照舊累加。
         """
         if tick.symbol.startswith(_SPOT_PREFIX):
+            # 同 `_ingest` 的 `> 0` 閘:0 不是價格(鎖停時 TC4 於簿第一檔推市價佇列)。
+            # spot 無量無內外盤 → 整筆早退;否則 0 會被內插進損益,且與真價交替時
+            # 每筆都過同價短路算 changed(整包推播風暴)。
+            if tick.price_millipts <= 0:
+                return False
             if self.spot_millipts == tick.price_millipts:
                 return False
             self.spot_millipts = tick.price_millipts
