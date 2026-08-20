@@ -131,13 +131,18 @@ function OverlayCard({
   height?: number;
   unitScale?: number;
 }) {
-  const size = { width: SIZE.width, height };
+  // **單一來源**:幾何、viewBox、刻度線三處吃同一個 `size`。改版前幾何那支自己現寫
+  // 一份 `{ width: SIZE.width, height }` 字面量,與這裡的 `size` 是兩份 —— 哪天有人只
+  // 改其中一份(例如把寬度改吃量測值),圖框與線的座標系就靜默錯開,而 svg 不會報錯、
+  // 線照畫,只有位置歪掉。`useMemo([height])` 是為了讓它能安全地當下面那支的 dep
+  // (render 內現建的物件當 dep 等於沒 memo,同 L363-366 那條警告)。
+  const size = useMemo(() => ({ width: SIZE.width, height }), [height]);
   const font = svgFontRem(0.625, unitScale);
   // **必經 useMemo**:重疊開著時,App 層那五條流(期貨 coalesce 0.1s = 10 Hz 最兇)
   // 每推一次就重繪整棵樹 —— 加權/櫃買一個分鐘點都沒動,兩條全窗 series 的 pct → x/y
   // 換算照樣重跑一遍。症狀只有 CPU 知道,線照畫值照對,沒有任何行為測試會紅。
-  // deps 拆成**欄位級**四項 + height:`size` 是 render 內現建的物件,拿它當 dep 等於
-  // 沒 memo(同 L363-366 那條警告);`unitScale` / `font` 只進字級不進幾何,不是輸入。
+  // deps 拆成**欄位級**四項 + `size`(自身已 memo 於 `height`);`unitScale` / `font`
+  // 只進字級不進幾何,不是輸入。
   const g = useMemo(
     () =>
       buildOverlayGeometry(
@@ -145,9 +150,9 @@ function OverlayCard({
           { minutes: twse.minutes, ref: twse.ref },
           { minutes: otc.minutes, ref: otc.ref },
         ],
-        { width: SIZE.width, height },
+        size,
       ),
-    [twse.minutes, twse.ref, otc.minutes, otc.ref, height],
+    [twse.minutes, twse.ref, otc.minutes, otc.ref, size],
   );
   return (
     <figure className="rounded-md border border-line bg-surface p-4">
