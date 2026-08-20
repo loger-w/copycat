@@ -1,3 +1,11 @@
+## 2026-08-20(mod/signal-alert-side-effects 訊號提示副作用留尾)
+
+- [ ] **背景通知 trailing/latest-wins**(code review F3 選項 b):現行 leading-edge 節流 + 固定 tag
+  下,每個 5 s 窗使用者看到的是**窗內最舊**那則;若嫌過時,改「窗內記最後一則、窗尾補發一次」
+  (latest-wins)。本輪拍板取首則(實作最簡、跨窗仍會覆蓋更新),真環境嫌舊再做。
+- [ ] **訊號 grouping 合成一張 toast**(承 08-18 降噪留尾):useSignalAlerts 走 groupSignals
+  口徑;做的時候順手評估 Notification 文案也吃 grouping。
+
 ## 2026-08-19(mod/ws-app-heartbeat 8 條 WS 應用層心跳 + 前端靜默 watchdog 留尾)
 
 - [ ] **7 份 `WsStatus` 同值型別宣告 + `types.ts` 一份**(spec review R13):本輪刻意不收斂;下次動 hook 時統一從一處 import。

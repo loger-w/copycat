@@ -68,7 +68,11 @@ Component Performance Track 對每個「props identity 變了」的 re-render �
 - 同輪順手:`useStockStream.ts:460` 等 `ws.onerror = () => ws?.close()` 關的是共用變數當下的 socket
   (`FE-WS-ONERROR-ALIAS`),改成關自身 socket。
 
-### R4(前端)`/mod 訊號提示副作用:AudioContext suspended 節點洩漏 + Notification 洪水`
+### R4(前端)`/mod 訊號提示副作用:AudioContext suspended 節點洩漏 + Notification 洪水` — **已出貨(08-20,branch mod/signal-alert-side-effects)**
+- 出貨:playBeep 在 `state !== "running"` 不建節點(suspended → resume in-flight 守門一發;
+  closed → 回收單例下一則重建);Notification tag 固定 `copycat-signal` + 5 s leading-edge 節流
+  (permission 擋掉不消耗窗口)。artifact `.claude/mod/signal-alert-side-effects/`。
+- 原記載:
 - `useSignalAlerts.ts:30-44` `playBeep` 在 AudioContext suspended 時 `osc.stop` 排在凍結的 currentTime → 節點永不結束;
   `useSignalAlerts.ts:97` 背景分頁每則訊號 `new Notification`,tag 用唯一 sig.id 不合併。
 - 這一輪與「跑一段時間後掛」的時間相依性最像(節點只增不減),但 14:11 無訊號,故驗證者仍判 P2;
