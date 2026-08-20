@@ -130,6 +130,40 @@ function btn(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
 
+// 🔴 SC-3:17 顆週期鈕在 ~350px 的 pane(1536 兩欄態)折成 3 行、吃掉 50px 圖高。
+// 修法 = pane 自掛 `@container` + 窄容器下把 Btn 的 px-2 收成 px-1、列 gap-1 收成
+// gap-0.5(估算 ≈ 561px / 346px = 1.6 行 → 2 行)。
+//
+// **只能鎖 class 字串**:jsdom 不套 Tailwind CSS,`getComputedStyle` 對 container query
+// 一無所知 —— 真正「折幾行」由 SC-3 的真環境量測(getBoundingClientRect().height ≤ 48)
+// 把關,這裡防的是「漏寫 / 被 twMerge 吃掉」。
+//
+// ⚠ 門檻用 **rem 不用 px**:鈕的文字與 padding 全是 rem,root font-size 在 ≥1920 放大
+// 到 112.5% / ≥2560 放大到 125%,px 門檻會讓寬螢幕誤判(frontend-conventions 的 px 案例
+// 反過來 —— 那裡量的是固定 px 面板寬)。26.5rem = 424@100% / 477@112.5% / 530@125%。
+describe("MarketPane 窄容器週期列(SC-3)", () => {
+  it("pane root 自掛 @container(週期列的門檻要量 pane 寬,不是左欄寬)", () => {
+    renderPane();
+    // 最近的 container 祖先若還是左欄(兩欄態 630–930px),26.5rem 的門檻永不成立
+    expect(screen.getByTestId("market-pane-left").className).toContain("@container");
+  });
+
+  it("週期鈕:窄容器 px-1,寬容器仍是既有 px-2(W-6:兩個 token 都要在)", () => {
+    renderPane();
+    const cls = btn("日K").className;
+    expect(cls).toContain("@max-[26.5rem]:px-1");
+    // twMerge 不會把兩者判成衝突(不同 variant),被吃掉的話寬 pane 的 padding 也變了
+    expect(cls).toContain("px-2");
+  });
+
+  it("週期列容器:窄容器 gap-0.5,寬容器仍是既有 gap-1", () => {
+    renderPane();
+    const row = btn("日K").parentElement!;
+    expect(row.className).toContain("@max-[26.5rem]:gap-0.5");
+    expect(row.className).toContain("gap-1");
+  });
+});
+
 describe("MarketPane 參數化(SC-2)", () => {
   it("(a) 無 storage 時尊重 defaultKey:右 pane 預設櫃買", () => {
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
