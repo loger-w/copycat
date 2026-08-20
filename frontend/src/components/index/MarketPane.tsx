@@ -94,8 +94,11 @@ function Btn({
       className={cn(
         // `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成
         // 3 行、吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
-        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,root font-size 在
-        // ≥1920 / ≥2560 放大到 112.5% / 125%,px 門檻在寬螢幕會誤判。
+        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,rem 門檻讓「塞不
+        // 塞得下」這個條件對 root font-size 不變。**本專案 root 目前恆 16px(無縮放
+        // media query),26.5rem = 424px / 41rem = 656px**;真環境量測(2026-08-21):
+        // 1536 pane 350 → 降級(右欄 473 亦降級);1920 pane 466 → 不 compact 但週期列
+        // 仍 2 行(48px)、右欄 627 → 七欄;2560 pane 658、右欄 883 → 九欄。
         // 標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。
         "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
         disabled

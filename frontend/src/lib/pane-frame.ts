@@ -56,11 +56,18 @@ export const INTRADAY_CHROME_Y = 26;
  *  - `MarketChart` 的 meta 列:`h-4` 16 + `mt-1` 4 = **20**
  *
  *  meta 列的 `h-4 truncate` 因此是契約不是裝飾:它原本無高度限制,窄 pane 下最長的
- *  來源字串會折成兩行 → 這裡少算 16 → svg 溢出 figure。 */
+ *  來源字串會折成兩行 → 這裡少算 16 → svg 溢出 figure。
+ *
+ *  ⚠ **這兩值假設 root font-size = 16px**(chrome 全是 rem:`p-4` / `h-[1.375rem]` /
+ *  `h-4` / `mt-1` / `mb-1`;本專案目前無 root 縮放 media query,所以 px 與 rem 一對一)。
+ *  日後若加 root 縮放 media query,本兩顆與 `INTRADAY_CHROME_Y` 必須同步改為 rem 反算,
+ *  否則 chromeY 少算 → svg 溢出 figure、1:1 破 1–2%。 */
 export const CANDLE_CHROME_Y = 100;
 
 /** K 線態的水平用量(px):`CandleChart` figure 的 border 2 + `p-4` 32。與 overlay 同值
- *  是巧合不是共用 —— 兩者各自數自己的框。 */
+ *  是巧合不是共用 —— 兩者各自數自己的框。
+ *
+ *  ⚠ 同 `CANDLE_CHROME_Y` 的 root = 16px 假設(見上)。 */
 export const CANDLE_INSET_X = 34;
 
 /** 1:1 圖的 viewBox 尺寸(分時 / K 線共用)。
@@ -106,6 +113,9 @@ export function paneIntradayBox(size: Size): PaneBox {
  *  **寬要扣 `CANDLE_INSET_X`**(分時態不扣):被量測的 wrapper 在 `CandleChart` 的
  *  figure **之外**,svg 實際渲染寬 = 容器寬 − figure 的 border + padding。少扣的症狀是
  *  viewBox 比渲染寬大 34px → 又變回等比縮放(比值 0.9),只是這次沒人看得出來。
+ *
+ *  寬取 `Math.round`:1:1 容許 ±0.5px 取整誤差(≈ 0.2% 縮放,三檔真環境實測 viewBox
+ *  寬 = clientWidth 逐值相等)。
  *
  *  地板 96 與 −2 抗抖動的理由同 `paneIntradayBox`。任一邊 ≤ 0 或扣完寬 ≤ 0(pane 窄到
  *  只剩框)→ `usable: false`,呼叫端傳 undefined 而不是傳 0(svg 不報錯,純粹消失)。 */
