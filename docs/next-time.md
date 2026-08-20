@@ -54,7 +54,8 @@
   `_leaf_fed`)都不觸發 → 凍結零訊號;夜盤冷門品「靜默再武裝」又會乒乓。要做 = 先設計 engine 層 HOT 靜默偵測(>N 秒且同族他品有推播)
   再武裝,且 `unsubscribe_leaf` 不得 `_ensure_connected`(review I1 KeepAlive 洩漏)。coalesce 後雙流 WS 流量已歸零,收益只剩 engine CPU。
 - [ ] **`_heal_gate` 跨午夜段日曆歸屬**:週一 / 長假後首交易日凌晨 00:00–05:05 假開(空 churn)、週六凌晨假關;真修法 = 凌晨段改查
-  前一日 `is_trading_day`。
+  前一日 `is_trading_day`。〔2026-08-20 機械探針證實(真日曆):週六 01:00 gate=False(該救不救)、
+  週一 01:00 gate=True(無夜盤仍開)——兩個邊界都如條目所述〕
 
 ## 2026-08-19(mod/txo-snapshot-no-redundant-push TXO 快照只在內容有變才推 留尾)
 
@@ -62,7 +63,9 @@
   (鎖停時 TC4 簿第一檔推市價佇列 0 價),spot 沒有 → 0 價會記成 `spot.price=0.0` 並拿 0 點內插 `spot_pnl`;
   新的同價短路還讓「0 ↔ 真價」交替每筆都算價變。候選 = spot 分支開頭 `if tick.price_millipts <= 0: return False`
   (行為改動,另案 /bug 或 /mod)。
-- [ ] **TXO 推播仍是全量 ~22 KB 整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
+- [ ] **TXO 推播仍是全量整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
+  〔2026-08-20 實測:夜盤 60s 收 24 則,每則中位 17.1 KB(min 15B=ping),0.4 則/s ≈ 410 KB/min;
+  日盤價變頻率更高,量級成比例放大〕
 - [ ] **回補重試期間 WS 可十幾分鐘零訊息**(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
   候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 —
   〔2026-08-19 R3 心跳已出貨:零訊息不再被前端誤判斷線(保活面已解),本條只剩「重試進度可觀測」的 UX 面〕。
@@ -104,6 +107,7 @@
   再需要時從 TC4 log 的 `AddSubQuoteCount` 抓 prod key 重做即可(repro.md 有做法)。
 - [ ] **自癒閘週六凌晨 00:00–05:00 不開**(round-1 C-5 逐字用 `is_trading_day(today)`):週五夜盤跨午夜那 5 小時若 key 被殺,
   要到週一 08:45 閘開才自癒。要收 = `_heal_gate` 對 TXO/futures 改「hour < 6 看前一日是否交易日」。
+  〔2026-08-20 機械探針證實,詳 2026-08-19 coalesce 節 `_heal_gate` 條〕
 - [ ] **corr 海外腿在自身休市段落入 R2「從未推播」母體**(C-6 放寬後):每腿最慢 300s 一發 UNSUB+SUB、每 3 發換窗;
   上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。
 - [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
@@ -148,11 +152,14 @@
   標示(需 OpenTime/CloseTime 語意,另案)。
 - [ ] **重疊圖 readout 對「全窗無值」腿不列**(code review R-2):`buildOverlayGeometry` 濾掉空腿 → pill 亮著、
   圖與 readout 都沒它,呈現為「腿消失」;並排卡同狀態顯示「無資料」→ 兩模式不一致。每日 14:45–16:00 小日經
-  必命中。修法:readout 改由未過濾 entries 產生,空腿印「—」。
+  必命中。修法:readout 改由未過濾 entries 產生,空腿印「—」。〔2026-08-20 vitest 探針證實:
+  `buildOverlayGeometry` 對 `minutes={}` 的腿整條濾出 `lines`〕
 - [ ] **日盤收盤 clamp 對交易到 14:45 的腿覆蓋 13:45 末格**(code review R-3,pre-existing 類):
   `river_models.offset_of` 的 `end < m <= end+5 → end` 是為台期交 13:45 收盤寫的,小日經(OSE 日盤 14:45 收)
   13:45–13:50 成交會 last-write-wins 蓋掉 13:45 收盤價 → 日盤圖小日經末點 ≈ 13:50;ES/NQ/YM 同類既有。
   候選修法:clamp 只在 end 格尚無值時套用(把 apply_backfill 的 don't-overwrite 語意搬進 clamp 分支)。
+  〔2026-08-20 機械探針證實:`offset_of` 對 13:46–13:50 全回 13:45 的 offset(300),`push` 無條件
+  last-write-wins → 13:50 成交確實蓋掉 13:45 收盤值〕
 - [ ] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關(review R7/R2-4):判準 `grep -rn 六腿 copycat frontend/src`
   (corr_engine / river_models / river_state / app.py / types.ts / CorrPage / RiverCards / RiverOverlay / useRiver /
   river-chart-svg(+test)/ RiverPanel 檔頭 …),不寫死行號。純註解,零行為。
@@ -167,7 +174,8 @@
   幾何加「地板 %」參數(core `buildIntradayGeometry` 需開 option,另案)。
 - [ ] **兩欄態較矮視窗(容器 ≥ 1050 但主 grid 高 < ~800px)家數帶 section 溢出走主 grid 捲軸**(KR-3,
   code review C-3):`--idx-adl-min` 10rem 地板 + 家數帶兩列固定 chrome ≈ 306px > 分到的 5/11。1080p /
-  864p 實測不捲;命中再降地板或 section 改 `5 1 auto`。
+  864p 實測不捲;命中再降地板或 section 改 `5 1 auto`。〔2026-08-20 機械實測釘邊界:1536×700
+  主 grid 622/676 = 54px 捲軸、溢出源家數帶 section 262/316;1536×864 = 786/786 不捲〕
 - [ ] **`lib/index-chart-svg.ts` 死碼 cluster**:`buildIndexGeometry` / `rightEdgeLabels` / `IndexPt` /
   `RightEdgeLabel` / `RightEdgeInput` 自本輪起無 production caller(`outOfDomainLevels` / `IndexGeometry` /
   `buildOverlayGeometry` 仍活),`index-chart-svg.test.ts` 有 3 個 describe 只測沒人走的碼 → 🔵 清理連測試一起。
@@ -226,7 +234,8 @@
 - [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
   屆時 OrdersList 標籤對這兩梯才會出現(現在 wire 就是限價 IOC,不標)。
 - [ ] `futMarketEdgeMilli` 對 `upper/lower ≤ 0` 不回 null(只對 null;stkfut 版有 ≤0 守門)—— 後端
-  `_bad_price` 會擋,前端不鎖鈕;統一口徑時順手。
+  `_bad_price` 會擋,前端不鎖鈕;統一口徑時順手。〔2026-08-20 vitest 探針證實:fut 版對 0 回 0、
+  負值照 floor 放行;stkfut 版同輸入回 null〕
 
 ## 2026-08-17(mod/ladder-pills-avgpct R6 留尾)
 
@@ -267,6 +276,8 @@
   或 chrome 依可用高分級。user 實機 2560 寬 4×4(430×262)可讀。
 - [ ] **群組檢視點卡片仍拉全量 tape snapshot**(review B7):`/api/stock/state/{code}` 含整份 ticks
   而群組檢視無主圖讀者;候選 `?tape=0` 或群組檢視輕量換檔(W-4 要求 onSelect 仍換訂閱)。
+  〔2026-08-20 結構面已證實(endpoint 恆帶 ticks);盤後 tape 近空(579B)量不出實際大小,
+  以 08-20 早盤 log 換算:3450 回填 4266 ticks ≈ 數百 KB 級,實測留次一盤中〕
 - [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
   balance / group-state 最大延遲。
 - [ ] **>20k tick 日單檔頁 vp 偏小**(review R2-5):單檔頁 vp 折自已被 deque(20k)截斷的 snapshot
@@ -301,16 +312,18 @@
 
 - [ ] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**(review WL-3
   partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
-  ≈ 312–420px(改版前 ≈ 550,當時也已 3.9px)。本輪只補了 intraday / overlay 的
+  ≈ 312–420px(改版前 ≈ 550,當時也已 3.9px)。〔2026-08-20 機械實測:1536×864 兩欄態加權
+  pane 實渲染 282×113px、scale 0.202,**全部文字 3.0px 高**——比原估更窄〕本輪只補了 intraday / overlay 的
   `unitScale` 字級補償(`lib/pane-frame.ts::paneUnitScale` + `svgFontRem`)。修法候選:
   CandleChart 收 `unitScale` prop 套進五處 fontSize;或 MarketPane 在窄 pane 時傳較小
   viewBox 寬(需 CandleChart 開 `width` prop)。個股頁 CandleChart 不受影響。
 - [ ] **`rightEdgeLabels` 的 `EDGE_LABEL_H` 未隨 unitScale 縮放**(fix 波偏離 2):字放大後右緣
   標籤(昨收 / CDP / MA)間距相對變密,極端時可能相疊;`lib/index-chart-svg.ts` 是個股圖共用
   契約故本輪不動。修法:clamp 高度也乘 unitScale(需連 StockIntradayChart 的呼叫端一起看)。
-- [ ] **1536 寬右欄(≈475px)漲跌停表仍可能出現水平捲軸**(截圖觀察):th / 徽章已 `whitespace-nowrap`
-  防折行截字;9 欄在 475px 內本就擠。候選:金額(億)/ 量比 兩欄在窄容器 `@[…]:hidden`,或縮
-  px-2 → px-1。看 user 實際使用感受再決定。
+- [ ] **1536 寬右欄漲跌停表水平捲軸**(截圖觀察):th / 徽章已 `whitespace-nowrap`
+  防折行截字;9 欄在窄容器內本就擠。候選:金額(億)/ 量比 兩欄在窄容器 `@[…]:hidden`,或縮
+  px-2 → px-1。看 user 實際使用感受再決定。〔2026-08-20 機械實測:1536×864 下 scroller
+  clientWidth 431px、表 612px → 恆有捲軸,約 30% 欄寬藏在捲軸後,非邊緣 case〕
 - [ ] `frontend-conventions` skill 可沉澱本輪兩條版面教訓(已寫進 skill,見該檔 2026-08-16 節):
   container query 變體量的是**最近 `@container` 祖先**(MarketPane 的 `@[1050px]:min-h-0`
   量到左欄寬永不成立);grid 單欄態 auto 列會把自由空間等分給 min-h-0 的項目。
@@ -374,7 +387,8 @@
 - [ ] **側欄 sticky 遮蔽帶的拖曳落點語意**(review A-3,既有語意的量變):游標在 sticky
   搜尋區上放開時 `dropTargetFromPointer` 取最近 zone(落未分組 index 0)而非作廢;本輪
   全收/全展鈕使 sticky 高一列,遮蔽帶隨之加高。收斂方向 = 把 sticky 高度傳進 `zonesNow`,
-  y 落帶內回 null(拖到搜尋列 = 作廢),不動 ROW_H / bounds。
+  y 落帶內回 null(拖到搜尋列 = 作廢),不動 ROW_H / bounds。〔2026-08-20 vitest 探針證實:
+  y 在所有 zone 上方 → 回最上 zone index 0,不作廢〕
 - [x] ~~conftest 自選隔離 fixture 的組合跑 flake~~ **2026-08-20 修畢**(與 08-18 signal-denoise
   節同一條):根因 = pytest 9.1.1 參數順序 bug,fixture 已上移 root conftest,細節見該節。
 
@@ -414,6 +428,9 @@
   在「TC4 冷啟動忙碌」窗口同樣拿到空結果且無重試 —— river 六腿 08:23 實錄裡 TXF/TWN/SXF
   三腿同秒 timeout 回空。候選:回傳三態(ok/timeout/empty)或 timeout 專用 exception,
   逐 caller 決定重試;動基底 `TC4QuoteSource` 需盤 blast radius,獨立輪。
+  〔2026-08-20 caller 盤點:`HistoryResult.timed_out` 旗標已存在(08-05 bars 三態),但只有
+  stock bars 路徑(stock_source:691-709)在讀;`futures_source:187/192`、`stock_source:643/721/724`
+  皆 `.rows` 直取丟旗標,river_backfill 另有自己的「首頁非空即 break」迴圈 —— 家族名單就這五處+river〕
 - [ ] **盤外時段啟動踩 timeout 無自癒**:分時自癒 gate 在 watch window(09:00–13:25),
   盤後/晚間啟動若 1K 回補 timeout,線缺到次日 09:06 才自癒。實測晚間 TC4 閒時回補快
   (18:17 啟動無 timeout),風險低;若要覆蓋,detector 改「窗外以 min(now, 13:30) 為
