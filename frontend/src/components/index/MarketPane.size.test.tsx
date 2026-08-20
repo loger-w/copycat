@@ -21,7 +21,8 @@ import {
   MARKET_MODE_STORE,
 } from "@/lib/constants";
 import {
-  CANDLE_CHROME_Y,
+  // `CANDLE_CHROME_Y` 刻意**不 import**:高的期望值改字面量後它只會誘人寫回同義反覆
+  // (B2)。`CANDLE_INSET_X` 留著只給「寬恰等於 insetX」這種與數值無關的邊界案例。
   CANDLE_INSET_X,
   PANE_FRAMES,
   paneCandleBox,
@@ -168,13 +169,30 @@ describe("paneSvgHeight(overlay 唯一讀者;§4.1)", () => {
  *  fontSize,補不了 `PRICE_TAG` / `TIME_TAG` / `X_LABEL_H` 這些 viewBox 單位的排版
  *  常數 —— 縮放比 0.2 下 hover 價位框只有 11×3px,字放大後必撞。
  *
- *  **常數一律 import 不硬寫**:`CANDLE_CHROME_Y` 的 80 + 20 拆解是 W-4 契約的出處
- *  (`MarketChart` 的 meta 列 `h-4`),測試裡寫死 100 會讓契約漂掉時這裡照樣綠。 */
+ *  **期望值一律寫字面量,不由 import 的常數算回來**(review round-1 B2):用
+ *  `430 - CANDLE_INSET_X` 當期望等於把待測的常數搬到等號兩邊,`CANDLE_CHROME_Y` 改
+ *  84 / `CANDLE_INSET_X` 改 30 這類 mutant 全數存活(實測 71/71 綠)。常數仍 import
+ *  給「邊界恰等於 insetX」那種**與數值無關**的案例用。 */
 describe("paneCandleBox 算式(1:1)", () => {
   it("量得到:寬 = round(量到的寬 − insetX)、高 = max(96, floor(高 − chromeY) − 2)", () => {
+    // 430×300 的拆解(字面量,不由常數算):
+    //   396 = 430 − 34(CandleChart figure 的 border 2 + `p-4` 32)
+    //   198 = floor(300 − 100) − 2,其中 100 = CandleChart figure 80(border 2 + p-4 32
+    //         + 頂列 26 + figcaption 20) + MarketChart meta 列 20(h-4 16 + mt-1 4)
     expect(paneCandleBox({ width: 430, height: 300 })).toEqual({
-      width: 430 - CANDLE_INSET_X,
-      height: Math.max(96, Math.floor(300 - CANDLE_CHROME_Y) - 2),
+      width: 396,
+      height: 198,
+      usable: true,
+    });
+  });
+
+  // ResizeObserver 的 contentRect 是**小數**(devicePixelRatio 非整數倍、container query
+  // 下的分數寬),整數輸入下 round / floor 恆同值 → 取整策略零鑑別力(review round-1 B3)。
+  // 397 只有 Math.round 給得出(floor → 396);198 只有 Math.floor 給得出(round → 199)。
+  it("小數輸入(RO contentRect 常是小數):寬 round 進位、高 floor 捨去", () => {
+    expect(paneCandleBox({ width: 430.6, height: 300.7 })).toEqual({
+      width: 397,
+      height: 198,
       usable: true,
     });
   });
@@ -223,6 +241,8 @@ describe("MarketPane 量測 → 圖高(SC-4)", () => {
     const box = paneIntradayBox({ width: 430, height: 300 });
     expect(box.usable).toBe(true);
     expect(intradayViewBox()).toBe(`0 0 ${box.width} ${box.height}`);
+    // 兩態互斥(B6):分時態下 CandleChart 不得同時掛著(見 TD-7 K 線態的對稱斷言)
+    expect(screen.queryByTestId("candle-figure")).toBeNull();
   });
 
   it("無 ResizeObserver(jsdom 預設 / 舊瀏覽器)→ 退回 core 預設 800×260(W-10)", () => {
@@ -261,13 +281,14 @@ describe("MarketPane 依模式選換算(TD-7)", () => {
     renderPane();
 
     const figure = await screen.findByTestId("candle-figure");
-    const box = paneCandleBox(SIZE);
-    expect(box.usable).toBe(true);
     // 寬也是變數(1:1)—— 只比高會漏掉「寬沒跟著量測走」這個失效樣態,而那正是
-    // 字級被縮成 3px 的成因(同 intradayViewBox 的理由)
-    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe(
-      `0 0 ${box.width} ${box.height}`,
-    );
+    // 字級被縮成 3px 的成因(同 intradayViewBox 的理由)。
+    // **字面量**(B2):寫成 `0 0 ${box.width} ${box.height}` 會讓待測常數同時當期望,
+    // chromeY / insetX 改錯照樣綠。396/198 的拆解見 paneCandleBox describe。
+    expect(figure.querySelector("svg")!.getAttribute("viewBox")).toBe("0 0 396 198");
+    // 兩態互斥(B6):candleBox / intradayBox 原本只由「同一個 mode 判別」建構保證,
+    // 零測試 —— 兩者同時 render 的症狀是圖疊圖,而 viewBox 斷言照樣全綠
+    expect(screen.queryByRole("img", { name: /分時走勢/ })).toBeNull();
   });
 
   // W-3:量不到就**不傳**,讓 CandleChart 走它自己的 1400×578 —— 傳一組 0 的話 svg
