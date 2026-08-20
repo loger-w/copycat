@@ -142,9 +142,9 @@
 - [ ] **規則 UI `rearm_dwell_secs` step="1" 且前端不擋 0–3600 值域**(code review T-10 rejected):沿
   `window_secs` 既有慣例(值域由後端 INVALID_RULE 擋、文案泛用);要做就連 rearm_ticks / window_secs 一起
   加前端值域提示。
-- [ ] **合併列 title 只有整組合併字串**(T-12 partial):kind 段與規則名段的一對一對應在 hover 提示上看不出;
+- [x] ~~**合併列 title 只有整組合併字串**~~ **2026-08-21 B3 修畢**(逐段 span title「label(rule)」/「rule:labels」;分支 mod/signal-merged-row-wrap)。原文:(T-12 partial):kind 段與規則名段的一對一對應在 hover 提示上看不出;
   候選 = 逐段 span 各帶自己的 title「kind(rule)」。
-- [ ] **合併列在 200px rail 內易被 truncate**(真環境過目:「突破 CDP AH・爆量 5.9 倍」被截成「突破 CDP AH・…」),
+- [x] ~~**合併列在 200px rail 內易被 truncate**~~ **2026-08-21 B3 修畢**(合併列 kind 段 line-clamp-2 + 規則名堆疊另起一行;實測 154/154 零裁切、三段列 2 行、價格仍對齊首行)。原文:(真環境過目:「突破 CDP AH・爆量 5.9 倍」被截成「突破 CDP AH・…」),
   full text 在 title;若嫌難讀,候選 = 合併列允許換行或縮字級。〔2026-08-20 MCP 實測:當日兩條真實
   合併列雙雙被切 —「跌破 CDP 中軸・爆跌 -2.06%」需 154px 只分到 95px(38% 被切)、規則名段 92→57px〕
 - [x] ~~conftest `TestConftestWatchlistIsolation` 順序脆弱~~ **2026-08-20 修畢**:根因不是測試污染,
