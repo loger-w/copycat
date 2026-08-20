@@ -3,7 +3,7 @@
  * 吃 props 不自己呼叫 `useRiver` —— 與 `CorrPanel` 同款(資料流留在 `CorrPage`),
  * 元件測試才能直接餵狀態(`[phase-3 補註]`:design §2 原寫 RiverPanel 內呼叫 hook)。
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { RIVER_MODE_KEY, RIVER_OFF_KEY } from "@/lib/constants";
 import type { OverlayEntry } from "@/lib/river-chart-svg";
@@ -40,6 +40,22 @@ export function RiverPanel({ state }: Props) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const [off, setOff] = useState<string[]>(initialOff);
 
+  // 兩個 useMemo 必須在 `state === null` 早退**之前** —— 放在早退之後就是條件式 hook,
+  // 江波圖首載(state 尚未到)那一輪與有資料後的 hook 數量不同,corr tab 開站即崩。
+  // null 分支各自回空,早退在下面照舊。
+  const legs = state?.legs;
+  const order = useMemo(() => (legs === undefined ? [] : Object.keys(legs)), [legs]);
+  // `entries` 是 RiverOverlay 幾何 useMemo 的 dep,identity 每輪換掉的話下游 memo 全空轉。
+  // deps 不含 `state.base`:base 只決定哪條線畫粗(RiverOverlay 自己吃 prop),不進本計算。
+  const entries = useMemo<OverlayEntry[]>(() => {
+    if (legs === undefined) return [];
+    return Object.keys(legs).flatMap((key, i) => {
+      const leg = legs[key];
+      if (leg === undefined || off.includes(key)) return [];
+      return [{ key, colorIndex: i, leg, label: leg.label }];
+    });
+  }, [legs, off]);
+
   function switchMode(next: Mode): void {
     setMode(next);
     window.localStorage.setItem(RIVER_MODE_KEY, next);
@@ -59,12 +75,8 @@ export function RiverPanel({ state }: Props) {
     );
   }
 
-  const order = Object.keys(state.legs);
   const sessionText = state.session === "day" ? "日盤" : "夜盤";
   const hasAnyPoint = order.some((key) => Object.keys(state.legs[key]?.minutes ?? {}).length > 0);
-  const entries: OverlayEntry[] = order
-    .map((key, i) => ({ key, colorIndex: i, leg: state.legs[key]!, label: state.legs[key]!.label }))
-    .filter((entry) => !off.includes(entry.key));
 
   return (
     <section className="flex flex-col gap-2">
