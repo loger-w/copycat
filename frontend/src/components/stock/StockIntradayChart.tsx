@@ -1,9 +1,10 @@
 import { memo, useId, useMemo, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
-// 型別借用既有 export(K 線圖的水平 overlay 與分時圖畫的是同一組語意:持倉均價 / OI 撐壓)。
-// CandleChart 不 import 本檔,不成環;兩邊各定義一份的失效樣態是「K 線加了 title 欄、
-// 分時圖沒有」這種同一份資料在兩張圖上長不一樣,沒有 assertion 會紅。
+// 水平 overlay 的單一出處 = `lib/chart-hlines`(K 線圖與分時圖畫的是同一組語意:持倉均價 /
+// OI 撐壓);`CandleChart` 對 `ChartHLine` 只是 `export type` re-export,保住既有 import 路徑。
+// 兩邊各定義一份的失效樣態是「K 線加了 title 欄、分時圖沒有」這種同一份資料在兩張圖上長不
+// 一樣,沒有 assertion 會紅。
 import { EMPTY_HLINES, type ChartHLine } from "@/lib/chart-hlines";
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";

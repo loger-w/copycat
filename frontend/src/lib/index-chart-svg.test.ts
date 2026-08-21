@@ -50,6 +50,10 @@ describe("outOfDomainLevels(SC-7 域內/域外分類)", () => {
   //   yBottom = low  * 0.997 = 22_990_000 * 0.997 = 22_921_030
   //   toY(p)  = (yTop − p) / (yTop − yBottom) * height
   // `toY` 是 `overlayLines`(下面對照組)要的第二欄,一併給。
+  //
+  // yTop 那 15 位小數只是**出處還原**(把域公式的浮點結果原樣抄回),不是被斷言的精度:
+  // 下面的案子只依賴「yTop 落在 23_100_000 這個量級之上」——`ah` / `ma20` 之類的樁值是拿
+  // yTop / yBottom 加減百萬去構造的,末位差幾個 ulp 不會改變任何一筆的域內外分類。
   const yTop = 23_169_299.999_999_996;
   const yBottom = 22_921_030;
   const g: { yDomain: [number, number]; toY: (p: number) => number } = {
