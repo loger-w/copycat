@@ -2287,7 +2287,7 @@ _OBSERVE_PREFIX = "trade-status-observe"
 
 
 async def _make_with_clock(
-    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01
+    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01, trading_day: bool = True
 ) -> tuple[StockEngine, FakeSource]:
     """假時鐘**先注入再 `start()`**(D3 amendment R3)。
 
@@ -2295,10 +2295,20 @@ async def _make_with_clock(
     「真實時鐘 → 假時鐘」的假翻轉並補推一輪,否定型斷言(固定時鐘不補推)就永遠假綠。
     注入的是**模組屬性**而非 engine 方法:`_now_taipei_time` 是模組級函式(同
     `_now_taipei_hhmm` 慣例),per-code 的 `_trial_now` 走它。
+
+    `is_trading_day` 顯式注入(test-infra-fix,D4'):試撮旗標接日曆之後,不注入的
+    engine 會落到預設 `weekday() < 5` → 整組窗內測試在週末跑就集體轉紅(而它們要測的
+    是**窗**,不是日曆)。`trading_day=False` 則是 SC-3 的反向案共用入口。
     """
     monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: clock)
     src = FakeSource()
-    engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=throttle, checkpoint=False)
+    engine = StockEngine(
+        src,
+        trade_date="2026-07-21",
+        throttle_secs=throttle,
+        checkpoint=False,
+        is_trading_day=lambda _d: trading_day,
+    )
     await engine.start()
     return engine, src
 
@@ -2394,6 +2404,18 @@ class TestTrialFlag:
         assert engine.snapshot("2330")["trial"] is False
         await engine.close()
 
+    async def test_trial_false_on_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SC-3(D4'):日曆說今天不開盤 → 窗內也不標(緩)。
+
+        只看窗不看日曆的話,週末 / 國定假日開著的站在 08:30–09:00 會讓全自選一起亮
+        「(緩)」—— 那是完全沒有撮合的時段,畫面上是純噪音,還跟後端「非交易日不輪詢」
+        的事實直接打架。日曆來源 = engine 既有的 `is_trading_day` 注入(單一來源)。
+        """
+        engine, _src = await _make_with_clock(monkeypatch, "08:50:00.000", trading_day=False)
+        assert engine.snapshot("2330")["trial"] is False  # 對照:同一時鐘交易日為 True
+        assert engine._quote_payload("2330")["trial"] is False
+        await engine.close()
+
 
 class TestTrialWindowFlipPush:
     """SC-4:窗邊界翻轉 → 自選各碼 + 現貨主圖碼各補推一則帶新 `trial` 的 quote(D3)。
@@ -2408,7 +2430,13 @@ class TestTrialWindowFlipPush:
         now = {"t": "08:29:59.000"}
         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
         src = FakeSource()
-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        engine = StockEngine(
+            src,
+            trade_date="2026-07-21",
+            throttle_secs=0.01,
+            checkpoint=False,
+            is_trading_day=lambda _d: True,  # test-infra-fix(D4'):測的是窗,不是日曆
+        )
         await engine.start()
         await engine.set_watchlist(["2330"])
         await engine.set_main("5483")  # 現貨主圖且**不在自選** + 全程零成交(last is None)
@@ -2447,7 +2475,13 @@ class TestTrialWindowFlipPush:
         now = {"t": "08:29:59.000"}
         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
         src = FakeSource()
-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        engine = StockEngine(
+            src,
+            trade_date="2026-07-21",
+            throttle_secs=0.01,
+            checkpoint=False,
+            is_trading_day=lambda _d: True,  # test-infra-fix(D4')
+        )
         await engine.start()
         await engine.set_watchlist(["2330"])
         await engine.set_main("2330")  # 第二個 owner:自選 + 主圖
@@ -2470,7 +2504,13 @@ class TestTrialWindowFlipPush:
         now = {"t": "08:29:59.000"}
         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
         src = FakeSource()
-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        engine = StockEngine(
+            src,
+            trade_date="2026-07-21",
+            throttle_secs=0.01,
+            checkpoint=False,
+            is_trading_day=lambda _d: True,  # test-infra-fix(D4')
+        )
         await engine.start()
         await engine.set_main_contract(_CONTRACT)
         got, tap = _tap(engine.stream())
@@ -2478,6 +2518,36 @@ class TestTrialWindowFlipPush:
         mark = len(got)
 
         now["t"] = "08:30:00.000"
+        await _drain(engine)
+        assert [m for m in got[mark:] if m["type"] == "watchlist_quote"] == []
+        await _untap(tap)
+        await engine.close()
+
+    async def test_no_flip_push_on_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SC-3(D4'):非交易日跨過窗邊界 → 一則都不補推(旗標恆 False = 根本沒有翻轉)。
+
+        翻轉偵測若只看窗,休市日的 08:30 / 09:00 / 13:25 / 13:30 各會替全自選 + 現貨
+        主圖補推一輪 quote —— 那是打穿節流的空推,且畫面上的「(緩)」會在沒有撮合的
+        日子亮起又熄掉。
+        """
+        now = {"t": "08:29:59.000"}
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+        src = FakeSource()
+        engine = StockEngine(
+            src,
+            trade_date="2026-07-21",
+            throttle_secs=0.01,
+            checkpoint=False,
+            is_trading_day=lambda _d: False,
+        )
+        await engine.start()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("5483")
+        got, tap = _tap(engine.stream())
+        await _drain(engine)
+        mark = len(got)
+
+        now["t"] = "08:30:00.000"  # 「進窗」但今天休市
         await _drain(engine)
         assert [m for m in got[mark:] if m["type"] == "watchlist_quote"] == []
         await _untap(tap)
@@ -2818,7 +2888,7 @@ class TestObserveClockContract:
             "_dt",
             SimpleNamespace(datetime=SimpleNamespace(now=lambda: wall), timedelta=_dt.timedelta),
         )
-        assert stock_engine_mod._spot_trial_now() is expected
+        assert stock_engine_mod._spot_trial_window_now() is expected
 
     def test_observe_windows_widen_trial_windows_by_two_seconds(self) -> None:
         """D6-1 的推導式落地值(改 `TRIAL_WINDOWS` 時這條會提醒觀測窗要跟著動)。"""
