@@ -1405,6 +1405,35 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
     assert _balance_queries(com) == 2
 
 
+def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) -> None:
+    """R7/A4:死查詢逾期解卡(SC-7(d))放棄了第一輪,但那一輪的 `##` 可能才遲到 —
+    COM 回呼不帶任何查詢識別,終止符無法與查詢配對。遲到的零列 `##` 若照 flush,
+    on_complete 的全量取代語意會把有庫存的部位清成空集合(平倉鍵鎖住,真錢面不可操作),
+    且 `_closed` 之後第二輪的 rows 全被丟棄 → 最壞 60s 才自癒。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
+    assert _balance_queries(com) == 1
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0  # deadline 逾期 → 解卡放行
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 2
+
+    client._handle_balance("##")  # 第一輪遲到的終止符
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    assert client._pending_sec is None  # 鏈不得被空集合啟動
+
+    bal = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
+    client._handle_balance(bal)  # 第二輪真回應
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
+
+
 def test_balance_query_rc_failure_rearms_due_with_backoff(tmp_path: Path) -> None:
     """C1/T9:GetRealBalance rc≠0(1019「查詢處理中」)= 鏈根本沒啟動 →
     (a) 守門旗標必須清掉,不可佔著擋下一輪;
