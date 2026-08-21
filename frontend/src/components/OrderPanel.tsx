@@ -5,6 +5,7 @@ import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog"
 import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
 import { useCapitalStatus, useSubmitFuture } from "@/hooks/useCapital";
 import { shortSymbol, tradeErrorText } from "@/lib/trade-text";
+import { RadioPills } from "@/components/ui/RadioPills";
 import { cn } from "@/lib/utils";
 import type { ContractRow } from "@/types";
 
@@ -167,66 +168,57 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
             </select>
           </label>
 
-          <div className="grid grid-cols-2 gap-2" role="group" aria-label="買賣別">
-            <button
-              type="button"
-              aria-pressed={side === "buy"}
-              onClick={() => setSide("buy")}
-              className={cn(
-                "border px-3 py-1.5 text-sm transition-colors",
-                side === "buy"
-                  ? "border-bull bg-bull/15 font-bold text-bull"
-                  : "border-line text-ink-dim hover:text-bull",
-              )}
-            >
-              買進
-            </button>
-            <button
-              type="button"
-              aria-pressed={side === "sell"}
-              onClick={() => setSide("sell")}
-              className={cn(
-                "border px-3 py-1.5 text-sm transition-colors",
-                side === "sell"
-                  ? "border-bear bg-bear/15 font-bold text-bear"
-                  : "border-line text-ink-dim hover:text-bear",
-              )}
-            >
-              賣出
-            </button>
-          </div>
+          {/* 買賣別 / 委託類型都是單選(a11y 批:原 `role="group"` + `aria-pressed` button
+              群 → radiogroup + sr-only radio)。pill 就在 `<form>` 裡,焦點掃到它按 Enter
+              會觸發 implicit submit 直接跳確認窗 —— `RadioPills` 已在 input 上擋掉。 */}
+          <RadioPills<"buy" | "sell">
+            ariaLabel="買賣別"
+            className="grid grid-cols-2 gap-2"
+            value={side}
+            onChange={setSide}
+            items={[
+              { value: "buy", label: "買進" },
+              { value: "sell", label: "賣出" },
+            ]}
+            pillClass={(item, checked) =>
+              cn(
+                // `text-center`:原 `<button>` 由 UA 樣式置中文字,換成 `<label>` 後
+                // 會靠左 —— 這兩組是 `grid-cols-2`(格子比文字寬),不補就是可見的版面
+                // 偏移。其餘 pill 群在 flex 容器內、盒寬貼著文字,不受影響。
+                "border px-3 py-1.5 text-center text-sm transition-colors",
+                item.value === "buy"
+                  ? checked
+                    ? "border-bull bg-bull/15 font-bold text-bull"
+                    : "border-line text-ink-dim hover:text-bull"
+                  : checked
+                    ? "border-bear bg-bear/15 font-bold text-bear"
+                    : "border-line text-ink-dim hover:text-bear",
+              )
+            }
+          />
 
-          <div className="grid grid-cols-2 gap-2" role="group" aria-label="委託類型">
-            <button
-              type="button"
-              aria-pressed={kind === "limit"}
-              onClick={() => setKind("limit")}
-              className={cn(
-                "border px-3 py-1.5 text-sm transition-colors",
-                kind === "limit"
-                  ? "border-accent text-accent"
-                  : "border-line text-ink-dim hover:text-ink",
-              )}
-            >
-              限價
-            </button>
-            <button
-              type="button"
-              aria-pressed={kind === "market"}
-              disabled={marketEstimate == null}
-              title={marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined}
-              onClick={() => setKind("market")}
-              className={cn(
-                "border px-3 py-1.5 text-sm transition-colors",
-                kind === "market"
-                  ? "border-accent text-accent"
-                  : "border-line text-ink-dim hover:text-ink",
-                marketEstimate == null && "cursor-not-allowed opacity-40",
-              )}
-            >
-              市價
-            </button>
-          </div>
+          <RadioPills<"limit" | "market">
+            ariaLabel="委託類型"
+            className="grid grid-cols-2 gap-2"
+            value={kind}
+            onChange={setKind}
+            items={[
+              { value: "limit", label: "限價" },
+              {
+                value: "market",
+                label: "市價",
+                disabled: marketEstimate == null,
+                title: marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined,
+              },
+            ]}
+            pillClass={(item, checked) =>
+              cn(
+                "border px-3 py-1.5 text-center text-sm transition-colors",
+                checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+                item.disabled && "cursor-not-allowed opacity-40",
+              )
+            }
+          />
 
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-xs text-ink-muted">

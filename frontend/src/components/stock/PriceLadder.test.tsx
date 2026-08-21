@@ -1339,7 +1339,7 @@ describe("PriceLadder 梯頂市價鈕", () => {
     });
     render(ladder());
     armUp();
-    fireEvent.click(screen.getByRole("button", { name: "無券" }));
+    fireEvent.click(screen.getByRole("radio", { name: "無券" }));
     const buy = marketBtn("買");
     expect(buy.hasAttribute("disabled")).toBe(true);
     expect(buy.getAttribute("title")).toBe("無券當沖不可買進");

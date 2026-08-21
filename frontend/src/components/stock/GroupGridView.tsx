@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
+import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
@@ -312,42 +313,35 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      {/* `aria-label` 掛在 `role="group"` 容器而不是任何一顆 button:容器不是表單控制項,
+      {/* `aria-label` 掛在 `RadioPills` 的 radiogroup 容器而不是任何一顆 pill(a11y 批:
+          原本是 `role="group"` + `aria-pressed` button 群):容器不是表單控制項,
           不觸 label-in-name(pill 自己的可及名稱就是印在上面的群組名,兩者不打架)。
           這個名稱是**契約**:StockPage.test.tsx 671/713(`queryByLabelText` 鎖「單檔檢視
           不渲染群組檢視」)與 746/750(鎖「重掛後還原群組檢視」)四處都靠它接住 ——
           拿掉的失效樣態是那四條斷言靜默 vacuous(查不到元素與「沒渲染」在 queryBy 下
           長得一模一樣),不是紅燈。 */}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-      <div
-        role="group"
-        aria-label="選擇群組"
+      <RadioPills<string>
+        ariaLabel="選擇群組"
         className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
-      >
-        <span>群組</span>
-        {groups.map((g) => (
-          <button
-            key={g.name}
-            type="button"
-            aria-pressed={selected?.name === g.name}
-            onClick={() => {
-              setPicked(g.name);
-              persistGroupName(g.name);
-            }}
-            className={cn(
-              "rounded border px-2 py-0.5 text-xs",
-              selected?.name === g.name
-                ? "border-accent text-accent"
-                : "border-line text-ink-dim hover:text-ink",
-            )}
-          >
-            {g.name}
-          </button>
-        ))}
-      </div>
+        leading={<span>群組</span>}
+        value={selected?.name ?? ""}
+        onChange={(name) => {
+          setPicked(name);
+          persistGroupName(name);
+        }}
+        items={groups.map((g) => ({ value: g.name, label: g.name }))}
+        pillClass={(_item, checked) =>
+          cn(
+            "rounded border px-2 py-0.5 text-xs",
+            checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+          )
+        }
+      />
         {/* toggle 列與群組 pill 同一行(SC-2):圖牆頂只有一列 chrome,兩列會吃掉
-            卡片的高。**不放進 `role="group"` 容器內** —— 那個容器的可及名稱是
-            「選擇群組」,圖層開關不屬於它。 */}
+            卡片的高。**不放進 radiogroup 容器內**(連 `trailing` 都不走)—— 那個容器的
+            可及名稱是「選擇群組」,而這三顆是**開關**不是單選項,混進去會讓 AT 把
+            「vp / 成交點 / 布林」讀成群組選項。 */}
         <div className="ml-auto flex shrink-0 gap-1">
           {GRID_TOGGLES.map(({ key, label }) => (
             <button
