@@ -30,11 +30,15 @@ function tick(id: string, over: Partial<SignalMsg>): SignalMsg {
   return { ...sig(id), code: "2330", ...over };
 }
 
-/** SC-1 的三則同 tick 訊號(CDP 穿越 + 爆拉 + 爆量),到達序 a → b → c。 */
+/** SC-1 的三則同 tick 訊號(CDP 穿越 + 爆拉 + 爆量),到達序 a → b → c。
+ *
+ *  **三則 price 刻意互異**(review TQ-5):錨價取「最早到那則」是明示契約,三則同價時
+ *  `items.at(-1)` 換成 `items[0]` 的 mutant 照樣綠 —— 文案尾巴的價格就是鑑別子。 */
 const TICK_A = tick("a", { kind: "cdp_cross", levels: ["ah"], direction: "from_below", pct: null });
-const TICK_B = tick("b", { kind: "surge", pct: 1.5 });
-const TICK_C = tick("c", { kind: "vol_burst", pct: 3 });
-/** 三則合併後的字面文案(price 1_234_500 → "1234.5")。 */
+const TICK_B = tick("b", { kind: "surge", pct: 1.5, price: 1_240_000 });
+const TICK_C = tick("c", { kind: "vol_burst", pct: 3, price: 1_250_000 });
+/** 三則合併後的字面文案。價格 = 錨(TICK_A,1_234_500 → "1234.5"),**不是**最後到的
+ *  TICK_C("1250.0");kind 段依到達序 a・b・c。 */
 const TICK_TEXT = "2330 台積電 突破 CDP AH・爆拉 +1.50%・爆量 3.0 倍 1234.5";
 
 /** 這兩個計數器由 fake 類別在呼叫當下累加;`beforeEach` 歸零(不重新綁定,
@@ -147,6 +151,20 @@ describe("useSignalAlerts — toast 佇列", () => {
     expect(hook.result.current.toasts[0]?.key).not.toBe(target.key);
   });
 
+  // TQ-3:手動關掉那張之後,合併索引也必須跟著清 —— 否則同鍵下一則會走 merge 分支,
+  // setQueue 在佇列裡找不到那張直接原樣返回 = 訊號被靜靜吞掉(零畫面、零聲音)。
+  it("dismiss 後同 (code,time) 再來 → 另開新張(索引已清,不被吞掉)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("dup")));
+    const first = hook.result.current.toasts[0]!.key;
+    act(() => hook.result.current.dismiss(first));
+    expect(hook.result.current.toasts.length).toBe(0);
+    act(() => emitSignal(sig("dup")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.key).not.toBe(first);
+    expect(oscillators).toBe(2); // 新張 = 新一組 → 再嗶一聲
+  });
+
   // D1'':合併鍵 = (code, time)。同 id 重發必然同鍵 → 併入既有那張(key 不變,避免
   // 卸載重掛閃爍);「key 互異」的原意由下面兩案(不同 code / 判為新張)保住。
   it("同 (code,time) 重發 → 併入同一張 toast(key 不變,不重嗶)", () => {
@@ -209,6 +227,38 @@ describe("useSignalAlerts — 同 tick 合併(SC-1 / SC-2)", () => {
     expect(toast?.text).toBe(TICK_TEXT);
     expect(toast?.key).toBe(key);
     expect(toast?.sig.id).toBe("a"); // 錨 = 最早到那則
+  });
+
+  // TQ-4 / D3:併入**不重設 TTL** —— 同一 tick 的一組本來就同時到,續命等於讓一組
+  // 持續有訊號的標的永遠佔著版面。t=3000 併入(剩 2000ms ≥ 1500ms),TTL 仍在 t=5000 到期。
+  it("併入既有那張不重設 TTL(t=3000 併入,仍於 t=5000 消失)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(TICK_A));
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+      emitSignal(TICK_B);
+    });
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.items.length).toBe(2);
+    act(() => vi.advanceTimersByTime(1_999)); // t=4999
+    expect(hook.result.current.toasts.length).toBe(1);
+    act(() => vi.advanceTimersByTime(2)); // t=5001 = 首則的 t=0 + TTL 5000
+    expect(hook.result.current.toasts.length).toBe(0);
+  });
+
+  // TQ-8:同 kind 兩條規則同一 tick 各發一則(rule_id 讓 id 互異,formatToastText 文案
+  // 一模一樣)—— 併成一張、kind 段只印一次(規則名在 rail 另行顯示,toast 不含)。
+  it("同 tick 同 kind 兩條規則 → 一張一聲,kind 段只印一次", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => {
+      emitSignal(tick("r1", { kind: "surge", pct: 1.5, rule_name: "爆拉主規則" }));
+      emitSignal(tick("r2", { kind: "surge", pct: 1.5, rule_name: "爆拉備援" }));
+    });
+    const [toast] = hook.result.current.toasts;
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(toast?.items.length).toBe(2);
+    expect(toast?.text).toBe("2330 台積電 爆拉 +1.50% 1234.5"); // 一段,不是「爆拉…・爆拉…」
+    expect(oscillators).toBe(1);
   });
 
   it("同 code 不同 time / 同 time 不同 code → 各自一張", () => {
@@ -284,7 +334,9 @@ describe("useSignalAlerts — 同 tick 合併(SC-1 / SC-2)", () => {
       },
       { reactStrictMode: true },
     );
-    expect(renders).toBeGreaterThanOrEqual(2); // StrictMode 生效自檢(否則本案退化成一般案)
+    // StrictMode 生效自檢:掛載一次 = render body 跑兩次(字面值,不寫不等式 ——
+    // `toBeGreaterThanOrEqual` 連「wrapper 被拿掉但多渲染一次」都放過,自檢就失效了)。
+    expect(renders).toBe(2);
     act(() => {
       emitSignal(TICK_A);
       emitSignal(TICK_B);
@@ -305,6 +357,22 @@ describe("useSignalAlerts — Notification", () => {
     act(() => emitSignal(s));
     act(() => vi.advanceTimersByTime(300));
     expect(notified).toEqual([formatToastText(s)]);
+  });
+
+  // TQ-2:桌面通知走的是**合併後**文案(pendingRef 存的是 handler 算好的 text)——
+  // 期望寫字面量,不由 formatGroupToastText 算回來(同源 = 同義反覆,skill frontend-testing)。
+  it("背景同 tick 三則 → 一則通知,文案 = 合併文案(字面量)", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    act(() => {
+      emitSignal(TICK_A);
+      emitSignal(TICK_B);
+      emitSignal(TICK_C);
+    });
+    act(() => vi.advanceTimersByTime(300));
+    expect(notified).toEqual([
+      "2330 台積電 突破 CDP AH・爆拉 +1.50%・爆量 3.0 倍 1234.5",
+    ]);
   });
 
   // A4:推進量 < TTL,確保「沒通知」不是因為 toast 早就沒了(否則斷言 vacuous)
@@ -341,8 +409,17 @@ describe("useSignalAlerts — Notification", () => {
       vi.advanceTimersByTime(100);
       hidden = false;
     });
-    act(() => vi.advanceTimersByTime(500));
+    act(() => vi.advanceTimersByTime(500)); // t=600:timer 觸發,前景 → 丟棄
     expect(notified).toEqual([]);
+    // TQ-7:丟棄的那則**不記帳** —— 誤寫 lastNotifyRef 的話下一則要等到 t≈5600,
+    // 人切回背景後的第一則訊號整整五秒收不到通知。
+    const s = sig("b");
+    act(() => {
+      hidden = true;
+      emitSignal(s);
+    });
+    act(() => vi.advanceTimersByTime(300)); // t=900 = 600 + COALESCE_MS
+    expect(notified).toEqual([formatToastText(s)]);
   });
 
   // D5':pending 是**全域單槽**(固定 tag 本來就只有一格)—— 同一合併窗內不同標的
@@ -401,6 +478,28 @@ describe("useSignalAlerts — Notification", () => {
     expect(notified).toEqual([formatToastText(b), formatToastText(third)]);
   });
 
+  // TQ-1:上一案的 t=5299 emit 恰好落在「合併窗尾 = 節流窗尾」的重合點,兩個排程式子
+  // 給同一個答案 —— 節流其實沒被鎖住。本案把第二則挪到 t=1000:合併窗尾 t=1300 已過,
+  // 只有節流窗(lastSent 300 + 5000)撐到 t=5300,兩者差 4 秒,量得出來。
+  it("節流窗晚於合併窗時以節流窗為準(t=1000 到達,t=5300 才發)", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    const a = sig("a");
+    act(() => emitSignal(a));
+    act(() => vi.advanceTimersByTime(300)); // t=300:第一則發出,lastSent=300
+    expect(notified).toEqual([formatToastText(a)]);
+    const b = sig("b");
+    act(() => {
+      vi.advanceTimersByTime(700); // t=1000
+      emitSignal(b);
+    });
+    act(() => vi.advanceTimersByTime(4_299)); // t=5299(合併窗尾 t=1300 早就過了)
+    expect(notified.length).toBe(1);
+    act(() => vi.advanceTimersByTime(1)); // t=5300 = lastSent 300 + 5000
+    expect(notified.length).toBe(2);
+    expect(notified).toEqual([formatToastText(a), formatToastText(b)]);
+  });
+
   // spec Edge case 3:本輪要解的使用者症狀規模(爆量疊成一排);同時鎖住
   // 「節流閘不得往上吃掉 toast 佇列」(review TC-2)。
   it("背景爆量 20 則 → 恰 1 則通知,toast 佇列照常 4 + overflow 16", () => {
@@ -437,11 +536,15 @@ describe("useSignalAlerts — Notification", () => {
     expect(notified).toEqual([formatToastText(s)]);
   });
 
+  // TQ-6:只斷言「沒發通知」是半 vacuous —— pendingRef 被清空也會讓通知不發,timer
+  // 本身仍活著。直接數 timer:一則背景訊號 = TTL timer + 通知 timer 各一,unmount 後歸零。
   it("unmount 清掉待發的通知 timer(離開頁面後不再冒出來)", () => {
     hidden = true;
     const hook = renderHook(() => useSignalAlerts());
     act(() => emitSignal(sig("a")));
+    expect(vi.getTimerCount()).toBe(2); // TTL(5s)+ 通知合併窗(300ms)
     hook.unmount();
+    expect(vi.getTimerCount()).toBe(0);
     act(() => vi.advanceTimersByTime(1_000));
     expect(notified).toEqual([]);
   });
