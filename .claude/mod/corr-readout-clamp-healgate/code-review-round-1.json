@@ -1,0 +1,105 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "TQ-1",
+   "severity": "P1",
+   "summary": "rank>=2 邊界(827 且 end 有值)無 lock",
+   "disposition": "accepted",
+   "resolution": "補 827 案"
+  },
+  {
+   "id": "TQ-2",
+   "severity": "P1",
+   "summary": "夜盤 clamp 零覆蓋(_expand 共用無 lock)",
+   "disposition": "accepted",
+   "resolution": "night 四案 + push 案"
+  },
+  {
+   "id": "TQ-3",
+   "severity": "P2",
+   "summary": "05:06 案半空",
+   "disposition": "accepted",
+   "resolution": "拆腿斷言"
+  },
+  {
+   "id": "TQ-4",
+   "severity": "P2",
+   "summary": "守門在 set_session 後無測試",
+   "disposition": "accepted",
+   "resolution": "換場案"
+  },
+  {
+   "id": "TQ-5",
+   "severity": "P2",
+   "summary": "826 半案名實不符",
+   "disposition": "accepted",
+   "resolution": "改 830"
+  },
+  {
+   "id": "TQ-6",
+   "severity": "P2",
+   "summary": "讀值列順序斷言脆弱/無鑑別",
+   "disposition": "accepted",
+   "resolution": "過濾形狀 + 空腿不在末"
+  },
+  {
+   "id": "TQ-7",
+   "severity": "P2",
+   "summary": "未勾選腿不進讀值列無測試",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "TQ-8",
+   "severity": "P2",
+   "summary": "R5 留尾無 characterization",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "C-1",
+   "severity": "P2",
+   "summary": "close_clamp_rank 慣例(live floor+1)未寫",
+   "disposition": "accepted",
+   "resolution": "docstring"
+  },
+  {
+   "id": "C-2",
+   "severity": "P2",
+   "summary": "同 TQ-2",
+   "disposition": "accepted",
+   "resolution": "同"
+  },
+  {
+   "id": "C-3",
+   "severity": "P2",
+   "summary": "_session_date docstring 漏 _calendar_crosscheck",
+   "disposition": "accepted",
+   "resolution": "改判準式"
+  },
+  {
+   "id": "C-4",
+   "severity": "P2",
+   "summary": "同 TQ-5",
+   "disposition": "accepted",
+   "resolution": "同"
+  },
+  {
+   "id": "C-5",
+   "severity": "P2",
+   "summary": "空行",
+   "disposition": "accepted",
+   "resolution": "修"
+  }
+ ],
+ "evidence": {
+  "pytest": "2824",
+  "vitest": "2488",
+  "offset_of_equivalence": "全域逐點 0 差異"
+ }
+}
