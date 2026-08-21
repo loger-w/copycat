@@ -5,7 +5,7 @@ import { parseError } from "@/lib/api-error";
 import { setHolidays } from "@/lib/trading-calendar";
 import type { CalendarState } from "@/types";
 
-/** 交易日曆取數(SC-9):開站問一次 `/api/calendar`,把假日集合灌進 `lib/trading-calendar`。
+/** 交易日曆取數(SC-9):每 5 分鐘問一次 `/api/calendar`,把假日集合灌進 `lib/trading-calendar`。
  *
  *  **掛在 App 層且只掛一支**:消費端(三支交易時段函式)是模組級的,多掛幾份只是多打
  *  幾次同一個端點。
