@@ -45,6 +45,16 @@ function capStatus(overrides: Partial<CapitalStatus> = {}): CapitalStatus {
   };
 }
 
+/** 🔴 a11y 批:委託類型 pill 改 RadioPills(sr-only radio + label)。
+ *  舊寫法 `getByText("市價").closest("button")?.getAttribute("disabled")` 在改後會靜默
+ *  vacuous —— `closest("button")` 回 null、`?.` 讓 `.not.toBeNull()` 對著 `undefined` 通過。
+ *  改鎖 input 的 `disabled` 本身,並連 `title`(W8:文案與觸發條件不變)一起釘。 */
+function expectMarketLocked() {
+  const market = screen.getByRole("radio", { name: "市價" }) as HTMLInputElement;
+  expect(market.disabled).toBe(true);
+  expect(market.closest("label")?.getAttribute("title")).toBe("此合約尚無成交估價,市價不可用");
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -201,7 +211,7 @@ describe("OrderPanel(群益)", () => {
     });
     renderPanel();
     await screen.findByText("模擬");
-    fireEvent.click(screen.getByText("市價"));
+    fireEvent.click(screen.getByRole("radio", { name: "市價" }));
     expect(screen.queryByLabelText("價格(點)")).toBeNull();
     fireEvent.click(screen.getByText("送出"));
     expect(await screen.findByText("確認送單")).toBeTruthy();
@@ -213,7 +223,7 @@ describe("OrderPanel(群益)", () => {
 
     // 無估價合約(PUT last_price=null)→ 市價鈕 disabled
     fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
-    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
+    expectMarketLocked();
   });
 
   it("選單以 /api/txo/contracts 全鏈為主:props 子集仍列全鏈;鏈上無估價合約鎖市價", async () => {
@@ -230,7 +240,7 @@ describe("OrderPanel(群益)", () => {
     expect(screen.getByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
     // EXTRA 不在 props → 無 last_price → 市價鎖定(估價查找仍走 props)
     fireEvent.change(screen.getByLabelText("商品"), { target: { value: EXTRA } });
-    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
+    expectMarketLocked();
   });
 
   it("props 為空時選單仍列全鏈", async () => {
@@ -275,9 +285,9 @@ describe("OrderPanel(群益)", () => {
     renderPanel();
     await screen.findByText("模擬");
     expect(screen.getByLabelText("價格(點)")).toBeTruthy();
-    fireEvent.click(screen.getByText("市價"));
+    fireEvent.click(screen.getByRole("radio", { name: "市價" }));
     expect(screen.queryByLabelText("價格(點)")).toBeNull();
-    fireEvent.click(screen.getByText("限價"));
+    fireEvent.click(screen.getByRole("radio", { name: "限價" }));
     expect(screen.getByLabelText("價格(點)")).toBeTruthy();
   });
 });

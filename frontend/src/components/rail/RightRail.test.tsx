@@ -190,7 +190,7 @@ describe("RightRail 內容跟隨 context(SC-3 / D2)", () => {
     expect(screen.getByText("2330")).toBeTruthy();
     expect(screen.getByText("台積電")).toBeTruthy();
     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 個股專屬控制
-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // 容器之外還要有真控制項(review A5)
+    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // 容器之外還要有真控制項(review A5)
   });
 
   // LP-5:閃電 tab 是唯一渲染 PriceLadder 的地方,而部位條插在卡片最底 —— 這則守的是
@@ -256,16 +256,18 @@ describe("RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)", () 
 describe("RightRail 交易別 / 數量不隨 tab 重置(R2-10)", () => {
   it("選融券後切 tab 再切回,交易別仍是融券(真錢:靜默回現股會出事)", () => {
     render(rail(STOCK_CTX));
-    // 🔴 R6 該變:交易別 select → pill,選取 = 點「融券」鈕、狀態 = aria-pressed
-    fireEvent.click(screen.getByRole("button", { name: "融券" }));
+    // 🔴 a11y 批該變:交易別 pill 改 RadioPills,選取 = 點「融券」radio、狀態 = checked
+    fireEvent.click(screen.getByRole("radio", { name: "融券" }));
     fireEvent.click(screen.getByRole("tab", { name: "委託" }));
     fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
     // 四元組:整合面也鎖單選(review A7)
     expect(
-      within(screen.getByRole("group", { name: "交易別" }))
-        .getAllByRole("button")
-        .map((b) => b.getAttribute("aria-pressed")),
-    ).toEqual(["false", "false", "true", "false"]);
+      (
+        within(screen.getByRole("radiogroup", { name: "交易別" })).getAllByRole(
+          "radio",
+        ) as HTMLInputElement[]
+      ).map((r) => r.checked),
+    ).toEqual([false, false, true, false]);
   });
 
   it("張數快捷值切 tab 後保留", () => {
@@ -491,7 +493,7 @@ describe("RightRail 置中請求不跨 instrument(A7a)", () => {
     await waitFor(() => expect(follow()).toBe("false"));
     rerender(rail(STOCK_CTX)); // 同一個股號、換回現貨 → 舊 deps 認不出這是換標的
     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 前提:真的換成現股梯了
-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // review A5
+    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // review A5
     await waitFor(() => expect(follow()).toBe("true"));
   });
 
@@ -567,7 +569,7 @@ describe("RightRail 鎖定武裝跨梯保留(SC-3 / SC-4 / SC-10)", () => {
     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
     rerender(rail(STOCK_CTX));
     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 真的換回現股梯
-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // review A5
+    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // review A5
     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
   });
