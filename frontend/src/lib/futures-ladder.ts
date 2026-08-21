@@ -127,7 +127,12 @@ export function edgeMilli(
  *
  *  邊價 floor / ceil 到 `FUT_TICK_MILLI`,與 `buildFuturesLadder` 的界截斷同口徑
  *  (:144-145):`state.upper` 不保證落在合法檔位,而期貨路徑後端**沒有** tick 閘 ——
- *  未對齊只會被券商退單,而那時使用者已經按下去了。兩側都往簿內收。 */
+ *  未對齊只會被券商退單,而那時使用者已經按下去了。兩側都往簿內收。
+ *
+ *  **snap 後再守一次 `≤ 0`**(review round-1 F1):`edgeMilli` 的哨符守門在 snap 之前,
+ *  買側 floor 會把 `0 < upper < FUT_TICK` 的界壓成 0 —— 送出去就是「用 0 元下真錢單」。
+ *  `futCloseEstimate` 回傳前本來就守 ≤0 → null,這裡不守的話同一份行情會出現
+ *  「平倉鍵鎖住、市價鈕照樣可按」兩個矛盾的答案。 */
 export function futMarketEdgeMilli(
   side: "buy" | "sell",
   upper: number | null,
@@ -135,9 +140,11 @@ export function futMarketEdgeMilli(
 ): number | null {
   const e = edgeMilli(side, upper, lower);
   if (e === null) return null;
-  return side === "buy"
-    ? Math.floor(e / FUT_TICK_MILLI) * FUT_TICK_MILLI
-    : Math.ceil(e / FUT_TICK_MILLI) * FUT_TICK_MILLI;
+  const s =
+    side === "buy"
+      ? Math.floor(e / FUT_TICK_MILLI) * FUT_TICK_MILLI
+      : Math.ceil(e / FUT_TICK_MILLI) * FUT_TICK_MILLI;
+  return s <= 0 ? null : s;
 }
 
 /** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
