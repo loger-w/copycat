@@ -107,7 +107,7 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
   /** manual activation(D3'):方向鍵只移焦點,Enter / Space 才 `selectTab`。
    *  焦點目標從 tablist 現場查 —— 三顆 tab 恆掛,不必為此多存一組 ref。 */
   function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: RailTab): void {
-    const action = tablistKeyAction(e.key, TABS.findIndex(([t]) => t === id), TABS.length);
+    const action = tablistKeyAction(e, TABS.findIndex(([t]) => t === id), TABS.length);
     if (action === null) return;
     e.preventDefault();
     if (action === "select") {
