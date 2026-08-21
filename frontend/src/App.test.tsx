@@ -223,6 +223,30 @@ describe("App 主分頁 tablist 補全(a11y SC-2'')", () => {
       expect(target).toBeTruthy();
       expect(target!.getAttribute("aria-labelledby")).toBe(tab(name).id);
     }
+    // TC-1:**跳過的顆數要對帳**。上面的 `continue` 是為了 dangling 而留的門,但不記數的話
+    // 「五個 panel 一個都沒掛出來」這種整組壞掉的樣態會讓迴圈零次斷言、測試照綠(vacuous)。
+    // 未造訪的恰是 stock / futures / corr 三顆。
+    const mainTabs = within(screen.getByRole("tablist", { name: "主要分頁" })).getAllByRole("tab");
+    const skipped = mainTabs.filter(
+      (t) => !byId.has(t.getAttribute("aria-controls") ?? ""),
+    );
+    expect(skipped.map((t) => t.textContent)).toEqual(["個股(期)", "期貨", "相關係數"]);
+  });
+
+  // TC-1:`visited` 閘門延後 mount 的那三顆,**造訪之後**必須補上互指 —— 上面那案只證了
+  // 「沒掛的允許 dangling」,而閘門後 panel 掛出來卻漏了 id / aria-labelledby 的話,
+  // 螢幕閱讀器從 tab 找不到內容區,兩案都不會紅。
+  it("造訪 stock tab 後,它的 aria-controls 指向真的 tabpanel 且回指", () => {
+    renderApp();
+    const stockTab = tab("個股(期)");
+    fireEvent.click(stockTab);
+    const panelIdOf = stockTab.getAttribute("aria-controls") ?? "";
+    expect(panelIdOf).not.toBe("");
+    const panel = document.getElementById(panelIdOf);
+    expect(panel).toBeTruthy();
+    expect(panel!.getAttribute("role")).toBe("tabpanel");
+    expect(panel!.getAttribute("aria-labelledby")).toBe(stockTab.id);
+    expect(panel!.hasAttribute("hidden")).toBe(false); // 選中的那個 panel 不 hidden
   });
 
   it("roving tabindex:只有選中的 tab 是 0", () => {
