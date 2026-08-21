@@ -486,12 +486,14 @@ class StockEngine:
                     # 退訂當下若有一個 job 還在佇列裡或正跑著 `to_thread(backfill)`,
                     # 它完成時 `_backfilled.add(code)` 會把記帳寫回去 —— 而 generation
                     # 只在 rollover stage1 才 bump,退訂不 bump,worker 的 guard 攔不住。
-                    # 窗是秒級(一次 SubHistory 的時間)且後果與 E-2 同構(那一檔在
+                    # 窗是秒級(一次 SubHistory 的時間;逾時重排 timer 另由
+                    # `_forget_backfill_timeout` 在此一併取消,不會把窗拉到 15s+)且後果與 E-2 同構(那一檔在
                     # 群組輪詢裡被 dedup 擋到下一次日別清空為止)。完整解要 per-code
                     # epoch(退訂時 +1,job 自帶取件時的 epoch,套用前比對),那是新的
                     # 不變式不是註解能帶過的,記 next-time。
                     self._backfilled.discard(code)
                     self._backfill_failed.pop(code, None)
+                    self._forget_backfill_timeout(code)
                     # TradeStatus 前值同以**訂閱期**為界(code review IC-6):留著的話
                     # 重新訂閱後拿上一段訂閱期的前值跟新的第一則比對 = 一則跨訂閱期的
                     # 假轉態,而 episode 旗標還武裝著時更會生出一則沒有起點的假「恢復」。
@@ -547,6 +549,7 @@ class StockEngine:
                     # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
                     self._backfilled.discard(old)
                     self._backfill_failed.pop(old, None)
+                    self._forget_backfill_timeout(old)
                     # TradeStatus 前值同以訂閱期為界(理由見 `set_watchlist` removed 迴圈)
                     self._trade_status.pop(old, None)
             if not is_futures_key(key):
@@ -1247,6 +1250,18 @@ class StockEngine:
         """
         self._backfill_timeout_handles.pop(code, None)
         self._enqueue_backfill(code)
+
+    def _forget_backfill_timeout(self, code: str) -> None:
+        """退訂 / 主圖槽位真退訂時呼叫:取消該 code 在途的逾時重排 timer + 清逾時記帳。
+
+        兩份記帳同以**訂閱期**為界(與 `_backfilled` / `_backfill_failed` 同款)。不清的話
+        孤兒 timer 15s 後照樣對已 release 的 code 發 SubHistory,成功時 `_backfilled.add`
+        把剛清掉的記帳寫回去;而重新訂閱時重試預算已被上一段訂閱期吃掉。
+        """
+        handle = self._backfill_timeout_handles.pop(code, None)
+        if handle is not None:
+            handle.cancel()
+        self._backfill_timeouts.pop(code, None)
 
     def _cancel_backfill_timeout_retries(self) -> None:
         """取消並清空全部在途重排 timer(`close()` 與 rollover stage2 共用的唯一取消點)。"""

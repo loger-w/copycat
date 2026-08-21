@@ -333,12 +333,12 @@ class CorrelationEngine:
             # (它的 `pending` 快照與 `_backfill_inflight = False` 之間沒有 await,
             # 所以此刻的寫入必定被它讀到,恰好排一次、不會與它自己的重排重複)。
             # **不 bump `_backfill_retry_round`**:被擋下不等於試過一次。
+            merged = set(legs) if legs else set(self._legs)  # 整輪(None)= 全部腿,不可靜默丟掉
             logger.info(
                 "river 回補 single-flight:已有一輪進行中,本次併回 pending(legs=%s)",
-                sorted(legs) if legs else "全部",
+                sorted(merged),
             )
-            if legs:
-                self._backfill_pending_legs |= legs
+            self._backfill_pending_legs |= merged
             return
         self._backfill_inflight = True
         try:
@@ -389,7 +389,15 @@ class CorrelationEngine:
     async def _backfill_retry(self, legs: set[str]) -> None:
         await asyncio.sleep(_BACKFILL_RETRY_SECS)
         logger.info("river 回補重試(第 %d 輪):%s", self._backfill_retry_round, sorted(legs))
-        await self._backfill_river(legs=legs)
+        try:
+            await self._backfill_river(legs=legs)
+        except Exception:
+            # `_fetch_leg_minutes` 只接 ConnectionError 家族;apply_backfill / 換場等處的其他
+            # 例外會讓這支 task 以「Task exception was never retrieved」收場,
+            # `_backfill_retry_round` 卡在非零 → 當天稍後的新 episode 拿到被削過的預算。
+            # 具體處置 = 留 traceback + 連續失敗輪數歸零(與「放棄」分支同語意)。
+            logger.exception("river 回補重試 task 非預期例外(第 %d 輪),輪數歸零", self._backfill_retry_round)
+            self._backfill_retry_round = 0
 
     async def _fetch_leg_minutes(
         self, key: str, symbol: str, source_kind: str
