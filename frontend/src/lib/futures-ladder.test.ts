@@ -4,11 +4,13 @@ import {
   FUT_TICK_MILLI,
   buildFuturesLadder,
   edgeMilli,
+  futCloseEstimate,
   futExchangeContract,
   futMarketEdgeMilli,
   splitMyLots,
   type FutOrderSource,
 } from "@/lib/futures-ladder";
+import { stkfutMarketEdgeMilli } from "@/lib/stkfut";
 
 const noDepth = { bids: [], asks: [], myLots: [] };
 const wide = { upperMilli: 25_300_000, lowerMilli: 20_700_000 };
@@ -234,7 +236,7 @@ describe("futExchangeContract 商品 + YYYYMM → 期交所契約碼", () => {
   });
 });
 
-describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
+describe("edgeMilli 貼漲跌停選邊(raw 不 snap;≤0 = 缺值哨符)", () => {
   it("buy → 漲停、sell → 跌停", () => {
     expect(edgeMilli("buy", 25_300_000, 20_700_000)).toBe(25_300_000);
     expect(edgeMilli("sell", 25_300_000, 20_700_000)).toBe(20_700_000);
@@ -248,6 +250,15 @@ describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
   it("不 snap 到合法檔位:非整 tick 的界原樣回傳", () => {
     expect(edgeMilli("buy", 25_300_500, 20_699_500)).toBe(25_300_500);
     expect(edgeMilli("sell", 25_300_500, 20_699_500)).toBe(20_699_500);
+  });
+
+  // 🔴 B11(SC-2):後端缺值以 0 給,0 不是「免費」的價 —— 放行的話市價鈕與平倉鍵
+  // 都會拿一個假想界去送真錢單(stkfut 版早就擋,兩版口徑必須一致)。
+  it("界為 0 或負(資料壞 / 後端缺值哨符)→ null", () => {
+    expect(edgeMilli("buy", 0, 20_700_000)).toBeNull();
+    expect(edgeMilli("sell", 25_300_000, 0)).toBeNull();
+    expect(edgeMilli("buy", -1, 20_700_000)).toBeNull();
+    expect(edgeMilli("sell", 25_300_000, -1)).toBeNull();
   });
 });
 
@@ -265,5 +276,46 @@ describe("futMarketEdgeMilli 期貨市價邊價(FUT_TICK 對齊)", () => {
   it("該側界缺 → null(另一側有值不代打)", () => {
     expect(futMarketEdgeMilli("buy", null, 20_520_000)).toBeNull();
     expect(futMarketEdgeMilli("sell", 25_080_000, null)).toBeNull();
+  });
+
+  // 🔴 B11(SC-2):守門在 edgeMilli,市價鈕連帶受益 —— 沒有的話 0 會 floor 成 0 送出去
+  it("界為 0 / 負 → null(鎖鈕,不用假想界送真錢單)", () => {
+    expect(futMarketEdgeMilli("buy", 0, 20_520_000)).toBeNull();
+    expect(futMarketEdgeMilli("sell", 25_080_000, 0)).toBeNull();
+    expect(futMarketEdgeMilli("buy", -1_000, 20_520_000)).toBeNull();
+  });
+});
+
+// 🔴 B11(SC-3):平倉估價原本吃 **raw** 界,與市價鈕的 snap 後邊價不同值 ——
+// 同一個標的兩處顯示不同價,且未對齊的檔位券商直接退單。
+describe("futCloseEstimate 平倉估價吃 snap 後邊價(edgeOf 注入)", () => {
+  const pos = (qty: number) => ({ stock_no: "TXFI6", qty });
+  /** 未對齊 FUT_TICK 的界(既有 fixture 都對齊了,對齊的值 snap 前後同值 = 測不出來) */
+  const OFF = { upper: 25_080_400, lower: 20_520_600 };
+
+  it("空單平倉(買)→ 漲停 floor 到 1 點(25_080_400 → 25_080 元)", () => {
+    expect(futCloseEstimate(pos(-1), "TXFI6", OFF)).toBe(25_080);
+  });
+
+  it("多單平倉(賣)→ 跌停 ceil 到 1 點(20_520_600 → 20_521 元)", () => {
+    expect(futCloseEstimate(pos(2), "TXFI6", OFF)).toBe(20_521);
+  });
+
+  it("界為 0 → null(守門在 edgeMilli,平倉鍵鎖住)", () => {
+    expect(futCloseEstimate(pos(-1), "TXFI6", { upper: 0, lower: 20_520_000 })).toBeNull();
+  });
+
+  // review R5:回傳前自己再守一次 —— 注入者是呼叫端寫的,不能假設它守門
+  it("注入的 edgeOf 不守門而回 0 → 仍 null(不依賴注入者)", () => {
+    expect(futCloseEstimate(pos(-1), "TXFI6", OFF, () => 0)).toBeNull();
+  });
+
+  it("注入的 edgeOf 決定檔位口徑(個股期走股票 tick 表)", () => {
+    // 買側往下收到 100 毫元檔:90_030 → 90_000 → 90 元
+    expect(
+      futCloseEstimate(pos(-1), "TXFI6", { upper: 90_030, lower: null }, (side, u, l) =>
+        stkfutMarketEdgeMilli(side, { upper: u, lower: l }),
+      ),
+    ).toBe(90);
   });
 });
