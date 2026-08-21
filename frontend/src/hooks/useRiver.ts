@@ -1,4 +1,4 @@
-/** 六腿江波圖資料流:`GET /api/river/state` 全量 + `/ws/river` 每秒 delta(design v2 §5)。
+/** 江波圖資料流:`GET /api/river/state` 全量 + `/ws/river` 每秒 delta(design v2 §5)。
  *
  * 與 `useCorrelation` 的關鍵差異:corr 每秒推**全量快照**,river 不能 —— 滿窗夜盤 840 分鐘
  * × 6 腿 ≈ 5,000 個數字(60–80 KB),每秒推等於每分鐘 4.8 MB。所以這裡是

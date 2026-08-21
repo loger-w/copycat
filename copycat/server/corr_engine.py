@@ -1,4 +1,4 @@
-"""相關係數引擎:每秒 pull 六腿中價 → 滾動相關 → 廣播(SC-5/6;design §6)。
+"""相關係數引擎:每秒 pull 各腿中價 → 滾動相關 → 廣播(SC-5/6;design §6)。
 
 **pull 而非 push**:需求是每秒更新,不是每 tick 更新。每秒主動讀各腿當前最佳買賣算
 中價,取樣率與推播率解耦(台指 516 則/分 vs 費半 146 則/分不需對齊)。更關鍵的是
@@ -135,7 +135,7 @@ class CorrelationEngine:
             # 只有失敗腿才起這個 task —— 訂閱全成功時行為與修復前完全相同
             self._resub_task = self._loop.create_task(self._resub_loop())
         self._task = self._loop.create_task(self._run())
-        # 回補放背景:六腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
+        # 回補放背景:各腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
         # 而畫面本來就可以先有 live 點再補歷史(design §3)
         self._backfill_task = self._loop.create_task(self._backfill_river())
         if hasattr(self._source, "on_reconnect"):

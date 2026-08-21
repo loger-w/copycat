@@ -1,4 +1,4 @@
-/** 重疊模式:六腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
+/** 重疊模式:各腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
 import { useMemo, useState } from "react";
 
 import { fmtPct } from "@/lib/format";
@@ -41,7 +41,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
   // **不能**進來(進來就會被凍在 cursor === null,讀值列永遠是「—」而線照畫)。
   const { g, labelYs, lateStarts } = useMemo(() => {
     const geo = buildOverlayGeometry(entries, win, SIZE);
-    // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
+    // 右緣腿名防疊(real-env 截圖:各腿價位接近時標籤互相蓋住)
     const ys = spreadLabelYs(
       geo.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
       11,

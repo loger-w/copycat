@@ -1,4 +1,4 @@
-"""六腿江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。
+"""江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。
 
 per-leg `{offset: 收盤毫點}`,offset = 當場盤別窗內的分鐘位移(`river_models.offset_of`)。
 
