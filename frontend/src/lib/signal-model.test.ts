@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatGroupToastText,
   formatToastText,
   groupKindLabels,
   groupRuleNames,
@@ -270,5 +271,49 @@ describe("groupKindLabels / groupRuleNames", () => {
     const older = sig({ id: "k3", kind: "vol_burst", pct: 3, time: "09:31:22" });
     const [group] = groupSignals([base, old, older]);
     expect(groupRuleNames(group!)).toEqual(["早盤急拉"]);
+  });
+});
+
+describe("formatGroupToastText", () => {
+  // SC-4:單則組必須與逐則 toast 的文案逐字相同 —— 合併上線後同一則訊號的文案
+  // 不該因為「剛好只有一則」而換一套來源(兩份文案會漂)。
+  it("單則組 === formatToastText(單一份文案來源)", () => {
+    const s = sig();
+    const [group] = groupSignals([s]);
+    expect(formatGroupToastText(group!)).toBe(formatToastText(s));
+    expect(formatGroupToastText(group!)).toBe("2330 台積電 爆拉 +5.23% 1234.5");
+  });
+
+  it("名稱缺值的單則組亦等價(不留雙空格)", () => {
+    const s = sig({ name: "" });
+    const [group] = groupSignals([s]);
+    expect(formatGroupToastText(group!)).toBe(formatToastText(s));
+    expect(formatGroupToastText(group!)).toBe("2330 爆拉 +5.23% 1234.5");
+  });
+
+  // items 是「新在前」→ 到達序 a, b, c;價格錨在**最早到**那則(a),與 Discord
+  // 合併訊息 rows[0] 同口徑(D2)。
+  it("多則:kind 段依到達序以「・」串接,價格取最早到那則", () => {
+    const a = sig({
+      id: "a",
+      kind: "cdp_cross",
+      levels: ["ah"],
+      direction: "from_below",
+      pct: null,
+      price: 1_000_000,
+    });
+    const b = sig({ id: "b", kind: "surge", pct: 5.234, price: 2_000_000 });
+    const c = sig({ id: "c", kind: "vol_burst", pct: 3.45, price: 3_000_000 });
+    const [group] = groupSignals([c, b, a]);
+    expect(formatGroupToastText(group!)).toBe(
+      "2330 台積電 突破 CDP AH・爆拉 +5.23%・爆量 3.5 倍 1000",
+    );
+  });
+
+  it("同 kind 兩規則同 tick → 段去重(沿 groupKindLabels)", () => {
+    const a = sig({ id: "a", kind: "surge", pct: 5.234, rule_name: "早盤急拉" });
+    const twin = sig({ id: "b", kind: "surge", pct: 5.234, rule_name: "另一條" });
+    const [group] = groupSignals([twin, a]);
+    expect(formatGroupToastText(group!)).toBe("2330 台積電 爆拉 +5.23% 1234.5");
   });
 });
