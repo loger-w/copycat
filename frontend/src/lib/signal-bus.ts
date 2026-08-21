@@ -27,16 +27,6 @@ export function onSignal(cb: (sig: SignalMsg) => void): () => void {
   return subscribe(SIGNAL, (ev) => cb((ev as CustomEvent<SignalMsg>).detail));
 }
 
-/** **臨時**注入口(SC-5 截圖用,收尾移除):dev build 才掛,讓 console 能直接餵同 tick
- *  三則訊號驗合併 toast —— 真訊號要等盤中特定條件,截圖排不進去。 */
-declare global {
-  interface Window {
-    __emitSignal?: typeof emitSignal;
-  }
-}
-// `typeof window` 守衛:本檔的測試跑 node environment(無 jsdom),模組載入即炸。
-if (import.meta.env.DEV && typeof window !== "undefined") window.__emitSignal = emitSignal;
-
 /** WS(重)連線成功。斷線期間 WS 丟掉的訊號要靠 feed 重抓當日 jsonl 補回(自癒)。 */
 export function emitWsOpen(): void {
   bus.dispatchEvent(new Event(WS_OPEN));
