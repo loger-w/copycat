@@ -9,11 +9,24 @@ from typing import Any
 
 import pytest
 
+from copycat.live import river_backfill as river_backfill_mod
 from copycat.live.corr_source import CorrQuoteSource
 from copycat.live.futures_source import FuturesQuoteSource
-from copycat.live.river_models import all_day_utc_window
 from copycat.live.tc4 import HistoryTimeoutError
 from tests.helpers.tc4_fakes import FakeApi, ok
+
+#: **凍結**的回補窗(TQ-5):治具與實作若共用 `all_day_utc_window()`,Date 閘就是拿
+#: 自己的答案跟自己比 —— 把閘改成 `row["Date"] != all_day_utc_window()[0][:8]` 之外的
+#: 任何等價式(甚至整條拆掉再用同一個函式重算)都照樣綠。窗釘死 + Date 寫死字面值,
+#: 比對的兩端才真的獨立。
+_WINDOW = ("2026073000", "2026073023")
+_UTC_DAY = "20260730"
+
+
+@pytest.fixture(autouse=True)
+def _frozen_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """收割器看到的窗一律 `_WINDOW`(牆鐘無關 → 跨午夜跑測試也不會漂)。"""
+    monkeypatch.setattr(river_backfill_mod, "all_day_utc_window", lambda: _WINDOW)
 
 
 def _his(rows: list[dict]) -> bytes:
@@ -22,13 +35,9 @@ def _his(rows: list[dict]) -> bytes:
 
 
 def _row(qry: int, time_utc: str, close: str, date: str | None = None) -> dict:
-    """`Date` 預設 = **窗口的 UTC 日**(不是寫死的過去日期)。
-
-    回補窗是「今天(UTC)」,而收割器現在會丟掉 `Date` 不等於窗口日的列(凍結 stub 的
-    簽名)—— 治具寫死舊日期的話,鎖分頁/解析的那幾條會被 Date 閘整批丟掉而變成假紅。
-    """
+    """`Date` 預設 = 窗口日的**字面值**(`_UTC_DAY`),不從實作那邊算回來。"""
     return {
-        "Date": date if date is not None else all_day_utc_window()[0][:8],
+        "Date": date if date is not None else _UTC_DAY,
         "Time": time_utc,
         "Open": close,
         "High": close,
@@ -75,7 +84,7 @@ class TestCorrSourceFetchDay1k:
 
         sub = next(o for o in sent if o["Request"] == "SUBQUOTE")
         assert sub["Param"]["SubDataType"] == "1K"
-        assert (sub["Param"]["StartTime"], sub["Param"]["EndTime"]) == all_day_utc_window()
+        assert (sub["Param"]["StartTime"], sub["Param"]["EndTime"]) == _WINDOW
 
     def test_empty_first_page_raises_without_blocking(self) -> None:
         """**事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty_without_blocking`)。
@@ -168,6 +177,24 @@ class TestCorrSourceFetchDay1k:
         with caplog.at_level(logging.WARNING):
             assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
         assert "疑似凍結 stub" not in caplog.text
+
+    def test_late_utc_row_of_the_window_day_is_kept(self) -> None:
+        """UTC 16:30 = **台北次日 00:30**,但 `Date` 仍是窗口日 → 保留。
+
+        Date 閘刻意是**純 UTC 比對**(窗本身就是 UTC 全天窗)。哪天有人「順手補上」
+        台北換算,夜盤跨午夜那一段的每一列都會被判成隔天而整批丟掉 —— 江波圖夜盤
+        後半段整段消失,而全鏈只有一行「丟棄 N 列」。
+        """
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] != "GETHISDATA":
+                return ok()
+            qi = obj["Param"]["QryIndex"]
+            return _his([_row(1, "163000", "51680")] if qi == "0" else [])
+
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
+        # (16+8)%24 = 0 → 台北 00:30 → minute_end 30
+        assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == [(30, 51_680_000)]
 
     def test_rows_without_date_still_reach_the_chart(self) -> None:
         """缺 `Date` 的列不被 Date 閘丟掉 —— 丟資料比放過凍結 stub 更壞(整條線消失)。"""

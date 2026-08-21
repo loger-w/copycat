@@ -300,6 +300,33 @@ class TestFetchDailyBars:
         with pytest.raises(HistoryTimeoutError):
             src.fetch_daily_bars("2330")
 
+    def test_dk_ready_but_empty_plus_1k_timeout_returns_empty(self) -> None:
+        """判準是 `dk_timed_out **and** fb_timed_out` —— 半邊逾時不算。
+
+        DK 首頁**備妥**(TC4 不忙)卻 0 根 = 資料面的答案;此時 1K fallback 再逾時,
+        往外拋會讓 SignalHub 對一檔「本來就沒有日 K」的股票整天有限重試 + 每輪一則
+        WARNING。把 `and` 換成 `or` 兩條紅測試都還是綠的,只有這條擋得住。
+        """
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] != "GETHISDATA":
+                return ok()
+            dtype = obj["Param"]["SubDataType"]
+            if dtype == "DK":
+                # 首頁非空(= 備妥,不逾時)但欄位缺 High → `_parse_dk_rows` 全數略過
+                rows = (
+                    [{"Date": "20260724", "Low": "9", "Close": "9.5", "QryIndex": "1"}]
+                    if obj["Param"]["QryIndex"] == "0"
+                    else []
+                )
+                return ("DK:" + json.dumps({"Success": "OK", "HisData": rows}) + "\0").encode()
+            return ("1K:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        assert src.fetch_daily_bars("2330") == []
+
     def test_both_segments_get_the_short_bars_deadline(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -855,6 +855,33 @@ class TestDailyBarsTimeout:
         await engine.close()
 
 
+class TestHistoryTimeoutIsConnectionError:
+    """`HistoryTimeoutError` 的**子類契約** —— 整個修法就架在這一條上(repro §修法)。
+
+    六處 caller 的上游已經有 `except ConnectionError` 的降級 / 重試網,做成子類才能
+    「一行不改自動接手」;基底哪天被改成 `Exception`,那些路徑會從降級變成把例外往上
+    炸,而它們多半是背景 task —— 炸掉只留一行 log,畫面靜靜地空著。
+    """
+
+    def test_is_a_connection_error_subclass(self) -> None:
+        assert issubclass(HistoryTimeoutError, ConnectionError)
+
+    async def test_caller_that_only_catches_connection_error_still_degrades(self) -> None:
+        """`bars_range` 是**不分辨逾時**的那種 caller(只寫 `except ConnectionError`):
+        逾時對它必須仍是「降級回空 + disconnected」,不是往外拋。"""
+        engine, src = await _make()
+
+        def boom(*_args: object, **_kwargs: object) -> tuple[list[Bar], BarsStatus]:
+            raise HistoryTimeoutError("first page not ready")
+
+        src.fetch_bars_range = boom  # type: ignore[method-assign]
+        assert await engine.bars_range("2330", "1", "2026-07-28", "2026-07-28") == (
+            [],
+            "disconnected",
+        )
+        await engine.close()
+
+
 class TestBackfillTimeoutRetry:
     """回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。"""
 
@@ -872,12 +899,12 @@ class TestBackfillTimeoutRetry:
                       is_trial=False)
         ]
         await engine.set_main("2330")
-        await _drain(engine)
+        await _wait_until(lambda: src.backfills.count("2330") >= 1)
         # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
         assert engine.tc4_status != "down"
         assert engine._backfill_failed.get("2330", 0) == 0
-        await asyncio.sleep(0.05)
-        await _drain(engine)
+        # 等**終態**(分鐘套用進去了)而不是等固定圈數 —— `backfills` 是進場時記的
+        await _wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
         assert src.backfills.count("2330") == 2  # 重排且第二發成功
         assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
         await engine.close()
@@ -890,9 +917,9 @@ class TestBackfillTimeoutRetry:
         src.backfill_error = HistoryTimeoutError("first page not ready")
         with caplog.at_level(logging.WARNING):
             await engine.set_main("2330")
-            for _ in range(6):
-                await asyncio.sleep(0.03)
-                await _drain(engine)
+            await _wait_until(lambda: src.backfills.count("2330") == 3)
+            await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 4 發(若有)現形
+            await _drain(engine)
         # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
         assert src.backfills.count("2330") == 3
         assert engine.tc4_status != "down"
@@ -948,6 +975,27 @@ class TestBackfillTimeoutRetry:
         src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
         await _drain(engine)
         assert all(h.cancelled() for h in handles)
+        await engine.close()
+
+    async def test_rollover_clears_the_timeout_ledger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_backfill_timeouts` 是**日別**記帳:換日後那一檔要重新有完整的重試預算。
+
+        不清的話計數永久停在上限 —— 昨天忙窗逾時放棄的檔,今天第一次逾時就直接放棄
+        (零重試),而它的分時圖整天空著、log 只有一行「已重試 2 次」讀起來像真的試過。
+        """
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await _wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
+        before = src.backfills.count("2330")
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+        # 記帳沒清的話 stage2 排的那一發會**當場**放棄(+1 就到頂),等不到 +3
+        await _wait_until(lambda: src.backfills.count("2330") >= before + 3)
         await engine.close()
 
 
