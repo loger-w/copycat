@@ -57,6 +57,13 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
   const selected = symbol || symbols[0] || "";
   // 市價閘用估價 = 該合約最近成交價(snapshot last_price);缺值 → 鎖市價選項
   const marketEstimate = (contracts ?? []).find((c) => c.symbol === selected)?.last_price ?? null;
+  // 🔴 A11Y-2:估價消失(換到無成交合約)時 `kind` 還停在 market —— 市價 radio 於是是
+  // 「disabled 但 checked」,而 HTML radio group 只讓 checked 的那顆進 tab 序 → **整組
+  // 從鍵盤消失**,使用者切不回限價,畫面上卻兩顆 pill 都在(零錯誤訊號)。
+  // 收斂用 **render 期間調整 state**(官方 adjust-state-on-prop-change;樣板
+  // `StockChart` 的 isFut 收斂),不用 effect:effect 要下一個 commit 才生效,中間那一格
+  // 就是壞的那一格。React 在本函式 return 後立刻用新 state 重跑,不會 commit 中間態。
+  if (marketEstimate == null && kind === "market") setKind("limit");
 
   const capStatus = info?.status;
   const blockedReason =
