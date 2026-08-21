@@ -3,3 +3,4 @@ spec: change-spec.md(末節 amendments 為準)
 - spec review round 1:11 條(P0×1)全 accepted;P0 為實作細節(ref 化)→ 限縮輪由實作後 code review 承接(auto-default:不加 spec 輪)。
 - 單包 dispatch(opus):後端 2 + 前端 4。
 - 實作 8 commits 落地;code review round 1:P1×2 / P2×9 全 accepted → fix 波
+- fix 波 5 commits + doctor 抑制對位 1 commit(主 session 直做,2 行註解);self_review_head=80f8f316

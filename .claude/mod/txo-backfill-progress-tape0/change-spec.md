@@ -63,3 +63,6 @@ TXO delta 化(B13)、group-state 端點、tape 200 筆上限、前端顯示 back
 - **SC-5'(R9)**:重啟後 `curl -s -o /dev/null -w '%{size_download}' /api/stock/state/<活躍檔>` vs `?tape=0` 同日下午對照(set_main 觸發當日全量回補,ticks 仍兩萬筆);該紅清單補 `App.memo.test.tsx`(view 上提改 optional 後應不紅,仍列觀察)、`useStockStream.test.ts`(非 .tsx)。
 - **R10 Out of scope 依據**:`/api/stock/group-state` 走 `light_snapshot()` 本就不含 ticks(test_stock_engine:1548 全等 lock)→ 無 tape 可省。
 - **R11**:engine attempt 欄 🟢 commit subject 註明「重試期間每 attempt 多一則快照推播(內容真變,非回退 R1)」。
+
+## self_review_head
+80f8f316

@@ -108,7 +108,7 @@
   日盤價變頻率更高,量級成比例放大〕〔2026-08-21 M0 日盤 12:35 實測 60s:19 則(另 5 則 ping),
   每則 **27.1 KB**(日盤鏈更寬),0.32 則/s,間隔中位 2.7 s(min 1.0 s / max 10.2 s)≈ **503 KB/min**;
   則數比夜盤少但單則大 58%,總流量 +23%〕
-- [ ] **回補重試期間 WS 可十幾分鐘零訊息**(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
+- [x] **回補重試期間 WS 可十幾分鐘零訊息**〔2026-08-21 已出貨 PR #86 mod/txo-backfill-progress-tape0:`_handover` 寫 attempt/attempts_max/phase + `_mark_changed`,ConnectionBadge「回補中(第 n 次)」;推播為 latest-wins,快到看不見的重試會跳號〕(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
   候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 —
   〔2026-08-19 R3 心跳已出貨:零訊息不再被前端誤判斷線(保活面已解),本條只剩「重試進度可觀測」的 UX 面〕。
 - [ ] **code review lens 並行汙染**:本輪 test-coverage lens 做 mutation 改檔,與 correctness lens 並行 → 後者讀到汙染樹
@@ -343,7 +343,7 @@
 - [ ] **1080p 4×4 卡片刻度互疊**(SC-1-4x4-1080p 截圖):卡 266×182 px 時左緣 11 條 y 刻度成團、
   右緣 CDP/MA 標籤疊。R2-1 決議不動共用 ChartStatic(W-1);候選 = card 變體 y 刻度減量(±10/6/2 三條)
   或 chrome 依可用高分級。user 實機 2560 寬 4×4(430×262)可讀。
-- [ ] **群組檢視點卡片仍拉全量 tape snapshot**(review B7):`/api/stock/state/{code}` 含整份 ticks
+- [x] **群組檢視點卡片仍拉全量 tape snapshot**〔2026-08-21 已出貨 PR #86:`/api/stock/state?tape=0`(snapshot(tape=False) 跳過展開)+ useStockStream tape 選項(群組檢視 tape=0、切回單檔補打全量);onSelect 仍換訂閱(W-4)〕(review B7):`/api/stock/state/{code}` 含整份 ticks
   而群組檢視無主圖讀者;候選 `?tape=0` 或群組檢視輕量換檔(W-4 要求 onSelect 仍換訂閱)。
   〔2026-08-20 結構面已證實(endpoint 恆帶 ticks);盤後 tape 近空(579B)量不出實際大小,
   以 08-20 早盤 log 換算:3450 回填 4266 ticks ≈ 數百 KB 級,實測留次一盤中〕
