@@ -420,7 +420,24 @@ class TestSignalsTodayRoute:
     def test_empty_when_no_jsonl(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
+            assert client.get("/api/stock/signals/today").json()["signals"] == []
+
+    def test_carries_trade_date_and_today(self, tmp_path: Path) -> None:
+        """D3'/AR6:標題用的日期由回傳體自帶 —— 前端不看瀏覽器時鐘也不多打 /api/calendar。
+
+        `trade_date` = hub 的引擎日別、`today` = hub 牆鐘日(與 `today_signals()` 取
+        聯集的那顆時鐘同源,AR7)。缺欄的失效樣態是前端永遠印「今日訊號」:假日開站
+        掛的是上一交易日的訊號,畫面上零提示 —— 所以在這裡把兩欄的來源釘死。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            assert hub is not None
+            hub._trade_date_fn = lambda: "2026-08-20"  # 引擎日別
+            hub._now_fn = lambda: _dt.datetime(2026, 8, 21, 9, 30, 0)  # 牆鐘
+            body = client.get("/api/stock/signals/today").json()
+        assert body["trade_date"] == "2026-08-20"
+        assert body["today"] == "2026-08-21"
 
     def test_returns_jsonl_rows(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)
@@ -430,7 +447,7 @@ class TestSignalsTodayRoute:
             path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-            assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
+            assert client.get("/api/stock/signals/today").json()["signals"] == [row]
 
     def test_reads_jsonl_off_event_loop(self, tmp_path: Path) -> None:
         """handoff R5:同步讀整份 jsonl 會卡住 event loop(8 條 WS 推播/心跳一起頓),
@@ -454,7 +471,7 @@ class TestSignalsTodayRoute:
                 return []
 
             hub.today_signals = _probing_today  # type: ignore[method-assign]
-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
+            assert client.get("/api/stock/signals/today").json()["signals"] == []
         # dict 全等:probe 空(route 沒呼叫 today_signals)與 True(跑在 loop 上)
         # 兩種回歸都要印出實際值,不能壓成無訊息的 KeyError(review TC-1/T-1)
         assert probe == {"in_event_loop": False}, f"today_signals 未被呼叫或跑在 loop 上:{probe}"
@@ -493,7 +510,8 @@ class TestSignalsTodayRoute:
             bare = client.get("/api/stock/signals/today")
             legacy = client.get("/api/stock/signals/today", params={"market": "exclude"})
         assert legacy.status_code == 200
-        assert legacy.json() == bare.json() == {"signals": [row]}
+        assert legacy.json() == bare.json()
+        assert bare.json()["signals"] == [row]
 
 
 class TestLegacyEnabledRouteGone:
@@ -767,7 +785,7 @@ class TestSignalRoutesWithoutStock:
 
             today = client.get("/api/stock/signals/today")
             assert today.status_code == 200
-            assert today.json() == {"signals": []}
+            assert today.json()["signals"] == []
 
     def test_rule_signal_reaches_today_on_wall_clock_date(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -781,7 +799,7 @@ class TestSignalRoutesWithoutStock:
         _seed_watchlist(tmp_path)
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
+            assert client.get("/api/stock/signals/today").json()["signals"] == []
             hub = app.state.signal_hub
             assert hub is not None
             assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
