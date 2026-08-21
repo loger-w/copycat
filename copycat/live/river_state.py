@@ -64,6 +64,11 @@ class RiverState:
         # 收盤 clamp 第 2 分鐘起(13:46– / 05:01–)不覆寫已有值的 end 格:那些是收盤後
         # 的殘留取樣。end+1 = 收盤撮合那一分鐘,必須寫得進來(base 腿每秒取樣在 13:44:xx
         # 就先填了 end 格)。end 格還空著時照寫 —— tick 稀疏沒落 end 格時它就是最佳近似。
+        # 守門刻意排在 `set_session` **之後**:換場後 end 格是空的,新場第一筆(哪怕名次
+        # 大)就是它當下最好的近似;順序顛倒會拿上一場的 end 格擋掉新場第一筆。
+        # `rank is not None` 是防禦性冗餘 —— 兩者共用 `_expand` 與同一個 clamp 寬度,
+        # rank 為 None 的分鐘 `offset_of` 也回 None,上面早就 return 了。留著是因為
+        # 「兩函式恆同時失效」是耦合假設而非型別保證,拆尺時這裡不該變成 TypeError。
         rank = close_clamp_rank(minute_end, session[1])
         if rank is not None and rank >= 2 and offset in minutes:
             return
