@@ -319,7 +319,7 @@ describe("FuturesLadder 武裝防護(review C3/C4)", () => {
 });
 
 describe("FuturesLadder 鎖定武裝(SC-1 / SC-12a)", () => {
-  it("SC-1:按鎖定 → 武裝 +「鎖定中」(期貨梯自帶的第三份武裝列 JSX 同款有鈕)", () => {
+  it("SC-1:按鎖定 → 武裝 +「鎖定中」(期貨梯與現股梯共用 components/ladder/ArmRow)", () => {
     mockFetch({
       "/api/capital/orders": () => json({ orders: [] }),
       "/api/capital/positions": () => json({ positions: [] }),
