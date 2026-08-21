@@ -2074,7 +2074,7 @@ describe("VWAP 就地標籤進 MA 價位標的 obstacles(mod/vwap-label-avoid)",
     },
     ticks: [], book: null,
     meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
-  } as const;
+  };
 
   /** PR #78 SC-4 近拍實證:末點貼右界時 VWAP 標籤右緣 = w−R_AXIS_W,與 MA 價位標
    *  (anchor=end 在 w−R_AXIS_W−2、向左佔 EDGE_LABEL_W)x 區間完全重疊;y 相近即疊印。
