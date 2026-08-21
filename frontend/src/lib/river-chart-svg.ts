@@ -1,4 +1,4 @@
-/** 六腿江波圖幾何純函數(零 React 依賴;design v2 §5)。
+/** 江波圖幾何純函數(零 React 依賴;design v2 §5)。
  *
  * 與既有 `index-chart-svg.ts` / `stock-intraday-svg.ts` 的差別:那兩支把 x 軸寫死在
  * 09:00–13:30(台股日盤),本圖的窗**跟盤別走**(日盤 08:45–13:45 / 夜盤 15:00–次日 05:00),
@@ -7,7 +7,7 @@
  * 兩種呈現:
  * - 並排(`buildLegGeometry`):單腿絕對價 + 「窗內第一筆」的平盤基準線 → autofit 域。
  *   指數期貨沒有漲跌停可當域邊界,只能 autofit。
- * - 重疊(`buildOverlayGeometry`):各腿一律以窗內第一筆為 0%,y 為百分比 —— 六腿價格量級
+ * - 重疊(`buildOverlayGeometry`):各腿一律以窗內第一筆為 0%,y 為百分比 —— 各腿價格量級
  *   差 15 倍(富台 3462 vs 道瓊 51909),不正規化根本疊不起來。
  */
 
@@ -188,7 +188,7 @@ export function timeTicks(window: RiverWindow): { offset: number; label: string 
 
 /** 右緣腿名的防疊:把靠太近的 y 往下推開至 `minGap`,推到底再往上回折。
  *
- * 六腿收盤價位接近時(real-env 截圖實見),原位標籤會互相疊住 —— 既有 `IndexPage` 只有
+ * 各腿收盤價位接近時(real-env 截圖實見),原位標籤會互相疊住 —— 既有 `IndexPage` 只有
  * 兩條線所以沒踩到。回傳陣列與**輸入順序**對應(呼叫端依 index 取用)。
  */
 export function spreadLabelYs(ys: number[], minGap: number, maxY: number): number[] {

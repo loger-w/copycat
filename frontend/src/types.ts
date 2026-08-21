@@ -220,7 +220,7 @@ export interface CorrState {
   pairs: Record<string, CorrPairState>;
 }
 
-// ---- 六腿江波圖(對應 copycat/live/river_state.py;index-river-chart)----
+// ---- 江波圖(對應 copycat/live/river_state.py;index-river-chart)----
 
 /** 當場盤別的 x 軸窗(台北 minute-of-day;夜盤 end_min > 1440 = 跨午夜展開)。 */
 export interface RiverWindow {

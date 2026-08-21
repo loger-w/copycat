@@ -14,7 +14,7 @@ SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 T
 #: 現價源判定前綴 = **台指期產品樹**,含 HOT 與月份 leaf(`TC.F.TWF.TXF.202609`)。
 #:
 #: **不可放寬成 `"TC.F."`**:TXO runtime 的 ZMQ SUB 訂 `""`,會收到同 process 其他引擎訂的
-#: 所有期貨推播 —— 個股期(`TC.F.TWF.DHF.HOT`)、六腿海外(`TC.F.CME.YM.HOT` 等)、
+#: 所有期貨推播 —— 個股期(`TC.F.TWF.DHF.HOT`)、海外腿(`TC.F.CME.YM.HOT` 等)、
 #: 費半、小台微台。整棵樹前綴會讓它們輪流覆寫現價,右上角台指與 TXO 綜合損益的
 #: `spot_pnl` 一起亂跳(2026-07-29 盤中實測個股期 232.5 顯示成台指)。
 #:

@@ -10,7 +10,7 @@
    CME 會落在窗外。且 TC4 對訂閱一律回 `Success: OK`(CLAUDE.md §8),窗不匹配的
    失效樣態是「訂閱成功但零推播」,沒有錯誤訊號 —— 靠 log 抓不到,只能靠設計避開。
 
-全天窗 `({ymd}00, {ymd}23)` 即 Phase 0 probe 實測有效者(2026-07-29 23:09 六腿全推播)。
+全天窗 `({ymd}00, {ymd}23)` 即 Phase 0 probe 實測有效者(2026-07-29 23:09 各腿全推播)。
 """
 
 from __future__ import annotations

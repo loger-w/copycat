@@ -1742,7 +1742,7 @@ def create_app(
         except WebSocketDisconnect:
             return
 
-    # ---- river(六腿江波圖;index-river-chart SC-5)----
+    # ---- river(江波圖;index-river-chart SC-5)----
 
     @app.get("/api/river/state")
     async def river_state(request: Request) -> dict:

@@ -7,7 +7,7 @@ import { useRiver } from "@/hooks/useRiver";
  * 兩條 WS 常駐 —— 與其他 lazy tab 同慣例)。兩條 WS 都在此建立,沒點進來過就不 mount,
  * 也就沒有每秒推播的流量(gate 在 App 的 `visited.corr`)。
  *
- * 版面:上半 六腿江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
+ * 版面:上半 江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
  * 係數是數字,看不出哪條腿先動;圖看得出時點,看不出強度。
  */
 export default function CorrPage() {

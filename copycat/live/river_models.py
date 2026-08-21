@@ -1,4 +1,4 @@
-"""六腿江波圖的純對映層(design v2 §1/§4;零 IO、只依賴 stdlib)。
+"""江波圖的純對映層(design v2 §1/§4;零 IO、只依賴 stdlib)。
 
 **分鐘鍵一律「終點標記」**(bar end),與 TC4 1K 的 `Time` 語意一致:
 

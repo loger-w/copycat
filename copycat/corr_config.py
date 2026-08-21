@@ -82,7 +82,7 @@ def load_config(path: Path | None = None) -> CorrConfig:
     """讀設定檔;不存在 / 壞格式 / base 不在 legs → 記 warning 後回 DEFAULT_CONFIG。
 
     never-raise(沿用 notify.py 慣例):設定檔壞掉不該讓整個 server 起不來,
-    降級成預設六腿仍是可用狀態。
+    降級成預設腿組仍是可用狀態。
     """
     target = CONFIG_PATH if path is None else path
     if not target.exists():
