@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from copycat.live.stock_models import StockTick
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import app as app_module
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
@@ -302,6 +303,20 @@ class TestOverlayRoute:
     def test_overlay_tc4_down_returns_all_null_200(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
         fake.daily_bars_result = ConnectionError("tc4 down")
+        with client:
+            r = client.get("/api/stock/overlay/2330")
+            assert r.status_code == 200
+            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+
+    def test_overlay_history_timeout_degrades_like_asyncio_timeout(self, tmp_path: Path) -> None:
+        """`daily_bars` 現在會把 TC4 首頁逾時往外拋(hub 靠它排重試)。
+
+        route 這一端的語意與既有 `OVERLAY_FETCH_TIMEOUT_S` 逾時完全相同 —— 200 + 全 null
+        + 不寫 cache。沒有這條分支的話,`ConnectionError` 的降級接不到子類以外的任何
+        地方,疊線會變成 500/502。
+        """
+        client, fake = make_client(tmp_path)
+        fake.daily_bars_result = HistoryTimeoutError("first page not ready")
         with client:
             r = client.get("/api/stock/overlay/2330")
             assert r.status_code == 200

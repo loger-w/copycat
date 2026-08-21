@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
+import pytest
+
 from copycat.corr_config import CorrConfig, Leg
+from copycat.live.tc4 import HistoryTimeoutError
+from copycat.server import corr_engine as corr_engine_mod
 from copycat.server.corr_engine import CorrelationEngine
 
 DAY = ("20260730", "day")
@@ -31,6 +35,9 @@ class _FakeSource:
         self.fetched: list[str] = []
         self.minutes: dict[str, list[tuple[int, int]]] = {}
         self.fail_1k: set[str] = set()
+        #: 恆逾時(重試上界要測的那條);`timeout_1k_once` 只逾時第一發,之後正常
+        self.fail_1k_timeout: set[str] = set()
+        self.timeout_1k_once: set[str] = set()
 
     def subscribe_raw(self, symbol: str) -> None:
         self.subscribed.append(symbol)
@@ -46,6 +53,11 @@ class _FakeSource:
         self.fetched.append(symbol)
         if symbol in self.fail_1k:
             raise ConnectionError(f"1K fail {symbol}")
+        if symbol in self.fail_1k_timeout:
+            raise HistoryTimeoutError(f"1K timeout {symbol}")
+        if symbol in self.timeout_1k_once:
+            self.timeout_1k_once.discard(symbol)
+            raise HistoryTimeoutError(f"1K timeout {symbol}")
         return self.minutes.get(symbol, [])
 
     def close(self) -> None:
@@ -308,6 +320,63 @@ class TestBackfill:
             assert _minutes(eng, "NQ") == {136: 27_638_000}
         finally:
             await eng.close()
+
+
+class TestBackfillTimeoutRetry:
+    """bug/history-timeout-propagation:逾時的腿要排重試,不是「整天只從啟動後累積」。
+
+    真實事故(08:23):TXF/TWN/SXF 三腿同秒逾時 → 江波圖三條線整天缺前半段,
+    而 TC4 端的 1K 一直都在。
+    """
+
+    async def test_timed_out_leg_is_retried_and_only_that_leg(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
+        src = _FakeSource()
+        src.minutes["TC.F.CME.NQ.HOT"] = [(600, 27_600_000)]
+        src.timeout_1k_once.add("TC.F.TWF.SXF.HOT")
+        src.minutes["TC.F.TWF.SXF.HOT"] = [(601, 12_000_000)]
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            await _drain()
+            assert _minutes(eng, "SXF") == {}  # 首輪該腿逾時
+            for _ in range(10):
+                await asyncio.sleep(0.01)
+                await _drain()
+            assert _minutes(eng, "SXF") == {76: 12_000_000}  # 重試補回來
+            # 只重補 pending 腿:成功的腿不該被再打一次(TC4 歷史通道是稀缺資源)
+            assert src.fetched.count("TC.F.CME.NQ.HOT") == 1
+        finally:
+            await eng.close()
+
+    async def test_retry_rounds_are_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
+        src = _FakeSource()
+        src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")  # 永遠逾時
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            for _ in range(20):
+                await asyncio.sleep(0.01)
+                await _drain()
+            # 首輪 + 3 輪重試 = 4;沒有上界的話會一路重試到收盤
+            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4
+        finally:
+            await eng.close()
+
+    async def test_close_cancels_pending_retry_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 5.0)
+        src = _FakeSource()
+        src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        await _drain()
+        assert eng._backfill_retry_tasks, "逾時腿必須留下一個待跑的重試 task"
+        tasks = list(eng._backfill_retry_tasks)
+        await eng.close()
+        assert all(t.cancelled() or t.done() for t in tasks)
 
 
 class TestBackfillSessionOrdering:

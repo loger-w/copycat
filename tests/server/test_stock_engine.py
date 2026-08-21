@@ -12,6 +12,7 @@ from typing import Callable
 import pytest
 
 from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import stock_engine as stock_engine_mod
 from copycat.server.stock_engine import StockEngine
 
@@ -75,6 +76,10 @@ class FakeSource:
         # 那些值來自各自的 job)。收件人正確性要鎖,就得讓不同 code 的回補可分辨。
         self.backfill_results: dict[str, list] = {}
         self.backfill_error: Exception | None = None
+        # 逐次結果:pop(0) 取一個,取完退回 `backfill_error`(重試路徑要能表達
+        # 「第一發逾時、第二發成功」,單一 `backfill_error` 只表達得出恆錯)
+        self.backfill_errors: list[Exception | None] = []
+        self.daily_bars_error: Exception | None = None
         self.on_message: Callable[[dict], None] | None = None
         self.on_no_data: Callable[[str], None] | None = None
         self.on_reconnect: Callable[[], None] | None = None
@@ -104,7 +109,11 @@ class FakeSource:
 
     def backfill(self, code: str) -> list:
         self.backfills.append(code)
-        if self.backfill_error is not None:
+        if self.backfill_errors:
+            err = self.backfill_errors.pop(0)
+            if err is not None:
+                raise err
+        elif self.backfill_error is not None:
             raise self.backfill_error
         if self.backfill_gate is not None:
             self.backfill_gate.wait(timeout=5)
@@ -119,6 +128,8 @@ class FakeSource:
         return [], "ok"
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
+        if self.daily_bars_error is not None:
+            raise self.daily_bars_error
         return []
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
@@ -820,6 +831,72 @@ class TestBarsRangeStatus:
 
         src.fetch_bars_range = slow  # type: ignore[method-assign]
         assert await engine.bars_range("2330", "1", "2026-07-28", "2026-07-28") == ([], "timeout")
+        await engine.close()
+
+
+class TestDailyBarsTimeout:
+    """bug/history-timeout-propagation:逾時 ≠ 資料面沒有。
+
+    `daily_bars` 回空時 SignalHub 讀成「無已完成日 K,CDP 停用」且**永不重試**
+    (app.py 的分工:空清單 = 資料面沒有;拋例外 = 暫時性 → X-2b 有限重試)。
+    """
+
+    async def test_history_timeout_propagates(self) -> None:
+        engine, src = await _make()
+        src.daily_bars_error = HistoryTimeoutError("first page not ready")
+        with pytest.raises(HistoryTimeoutError):
+            await engine.daily_bars("2330")
+        await engine.close()
+
+    async def test_plain_connection_error_still_degrades_to_empty(self) -> None:
+        engine, src = await _make()
+        src.daily_bars_error = ConnectionError("tc4 down")
+        assert await engine.daily_bars("2330") == []
+        await engine.close()
+
+
+class TestBackfillTimeoutRetry:
+    """回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。"""
+
+    async def test_timeout_reenqueues_without_touching_tc4_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        from copycat.live.stock_models import StockTick
+
+        src.backfill_errors = [HistoryTimeoutError("first page not ready")]
+        src.backfill_result = [
+            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
+                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                      is_trial=False)
+        ]
+        await engine.set_main("2330")
+        await _drain(engine)
+        # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
+        assert engine.tc4_status != "down"
+        assert engine._backfill_failed.get("2330", 0) == 0
+        await asyncio.sleep(0.05)
+        await _drain(engine)
+        assert src.backfills.count("2330") == 2  # 重排且第二發成功
+        assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
+        await engine.close()
+
+    async def test_retry_is_bounded_then_gives_up(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        with caplog.at_level(logging.WARNING):
+            await engine.set_main("2330")
+            for _ in range(6):
+                await asyncio.sleep(0.03)
+                await _drain(engine)
+        # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
+        assert src.backfills.count("2330") == 3
+        assert engine.tc4_status != "down"
+        assert "放棄" in caplog.text
         await engine.close()
 
 

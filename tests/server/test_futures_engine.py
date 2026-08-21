@@ -8,6 +8,7 @@ from typing import Callable
 import pytest
 
 from copycat.live.stock_source import Bar
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.futures_engine import FuturesEngine
 
 
@@ -1021,6 +1022,30 @@ class TestBarsRangeProxy:
         got = await self._run(engine, caplog)
         assert got == []
         assert "market: futures history proxy miss" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_history_timeout_degrades_here_with_its_own_log(self, caplog) -> None:
+        """逾時在 **engine 內**吃掉:payload / 前端零變,但 log 分得出「TC4 掛了」。
+
+        `HistoryTimeoutError` 是 `ConnectionError` 子類 → 沒有專屬分支的話會被下面那條
+        接走並印成 proxy miss,3am 判準就把「忙一下」讀成「TC4 掛了」。
+        """
+
+        class Slow(FakeSource):
+            def fetch_bars_range(
+                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+            ) -> list[dict]:
+                raise HistoryTimeoutError("first page not ready")
+
+        engine = FuturesEngine(lambda: Slow())
+        await engine.start()
+        try:
+            got = await self._run(engine, caplog)
+        finally:
+            await engine.close()
+        assert got == []
+        assert "期貨 K 線 timeout(非 TC4 down)" in caplog.text
+        assert "market: futures history proxy miss" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_connection_error_returns_empty_with_fixed_log(self, caplog) -> None:
