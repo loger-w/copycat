@@ -2286,8 +2286,18 @@ class TestDirtyWatchlistScope:
 _OBSERVE_PREFIX = "trade-status-observe"
 
 
+#: `_make_with_clock` 的預設引擎牆鐘(`now_fn`)。2026-07-21 = 週二,與 `trade_date` 同日。
+#: 固定住是為了讓日曆判準能寫成「入參 == 這一天」—— 見下方 `is_trading_day` 的理由。
+_ENGINE_NOW = _dt.datetime(2026, 7, 21, 9, 0)
+
+
 async def _make_with_clock(
-    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01, trading_day: bool = True
+    monkeypatch: pytest.MonkeyPatch,
+    clock: str,
+    *,
+    throttle: float = 0.01,
+    trading_day: bool = True,
+    now_fn: Callable[[], _dt.datetime] | None = None,
 ) -> tuple[StockEngine, FakeSource]:
     """假時鐘**先注入再 `start()`**(D3 amendment R3)。
 
@@ -2299,15 +2309,25 @@ async def _make_with_clock(
     `is_trading_day` 顯式注入(test-infra-fix,D4'):試撮旗標接日曆之後,不注入的
     engine 會落到預設 `weekday() < 5` → 整組窗內測試在週末跑就集體轉紅(而它們要測的
     是**窗**,不是日曆)。`trading_day=False` 則是 SC-3 的反向案共用入口。
+
+    **判準吃入參而不是 `lambda _d: trading_day`**(review TQ-5):忽略引數的 stub 讓
+    「engine 把哪個日期送進日曆」完全無鎖 —— 把 `self._now_fn().date()` 換成
+    `date.today()`、`+1 天`、甚至寫死一個常數,整組測試照樣全綠,而 prod 的失效樣態
+    (拿錯的日期去問日曆)正是這一類。改成與 `now_fn` 的日期比對後,兩個方向都咬:
+    正例只在日期正確時 True、反例只在日期正確時 False。
     """
     monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: clock)
+    now = now_fn if now_fn is not None else (lambda: _ENGINE_NOW)
     src = FakeSource()
     engine = StockEngine(
         src,
         trade_date="2026-07-21",
         throttle_secs=throttle,
         checkpoint=False,
-        is_trading_day=lambda _d: trading_day,
+        is_trading_day=(
+            (lambda d: d == now().date()) if trading_day else (lambda d: d != now().date())
+        ),
+        now_fn=now,
     )
     await engine.start()
     return engine, src
@@ -2416,6 +2436,41 @@ class TestTrialFlag:
         assert engine._quote_payload("2330")["trial"] is False
         await engine.close()
 
+    async def test_start_seeds_trial_flag_from_calendar_and_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[lock] TQ-3:`start()` 的**播種點**本身要有鎖(D3 amendment R3 的另一半)。
+
+        `throttle=5.0` → flush loop 這一輪絕不會轉到,`_trial_on` 只可能來自 `start()`
+        內的現算播種。播種若漏掉日曆(只算窗),休市日的窗內冷啟動會播成 True,而下一輪
+        flush 算出 False = 一次**假翻轉**,替全自選補推一輪「(緩)熄掉」的 quote ——
+        那天根本沒有撮合,畫面上的兩次轉態全是憑空的,且與真翻轉在 log 上無從分辨。
+
+        既有測試只看得到播種的下游(補推 / payload),把 `start()` 那行改成
+        `_spot_trial_window_now()` 或直接刪掉照樣全綠。
+        """
+        on, _src_on = await _make_with_clock(monkeypatch, "08:50:00.000", throttle=5.0)
+        assert on._trial_on is True  # 窗內 + 交易日
+        await on.close()
+        off, _src_off = await _make_with_clock(
+            monkeypatch, "08:50:00.000", throttle=5.0, trading_day=False
+        )
+        assert off._trial_on is False  # 同一時鐘、同一窗,只差日曆
+        await off.close()
+
+    def test_default_is_trading_day_is_weekday_lt_5(self) -> None:
+        """[lock] TQ-9(W9):不注入 `is_trading_day` 時的預設判準逐字不變。
+
+        「engine 直接建構的既有 caller 行為不得有一絲變化」這條白名單目前只有 checkpoint
+        路徑間接鎖著;預設改成 `lambda _d: True`(或反過來恆 False)在那條測試以外全綠,
+        而失效樣態是**測試 / 非 prod 入口**的日曆判定整個翻面。
+
+        不 `start()`:測的是建構期的預設值,起 task 只是多一組要收的資源。
+        """
+        engine = StockEngine(FakeSource(), trade_date="2026-07-21", checkpoint=False)
+        assert engine._is_trading_day(_dt.date(2026, 8, 21)) is True  # 週五
+        assert engine._is_trading_day(_dt.date(2026, 8, 22)) is False  # 週六
+
 
 class TestTrialWindowFlipPush:
     """SC-4:窗邊界翻轉 → 自選各碼 + 現貨主圖碼各補推一則帶新 `trial` 的 quote(D3)。
@@ -2435,7 +2490,10 @@ class TestTrialWindowFlipPush:
             trade_date="2026-07-21",
             throttle_secs=0.01,
             checkpoint=False,
-            is_trading_day=lambda _d: True,  # test-infra-fix(D4'):測的是窗,不是日曆
+            # 判準吃入參(review TQ-5):與下方 `test_no_flip_push_on_non_trading_day`
+            # 成對 —— 忽略引數的 stub 讓「engine 拿哪個日期去問日曆」完全無鎖。
+            is_trading_day=lambda d: d == _ENGINE_NOW.date(),
+            now_fn=lambda: _ENGINE_NOW,
         )
         await engine.start()
         await engine.set_watchlist(["2330"])
@@ -2538,7 +2596,10 @@ class TestTrialWindowFlipPush:
             trade_date="2026-07-21",
             throttle_secs=0.01,
             checkpoint=False,
-            is_trading_day=lambda _d: False,
+            # 反例同樣吃入參(review TQ-5):`!=` 讓「engine 送錯日期」翻成 True →
+            # 補推真的發生 → 這條紅。恆 False 的 stub 對錯誤日期是沉默的。
+            is_trading_day=lambda d: d != _ENGINE_NOW.date(),
+            now_fn=lambda: _ENGINE_NOW,
         )
         await engine.start()
         await engine.set_watchlist(["2330"])
@@ -2638,6 +2699,35 @@ class TestTradeStatusObserve:
             await _drain(engine)
         assert len(_observed(caplog, logging.WARNING)) == 1
         assert _observed(caplog, logging.DEBUG) == []
+        await engine.close()
+
+    async def test_observe_window_is_pure_window_on_non_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """[lock] TQ-6:休市日窗內轉態 —— observe 仍記 `trial_window=True` 的 DEBUG,
+        而同一時刻 payload 的 `trial` 是 **False**。
+
+        兩者刻意不同源(D4' / `_observe_window_now` docstring):payload 那顆要接日曆
+        (休市日不該亮「(緩)」),觀測這顆是**純窗**(把日曆 AND 進來,休市日的窗內
+        事件會被整段降級成「窗外」→ 全部升 WARNING,蒐證檔被自己的分級淹掉)。
+
+        這條契約原本只寫在 docstring 裡:把 `_observe_window_now()` 改成
+        `self._spot_trial_now()` 全組測試照綠(其餘 case 的日曆恆為交易日,兩者同值)。
+        一個 assert 同時釘住兩邊的值,兩者被合併成同一顆時鐘就必紅。
+        """
+        engine, src = await _make_with_clock(monkeypatch, "08:50:00.000", trading_day=False)
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        with caplog.at_level(logging.DEBUG, logger="copycat.server.stock_engine"):
+            src.on_message(_quote(cum=1))  # 首見 "0" → 只播種
+            src.on_message(_quote(cum=2) | {"TradeStatus": "1"})
+            await _drain(engine)
+        assert _observed(caplog, logging.WARNING) == []
+        debugs = _observed(caplog, logging.DEBUG)
+        assert len(debugs) == 1
+        assert "0->1" in debugs[0]
+        assert "trial_window=True" in debugs[0]  # 純窗:休市日照樣 True
+        assert engine._quote_payload("2330")["trial"] is False  # 對照:wire 上不亮
         await engine.close()
 
     async def test_observe_skips_futures_key(
