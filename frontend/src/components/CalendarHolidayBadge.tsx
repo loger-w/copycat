@@ -19,8 +19,8 @@ import { isoLocalDate, isWeekendIso } from "@/lib/trading-calendar";
  *  看盤機的時區與時鐘和後端日別是兩回事,拿本機今天去比對後端日別會在跨午夜與時區偏移
  *  時各錯一種。
  *
- *  **本機日保險絲**(review C-3):payload 是 `staleTime: Infinity` + 6 小時 refetch 的
- *  快取,長跑分頁跨午夜後 `today` 會停在昨天 —— 那份 payload 對「今天」已經無話可說,
+ *  **本機日保險絲**(review C-3):payload 是 `staleTime: Infinity` + 5 分鐘背景輪詢的
+ *  快取,長跑分頁跨午夜後 `today` 最多停在昨天 5 分鐘 —— 那份 payload 對「今天」已經無話可說,
  *  `data.today !== isoLocalDate(new Date())` 就不亮。這是唯一用到瀏覽器時鐘的地方,而
  *  它只用來**否決**(時鐘歪掉的失效方向是「該亮時不亮」= 降級成現況)。
  *
