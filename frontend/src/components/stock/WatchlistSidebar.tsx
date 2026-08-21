@@ -91,7 +91,9 @@ function avgBadge(a: GroupAvg): React.ReactElement {
       title={`平均漲幅 ${text}(${a.n}/${a.total} 檔有成交${trialNote})`}
       className={cn(
         "shrink-0 font-mono text-[0.625rem]",
-        shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-dim",
+        // 零 = `text-ink-muted` 不是 `text-ink-dim`(a11y 批 D4''):dim 對 surface 只有
+        // 2.92:1,而「這組今天平盤」是要讀的數字,不是弱化的佔位。
+        shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-muted",
       )}
     >
       {text}
@@ -495,7 +497,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                           ? "text-bull"
                           : (q.chg_pct ?? 0) < 0
                             ? "text-bear"
-                            : "text-ink-dim",
+                            : // 平盤 = ink-muted(a11y 批 D4''):有成交的零漲跌是要讀的
+                              // 數字,dim 的 2.92:1 讀不出來;下面 `參考` / `-` 兩態才是
+                              // 「今天還沒開始」的弱化,維持 dim。
+                              "text-ink-muted",
                     )}
                   >
                     {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}

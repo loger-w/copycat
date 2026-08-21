@@ -89,7 +89,9 @@ export function gridShape(n: number): string {
 function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined }) {
   const tone =
     q?.p == null
-      ? "text-ink-dim"
+      ? // 無成交(參考價 / `-` 兩態)= ink-muted(a11y 批 D4''):卡片格比側欄列更小,
+        // ink-dim 對 surface 的 2.92:1 在 mini 卡上實際讀不出來。
+        "text-ink-muted"
       : (q.chg_pct ?? 0) > 0
         ? "text-bull"
         : (q.chg_pct ?? 0) < 0
