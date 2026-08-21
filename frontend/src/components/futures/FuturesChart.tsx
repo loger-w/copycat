@@ -18,7 +18,7 @@ import {
   sliceCurrentAllday,
 } from "@/lib/allday";
 import { aggregateBars, type Bar } from "@/lib/candle";
-import { svgBox } from "@/lib/chart-frame";
+import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fmt } from "@/lib/format";
 import {
   FUT_CHART_MODES,
@@ -44,9 +44,6 @@ import type { FuturesProductState } from "@/types";
  * (clamp 到邊緣會把「圖外的價位」講成「圖緣的價位」)。
  */
 
-/** 主圖佔可用高的比例(= core 的 `MAIN.height : MAIN.height + SUB.height`,同個股頁)。 */
-const MAIN_RATIO_NUM = 260;
-const MAIN_RATIO_DEN = 330;
 /** 分時 viewBox 寬 = core 的 `DEFAULT_W`;`svgBox` 反解要用同一個值。 */
 const INTRADAY_VB_W = 800;
 

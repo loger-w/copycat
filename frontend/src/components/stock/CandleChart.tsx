@@ -67,7 +67,7 @@ export interface ChartHLine {
 
 /** 同 `EMPTY_LINE` 的理由:預設值寫 `hlines = []` 會讓每次 render 產生新 array,
  *  打穿 ChartStatic 的 memo —— 而且是**所有既有頁面**(個股 / 大盤)都被打穿。 */
-const EMPTY_HLINES: readonly ChartHLine[] = [];
+export const EMPTY_HLINES: readonly ChartHLine[] = [];
 
 /** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
 interface WindowMark {

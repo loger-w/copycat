@@ -4,7 +4,7 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
 // 型別借用既有 export(K 線圖的水平 overlay 與分時圖畫的是同一組語意:持倉均價 / OI 撐壓)。
 // CandleChart 不 import 本檔,不成環;兩邊各定義一份的失效樣態是「K 線加了 title 欄、
 // 分時圖沒有」這種同一份資料在兩張圖上長不一樣,沒有 assertion 會紅。
-import type { ChartHLine } from "@/components/stock/CandleChart";
+import { EMPTY_HLINES, type ChartHLine } from "@/components/stock/CandleChart";
 import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
@@ -121,11 +121,6 @@ const EMPTY_PEGS: readonly PegInput[] = [];
 
 /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
 const EMPTY_ENERGY: { bars: EnergyBar[]; maxTotal: number } = { bars: [], maxTotal: 1 };
-
-/** 水平參考線的空集合(stock / index 態恆為它)。**模組層常數**,理由同 `EMPTY_PEGS`:
- *  預設值寫成 `hlines = []` 會讓**所有既有頁面**每次 render 都打穿 ChartStatic 的 memo,
- *  而症狀只是 hover 掉幀,沒有任何測試會紅。 */
-const EMPTY_HLINES: readonly ChartHLine[] = [];
 
 /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
 const MARK_LABEL_TOP = 9;
