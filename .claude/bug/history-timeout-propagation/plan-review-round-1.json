@@ -1,0 +1,98 @@
+{
+ "round": 1,
+ "type": "plan-review",
+ "reviewer": "general-purpose(opus)",
+ "findings": [
+  {
+   "id": "P0-1",
+   "severity": "P0",
+   "summary": "DK timeout raise 砍掉 1K fallback",
+   "disposition": "accepted",
+   "resolution": "保留 fallback,兩段皆 timeout 才 raise"
+  },
+  {
+   "id": "P0-2",
+   "severity": "P0",
+   "summary": "overlay route 只 catch TimeoutError → 502",
+   "disposition": "accepted",
+   "resolution": "加 except HistoryTimeoutError"
+  },
+  {
+   "id": "P0-3",
+   "severity": "P0",
+   "summary": "index fetch_day_minutes raise 關掉 variant 逃逸階梯",
+   "disposition": "accepted",
+   "resolution": "index 不改語意"
+  },
+  {
+   "id": "P1-4",
+   "severity": "P1",
+   "summary": "stock 回補 worker ConnectionError 不重排且打 tc4 down",
+   "disposition": "accepted",
+   "resolution": "except HistoryTimeoutError 先行 + 有界重排"
+  },
+  {
+   "id": "P1-5",
+   "severity": "P1",
+   "summary": "caller 盤點事實錯(backfill 自有迴圈)",
+   "disposition": "accepted",
+   "resolution": "更正"
+  },
+  {
+   "id": "P1-6",
+   "severity": "P1",
+   "summary": "期貨無 status 通道",
+   "disposition": "accepted",
+   "resolution": "engine 內吃掉只 log;三態記 next-time"
+  },
+  {
+   "id": "P1-7",
+   "severity": "P1",
+   "summary": "例外進 build_* 跳過負向快取 → 502",
+   "disposition": "accepted",
+   "resolution": "engine/closure 內吃掉"
+  },
+  {
+   "id": "P1-8",
+   "severity": "P1",
+   "summary": "Date 台北換算砍夜盤",
+   "disposition": "accepted",
+   "resolution": "UTC 比對 + stub 簽名"
+  },
+  {
+   "id": "P2-9",
+   "severity": "P2",
+   "summary": "corr 重試應搭既有 _schedule_backfill",
+   "disposition": "accepted",
+   "resolution": "legs 子集 + task 集合"
+  },
+  {
+   "id": "P2-10",
+   "severity": "P2",
+   "summary": "stock/futures 表述不對稱",
+   "disposition": "accepted",
+   "resolution": "futures engine 內吃掉"
+  },
+  {
+   "id": "P2-11",
+   "severity": "P2",
+   "summary": "三處 log/註解說謊",
+   "disposition": "accepted",
+   "resolution": "改寫"
+  },
+  {
+   "id": "P2-12",
+   "severity": "P2",
+   "summary": "該紅清單",
+   "disposition": "accepted",
+   "resolution": "更正"
+  },
+  {
+   "id": "P2-13",
+   "severity": "P2",
+   "summary": "hub 重試成本",
+   "disposition": "accepted",
+   "resolution": "短 deadline"
+  }
+ ]
+}
