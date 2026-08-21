@@ -1,0 +1,71 @@
+{
+ "round": 1,
+ "lenses": [
+  "zero-behaviour(opus)",
+  "test-quality(opus)"
+ ],
+ "findings": [
+  {
+   "id": "Z1",
+   "severity": "P2",
+   "summary": "StockIntradayChart import 註解過期",
+   "disposition": "accepted",
+   "resolution": "純註解"
+  },
+  {
+   "id": "Z2",
+   "severity": "P2",
+   "summary": "docs/next-time 398/429 指已刪函式、238 未勾",
+   "disposition": "accepted",
+   "resolution": "收尾 chore"
+  },
+  {
+   "id": "Z3",
+   "severity": "P2",
+   "summary": "RiverCards「六張小卡」漏改",
+   "disposition": "accepted",
+   "resolution": "純註解"
+  },
+  {
+   "id": "Z4/T-2",
+   "severity": "P2",
+   "summary": "C5 characterization 只拍靜止態",
+   "disposition": "accepted",
+   "resolution": "補 armed / locked 兩字面量(期望取自改後,標明)"
+  },
+  {
+   "id": "Z5",
+   "severity": "P2",
+   "summary": "C4 偏離 plan 未回填",
+   "disposition": "accepted",
+   "resolution": "plan/progress 補"
+  },
+  {
+   "id": "T-1",
+   "severity": "P2",
+   "summary": "FuturesLadder.test 名稱過期",
+   "disposition": "accepted",
+   "resolution": "改名"
+  },
+  {
+   "id": "T-3",
+   "severity": "P2",
+   "summary": "yTop 15 位字面量誤導",
+   "disposition": "accepted",
+   "resolution": "註解"
+  },
+  {
+   "id": "T-4",
+   "severity": "P2",
+   "summary": "outOfDomainLevels 邊界無案(既有)",
+   "disposition": "accepted",
+   "resolution": "next-time"
+  }
+ ],
+ "evidence": {
+  "ast_equal": "14/14 py 檔剝 docstring 後 AST 全等",
+  "pytest": "2895",
+  "vitest": "2522(−10+4 對帳)",
+  "validate": "42/42"
+ }
+}

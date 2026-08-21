@@ -1,0 +1,1309 @@
+diff --git a/frontend/src/components/index/MarketPane.memo.test.tsx b/frontend/src/components/index/MarketPane.memo.test.tsx
+index 3ee118ac..389c869c 100644
+--- a/frontend/src/components/index/MarketPane.memo.test.tsx
++++ b/frontend/src/components/index/MarketPane.memo.test.tsx
+@@ -25,7 +25,7 @@ import {
+  *
+  *  量法(refactor-plan R11):`importOriginal` partial mock `@/lib/index-chart-svg`,
+  *  **只包住** `buildOverlayGeometry` 計次,其餘 export(`X_START_MIN` / `X_END_MIN` /
+- *  `buildIndexGeometry` / `rightEdgeLabels` …)一律保留真身 —— 漏了 `X_START_MIN`
++ *  `outOfDomainLevels` …)一律保留真身 —— 漏了 `X_START_MIN`
+  *  這對常數,MarketPane 自己的 `toX` 立刻變 NaN,測試會以為自己在量 memo,
+  *  其實在量壞掉的圖。
+  *
+diff --git a/frontend/src/components/ladder/ArmRow.characterization.test.tsx b/frontend/src/components/ladder/ArmRow.characterization.test.tsx
+new file mode 100644
+index 00000000..e6a18e10
+--- /dev/null
++++ b/frontend/src/components/ladder/ArmRow.characterization.test.tsx
+@@ -0,0 +1,181 @@
++/** @vitest-environment jsdom */
++/** 兩座閃電梯「武裝列」的 characterization lock(refactor housekeeping C5)。
++ *
++ *  現股 / 個股期梯(`LadderView`)與期貨梯(`FuturesLadder`)各自寫了一份結構相同的
++ *  武裝列(武裝鈕 + 鎖定鈕 + 商品別控制項),差異只在容器 gap、鎖定鈕是否條件渲染、
++ *  `title` 口徑與右側 slot 的內容。抽 `components/ladder/ArmRow.tsx` 合一之前,先把
++ *  **改前的 DOM 逐字**釘住 —— 這種列的失效樣態(class 掉一個、`aria-pressed` 變
++ *  `data-pressed`、鈕順序互換)在功能測試裡全是綠的,只有 outerHTML 看得見。
++ *
++ *  期望值刻意寫**字面量字串**而不是 `toMatchSnapshot()`:snapshot 檔會被 `-u` 一鍵
++ *  重寫,而這裡要的正是「改動必須是人為決定」。
++ *
++ *  焦點穩定性另立一案:合一後武裝鈕若換了 element identity(例如被包進新的條件分支),
++ *  rerender 時焦點會掉回 body —— 武裝中的使用者按 Esc / 空白鍵就失效,畫面上看不出來。 */
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { FuturesLadder } from "@/components/futures/FuturesLadder";
++import { LadderView } from "@/components/stock/LadderView";
++import { setCapitalWsStatus } from "@/hooks/useCapital";
++import type { LadderRow } from "@/lib/stock-tick";
++import type { FuturesProductState } from "@/types";
++
++const ROWS: LadderRow[] = [
++  { priceMilli: 100_000, bidQty: 30, askQty: 0, isCenter: true, dimmed: false },
++];
++
++const TXF_STATE: FuturesProductState = {
++  product: "TXF",
++  name: "臺股期貨",
++  p: 23_000_000,
++  q: 3,
++  cum_vol: 12_000,
++  t: "09:10:00",
++  date: "20260728",
++  bids: [[22_999_000, 45]],
++  asks: [[23_001_000, 88]],
++  ref: 22_800_000,
++  upper: 25_080_000,
++  lower: 20_520_000,
++  resolved_contract: "202609",
++};
++
++/** 改前逐字(2026-08-21,commit 前的 master 行為)。以 `+` 串接只為行寬,內容連續無空白。 */
++const ARM_BUTTON =
++  '<button type="button" aria-pressed="false" class="min-w-0 flex-1 rounded border px-2 py-1' +
++  ' text-xs font-bold border-line text-ink-dim hover:border-accent hover:text-ink">武裝</button>';
++
++const LOCK_TITLE_TEXT = "鎖定:換標的 / 換梯 / 閒置不解除;斷線 / 連 3 敗 / Esc / 解除仍會解除";
++
++const LADDER_VIEW_ARM_ROW =
++  '<div class="flex items-center gap-1">' +
++  ARM_BUTTON +
++  `<button type="button" aria-pressed="false" title="${LOCK_TITLE_TEXT}" class="shrink-0` +
++  ' rounded border px-2 py-1 text-xs font-bold border-line text-ink-dim hover:border-accent' +
++  ' hover:text-ink">鎖定</button>' +
++  '<span data-testid="arm-controls">現沖</span></div>';
++
++const LADDER_VIEW_ARM_ROW_NO_LOCK =
++  '<div class="flex items-center gap-1">' + ARM_BUTTON + "</div>";
++
++const FUTURES_ARM_ROW =
++  '<div class="flex items-center gap-2">' +
++  ARM_BUTTON +
++  '<button type="button" aria-pressed="false" disabled="" title="連線未就緒,無法鎖定"' +
++  ' class="shrink-0 rounded border px-2 py-1 text-xs font-bold border-line text-ink-dim' +
++  ' hover:border-accent hover:text-ink opacity-40">鎖定</button>' +
++  '<label class="flex items-center gap-1 text-xs text-ink-muted">' +
++  '<input aria-label="當沖" class="accent-loss" type="checkbox">當沖</label></div>';
++
++let qc: QueryClient;
++
++/** 武裝列 = 武裝鈕的父層 flex 容器(鎖定鈕 / 商品別控制項與它同層)。 */
++function armRowHtml(): string {
++  return screen.getByRole("button", { name: "武裝" }).parentElement!.outerHTML;
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++  setCapitalWsStatus("connecting");
++  Element.prototype.scrollIntoView = vi.fn();
++  vi.spyOn(globalThis, "fetch").mockImplementation(
++    async () =>
++      new Response(JSON.stringify({ orders: [] }), {
++        status: 200,
++        headers: { "Content-Type": "application/json" },
++      }),
++  );
++  qc = new QueryClient({
++    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
++  });
++});
++
++afterEach(() => {
++  cleanup();
++  vi.restoreAllMocks();
++});
++
++describe("武裝列 characterization(兩梯 outerHTML 逐字)", () => {
++  it("LadderView(現股 / 個股期):武裝 + 鎖定 + armControls", () => {
++    render(
++      <LadderView
++        code="2330"
++        rows={ROWS}
++        marketBidQty={0}
++        marketAskQty={0}
++        armed={false}
++        onToggleArm={() => {}}
++        locked={false}
++        onToggleLock={() => {}}
++        armControls={<span data-testid="arm-controls">現沖</span>}
++        qty={1}
++        qtyLabel="張數"
++        onQtyPreset={() => {}}
++        onQtyInput={() => {}}
++        onClickPrice={() => {}}
++        onCancelLot={() => {}}
++      />,
++    );
++    expect(armRowHtml()).toBe(LADDER_VIEW_ARM_ROW);
++  });
++
++  it("LadderView:未給 onToggleLock → 鎖定鈕整顆不渲染", () => {
++    render(
++      <LadderView
++        code="2330"
++        rows={ROWS}
++        marketBidQty={0}
++        marketAskQty={0}
++        armed={false}
++        onToggleArm={() => {}}
++        qty={1}
++        qtyLabel="張數"
++        onQtyPreset={() => {}}
++        onQtyInput={() => {}}
++        onClickPrice={() => {}}
++        onCancelLot={() => {}}
++      />,
++    );
++    expect(armRowHtml()).toBe(LADDER_VIEW_ARM_ROW_NO_LOCK);
++  });
++
++  it("FuturesLadder(期貨):武裝 + 鎖定 + 當沖 checkbox", () => {
++    render(
++      <QueryClientProvider client={qc}>
++        <FuturesLadder product="TXF" state={TXF_STATE} />
++      </QueryClientProvider>,
++    );
++    expect(armRowHtml()).toBe(FUTURES_ARM_ROW);
++  });
++
++  it("武裝鈕 focus 後 rerender → activeElement 不變(element identity 穩定)", () => {
++    const props = {
++      code: "2330",
++      rows: ROWS,
++      marketBidQty: 0,
++      marketAskQty: 0,
++      armed: false,
++      onToggleArm: () => {},
++      locked: false,
++      onToggleLock: () => {},
++      qtyLabel: "張數",
++      onQtyPreset: () => {},
++      onQtyInput: () => {},
++      onClickPrice: () => {},
++      onCancelLot: () => {},
++    };
++    const { rerender } = render(<LadderView {...props} qty={1} />);
++    const armBtn = screen.getByRole("button", { name: "武裝" });
++    armBtn.focus();
++    expect(document.activeElement).toBe(armBtn);
++    // 自檢:focus 真的落在鈕上而不是 body(jsdom 對 detached / hidden 元素會靜默不 focus)
++    expect(document.activeElement).not.toBe(document.body);
++
++    rerender(<LadderView {...props} qty={5} />);
++    // 同一顆 DOM node 還在(React 沒重建),焦點也還在它身上
++    expect(screen.getByRole("button", { name: "武裝" })).toBe(armBtn);
++    expect(document.activeElement).toBe(armBtn);
++  });
++});
+diff --git a/frontend/src/lib/index-chart-svg.test.ts b/frontend/src/lib/index-chart-svg.test.ts
+index 45394f9a..d88e8ebc 100644
+--- a/frontend/src/lib/index-chart-svg.test.ts
++++ b/frontend/src/lib/index-chart-svg.test.ts
+@@ -1,12 +1,7 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import {
+-  buildIndexGeometry,
+-  buildOverlayGeometry,
+-  outOfDomainLevels,
+-  rightEdgeLabels,
+-} from "@/lib/index-chart-svg";
+-import { overlayLines, type OverlayLine, type StockOverlay } from "@/lib/stock-intraday-svg";
++import { buildOverlayGeometry, outOfDomainLevels } from "@/lib/index-chart-svg";
++import { overlayLines, type StockOverlay } from "@/lib/stock-intraday-svg";
+ 
+ const SIZE = { width: 270, height: 100 };
+ 
+@@ -14,47 +9,6 @@ function minutes(entries: [string, number][]): Record<string, number> {
+   return Object.fromEntries(entries);
+ }
+ 
+-describe("buildIndexGeometry", () => {
+-  it("autofit 域含 high/low/ref 並留 pad", () => {
+-    const g = buildIndexGeometry(
+-      {
+-        minutes: minutes([
+-          ["0901", 43_000_000],
+-          ["0930", 42_000_000],
+-        ]),
+-        ref: 43_634_190,
+-        high: 43_221_930,
+-        low: 41_815_780,
+-      },
+-      SIZE,
+-    );
+-    expect(g.yDomain[0]).toBeLessThan(41_815_780);
+-    expect(g.yDomain[1]).toBeGreaterThan(43_634_190);
+-    expect(g.line).toHaveLength(2);
+-    // 0901 → x=1px(09:00 起每分 1px @ width 270)
+-    expect(g.line[0]!.x).toBeCloseTo(1, 5);
+-    expect(Number.isFinite(g.refY)).toBe(true);
+-    expect(g.yTicks).toHaveLength(3);
+-  });
+-
+-  it("空 minutes 不產生 NaN", () => {
+-    const g = buildIndexGeometry(
+-      { minutes: {}, ref: 43_000_000, high: null, low: null },
+-      SIZE,
+-    );
+-    expect(g.line).toEqual([]);
+-    expect(Number.isFinite(g.refY)).toBe(true);
+-  });
+-
+-  it("ref null → 以序列均值為基準不炸", () => {
+-    const g = buildIndexGeometry(
+-      { minutes: minutes([["0901", 42_000_000]]), ref: null, high: null, low: null },
+-      SIZE,
+-    );
+-    expect(Number.isFinite(g.line[0]!.y)).toBe(true);
+-  });
+-});
+-
+ describe("buildOverlayGeometry", () => {
+   it("各線相對各自 ref 的 % 共域,含 zeroY", () => {
+     const g = buildOverlayGeometry(
+@@ -86,142 +40,22 @@ describe("buildOverlayGeometry", () => {
+   });
+ });
+ 
+-describe("buildIndexGeometry avgLine(SC-1/2)", () => {
+-  it("第 k 個已有分鐘的值 = 前 k 個已有分鐘收盤的算術平均(缺分鐘不補值)", () => {
+-    const g = buildIndexGeometry(
+-      {
+-        minutes: minutes([
+-          ["0901", 43_000_000],
+-          ["0902", 43_000_200],
+-          // 0903/0904 缺 —— 不補值,均價只走「已有」分鐘
+-          ["0905", 43_000_400],
+-          ["0906", 43_000_800],
+-        ]),
+-        ref: 43_000_000,
+-        high: null,
+-        low: null,
+-      },
+-      SIZE,
+-    );
+-    expect(g.avgLine.map((p) => p.p)).toEqual([
+-      43_000_000, 43_000_100, 43_000_200, 43_000_350,
+-    ]);
+-    expect(g.avgLine.map((p) => p.minute)).toEqual(["0901", "0902", "0905", "0906"]);
+-    // x 與走勢線逐點同源(缺分鐘不佔位)
+-    expect(g.avgLine.map((p) => p.x)).toEqual(g.line.map((p) => p.x));
+-    expect(g.avgLine[1]!.y).toBeCloseTo(g.toY(43_000_100), 6);
+-  });
+-
+-  it("minutes 空 → avgLine 空陣列", () => {
+-    const g = buildIndexGeometry({ minutes: {}, ref: 43_000_000, high: null, low: null }, SIZE);
+-    expect(g.avgLine).toEqual([]);
+-  });
+-
+-  it("toY 匯出與 yTicks / refY / yDomain 同源", () => {
+-    const g = buildIndexGeometry(
+-      {
+-        minutes: minutes([["0901", 43_000_000]]),
+-        ref: 43_634_190,
+-        high: 43_221_930,
+-        low: 41_815_780,
+-      },
+-      SIZE,
+-    );
+-    expect(g.toY(g.yDomain[1])).toBeCloseTo(0, 6);
+-    expect(g.toY(g.yDomain[0])).toBeCloseTo(SIZE.height, 6);
+-    expect(g.toY(43_634_190)).toBeCloseTo(g.refY, 6);
+-    for (const t of g.yTicks) expect(g.toY(t.priceMilli)).toBeCloseTo(t.y, 2);
+-  });
+-});
+-
+-const BOUNDS = { top: 8, bottom: 206 };
+-
+-function line(level: OverlayLine["level"], y: number): OverlayLine {
+-  return { y, priceMilli: 23_000_000, level };
+-}
+-
+-describe("rightEdgeLabels(決策 6:右緣標籤唯一佈局來源)", () => {
+-  it("3 項同時貼底 → y 兩兩相距 ≥10 且全在界內", () => {
+-    const out = rightEdgeLabels({
+-      ref: null,
+-      oLines: [],
+-      outOfDomain: [
+-        { level: "nl", priceMilli: 22_000_000, dir: "down" },
+-        { level: "al", priceMilli: 21_000_000, dir: "down" },
+-        { level: "ma20", priceMilli: 20_000_000, dir: "down" },
+-      ],
+-      bounds: BOUNDS,
+-    });
+-    expect(out).toHaveLength(3);
+-    const ys = out.map((l) => l.y).sort((a, b) => a - b);
+-    expect(ys[1]! - ys[0]!).toBeGreaterThanOrEqual(10);
+-    expect(ys[2]! - ys[1]!).toBeGreaterThanOrEqual(10);
+-    for (const y of ys) {
+-      expect(y).toBeGreaterThanOrEqual(BOUNDS.top);
+-      expect(y).toBeLessThanOrEqual(BOUNDS.bottom);
+-    }
+-  });
+-
+-  it("8 項(昨收 + 七條域內線)全塞得下", () => {
+-    const out = rightEdgeLabels({
+-      ref: { y: 100, text: "昨收 23000" },
+-      oLines: [
+-        line("ah", 20),
+-        line("nh", 40),
+-        line("cdp", 60),
+-        line("nl", 130),
+-        line("al", 150),
+-        line("ma5", 170),
+-        line("ma20", 190),
+-      ],
+-      outOfDomain: [],
+-      bounds: BOUNDS,
+-    });
+-    expect(out).toHaveLength(8);
+-    // 互不相撞就不推擠:域內線的 y 原封不動
+-    expect(
+-      out.filter((l) => l.kind === "line").map((l) => l.y),
+-    ).toEqual([20, 40, 60, 130, 150, 170, 190]);
+-  });
+-
+-  it("cdp 與昨收同 y±3px → 昨收 y 不動、cdp 被推開", () => {
+-    const out = rightEdgeLabels({
+-      ref: { y: 100, text: "昨收 23000" },
+-      oLines: [line("cdp", 102)],
+-      outOfDomain: [],
+-      bounds: BOUNDS,
+-    });
+-    const refLabel = out.find((l) => l.kind === "ref");
+-    const cdpLabel = out.find((l) => l.kind === "line");
+-    expect(refLabel?.y).toBe(100);
+-    expect(cdpLabel).toBeTruthy();
+-    expect(Math.abs(cdpLabel!.y - 100)).toBeGreaterThanOrEqual(10);
+-  });
+-
+-  it("容量不足 → 依排序末端優先丟棄", () => {
+-    const out = rightEdgeLabels({
+-      ref: null,
+-      oLines: [line("ah", 10), line("nh", 20), line("cdp", 30)],
+-      outOfDomain: [],
+-      // 容量 = floor((25−10)/10)+1 = 2
+-      bounds: { top: 10, bottom: 25 },
+-    });
+-    expect(out).toHaveLength(2);
+-    expect(out.map((l) => (l.kind === "line" ? l.level : null))).toEqual(["ah", "nh"]);
+-  });
+-});
+-
+ describe("outOfDomainLevels(SC-7 域內/域外分類)", () => {
+-  const g = buildIndexGeometry(
+-    {
+-      minutes: minutes([["0901", 23_000_000]]),
+-      ref: 23_000_000,
+-      high: 23_100_000,
+-      low: 22_990_000,
+-    },
+-    SIZE,
+-  );
+-  const [yBottom, yTop] = g.yDomain;
++  // 幾何寫字面量,不由已刪的 `buildIndexGeometry` 產:本 describe 要測的是
++  // `outOfDomainLevels` 對「域」的分類,域怎麼算出來的與它無關(同源算回來也測不到東西)。
++  //
++  // 值 = 原 fixture(minutes {"0901": 23_000_000} / ref 23_000_000 / high 23_100_000 /
++  // low 22_990_000,SIZE 270×100)經 buildIndexGeometry 的域公式所得:
++  //   yTop    = high * 1.003 = 23_100_000 * 1.003 = 23_169_299.999_999_996(浮點,非整數)
++  //   yBottom = low  * 0.997 = 22_990_000 * 0.997 = 22_921_030
++  //   toY(p)  = (yTop − p) / (yTop − yBottom) * height
++  // `toY` 是 `overlayLines`(下面對照組)要的第二欄,一併給。
++  const yTop = 23_169_299.999_999_996;
++  const yBottom = 22_921_030;
++  const g: { yDomain: [number, number]; toY: (p: number) => number } = {
++    yDomain: [yBottom, yTop],
++    toY: (p) => ((yTop - p) / (yTop - yBottom)) * SIZE.height,
++  };
+   const overlay: StockOverlay = {
+     cdp: {
+       cdp: 23_050_000,
+diff --git a/tests/helpers/wait.py b/tests/helpers/wait.py
+new file mode 100644
+index 00000000..b6d7e7bb
+--- /dev/null
++++ b/tests/helpers/wait.py
+@@ -0,0 +1,27 @@
++"""測試用的條件式等待(deadline 輪詢),取代 `await asyncio.sleep(N)` 換圈數。
++
++**為什麼不用固定 sleep**:Windows timer 解析度 15.6 ms —— `sleep(0.15)` 名目「約 5 拍」
++實際可能一拍都沒轉。正向斷言會間歇假紅,而否定型斷言(「沒多打一次」)更糟:迴圈根本
++沒跑也會綠,是永久性的假綠。條件式等待兩邊都對,慢只會慢不會錯,失敗訊息也說得出等的
++是什麼。
++"""
++
++from __future__ import annotations
++
++import asyncio
++from collections.abc import Callable
++
++
++async def wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
++    """輪詢 `pred()` 直到成立;逾時 raise `AssertionError`。
++
++    時鐘取 `loop.time()`(單調鐘,與 `asyncio.sleep` 同一把):被測物若用 `monkeypatch`
++    改過牆鐘,這裡的 deadline 不會跟著漂。
++    """
++    loop = asyncio.get_running_loop()
++    deadline = loop.time() + timeout
++    while loop.time() < deadline:
++        if pred():
++            return
++        await asyncio.sleep(0.005)
++    raise AssertionError(f"條件未在 {timeout}s 內成立")
+diff --git a/tests/live/test_aggregate.py b/tests/live/test_aggregate.py
+index 7947ee0c..9644e703 100644
+--- a/tests/live/test_aggregate.py
++++ b/tests/live/test_aggregate.py
+@@ -102,7 +102,7 @@ class TestRouting:
+ 
+     def test_txf_month_leaf_also_updates_spot(self) -> None:
+         """futures_engine 的 leaf fallback 訂 TC.F.TWF.TXF.<YYYYMM> —— 同一標的同一價位,
+-        HOT 推播被搶走時它是唯一的現價來源(CLAUDE.md §8 同 symbol 跨 session 只推一邊)。"""
++        HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol)時它是唯一的現價來源。"""
+         agg = make_agg()
+         agg.route(tick("TC.F.TWF.TXF.202609", price=43_800_000, qty=1))
+         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
+diff --git a/tests/live/test_futures_bars.py b/tests/live/test_futures_bars.py
+index ac55c63d..02a15849 100644
+--- a/tests/live/test_futures_bars.py
++++ b/tests/live/test_futures_bars.py
+@@ -1,8 +1,9 @@
+ """期指 K 線歷史(index-board N-2)。
+ 
+ **為什麼一定要從 futures session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這條
+-session 手上,TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從別的 session 問
+-同一檔有把推播搶走的風險。`river_backfill` 檔頭記的是同一件事。
++session 手上 —— 從別的 session 問同一檔會多掛一把 TC4 refcount key,而上游 feed 以 symbol
++為單位,那把 key 歸零就退訂整個 symbol(見 `.claude/skills/tc4-market-facts/SKILL.md`)。
++`river_backfill` 檔頭記的是同一件事。
+ """
+ 
+ from __future__ import annotations
+diff --git a/tests/server/test_breadth_engine.py b/tests/server/test_breadth_engine.py
+index 0b259e04..f7a80c89 100644
+--- a/tests/server/test_breadth_engine.py
++++ b/tests/server/test_breadth_engine.py
+@@ -13,7 +13,6 @@ from __future__ import annotations
+ import asyncio
+ import datetime as _dt
+ import json
+-import time as _time
+ from pathlib import Path
+ from typing import Any, Callable
+ 
+@@ -22,6 +21,7 @@ import pytest
+ import copycat.server.breadth_engine as be
+ from copycat.breadth_config import BreadthConfig
+ from copycat.server.breadth_fetch import BreadthFetchError
++from tests.helpers.wait import wait_until
+ 
+ _TRADE_DATE = "2026-08-05"
+ _STAMP = f"{_TRADE_DATE} 10:23:45"
+@@ -242,15 +242,6 @@ def _make(
+     return engine, snap, inf, disp, clk
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    deadline = _time.monotonic() + timeout
+-    while _time.monotonic() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件未在時限內成立")
+-
+-
+ def _series_file(tmp_path: Path, trade_date: str = _TRADE_DATE) -> Path:
+     return tmp_path / f"breadth-{trade_date}.json"
+ 
+@@ -746,7 +737,7 @@ class TestSeriesPersistence:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: engine.state()["counts"] is not None)
++            await wait_until(lambda: engine.state()["counts"] is not None)
+         finally:
+             await engine.close()
+ 
+@@ -1028,7 +1019,7 @@ class TestPollLoop:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 1)
++            await wait_until(lambda: snap.calls >= 1)
+             await asyncio.sleep(0.1)  # 夠跑約 10 圈
+         finally:
+             await engine.close()
+@@ -1040,7 +1031,7 @@ class TestPollLoop:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 3)
++            await wait_until(lambda: snap.calls >= 3)
+         finally:
+             await engine.close()
+ 
+@@ -1067,7 +1058,7 @@ class TestPollLoop:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
++            await wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
+         finally:
+             await engine.close()
+ 
+@@ -1095,12 +1086,12 @@ class TestPollLoop:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 1)  # 首圈(無條件)已跑過
++            await wait_until(lambda: snap.calls >= 1)  # 首圈(無條件)已跑過
+             assert engine._streak_armed_day is None  # 05:30 未到武裝時刻
+             assert daily.calls == []
+ 
+             clock.now = _dt.datetime.fromisoformat(f"{_TRADE_DATE} 06:30:00")
+-            await _wait_until(lambda: engine._streaks_day == _TRADE_DATE)
++            await wait_until(lambda: engine._streaks_day == _TRADE_DATE)
+         finally:
+             await engine.close()
+ 
+@@ -1127,7 +1118,7 @@ class TestPollLoop:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 3)
++            await wait_until(lambda: snap.calls >= 3)
+         finally:
+             await engine.close()
+ 
+@@ -1507,7 +1498,7 @@ class TestStreakScheduling:
+         engine._maybe_arm_streaks()
+         task = engine._streak_task
+         assert task is not None
+-        await _wait_until(lambda: len(daily.calls) >= 1)
++        await wait_until(lambda: len(daily.calls) >= 1)
+ 
+         await engine.close()
+ 
+@@ -1526,7 +1517,7 @@ class TestStreakCache:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: engine.state()["counts"] is not None)
++            await wait_until(lambda: engine.state()["counts"] is not None)
+             await asyncio.sleep(0.1)  # 夠跑約 10 圈武裝檢查
+         finally:
+             await engine.close()
+@@ -1921,7 +1912,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: engine.state()["counts"] is not None)
++            await wait_until(lambda: engine.state()["counts"] is not None)
+         finally:
+             await engine.close()
+ 
+@@ -1957,7 +1948,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: rounds["n"] >= 4)
++            await wait_until(lambda: rounds["n"] >= 4)
+         finally:
+             await engine.close()
+ 
+@@ -1974,7 +1965,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 3)
++            await wait_until(lambda: snap.calls >= 3)
+         finally:
+             await engine.close()
+ 
+@@ -1992,7 +1983,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: snap.calls >= 3)
++            await wait_until(lambda: snap.calls >= 3)
+         finally:
+             await engine.close()
+ 
+@@ -2017,7 +2008,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: engine.state()["counts"] is not None)
++            await wait_until(lambda: engine.state()["counts"] is not None)
+         finally:
+             await engine.close()
+ 
+@@ -2051,7 +2042,7 @@ class TestTradingDayGate:
+ 
+         await engine.start()
+         try:
+-            await _wait_until(lambda: rounds["n"] >= 4)
++            await wait_until(lambda: rounds["n"] >= 4)
+         finally:
+             await engine.close()
+ 
+diff --git a/tests/server/test_corr_engine.py b/tests/server/test_corr_engine.py
+index 1cc61f5c..22acdfea 100644
+--- a/tests/server/test_corr_engine.py
++++ b/tests/server/test_corr_engine.py
+@@ -7,6 +7,7 @@ from typing import Callable
+ 
+ from copycat.corr_config import CorrConfig, Leg
+ from copycat.server.corr_engine import CorrelationEngine
++from tests.helpers.wait import wait_until
+ 
+ NIGHT = ("20260730", "night")
+ 
+@@ -349,15 +350,6 @@ class _BadRetrySource(_FakeSource):
+         super().subscribe_raw(symbol)
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    deadline = asyncio.get_running_loop().time() + timeout
+-    while asyncio.get_running_loop().time() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件逾時未成立")
+-
+-
+ class TestPendingResubscribe:
+     """腿訂閱失敗的**零重試路徑**(mod/subscribe-retry-recovery SC-1)。
+ 
+@@ -373,7 +365,7 @@ class TestPendingResubscribe:
+         await eng.start()
+         assert src.subscribed == ["TC.F.TWF.SXF.HOT"]  # 首輪只有費半成功
+         try:
+-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
++            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+         finally:
+             await eng.close()
+         assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 失敗 2 次 + 成功 1 次
+@@ -387,7 +379,7 @@ class TestPendingResubscribe:
+         )
+         await eng.start()
+         try:
+-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
++            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+             assert src.cb is not None
+             src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
+             await asyncio.sleep(0)
+@@ -419,7 +411,7 @@ class TestPendingResubscribe:
+             src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
+         )
+         await eng.start()
+-        await _wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
++        await wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
+         await eng.close()
+         n = len(src.attempts)
+         # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
+@@ -438,7 +430,7 @@ class TestPendingResubscribe:
+         )
+         await eng.start()
+         try:
+-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
++            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+             assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 連線類 + 非連線類 + 成功
+         finally:
+             await eng.close()
+@@ -455,7 +447,7 @@ class TestPendingResubscribe:
+         )
+         await eng.start()
+         try:
+-            await _wait_until(lambda: src.fetched.count("TC.F.CME.NQ.HOT") >= 2)
++            await wait_until(lambda: src.fetched.count("TC.F.CME.NQ.HOT") >= 2)
+         finally:
+             await eng.close()
+ 
+@@ -471,7 +463,7 @@ class TestPendingResubscribe:
+         )
+         await eng.start()
+         try:
+-            await _wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
++            await wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
+             assert "TC.F.TWF.TXF.HOT" not in src.attempts
+             assert "TC.F.TWF.TXF.HOT" not in src.subscribed
+         finally:
+diff --git a/tests/server/test_corr_engine_river.py b/tests/server/test_corr_engine_river.py
+index cf2fa226..07ff4892 100644
+--- a/tests/server/test_corr_engine_river.py
++++ b/tests/server/test_corr_engine_river.py
+@@ -13,6 +13,7 @@ from copycat.corr_config import CorrConfig, Leg
+ from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server import corr_engine as corr_engine_mod
+ from copycat.server.corr_engine import CorrelationEngine
++from tests.helpers.wait import wait_until
+ 
+ DAY = ("20260730", "day")
+ 
+@@ -153,21 +154,6 @@ async def _drain() -> None:
+         await asyncio.sleep(0.001)
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    """等到 `pred()` 成立(沿 `test_corr_engine.py` / `test_breadth_engine.py` 的慣例)。
+-
+-    固定圈數的 `_drain()` 對「要等一個延遲重試醒來」的斷言是兩頭錯:CI 慢一點就假紅,
+-    本機快的時候又白等滿全部圈數。條件式等待兩邊都對,失敗訊息也說得出等的是什麼。
+-    """
+-    loop = asyncio.get_running_loop()
+-    deadline = loop.time() + timeout
+-    while loop.time() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件逾時未成立")
+-
+-
+ def _engine(
+     source: _FakeSource,
+     *,
+@@ -302,7 +288,7 @@ class TestBackfill:
+             await eng.close()
+ 
+     async def test_never_requests_base_leg_symbol(self) -> None:
+-        """SC-4:台指的歷史也不可從 corr session 問(同 symbol 跨 session 只推一邊)。"""
++        """SC-4:台指的歷史也不可從 corr session 問(多掛一把 refcount key = 多一個退訂引信)。"""
+         src = _FakeSource()
+         eng = _engine(src, futures_minutes_fetch=lambda p: [])
+         await eng.start()
+@@ -364,7 +350,7 @@ class TestBackfillTimeoutRetry:
+         try:
+             # 等**終態**(分鐘進來了)而不是等固定圈數:`fetched` 是在 fetch 進場時就
+             # 記的,等它到 2 只證明第二發開打,還沒證明它的結果被套用
+-            await _wait_until(lambda: bool(_minutes(eng, "SXF")))
++            await wait_until(lambda: bool(_minutes(eng, "SXF")))
+             # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
+             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
+             assert _minutes(eng, "SXF") == {76: 12_000_000}
+@@ -381,7 +367,7 @@ class TestBackfillTimeoutRetry:
+         await eng.start()
+         try:
+             # 首輪 + 3 輪重試 = 4;沒有上界的話會一路重試到收盤
+-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
++            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+             await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 5 發(若有)現形
+             await _drain()
+             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4
+@@ -394,7 +380,7 @@ class TestBackfillTimeoutRetry:
+         src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")
+         eng = _engine(src, futures_minutes_fetch=lambda p: [])
+         await eng.start()
+-        await _wait_until(lambda: bool(eng._backfill_retry_tasks))
++        await wait_until(lambda: bool(eng._backfill_retry_tasks))
+         tasks = list(eng._backfill_retry_tasks)
+         await eng.close()
+         # `cancelled()` 而非 `cancelled() or done()`:退避是 5s,close 時它必定還睡在
+@@ -417,7 +403,7 @@ class TestBackfillTimeoutRetry:
+         eng = _engine(src, futures_minutes_fetch=lambda p: [])
+         await eng.start()
+         try:
+-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 1)
++            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 1)
+             await asyncio.sleep(0.05)
+             await _drain()
+             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 1
+@@ -442,12 +428,12 @@ class TestBackfillTimeoutRetry:
+         await eng.start()
+         try:
+             # episode 1:首輪 + 3 輪重試 = 4,然後放棄
+-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
++            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+             await _drain()
+             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4, "上界失效"
+             # episode 2:reconnect 觸發全新一輪 —— 預算沒歸零的話這裡只會有 1 發
+             eng._on_reconnect_threadsafe()
+-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 8)
++            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 8)
+         finally:
+             await eng.close()
+ 
+@@ -465,7 +451,7 @@ class TestBackfillTimeoutRetry:
+         eng = _engine(src, futures_minutes_fetch=lambda p: [])
+         await eng.start()
+         try:
+-            await _wait_until(lambda: eng._backfill_inflight)
++            await wait_until(lambda: eng._backfill_inflight)
+             round_before = eng._backfill_retry_round
+             with caplog.at_level(logging.INFO):
+                 await eng._backfill_river(legs={"SXF"})  # 重試醒來,撞上進行中那一輪
+diff --git a/tests/server/test_futures_engine.py b/tests/server/test_futures_engine.py
+index d6ad33dc..14321674 100644
+--- a/tests/server/test_futures_engine.py
++++ b/tests/server/test_futures_engine.py
+@@ -10,6 +10,7 @@ import pytest
+ from copycat.live.stock_source import Bar
+ from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server.futures_engine import FuturesEngine
++from tests.helpers.wait import wait_until
+ 
+ 
+ def _quote(product: str = "TXF", **over: object) -> dict:
+@@ -477,8 +478,10 @@ class TestResolvedContract:
+ 
+ class TestLeafFallbackSubscribe:
+     """Phase 6 real-env finding:TXO runtime 同 process 已訂 TC.F.TWF.TXF.HOT(spot),
+-    TC4 對同 symbol 跨 session 只推一邊 → futures 的 TXF HOT 永收不到。
+-    解法:resolve 已知後,寬限期內仍零推播的商品補訂 leaf 契約(symbol 字串不同無衝突)。"""
++    TC4 refcount 的另一把 key 歸零時上游退訂整個 symbol → futures 的 TXF HOT 永收不到
++    (2026-08-18 定調,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
++    解法:resolve 已知後,寬限期內仍零推播的商品補訂 leaf 契約 —— leaf 是不同 symbol,
++    天然是一把新 key,所以補得回來。"""
+ 
+     async def test_empty_product_gets_leaf_subscribe_after_grace(self) -> None:
+         src = FakeSource()
+@@ -619,15 +622,6 @@ class _AlwaysBadRetrySource(FakeSource):
+         raise ValueError("wrapper 內部型別錯")
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    deadline = asyncio.get_running_loop().time() + timeout
+-    while asyncio.get_running_loop().time() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件逾時未成立")
+-
+-
+ class TestPendingResubscribe:
+     """bug startup-names-futures-resub 症狀 3:訂閱失敗品**零重試路徑**。
+ 
+@@ -641,10 +635,10 @@ class TestPendingResubscribe:
+         await engine.start()
+         assert src.subscribed == ["TMF"]  # 首輪只有 TMF 成功
+         try:
+-            await _wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
++            await wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
+             # P2-3 收斂不變式:pending 清空後迴圈必須自然結束(while True mutant 下
+             # task 常駐洩漏,原測試無任何斷言會紅)
+-            await _wait_until(
++            await wait_until(
+                 lambda: engine._resub_task is not None and engine._resub_task.done()
+             )
+             assert engine._pending_subs == set()
+@@ -658,7 +652,7 @@ class TestPendingResubscribe:
+         src = _FlakySource({"TXF": 1})
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: "TXF" in src.subscribed)
++        await wait_until(lambda: "TXF" in src.subscribed)
+         _push(src, _quote())
+         await _drain()
+         assert engine.state()["products"]["TXF"]["p"] == 23_500_000
+@@ -679,7 +673,7 @@ class TestPendingResubscribe:
+         src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
++        await wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
+         await engine.close()
+         # T-9:in-flight worker(close 前已過 guard)脫鉤跑完 —— 用靜止條件取代
+         # 固定 sleep(快照連續兩次相等),斷言不再吃 OS 排程時序
+@@ -745,13 +739,13 @@ class TestPendingResubscribe:
+         src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: len(src.attempts) > 3)
++        await wait_until(lambda: len(src.attempts) > 3)
+         loop = engine._loop
+         task = engine._resub_task
+         assert task is not None
+         with caplog.at_level(logging.ERROR):
+             engine._loop = None  # 模擬 close 第一步(worker guard 生效)
+-            await _wait_until(lambda: task.done())
++            await wait_until(lambda: task.done())
+         assert "訂閱重試輪失敗" not in caplog.text
+         engine._loop = loop
+         await engine.close()
+@@ -767,7 +761,7 @@ class TestPendingResubscribe:
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+         try:
+-            await _wait_until(lambda: "TXF" in src.subscribed)
++            await wait_until(lambda: "TXF" in src.subscribed)
+             assert src.attempts.count("TXF") == 3  # 連線類 + 非連線類 + 成功
+         finally:
+             await engine.close()
+@@ -782,7 +776,7 @@ class TestPendingResubscribe:
+         src = _AlwaysBadRetrySource()
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
++        await wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
+         await engine.close()  # 不得重拋 ValueError
+         assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
+ 
+@@ -808,7 +802,7 @@ class TestRetrySuccessLeafBookkeeping:
+         assert "TXF" in engine._leaf_fed
+         src.fail_subscribe.discard("TXF")  # TC4 恢復 → 下一輪重試成功
+         try:
+-            await _wait_until(lambda: "TXF" in src.subscribed)
++            await wait_until(lambda: "TXF" in src.subscribed)
+             await _drain()
+             assert "TXF" in engine._leaf_fed  # SUB 成功 ≠ HOT 已回:記帳保留
+             _push(src, _quote())  # TXF 的 HOT 成交推播 = 真判準
+@@ -885,7 +879,7 @@ class TestReconnectReconciliation:
+         # no running event loop → 全引擎斷流)必紅
+         await asyncio.to_thread(src.on_reconnect)
+         try:
+-            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
++            await wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+         finally:
+             await engine.close()
+ 
+@@ -895,13 +889,13 @@ class TestReconnectReconciliation:
+         src = _FlakyReconnectSource({"TXF": 1})
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: engine._resub_task is not None and engine._resub_task.done())
++        await wait_until(lambda: engine._resub_task is not None and engine._resub_task.done())
+         old = engine._resub_task
+         src.subscribed.clear()
+         assert src.on_reconnect is not None
+         await asyncio.to_thread(src.on_reconnect)
+         try:
+-            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
++            await wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+             assert engine._resub_task is not old
+         finally:
+             await engine.close()
+@@ -912,7 +906,7 @@ class TestReconnectReconciliation:
+         src = _FlakyReconnectSource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
+         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
+         await engine.start()
+-        await _wait_until(lambda: len(src.attempts) > 3)
++        await wait_until(lambda: len(src.attempts) > 3)
+         task = engine._resub_task
+         assert task is not None and not task.done()
+         assert src.on_reconnect is not None
+@@ -961,7 +955,7 @@ class TestReconnectReconciliation:
+         assert src.on_reconnect is not None
+         await asyncio.to_thread(src.on_reconnect)
+         try:
+-            await _wait_until(lambda: src.subscribed.count("TXF") >= 2)  # 對帳重掛完成
++            await wait_until(lambda: src.subscribed.count("TXF") >= 2)  # 對帳重掛完成
+             await _drain()
+             assert "TXF" in engine._leaf_fed  # SUB OK ≠ HOT 已回:記帳不得清
+         finally:
+@@ -980,7 +974,7 @@ class TestReconnectReconciliation:
+         src.gate.set()
+         try:
+             # 舊連線上的成功若被出列,MXF 永遠不會再被重掛(count 停在 1)
+-            await _wait_until(lambda: src.subscribed.count("MXF") >= 2)
++            await wait_until(lambda: src.subscribed.count("MXF") >= 2)
+         finally:
+             await engine.close()
+ 
+diff --git a/tests/server/test_index_engine.py b/tests/server/test_index_engine.py
+index b4c819c1..a7285791 100644
+--- a/tests/server/test_index_engine.py
++++ b/tests/server/test_index_engine.py
+@@ -5,7 +5,6 @@ from __future__ import annotations
+ import asyncio
+ import datetime as _dt
+ import logging
+-import time as _time
+ from typing import Any, Callable
+ 
+ import pytest
+@@ -13,6 +12,7 @@ import pytest
+ from copycat.server.index_engine import IndexEngine, minute_key
+ from copycat.server.mis import OtcSnap
+ from tests.helpers.fake_sources import FakeIndexSource
++from tests.helpers.wait import wait_until
+ 
+ 
+ def _quote(price: str = "42039.92", filled: str = "13015") -> dict:
+@@ -29,20 +29,6 @@ def _quote(price: str = "42039.92", filled: str = "13015") -> dict:
+ OTC_SNAP = OtcSnap(p=359_800, ref=378_090, open=373_420, high=373_420, low=358_430, time="101610")
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    """等條件成立,不用 `sleep(N)` 換圈數。
+-
+-    Windows timer 解析度 15.6ms:`sleep(0.15)` 名目「約 5 拍」實際可能一拍都沒轉,
+-    否定型斷言(「沒多打」)就變成「迴圈根本沒跑」的假綠。
+-    """
+-    deadline = _time.monotonic() + timeout
+-    while _time.monotonic() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件未在時限內成立")
+-
+-
+ def make_engine(
+     fake: FakeIndexSource,
+     *,
+@@ -655,7 +641,7 @@ async def test_rollover_skips_non_trading_day() -> None:
+     await eng.start()
+     try:
+         calls_after_start = fake.fetch_minutes_calls  # start() 的回補那一次
+-        await _wait_until(lambda: ticks["n"] >= 3)
++        await wait_until(lambda: ticks["n"] >= 3)
+         assert eng.state()["trade_date"] == "2026-08-14"
+         assert eng._pending_date is None  # type: ignore[attr-defined]
+         assert fake.trade_dates == ["2026-08-14"]  # 只有 start 同步那次
+@@ -681,7 +667,7 @@ async def test_rollover_runs_on_trading_day() -> None:
+     try:
+         # 等的是**結果**不是時間:換日要經 pending → 重掛 → 回補 → swap 四步,
+         # 固定 sleep 只要有一步比預期慢就是 flake(慢機 / CI 上必現)。
+-        await _wait_until(lambda: eng.state()["trade_date"] == "2026-08-14")
++        await wait_until(lambda: eng.state()["trade_date"] == "2026-08-14")
+         state = eng.state()
+         assert state["trade_date"] == "2026-08-14"
+         assert state["twse"]["minutes"] == {"0901": 2_000}
+@@ -708,7 +694,7 @@ async def test_default_rolls_over_on_weekend() -> None:
+     eng._rollover_check_secs = 0.005  # type: ignore[attr-defined]
+     await eng.start()
+     try:
+-        await _wait_until(lambda: eng.state()["trade_date"] == "2026-08-15")
++        await wait_until(lambda: eng.state()["trade_date"] == "2026-08-15")
+         assert eng.state()["twse"]["minutes"] == {"0901": 2_000}
+     finally:
+         await eng.close()
+diff --git a/tests/server/test_market_routes.py b/tests/server/test_market_routes.py
+index 00e067fc..8d1ec682 100644
+--- a/tests/server/test_market_routes.py
++++ b/tests/server/test_market_routes.py
+@@ -1,7 +1,8 @@
+ """大盤 K 線 route(index-board N-5 / SC-4/5/6)。
+ 
+ 三個分派各自向**持有該 symbol REALTIME 訂閱的那條 session** 問歷史
+-(CLAUDE.md §8 同 symbol 跨 session 只推一邊):
++(別條 session 問 = 對同一 symbol 多掛一把 TC4 refcount key,歸零時退訂整個 symbol;
++見 `.claude/skills/tc4-market-facts/SKILL.md`):
+ `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(TC4 無此 symbol)。
+ """
+ 
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index e6b1e3e1..e21dec21 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -15,6 +15,7 @@ from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
+ from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server import stock_engine as stock_engine_mod
+ from copycat.server.stock_engine import StockEngine
++from tests.helpers.wait import wait_until
+ 
+ 
+ def _quote(
+@@ -899,12 +900,12 @@ class TestBackfillTimeoutRetry:
+                       is_trial=False)
+         ]
+         await engine.set_main("2330")
+-        await _wait_until(lambda: src.backfills.count("2330") >= 1)
++        await wait_until(lambda: src.backfills.count("2330") >= 1)
+         # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
+         assert engine.tc4_status != "down"
+         assert engine._backfill_failed.get("2330", 0) == 0
+         # 等**終態**(分鐘套用進去了)而不是等固定圈數 —— `backfills` 是進場時記的
+-        await _wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
++        await wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
+         assert src.backfills.count("2330") == 2  # 重排且第二發成功
+         assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
+         await engine.close()
+@@ -917,7 +918,7 @@ class TestBackfillTimeoutRetry:
+         src.backfill_error = HistoryTimeoutError("first page not ready")
+         with caplog.at_level(logging.WARNING):
+             await engine.set_main("2330")
+-            await _wait_until(lambda: src.backfills.count("2330") == 3)
++            await wait_until(lambda: src.backfills.count("2330") == 3)
+             await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 4 發(若有)現形
+             await _drain(engine)
+         # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
+@@ -955,7 +956,7 @@ class TestBackfillTimeoutRetry:
+         engine, src = await _make()
+         src.backfill_error = HistoryTimeoutError("first page not ready")
+         await engine.set_main("2330")
+-        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
++        await wait_until(lambda: bool(engine._backfill_timeout_handles))
+         handles = list(engine._backfill_timeout_handles.values())
+         await engine.close()
+         assert handles and all(h.cancelled() for h in handles)
+@@ -968,7 +969,7 @@ class TestBackfillTimeoutRetry:
+         engine, src = await _make()
+         src.backfill_error = HistoryTimeoutError("first page not ready")
+         await engine.set_main("2330")
+-        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
++        await wait_until(lambda: bool(engine._backfill_timeout_handles))
+         handles = list(engine._backfill_timeout_handles.values())
+         engine.rollover_stage1("2026-07-22")
+         assert src.on_message is not None
+@@ -989,13 +990,13 @@ class TestBackfillTimeoutRetry:
+         engine, src = await _make()
+         src.backfill_error = HistoryTimeoutError("first page not ready")
+         await engine.set_main("2330")
+-        await _wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
++        await wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
+         before = src.backfills.count("2330")
+         engine.rollover_stage1("2026-07-22")
+         assert src.on_message is not None
+         src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+         # 記帳沒清的話 stage2 排的那一發會**當場**放棄(+1 就到頂),等不到 +3
+-        await _wait_until(lambda: src.backfills.count("2330") >= before + 3)
++        await wait_until(lambda: src.backfills.count("2330") >= before + 3)
+         await engine.close()
+ 
+ 
+@@ -1107,15 +1108,6 @@ async def _make_retry(
+     return engine, src
+ 
+ 
+-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+-    deadline = asyncio.get_running_loop().time() + timeout
+-    while asyncio.get_running_loop().time() < deadline:
+-        if pred():
+-            return
+-        await asyncio.sleep(0.005)
+-    raise AssertionError("條件逾時未成立")
+-
+-
+ # 恆失敗的自選檔:重試輪的**可觀察計數器**。用牆鐘 sleep 換輪數在 Windows 上是假的
+ # (timer 解析度 15.6ms,`sleep(0.05)` 對 interval=0.01 實際只跑 ~3 輪),否定斷言的
+ # 強度會比註解寫的低一半以上(review W-4)。
+@@ -1125,7 +1117,7 @@ _SENTINEL = "8888"
+ async def _wait_rounds(src: _RetrySource, rounds: int, timeout: float = 2.0) -> None:
+     """等重試迴圈確實跑滿 `rounds` 輪(以哨兵檔被重試的次數計)。"""
+     base = src.attempts.count(_SENTINEL)
+-    await _wait_until(lambda: src.attempts.count(_SENTINEL) >= base + rounds, timeout=timeout)
++    await wait_until(lambda: src.attempts.count(_SENTINEL) >= base + rounds, timeout=timeout)
+ 
+ 
+ async def _collect(stream) -> list[dict]:
+@@ -1152,7 +1144,7 @@ class TestWatchlistRetry:
+         await engine.set_watchlist(["9999"])
+         assert "9999" not in src.subscribed
+         src.fail_subscribe.discard("9999")
+-        await _wait_until(lambda: "9999" in src.subscribed)
++        await wait_until(lambda: "9999" in src.subscribed)
+         await _drain(engine)
+         got = await _collect(stream)
+         quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "9999"]
+@@ -1202,9 +1194,9 @@ class TestWatchlistRetry:
+         await engine.set_main("2330")
+         src.fail_subscribe.add("2330")
+         engine.rollover_stage1("2026-07-22")
+-        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        await wait_until(lambda: "2330" in engine._failed_resubs)
+         src.fail_subscribe.discard("2330")
+-        await _wait_until(lambda: "2330" not in engine._failed_resubs)
++        await wait_until(lambda: "2330" not in engine._failed_resubs)
+         assert src.subscribed.count("2330") >= 2  # 重掛真的發出去了
+         await engine.close()
+ 
+@@ -1215,9 +1207,9 @@ class TestWatchlistRetry:
+         await engine.set_main("2330")
+         src.fail_subscribe.add("2330")
+         engine.rollover_stage1("2026-07-22")
+-        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        await wait_until(lambda: "2330" in engine._failed_resubs)
+         await engine.set_main("5483")  # 2330 last owner 退 → 已不在 _refs
+-        await _wait_until(lambda: not engine._failed_resubs)
++        await wait_until(lambda: not engine._failed_resubs)
+         n = src.attempts.count("2330")
+         await _wait_rounds(src, 5)
+         assert src.attempts.count("2330") == n  # 已退訂的檔不再被重試
+@@ -1230,7 +1222,7 @@ class TestWatchlistRetry:
+         src.fail_subscribe.update({"9998", "9999"})
+         await engine.set_watchlist(["9998", "9999"])  # 9998 排在前面且恆失敗
+         src.fail_subscribe.discard("9999")  # 只修好排在後面的那檔
+-        await _wait_until(lambda: "9999" in src.subscribed)
++        await wait_until(lambda: "9999" in src.subscribed)
+         await engine.close()
+ 
+     async def test_head_of_line_failure_does_not_starve_failed_resubs(self) -> None:
+@@ -1239,9 +1231,9 @@ class TestWatchlistRetry:
+         await engine.set_watchlist(["9997", "9998"])  # 先真訂上 → owner 在 _refs
+         src.fail_subscribe.update({"9997", "9998"})
+         engine.rollover_stage1("2026-07-22")  # 全量重掛兩檔皆失敗
+-        await _wait_until(lambda: engine._failed_resubs == {"9997", "9998"})
++        await wait_until(lambda: engine._failed_resubs == {"9997", "9998"})
+         src.fail_subscribe.discard("9998")  # 只修 sorted 順序在後的那檔
+-        await _wait_until(lambda: "9998" not in engine._failed_resubs)
++        await wait_until(lambda: "9998" not in engine._failed_resubs)
+         await engine.close()
+ 
+     async def test_failed_resub_merge_waits_for_pool_lock(self) -> None:
+@@ -1256,11 +1248,11 @@ class TestWatchlistRetry:
+         await engine.set_main("2330")
+         src.fail_subscribe.add("2330")
+         engine.rollover_stage1("2026-07-22")
+-        await _wait_until(lambda: src.attempts.count("2330") >= 2)  # 重掛已進到慢失敗窗
++        await wait_until(lambda: src.attempts.count("2330") >= 2)  # 重掛已進到慢失敗窗
+         async with engine._pool_lock:
+             await asyncio.sleep(0.4)  # 慢失敗早已結束;合併必須還卡在鎖外
+             assert engine._failed_resubs == set()
+-        await _wait_until(lambda: "2330" in engine._failed_resubs)  # 放鎖後才進帳
++        await wait_until(lambda: "2330" in engine._failed_resubs)  # 放鎖後才進帳
+         await engine.close()
+ 
+     async def test_close_stops_retry_loop(self) -> None:
+@@ -1268,7 +1260,7 @@ class TestWatchlistRetry:
+         engine, src = await _make_retry()
+         src.fail_subscribe.add("9999")
+         await engine.set_watchlist(["9999"])
+-        await _wait_until(lambda: src.attempts.count("9999") > 4)  # 迴圈確實在跑
++        await wait_until(lambda: src.attempts.count("9999") > 4)  # 迴圈確實在跑
+         await engine.close()
+         n = len(src.attempts)
+         # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
+@@ -1289,7 +1281,7 @@ class TestStkfutRetry:
+         await engine.set_main("2330")
+         assert "F:CDF" not in src.subscribed
+         src.fail_subscribe.discard("F:CDF")
+-        await _wait_until(lambda: "F:CDF" in src.subscribed)
++        await wait_until(lambda: "F:CDF" in src.subscribed)
+         assert engine._refs["F:CDF"] == {"stkfut:2330"}
+         await engine.close()
+ 
+@@ -1697,7 +1689,7 @@ class TestRetryLoopStarvation:
+         codes = [str(9000 + i) for i in range(12)]
+         src.fail_subscribe.update(codes)
+         await engine.set_watchlist(codes)
+-        await _wait_until(lambda: len(src.attempts) > len(codes))  # 重試迴圈確實已在跑
++        await wait_until(lambda: len(src.attempts) > len(codes))  # 重試迴圈確實已在跑
+         t0 = asyncio.get_running_loop().time()
+         await engine.set_main("2330")
+         elapsed = asyncio.get_running_loop().time() - t0
+@@ -1714,9 +1706,9 @@ class TestRetryLoopStarvation:
+         await engine.set_main("2330")  # 段 4 的 stkfut 腿失敗
+         src.fail_subscribe.add("2330")
+         engine.rollover_stage1("2026-07-22")  # 段 3 的 failed_resubs
+-        await _wait_until(lambda: "2330" in engine._failed_resubs)
++        await wait_until(lambda: "2330" in engine._failed_resubs)
+         src.fail_subscribe.difference_update({"2330", "F:CDF"})  # 9999 仍恆失敗
+-        await _wait_until(
++        await wait_until(
+             lambda: "F:CDF" in src.subscribed and "2330" not in engine._failed_resubs
+         )
+         assert "9999" not in src.subscribed  # 前提:段 2 確實每輪都在失敗
+@@ -3210,7 +3202,7 @@ class TestCheckpointTradingDay:
+         )
+         engine._checkpoint_secs = 0.01  # type: ignore[attr-defined]
+         await engine.start()
+-        await _wait_until(lambda: clock.ticks >= 3)
++        await wait_until(lambda: clock.ticks >= 3)
+         return engine, src, clock
+ 
+     async def test_non_trading_weekday_does_not_arm_stage1(self) -> None:
+@@ -3230,7 +3222,7 @@ class TestCheckpointTradingDay:
+             _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: True
+         )
+         try:
+-            await _wait_until(lambda: engine._pending_date == "2026-08-13")
++            await wait_until(lambda: engine._pending_date == "2026-08-13")
+             assert src.trade_dates == ["2026-08-12", "2026-08-13"]
+         finally:
+             await engine.close()

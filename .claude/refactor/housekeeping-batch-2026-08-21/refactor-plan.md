@@ -36,3 +36,7 @@ duplication:localYmd 2→1、EMPTY_HLINES 2→1、比例常數 3→1、武裝列
 - **C6(R12)**:async `_wait_until` 六份 + `test_watchlist_service.py:57`、`test_signal_hub.py:426/438`、`test_signal_routes.py:255/275`、`test_ws_disconnect.py:298` 同型者一併收 `tests/helpers/wait.py::wait_until`(簽名 `(pred, timeout=2.0)`,語意相同者才收);同步式四處(boot / breadth_routes / calendar_wiring / capital_api)**不收**(簽名不相容),收尾核如實寫 N→1。
 - **C7(R7)**:站點 = `grep -rln "跨 session 只推一邊" copycat configs tests spikes` 完整清單(app / futures_engine / corr_engine / corr_config / index_engine / futures_source / river_backfill / verify / models + configs/correlation.json 註解欄 + tests ×5 + spikes ×2);口徑統一指 `.claude/skills/tc4-market-facts/SKILL.md`;`ops-discipline/SKILL.md:12` 理由改 refcount(結論不變)。
 - **C8 移出本批(R5 / R6)**:先例 `lib/fut-chart-mode.ts`(非 initialSubTab);真白屏層在 App.tsx 四處 + 全站 ~14 處 setItem → 獨立 /mod(`lib/storage.ts::readLocal/writeLocal` 全站收),記 next-time。
+
+## 實作偏離回填(code review Z5)
+- C4:react-doctor `only-export-components` 逼出 `lib/chart-hlines.ts` 新檔(零新檔目標放棄;`ChartHLine` 由 CandleChart re-export,既有 import 路徑與 identity 不變)→ 8 個 🔵 commit(七條 + C4 收尾)。
+- C5 實為 2 份;C6 為 6→1(四個同步式 + 三個專屬 predicate helper 不收,理由見 commit body)。
