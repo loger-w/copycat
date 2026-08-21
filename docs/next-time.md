@@ -75,7 +75,7 @@
   TXO session 搶走推播(同 symbol 只推一邊,UNSUB→SUB 救不回)時既有再武裝路徑(pending `st.p is None` 只冷啟動、跨日重武裝只掃
   `_leaf_fed`)都不觸發 → 凍結零訊號;夜盤冷門品「靜默再武裝」又會乒乓。要做 = 先設計 engine 層 HOT 靜默偵測(>N 秒且同族他品有推播)
   再武裝,且 `unsubscribe_leaf` 不得 `_ensure_connected`(review I1 KeepAlive 洩漏)。coalesce 後雙流 WS 流量已歸零,收益只剩 engine CPU。
-- [ ] **`_heal_gate` 跨午夜段日曆歸屬**:週一 / 長假後首交易日凌晨 00:00–05:05 假開(空 churn)、週六凌晨假關;真修法 = 凌晨段改查
+- [x] **`_heal_gate` 跨午夜段日曆歸屬**〔2026-08-21 已出貨 PR #82 mod/corr-readout-clamp-healgate:`_session_date()` hour<6 歸前一日;近似誤差 = 次一營業日休市的夜仍空 churn(方向安全)〕:週一 / 長假後首交易日凌晨 00:00–05:05 假開(空 churn)、週六凌晨假關;真修法 = 凌晨段改查
   前一日 `is_trading_day`。〔2026-08-20 機械探針證實(真日曆):週六 01:00 gate=False(該救不救)、
   週一 01:00 gate=True(無夜盤仍開)——兩個邊界都如條目所述〕
 
@@ -129,7 +129,7 @@
   `corr_config.py:7`、`app.py:775` 都引用舊說法,下次動這些檔時順手校正(本輪不動 server/*.py)。
 - [ ] **prod 復活側車 `holder_sidecar.py`(scratchpad)不入 repo**:它退訂時會帶走 symbol feed;fix 上線後就停,
   再需要時從 TC4 log 的 `AddSubQuoteCount` 抓 prod key 重做即可(repro.md 有做法)。
-- [ ] **自癒閘週六凌晨 00:00–05:00 不開**(round-1 C-5 逐字用 `is_trading_day(today)`):週五夜盤跨午夜那 5 小時若 key 被殺,
+- [x] **自癒閘週六凌晨 00:00–05:00 不開**〔2026-08-21 已出貨 PR #82(同上條)〕(round-1 C-5 逐字用 `is_trading_day(today)`):週五夜盤跨午夜那 5 小時若 key 被殺,
   要到週一 08:45 閘開才自癒。要收 = `_heal_gate` 對 TXO/futures 改「hour < 6 看前一日是否交易日」。
   〔2026-08-20 機械探針證實,詳 2026-08-19 coalesce 節 `_heal_gate` 條〕
 - [ ] **corr 海外腿在自身休市段落入 R2「從未推播」母體**(C-6 放寬後):每腿最慢 300s 一發 UNSUB+SUB、每 3 發換窗;
@@ -181,16 +181,19 @@
 - [ ] **每日台北 14:45–16:00 小日經腿 stale / corr 三窗依窗長先後轉「—」(w1800 最長 30 分後)/ 江波圖夜盤窗前 60 格空**(OSE 日盤收 → 夜盤開;
   台指夜盤 15:00 已開)= 預期行為非訂閱失效(判別:16:00 後恢復推播)。若覺得刺眼,候選 = 腿級「休市中」
   標示(需 OpenTime/CloseTime 語意,另案)。
-- [ ] **重疊圖 readout 對「全窗無值」腿不列**(code review R-2):`buildOverlayGeometry` 濾掉空腿 → pill 亮著、
+- [x] **重疊圖 readout 對「全窗無值」腿不列**〔2026-08-21 已出貨 PR #82:讀值列由 entries 產生,空腿印「—」,圖上仍不畫〕(code review R-2):`buildOverlayGeometry` 濾掉空腿 → pill 亮著、
   圖與 readout 都沒它,呈現為「腿消失」;並排卡同狀態顯示「無資料」→ 兩模式不一致。每日 14:45–16:00 小日經
   必命中。修法:readout 改由未過濾 entries 產生,空腿印「—」。〔2026-08-20 vitest 探針證實:
   `buildOverlayGeometry` 對 `minutes={}` 的腿整條濾出 `lines`〕
-- [ ] **日盤收盤 clamp 對交易到 14:45 的腿覆蓋 13:45 末格**(code review R-3,pre-existing 類):
+- [x] **日盤收盤 clamp 對交易到 14:45 的腿覆蓋 13:45 末格**〔2026-08-21 已出貨 PR #82:`close_clamp_rank`,收盤撮合分鐘(end+1)可覆寫、end+2 起 end 格已有值不覆寫;夜盤同規〕(code review R-3,pre-existing 類):
   `river_models.offset_of` 的 `end < m <= end+5 → end` 是為台期交 13:45 收盤寫的,小日經(OSE 日盤 14:45 收)
   13:45–13:50 成交會 last-write-wins 蓋掉 13:45 收盤價 → 日盤圖小日經末點 ≈ 13:50;ES/NQ/YM 同類既有。
   候選修法:clamp 只在 end 格尚無值時套用(把 apply_backfill 的 don't-overwrite 語意搬進 clamp 分支)。
   〔2026-08-20 機械探針證實:`offset_of` 對 13:46–13:50 全回 13:45 的 offset(300),`push` 無條件
   last-write-wins → 13:50 成交確實蓋掉 13:45 收盤值〕
+- [ ] **江波圖 end 格被 clamp 近似值先佔後,1K 回補的真收盤 bar 被「只填尚無值」擋掉**(2026-08-21 R5 spec review R5;characterization 已鎖
+  `test_clamp_approximation_blocks_the_real_close_bar`,改時該案該紅):per-leg 旗標「end 格為近似值」讓 `apply_backfill` 覆寫一次。S 級。
+- [ ] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。
 - [ ] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關(review R7/R2-4):判準 `grep -rn 六腿 copycat frontend/src`
   (corr_engine / river_models / river_state / app.py / types.ts / CorrPage / RiverCards / RiverOverlay / useRiver /
   river-chart-svg(+test)/ RiverPanel 檔頭 …),不寫死行號。純註解,零行為。
