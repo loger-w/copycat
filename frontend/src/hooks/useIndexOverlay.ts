@@ -1,14 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import type { StockOverlay } from "@/lib/stock-intraday-svg";
-
-function localYmd(): string {
-  // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd}`;
-}
+import { isoLocalDate } from "@/lib/trading-calendar";
 
 async function fetchIndexOverlay(): Promise<StockOverlay> {
   const res = await fetch("/api/index/overlay");
@@ -28,7 +21,8 @@ async function fetchIndexOverlay(): Promise<StockOverlay> {
  *  只寫 `data != null && 全 null` 的條件會讓 503 那條路永遠不輪詢。 */
 export function useIndexOverlay(enabled: boolean) {
   return useQuery({
-    queryKey: ["index-overlay", localYmd()],
+    // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)
+    queryKey: ["index-overlay", isoLocalDate(new Date())],
     queryFn: fetchIndexOverlay,
     enabled,
     staleTime: Infinity,
