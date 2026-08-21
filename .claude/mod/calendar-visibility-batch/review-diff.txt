@@ -1,0 +1,569 @@
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index e315bdbb..d804d905 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -1314,6 +1314,10 @@ def create_app(
+ 
+         前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
+ 
++        `trade_date`(引擎日別)/ `today`(牆鐘日)是 additive 兩欄(D3'):前端拿它
++        判標題該印「今日訊號」還是「MM-DD 訊號」。日期只能由**這裡**給 —— 瀏覽器
++        時鐘與後端日別可以差一天(假日開站掛的是上一交易日的訊號),各算各的必錯。
++
+         **無查參**:未宣告的查參 FastAPI 一律忽略,舊 bundle 打 `?market=exclude`
+         照樣 200(前後端部署順序無關)。
+         """
+@@ -1322,7 +1326,13 @@ def create_app(
+         # to_thread 走 loop 預設 executor,與 daily_bars / capital close 同池且工作
+         # 執行緒不可中斷 —— TC4 半死的殭屍執行緒堆積時這條會跟著排隊(review C-1);
+         # today 若變慢先查同池鄰居,別急著懷疑 jsonl。
+-        return {"signals": await asyncio.to_thread(_signals(request).today_signals)}
++        hub = _signals(request)
++        # 兩個日期是純屬性(no IO)→ 留在 loop 上讀;只有 jsonl 那段丟 worker thread。
++        return {
++            "signals": await asyncio.to_thread(hub.today_signals),
++            "trade_date": hub.trade_date,
++            "today": hub.today,
++        }
+ 
+     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
+ 
+diff --git a/copycat/server/signal_hub.py b/copycat/server/signal_hub.py
+index dc94fcc0..7f99cbf1 100644
+--- a/copycat/server/signal_hub.py
++++ b/copycat/server/signal_hub.py
+@@ -278,6 +278,24 @@ class SignalHub:
+     def dropped(self) -> int:
+         return self.dropped_jsonl + self.dropped_discord
+ 
++    @property
++    def trade_date(self) -> str:
++        """引擎日別(唯讀,AR6):`today_signals()` 讀的兩個日別之一,給 today 端點掛出去。
++
++        route 直接讀屬性而不是自己算日期 —— hub 內外算法一旦分家,端點回報的日別會跟
++        實際讀的那個檔悄悄不同(rollover 前後最容易發生),而畫面看起來完全正常。
++        """
++        return self._trade_date_fn()
++
++    @property
++    def today(self) -> str:
++        """牆鐘日(唯讀,AR7):與 `today_signals()` 取聯集用的**同一顆**時鐘(`_now_fn`)。
++
++        與 `trade_date` 兩次取樣中間可能夾著 rollover stage2(錯位一拍),差別只是
++        標題晚一拍更新,可接受;換成別的時鐘則會整天不一致。
++        """
++        return self._now_fn().date().isoformat()
++
+     # ---- 規則(SC-2)----
+ 
+     def _load_or_migrate_rules(self) -> None:
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index e31d8ab1..ff4d2fee 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -80,13 +80,16 @@ def _now_taipei_time() -> str:
+     return f"{_dt.datetime.now():%H:%M:%S.%f}"[:-3]
+ 
+ 
+-def _spot_trial_now() -> bool:
+-    """現貨那把尺的「當下在試撮窗內」——`_flush_watchlist_loop` 的翻轉偵測用。
++def _spot_trial_window_now() -> bool:
++    """現貨那把尺的「當下在試撮**時間窗**內」——**純窗**,不看交易日曆。
+ 
+     per-instrument 判定走 `StockEngine._trial_now`(期貨空窗恆 False);這裡要的是
+     「現貨窗有沒有跨過邊界」這**單一**事件,拿某一檔的 key 去算會在自選全空 /
+     只剩期貨主圖時失去判準。窗顯式傳 `TRIAL_WINDOWS` 不吃預設值(同
+     `parse_stock_realtime` 的 keyword-only 理由:傳錯的失效是靜默的)。
++
++    對外的旗標請走 `StockEngine._spot_trial_now()`(= 本函式 AND 交易日曆,D4');
++    這一支只留給「要的就是窗本身」的地方(觀測分級、格式契約測試)。
+     """
+     return is_trial_window(_now_taipei_time(), TRIAL_WINDOWS)
+ 
+@@ -119,7 +122,10 @@ _OBSERVE_WINDOWS: tuple[tuple[str, str], ...] = tuple(
+ 
+ 
+ def _observe_window_now() -> bool:
+-    """觀測分級的「當下在(放寬後的)試撮窗內」。
++    """觀測分級的「當下在(放寬後的)試撮窗內」——**純窗**,不看交易日曆(D4')。
++
++    因此它與 payload 的 `trial` 在休市日會不同值(這裡 True、那邊 False):蒐證要看
++    的是窗本身有沒有事件,把日曆 AND 進來等於在休市日把整段紀錄降級成「窗外」。
+ 
+     寬限的理由:窗判準是**本機時鐘**而事件來自 **TC4 時戳**,兩者的秒級偏移會把
+     13:25:00 進窗的 0→1 判成「窗外非 0」→ 每檔每日最多產出一對假 WARNING
+@@ -322,7 +328,7 @@ class StockEngine:
+         # 試撮窗基準**現算播種**(D3 amendment R3):窗內啟動(08:30–09:00 / 13:25–13:30)
+         # 時若沿用 `__init__` 的 False,第一輪 flush 會判成「剛進窗」並替全自選各補推
+         # 一則 —— 那是假翻轉,而它與真翻轉在 log 與線上都無從分辨。
+-        self._trial_on = _spot_trial_now()
++        self._trial_on = self._spot_trial_now()
+         self._source.set_trade_date(self._trade_date)  # 休市日回補模式與 source 日窗同步
+         self._source.set_on_message(self._on_raw_threadsafe)
+         self._source.set_on_no_data(self._on_no_data_threadsafe)
+@@ -518,8 +524,17 @@ class StockEngine:
+                 await self._acquire_stkfut(key)
+             self._enqueue_backfill(key)
+ 
++    def _spot_trial_now(self) -> bool:
++        """現貨試撮旗標 = 交易日曆 AND 時間窗(D4')——`_flush_watchlist_loop` 的翻轉判準。
++
++        日曆來源是 engine 既有的 `is_trading_day` 注入(單一來源);少了它,休市日的
++        四個窗邊界各會替全自選補推一輪空 quote,畫面在沒有撮合的日子亮起「(緩)」。
++        時鐘走 `self._now_fn`(同 checkpoint 換日判定那顆),窗走模組級純窗函式。
++        """
++        return self._is_trading_day(self._now_fn().date()) and _spot_trial_window_now()
++
+     def _trial_now(self, code: str) -> bool:
+-        """該 instrument 當下是否在試撮/緩撮窗內(D1)。
++        """該 instrument 當下是否在試撮/緩撮窗內(D1)+ 今天是不是交易日(D4')。
+ 
+         **每次組 payload 當下現算**,不落 `StockDayState`:試撮期 TC4 不推成交 tick
+         (2026-07-21 實測),tick 路徑萃取不到「進窗」事件 —— 掛在狀態機上的旗標
+@@ -528,6 +543,8 @@ class StockEngine:
+         窗對映走 `trial_windows_for`(唯一定義):期貨鍵空窗 → 恆 False,前端因此
+         不必自己判 instrument 種類。
+         """
++        if not self._is_trading_day(self._now_fn().date()):
++            return False
+         return is_trial_window(_now_taipei_time(), trial_windows_for(code))
+ 
+     def snapshot(self, code: str) -> dict:
+@@ -1300,7 +1317,7 @@ class StockEngine:
+             await asyncio.sleep(self._throttle)
+             # 掛既有 1s loop 而不加新 task:一天僅 4 次邊界事件(08:30 / 09:00 /
+             # 13:25 / 13:30),直接 publish 不打穿節流。
+-            trial_on = _spot_trial_now()
++            trial_on = self._spot_trial_now()
+             if trial_on != self._trial_on:
+                 self._trial_on = trial_on
+                 for code in self._trial_flip_targets():
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index d3f54b51..4915d047 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -835,3 +835,100 @@ describe("App 個股期合約選擇(SC-4)", () => {
+     expect(rail.textContent).not.toContain("F:CDF");
+   });
+ });
++
++// 🟢 SC-1(D2' / AR2):日曆把真交易日標成假日時,後端 `_resolve_trade_date` 退到最近
++// 交易日、輪詢整天停擺,而畫面上零提示(只有 boot 一行 WARNING 沒人看得到)。
++// 前端判不出「錯標」,能判的只有「日曆說今天休市」—— 真假日也該讓人知道為何靜默。
++describe("App 日曆休市膠囊(SC-1)", () => {
++  function nav() {
++    return screen.getByRole("tablist", { name: "主要分頁" });
++  }
++
++  /** 只覆寫 `/api/calendar` 一條路由,其餘沿用共用 stub(逐字不變)。 */
++  function withCalendar(over: Record<string, unknown>) {
++    const base = appFetch();
++    return vi.fn(async (url: string) => {
++      if (String(url).includes("/api/calendar")) {
++        return new Response(
++          JSON.stringify({
++            today: "2026-10-09",
++            trade_date: "2026-10-08",
++            calendar_trade_date: "2026-10-08",
++            backfill_env: null,
++            holidays: ["2026-10-09"],
++            years_loaded: [2026],
++            calendar_loaded: true,
++            ...over,
++          }),
++        );
++      }
++      return base(url);
++    });
++  }
++
++  /** 負例的 settle 點:等 calendar 真的打過並把 promise chain 排乾,
++   *  否則「還沒回」與「判定不顯示」在 queryBy 下同形。 */
++  async function settleCalendar() {
++    await waitFor(() =>
++      expect(
++        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
++          String(c[0]).includes("/api/calendar"),
++        ),
++      ).toBe(true),
++    );
++    await act(async () => {
++      await new Promise((r) => setTimeout(r, 0));
++    });
++  }
++
++  it("後端今日(平日)在假日清單內 → 膠囊出現,title 帶後端資料日", async () => {
++    vi.stubGlobal("fetch", withCalendar({}));
++    renderApp();
++    const badge = await within(nav()).findByTestId("calendar-holiday-badge");
++    expect(badge.textContent).toBe("日曆判今日休市");
++    expect(badge.getAttribute("title")).toBe(
++      "日曆判今日休市,後端資料日 = 2026-10-08;若今天實際有開盤,更新 configs/trading_holidays.json 並重啟",
++    );
++  });
++
++  it("今日不在假日清單 → 無膠囊(交易日不留常駐雜訊)", async () => {
++    vi.stubGlobal("fetch", withCalendar({ holidays: [] }));
++    renderApp();
++    await settleCalendar();
++    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
++  });
++
++  it("calendar_loaded=false(後端沒載日曆)→ 無膠囊(空集合不代表今天有開盤)", async () => {
++    vi.stubGlobal("fetch", withCalendar({ calendar_loaded: false, holidays: ["2026-10-09"] }));
++    renderApp();
++    await settleCalendar();
++    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
++  });
++
++  // AR8 週末守門:週末本來就休市,每個週末常駐一顆膠囊 = 雜訊,兩週後沒人看得見它。
++  it("今日是週末(即使在假日清單內)→ 無膠囊(週末守門)", async () => {
++    vi.stubGlobal(
++      "fetch",
++      withCalendar({ today: "2026-08-16", holidays: ["2026-08-16"], trade_date: "2026-08-14" }),
++    );
++    renderApp();
++    await settleCalendar();
++    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
++  });
++
++  it("calendar 取數失敗 → 無膠囊(降級成現況,不誤報)", async () => {
++    const base = appFetch();
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string) => {
++        if (String(url).includes("/api/calendar")) {
++          return new Response(JSON.stringify({ detail: { error: "BOOM" } }), { status: 500 });
++        }
++        return base(url);
++      }),
++    );
++    renderApp();
++    await settleCalendar();
++    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
++  });
++});
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index ffdaf3ec..e50e7bdc 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -9,6 +9,7 @@ import { QuoteTable } from "@/components/QuoteTable";
+ import { RightRail, type RailContext } from "@/components/rail/RightRail";
+ import { SeriesSelect } from "@/components/SeriesSelect";
+ import { ToastStack } from "@/components/ToastStack";
++import { CalendarHolidayBadge } from "@/components/CalendarHolidayBadge";
+ import { VersionDriftBadge } from "@/components/VersionDriftBadge";
+ import { useBreadth } from "@/hooks/useBreadth";
+ import { useCapitalStream } from "@/hooks/useCapital";
+@@ -283,6 +284,8 @@ export default function App() {
+         {/* 一個 ml-auto 推到右側,兩個會平分剩餘空間把膠囊卡在 nav 中段(design R4);
+             IndexBar 自身的 ml-auto 在這個內容尺寸容器內成為 no-op。 */}
+         <div className="ml-auto flex items-baseline gap-3">
++          {/* 兩顆膠囊同在這個 ml-auto 容器內(R4:各自帶 ml-auto 會平分剩餘空間) */}
++          <CalendarHolidayBadge />
+           <VersionDriftBadge />
+           <IndexBar twse={twse} otc={otc} txf={txf} />
+         </div>
+diff --git a/frontend/src/components/CalendarHolidayBadge.tsx b/frontend/src/components/CalendarHolidayBadge.tsx
+new file mode 100644
+index 00000000..61af58ba
+--- /dev/null
++++ b/frontend/src/components/CalendarHolidayBadge.tsx
+@@ -0,0 +1,38 @@
++import { useQuery } from "@tanstack/react-query";
++
++import { calendarQueryOptions } from "@/hooks/useTradingCalendar";
++import { isWeekendIso } from "@/lib/trading-calendar";
++
++/** 日曆判今日休市膠囊(SC-1 / D2')。
++ *
++ *  **要解的是「錯標」的靜默**:`configs/trading_holidays.json` 把一個真交易日標成假日時,
++ *  後端 `_resolve_trade_date` 會退到最近交易日、盤中輪詢整天不動,而畫面上完全看不出來
++ *  (只有 boot 一行 WARNING)。前端判不出「錯標」—— 它能判的只有「日曆說今天休市」,
++ *  所以真假日也一起顯示:那時這顆膠囊回答的是「為什麼今天畫面不動」。
++ *
++ *  **條件全取自後端同一份 payload**(`today` / `holidays` / `trade_date`),不用瀏覽器
++ *  時鐘:看盤機的時區與時鐘和後端日別是兩回事,拿本機今天去比對假日清單會在跨午夜與
++ *  時區偏移時各錯一種,而錯的方向是「該亮時不亮」。
++ *
++ *  **週末不亮**(AR8):週末本來就休市,常駐一顆膠囊兩週後就沒人看得見它了;真正要
++ *  被看見的是平日亮起來的那一次。補班日(`extra_trading_days`)漏設而週末真開盤這條
++ *  由此排除,記 next-time。
++ *
++ *  未載入 / 取數失敗 → 不顯示:降級成改動前的現況。誤報一次就會被當雜訊無視,之後真的
++ *  錯標也不會有人看(同 `VersionDriftBadge` 的「健康態零 DOM」判準)。 */
++export function CalendarHolidayBadge() {
++  const { data } = useQuery(calendarQueryOptions);
++  if (data === undefined || !data.calendar_loaded) return null;
++  if (!data.holidays.includes(data.today) || isWeekendIso(data.today)) return null;
++  return (
++    <span
++      data-testid="calendar-holiday-badge"
++      // 資料日寫進 title:「今天沒動」與「畫面停在哪一天」是同一個問題的兩半,
++      // 少了後者還是得自己去翻 /api/calendar。
++      title={`日曆判今日休市,後端資料日 = ${data.trade_date};若今天實際有開盤,更新 configs/trading_holidays.json 並重啟`}
++      className="inline-flex items-center gap-1.5 rounded-sm border border-warn/40 bg-warn/15 px-2.5 py-1 font-mono text-xs text-warn"
++    >
++      日曆判今日休市
++    </span>
++  );
++}
+diff --git a/frontend/src/components/index/LimitListSection.tsx b/frontend/src/components/index/LimitListSection.tsx
+index 2f3485cb..9ffd8161 100644
+--- a/frontend/src/components/index/LimitListSection.tsx
++++ b/frontend/src/components/index/LimitListSection.tsx
+@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
+ 
+ import { useBreadthRows } from "@/hooks/useBreadthRows";
+ import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
++import { monthDay } from "@/lib/format";
+ import { isoLocalDate } from "@/lib/trading-calendar";
+ import { cn } from "@/lib/utils";
+ import type { BreadthRow } from "@/types";
+@@ -260,12 +261,6 @@ function decimalText(v: number | null): string {
+   return v === null ? "—" : v.toFixed(2);
+ }
+ 
+-/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
+- *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
+-function monthDay(iso: string): string {
+-  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
+-}
+-
+ // ---------------------------------------------------------------------------
+ // 篩選列元件
+ // ---------------------------------------------------------------------------
+diff --git a/frontend/src/components/stock/SignalRail.tsx b/frontend/src/components/stock/SignalRail.tsx
+index fea209ff..e27ea777 100644
+--- a/frontend/src/components/stock/SignalRail.tsx
++++ b/frontend/src/components/stock/SignalRail.tsx
+@@ -7,7 +7,7 @@
+ import { Fragment } from "react";
+ 
+ import { errText, type SignalRule } from "@/hooks/useSignalRules";
+-import { fmt } from "@/lib/format";
++import { fmt, monthDay } from "@/lib/format";
+ import {
+   groupKindLabels,
+   groupRuleNames,
+@@ -35,6 +35,24 @@ interface Props {
+   onRequestNotif: () => void;
+   soundOn: boolean;
+   onToggleSound: (value: boolean) => void;
++  /** baseline 的資料日(後端 hub 的 engine 日別);payload 缺欄 / 未接線 = null。 */
++  tradeDate?: string | null;
++  /** 後端牆鐘日(同一支 payload 自帶)—— **不用瀏覽器時鐘**:看盤機的時區 / 時鐘
++   *  與後端日別是兩回事,拿本機今天去比會在跨日與時區偏移時各錯一種。 */
++  today?: string | null;
++}
++
++/** 標題文案:資料日 ≠ 後端今日(假日 / 盤前開站)時把日期寫進標題 ——
++ *  「今日訊號」四個字會讓人把上一交易日的鎖漲停當成剛剛發生的。
++ *
++ *  兩欄任一缺(舊後端 / 未接線)一律退「今日訊號」:單邊日期推不出「是不是今天」,
++ *  拿本機時鐘補那一半只會在時區 / 跨午夜時給出比沉默更糟的答案。
++ *
++ *  已知落差(D3'):hub `today_signals()` 是 {engine 日, 牆鐘日} 聯集,rollover
++ *  stage2 前標題 = engine 日(與列的內容一致),接受。 */
++function railTitle(tradeDate: string | null | undefined, today: string | null | undefined): string {
++  const stale = tradeDate != null && today != null && tradeDate !== today;
++  return stale ? `${monthDay(tradeDate)} 訊號` : "今日訊號";
+ }
+ 
+ /** `HH:MM:SS` → `HH:MM`。窄欄放不下秒,而秒對「幾點發生」的判讀沒有價值。 */
+@@ -110,16 +128,20 @@ export function SignalRail({
+   onRequestNotif,
+   soundOn,
+   onToggleSound,
++  tradeDate,
++  today,
+ }: Props) {
++  // 標題與 aria-label 同一句(兩處各寫一份就會漂;讀螢幕器唸到的也該是資料日)
++  const title = railTitle(tradeDate, today);
+   return (
+     // border-r:與中間主區的視覺分隔(同 WatchlistSidebar 慣例)
+     <aside
+       data-testid="signal-rail"
+-      aria-label="今日訊號"
++      aria-label={title}
+       className="flex w-52 shrink-0 flex-col border-r border-line pr-2"
+     >
+       <div className="flex min-h-0 flex-1 flex-col">
+-        <h3 className="shrink-0 border-b border-line px-1 py-1 text-xs text-ink-dim">今日訊號</h3>
++        <h3 className="shrink-0 border-b border-line px-1 py-1 text-xs text-ink-dim">{title}</h3>
+         {/* **關掉規則不再隱藏它今天已發過的列**(signal-rules R14a,🔴 行為改動):
+             那些列帶規則名、來源可辨識,而原本的隱藏語意會讓「剛剛看到的訊號」
+             在關掉規則的瞬間整批消失,看起來像資料掉了。 */}
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index 2e9d7e33..0813e765 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -71,7 +71,8 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+   const { accum, watchlist, status, stkfut, wsStatus } = stream;
+   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
+   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
+-  const { signals } = useSignalFeed();
++  // 兩個日期原樣往下傳、由 rail 判文案(AR5:標題邏輯只有一個註冊點)
++  const { signals, tradeDate: signalsTradeDate, today: signalsToday } = useSignalFeed();
+   // `isError` 要一路帶到畫面:退回 `[]` 之後,「載入失敗」與「零規則」在 rail 與
+   // Dialog 上長得一模一樣,而後者會讓使用者照著空態去新增(只會撞名失敗)。
+   const { data: rules = [], isError: rulesError } = useSignalRules();
+@@ -194,6 +195,8 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+         onRequestNotif={requestNotif}
+         soundOn={soundOn}
+         onToggleSound={setSoundOn}
++        tradeDate={signalsTradeDate}
++        today={signalsToday}
+       />
+       {/* 常駐掛載、只切 open(dialog 樣板慣例);規則清單由本層餵,Dialog 不自己抓 */}
+       <SignalRulesDialog
+diff --git a/frontend/src/hooks/useSignalFeed.ts b/frontend/src/hooks/useSignalFeed.ts
+index 3fc41d60..e09cee01 100644
+--- a/frontend/src/hooks/useSignalFeed.ts
++++ b/frontend/src/hooks/useSignalFeed.ts
+@@ -19,12 +19,31 @@ import { mergeSignals, type SignalMsg } from "@/lib/signal-model";
+  *  而 ws-open 的 invalidate 也就必須逐一列舉。 */
+ const TODAY_KEY = ["stock-signals-today"];
+ 
+-/** 回傳已反轉為「新在前」的 baseline —— `mergeSignals` 兩份輸入都要求新在前。 */
+-async function fetchToday(): Promise<SignalMsg[]> {
++/** 跨午夜 / stage2 rollover 後標題要跟上(AR4)。WS 重連的 invalidate 只在斷線時發生,
++ *  而長跑分頁可以整晚不斷線 —— 沒有這條週期,標題會停在昨天的日期直到有人重整。 */
++const BASELINE_REFETCH_MS = 5 * 60_000;
++
++interface TodayPayload {
++  /** 已反轉為「新在前」—— `mergeSignals` 兩份輸入都要求新在前。 */
++  signals: SignalMsg[];
++  /** 後端 hub 的資料日別 / 牆鐘日;舊後端沒這兩欄 → null(不由前端猜)。 */
++  tradeDate: string | null;
++  today: string | null;
++}
++
++async function fetchToday(): Promise<TodayPayload> {
+   const res = await fetch("/api/stock/signals/today");
+   if (!res.ok) throw new Error(`HTTP_${res.status}`);
+-  const body = (await res.json()) as { signals?: SignalMsg[] };
+-  return [...(body.signals ?? [])].reverse();
++  const body = (await res.json()) as {
++    signals?: SignalMsg[];
++    trade_date?: string;
++    today?: string;
++  };
++  return {
++    signals: [...(body.signals ?? [])].reverse(),
++    tradeDate: body.trade_date ?? null,
++    today: body.today ?? null,
++  };
+ }
+ 
+ export interface SignalFeed {
+@@ -36,11 +55,21 @@ export interface SignalFeed {
+    *  「服務沒起來」與「今天真的沒訊號」畫成同一句話,而使用者對這兩句的反應完全相反
+    *  (去查 vs 繼續等)。 */
+   baselineError: boolean;
++  /** baseline 是哪一天的訊號(後端 hub 的日別);缺欄 / 未取到 = null。 */
++  tradeDate: string | null;
++  /** 後端牆鐘日。與 `tradeDate` 成對才有意義 —— 消費端拿兩者比對決定標題文案,
++   *  單邊搭配瀏覽器時鐘會在時區偏移 / 跨午夜時給出錯的「今天」。 */
++  today: string | null;
+ }
+ 
+ export function useSignalFeed(): SignalFeed {
+   const queryClient = useQueryClient();
+-  const today = useQuery({ queryKey: TODAY_KEY, queryFn: fetchToday, retry: 1 });
++  const baselineQuery = useQuery({
++    queryKey: TODAY_KEY,
++    queryFn: fetchToday,
++    retry: 1,
++    refetchInterval: BASELINE_REFETCH_MS,
++  });
+   const [live, setLive] = useState<SignalMsg[]>([]);
+ 
+   // 外部事件源訂閱(不是從 props/state 推導的值)—— effect 是正解。
+@@ -54,7 +83,12 @@ export function useSignalFeed(): SignalFeed {
+   );
+ 
+   // 抓失敗(hub 未就緒 503)= 沒有 baseline,不是壞掉:live 訊號照樣進得來
+-  const baseline = today.data;
++  const baseline = baselineQuery.data?.signals;
+   const signals = useMemo(() => mergeSignals(baseline ?? [], live), [baseline, live]);
+-  return { signals, baselineError: today.isError };
++  return {
++    signals,
++    baselineError: baselineQuery.isError,
++    tradeDate: baselineQuery.data?.tradeDate ?? null,
++    today: baselineQuery.data?.today ?? null,
++  };
+ }
+diff --git a/frontend/src/hooks/useTradingCalendar.ts b/frontend/src/hooks/useTradingCalendar.ts
+index e523489f..7d6272ca 100644
+--- a/frontend/src/hooks/useTradingCalendar.ts
++++ b/frontend/src/hooks/useTradingCalendar.ts
+@@ -28,14 +28,19 @@ async function fetchCalendar(): Promise<CalendarState> {
+   return (await res.json()) as CalendarState;
+ }
+ 
++/** 共用 query options(D1):第二個讀者(`CalendarHolidayBadge`)要的是**同一份 cache**,
++ *  不是第二次取數 —— 各自寫一份 options 會在 queryKey 相同但 staleTime 不同時,
++ *  讓兩邊互相觸發背景重取。掛載點仍只有 App 那一支寫入模組級假日集合。 */
++export const calendarQueryOptions = {
++  queryKey: ["calendar"],
++  queryFn: fetchCalendar,
++  staleTime: Infinity,
++  retry: 1,
++  refetchInterval: SIX_HOURS_MS,
++} as const;
++
+ export function useTradingCalendar() {
+-  const query = useQuery({
+-    queryKey: ["calendar"],
+-    queryFn: fetchCalendar,
+-    staleTime: Infinity,
+-    retry: 1,
+-    refetchInterval: SIX_HOURS_MS,
+-  });
++  const query = useQuery(calendarQueryOptions);
+ 
+   const holidays = query.data?.holidays;
+   useEffect(() => {
+diff --git a/frontend/src/lib/format.ts b/frontend/src/lib/format.ts
+index 250bdbd7..ad51421b 100644
+--- a/frontend/src/lib/format.ts
++++ b/frontend/src/lib/format.ts
+@@ -36,6 +36,12 @@ export function fmt(milli: number): string {
+   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
+ }
+ 
++/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
++ *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
++export function monthDay(iso: string): string {
++  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
++}
++
+ /** 指數軸帶用的價位文字(index 態的 y 刻度 / CDP `價位*` / MA 價位標 / 掛牌 / hover 價標)。
+  *
+  *  `fmt` 口徑但**超過 6 字就收整數點**:左緣價位帶 `Y_AXIS_W` 36px / 右緣 40px 是為個股
+diff --git a/frontend/src/lib/trading-calendar.ts b/frontend/src/lib/trading-calendar.ts
+index 5910b0f0..ac109d0a 100644
+--- a/frontend/src/lib/trading-calendar.ts
++++ b/frontend/src/lib/trading-calendar.ts
+@@ -35,6 +35,19 @@ export function isoLocalDate(d: Date): string {
+   return `${y}-${m}-${day}`;
+ }
+ 
++/** 後端給的 `YYYY-MM-DD` 是不是週末。
++ *
++ *  **以 UTC 午夜解讀,不用本機 `getDay()`**(AR8):`new Date("2026-08-17")` 是 UTC
++ *  午夜,在 UTC−n 的機器上讀回本機日期會退成前一天 —— 週一會被算成週日。這裡比的是
++ *  「後端那個日期字串是星期幾」,與看盤機的時區無關。
++ *
++ *  形狀不合(空字串 / 亂字串)→ `NaN` → false:失效方向是「少擋一次」(照常顯示),
++ *  不是拿 NaN 去當星期幾。 */
++export function isWeekendIso(iso: string): boolean {
++  const day = new Date(`${iso}T00:00:00Z`).getUTCDay();
++  return day === 0 || day === 6;
++}
++
+ /** 非週末且不在假日集合。 */
+ export function isTradingDay(d: Date): boolean {
+   const day = d.getDay(); // 0 = 週日

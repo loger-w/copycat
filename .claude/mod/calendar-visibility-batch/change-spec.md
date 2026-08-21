@@ -87,3 +87,10 @@ R3b 交易日盤前冷啟動(待 user 拍板);後端 boot WARNING 文案;週末�
 - **AR3 SC-4 通道修正**:膠囊 = 前端測試(SC-1)為自動化證據,真環境截圖**不開側車**(verify 側車 calendar_loaded=false 無法顯示;改 prod config 不允許)→ `browser_unavailable: verify 側車無日曆` + user 過目說明。
   標題 = verify 側車 `TXO_SERVER_PORT=8722 TXO_BACKFILL_DATE=2026-08-20 python -m copycat.server --verify`(fake TXO,其餘引擎不啟)—— 但 signals route 需 hub;若 verify 模式無 hub → 以 StockPage.test 為證據 + 同樣標 browser_unavailable。
 - **AR9 Out of scope**:tick 層 `stock_models.is_trial`(丟棄語意)維持純時間窗不接日曆;R9 補班漏設情境症狀 = 報價凍住 + 無 (緩),記 next-time。
+
+---
+## Code review round 1 amendments(`code-review-round-1.json`)
+- **D2'' 膠囊條件(C-2 / C-3)**:`data.calendar_loaded && data.calendar_trade_date !== data.today && !isWeekendIso(data.today) && data.today === isoLocalDate(new Date())`
+  (後端同源「今天非交易日」判定涵蓋補班日;最後一項為 stale 保險絲:payload 跨日未更新 → 寧可不亮)。
+- **route 取樣順序(C-1)**:`trade_date` / `today` 在 `await to_thread(today_signals)` **之前**取樣(錯位只錯向舊日)。
+- C-5 / C-4:docstring 註明窗的時鐘不吃 `now_fn`;useSignalFeed 註明 ≤5 分前提為分頁可見、與 daily_bars 同 executor。C-6:`stale = Boolean(tradeDate) && Boolean(today) && tradeDate !== today`。

@@ -1,0 +1,118 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "C-1",
+   "severity": "P2",
+   "summary": "日期取樣在 await 後,錯位方向錯",
+   "disposition": "accepted",
+   "resolution": "先取樣再 await"
+  },
+  {
+   "id": "C-2",
+   "severity": "P2",
+   "summary": "膠囊 holidays.includes 與 extra_trading_days 不同源",
+   "disposition": "accepted",
+   "resolution": "改 calendar_trade_date !== today"
+  },
+  {
+   "id": "C-3",
+   "severity": "P2",
+   "summary": "膠囊無新鮮度路徑(6h)",
+   "disposition": "accepted",
+   "resolution": "瀏覽器本機日 ≠ payload today → 不顯示(保險絲)"
+  },
+  {
+   "id": "C-4",
+   "severity": "P2",
+   "summary": "5 分 poll 代價註解",
+   "disposition": "accepted",
+   "resolution": "註解"
+  },
+  {
+   "id": "C-5",
+   "severity": "P2",
+   "summary": "日/窗兩顆時鐘",
+   "disposition": "accepted",
+   "resolution": "docstring 明寫"
+  },
+  {
+   "id": "C-6",
+   "severity": "P2",
+   "summary": "tradeDate 空字串 → 「 訊號」",
+   "disposition": "accepted",
+   "resolution": "Boolean 守門 + 案"
+  },
+  {
+   "id": "TQ-1",
+   "severity": "P1",
+   "summary": "isWeekendIso getDay mutant 存活",
+   "disposition": "accepted",
+   "resolution": "TZ 負偏移案"
+  },
+  {
+   "id": "TQ-2",
+   "severity": "P1",
+   "summary": "失敗案 vacuous(retry 終態未到)",
+   "disposition": "accepted",
+   "resolution": "等第 2 次 fetch"
+  },
+  {
+   "id": "TQ-3",
+   "severity": "P1",
+   "summary": "start() 播種點無 lock",
+   "disposition": "accepted",
+   "resolution": "窗內冷啟動 trading_day=False → _trial_on False"
+  },
+  {
+   "id": "TQ-4",
+   "severity": "P2",
+   "summary": "today 期望 = 撰寫日",
+   "disposition": "accepted",
+   "resolution": "改 2019 日期"
+  },
+  {
+   "id": "TQ-5",
+   "severity": "P2",
+   "summary": "is_trading_day 忽略引數",
+   "disposition": "accepted",
+   "resolution": "d == date 案"
+  },
+  {
+   "id": "TQ-6",
+   "severity": "P2",
+   "summary": "observe 純窗契約無鎖",
+   "disposition": "accepted",
+   "resolution": "非交易日 observe 案"
+  },
+  {
+   "id": "TQ-7",
+   "severity": "P2",
+   "summary": "monthDay 形狀守門無鎖",
+   "disposition": "accepted",
+   "resolution": "format.test 三行"
+  },
+  {
+   "id": "TQ-8",
+   "severity": "P2",
+   "summary": "回傳體形狀無鎖",
+   "disposition": "accepted",
+   "resolution": "set(body) 斷言"
+  },
+  {
+   "id": "TQ-9",
+   "severity": "P2",
+   "summary": "預設 weekday<5 無鎖",
+   "disposition": "accepted",
+   "resolution": "建構斷言"
+  }
+ ],
+ "evidence": {
+  "pytest": "2836",
+  "vitest": "2504"
+ }
+}
