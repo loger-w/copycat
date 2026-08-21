@@ -10,6 +10,7 @@ import {
   type CandleGeometry,
 } from "@/lib/candle";
 import { clampTagX, clampTagY, overlaps } from "@/lib/chart-crosshair";
+import { EMPTY_HLINES, type ChartHLine } from "@/lib/chart-hlines";
 import { useCandleHover } from "@/hooks/useCandleHover";
 import { useCandleViewport } from "@/hooks/useCandleViewport";
 import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
@@ -52,22 +53,9 @@ function shortStamp(t: string): string {
 /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
 const EMPTY_LINE: { x: number; y: number }[] = [];
 
-/** 水平 overlay 線(持倉均價 / OI 撐壓;futures-allday SC-7/SC-11)。
- *
- *  `className` 是 **stroke-\* 家族**(線的顏色語意),不套到標籤文字上 —— 套上去
- *  文字會被描邊而不是填色。標籤一律中性 ink + 底色描邊,方向語意由線本身承載。 */
-export interface ChartHLine {
-  priceMilli: number;
-  label: string;
-  className: string;
-  /** hover 提示(SVG `<title>` 子節點)。線上只寫得下價位,證據(OI 口數 / 資料日 /
-   *  部位口數)掛這裡。 */
-  title?: string;
-}
-
-/** 同 `EMPTY_LINE` 的理由:預設值寫 `hlines = []` 會讓每次 render 產生新 array,
- *  打穿 ChartStatic 的 memo —— 而且是**所有既有頁面**(個股 / 大盤)都被打穿。 */
-export const EMPTY_HLINES: readonly ChartHLine[] = [];
+/** 型別本體在 `lib/chart-hlines.ts`(與 `EMPTY_HLINES` 同居 —— 非元件 export 不留在
+ *  元件檔);此處 re-export 保住既有 `@/components/stock/CandleChart` 的 import 路徑。 */
+export type { ChartHLine };
 
 /** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
 interface WindowMark {
