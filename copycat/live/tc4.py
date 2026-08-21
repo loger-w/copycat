@@ -36,6 +36,7 @@ __all__ = [
     "SPOT_SYMBOL",
     "TC4_APPID",
     "TC4_SKEY",
+    "HistoryTimeoutError",
     "TC4QuoteSource",
     "group_series",
     "parse_stkfut_catalog",
@@ -60,6 +61,20 @@ class HistoryResult(NamedTuple):
 
     rows: list[dict]
     timed_out: bool
+
+
+class HistoryTimeoutError(ConnectionError):
+    """歷史首頁在預算內未備妥 —— 「現在取不到」,**不是**「沒有這些資料」。
+
+    **為什麼是 `ConnectionError` 子類**(bug/history-timeout-propagation):六處 caller
+    的上游都已經有 `except ConnectionError` 的降級/重試網(stock_engine 回補 worker、
+    index_engine `_schedule_retry`、futures_engine、corr 訂閱重試)。做成子類 = 那些
+    路徑一行不改就自動接手,只有真的需要分辨的地方才寫 `except HistoryTimeoutError`
+    **先於** `except ConnectionError`;做成獨立例外或三態回傳則要動五個簽名 + 全部 fake。
+
+    `timed_out` 是 TC4 協定側**唯一**能正面取得的「暫時性」訊號(空頁本身沒有原因)。
+    丟掉它 = 逾時被讀成資料面就是沒有 → 全鏈無從重試,而畫面只是一直空著。
+    """
 
 
 _STALE_THRESHOLD_SECS = 30.0

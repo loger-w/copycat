@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from copycat.live.futures_source import FuturesQuoteSource
+from copycat.live.tc4 import HistoryTimeoutError
 from tests.helpers.tc4_fakes import FakeApi
 
 
@@ -78,7 +81,9 @@ class TestFetchBarsRange:
     def test_product_routing(self) -> None:
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("MXF", "D", "2026-07-30", "2026-07-30")
+        # 空頁 → 首頁未備妥 → 逾時(SUBQUOTE 早已送出,routing 斷言不受影響)
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_bars_range("MXF", "D", "2026-07-30", "2026-07-30")
         assert sent[0]["Param"]["Symbol"] == "TC.F.TWF.MXF.HOT"
 
     def test_minute_uses_1k_and_futures_session_domain(self) -> None:
@@ -98,8 +103,20 @@ class TestFetchBarsRange:
             "2026-07-30 13:45",
         ]
 
-    def test_empty_first_page_returns_empty(self) -> None:
+    def test_first_page_timeout_raises_history_timeout(self) -> None:
+        """**事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty`)。
+
+        回空時 route 的 tag 是 `"unavailable"`、status 恆 `"ok"` —— 「TC4 現在忙」與
+        「這個商品真沒 K 線」在畫面上長得一模一樣,而前者本來只要重打一次就有。
+        `HistoryTimeoutError` 是 `ConnectionError` 子類 → 上游既有的降級網照樣接得住。
+        """
         src = _source([])
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+
+    def test_ready_first_page_with_no_usable_rows_still_returns_empty(self) -> None:
+        """首頁備妥(非逾時)但域內無 bar → 照舊回空,不 raise。"""
+        src = _source([_k1_row("20260730", "150000", "1", "1", "1", "1")])  # 夜盤列,日盤域外
         assert src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30") == []
 
 
@@ -115,36 +132,43 @@ class TestAlldaySession:
         hist = [o for o in sent if o["Request"] in ("SUBQUOTE", "GETHISDATA")]
         return hist[0]["Param"]["StartTime"], hist[0]["Param"]["EndTime"]
 
+    @staticmethod
+    def _fetch(src: FuturesQuoteSource, *args: str, **kw: str) -> None:
+        """窗斷言只看 SUBQUOTE 的參數 —— 空頁治具現在會逾時(見 `TestFetchBarsRange`),
+        窗早在 raise 之前就送出去了,所以吃掉例外不影響這一組要鎖的東西。"""
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_bars_range(*args, **kw)  # type: ignore[arg-type]
+
     def test_window_start_shifts_back_one_day(self) -> None:
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30", session="allday")
+        self._fetch(src, "TXF", "1", "2026-07-30", "2026-07-30", session="allday")
         assert self._window(sent) == ("2026072916", "2026073023")
 
     def test_window_shift_crosses_month(self) -> None:
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("TXF", "1", "2026-08-01", "2026-08-03", session="allday")
+        self._fetch(src, "TXF", "1", "2026-08-01", "2026-08-03", session="allday")
         assert self._window(sent) == ("2026073116", "2026080323")
 
     def test_window_shift_crosses_year(self) -> None:
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("TXF", "1", "2026-01-01", "2026-01-01", session="allday")
+        self._fetch(src, "TXF", "1", "2026-01-01", "2026-01-01", session="allday")
         assert self._window(sent) == ("2025123116", "2026010123")
 
     def test_day_session_window_unchanged(self) -> None:
         """預設 session(day)的窗與行為零改動 —— 既有 caller 全不受影響。"""
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        self._fetch(src, "TXF", "1", "2026-07-30", "2026-07-30")
         assert self._window(sent) == ("2026073000", "2026073023")
 
     def test_daily_ignores_session(self) -> None:
         """tf="D" 無 session 維度:窗與 SubDataType 都不因 allday 而變。"""
         sent: list[dict] = []
         src = _source([], sent)
-        src.fetch_bars_range("TXF", "D", "2026-07-30", "2026-07-30", session="allday")
+        self._fetch(src, "TXF", "D", "2026-07-30", "2026-07-30", session="allday")
         assert self._window(sent) == ("2026073000", "2026073023")
         assert sent[0]["Param"]["SubDataType"] == "DK"
 

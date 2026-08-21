@@ -9,6 +9,7 @@ from typing import Callable
 import pytest
 
 from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
+from copycat.live.tc4 import BARS_POLL_DEADLINE, HistoryTimeoutError
 from tests.helpers.tc4_fakes import FakeApi, ok
 
 HIST_ROW = {
@@ -120,6 +121,24 @@ class TestBackfill:
         assert ticks[0].price_milli == 2_415_000
         assert ticks[0].time == "09:00:06.840"
 
+    def test_first_page_timeout_raises_history_timeout(self) -> None:
+        """首頁等滿預算仍未備妥 = 「現在取不到」,不是「當日無 tick」。
+
+        回空的話 `_backfill_worker` 把它當成功套用(`_backfilled` 進帳)→ 當日再也
+        不重排,分時圖整天空著且零錯誤訊號(repro §症狀)。
+        """
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                return ("TICKS:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
+        )
+        with pytest.raises(HistoryTimeoutError):
+            src.backfill("2330")
+
 
 class TestFetchDailyBars:
     """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
@@ -217,6 +236,102 @@ class TestFetchDailyBars:
             {"date": "2026-07-27", "high": 103_000, "low": 101_000, "close": 102_000},
         ]
         assert any(o["Param"].get("SubDataType") == "1K" for o in sent)
+
+    def test_dk_timeout_still_falls_back_to_1k(self) -> None:
+        """DK 逾時**不**直接 raise:fallback 是 timeout 時唯一還可能有貨的那條路。
+
+        (`test_dk_empty_falls_back_to_1k_aggregation` 走的正是這條 —— poll_wait=0 下
+        DK 空頁就是 `timed_out=True`,所以「DK 逾時即 raise」會把它一起打紅。)
+        """
+        k1_pages = {
+            "0": [
+                {
+                    "Date": "20260724",
+                    "Time": "10000",
+                    "Open": "100",
+                    "High": "101",
+                    "Low": "100",
+                    "Close": "100.5",
+                    "Volume": "10",
+                    "QryIndex": "1",
+                }
+            ],
+            "1": [],
+        }
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                if obj["Param"]["SubDataType"] == "DK":
+                    return ("DK:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
+                ).encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        assert src.fetch_daily_bars("2330") == [
+            {"date": "2026-07-24", "high": 101_000, "low": 100_000, "close": 100_500}
+        ]
+
+    def test_both_segments_timeout_raises_history_timeout(self) -> None:
+        """兩段都逾時 → raise:回空會讓 SignalHub 讀成「無已完成日 K,CDP 停用」且永不重試。"""
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                dtype = obj["Param"]["SubDataType"]
+                return (f"{dtype}:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_daily_bars("2330")
+
+    def test_both_segments_get_the_short_bars_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """兩段都要顯式帶 `BARS_POLL_DEADLINE`。
+
+        漏傳的話預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞 60s;hub 的有限重試會把
+        整個 executor 佔滿,而畫面只是疊線遲遲不來。
+        """
+        k1_pages = {"0": [], "1": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                dtype = obj["Param"]["SubDataType"]
+                if dtype == "DK":
+                    return ("DK:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
+                ).encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        seen: list[tuple[str, float | None]] = []
+        original = src._collect_history
+
+        def spy(
+            sym: str,
+            data_type: str,
+            start: str,
+            end: str,
+            deadline_secs: float | None = None,
+        ):
+            seen.append((data_type, deadline_secs))
+            return original(sym, data_type, start, end, deadline_secs)
+
+        monkeypatch.setattr(src, "_collect_history", spy)
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_daily_bars("2330")
+        assert seen == [("DK", BARS_POLL_DEADLINE), ("1K", BARS_POLL_DEADLINE)]
 
     def test_tail_limited_to_n(self) -> None:
         rows = [self._dk_row(f"202607{d:02d}", "10", "9", "9.5") for d in range(1, 28)]
