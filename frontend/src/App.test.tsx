@@ -838,13 +838,32 @@ describe("App 個股期合約選擇(SC-4)", () => {
 
 // 🟢 SC-1(D2' / AR2):日曆把真交易日標成假日時,後端 `_resolve_trade_date` 退到最近
 // 交易日、輪詢整天停擺,而畫面上零提示(只有 boot 一行 WARNING 沒人看得到)。
-// 前端判不出「錯標」,能判的只有「日曆說今天休市」—— 真假日也該讓人知道為何靜默。
+// 前端判不出「錯標」,能判的只有「後端今天採用的不是今天」—— 那正是畫面靜默的原因。
+//
+// **判準是 `calendar_trade_date !== today`,不是 `holidays.includes(today)`**(review C-2):
+// 後端的「今天有沒有開盤」由 `resolve_trade_date` 一支推導,它涵蓋補班日
+// (`extra_trading_days`:在假日清單內但仍開盤)—— 前端自己拿 holidays 重算等於複製一份
+// 會漂的判定,而漂掉時膠囊會在有開盤的補班日亮著。
+//
+// **本機日保險絲**(review C-3):payload 是 6 小時 refetch 的快取,長跑分頁跨午夜後
+// `today` 會停在昨天 —— 那份 payload 的「今天」已經不是今天,寧可不亮也不要指著昨天的
+// 日期說今天休市。
 describe("App 日曆休市膠囊(SC-1)", () => {
   function nav() {
     return screen.getByRole("tablist", { name: "主要分頁" });
   }
 
-  /** 只覆寫 `/api/calendar` 一條路由,其餘沿用共用 stub(逐字不變)。 */
+  /** 瀏覽器本機日固定住(保險絲的另一半)。只假造 `Date` 不假造 timer ——
+   *  RTL 的 waitFor 在 vitest 下偵測不到 fake timers(同本檔上方 active gate 測試)。
+   *  還原走全域 afterEach 的 `vi.useRealTimers()`。 */
+  function atBrowserDate(y: number, monthIndex: number, d: number) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(y, monthIndex, d, 10, 0));
+  }
+
+  /** 只覆寫 `/api/calendar` 一條路由,其餘沿用共用 stub(逐字不變)。
+   *  預設 payload = 2026-10-09(五)國定假日:後端退到 10-08(四),`holidays` 刻意
+   *  留空 —— 判定不看它,留值反而讓「改回 holidays.includes」的 mutant 混過去。 */
   function withCalendar(over: Record<string, unknown>) {
     const base = appFetch();
     return vi.fn(async (url: string) => {
@@ -855,7 +874,7 @@ describe("App 日曆休市膠囊(SC-1)", () => {
             trade_date: "2026-10-08",
             calendar_trade_date: "2026-10-08",
             backfill_env: null,
-            holidays: ["2026-10-09"],
+            holidays: [],
             years_loaded: [2026],
             calendar_loaded: true,
             ...over,
@@ -881,7 +900,8 @@ describe("App 日曆休市膠囊(SC-1)", () => {
     });
   }
 
-  it("後端今日(平日)在假日清單內 → 膠囊出現,title 帶後端資料日", async () => {
+  it("後端資料日 ≠ 今日(平日、且 payload 的今天就是本機今天)→ 膠囊出現", async () => {
+    atBrowserDate(2026, 9, 9); // 2026-10-09 週五
     vi.stubGlobal("fetch", withCalendar({}));
     renderApp();
     const badge = await within(nav()).findByTestId("calendar-holiday-badge");
@@ -891,25 +911,54 @@ describe("App 日曆休市膠囊(SC-1)", () => {
     );
   });
 
-  it("今日不在假日清單 → 無膠囊(交易日不留常駐雜訊)", async () => {
-    vi.stubGlobal("fetch", withCalendar({ holidays: [] }));
+  // 補班日語意:今天在 holidays 清單內、但 `extra_trading_days` 把它加回交易日 →
+  // 後端 `calendar_trade_date` 就是今天 = 有開盤,膠囊不得亮。
+  it("後端資料日 = 今日(即使今日在假日清單內)→ 無膠囊(補班日仍有開盤)", async () => {
+    atBrowserDate(2026, 9, 9);
+    vi.stubGlobal(
+      "fetch",
+      withCalendar({ calendar_trade_date: "2026-10-09", holidays: ["2026-10-09"] }),
+    );
     renderApp();
     await settleCalendar();
     expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
   });
 
   it("calendar_loaded=false(後端沒載日曆)→ 無膠囊(空集合不代表今天有開盤)", async () => {
-    vi.stubGlobal("fetch", withCalendar({ calendar_loaded: false, holidays: ["2026-10-09"] }));
+    atBrowserDate(2026, 9, 9);
+    vi.stubGlobal("fetch", withCalendar({ calendar_loaded: false }));
     renderApp();
     await settleCalendar();
     expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
   });
 
   // AR8 週末守門:週末本來就休市,每個週末常駐一顆膠囊 = 雜訊,兩週後沒人看得見它。
-  it("今日是週末(即使在假日清單內)→ 無膠囊(週末守門)", async () => {
+  it("今日是週末(後端資料日仍是上週五)→ 無膠囊(週末守門)", async () => {
+    atBrowserDate(2026, 9, 10); // 2026-10-10 週六
     vi.stubGlobal(
       "fetch",
-      withCalendar({ today: "2026-08-16", holidays: ["2026-08-16"], trade_date: "2026-08-14" }),
+      withCalendar({
+        today: "2026-10-10",
+        trade_date: "2026-10-08",
+        calendar_trade_date: "2026-10-08",
+      }),
+    );
+    renderApp();
+    await settleCalendar();
+    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
+  });
+
+  // C-3 保險絲:payload 的今天(10-08 週四)與本機今天(10-09)不同 = 快取跨了午夜,
+  // 這份 payload 對「今天」已經無話可說。
+  it("payload 的 today ≠ 瀏覽器本機今日(跨午夜的舊快取)→ 無膠囊", async () => {
+    atBrowserDate(2026, 9, 9);
+    vi.stubGlobal(
+      "fetch",
+      withCalendar({
+        today: "2026-10-08",
+        trade_date: "2026-10-07",
+        calendar_trade_date: "2026-10-07",
+      }),
     );
     renderApp();
     await settleCalendar();
@@ -917,6 +966,7 @@ describe("App 日曆休市膠囊(SC-1)", () => {
   });
 
   it("calendar 取數失敗 → 無膠囊(降級成現況,不誤報)", async () => {
+    atBrowserDate(2026, 9, 9);
     const base = appFetch();
     vi.stubGlobal(
       "fetch",
