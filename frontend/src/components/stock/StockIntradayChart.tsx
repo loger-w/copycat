@@ -245,6 +245,22 @@ const ChartStatic = memo(function ChartStatic({
   // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
   // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
   const pegList = pegLabels(pegs, edgeBounds);
+  // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
+  // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 / 後端 VWAP
+  // 不可得(vwapMilli null,與說明列的「-」同步)→ 不畫。**不退回前端近似值**:
+  // 那正是 review A-1 要消滅的第二來源。
+  // x 的上界留 `VWAP_LABEL_W`:盤末末點恰在繪圖區右界上,`+4` 會把整塊字推進右緣
+  // 疊線標籤帶甚至出畫布,而那是「畫了但看不到」的靜默失敗。在此算好,渲染與 obstacle
+  // 判定共用同一個 x(兩處各算各的話會出現「判定說不撞、畫出來撞」)。
+  const vwapEnd = g.vwapLine[g.vwapLine.length - 1] ?? null;
+  const vwapLabel =
+    showVwap && vwapMilli !== null && vwapEnd !== null
+      ? {
+          x: Math.min(vwapEnd.x + 4, w - R_AXIS_W - VWAP_LABEL_W),
+          y: vwapEnd.y,
+          text: fmt(vwapMilli),
+        }
+      : null;
   const maObstacles = markLabels
     .flatMap((m) =>
       clampLabelX(m.mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16) + EDGE_LABEL_W / 2 > maLabelLeft
@@ -252,17 +268,13 @@ const ChartStatic = memo(function ChartStatic({
         : [],
     )
     // 掛牌的 y 併入 obstacles → MA 讓位。stock 態 pegList 恆空,這一段是 no-op。
-    .concat(pegList.map((p) => p.y));
+    .concat(pegList.map((p) => p.y))
+    // VWAP 就地標籤(2026-08-22 review R1 P1):它的位置 = 「線末點在哪」是資訊,不可動;
+    // 末點貼右界時它的右緣 = w − R_AXIS_W,與 MA 價位標的 x 區間完全重疊(PR #78 SC-4
+    // 近拍實證白 2387.74 壓琥珀 2380)。與極值標記同一套判準:x 區間碰到走廊才算 obstacle,
+    // 盤中末點在畫面中段時 MA 標籤不無故位移。
+    .concat(vwapLabel !== null && vwapLabel.x + VWAP_LABEL_W > maLabelLeft ? [vwapLabel.y] : []);
   const maLabels = edgePriceLabels(oLines, maObstacles, edgeBounds);
-  // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
-  // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 / 後端 VWAP
-  // 不可得(vwapMilli null,與說明列的「-」同步)→ 不畫。**不退回前端近似值**:
-  // 那正是 review A-1 要消滅的第二來源。
-  const vwapEnd = g.vwapLine[g.vwapLine.length - 1] ?? null;
-  const vwapLabel =
-    showVwap && vwapMilli !== null && vwapEnd !== null
-      ? { x: vwapEnd.x, y: vwapEnd.y, text: fmt(vwapMilli) }
-      : null;
   // POC(域內量最大的價位);vp toggle 關 → vpBars 空 → 自然沒有
   const pocBar = vpBars.find((b) => b.poc) ?? null;
   return (
@@ -588,12 +600,11 @@ const ChartStatic = memo(function ChartStatic({
       ))}
       {/* VWAP 即時數值(SC-2)。就地畫在末點右側;值 = `vwapMilli`(後端逐筆,與說明列
           同源同值,review A-1),`fmt` 不 snap tick —— VWAP 是統計量不是可掛單價
-          (review F3)。x 的上界留 `VWAP_LABEL_W`:盤末末點恰在繪圖區右界上,`+4` 會把
-          整塊字推進右緣疊線標籤帶甚至出畫布,而那是「畫了但看不到」的靜默失敗。 */}
+          (review F3)。x 已在 `vwapLabel` 內含 `+4` 與右界內縮(與 obstacle 判定同源)。 */}
       {vwapLabel !== null ? (
         <text
           data-testid="edge-price-vwap"
-          x={Math.min(vwapLabel.x + 4, w - R_AXIS_W - VWAP_LABEL_W)}
+          x={vwapLabel.x}
           y={vwapLabel.y}
           dy="0.35em"
           textAnchor="start"
