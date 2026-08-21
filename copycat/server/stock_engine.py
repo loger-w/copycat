@@ -90,6 +90,14 @@ def _spot_trial_window_now() -> bool:
 
     對外的旗標請走 `StockEngine._spot_trial_now()`(= 本函式 AND 交易日曆,D4');
     這一支只留給「要的就是窗本身」的地方(觀測分級、格式契約測試)。
+
+    **窗與日的時鐘是兩顆,窗這顆不吃 `now_fn` 注入**(review C-5):日別走
+    `StockEngine._now_fn`(可注入),窗走這裡的模組級 `_now_taipei_time()`(只能
+    monkeypatch 模組屬性)。兩顆在 prod 都是本機牆鐘、同一台機器,但**測試裡可以被設成
+    互相矛盾**(now_fn 給週二、窗時鐘給 08:50 卻是另一天的 08:50)—— 寫測試時兩顆都要
+    設,只設一顆的那半會靜默沿用真牆鐘。合併成一顆的代價是窗判定得繞過 `%H:%M:%S.%f`
+    的字串尺(`is_trial_window` 做字串比對),而那把尺的邊界語意已由 `TestObserveClock
+    Contract` 釘死,不值得為對稱去動它。
     """
     return is_trial_window(_now_taipei_time(), TRIAL_WINDOWS)
 
