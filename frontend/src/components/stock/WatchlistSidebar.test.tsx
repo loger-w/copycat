@@ -998,25 +998,40 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
 //  已經有握把 / 加入群組 / 移除三個互動子元素,button 內巢狀 button 是無效 HTML。
 //  → 代號 / 名稱 / 報價那一段包進 `wl-select-*` button,三顆子元件留在 row 層與它並排。
 describe("WatchlistSidebar 列選取 button(SC-4')", () => {
-  it("列內容是真 <button>,可及名稱含代號與名稱;點它 onSelect 一次", async () => {
+  // 🔴 D5''' / A11Y-1:改前掛 `aria-label="選取 {code} {name}"` —— button 的子孫在可及
+  // 名稱計算時是 presentational,aria-label 一掛,**價與漲跌幅整段被蓋掉**,螢幕閱讀器
+  // 唸完一列只知道是哪一檔、不知道現在多少錢(而這一列存在的理由就是報價)。
+  // 所以查詢刻意以「只可能來自內容」的字串(價 / 無資料)定位,aria-label 版本必紅。
+  it("列內容是真 <button>,可及名稱由內容計算(代號 / 名稱 / 價 / 漲跌幅全在)", async () => {
     const onSelect = vi.fn();
     wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
     await waitGroups();
-    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-2330");
+    const main = within(screen.getByTestId("wl-group-主力"));
     // 原生 button:瀏覽器的 Enter / Space → click 由 UA 提供(jsdom 不實作按鍵啟動,
     // 所以這裡鎖「它真的是 button」+「click 走得到 onSelect」兩半)
+    const btn = main.getByRole("button", { name: /2380/ }) as HTMLButtonElement;
+    expect(btn.getAttribute("data-testid")).toBe("wl-select-2330");
     expect(btn.tagName).toBe("BUTTON");
     expect(btn.getAttribute("type")).toBe("button");
-    expect(btn.getAttribute("aria-label")).toBe("選取 2330 台積電");
+    expect(btn.getAttribute("aria-label")).toBeNull();
+    // 代號 / 名稱 / 漲跌幅同樣要能從可及名稱找到它(同一顆 button)
+    expect(main.getByRole("button", { name: /2330/ })).toBe(btn);
+    expect(main.getByRole("button", { name: /台積電/ })).toBe(btn);
+    expect(main.getByRole("button", { name: /\+2\.59%/ })).toBe(btn);
+    // 🔴 A11Y-7:button 內不得有 div(HTML content model:button 只吃 phrasing content)
+    expect(btn.querySelector("div")).toBeNull();
     fireEvent.click(btn);
     expect(onSelect.mock.calls).toEqual([["2330"]]);
   });
 
-  it("名冊查無名稱 → 可及名稱只帶代號(不留一個空詞)", async () => {
+  it("名冊查無名稱 → 可及名稱只帶代號與狀態(不留一個空詞)", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
     await waitGroups();
-    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-5483");
-    expect(btn.getAttribute("aria-label")).toBe("選取 5483");
+    const main = within(screen.getByTestId("wl-group-主力"));
+    const btn = main.getByRole("button", { name: /無資料/ });
+    expect(btn.getAttribute("data-testid")).toBe("wl-select-5483");
+    expect(btn.getAttribute("aria-label")).toBeNull();
+    expect(btn.textContent).toContain("5483");
   });
 
   it("選取中的那一列 aria-current=true,其餘不掛(不是 false)", async () => {
