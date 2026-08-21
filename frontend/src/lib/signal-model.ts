@@ -178,6 +178,19 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
   return out;
 }
 
+/** 合併 toast 一行文字:`代號 名稱 <kind 段以「・」串接> 價格`。
+ *
+ *  與 `formatToastText` 同一套欄位口徑(單則組輸出逐字相同,signal-model.test lock)——
+ *  toast 只有一行,**不含規則名**(規則名在 rail 另起一行放得下)。kind 段沿
+ *  `groupKindLabels` 的到達序去重;價格取組錨(最早到那則),與 Discord 合併訊息
+ *  `rows[0]` 同口徑。 */
+export function formatGroupToastText(group: SignalGroup): string {
+  const kinds = groupKindLabels(group)
+    .map((s) => s.label)
+    .join("・");
+  return [group.code, group.name, kinds, fmt(group.price)].filter((x) => x !== "").join(" ");
+}
+
 /** 組內規則名去重(**到達序**的首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,
  *  整段略過 —— 留下來只會變成一個沒有內容的分隔符。
  *
