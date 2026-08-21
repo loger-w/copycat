@@ -4,6 +4,7 @@ import datetime as _dt
 import json
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -481,7 +482,9 @@ class TestStateRoute:
         assert r.json()["detail"]["error"] == "NOT_READY"
 
 
-#: 餵一則成交進 engine(讓 tape 非空;欄位比照 TestStockWs 的真 TC4 payload)
+#: 餵一則成交進 engine(讓 tape 非空;欄位比照 TestStockWs 的真 TC4 payload)。
+#: **刻意不帶 Upper/LowerLimitPrice**:漲跌停值變(None → 有值)是 engine 的回補入列點
+#: 之一,而回補是原子重建 —— 帶了就會在餵完 tick 之後非同步把 tape 清掉。
 TICK_MSG: dict[str, str] = {
     "Symbol": "TC.S.TWS.2330",
     "Security": "2330",
@@ -497,8 +500,6 @@ TICK_MSG: dict[str, str] = {
     "BidVolume": "10",
     "AskVolume": "10",
     "ReferencePrice": "2320",
-    "UpperLimitPrice": "2550",
-    "LowerLimitPrice": "2090",
     "YClosedPrice": "2320",
     "YTradeVolume": "100",
     "OpenTime": "90000",
@@ -515,12 +516,36 @@ class TestStateRouteTape:
     20–70 MB)。`set_main` 仍要打(W-4:訂閱與回補靠它),省的只有 payload。
     """
 
+    def _wait(self, client: TestClient, pred: Callable[[StockEngine], bool], why: str) -> None:
+        stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+        for _ in range(300):
+            if pred(stock):
+                return
+            time.sleep(0.01)
+        raise AssertionError(why)
+
+    def _quiet_state_with_one_tick(self, client: TestClient, fake: FakeStockSource) -> None:
+        """把 2330 帶到「tape 有一筆、且不會再有回補落地」的穩定點。
+
+        `apply_backfill` 是**原子重建**(seq +1001、ticks 整份換掉),落在餵 tick 與
+        兩次 GET 之間就會把全量那份的 tape 清空 —— 對照退化成「兩邊都空」的假綠。
+        所以:(a) 先等 `set_main` 那趟回補落地才餵;(b) 餵的那則**不帶漲跌停**,
+        否則 meta 值變(None → 有值)會再排一趟非同步回補(engine 既有行為)。
+        """
+        assert fake.on_message is not None
+        client.get("/api/stock/state/2330")  # set_main → 唯一一趟回補
+        self._wait(client, lambda s: "2330" in s._backfilled, "set_main 的回補沒落地")
+        fake.on_message(dict(TICK_MSG))
+        self._wait(
+            client,
+            lambda s: (st := s._states.get("2330")) is not None and len(st.ticks) == 1,
+            "餵進去的成交沒進 tape",
+        )
+
     def test_tape_0_omits_ticks_and_leaves_every_other_key_intact(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
         with client:
-            client.get("/api/stock/state/2330")  # set_main → engine 開始收本檔推播
-            assert fake.on_message is not None
-            fake.on_message(dict(TICK_MSG))
+            self._quiet_state_with_one_tick(client, fake)
             full = client.get("/api/stock/state/2330").json()
             light = client.get("/api/stock/state/2330?tape=0").json()
         assert full["ticks"], "基準 tape 是空的 → 兩邊都空,測不出東西"
@@ -543,9 +568,7 @@ class TestStateRouteTape:
         422 的 detail 是 list 形,不符全站 `{"detail": {"error": code}}` 契約。"""
         client, fake = make_client(tmp_path)
         with client:
-            client.get("/api/stock/state/2330")
-            assert fake.on_message is not None
-            fake.on_message(dict(TICK_MSG))
+            self._quiet_state_with_one_tick(client, fake)
             r = client.get("/api/stock/state/2330?tape=abc")
         assert r.status_code == 200
         assert r.json()["ticks"], "非 0 一律全量"

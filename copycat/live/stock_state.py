@@ -257,8 +257,13 @@ class StockDayState:
             "vp": {str(price): list(cell) for price, cell in sorted(self._vp.items())},
         }
 
-    def snapshot(self) -> dict:
-        """REST 全量(design §4:snapshot 為前端累算基底)。"""
+    def snapshot(self, *, tape: bool = True) -> dict:
+        """REST 全量(design §4:snapshot 為前端累算基底)。
+
+        `tape=False` = **跳過**逐筆展開(不是展開完再丟):群組檢視點卡片時沒有明細 /
+        主圖讀者,而 deque 上限兩萬筆、每筆組一個 dict —— 省的是 payload **與** CPU。
+        其餘鍵一個不少(呼叫端只該少掉 tape 這一項,不該多分岔一種 snapshot 形狀)。
+        """
         last = self.last
         return {
             "seq": self.seq,
@@ -291,7 +296,9 @@ class StockDayState:
                     "a": t.ask_milli,
                 }
                 for t in self.ticks
-            ],
+            ]
+            if tape
+            else [],
             "book": {"bids": self.book.bids, "asks": self.book.asks} if self.book else None,
             "meta": self._meta_payload(),
         }

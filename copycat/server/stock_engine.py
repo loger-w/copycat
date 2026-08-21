@@ -576,9 +576,13 @@ class StockEngine:
             return False
         return is_trial_window(_now_taipei_time(), trial_windows_for(code))
 
-    def snapshot(self, code: str) -> dict:
+    def snapshot(self, code: str, *, tape: bool = True) -> dict:
+        """`tape=False` 只轉發給 state(見 `StockDayState.snapshot`):群組檢視點卡片
+        時沒有明細讀者,兩萬筆逐筆 dict 純浪費。其餘附加欄與全量完全相同。"""
         state = self._states.get(code)
-        snap = state.snapshot() if state is not None else StockDayState().snapshot()
+        snap = (
+            state.snapshot(tape=tape) if state is not None else StockDayState().snapshot(tape=tape)
+        )
         snap["code"] = code
         snap["no_data"] = code in self._no_data
         # 附加點在 engine 而非 `StockDayState.snapshot()`(同 `no_data` 慣例):

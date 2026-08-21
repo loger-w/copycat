@@ -1434,7 +1434,9 @@ def create_app(
         }
 
     @app.get("/api/stock/state/{code}")
-    async def stock_state(request: Request, code: str, contract: str | None = None) -> dict:
+    async def stock_state(
+        request: Request, code: str, contract: str | None = None, tape: str = "1"
+    ) -> dict:
         """主圖狀態;`?contract=<prod>:<ym>` 切成該股的個股期合約(stkfut-contracts D6/D7)。
 
         **合約合法性只能來自 catalog,不能只驗字串形**:`?contract=DHF:202609` 打到
@@ -1452,8 +1454,19 @@ def create_app(
         if contract is not None:
             key = await _resolve_contract(request, code, contract)
         await stock.set_main_contract(key)  # 含回補觸發(design §2.5)
-        snap = stock.snapshot(key)
+        # `?tape=0` = 呼叫端沒有逐筆明細讀者(群組檢視點卡片只為換右欄標的)→ 省掉
+        # 整份 tape。**`set_main_contract` 照打**(W-4):省的只有 payload,訂閱與回補
+        # 都還要靠它,漏掉的話點卡片換不了標的而畫面上只是「右欄沒資料」。
+        #
+        # 型別收 `str` 不收 `int`(D3'):`?tape=abc` 走全量比 422 好 —— 422 的 detail
+        # 是 list 形,不符全站 `{"detail": {"error": code}}` 契約。
+        omit_tape = tape == "0"
+        snap = stock.snapshot(key, tape=not omit_tape)
         snap["underlying"] = code
+        if omit_tape:
+            # 旗標只在省略時出現(全量路徑位元不變,W3);診斷 / 測試用,前端不依賴 ——
+            # 空 tape 與「今天真的還沒成交」在畫面上同義,沒有這個鍵就分不出來。
+            snap["tape_omitted"] = True
         return snap
 
     @app.get("/api/stock/group-state")
