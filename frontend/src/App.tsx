@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { IndexBar } from "@/components/IndexBar";
@@ -27,6 +27,7 @@ import {
 } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import type { StkfutSelection } from "@/lib/stkfut";
+import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
 
 const StockPage = lazy(() => import("@/components/stock/StockPage"));
@@ -35,6 +36,20 @@ const IndexPage = lazy(() => import("@/components/index/IndexPage"));
 const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
 
 type Tab = "txo" | "stock" | "futures" | "index" | "corr";
+
+/** 主分頁列的內容(單一來源:tablist 與方向鍵導航都吃它)。原本是 JSX 內的行內字面量,
+ *  抽出來是因為鍵盤導航要知道「共幾顆、第幾顆」。 */
+const MAIN_TABS: readonly (readonly [Tab, string])[] = [
+  ["index", "台股綜合"],
+  ["stock", "個股(期)"],
+  ["txo", "選擇權"],
+  ["futures", "期貨"],
+  ["corr", "相關係數"],
+];
+
+/** tab ↔ tabpanel 的 id 對(a11y 批 SC-2'')。App 是單例,固定字串即可。 */
+const tabId = (id: Tab) => `app-tab-${id}`;
+const panelId = (id: Tab) => `app-panel-${id}`;
 
 const FUT_PRODUCTS = [
   ["TXF", "大台"],
@@ -225,23 +240,37 @@ export default function App() {
   const railCtx: RailContext =
     tab === "stock" ? stockCtx : tab === "futures" ? futuresCtx : NONE_CTX;
 
+  /** manual activation(D3',與 RightRail 同一份判斷):方向鍵只移焦點,Enter / Space
+   *  才切分頁。自動切換會讓方向鍵掃過的每一頁都真的掛載(lazy chunk + WS gate 全開)。 */
+  function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: Tab): void {
+    const action = tablistKeyAction(e.key, MAIN_TABS.findIndex(([t]) => t === id), MAIN_TABS.length);
+    if (action === null) return;
+    e.preventDefault();
+    if (action === "select") {
+      setTab(id);
+      return;
+    }
+    // `[role="tab"]` 而非所有子元素:nav 尾端還有版本膠囊 / 指數列
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[action]?.focus();
+  }
+
   return (
     <div className="flex h-full w-full flex-col gap-3 px-4 py-4">
       <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
-        {(
-          [
-            ["index", "台股綜合"],
-            ["stock", "個股(期)"],
-            ["txo", "選擇權"],
-            ["futures", "期貨"],
-            ["corr", "相關係數"],
-          ] as [Tab, string][]
-        ).map(([id, label]) => (
+        {MAIN_TABS.map(([id, label]) => (
           <button
             key={id}
             type="button"
             role="tab"
+            id={tabId(id)}
+            // ⚠ stock / futures / corr 的 panel 受 `visited` 閘門延後 mount → 未造訪時
+            // 這條 `aria-controls` 是 dangling(SC-2'' 明記的既定代價);index / txo 恆掛。
+            aria-controls={panelId(id)}
             aria-selected={tab === id}
+            // roving tabindex:整列只佔一個 tab stop,列內用方向鍵走
+            tabIndex={tab === id ? 0 : -1}
+            onKeyDown={(e) => onTabKeyDown(e, id)}
             onClick={() => setTab(id)}
             className={cn(
               "rounded-t px-3 py-1.5 text-sm",
@@ -261,11 +290,23 @@ export default function App() {
       {/* 主區 + 常駐右欄(SC-3:切 tab 時右欄位置 / 寬度 / 三顆 tab 都不變) */}
       <div className="flex min-h-0 min-w-0 flex-1 gap-4">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div hidden={tab !== "txo"} className={tab === "txo" ? "flex min-h-0 flex-1 flex-col gap-4" : ""}>
+          <div
+            role="tabpanel"
+            id={panelId("txo")}
+            aria-labelledby={tabId("txo")}
+            hidden={tab !== "txo"}
+            className={tab === "txo" ? "flex min-h-0 flex-1 flex-col gap-4" : ""}
+          >
             <TxoPage />
           </div>
           {visited.stock ? (
-            <div hidden={tab !== "stock"} className={tab === "stock" ? "flex min-h-0 flex-1 flex-col" : ""}>
+            <div
+              role="tabpanel"
+              id={panelId("stock")}
+              aria-labelledby={tabId("stock")}
+              hidden={tab !== "stock"}
+              className={tab === "stock" ? "flex min-h-0 flex-1 flex-col" : ""}
+            >
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
@@ -280,7 +321,13 @@ export default function App() {
             </div>
           ) : null}
           {visited.futures ? (
-            <div hidden={tab !== "futures"} className={tab === "futures" ? "flex min-h-0 flex-1 flex-col" : ""}>
+            <div
+              role="tabpanel"
+              id={panelId("futures")}
+              aria-labelledby={tabId("futures")}
+              hidden={tab !== "futures"}
+              className={tab === "futures" ? "flex min-h-0 flex-1 flex-col" : ""}
+            >
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
@@ -300,7 +347,13 @@ export default function App() {
             </div>
           ) : null}
           {visited.index ? (
-            <div hidden={tab !== "index"} className={tab === "index" ? "flex min-h-0 flex-1 flex-col" : ""}>
+            <div
+              role="tabpanel"
+              id={panelId("index")}
+              aria-labelledby={tabId("index")}
+              hidden={tab !== "index"}
+              className={tab === "index" ? "flex min-h-0 flex-1 flex-col" : ""}
+            >
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
@@ -326,7 +379,13 @@ export default function App() {
             </div>
           ) : null}
           {visited.corr ? (
-            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
+            <div
+              role="tabpanel"
+              id={panelId("corr")}
+              aria-labelledby={tabId("corr")}
+              hidden={tab !== "corr"}
+              className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}
+            >
               <Suspense
                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
               >
