@@ -56,3 +56,60 @@ Fake source 注入 `_collect_history` 回 `HistoryResult([], timed_out=True)`:
   沿 `_schedule_backfill` 語意排 30s 延遲 task(存 `self._backfill_retry_tasks` 集合,`close()` 一併 cancel),只補 pending 腿;其餘 ConnectionError 照舊降級。
 - log 文案三處(P2-11):tc4.py:715、river_backfill.py:57、index_engine.py:510 註解改寫。
 - **該紅(預告)**:`tests/live/test_river_backfill.py::test_empty_first_page_returns_empty_without_blocking`(首頁逾時 → 改斷言 raises);**不該紅**:`test_dk_empty_falls_back_to_1k_aggregation`(fallback 保留)、`TestFetchDayMinutes*`(index 不改)、`test_stock_bars` 三態、`test_index_engine` heal 系列。
+
+## 反向驗證結果
+
+`git revert --no-commit d73477ba`(修復 commit)→ 跑七個受影響測試檔:
+
+```
+20 failed, 347 passed, 1 warning in 89.04s
+FAILED tests/live/test_stock_source.py::TestBackfill::test_first_page_timeout_raises_history_timeout
+FAILED tests/live/test_stock_source.py::TestFetchDailyBars::test_both_segments_timeout_raises_history_timeout
+FAILED tests/live/test_stock_source.py::TestFetchDailyBars::test_both_segments_get_the_short_bars_deadline
+FAILED tests/live/test_futures_bars.py::TestFetchBarsRange::test_product_routing
+FAILED tests/live/test_futures_bars.py::TestFetchBarsRange::test_first_page_timeout_raises_history_timeout
+FAILED tests/live/test_futures_bars.py::TestAlldaySession::test_window_start_shifts_back_one_day
+FAILED tests/live/test_futures_bars.py::TestAlldaySession::test_window_shift_crosses_month
+FAILED tests/live/test_futures_bars.py::TestAlldaySession::test_window_shift_crosses_year
+FAILED tests/live/test_futures_bars.py::TestAlldaySession::test_day_session_window_unchanged
+FAILED tests/live/test_futures_bars.py::TestAlldaySession::test_daily_ignores_session
+FAILED tests/live/test_river_backfill.py::TestCorrSourceFetchDay1k::test_empty_first_page_raises_without_blocking
+FAILED tests/live/test_river_backfill.py::TestCorrSourceFetchDay1k::test_rows_from_another_utc_day_are_dropped
+FAILED tests/live/test_river_backfill.py::TestCorrSourceFetchDay1k::test_all_rows_dropped_warns_frozen_stub
+FAILED tests/server/test_stock_engine.py::TestDailyBarsTimeout::test_history_timeout_propagates
+FAILED tests/server/test_stock_engine.py::TestBackfillTimeoutRetry::test_timeout_reenqueues_without_touching_tc4_status
+FAILED tests/server/test_stock_engine.py::TestBackfillTimeoutRetry::test_retry_is_bounded_then_gives_up
+FAILED tests/server/test_futures_engine.py::TestBarsRangeProxy::test_history_timeout_degrades_here_with_its_own_log
+FAILED tests/server/test_corr_engine_river.py::TestBackfillTimeoutRetry::test_timed_out_leg_is_retried_and_only_that_leg
+FAILED tests/server/test_corr_engine_river.py::TestBackfillTimeoutRetry::test_retry_rounds_are_capped
+FAILED tests/server/test_corr_engine_river.py::TestBackfillTimeoutRetry::test_close_cancels_pending_retry_task
+```
+
+紅回來的 20 條 = 紅測試 commit(`dde98f95`)當初的同一組 20 條,逐條同名。
+還原(`git revert --quit` + `git checkout HEAD -- <11 檔>`)後 `tests/live tests/server`
+**1724 passed**。
+
+### Gate(修復後,repo root)
+- `pytest -q` → **2870 passed, 1 warning in 183.75s**
+- `ruff check copycat tests` → **All checks passed!**
+- `pyright` → **0 errors, 0 warnings, 0 informations**
+- `copycat validate` 未跑:engine / replay 未被本輪碰到。
+
+### 與 plan 的偏差(逐條)
+1. **預告外的該紅**:`tests/live/test_futures_bars.py` 另有 5 條空頁治具測試
+   (`test_product_routing` / allday 四條窗)一起變紅 —— `_source([])` 在 `poll_wait=0`
+   下本來就是「首頁未備妥」,所以任何「timed_out → raise」都會打到它們。改成
+   `pytest.raises` 包住取數,**窗與 routing 的斷言本身一字未改**。
+2. **治具更正**:`tests/live/test_river_backfill.py::_row` 的 `Date` 由寫死的
+   `"20260730"` 改成窗口 UTC 日 —— 新增的 Date 閘會把寫死舊日期的列整批丟掉,
+   不改的話鎖「分頁收割 / 解析」的那兩條會變成假紅。
+3. **紅 commit 含型別宣告**:`HistoryTimeoutError` 的**類別定義**放在紅 commit
+   (無人 raise)。不放的話七個測試檔全停在 collection ImportError,紅的內容只剩
+   「型別不存在」,看不出行為契約有沒有被違反。
+4. **一條中途斷言在綠 commit 被移除**:
+   `test_timed_out_leg_is_retried_and_only_that_leg` 原本先斷言「首輪後 SXF minutes
+   為空」,但退避被 monkeypatch 成 0.01s 後,重試在 `_drain()`(30×1ms)期間就跑完了
+   —— 那是**時序相依**的斷言,不是行為斷言。改以 fetch 次數(SXF 2 次 / NQ 1 次)
+   + 終態鎖同一件事,證據更強而非更弱。
+5. **`_backfill_timeouts` 為新增記帳**:與 `_backfill_failed` 分帳(逾時不該吃掉
+   「三次就冷卻」給真失敗用的額度),日別語意,在 rollover stage2 一併清空。
