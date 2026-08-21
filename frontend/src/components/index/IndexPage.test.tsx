@@ -143,32 +143,24 @@ describe("IndexPage 雙 pane 容器(SC-2)", () => {
 
   it("(b) 兩 pane 週期彼此獨立:左切日K,右仍停在分時", () => {
     renderPage();
-    fireEvent.click(pane("left").getByRole("button", { name: "日K" }));
-    expect(pane("left").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    expect(pane("right").getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    expect(pane("right").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
-      "false",
-    );
+    fireEvent.click(pane("left").getByRole("radio", { name: "日K" }));
+    expect((pane("left").getByRole("radio", { name: "日K" }) as HTMLInputElement).checked).toBe(true);
+    expect((pane("right").getByRole("radio", { name: "分時" }) as HTMLInputElement).checked).toBe(true);
+    expect((pane("right").getByRole("radio", { name: "日K" }) as HTMLInputElement).checked).toBe(false);
   });
 
   it("(b2) 兩 pane 標的彼此獨立:右切加權,左仍是加權且右不影響左標題", () => {
     renderPage();
-    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
+    fireEvent.click(pane("right").getByRole("radio", { name: "加權" }));
     expect(pane("right").getByText("加權指數")).toBeTruthy();
     expect(pane("left").getByText("加權指數")).toBeTruthy();
-    expect(pane("left").getByRole("button", { name: "加權" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect((pane("left").getByRole("radio", { name: "加權" }) as HTMLInputElement).checked).toBe(true);
   });
 
   it("(d) 右 pane 寫 market2 三支 key,左 pane 的舊 key 不動", async () => {
     renderPage();
-    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
-    fireEvent.click(pane("right").getByRole("button", { name: "日K" }));
+    fireEvent.click(pane("right").getByRole("radio", { name: "加權" }));
+    fireEvent.click(pane("right").getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("day"));
     expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("TWSE");
     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBeNull();
@@ -177,8 +169,8 @@ describe("IndexPage 雙 pane 容器(SC-2)", () => {
 
   it("(d2) 左 pane 寫舊 key,market2 三支不動", async () => {
     renderPage();
-    fireEvent.click(pane("left").getByRole("button", { name: "台指期" }));
-    fireEvent.click(pane("left").getByRole("button", { name: "小台" }));
+    fireEvent.click(pane("left").getByRole("radio", { name: "台指期" }));
+    fireEvent.click(pane("left").getByRole("radio", { name: "小台" }));
     await waitFor(() => expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF"));
     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("m1");

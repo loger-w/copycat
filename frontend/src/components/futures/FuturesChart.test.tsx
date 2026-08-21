@@ -152,34 +152,44 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// a11y 批:模式列是**單選**,改 RadioPills(sr-only `<input type=radio>` + 帶原 class 的
+// `<label>`)。選中態自此由 `checked` 表達,不再是 `aria-pressed`;class / title 掛在 label
+// 上 → 結構斷言要多跳一層(radio.parentElement = label)。
+const modeRadio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
+
 describe("FuturesChart 模式列(SC-2)", () => {
-  it("預設分時;切「5分」寫 localStorage 且 aria-pressed 跟隨", async () => {
+  it("預設分時;切「5分」寫 localStorage 且 checked 跟隨", async () => {
     barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    expect(screen.getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe("true");
+    expect(modeRadio("分時").checked).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "5分" }));
+    fireEvent.click(modeRadio("5分"));
     expect(window.localStorage.getItem(FUT_CHART_MODE_KEY)).toBe("m5");
-    expect(screen.getByRole("button", { name: "5分" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe("false");
+    expect(modeRadio("5分").checked).toBe(true);
+    expect(modeRadio("分時").checked).toBe(false);
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
   });
 
   it("模式列 15 顆:分時 / 1–10 分 / 15 / 30 / 60 分 / 日K;點「7分」寫 m7", async () => {
     barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    // 模式列 = 「分時」鈕的直接父層(cr1 B-1:`div > div` 會命中元件根 div,
-    // 綠只是因為斷言跑在 isPending 那一瞬、core 的 toggle 鈕還沒掛出)
-    const row = screen.getByRole("button", { name: "分時" }).parentElement!;
+    // 模式列 = radiogroup 容器本身(cr1 B-1 的「`div > div` 會命中元件根 div」不再是
+    // 問題:radiogroup 有 accessible name,直接取即可)
+    const row = screen.getByRole("radiogroup", { name: "圖表模式" });
     expect(container.contains(row)).toBe(true);
-    expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+    expect(modeRadio("分時").parentElement!.parentElement).toBe(row);
+    expect([...row.querySelectorAll("label")].map((b) => b.textContent)).toEqual([
       "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
       "15分", "30分", "60分", "日K",
     ]);
+    // 單選語意:同一個 name、恰一顆 checked
+    const radios = [...row.querySelectorAll("input")] as HTMLInputElement[];
+    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+    expect(radios.filter((r) => r.checked).length).toBe(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "7分" }));
+    fireEvent.click(modeRadio("7分"));
     expect(window.localStorage.getItem(FUT_CHART_MODE_KEY)).toBe("m7");
-    expect(screen.getByRole("button", { name: "7分" }).getAttribute("aria-pressed")).toBe("true");
+    expect(modeRadio("7分").checked).toBe(true);
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
   });
 
@@ -187,7 +197,7 @@ describe("FuturesChart 模式列(SC-2)", () => {
     window.localStorage.setItem(FUT_CHART_MODE_KEY, "day");
     barsBody = { bars: [bar("2026-08-04", 22_900_000), bar("2026-08-05", 23_000_000)], meta: META };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
-    expect(screen.getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe("true");
+    expect(modeRadio("日K").checked).toBe(true);
     await waitFor(() => expect(barsUrls).toEqual(["/api/market/bars/TXF?tf=D"]));
   });
 });
