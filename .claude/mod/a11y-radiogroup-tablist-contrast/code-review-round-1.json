@@ -1,0 +1,139 @@
+{
+ "round": 1,
+ "lenses": [
+  "a11y-semantics+behaviour(opus)",
+  "test-coverage(opus)"
+ ],
+ "findings": [
+  {
+   "id": "A11Y-1",
+   "severity": "P1",
+   "summary": "wl-select aria-label 蓋掉報價(button 子孫 presentational)",
+   "disposition": "accepted",
+   "resolution": "拿掉 aria-label,名稱由內容計算;D5' 改"
+  },
+  {
+   "id": "A11Y-2",
+   "severity": "P1",
+   "summary": "OrderPanel kind=market 且估價 null → 整組零可聚焦",
+   "disposition": "accepted",
+   "resolution": "OrderPanel 收斂 setKind(limit)"
+  },
+  {
+   "id": "A11Y-3",
+   "severity": "P1",
+   "summary": "label 無 UA cursor → I-beam、可選取",
+   "disposition": "accepted",
+   "resolution": "RadioPills 一般態補 cursor-default select-none"
+  },
+  {
+   "id": "A11Y-4",
+   "severity": "P2",
+   "summary": "Alt+←/→、Ctrl+Home/End 被 tablist 吃掉",
+   "disposition": "accepted",
+   "resolution": "修飾鍵早退(放 helper)"
+  },
+  {
+   "id": "A11Y-5",
+   "severity": "P2",
+   "summary": "id 拼 useId 原字 + 使用者群組名",
+   "disposition": "accepted",
+   "resolution": "safeIdToken + index"
+  },
+  {
+   "id": "A11Y-6",
+   "severity": "P2",
+   "summary": "PriceLadder 點已選 pill 不再 touchIdle",
+   "disposition": "accepted",
+   "resolution": "RadioPills onInteract(label onClick)"
+  },
+  {
+   "id": "A11Y-7",
+   "severity": "P2",
+   "summary": "button 內含 div",
+   "disposition": "accepted",
+   "resolution": "換 span"
+  },
+  {
+   "id": "A11Y-p2-1",
+   "severity": "P2",
+   "summary": "MarketPane 台指期 value=futKey 重掛掉焦點",
+   "disposition": "accepted",
+   "resolution": "value 固定 FUT + 映射"
+  },
+  {
+   "id": "A11Y-p2-2",
+   "severity": "P2",
+   "summary": "App nav tablist 含非 tab 子節點(既有)",
+   "disposition": "accepted",
+   "resolution": "記 next-time"
+  },
+  {
+   "id": "TC-1",
+   "severity": "P1",
+   "summary": "App visited 閘門三 panel 接線零覆蓋",
+   "disposition": "accepted",
+   "resolution": "點進 stock 後斷言互指 + 跳過數"
+  },
+  {
+   "id": "TC-2",
+   "severity": "P1",
+   "summary": "OrderPanel 買賣別 radiogroup 零測試",
+   "disposition": "accepted",
+   "resolution": "補 radiogroup/checked/class/name 互異/text-center"
+  },
+  {
+   "id": "TC-3",
+   "severity": "P2",
+   "summary": "MarketPane.test:267 恆真",
+   "disposition": "accepted",
+   "resolution": "改 queryByRole radio"
+  },
+  {
+   "id": "TC-4",
+   "severity": "P2",
+   "summary": "sr-only 無斷言",
+   "disposition": "accepted",
+   "resolution": "補 input className sr-only"
+  },
+  {
+   "id": "TC-5",
+   "severity": "P2",
+   "summary": "未走 label 點擊路徑",
+   "disposition": "accepted",
+   "resolution": "補 label click 兩條"
+  },
+  {
+   "id": "TC-6",
+   "severity": "P2",
+   "summary": "tablist-keys 無單測",
+   "disposition": "accepted",
+   "resolution": "新增 tablist-keys.test.ts"
+  },
+  {
+   "id": "TC-7",
+   "severity": "P2",
+   "summary": "PriceLadder 群組內 button=0 守門弱化",
+   "disposition": "accepted",
+   "resolution": "補 queryAllByRole button 0"
+  },
+  {
+   "id": "TC-8",
+   "severity": "P2",
+   "summary": "重疊 Btn class 同源無斷言",
+   "disposition": "accepted",
+   "resolution": "補 class 斷言"
+  },
+  {
+   "id": "TC-9",
+   "severity": "P2",
+   "summary": "GroupGridView leading 無斷言",
+   "disposition": "accepted",
+   "resolution": "補 群組 首子節點"
+  }
+ ],
+ "evidence": {
+  "full_suite": "2412 passed, tsc 0, eslint 0, doctor 0 new",
+  "sc5_pixel_diff": "僅活資料區"
+ }
+}

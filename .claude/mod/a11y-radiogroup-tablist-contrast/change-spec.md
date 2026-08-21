@@ -142,3 +142,12 @@ MarketPane.test.tsx(130 `btn()` helper、164 parentElement)、FuturesChart.test.
 - **SC-1'(d) / W9 改可證偽**(R2-5):RadioPills.test 斷言 Enter keydown `defaultPrevented === true`;OrderPanel 真 form 提交靠 SC-5' 真環境列一條(焦點在 pill 按 Enter 不跳確認窗)。
 - **D5'' 選取態**(R2-7):`wl-select-{code}` button 掛 `aria-current={active === code ? "true" : undefined}`;`cursor-pointer` 從 row div 移到 button;SC-4' 加 aria-current 斷言。
 - **符號更正**(R2-8):MarketPane 的 pill 元件是 `MarketPane.tsx::Btn`(非 PeriodButton);App panel 行號 264-336。
+
+---
+## Code review round 1 amendments(`code-review-round-1.json`)
+- **D5''' `[amendment 2026-08-21: A11Y-1]`**:`wl-select-{code}` **不掛 aria-label**,可及名稱由內容計算(代號 / 名稱 / 價 / 漲跌幅);`aria-current` 保留;button 內層容器用 `span`(A11Y-7)。
+- **D1''' `[A11Y-3 / A11Y-5 / A11Y-6]`**:label 一般態補 `cursor-default select-none`(還原 button UA 行為);`id = safeIdToken(useId()) + "-" + index`;新增 `onInteract?: () => void`(label onClick 必觸發,含已選中項)供 PriceLadder `touchIdle`。
+- **OrderPanel `[A11Y-2]`**:`marketEstimate == null && kind === "market"` → 收斂回 `limit`(同 StockChart isFut 收斂樣板);新鎖測試。
+- **tablist-keys `[A11Y-4]`**:helper 改吃 `{ key, altKey, ctrlKey, metaKey }`,修飾鍵 → null。
+- MarketPane 標的列「台指期」value 固定 `"FUT"`、呼叫端映射 futKey(A11Y-p2-1)。
+- next-time:App `<nav role=tablist>` 含 VersionDriftBadge / IndexBar(aria-required-children,既有);RiverPanel 單選 pill。

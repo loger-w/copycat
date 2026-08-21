@@ -1,0 +1,1614 @@
+diff --git a/frontend/src/components/OrderPanel.test.tsx b/frontend/src/components/OrderPanel.test.tsx
+index f81d205c..5c4ec245 100644
+--- a/frontend/src/components/OrderPanel.test.tsx
++++ b/frontend/src/components/OrderPanel.test.tsx
+@@ -45,6 +45,16 @@ function capStatus(overrides: Partial<CapitalStatus> = {}): CapitalStatus {
+   };
+ }
+ 
++/** 🔴 a11y 批:委託類型 pill 改 RadioPills(sr-only radio + label)。
++ *  舊寫法 `getByText("市價").closest("button")?.getAttribute("disabled")` 在改後會靜默
++ *  vacuous —— `closest("button")` 回 null、`?.` 讓 `.not.toBeNull()` 對著 `undefined` 通過。
++ *  改鎖 input 的 `disabled` 本身,並連 `title`(W8:文案與觸發條件不變)一起釘。 */
++function expectMarketLocked() {
++  const market = screen.getByRole("radio", { name: "市價" }) as HTMLInputElement;
++  expect(market.disabled).toBe(true);
++  expect(market.closest("label")?.getAttribute("title")).toBe("此合約尚無成交估價,市價不可用");
++}
++
+ function json(body: unknown, status = 200): Response {
+   return new Response(JSON.stringify(body), {
+     status,
+@@ -201,7 +211,7 @@ describe("OrderPanel(群益)", () => {
+     });
+     renderPanel();
+     await screen.findByText("模擬");
+-    fireEvent.click(screen.getByText("市價"));
++    fireEvent.click(screen.getByRole("radio", { name: "市價" }));
+     expect(screen.queryByLabelText("價格(點)")).toBeNull();
+     fireEvent.click(screen.getByText("送出"));
+     expect(await screen.findByText("確認送單")).toBeTruthy();
+@@ -213,7 +223,7 @@ describe("OrderPanel(群益)", () => {
+ 
+     // 無估價合約(PUT last_price=null)→ 市價鈕 disabled
+     fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
+-    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
++    expectMarketLocked();
+   });
+ 
+   it("選單以 /api/txo/contracts 全鏈為主:props 子集仍列全鏈;鏈上無估價合約鎖市價", async () => {
+@@ -230,7 +240,7 @@ describe("OrderPanel(群益)", () => {
+     expect(screen.getByRole("option", { name: "TXO.202607.C.23000" })).toBeTruthy();
+     // EXTRA 不在 props → 無 last_price → 市價鎖定(估價查找仍走 props)
+     fireEvent.change(screen.getByLabelText("商品"), { target: { value: EXTRA } });
+-    expect(screen.getByText("市價").closest("button")?.getAttribute("disabled")).not.toBeNull();
++    expectMarketLocked();
+   });
+ 
+   it("props 為空時選單仍列全鏈", async () => {
+@@ -275,9 +285,9 @@ describe("OrderPanel(群益)", () => {
+     renderPanel();
+     await screen.findByText("模擬");
+     expect(screen.getByLabelText("價格(點)")).toBeTruthy();
+-    fireEvent.click(screen.getByText("市價"));
++    fireEvent.click(screen.getByRole("radio", { name: "市價" }));
+     expect(screen.queryByLabelText("價格(點)")).toBeNull();
+-    fireEvent.click(screen.getByText("限價"));
++    fireEvent.click(screen.getByRole("radio", { name: "限價" }));
+     expect(screen.getByLabelText("價格(點)")).toBeTruthy();
+   });
+ });
+diff --git a/frontend/src/components/futures/FuturesChart.test.tsx b/frontend/src/components/futures/FuturesChart.test.tsx
+index fc613fd1..4d6ef956 100644
+--- a/frontend/src/components/futures/FuturesChart.test.tsx
++++ b/frontend/src/components/futures/FuturesChart.test.tsx
+@@ -152,34 +152,44 @@ afterEach(() => {
+   vi.useRealTimers();
+ });
+ 
++// a11y 批:模式列是**單選**,改 RadioPills(sr-only `<input type=radio>` + 帶原 class 的
++// `<label>`)。選中態自此由 `checked` 表達,不再是 `aria-pressed`;class / title 掛在 label
++// 上 → 結構斷言要多跳一層(radio.parentElement = label)。
++const modeRadio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
++
+ describe("FuturesChart 模式列(SC-2)", () => {
+-  it("預設分時;切「5分」寫 localStorage 且 aria-pressed 跟隨", async () => {
++  it("預設分時;切「5分」寫 localStorage 且 checked 跟隨", async () => {
+     barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
+     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+-    expect(screen.getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe("true");
++    expect(modeRadio("分時").checked).toBe(true);
+ 
+-    fireEvent.click(screen.getByRole("button", { name: "5分" }));
++    fireEvent.click(modeRadio("5分"));
+     expect(window.localStorage.getItem(FUT_CHART_MODE_KEY)).toBe("m5");
+-    expect(screen.getByRole("button", { name: "5分" }).getAttribute("aria-pressed")).toBe("true");
+-    expect(screen.getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe("false");
++    expect(modeRadio("5分").checked).toBe(true);
++    expect(modeRadio("分時").checked).toBe(false);
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+   });
+ 
+   it("模式列 15 顆:分時 / 1–10 分 / 15 / 30 / 60 分 / 日K;點「7分」寫 m7", async () => {
+     barsBody = { bars: [bar("2026-08-05 09:30", 23_000_000)], meta: META };
+     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+-    // 模式列 = 「分時」鈕的直接父層(cr1 B-1:`div > div` 會命中元件根 div,
+-    // 綠只是因為斷言跑在 isPending 那一瞬、core 的 toggle 鈕還沒掛出)
+-    const row = screen.getByRole("button", { name: "分時" }).parentElement!;
++    // 模式列 = radiogroup 容器本身(cr1 B-1 的「`div > div` 會命中元件根 div」不再是
++    // 問題:radiogroup 有 accessible name,直接取即可)
++    const row = screen.getByRole("radiogroup", { name: "圖表模式" });
+     expect(container.contains(row)).toBe(true);
+-    expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
++    expect(modeRadio("分時").parentElement!.parentElement).toBe(row);
++    expect([...row.querySelectorAll("label")].map((b) => b.textContent)).toEqual([
+       "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
+       "15分", "30分", "60分", "日K",
+     ]);
++    // 單選語意:同一個 name、恰一顆 checked
++    const radios = [...row.querySelectorAll("input")] as HTMLInputElement[];
++    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
++    expect(radios.filter((r) => r.checked).length).toBe(1);
+ 
+-    fireEvent.click(screen.getByRole("button", { name: "7分" }));
++    fireEvent.click(modeRadio("7分"));
+     expect(window.localStorage.getItem(FUT_CHART_MODE_KEY)).toBe("m7");
+-    expect(screen.getByRole("button", { name: "7分" }).getAttribute("aria-pressed")).toBe("true");
++    expect(modeRadio("7分").checked).toBe(true);
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+   });
+ 
+@@ -187,7 +197,7 @@ describe("FuturesChart 模式列(SC-2)", () => {
+     window.localStorage.setItem(FUT_CHART_MODE_KEY, "day");
+     barsBody = { bars: [bar("2026-08-04", 22_900_000), bar("2026-08-05", 23_000_000)], meta: META };
+     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+-    expect(screen.getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe("true");
++    expect(modeRadio("日K").checked).toBe(true);
+     await waitFor(() => expect(barsUrls).toEqual(["/api/market/bars/TXF?tf=D"]));
+   });
+ });
+diff --git a/frontend/src/components/futures/FuturesPage.test.tsx b/frontend/src/components/futures/FuturesPage.test.tsx
+index d974b370..6c3b7ee6 100644
+--- a/frontend/src/components/futures/FuturesPage.test.tsx
++++ b/frontend/src/components/futures/FuturesPage.test.tsx
+@@ -179,12 +179,23 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
+     expect(header.getByText("+200")).toBeTruthy(); // 漲跌(點)
+     expect(header.getByText("+0.88%")).toBeTruthy();
+     expect(header.getByText("TXF 2026/09")).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "大台" }).getAttribute("aria-pressed")).toBe("true");
++    expect((screen.getByRole("radio", { name: "大台" }) as HTMLInputElement).checked).toBe(true);
++  });
++
++  // a11y 批 SC-1':商品列是單選 —— 原本三顆 `aria-pressed` button 讓 AT 聽成三個互不
++  // 相干的開關、鍵盤要按三次 Tab 才穿得過。改 radiogroup 後恰一顆 checked。
++  it("商品列是 radiogroup:三顆 radio、恰一顆 checked、同一個 name", () => {
++    wrap(<Harness />);
++    const group = within(screen.getByRole("radiogroup", { name: "商品切換" }));
++    const radios = group.getAllByRole("radio") as HTMLInputElement[];
++    expect(radios.map((r) => r.parentElement!.textContent)).toEqual(["大台", "小台", "微台"]);
++    expect(radios.filter((r) => r.checked).length).toBe(1);
++    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+   });
+ 
+   it("切小台:回呼上拋並顯示 MXF 行情與合約", () => {
+     wrap(<Harness />);
+-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
++    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
+     const header = within(screen.getByRole("banner"));
+     expect(header.getByText("MXF 2026/09")).toBeTruthy();
+     expect(header.getByText("23010")).toBeTruthy();
+@@ -192,7 +203,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
+ 
+   it("初始微台;resolved null 顯示「合約解析中」", () => {
+     wrap(<Harness initial="TMF" />);
+-    expect(screen.getByRole("button", { name: "微台" }).getAttribute("aria-pressed")).toBe("true");
++    expect((screen.getByRole("radio", { name: "微台" }) as HTMLInputElement).checked).toBe(true);
+     expect(screen.getByText("合約解析中")).toBeTruthy();
+   });
+ });
+@@ -295,13 +306,13 @@ describe("FuturesPage 掛載 FuturesChart(SC-1/SC-4)", () => {
+   it("圖表跟隨商品切換 —— 換小台後改抓 MXF 的 bars", async () => {
+     wrap(<Harness />);
+     await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/TXF"))).toBe(true));
+-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
++    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
+     await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/MXF"))).toBe(true));
+   });
+ 
+   it("模式列與五檔同時在頁上(圖表掛在 DepthBar 下方)", () => {
+     wrap(<Harness />);
+-    expect(screen.getByRole("button", { name: "分時" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "分時" })).toBeTruthy();
+     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
+   });
+ });
+diff --git a/frontend/src/components/index/IndexPage.test.tsx b/frontend/src/components/index/IndexPage.test.tsx
+index 03128090..338e237e 100644
+--- a/frontend/src/components/index/IndexPage.test.tsx
++++ b/frontend/src/components/index/IndexPage.test.tsx
+@@ -143,32 +143,24 @@ describe("IndexPage 雙 pane 容器(SC-2)", () => {
+ 
+   it("(b) 兩 pane 週期彼此獨立:左切日K,右仍停在分時", () => {
+     renderPage();
+-    fireEvent.click(pane("left").getByRole("button", { name: "日K" }));
+-    expect(pane("left").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
+-      "true",
+-    );
+-    expect(pane("right").getByRole("button", { name: "分時" }).getAttribute("aria-pressed")).toBe(
+-      "true",
+-    );
+-    expect(pane("right").getByRole("button", { name: "日K" }).getAttribute("aria-pressed")).toBe(
+-      "false",
+-    );
++    fireEvent.click(pane("left").getByRole("radio", { name: "日K" }));
++    expect((pane("left").getByRole("radio", { name: "日K" }) as HTMLInputElement).checked).toBe(true);
++    expect((pane("right").getByRole("radio", { name: "分時" }) as HTMLInputElement).checked).toBe(true);
++    expect((pane("right").getByRole("radio", { name: "日K" }) as HTMLInputElement).checked).toBe(false);
+   });
+ 
+   it("(b2) 兩 pane 標的彼此獨立:右切加權,左仍是加權且右不影響左標題", () => {
+     renderPage();
+-    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
++    fireEvent.click(pane("right").getByRole("radio", { name: "加權" }));
+     expect(pane("right").getByText("加權指數")).toBeTruthy();
+     expect(pane("left").getByText("加權指數")).toBeTruthy();
+-    expect(pane("left").getByRole("button", { name: "加權" }).getAttribute("aria-pressed")).toBe(
+-      "true",
+-    );
++    expect((pane("left").getByRole("radio", { name: "加權" }) as HTMLInputElement).checked).toBe(true);
+   });
+ 
+   it("(d) 右 pane 寫 market2 三支 key,左 pane 的舊 key 不動", async () => {
+     renderPage();
+-    fireEvent.click(pane("right").getByRole("button", { name: "加權" }));
+-    fireEvent.click(pane("right").getByRole("button", { name: "日K" }));
++    fireEvent.click(pane("right").getByRole("radio", { name: "加權" }));
++    fireEvent.click(pane("right").getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("day"));
+     expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("TWSE");
+     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBeNull();
+@@ -177,8 +169,8 @@ describe("IndexPage 雙 pane 容器(SC-2)", () => {
+ 
+   it("(d2) 左 pane 寫舊 key,market2 三支不動", async () => {
+     renderPage();
+-    fireEvent.click(pane("left").getByRole("button", { name: "台指期" }));
+-    fireEvent.click(pane("left").getByRole("button", { name: "小台" }));
++    fireEvent.click(pane("left").getByRole("radio", { name: "台指期" }));
++    fireEvent.click(pane("left").getByRole("radio", { name: "小台" }));
+     await waitFor(() => expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF"));
+     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
+     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("m1");
+diff --git a/frontend/src/components/index/MarketPane.test.tsx b/frontend/src/components/index/MarketPane.test.tsx
+index 104173b8..80ad78ac 100644
+--- a/frontend/src/components/index/MarketPane.test.tsx
++++ b/frontend/src/components/index/MarketPane.test.tsx
+@@ -126,10 +126,17 @@ function renderPane(over: RenderOver = {}) {
+   );
+ }
+ 
++/** 真開關(只剩「重疊」)。標的 / 期貨商品 / 週期三組已改 radiogroup → 用 `pill()`。 */
+ function btn(name: string): HTMLButtonElement {
+   return screen.getByRole("button", { name }) as HTMLButtonElement;
+ }
+ 
++/** a11y 批:三組單選 pill 改 RadioPills(sr-only `<input type=radio>` + 帶原 class 的
++ *  `<label>`)。選中態 = `checked`;class / `aria-disabled` 掛在 label(= `parentElement`)。 */
++function pill(name: string): HTMLInputElement {
++  return screen.getByRole("radio", { name }) as HTMLInputElement;
++}
++
+ // 🔴 SC-3:17 顆週期鈕在 ~350px 的 pane(1536 兩欄態)折成 3 行、吃掉 50px 圖高。
+ // 修法 = pane 自掛 `@container` + 窄容器下把 Btn 的 px-2 收成 px-1、列 gap-1 收成
+ // gap-0.5(估算 ≈ 561px / 346px = 1.6 行 → 2 行)。
+@@ -153,7 +160,8 @@ describe("MarketPane 窄容器週期列(SC-3)", () => {
+ 
+   it("週期鈕:窄容器 px-1,寬容器仍是既有 px-2(W-6:兩個 token 都要在)", () => {
+     renderPane();
+-    const cls = btn("日K").className;
++    // W3:compact class 逐字保留 —— 只是從 `<button>` 搬到包住 radio 的 `<label>`
++    const cls = pill("日K").parentElement!.className;
+     expect(cls).toContain("@max-[26.5rem]:px-1");
+     // twMerge 不會把兩者判成衝突(不同 variant),被吃掉的話寬 pane 的 padding 也變了
+     expect(cls).toContain("px-2");
+@@ -161,17 +169,52 @@ describe("MarketPane 窄容器週期列(SC-3)", () => {
+ 
+   it("週期列容器:窄容器 gap-0.5,寬容器仍是既有 gap-1", () => {
+     renderPane();
+-    const row = btn("日K").parentElement!;
++    // 週期列 = radiogroup 容器本身(label 的父層);容器 class 逐字沿用
++    const row = screen.getByRole("radiogroup", { name: "週期" });
++    expect(pill("日K").parentElement!.parentElement).toBe(row);
+     expect(row.className).toContain("@max-[26.5rem]:gap-0.5");
+     expect(row.className).toContain("gap-1");
+   });
+ });
+ 
++// a11y 批 SC-1' / D2':三列 pill 各自是**單選**,改成三個 radiogroup。
++// 標的列拆兩群(標的 / 期貨商品)而不是一群:兩者語意不同,「恰一顆 checked」在合成的
++// 單一群裡不成立(台指期 + 大台會同時亮)。「重疊」是真開關,留在週期列 DOM 位置。
++describe("MarketPane radiogroup 語意(a11y SC-1')", () => {
++  it("標的列 = radiogroup「標的」三顆;期貨商品列僅期貨態出現且各自獨立 name", () => {
++    renderPane();
++    const keyGroup = within(screen.getByRole("radiogroup", { name: "標的" }));
++    const keyRadios = keyGroup.getAllByRole("radio") as HTMLInputElement[];
++    expect(keyRadios.map((r) => r.parentElement!.textContent)).toEqual(["加權", "櫃買", "台指期"]);
++    expect(keyRadios.filter((r) => r.checked).length).toBe(1);
++    expect(screen.queryByRole("radiogroup", { name: "期貨商品" })).toBeNull();
++
++    fireEvent.click(pill("台指期"));
++    const futGroup = screen.getByRole("radiogroup", { name: "期貨商品" });
++    const futRadios = [...futGroup.querySelectorAll("input")] as HTMLInputElement[];
++    expect(futRadios.map((r) => r.parentElement!.textContent)).toEqual(["大台", "小台", "微台"]);
++    expect(futRadios.filter((r) => r.checked).length).toBe(1);
++    // edge case 2:同頁多組必須各自 `name`,否則原生 radio 互相搶選
++    expect(new Set(futRadios.map((r) => r.name)).size).toBe(1);
++    expect(futRadios[0]!.name).not.toBe(pill("加權").name);
++  });
++
++  it("週期列 = radiogroup「週期」,「重疊」toggle 仍在同一列且保留 aria-pressed", () => {
++    renderPane();
++    const modeGroup = screen.getByRole("radiogroup", { name: "週期" });
++    expect((modeGroup.querySelectorAll("input") as NodeListOf<HTMLInputElement>).length).toBe(17);
++    // W2:重疊是真開關 —— 不進 radiogroup 的 radio 集合,但 DOM 位置不變(留在週期列內)
++    const overlay = btn("重疊");
++    expect(overlay.getAttribute("aria-pressed")).toBe("false");
++    expect(modeGroup.contains(overlay)).toBe(true);
++  });
++});
++
+ describe("MarketPane 參數化(SC-2)", () => {
+   it("(a) 無 storage 時尊重 defaultKey:右 pane 預設櫃買", () => {
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("加權").getAttribute("aria-pressed")).toBe("false");
++    expect(pill("櫃買").checked).toBe(true);
++    expect(pill("加權").checked).toBe(false);
+     expect(screen.getByText("櫃買指數")).toBeTruthy();
+   });
+ 
+@@ -185,8 +228,8 @@ describe("MarketPane 參數化(SC-2)", () => {
+ 
+   it("(b) storage keys 注入生效:寫入指定 key,舊 key 不動", () => {
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
+-    fireEvent.click(btn("台指期"));
+-    fireEvent.click(btn("小台"));
++    fireEvent.click(pill("台指期"));
++    fireEvent.click(pill("小台"));
+     expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("MXF");
+     expect(window.localStorage.getItem(MARKET2_FUT_STORE)).toBe("MXF");
+     expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("m1");
+@@ -199,48 +242,47 @@ describe("MarketPane 參數化(SC-2)", () => {
+     window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
+     window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
++    expect(pill("櫃買").checked).toBe(true);
+   });
+ 
+   it("(c) OTC 時日/週/月 disabled,分 K 仍可點", () => {
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
+     for (const label of ["日K", "週K", "月K"]) {
+-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
+-      expect(btn(label).disabled).toBe(true);
++      expect(pill(label).parentElement!.getAttribute("aria-disabled")).toBe("true");
++      expect(pill(label).disabled).toBe(true);
+     }
+-    expect(btn("30分").disabled).toBe(false);
++    expect(pill("30分").disabled).toBe(false);
+   });
+ 
+   it("(d) 殘值「日K + 櫃買」重載後經 coerce 落回分時", () => {
+     window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
+     window.localStorage.setItem(MARKET2_MODE_STORE, "day");
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    expect(pill("櫃買").checked).toBe(true);
++    expect(pill("分時").checked).toBe(true);
+   });
+ 
+   it("(e) 期指子鈕切換:點台指期才出現三選一,選微台後標題換料", () => {
+     renderPane();
+     expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
+-    fireEvent.click(btn("台指期"));
+-    expect(btn("大台").getAttribute("aria-pressed")).toBe("true");
+-    fireEvent.click(btn("微台"));
++    fireEvent.click(pill("台指期"));
++    expect(pill("大台").checked).toBe(true);
++    fireEvent.click(pill("微台"));
+     expect(screen.getByText("台指期(微台)")).toBeTruthy();
+-    expect(btn("微台").getAttribute("aria-pressed")).toBe("true");
++    expect(pill("微台").checked).toBe(true);
+   });
+ 
+   it("(f) 只寫 mode=day 不寫 key → defaultKey=OTC 落分時,無 disabled 模式被選中", () => {
+     window.localStorage.setItem(MARKET2_MODE_STORE, "day");
+     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("日K").getAttribute("aria-pressed")).toBe("false");
+-    // 沒有任何 disabled 鈕處於選中狀態
+-    const pressed = screen
+-      .getAllByRole("button")
+-      .filter((b) => b.getAttribute("aria-pressed") === "true");
+-    expect(pressed.length).toBeGreaterThan(0);
+-    for (const b of pressed) expect(b.getAttribute("aria-disabled")).toBeNull();
++    expect(pill("櫃買").checked).toBe(true);
++    expect(pill("分時").checked).toBe(true);
++    expect(pill("日K").checked).toBe(false);
++    // 沒有任何 disabled 鈕處於選中狀態(a11y 批:改數 checked 的 radio;`aria-disabled`
++    // 掛在 label 上)
++    const checked = (screen.getAllByRole("radio") as HTMLInputElement[]).filter((r) => r.checked);
++    expect(checked.length).toBeGreaterThan(0);
++    for (const r of checked) expect(r.parentElement!.getAttribute("aria-disabled")).toBeNull();
+   });
+ 
+   it("(g) stores.overlay undefined → 無「重疊」鈕;有 overlay key 才有", () => {
+@@ -263,10 +305,10 @@ describe("MarketPane review 修復", () => {
+     window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
+     window.localStorage.setItem(MARKET_MODE_STORE, "day");
+     renderPane();
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    expect(pill("分時").checked).toBe(true);
+     // 點加權 = 一次 no-op coerce(intraday 對 TWSE 合法)→ 舊寫法只寫 key 不寫 mode,
+     // storage 變成 TWSE+day 這組「合法但使用者沒選過」的組合,下次重載就跳日K
+-    fireEvent.click(btn("加權"));
++    fireEvent.click(pill("加權"));
+     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("intraday");
+   });
+ 
+@@ -279,9 +321,9 @@ describe("MarketPane review 修復", () => {
+ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
+   it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
+     renderPane();
+-    expect(btn("加權").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("櫃買")).toBeTruthy();
+-    expect(btn("台指期")).toBeTruthy();
++    expect(pill("加權").checked).toBe(true);
++    expect(pill("櫃買")).toBeTruthy();
++    expect(pill("台指期")).toBeTruthy();
+     expect(screen.getByText("加權指數")).toBeTruthy();
+     expect(screen.getByText(/-1594\.27/)).toBeTruthy();
+     // 昨收改斷言在**同一個標題列元素**上:分時圖右緣現在也有一顆「昨收 <值>」標籤
+@@ -301,14 +343,14 @@ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
+ 
+   it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
+     renderPane();
+-    fireEvent.click(btn("台指期"));
++    fireEvent.click(pill("台指期"));
+     expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
+   });
+ 
+   it("期指商品用獨立 localStorage key,不碰期貨 tab 的 copycat-fut-product(W-13)", () => {
+     renderPane();
+-    fireEvent.click(btn("台指期"));
+-    fireEvent.click(btn("小台"));
++    fireEvent.click(pill("台指期"));
++    fireEvent.click(pill("小台"));
+     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
+     expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF");
+     expect(window.localStorage.getItem("copycat-fut-product")).toBeNull();
+@@ -327,7 +369,7 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
+       "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
+       "30分", "60分", "90分", "日K", "週K", "月K",
+     ];
+-    const nodes = labels.map((l) => btn(l));
++    const nodes = labels.map((l) => pill(l));
+     for (let i = 1; i < nodes.length; i += 1) {
+       // DOM 順序 = 畫面由左至右
+       expect(nodes[i - 1]!.compareDocumentPosition(nodes[i]!) & Node.DOCUMENT_POSITION_FOLLOWING)
+@@ -337,8 +379,8 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
+ 
+   it("預設分時;切日K 後打 /api/market/bars 並持久化", async () => {
+     renderPane();
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+-    fireEvent.click(btn("日K"));
++    expect(pill("分時").checked).toBe(true);
++    fireEvent.click(pill("日K"));
+     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("day");
+     await waitFor(() =>
+       expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=D"))).toBe(true),
+@@ -347,7 +389,7 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
+ 
+   it("分 K 走 tf=1 共用原料(30/60/90 由前端聚合)", async () => {
+     renderPane();
+-    fireEvent.click(btn("90分"));
++    fireEvent.click(pill("90分"));
+     await waitFor(() =>
+       expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=1&days=30"))).toBe(true),
+     );
+@@ -357,19 +399,19 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
+ describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
+   it("日/週/月 K 鈕 disabled,分 K 仍可點", () => {
+     renderPane();
+-    fireEvent.click(btn("櫃買"));
++    fireEvent.click(pill("櫃買"));
+     for (const label of ["日K", "週K", "月K"]) {
+-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
+-      expect(btn(label).disabled).toBe(true);
++      expect(pill(label).parentElement!.getAttribute("aria-disabled")).toBe("true");
++      expect(pill(label).disabled).toBe(true);
+     }
+-    expect(btn("30分").disabled).toBe(false);
++    expect(pill("30分").disabled).toBe(false);
+   });
+ 
+   it("從加權(日K)切到櫃買 → 自動落回分時,不停在 disabled 模式", () => {
+     renderPane();
+-    fireEvent.click(btn("日K"));
+-    fireEvent.click(btn("櫃買"));
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    fireEvent.click(pill("日K"));
++    fireEvent.click(pill("櫃買"));
++    expect(pill("分時").checked).toBe(true);
+   });
+ 
+   it("後端回 refusal → 圖區顯示明確理由,不畫假圖", async () => {
+@@ -388,7 +430,7 @@ describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
+       },
+     });
+     renderPane();
+-    fireEvent.click(btn("日K"));
++    fireEvent.click(pill("日K"));
+     await waitFor(() =>
+       expect(screen.getByText("達錢 4 未提供櫃買指數,無歷史 K 線資料源")).toBeTruthy(),
+     );
+@@ -398,15 +440,15 @@ describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
+     window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
+     window.localStorage.setItem(MARKET_MODE_STORE, "day");
+     renderPane();
+-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
++    expect(pill("櫃買").checked).toBe(true);
++    expect(pill("分時").checked).toBe(true);
+   });
+ 
+   it("期指沒有分時 → 分時鈕 disabled,由加權切過去自動落到 1分", () => {
+     renderPane();
+-    fireEvent.click(btn("台指期"));
+-    expect(btn("分時").disabled).toBe(true);
+-    expect(btn("1分").getAttribute("aria-pressed")).toBe("true");
++    fireEvent.click(pill("台指期"));
++    expect(pill("分時").disabled).toBe(true);
++    expect(pill("1分").checked).toBe(true);
+   });
+ });
+ 
+@@ -428,7 +470,7 @@ describe("MarketPane 重疊(自 IndexPage 搬遷;左 pane 形態)", () => {
+   it("切到 K 線週期後不再顯示重疊圖", () => {
+     window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
+     renderPane();
+-    fireEvent.click(btn("日K"));
++    fireEvent.click(pill("日K"));
+     expect(screen.queryByLabelText("指數重疊走勢")).toBeNull();
+   });
+ });
+@@ -436,7 +478,7 @@ describe("MarketPane 重疊(自 IndexPage 搬遷;左 pane 形態)", () => {
+ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
+   it("顯示資料源中文與涵蓋期間", async () => {
+     renderPane();
+-    fireEvent.click(btn("日K"));
++    fireEvent.click(pill("日K"));
+     const meta = await screen.findByTestId("market-meta");
+     expect(meta.textContent).toContain("達錢 4 日K");
+     expect(meta.textContent).toContain("2026-07-27 ~ 2026-07-29");
+@@ -448,7 +490,7 @@ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
+       meta: { ...DK_BODY.meta, source: "tc4_dk_1k_agg", partial_last: true },
+     });
+     renderPane();
+-    fireEvent.click(btn("週K"));
++    fireEvent.click(pill("週K"));
+     const meta = await screen.findByTestId("market-meta");
+     expect(meta.textContent).toContain("達錢 4 1分K 聚合(日K 無資料)");
+     expect(meta.textContent).toContain("最後一根未收盤");
+@@ -470,8 +512,8 @@ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
+       },
+     });
+     renderPane();
+-    fireEvent.click(btn("櫃買"));
+-    fireEvent.click(btn("1分"));
++    fireEvent.click(pill("櫃買"));
++    fireEvent.click(pill("1分"));
+     const meta = await screen.findByTestId("market-meta");
+     expect(meta.textContent).toContain("本機合成(MIS 5秒取樣)");
+     expect(meta.textContent).toContain("自 10:17 起");
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index a1dc816a..435f77c8 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -184,13 +184,85 @@ describe("RightRail 三 tab(SC-2 / D1)", () => {
+   });
+ });
+ 
++// a11y 批 SC-2' / D3':tablist 原本只有 `role=tab` + `aria-selected` 半套 —— 沒有
++// `aria-controls` / `role=tabpanel` / `aria-labelledby`,螢幕閱讀器聽不出「這顆分頁
++// 控制的是哪塊內容」;三顆 tab 各自是一個 tab stop,也沒有方向鍵。
++//
++// **manual activation**(D3' / R2):方向鍵**只移焦點**,Enter / Space 才切換。
++// 自動切換(focus 即 select)會在方向鍵掃過閃電 tab 時 unmount 閃電梯 = 靜默解除武裝。
++describe("RightRail tablist 補全(a11y SC-2')", () => {
++  const tab = (name: string) => screen.getByRole("tab", { name });
++
++  it("選中 tab ↔ tabpanel 互指(aria-controls / aria-labelledby)", () => {
++    render(rail(STOCK_CTX));
++    const flash = tab("閃電");
++    const panel = screen.getByRole("tabpanel");
++    expect(flash.getAttribute("aria-controls")).toBe(panel.id);
++    expect(panel.getAttribute("aria-labelledby")).toBe(flash.id);
++    expect(flash.id).toBeTruthy();
++    expect(panel.id).toBeTruthy();
++  });
++
++  it("委託 / 部位 tab 也有互指的 panel(role 掛既有捲動層,不新增節點)", () => {
++    render(rail(STOCK_CTX));
++    for (const name of ["委託", "部位"]) {
++      fireEvent.click(tab(name));
++      const panel = screen.getByRole("tabpanel");
++      expect(tab(name).getAttribute("aria-controls")).toBe(panel.id);
++      expect(panel.getAttribute("aria-labelledby")).toBe(tab(name).id);
++      // 不新增節點:role 掛在既有的 `min-h-0 flex-1 overflow-y-auto` 那層
++      expect(panel.className).toContain("overflow-y-auto");
++    }
++  });
++
++  it("roving tabindex:只有選中的 tab 是 0,其餘 −1", () => {
++    render(rail(STOCK_CTX));
++    expect(screen.getAllByRole("tab").map((el) => el.tabIndex)).toEqual([0, -1, -1]);
++    fireEvent.click(tab("委託"));
++    expect(screen.getAllByRole("tab").map((el) => el.tabIndex)).toEqual([-1, 0, -1]);
++  });
++
++  it("ArrowRight 只移焦點,不切換(manual activation);Enter 才切", () => {
++    render(rail(STOCK_CTX));
++    tab("閃電").focus();
++    fireEvent.keyDown(tab("閃電"), { key: "ArrowRight" });
++    expect(document.activeElement).toBe(tab("委託"));
++    // 關鍵:選取態沒動 —— 閃電梯還掛著,武裝不會被方向鍵掃掉
++    expect(tab("閃電").getAttribute("aria-selected")).toBe("true");
++    expect(tab("委託").getAttribute("aria-selected")).toBe("false");
++
++    fireEvent.keyDown(tab("委託"), { key: "Enter" });
++    expect(tab("委託").getAttribute("aria-selected")).toBe("true");
++    expect(window.localStorage.getItem("copycat-rail-tab")).toBe("orders");
++  });
++
++  it("Space 也切換(且 preventDefault,避免頁面捲動 / 二次觸發)", () => {
++    render(rail(STOCK_CTX));
++    const evt = fireEvent.keyDown(tab("部位"), { key: " ", cancelable: true });
++    expect(evt).toBe(false); // dispatchEvent 回 false = 有人呼叫 preventDefault
++    expect(tab("部位").getAttribute("aria-selected")).toBe("true");
++  });
++
++  it("ArrowLeft 在首顆繞回尾顆;Home / End 到首 / 尾", () => {
++    render(rail(STOCK_CTX));
++    fireEvent.keyDown(tab("閃電"), { key: "ArrowLeft" });
++    expect(document.activeElement).toBe(tab("部位"));
++    fireEvent.keyDown(tab("部位"), { key: "Home" });
++    expect(document.activeElement).toBe(tab("閃電"));
++    fireEvent.keyDown(tab("閃電"), { key: "End" });
++    expect(document.activeElement).toBe(tab("部位"));
++    // 全程沒切換過
++    expect(tab("閃電").getAttribute("aria-selected")).toBe("true");
++  });
++});
++
+ describe("RightRail 內容跟隨 context(SC-3 / D2)", () => {
+   it("個股 context → 個股閃電梯,標題列顯示股號 + 股名(D-12)", () => {
+     render(rail(STOCK_CTX));
+     expect(screen.getByText("2330")).toBeTruthy();
+     expect(screen.getByText("台積電")).toBeTruthy();
+     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 個股專屬控制
+-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // 容器之外還要有真控制項(review A5)
++    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // 容器之外還要有真控制項(review A5)
+   });
+ 
+   // LP-5:閃電 tab 是唯一渲染 PriceLadder 的地方,而部位條插在卡片最底 —— 這則守的是
+@@ -256,16 +328,18 @@ describe("RightRail 武裝不跨畫面殘留(SC-9 / W-A2 第 6 條 / D-13)", ()
+ describe("RightRail 交易別 / 數量不隨 tab 重置(R2-10)", () => {
+   it("選融券後切 tab 再切回,交易別仍是融券(真錢:靜默回現股會出事)", () => {
+     render(rail(STOCK_CTX));
+-    // 🔴 R6 該變:交易別 select → pill,選取 = 點「融券」鈕、狀態 = aria-pressed
+-    fireEvent.click(screen.getByRole("button", { name: "融券" }));
++    // 🔴 a11y 批該變:交易別 pill 改 RadioPills,選取 = 點「融券」radio、狀態 = checked
++    fireEvent.click(screen.getByRole("radio", { name: "融券" }));
+     fireEvent.click(screen.getByRole("tab", { name: "委託" }));
+     fireEvent.click(screen.getByRole("tab", { name: "閃電" }));
+     // 四元組:整合面也鎖單選(review A7)
+     expect(
+-      within(screen.getByRole("group", { name: "交易別" }))
+-        .getAllByRole("button")
+-        .map((b) => b.getAttribute("aria-pressed")),
+-    ).toEqual(["false", "false", "true", "false"]);
++      (
++        within(screen.getByRole("radiogroup", { name: "交易別" })).getAllByRole(
++          "radio",
++        ) as HTMLInputElement[]
++      ).map((r) => r.checked),
++    ).toEqual([false, false, true, false]);
+   });
+ 
+   it("張數快捷值切 tab 後保留", () => {
+@@ -491,7 +565,7 @@ describe("RightRail 置中請求不跨 instrument(A7a)", () => {
+     await waitFor(() => expect(follow()).toBe("false"));
+     rerender(rail(STOCK_CTX)); // 同一個股號、換回現貨 → 舊 deps 認不出這是換標的
+     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 前提:真的換成現股梯了
+-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // review A5
++    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // review A5
+     await waitFor(() => expect(follow()).toBe("true"));
+   });
+ 
+@@ -567,7 +641,7 @@ describe("RightRail 鎖定武裝跨梯保留(SC-3 / SC-4 / SC-10)", () => {
+     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+     rerender(rail(STOCK_CTX));
+     expect(screen.getByLabelText("交易別")).toBeTruthy(); // 真的換回現股梯
+-    expect(screen.getByRole("button", { name: "現股" })).toBeTruthy(); // review A5
++    expect(screen.getByRole("radio", { name: "現股" })).toBeTruthy(); // review A5
+     expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "鎖定中" })).toBeTruthy();
+   });
+diff --git a/frontend/src/components/stock/GroupGridView.test.tsx b/frontend/src/components/stock/GroupGridView.test.tsx
+index 6431c1af..63d7a4ad 100644
+--- a/frontend/src/components/stock/GroupGridView.test.tsx
++++ b/frontend/src/components/stock/GroupGridView.test.tsx
+@@ -213,24 +213,21 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
+ });
+ 
+ // SC-3:`<select>` 換成一排 pill(與 StockPage 的「單檔/群組」view pill 同語彙)。
+-// 選中態的真相源改成 `aria-pressed`,切換靠 click —— 但**可及名稱契約不變**:
+-// pill 列容器保留 `role="group" aria-label="選擇群組"`,StockPage.test.tsx 的
++// 選中態的真相源是 radio 的 `checked`(a11y 批:aria-pressed button → RadioPills 的
++// sr-only radio),切換靠 click —— 但**可及名稱契約不變**:
++// pill 列容器保留 `role="radiogroup" aria-label="選擇群組"`,StockPage.test.tsx 的
+ // 671/713/746/750 四處 `ByLabelText("選擇群組")` 靠它接住(改成別的名字 = 那四條
+ // 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
+ describe("GroupGridView 群組切換 pill", () => {
+   it("預設第一個群組;成員卡片全數渲染", async () => {
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+-    expect(
+-      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+-    ).toBe("true");
+-    // 反向斷言不可省(review B-5):少了它,「每顆 pill 恆 pressed」全綠 ——
+-    // aria-pressed 是 SC-3 指名的選中態真相源,兩側都要釘
+-    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
+-      "false",
+-    );
++    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
++    // 反向斷言不可省(review B-5):少了它,「每顆 pill 恆 checked」全綠 ——
++    // 選中態是 SC-3 指名的真相源,兩側都要釘
++    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(false);
+     // 容器名稱契約 + select 真的走了(留著兩套切換 UI 才是最糟的中間態)
+     const rail = screen.getByLabelText("選擇群組");
+-    expect(rail.getAttribute("role")).toBe("group");
++    expect(rail.getAttribute("role")).toBe("radiogroup");
+     expect(screen.queryByRole("combobox")).toBeNull();
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     expect(screen.getByTestId("group-card-2317")).toBeTruthy();
+@@ -241,7 +238,7 @@ describe("GroupGridView 群組切換 pill", () => {
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     await waitFor(() => expect(groupCalls()).toHaveLength(1));
+     expect(groupCalls()[0]).toContain("codes=2330,2317");
+-    fireEvent.click(screen.getByRole("button", { name: "金融" }));
++    fireEvent.click(screen.getByRole("radio", { name: "金融" }));
+     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
+     expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
+     // 寫入側也要鎖(review B-1):刪掉 persistGroupName 整條路徑,其餘測試照樣全綠,
+@@ -249,15 +246,22 @@ describe("GroupGridView 群組切換 pill", () => {
+     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
+   });
+ 
+-  // review A-3:舊 <select> 的 change 事件在 value 未變時不發火,localStorage 的
+-  // 失效舊名會永遠留著;pill 的 click 無條件回寫 —— 這是**刻意的 stale-key 清理**
+-  // (spec 白名單 #7 amendment),不是不變行為,所以要有測試把新語意釘住。
+-  it("點已選中的 pill 也回寫 localStorage(清掉 stale 舊名)", async () => {
++  // 🔴 a11y 批 D1' R15a 該變:pill 改原生 radio 後,**點已 checked 的項不發 change**
++  // (瀏覽器 / React 都以 checkedness 有沒有變為準)→ 舊的「無條件回寫」stale-key
++  // 清理路徑消失。spec 逐處確認過那是冪等寫入、失去無影響:失效舊名由**讀取端的
++  // fallback**(下一條測試)承接,換到別組再換回來也會覆蓋掉。這裡把新語意釘住,
++  // 免得哪天有人在 onChange 外再補一顆 onClick 回寫(等於把 radio 的單選語意繞掉)。
++  it("點已選中的 pill 不發 change(stale 舊名留著,由讀取端 fallback 承接)", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+-    fireEvent.click(screen.getByRole("button", { name: "半導體" }));
+-    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
+-    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
++    const picked = screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement;
++    expect(picked.checked).toBe(true);
++    fireEvent.click(picked);
++    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("已刪掉的組");
++    // 換到別組 → 回寫,舊名不會永遠留著
++    fireEvent.click(screen.getByRole("radio", { name: "金融" }));
++    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
++    await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
+   });
+ 
+   // edge 5(R10):群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名。
+@@ -265,18 +269,14 @@ describe("GroupGridView 群組切換 pill", () => {
+   it("記住的群組已被刪 → fallback 第一個群組", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+-    expect(
+-      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
+-    ).toBe("true");
++    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+   });
+ 
+   it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
+     window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+-    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
+-      "true",
+-    );
++    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
+   });
+ });
+@@ -494,6 +494,9 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
+     expect(el.textContent).toContain("參考");
+     expect(el.className).not.toContain("text-bull");
+     expect(el.className).not.toContain("text-bear");
++    // 🔴 SC-3(D4''):無成交態的中性色由 ink-dim(對 surface 2.92:1)改 ink-muted(6.06:1)
++    expect(el.className).toContain("text-ink-muted");
++    expect(el.className).not.toContain("text-ink-dim");
+   });
+ 
+   // B3-b:`toContain("-")` 對 `-5.00%`、`2,380-` 之類的內容全都會通過 —— 缺值占位要
+@@ -502,6 +505,20 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
+     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+     const el = await screen.findByTestId("group-quote-2330");
+     expect(el.textContent).toBe("-");
++    // 🔴 SC-3:`-` 與參考價同屬「無成交」一態(D4'' 的口徑是整格 tone)
++    expect(el.className).toContain("text-ink-muted");
++    expect(el.className).not.toContain("text-ink-dim");
++  });
++
++  // 反向 lock(D4''):**有成交**的零漲跌不在這批 —— 它是正常報價,維持 text-ink。
++  // 少了這條,「整格一律 ink-muted」的過度修改會全綠。
++  it("有成交但零漲跌 → 仍是 text-ink(不套零態灰)", async () => {
++    const quotes = { "2330": quote({ p: 2_320_000, chg_pct: 0 }) };
++    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
++    const el = await screen.findByTestId("group-quote-2330");
++    expect(el.className).toContain("text-ink");
++    expect(el.className).not.toContain("text-ink-muted");
++    expect(el.className).not.toContain("text-ink-dim");
+   });
+ });
+ 
+diff --git a/frontend/src/components/stock/PriceLadder.test.tsx b/frontend/src/components/stock/PriceLadder.test.tsx
+index 1e45307e..bf01fd4a 100644
+--- a/frontend/src/components/stock/PriceLadder.test.tsx
++++ b/frontend/src/components/stock/PriceLadder.test.tsx
+@@ -400,9 +400,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
+     });
+     render(ladder());
+     armUp();
+-    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」鈕(舊 fireEvent.change 已無 select 可改)
+-    fireEvent.click(screen.getByRole("button", { name: "無券" }));
+-    expect(screen.getByRole("button", { name: "無券" }).getAttribute("aria-pressed")).toBe("true");
++    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」(a11y 批:pill 改 radio)
++    fireEvent.click(screen.getByRole("radio", { name: "無券" }));
++    expect((screen.getByRole("radio", { name: "無券" }) as HTMLInputElement).checked).toBe(true);
+     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
+     expect(screen.getByLabelText("賣 100.5").hasAttribute("disabled")).toBe(false);
+     fireEvent.click(screen.getByLabelText("買 100"));
+@@ -1156,23 +1156,31 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
+ });
+ 
+ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
+-  it("四顆並列 pill 現股/融資/融券/無券,單選 aria-pressed 轉移;容器 role=group aria-label=交易別", () => {
++  it("四顆並列 pill 現股/融資/融券/無券,單選 checked 轉移;容器 role=radiogroup aria-label=交易別", () => {
+     mockCapitalFetch();
+     render(ladder());
+-    const group = screen.getByRole("group", { name: "交易別" });
++    // a11y 批:role=group + aria-pressed button → radiogroup + sr-only radio(單選語意)
++    const group = screen.getByRole("radiogroup", { name: "交易別" });
+     const labels = ["現股", "融資", "融券", "無券"];
+-    const pills = labels.map((l) => within(group).getByRole("button", { name: l }));
++    const pills = labels.map(
++      (l) => within(group).getByRole("radio", { name: l }) as HTMLInputElement,
++    );
++    const pillLabel = (r: HTMLInputElement) => r.closest("label")!;
+     // DOM 次序 = TRADE_KINDS 次序(review A7:無券在最右,不與最常用的現股對調)
+-    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(labels);
+-    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
+-    expect(pills[0]!.className).toContain("border-accent"); // 現股選中 = accent
+-    expect(pills[1]!.className).toContain("border-line");
++    expect(
++      (within(group).getAllByRole("radio") as HTMLInputElement[]).map(
++        (r) => pillLabel(r).textContent,
++      ),
++    ).toEqual(labels);
++    expect(pills.map((r) => r.checked)).toEqual([true, false, false, false]);
++    expect(pillLabel(pills[0]!).className).toContain("border-accent"); // 現股選中 = accent
++    expect(pillLabel(pills[1]!).className).toContain("border-line");
+     fireEvent.click(pills[2]!);
+-    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true", "false"]);
++    expect(pills.map((r) => r.checked)).toEqual([false, false, true, false]);
+     // 非現股選中 = warn 琥珀(review C1:改送單語意的單擊必須在梯面外就刺眼)
+-    expect(pills[2]!.className).toContain("border-warn");
+-    expect(pills[2]!.className).not.toContain("border-accent");
+-    expect(pills[0]!.className).toContain("border-line");
++    expect(pillLabel(pills[2]!).className).toContain("border-warn");
++    expect(pillLabel(pills[2]!).className).not.toContain("border-accent");
++    expect(pillLabel(pills[0]!).className).toContain("border-line");
+     // 舊 select 已退場
+     expect(group.querySelector("select")).toBeNull();
+     // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
+@@ -1188,7 +1196,7 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
+       render(ladder());
+       armUp();
+       act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
+-      fireEvent.click(screen.getByRole("button", { name: "融資" }));
++      fireEvent.click(screen.getByRole("radio", { name: "融資" }));
+       act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
+       expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
+       act(() => vi.advanceTimersByTime(60_001));
+@@ -1331,7 +1339,7 @@ describe("PriceLadder 梯頂市價鈕", () => {
+     });
+     render(ladder());
+     armUp();
+-    fireEvent.click(screen.getByRole("button", { name: "無券" }));
++    fireEvent.click(screen.getByRole("radio", { name: "無券" }));
+     const buy = marketBtn("買");
+     expect(buy.hasAttribute("disabled")).toBe(true);
+     expect(buy.getAttribute("title")).toBe("無券當沖不可買進");
+diff --git a/frontend/src/components/stock/StockChart.futconverge.test.tsx b/frontend/src/components/stock/StockChart.futconverge.test.tsx
+index 961feceb..d370dfeb 100644
+--- a/frontend/src/components/stock/StockChart.futconverge.test.tsx
++++ b/frontend/src/components/stock/StockChart.futconverge.test.tsx
+@@ -90,7 +90,7 @@ function mount(strict = false) {
+ describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
+   it("回現貨還原日K:過程中不得掛上 stkfut=false 的分時圖", async () => {
+     const { setContract } = mount();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+ 
+     setContract(CONTRACT);
+@@ -112,7 +112,7 @@ describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
+   //  StrictMode(main.tsx)底下。上一條跑的是非 StrictMode 樹,測不到這個。
+   it("StrictMode 下同一流程:一樣不掛 stkfut=false,且不觸發無限重繪", async () => {
+     const { setContract } = mount(true);
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+ 
+     setContract(CONTRACT);
+diff --git a/frontend/src/components/stock/StockChart.test.tsx b/frontend/src/components/stock/StockChart.test.tsx
+index 84c5aaf1..14842d58 100644
+--- a/frontend/src/components/stock/StockChart.test.tsx
++++ b/frontend/src/components/stock/StockChart.test.tsx
+@@ -100,43 +100,46 @@ describe("StockChart 模式切換(SC-7)", () => {
+   it("模式鈕共 12 顆:江波圖 + 1分K…10分K + 日K", () => {
+     chart();
+     const labels = ["江波圖", ...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"];
+-    for (const l of labels) expect(screen.getByRole("button", { name: l })).toBeTruthy();
+-    // 只數模式鈕 —— 江波圖自己的 均價/CDP/MA toggle 也帶 aria-pressed,不能一起數
+-    const modeButtons = screen
+-      .getAllByRole("button")
+-      .filter((b) => /^(江波圖|日K|\d+分K)$/.test(b.textContent ?? ""));
+-    expect(modeButtons.length).toBe(12);
++    for (const l of labels) expect(screen.getByRole("radio", { name: l })).toBeTruthy();
++    // a11y 批:模式列改 radiogroup(單選),江波圖自己的 均價/CDP/MA 仍是 toggle button
++    // → 收斂到 radiogroup 內數,不再需要用 textContent regex 把 toggle 濾掉。
++    const group = screen.getByRole("radiogroup", { name: "圖表模式" });
++    const modeRadios = [...group.querySelectorAll("input")] as HTMLInputElement[];
++    expect(modeRadios.length).toBe(12);
++    expect(modeRadios.filter((r) => r.checked).length).toBe(1);
++    expect(new Set(modeRadios.map((r) => r.name)).size).toBe(1);
+   });
+ 
+   it("3分K / 7分K 等新模式可切換且寫入 localStorage", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "7分K" }));
+     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m7");
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+-    expect(screen.getByRole("button", { name: "7分K" }).getAttribute("aria-pressed")).toBe("true");
++    expect((screen.getByRole("radio", { name: "7分K" }) as HTMLInputElement).checked).toBe(true);
+   });
+ 
+-  it("預設江波圖:選中者 aria-pressed=true 且外框 border-accent", () => {
++  it("預設江波圖:選中者 checked 且外框 border-accent", () => {
+     chart();
+-    const btn = screen.getByRole("button", { name: "江波圖" });
+-    expect(btn.getAttribute("aria-pressed")).toBe("true");
+-    expect(btn.className).toContain("border-accent");
++    const btn = screen.getByRole("radio", { name: "江波圖" }) as HTMLInputElement;
++    expect(btn.checked).toBe(true);
++    // a11y 批:pill 的 class 搬到包住 sr-only radio 的 `<label>`(視覺零變的硬約束)
++    expect(btn.parentElement!.className).toContain("border-accent");
+     expect(screen.getByLabelText("分時走勢圖")).toBeTruthy();
+     expect(screen.queryByLabelText("K 線圖")).toBeNull();
+   });
+ 
+   it("切日K → 顯示 K 線圖,江波圖卸載", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+     expect(screen.queryByLabelText("分時走勢圖")).toBeNull();
+   });
+ 
+   it("切回江波圖 → 回到既有分時走勢圖(含 VWAP 切換與內外盤副圖)", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+-    fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
++    fireEvent.click(screen.getByRole("radio", { name: "江波圖" }));
+     expect(screen.getByLabelText("分時走勢圖")).toBeTruthy();
+     expect(screen.getByLabelText("成交量")).toBeTruthy();
+     expect(screen.getByRole("button", { name: "均價" })).toBeTruthy();
+@@ -144,18 +147,18 @@ describe("StockChart 模式切換(SC-7)", () => {
+ 
+   it("模式寫入 localStorage copycat-chart-mode 並在重載後復原", async () => {
+     const { unmount } = chart();
+-    fireEvent.click(screen.getByRole("button", { name: "5分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "5分K" }));
+     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m5");
+     unmount();
+     cleanup();
+     chart();
+-    expect(screen.getByRole("button", { name: "5分K" }).getAttribute("aria-pressed")).toBe("true");
++    expect((screen.getByRole("radio", { name: "5分K" }) as HTMLInputElement).checked).toBe(true);
+   });
+ 
+   // 🔴 SC-6.2:「往前」鈕與「近 N 日」文字移除,分 K 一次就載滿 30 日(縮放/平移取代分頁載入)
+   it("分K 直接載 30 日,無「往前」鈕與「近 N 日」文字", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "1分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
+     await waitFor(() => expect(barsUrls.some((u) => u.includes("days=30"))).toBe(true));
+     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
+     expect(screen.queryByText(/近 \d+ 日/)).toBeNull();
+@@ -165,7 +168,7 @@ describe("StockChart 模式切換(SC-7)", () => {
+ 
+   it("日K 走 tf=D 且 query 不帶 days(D-15)", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(barsUrls.some((u) => u.includes("tf=D"))).toBe(true));
+     expect(barsUrls.find((u) => u.includes("tf=D"))).not.toContain("days=");
+     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
+@@ -173,10 +176,10 @@ describe("StockChart 模式切換(SC-7)", () => {
+ 
+   it("2–10 分K 共用同一份 tf=1 資料(前端聚合,切模式不重打)", async () => {
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "1分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
+     await waitFor(() => expect(barsUrls.length).toBeGreaterThan(0));
+     const before = barsUrls.length;
+-    fireEvent.click(screen.getByRole("button", { name: "3分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "3分K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+     expect(barsUrls.length).toBe(before);
+   });
+@@ -195,7 +198,7 @@ describe("StockChart 模式切換(SC-7)", () => {
+       ),
+     );
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
+     expect(screen.getByText("NOT_READY")).toBeTruthy();
+     expect(screen.queryByText("無 K 線資料")).toBeNull();
+@@ -215,7 +218,7 @@ describe("StockChart 模式切換(SC-7)", () => {
+       ),
+     );
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
+     expect(screen.getByText("HTTP_404")).toBeTruthy();
+   });
+@@ -246,7 +249,7 @@ describe("StockChart 模式切換(SC-7)", () => {
+       ),
+     );
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
+     expect(screen.queryByText("K 線載入失敗")).toBeNull();
+   });
+@@ -269,7 +272,7 @@ describe("StockChart 空態三分態文案(N-7)", () => {
+   async function daily(body: unknown) {
+     stubBars(body);
+     chart();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+   }
+ 
+   it("status=timeout + 空 bars → 灰字「等待 TC4 回應中…(自動重試)」", async () => {
+@@ -358,12 +361,15 @@ describe("StockChart 期貨態(D10/R5)", () => {
+ 
+   it("江波圖以外的模式鈕全部 disabled + tooltip", () => {
+     futChart();
+-    const intraday = screen.getByRole("button", { name: "江波圖" });
++    const intraday = screen.getByRole("radio", { name: "江波圖" });
+     expect(intraday.hasAttribute("disabled")).toBe(false);
+     for (const label of [...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"]) {
+-      const btn = screen.getByRole("button", { name: label });
++      const btn = screen.getByRole("radio", { name: label });
+       expect(btn.hasAttribute("disabled")).toBe(true);
+-      expect(btn.getAttribute("title")).toBe("期貨合約本輪僅提供分時");
++      // a11y 批 W8:`title` 與 `aria-disabled` 掛在 label(sr-only input 上的 title
++      // 對滑鼠不可見)—— 文案與觸發條件不變
++      expect(btn.parentElement!.getAttribute("title")).toBe("期貨合約本輪僅提供分時");
++      expect(btn.parentElement!.getAttribute("aria-disabled")).toBe("true");
+     }
+   });
+ 
+@@ -371,7 +377,7 @@ describe("StockChart 期貨態(D10/R5)", () => {
+     window.localStorage.setItem("copycat-chart-mode", "day");
+     futChart();
+     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+-    expect(screen.getByRole("button", { name: "江波圖" }).getAttribute("aria-pressed")).toBe("true");
++    expect((screen.getByRole("radio", { name: "江波圖" }) as HTMLInputElement).checked).toBe(true);
+     expect(screen.queryByLabelText("K 線圖")).toBeNull();
+     // 存檔維持 day:切回現貨時使用者原本選的模式要回得來
+     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("day");
+@@ -414,12 +420,13 @@ describe("StockChart 現貨模式還原(A6)", () => {
+     return { setContract: (c: typeof CONTRACT | null) => view.rerender(tree(c)) };
+   }
+ 
++  // a11y 批:模式列改 RadioPills → 選中態由原生 `checked` 表達,不再是 aria-pressed
+   const pressed = (name: string) =>
+-    screen.getByRole("button", { name }).getAttribute("aria-pressed");
++    (screen.getByRole("radio", { name }) as HTMLInputElement).checked;
+ 
+   it("現貨日K → 進合約(收斂江波圖)→ 切回現貨:回到日K", async () => {
+     const { setContract } = mount();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+ 
+     setContract(CONTRACT);
+@@ -427,39 +434,39 @@ describe("StockChart 現貨模式還原(A6)", () => {
+ 
+     setContract(null);
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+-    expect(pressed("日K")).toBe("true");
++    expect(pressed("日K")).toBe(true);
+   });
+ 
+   it("分K 也還原(還原的是「進去前那一個」,不是寫死日K)", async () => {
+     const { setContract } = mount();
+-    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "7分K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+     setContract(CONTRACT);
+     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+     setContract(null);
+-    await waitFor(() => expect(pressed("7分K")).toBe("true"));
++    await waitFor(() => expect(pressed("7分K")).toBe(true));
+   });
+ 
+   it("本來就停在江波圖 → 切回現貨仍是江波圖(不憑空跳成 K 線)", async () => {
+     const { setContract } = mount();
+-    expect(pressed("江波圖")).toBe("true");
++    expect(pressed("江波圖")).toBe(true);
+     setContract(CONTRACT);
+     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+     setContract(null);
+-    expect(pressed("江波圖")).toBe("true");
++    expect(pressed("江波圖")).toBe(true);
+     expect(screen.queryByLabelText("K 線圖")).toBeNull();
+   });
+ 
+   it("還原只做一次:切回現貨後手動改模式,不會被舊值再蓋一次", async () => {
+     const { setContract } = mount();
+-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
++    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
+     setContract(CONTRACT);
+     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
+     setContract(null);
+-    await waitFor(() => expect(pressed("日K")).toBe("true"));
+-    fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
+-    expect(pressed("江波圖")).toBe("true");
++    await waitFor(() => expect(pressed("日K")).toBe(true));
++    fireEvent.click(screen.getByRole("radio", { name: "江波圖" }));
++    expect(pressed("江波圖")).toBe(true);
+   });
+ });
+ 
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index 5365a051..dc1db47f 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -119,10 +119,10 @@ describe("StockPage", () => {
+ 
+   it("選檔後中間主區 = 圖表切換 + 五檔 + 明細(SC-6/SC-7)", () => {
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+-    expect(screen.getByRole("button", { name: "江波圖" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "1分K" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "5分K" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "江波圖" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "1分K" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "5分K" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "日K" })).toBeTruthy();
+     expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 五檔(W-16:aria-label 格式是定位鍵)
+     expect(screen.getByText("時間")).toBeTruthy(); // 明細表頭
+   });
+@@ -667,8 +667,12 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+   it("預設單檔檢視:pill 在、群組 grid 不在", () => {
+     mockGroupApi();
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+-    expect(screen.getByRole("button", { name: "單檔" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "群組" })).toBeTruthy();
++    // a11y 批:檢視 pill 改 RadioPills(sr-only radio),單選態由 checked 表達
++    const single = screen.getByRole("radio", { name: "單檔" }) as HTMLInputElement;
++    const grid = screen.getByRole("radio", { name: "群組" }) as HTMLInputElement;
++    expect(single.checked).toBe(true);
++    expect(grid.checked).toBe(false);
++    expect(screen.getByRole("radiogroup", { name: "檢視" })).toBeTruthy();
+     expect(screen.queryByLabelText("選擇群組")).toBeNull();
+     expect(screen.getByTestId("stock-lower-row")).toBeTruthy();
+   });
+@@ -676,7 +680,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+   it("切到群組 → header / 圖表 / 下半列讓位給卡片 grid;訊號欄與自選欄不動", async () => {
+     mockGroupApi();
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     expect(screen.queryByTestId("stock-lower-row")).toBeNull();
+     expect(screen.queryByTestId("page-quote")).toBeNull();
+@@ -688,7 +692,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+   it("未選股(code=null)仍切得到群組檢視", async () => {
+     mockGroupApi();
+     wrap(<StockPage code={null} onSelect={vi.fn()} stream={stream({ accum: null })} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     expect(screen.queryByText(/從自選清單選擇/)).toBeNull();
+   });
+@@ -697,7 +701,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+   it("主圖 snapshot 未到(accum=null)仍切得到群組檢視", async () => {
+     mockGroupApi();
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum: null })} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+     expect(screen.queryByText("載入中…")).toBeNull();
+   });
+@@ -710,7 +714,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+     mockGroupApi();
+     const onSelect = vi.fn();
+     wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     const card = await screen.findByTestId("group-card-2317");
+     fireEvent.click(card);
+     expect(onSelect).toHaveBeenCalledWith("2317");
+@@ -736,7 +740,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+       }),
+     );
+     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     // `useStockWatchlist` 是 retry: 1 + 指數退避 → 錯誤終態要等第二次失敗(skill:
+     // TanStack Query error path 的 waitFor 必須放寬 timeout)
+     await waitFor(() => expect(screen.getByText("自選載入失敗")).toBeTruthy(), { timeout: 5000 });
+@@ -748,7 +752,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
+   it("檢視選擇存進 localStorage,重掛後還原", async () => {
+     mockGroupApi();
+     const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
++    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+     await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
+     unmount();
+     mockGroupApi();
+@@ -873,8 +877,8 @@ describe("StockPage 合約下拉(SC-4)", () => {
+       />,
+     );
+     await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
+-    expect(screen.getByRole("button", { name: "日K" }).hasAttribute("disabled")).toBe(true);
+-    expect(screen.getByRole("button", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
++    expect(screen.getByRole("radio", { name: "日K" }).hasAttribute("disabled")).toBe(true);
++    expect(screen.getByRole("radio", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
+   });
+ });
+ 
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index 506675e1..1fe67aa6 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -991,6 +991,80 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+   });
+ });
+ 
++// 🔴 SC-4'(D5' / D5''):自選列的選取路徑從「div onClick」改成**列內層 button**。
++//
++//  改前 `wl-row-*` 是 `div onClick`,沒有 role / tabIndex / key handler —— 鍵盤完全
++//  到不了(doctor no-static-element-interactions)。整列也不能改成 `<button>`:列內
++//  已經有握把 / 加入群組 / 移除三個互動子元素,button 內巢狀 button 是無效 HTML。
++//  → 代號 / 名稱 / 報價那一段包進 `wl-select-*` button,三顆子元件留在 row 層與它並排。
++describe("WatchlistSidebar 列選取 button(SC-4')", () => {
++  it("列內容是真 <button>,可及名稱含代號與名稱;點它 onSelect 一次", async () => {
++    const onSelect = vi.fn();
++    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
++    await waitGroups();
++    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-2330");
++    // 原生 button:瀏覽器的 Enter / Space → click 由 UA 提供(jsdom 不實作按鍵啟動,
++    // 所以這裡鎖「它真的是 button」+「click 走得到 onSelect」兩半)
++    expect(btn.tagName).toBe("BUTTON");
++    expect(btn.getAttribute("type")).toBe("button");
++    expect(btn.getAttribute("aria-label")).toBe("選取 2330 台積電");
++    fireEvent.click(btn);
++    expect(onSelect.mock.calls).toEqual([["2330"]]);
++  });
++
++  it("名冊查無名稱 → 可及名稱只帶代號(不留一個空詞)", async () => {
++    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
++    await waitGroups();
++    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-5483");
++    expect(btn.getAttribute("aria-label")).toBe("選取 5483");
++  });
++
++  it("選取中的那一列 aria-current=true,其餘不掛(不是 false)", async () => {
++    wrap(<WatchlistSidebar active="2330" onSelect={() => {}} quotes={QUOTES} />);
++    await waitGroups();
++    const main = within(screen.getByTestId("wl-group-主力"));
++    expect(main.getByTestId("wl-select-2330").getAttribute("aria-current")).toBe("true");
++    expect(main.getByTestId("wl-select-5483").getAttribute("aria-current")).toBeNull();
++  });
++
++  it("cursor-pointer 跟著 onClick 搬到 button(row div 不再假裝可點)", async () => {
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />,
++    );
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
++    expect(row.className).not.toContain("cursor-pointer");
++    expect(within(row).getByTestId("wl-select-2330").className).toContain("cursor-pointer");
++  });
++
++  it("點 row 的空白處不再選取(onClick 已搬到 button)", async () => {
++    const onSelect = vi.fn();
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />,
++    );
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
++    fireEvent.click(row);
++    expect(onSelect).not.toHaveBeenCalled();
++  });
++
++  it("加入群組 / 移除 兩顆子鈕不觸發 onSelect(與 button 並排,不是巢狀)", async () => {
++    const onSelect = vi.fn();
++    mockWatchlist(GROUPS, ["2330", "5483", "3231", "2317"]);
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />,
++    );
++    await waitFor(() => expect(screen.getByTestId("wl-row-2317")).toBeTruthy());
++    const row = container.querySelector('[data-testid="wl-row-2317"]') as HTMLElement;
++    // 巢狀 interactive 是無效 HTML 也會偷走鍵盤焦點順序 —— 兩顆子鈕必須在 button 之外
++    const select = within(row).getByTestId("wl-select-2317");
++    expect(select.querySelector("button")).toBeNull();
++    fireEvent.click(within(row).getByLabelText("加入群組 2317"));
++    fireEvent.click(within(row).getByLabelText("移除 2317"));
++    expect(onSelect).not.toHaveBeenCalled();
++  });
++});
++
+ // 🔴 round4 項 4(自選列)+ 項 5(字級)
+ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
+   it("列出股票名稱(名冊有的檔)", async () => {
+@@ -1017,6 +1091,35 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
+     expect(row.style.height).toBe(`${ROW_H}px`);
+   });
+ 
++  // 🔴 SC-3(D4''):有成交但平盤的那一列,漲跌欄是**要讀的數字**(「這檔今天沒動」
++  // 與「這檔還沒開始」是兩件事),ink-dim 對 surface 只有 2.92:1 → 換 ink-muted 6.06:1。
++  it("有成交、零漲跌 → 列漲跌欄 ink-muted(不是 ink-dim)", async () => {
++    const quotes = {
++      ...QUOTES,
++      "3231": {
++        p: 100_000,
++        chg_pct: 0,
++        vol: 10,
++        ref: 100_000,
++        upper: null,
++        lower: null,
++        no_data: false,
++        trial: false,
++      },
++    };
++    const { container } = wrap(
++      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
++    );
++    await waitGroups();
++    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
++    const pct = within(row).getByText("0.00%");
++    expect(pct.getAttribute("class")).toContain("text-ink-muted");
++    expect(pct.getAttribute("class")).not.toContain("text-ink-dim");
++  });
++
++  // 反向 lock(D4''):側欄這批只動「零漲跌」兩處 —— 參考價 / 無資料的 dim 不在其中
++  // (它們是「今天還沒開始」的弱化,不是要讀的數字)。少了這條,整檔一律換 token 的
++  // 過度修改會全綠。
+   it("尚無成交但有參考價 → 灰色參考價 + 灰字「參考」,不顯示 0.00%", async () => {
+     const quotes = {
+       ...QUOTES,
+@@ -1180,11 +1283,12 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
+     );
+     await waitGroups();
+     const z = within(headerOf("主力")).getByText("0.00%");
+-    expect(z.className).toContain("text-ink-dim");
++    // 🔴 SC-3(D4''):零漲跌的灰由 ink-dim(對 surface 2.92:1)改 ink-muted(6.06:1)
++    expect(z.className).toContain("text-ink-muted");
+     expect(z.className).not.toContain("text-bear");
+   });
+ 
+-  it("負值綠字;零 = ink-dim", async () => {
++  it("負值綠字;零 = ink-muted", async () => {
+     wrap(
+       <WatchlistSidebar
+         active={null}
+@@ -1198,7 +1302,8 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
+     await waitGroups();
+     expect(within(headerOf("主力")).getByText("-3.00%").className).toContain("text-bear");
+     const zero = within(headerOf("觀察")).getByText("0.00%");
+-    expect(zero.className).toContain("text-ink-dim");
++    expect(zero.className).toContain("text-ink-muted");
++    expect(zero.className).not.toContain("text-ink-dim");
+     expect(zero.className).not.toContain("text-bull");
+   });
+ 
+diff --git a/frontend/src/components/ui/RadioPills.test.tsx b/frontend/src/components/ui/RadioPills.test.tsx
+new file mode 100644
+index 00000000..1f52467f
+--- /dev/null
++++ b/frontend/src/components/ui/RadioPills.test.tsx
+@@ -0,0 +1,188 @@
++/** @vitest-environment jsdom */
++/** SC-1'(D1' / D1''):`RadioPills` = 單選 pill 群的共用元件。
++ *
++ *  鎖的是**語意層**:radio 數 = 選項數、恰一顆 checked、同組 `name` 一致且跨組互異
++ *  (否則兩組互搶選取)、點已選項不發 change、Enter 不觸發外層 form 的 implicit submit。
++ *  方向鍵 / roving tabindex 是原生 radio 行為,**jsdom 不實作** → 不在此鎖(靠 SC-5' 真環境)。
++ *
++ *  視覺零變靠 `pillClass` 逐字回傳呼叫端原 button 的 class,這裡只鎖「回傳值有掛上 label」
++ *  與「額外補的 focus ring class 在」—— 兩者任一漏掉都是靜默的外觀退化。 */
++import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
++import { useState } from "react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { RadioPills, type RadioPillItem } from "@/components/ui/RadioPills";
++
++afterEach(cleanup);
++
++type Kind = "cash" | "margin" | "short";
++
++const ITEMS: RadioPillItem<Kind>[] = [
++  { value: "cash", label: "現股" },
++  { value: "margin", label: "融資" },
++  { value: "short", label: "無券" },
++];
++
++const RING =
++  "has-focus-visible:ring-1 has-focus-visible:ring-inset has-focus-visible:ring-accent";
++
++function pill(_item: RadioPillItem<Kind>, checked: boolean): string {
++  return checked ? "border-accent text-accent" : "border-line text-ink-dim";
++}
++
++/** 受控殼:呼叫端一律自己持有 value,元件不自帶 state。 */
++function Harness({
++  onChange,
++  items = ITEMS,
++  initial = "cash",
++}: {
++  onChange?: (v: Kind) => void;
++  items?: RadioPillItem<Kind>[];
++  initial?: Kind;
++}) {
++  const [v, setV] = useState<Kind>(initial);
++  return (
++    <RadioPills<Kind>
++      ariaLabel="交易別"
++      value={v}
++      onChange={(next) => {
++        setV(next);
++        onChange?.(next);
++      }}
++      items={items}
++      pillClass={pill}
++      className="flex shrink-0 items-center gap-0.5"
++    />
++  );
++}
++
++describe("RadioPills", () => {
++  it("radiogroup 內 radio 數 = 選項數,且恰一顆 checked", () => {
++    render(<Harness initial="margin" />);
++    const group = screen.getByRole("radiogroup", { name: "交易別" });
++    const radios = within(group).getAllByRole("radio") as HTMLInputElement[];
++    expect(radios.length).toBe(3);
++    expect(radios.filter((r) => r.checked).length).toBe(1);
++    expect((within(group).getByRole("radio", { name: "融資" }) as HTMLInputElement).checked).toBe(
++      true,
++    );
++    expect((within(group).getByRole("radio", { name: "現股" }) as HTMLInputElement).checked).toBe(
++      false,
++    );
++  });
++
++  it("容器逐字沿用呼叫端 class,label 掛 pillClass + focus ring", () => {
++    render(<Harness initial="cash" />);
++    const group = screen.getByRole("radiogroup", { name: "交易別" });
++    expect(group.className).toBe("flex shrink-0 items-center gap-0.5");
++    const checked = screen.getByRole("radio", { name: "現股" });
++    const label = checked.closest("label");
++    expect(label).toBeTruthy();
++    expect(label?.className).toContain("border-accent");
++    expect(label?.className).toContain("text-accent");
++    for (const cls of RING.split(" ")) {
++      expect(label?.className).toContain(cls);
++    }
++    const other = screen.getByRole("radio", { name: "融資" }).closest("label");
++    expect(other?.className).toContain("border-line");
++    expect(other?.className).not.toContain("border-accent");
++  });
++
++  it("同組 name 全同;兩組同時掛載時 name 互異(不互搶選取)", () => {
++    render(
++      <>
++        <Harness />
++        <Harness />
++      </>,
++    );
++    const [g1, g2] = screen.getAllByRole("radiogroup", { name: "交易別" });
++    const names1 = (within(g1!).getAllByRole("radio") as HTMLInputElement[]).map((r) => r.name);
++    const names2 = (within(g2!).getAllByRole("radio") as HTMLInputElement[]).map((r) => r.name);
++    expect(new Set(names1).size).toBe(1);
++    expect(new Set(names2).size).toBe(1);
++    expect(names1[0]).toBeTruthy();
++    expect(names1[0]).not.toBe(names2[0]);
++  });
++
++  it("點未選中的 radio 觸發一次 onChange 並換選", () => {
++    const onChange = vi.fn();
++    render(<Harness onChange={onChange} />);
++    const target = screen.getByRole("radio", { name: "無券" }) as HTMLInputElement;
++    fireEvent.click(target);
++    expect(onChange.mock.calls).toEqual([["short"]]);
++    expect(target.checked).toBe(true);
++    expect((screen.getByRole("radio", { name: "現股" }) as HTMLInputElement).checked).toBe(false);
++  });
++
++  it("點已 checked 的 radio 不觸發 onChange", () => {
++    const onChange = vi.fn();
++    render(<Harness onChange={onChange} />);
++    fireEvent.click(screen.getByRole("radio", { name: "現股" }));
++    expect(onChange).not.toHaveBeenCalled();
++  });
++
++  it("disabled 項:input disabled、label aria-disabled + cursor-not-allowed、點擊不觸發", () => {
++    const onChange = vi.fn();
++    render(
++      <Harness
++        onChange={onChange}
++        items={[ITEMS[0]!, { value: "margin", label: "融資", disabled: true }]}
++      />,
++    );
++    const radio = screen.getByRole("radio", { name: "融資" }) as HTMLInputElement;
++    expect(radio.disabled).toBe(true);
++    const label = radio.closest("label");
++    expect(label?.getAttribute("aria-disabled")).toBe("true");
++    expect(label?.className).toContain("cursor-not-allowed");
++    fireEvent.click(radio);
++    expect(onChange).not.toHaveBeenCalled();
++    expect(radio.checked).toBe(false);
++    // 未 disabled 的項不掛 aria-disabled(否則整組被 AT 讀成不可用)
++    expect(
++      screen.getByRole("radio", { name: "現股" }).closest("label")?.getAttribute("aria-disabled"),
++    ).toBeNull();
++  });
++
++  it("焦點在 radio 按 Enter → defaultPrevented(不送出外層 form)", () => {
++    render(<Harness />);
++    const radio = screen.getByRole("radio", { name: "現股" });
++    expect(fireEvent.keyDown(radio, { key: "Enter" })).toBe(false);
++    // 其餘按鍵不攔(方向鍵要留給瀏覽器原生 roving)
++    expect(fireEvent.keyDown(radio, { key: "ArrowRight" })).toBe(true);
++  });
++
++  it("title 掛在 label(hover 提示與 disabled 理由同一個元素)", () => {
++    render(
++      <Harness
++        items={[ITEMS[0]!, { value: "margin", label: "融資", title: "此合約尚無成交估價" }]}
++      />,
++    );
++    const label = screen.getByRole("radio", { name: "融資" }).closest("label");
++    expect(label?.getAttribute("title")).toBe("此合約尚無成交估價");
++    expect(screen.getByRole("radio", { name: "現股" }).closest("label")?.getAttribute("title")).toBe(
++      null,
++    );
++  });
++
++  it("leading / trailing slot 渲染在容器內、radio 前後(不新增層)", () => {
++    render(
++      <RadioPills<Kind>
++        ariaLabel="交易別"
++        value="cash"
++        onChange={() => {}}
++        items={ITEMS}
++        pillClass={pill}
++        className="flex items-center gap-2"
++        leading={<span>群組</span>}
++        trailing={<span>重疊</span>}
++      />,
++    );
++    const group = screen.getByRole("radiogroup", { name: "交易別" });
++    expect(within(group).getByText("群組")).toBeTruthy();
++    expect(within(group).getByText("重疊")).toBeTruthy();
++    const kids = [...group.children];
++    expect(kids[0]?.textContent).toBe("群組");
++    expect(kids.at(-1)?.textContent).toBe("重疊");
++    expect(within(group).getAllByRole("radio").length).toBe(3);
++  });
++});
