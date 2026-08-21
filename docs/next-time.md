@@ -34,9 +34,15 @@
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
-- [ ] **真 tick trace 對照**(驗證窗口外降級):夜盤或次一交易日盤中,prod build 分頁
+- [x] ~~**真 tick trace 對照**(驗證窗口外降級):夜盤或次一交易日盤中,prod build 分頁
   DevTools performance trace 對照 scripting 佔比;殘留預期見
-  `.claude/refactor/memo-boundaries/verification.md`(期貨 tab rail 仍 10Hz 是正確行為)。
+  `.claude/refactor/memo-boundaries/verification.md`(期貨 tab rail 仍 10Hz 是正確行為)。~~
+  **2026-08-21 M0 盤中實測(prod build 4173,12:37–12:40,各 30s trace,1920×1080)**:
+  期貨 tab 主執行緒忙 9.2% of wall(scripting 6.7% / painting 0.7% / rendering 0.4%),
+  0 長任務、最長 task 48 ms;個股 tab 主圖 2609(當日 29.7k ticks 熱門股 + 閃電梯)忙 23.6%
+  (scripting 15.6% / painting 4.1% / rendering 2.0%),0 長任務、最長 49 ms。兩 tab 皆無
+  >50 ms 長任務,scripting 佔比與 rail 每 tick 重繪的殘留預期相符,未見跨流放大。
+  raw trace 分類腳本 = Chrome trace 事件自算(scratchpad `trace_summary.py`,未入 repo)。
 - [ ] **RiverOverlay hover 的 render body 成本**(review F5):幾何已 memo,但每 mousemove
   仍重跑 timeTicks + 七腿 polyline 字串重組(夜盤滿窗 840 分);要收斂把 polyline 字串
   併入幾何 useMemo — 注意 RiverCards 的 timeTicks 現在是計次探針,動它要一併換探針。
@@ -87,7 +93,9 @@
   changed),反向驗證過。真鎖停日觀測留待下次鎖停。
 - [ ] **TXO 推播仍是全量整包**(review R10):有行情時 spot 每次價變都推整包;delta / 分欄推播未做。
   〔2026-08-20 實測:夜盤 60s 收 24 則,每則中位 17.1 KB(min 15B=ping),0.4 則/s ≈ 410 KB/min;
-  日盤價變頻率更高,量級成比例放大〕
+  日盤價變頻率更高,量級成比例放大〕〔2026-08-21 M0 日盤 12:35 實測 60s:19 則(另 5 則 ping),
+  每則 **27.1 KB**(日盤鏈更寬),0.32 則/s,間隔中位 2.7 s(min 1.0 s / max 10.2 s)≈ **503 KB/min**;
+  則數比夜盤少但單則大 58%,總流量 +23%〕
 - [ ] **回補重試期間 WS 可十幾分鐘零訊息**(code review C4):同值 `backfilling` 不再推,保活只剩 uvicorn ws ping 20s;
   候選 = 把重試進度寫進 `_handover`(attempt / backfill_secs)讓內容真的變、前端可觀測 —
   〔2026-08-19 R3 心跳已出貨:零訊息不再被前端誤判斷線(保活面已解),本條只剩「重試進度可觀測」的 UX 面〕。
@@ -133,7 +141,10 @@
   要到週一 08:45 閘開才自癒。要收 = `_heal_gate` 對 TXO/futures 改「hour < 6 看前一日是否交易日」。
   〔2026-08-20 機械探針證實,詳 2026-08-19 coalesce 節 `_heal_gate` 條〕
 - [ ] **corr 海外腿在自身休市段落入 R2「從未推播」母體**(C-6 放寬後):每腿最慢 300s 一發 UNSUB+SUB、每 3 發換窗;
-  上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。
+  上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。〔2026-08-21 M0 log 對帳(08:39–11:42 三小時):
+  SXF.HOT 8 發(靜默 240–244s,10:28 起每 4–12 分一發,全 attempt 1),其餘海外腿零發;
+  **真正的 churn 大戶是個股冷門檔**:6921 嘉雨恩-創 153 發(全日 6 ticks,60s 靜默 → 每 ~70s 重掛)、
+  6949 59 發 —— 個股 R3 健檢對「當日本來就沒成交」的檔一樣狂重掛,建議併入同一條收;**收盤段 IX0001 加權 13:25:37–13:34 每 30 s 一發共 18 發**(收盤集合競價 + 收盤後指數本就停推,source 層 R2 靜默閘不知道指數的時段)、13:45 日盤收後 TXF/MXF/TMF 各 2 發(夜盤 15:00 前的空窗,同類)〕
 - [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
   session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
 - [x] ~~`tests/server/test_ws_disconnect.py::test_no_write_to_dead_transport` flake(3 跑 1 紅)~~
@@ -311,7 +322,12 @@
   VP+POC / 高低 / CDP·MA)、圖牆頂 toggle 列同步、點卡片只換閃電目標。盤中順量:冷 cache
   進群組 overlay 真耗時(route Semaphore(4)+ 15s 逾時降級)、50 檔 group-state 真 payload
   (fake 17 檔 319 KB → 換算 940 KB;上界 1.5 MB)、liveP 每秒真機 paint 成本(fake 量到 JS
-  longtask 0,paint 未含)。
+  longtask 0,paint 未含)。〔2026-08-21 M0 盤中實測(prod build,12:35,航運 6 檔):
+  `group-state` 6 檔全日 217 分鐘 = 92.9 KB(每檔 15.5 KB,含 vp)→ 50 檔換算 **≈ 775 KB**
+  (低於 940 KB 估,在 1.5 MB 上界內);`/api/stock/overlay` ×6 並發各 12–19 ms(磁碟 cache
+  命中,日線 date=2026-08-20;真冷 cache 須清 cache 才量得到,盤中未做);rAF 45 s 2670 幀 =
+  **60.0 fps**、PerformanceObserver longtask **0**。另觀察:群組檢視會觸發成員 tick 回補
+  (log 12:36 2609 29772 / 2615 12451 / 2606 3117 ticks),非只讀。〕
 - [ ] **1080p 4×4 卡片刻度互疊**(SC-1-4x4-1080p 截圖):卡 266×182 px 時左緣 11 條 y 刻度成團、
   右緣 CDP/MA 標籤疊。R2-1 決議不動共用 ChartStatic(W-1);候選 = card 變體 y 刻度減量(±10/6/2 三條)
   或 chrome 依可用高分級。user 實機 2560 寬 4×4(430×262)可讀。
@@ -319,10 +335,16 @@
   而群組檢視無主圖讀者;候選 `?tape=0` 或群組檢視輕量換檔(W-4 要求 onSelect 仍換訂閱)。
   〔2026-08-20 結構面已證實(endpoint 恆帶 ticks);盤後 tape 近空(579B)量不出實際大小,
   以 08-20 早盤 log 換算:3450 回填 4266 ticks ≈ 數百 KB 級,實測留次一盤中〕
+  〔2026-08-21 M0 盤中實測(12:33–12:37,無 gzip):5608 7479 ticks = **555 KB**、3450 5183
+  = 406 KB、2603 4310 = 340 KB、2637 3889 = 304 KB(≈ **74 B/tick**);2609 達 deque 上限
+  20000 ticks = **1.46 MB**。群組點卡一次 = 上述量級,50 檔群組輪點一圈 ≈ 20–70 MB。〕
 - [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
-  balance / group-state 最大延遲。
+  balance / group-state 最大延遲。〔2026-08-21 M0:6 檔暖 cache waterfall 已錄(overlay 各 12–19 ms、
+  group-state 6 ms、同期 capital/orders 4 ms、positions 19 ms);冷 cache + 50 檔仍未量〕
 - [ ] **>20k tick 日單檔頁 vp 偏小**(review R2-5):單檔頁 vp 折自已被 deque(20k)截斷的 snapshot
   ticks,後端增量 vp 全日 → 該類日子卡片與單檔頁 POC 可能不同;parity fixture 只鎖同輸入折法。
+  〔2026-08-21 M0 真樣本:2609 陽明 12:36 回補 29772 ticks,`/api/stock/state/2609` 回 20000 ticks、
+  首筆 09:16:54 → 09:00–09:16 開盤段已被截掉;航運大漲日一檔就中,非罕見路徑〕
 - [ ] **react-doctor `prefer-tag-over-role` GroupGridView 卡片**:刻意 div role=button(button 內容
   模型放不下 chart 區塊),triage 為本例誤報未關規則;若再有同類需求再評估 config。
 - [x] ~~mini 圖沿用 ±10% 漲跌停域,1% 波動僅 ~3.4px~~ **2026-08-17 隨 R4 換單檔同款圖消滅**(同域同尺,
@@ -452,6 +474,13 @@
   窗內純時間照標(無交易日曆,第二段天然消除)。**蒐證判讀注意**(review D6-2):
   窗內起 / 窗外訖的 episode(如收盤試撮窗跨越的延緩撮合)在第一段規則下全程只有
   DEBUG — 對帳時 13:25–13:30 前後要併看 DEBUG 級,別只 grep WARNING。
+  **〔2026-08-21 M0 首批真樣本(`logs/server-20260821-0839.log`,26 行 = 13 個完整 episode,
+  全部 trial_window=False → WARNING)〕**:TradeStatus 0→1 後約 2 分鐘 1→0,時長 1:55–2:05,
+  形狀 = TWSE「延緩撮合 2 分鐘」:開盤段 09:00:34–09:04:15 起 11 檔(3026/6207/6213/2615/2637/
+  3037/2484/3042/4958/6456/8046),**盤中段** 3037 09:06:06→09:08:01、3042 09:09:35→09:11:30
+  各一次(即第二段要亮的那種)。0→1 那筆 tick qty 極小(1–15)、1→0 那筆 qty 大(62–608,
+  = 延緩後集合撮合那筆)。可據此做 (a) skill 事實回填:**TradeStatus=1 即延緩撮合中,episode
+  ≈ 2 min,恢復 tick 即集合撮合成交**;(b) per-code `trial` 可直接吃 TradeStatus==1。
 - [ ] **`stock_engine._quote_payload` docstring「四個產出點」已漂移**:實為 8 處
   (:373 set_watchlist / :457 quotes() Discord 摘要 / :647 retry 重掛種子 /
   :767 _handle_no_data / :919 轉態補推 / 連線 seed / 1s flush / 本輪新增的
@@ -953,7 +982,7 @@
 
 ## 2026-07-30(realtime-correlation 收尾沉澱)
 
-- [ ] **P1 既有 bug:`futures_engine` 會間歇性整段零推播(期貨面板時好時壞)**。〔2026-07-30 10:24 更正:原記「P0 死鎖 / 一直是壞的」下得過重〕TXO runtime 的訂閱清單含 `SPOT_SYMBOL = TC.F.TWF.TXF.HOT`(`server/engine.py:89`),`futures_engine` 訂同一 symbol 時 TC4 只推一邊(CLAUDE.md §8);其 leaf fallback 需先由推播解析契約月份才啟動 → 全零推播時啟動不了。**兩個相反的實測狀態**:(i) 2026-07-29 17:33 起跑的 server 到 00:50 為止 TXF/MXF/TMF 全 `p=null`、`seq=0`,同時段獨立訂閱 TXF.HOT 有 235 則/30 秒(MXF 324 則)、五檔俱全 → TC4 端正常;(ii) 2026-07-30 10:24 起跑的 server 六腿含 TXF 全部正常有值,realtime-correlation 的 base 腿與五對相關係數都算得出來。**故為間歇性,觸發條件未定位**(疑似啟動時序 / TC4 session 殘留 / 先前有 process 訂過同 symbol)。下輪要做的第一件事是**穩定重現**(鐵則 A:先穩定重現再談修),而不是直接動 fallback。修法候選:leaf fallback 改為可由「非推播來源」取得月份(合約清單查詢),或 runtime 與 futures_engine 共用單一 TXF 訂閱。
+- [x] **P1 既有 bug:`futures_engine` 會間歇性整段零推播(期貨面板時好時壞)**。**〔2026-08-21 查證:已由 PR #66 吸收 —— root cause = TC4 refcount per key / 上游 feed per symbol 錯位 + 殭屍 reap 殺 key(skill `tc4-market-facts` 已把「07-30 futures 間歇零推播」列為同一機制);修 = source 層零推播自癒;08-21 早盤 log TXF.HOT 僅 08:41–08:44 盤前三發自癒(開盤前無推播屬正常),09:00 後零發〕**〔2026-07-30 10:24 更正:原記「P0 死鎖 / 一直是壞的」下得過重〕TXO runtime 的訂閱清單含 `SPOT_SYMBOL = TC.F.TWF.TXF.HOT`(`server/engine.py:89`),`futures_engine` 訂同一 symbol 時 TC4 只推一邊(CLAUDE.md §8);其 leaf fallback 需先由推播解析契約月份才啟動 → 全零推播時啟動不了。**兩個相反的實測狀態**:(i) 2026-07-29 17:33 起跑的 server 到 00:50 為止 TXF/MXF/TMF 全 `p=null`、`seq=0`,同時段獨立訂閱 TXF.HOT 有 235 則/30 秒(MXF 324 則)、五檔俱全 → TC4 端正常;(ii) 2026-07-30 10:24 起跑的 server 六腿含 TXF 全部正常有值,realtime-correlation 的 base 腿與五對相關係數都算得出來。**故為間歇性,觸發條件未定位**(疑似啟動時序 / TC4 session 殘留 / 先前有 process 訂過同 symbol)。下輪要做的第一件事是**穩定重現**(鐵則 A:先穩定重現再談修),而不是直接動 fallback。修法候選:leaf fallback 改為可由「非推播來源」取得月份(合約清單查詢),或 runtime 與 futures_engine 共用單一 TXF 訂閱。
   - **〔2026-07-30 夜盤重現嘗試:5/5 全部健康,未重現 → 依鐵則 A 不改 code〕** 詳細 `.claude/bug/futures-engine-silent/repro.md`。**已排除的條件**:夜盤冷啟動、hard kill 造成的 TC4 session 殘留、連續快速重啟(各試 4–5 次全正常)、以及「一個 process 起兩份 app」(`python -m copycat.server` 確實有 parent/child 兩個 process,但 **parent 是 1 執行緒 0 連線的 stub**,child 才持 5 條 TC4 session)。
   - **⚠ 但這 5 次的證據力比表面弱 —— 平台實例是完美混淆變數(2026-07-30 17:xx 補查)**:`TOUCHANCE.exe` / `TCore64.exe` 的實際啟動時刻是 **2026-07-30 10:22:23**,即 handoff 引為「健康狀態 (ii)」的 10:24 那台 server 起跑前 2 分鐘。今天的 12:57 server、10:24 server、以及我這 5 次重測,**全部跑在同一個 TC4 process 實例上**;而 07-29 17:33 的失敗必然是另一個實例。**100% 的健康觀測集中在實例 A、唯一的失敗在實例 B —— 我只變動了 client 側條件,平台側從頭到尾沒變過。**「5 次獨立試驗」實際上是「同一個試驗做了 5 次」。**下一步該做的實驗是重啟達錢 4 本身再起 server**,那是唯一從未被變動的變數。
   - **〔同日 21:02 已補做,混淆解除:仍未重現〕** 重啟達錢 4 本身(新實例 pid 7164,21:02:54;**自動回來、不需手動登入**,port 50774 約 15 秒後 LISTENING)後冷啟動 server → **三品 18 秒內全有值**(trial6,證據 `trial6_fresh_tc4.log` / `trial6_poll.txt`)。故健康狀態已在**兩個不同的 TC4 process 實例**上各自觀測到,平台實例不再是混淆變數,「平台年齡 / 暖機狀態」也不再是活假說。累計 **6/6 未重現**,涵蓋:夜盤、hard kill 殘留、連續快速重啟、兩個 TC4 實例、回補負載 17k–48k ticks。
