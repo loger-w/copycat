@@ -14,7 +14,7 @@ today,傳真日曆會讓 verify server 在假日整片空 —— 而 prod 漏傳
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -244,10 +244,18 @@ def test_default_txo_source_wires_realtime_heal(monkeypatch: pytest.MonkeyPatch)
 
 # ---- C-5:自癒閘 AND 交易日曆(純牆鐘 → 假日整天 churn TC4 上游)----
 
+_FRIDAY = date(2026, 8, 14)
 _SATURDAY = date(2026, 8, 15)
+_MONDAY = date(2026, 8, 17)
 _TUESDAY = date(2026, 8, 18)
 #: 假日表空 → 週末由 weekday() 擋、平日全開;閘的組合律用這一把就驗得完
 _CAL = TradingCalendar(frozenset(), frozenset(), frozenset({2026}))
+#: 週二(08-18)為國定假日的日曆:驗「跨午夜歸前一日」查的是假日表不只是 weekday
+_CAL_TUE_HOLIDAY = TradingCalendar(frozenset({_TUESDAY}), frozenset(), frozenset({2026}))
+
+
+def _at(d: date, hh: int, mm: int = 0, ss: int = 0) -> datetime:
+    return datetime(d.year, d.month, d.day, hh, mm, ss)
 
 
 def _session_mod() -> Any:
@@ -279,9 +287,9 @@ def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock:
     app_mod._default_source(_CAL)
     gate = seen["kwargs"]["heal_active"]
 
-    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate() is False, "非交易日不得自癒(整天每 5s 對 TC4 送 UNSUB+SUB)"
-    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
     assert gate() is clock, "交易日仍要 AND 牆鐘時段閘"
 
 
@@ -300,9 +308,9 @@ def test_stock_and_index_heal_gate_ands_the_calendar(
     getattr(app_mod, factory)(_CAL)
     gate = seen["kwargs"]["in_trading_hours"]
 
-    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate() is False
-    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
     assert gate() is clock, "交易日仍要 AND 盤中時段(盤外不得 churn)"
 
 
@@ -318,10 +326,92 @@ def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, cl
     app_mod._default_futures_source(_CAL)
     gate = seen["kwargs"]["heal_active"]
 
-    monkeypatch.setattr(app_mod, "_today", lambda: _SATURDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate() is False, "非交易日不得自癒"
-    monkeypatch.setattr(app_mod, "_today", lambda: _TUESDAY)
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
     assert gate() is clock, "交易日仍要 AND 盤別(盤外不得 churn)"
+
+
+class TestHealGateAcrossMidnight:
+    """B9:凌晨(hour < 6)屬前一日那一場 —— 閘要查**場別起始日**,不是牆鐘今天。
+
+    改動前用 `_today()`:週六 01:00 查週六 → False(週五夜盤該救不救);
+    週一 01:00 查週一 → True 但週一凌晨根本沒夜盤(週日無場)→ 整段空 churn。
+    """
+
+    def test_saturday_predawn_belongs_to_friday_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 1))
+        assert app_mod._heal_gate(_CAL, lambda: True)() is True
+
+    def test_monday_predawn_belongs_to_sunday_and_is_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_MONDAY, 1))
+        assert app_mod._heal_gate(_CAL, lambda: True)() is False
+
+    def test_predawn_after_a_holiday_evening_is_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週三 01:00 → 場別起始日 = 週二;週二放假 → 前一晚沒有夜盤
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(date(2026, 8, 19), 1))
+        assert app_mod._heal_gate(_CAL_TUE_HOLIDAY, lambda: True)() is False
+
+    def test_session_date_switches_at_six(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """門檻對稱案:05:59 仍屬前一場、06:00 起算當日(不經 AND,直接看取樣)。"""
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 59))
+        assert app_mod._session_date() == _FRIDAY
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 6, 0))
+        assert app_mod._session_date() == _SATURDAY
+
+
+class TestHealGateThresholdCoversSessionClose:
+    """不變式:`hour < 6` 的門檻 ⊇ 夜盤收盤 + 各自的寬放(閘不會先於牆鐘關掉)。
+
+    clock 用真函式但**顯式傳入同一時刻** —— prod 有兩個獨立取樣點(`app._now` 與
+    `session.datetime.now()`),測試裡只能人工對齊,不能假裝它們是同一個。
+    """
+
+    def test_futures_pad_five_minutes_still_inside_previous_session_date(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import copycat.live.futures_source as futures_mod
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 5))
+        gate = app_mod._heal_gate(_CAL, lambda: futures_mod.in_futures_session_now(time(5, 5)))
+        assert gate() is True, "05:05 仍在期貨寬放內,且屬週五那一場"
+
+    def test_futures_gate_closes_by_the_clock_not_by_the_date(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import copycat.live.futures_source as futures_mod
+
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 6))
+        gate = app_mod._heal_gate(_CAL, lambda: futures_mod.in_futures_session_now(time(5, 6)))
+        assert gate() is False, "寬放外由牆鐘閘關掉(日期仍是週五交易日)"
+
+    def test_txo_gate_closes_right_after_five(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from copycat.server import app as app_mod
+
+        session_mod = _session_mod()
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 0))
+        assert app_mod._heal_gate(_CAL, lambda: session_mod.in_txo_session(time(5, 0)))() is True
+        monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 0, 30))
+        assert (
+            app_mod._heal_gate(_CAL, lambda: session_mod.in_txo_session(time(5, 0, 30)))() is False
+        )
 
 
 def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
