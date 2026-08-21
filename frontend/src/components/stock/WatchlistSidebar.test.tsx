@@ -991,6 +991,80 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
   });
 });
 
+// 🔴 SC-4'(D5' / D5''):自選列的選取路徑從「div onClick」改成**列內層 button**。
+//
+//  改前 `wl-row-*` 是 `div onClick`,沒有 role / tabIndex / key handler —— 鍵盤完全
+//  到不了(doctor no-static-element-interactions)。整列也不能改成 `<button>`:列內
+//  已經有握把 / 加入群組 / 移除三個互動子元素,button 內巢狀 button 是無效 HTML。
+//  → 代號 / 名稱 / 報價那一段包進 `wl-select-*` button,三顆子元件留在 row 層與它並排。
+describe("WatchlistSidebar 列選取 button(SC-4')", () => {
+  it("列內容是真 <button>,可及名稱含代號與名稱;點它 onSelect 一次", async () => {
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+    await waitGroups();
+    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-2330");
+    // 原生 button:瀏覽器的 Enter / Space → click 由 UA 提供(jsdom 不實作按鍵啟動,
+    // 所以這裡鎖「它真的是 button」+「click 走得到 onSelect」兩半)
+    expect(btn.tagName).toBe("BUTTON");
+    expect(btn.getAttribute("type")).toBe("button");
+    expect(btn.getAttribute("aria-label")).toBe("選取 2330 台積電");
+    fireEvent.click(btn);
+    expect(onSelect.mock.calls).toEqual([["2330"]]);
+  });
+
+  it("名冊查無名稱 → 可及名稱只帶代號(不留一個空詞)", async () => {
+    wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
+    await waitGroups();
+    const btn = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-select-5483");
+    expect(btn.getAttribute("aria-label")).toBe("選取 5483");
+  });
+
+  it("選取中的那一列 aria-current=true,其餘不掛(不是 false)", async () => {
+    wrap(<WatchlistSidebar active="2330" onSelect={() => {}} quotes={QUOTES} />);
+    await waitGroups();
+    const main = within(screen.getByTestId("wl-group-主力"));
+    expect(main.getByTestId("wl-select-2330").getAttribute("aria-current")).toBe("true");
+    expect(main.getByTestId("wl-select-5483").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("cursor-pointer 跟著 onClick 搬到 button(row div 不再假裝可點)", async () => {
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />,
+    );
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    expect(row.className).not.toContain("cursor-pointer");
+    expect(within(row).getByTestId("wl-select-2330").className).toContain("cursor-pointer");
+  });
+
+  it("點 row 的空白處不再選取(onClick 已搬到 button)", async () => {
+    const onSelect = vi.fn();
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />,
+    );
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-2330"]') as HTMLElement;
+    fireEvent.click(row);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("加入群組 / 移除 兩顆子鈕不觸發 onSelect(與 button 並排,不是巢狀)", async () => {
+    const onSelect = vi.fn();
+    mockWatchlist(GROUPS, ["2330", "5483", "3231", "2317"]);
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />,
+    );
+    await waitFor(() => expect(screen.getByTestId("wl-row-2317")).toBeTruthy());
+    const row = container.querySelector('[data-testid="wl-row-2317"]') as HTMLElement;
+    // 巢狀 interactive 是無效 HTML 也會偷走鍵盤焦點順序 —— 兩顆子鈕必須在 button 之外
+    const select = within(row).getByTestId("wl-select-2317");
+    expect(select.querySelector("button")).toBeNull();
+    fireEvent.click(within(row).getByLabelText("加入群組 2317"));
+    fireEvent.click(within(row).getByLabelText("移除 2317"));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
 // 🔴 round4 項 4(自選列)+ 項 5(字級)
 describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
   it("列出股票名稱(名冊有的檔)", async () => {

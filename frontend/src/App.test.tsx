@@ -737,7 +737,7 @@ describe("App 個股期合約選擇(SC-4)", () => {
 
   it("換股重置合約:新股的 snapshot 不帶舊合約", async () => {
     await openStockWithContract();
-    fireEvent.click(screen.getByTestId("wl-row-2454"));
+    fireEvent.click(screen.getByTestId("wl-select-2454")); // a11y 批:選取路徑改列內層 button
     await waitFor(() => expect(stateUrls().includes("/api/stock/state/2454")).toBe(true));
     // 重置若走 effect 而非 render 期間,會先有一個 render 拿新股號配舊合約送出去
     expect(stateUrls().some((u) => u.startsWith("/api/stock/state/2454?"))).toBe(false);

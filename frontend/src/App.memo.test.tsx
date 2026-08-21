@@ -474,7 +474,7 @@ describe("App railCtx memo 邊界(S1)", () => {
     await settle();
     expect(lastLadder()?.code).toBe("2330");
 
-    fireEvent.click(await screen.findByTestId("wl-row-2454"));
+    fireEvent.click(await screen.findByTestId("wl-select-2454")); // a11y 批:選取改內層 button
     await waitFor(() =>
       expect(fetchUrls().some((u) => u.includes("/api/stock/state/2454"))).toBe(true),
     );
@@ -505,7 +505,7 @@ describe("App railCtx memo 邊界(S1)", () => {
     expect(lastLadder()?.meta).toBeNull();
     expect(lastLadder()?.code).toBe("9101");
 
-    fireEvent.click(await screen.findByTestId("wl-row-9102"));
+    fireEvent.click(await screen.findByTestId("wl-select-9102")); // a11y 批:選取改內層 button
     await settle();
     await settle();
 
