@@ -1,0 +1,56 @@
+{
+ "round": 2,
+ "scope": "narrow",
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "A1",
+   "severity": "P0",
+   "summary": "R8 零參 clock 讀真牆鐘,注入 _now 無效 → 隨時刻翻面",
+   "disposition": "accepted",
+   "resolution": "clock 顯式傳時刻"
+  },
+  {
+   "id": "A2",
+   "severity": "P1",
+   "summary": "SC-4 探針同根因,13:45 後跑必 False",
+   "disposition": "accepted",
+   "resolution": "拆三量"
+  },
+  {
+   "id": "A3",
+   "severity": "P1",
+   "summary": "TXO/期貨 pad 不同併一表必紅",
+   "disposition": "accepted",
+   "resolution": "兩張表"
+  },
+  {
+   "id": "A4",
+   "severity": "P2",
+   "summary": "06:00 合成案空案",
+   "disposition": "accepted",
+   "resolution": "直接斷言 _session_date"
+  },
+  {
+   "id": "A5",
+   "severity": "P2",
+   "summary": "W3 行號 volatile",
+   "disposition": "accepted",
+   "resolution": "名稱列舉"
+  },
+  {
+   "id": "A6",
+   "severity": "P2",
+   "summary": "次一營業日近似未記",
+   "disposition": "accepted",
+   "resolution": "docstring + edge"
+  },
+  {
+   "id": "A7",
+   "severity": "P2",
+   "summary": "rank 0/None 不可達分支",
+   "disposition": "accepted",
+   "resolution": "predicate 字面 + 五邊界"
+  }
+ ]
+}
