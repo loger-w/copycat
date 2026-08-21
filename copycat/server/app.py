@@ -299,20 +299,21 @@ class _Booted:
 def _heal_gate(
     calendar: TradingCalendar | None, clock_gate: Callable[[], bool]
 ) -> Callable[[], bool]:
-    """自癒閘 = 牆鐘時段 **AND 今天有開盤**;`calendar=None` 逐字等於改動前的純牆鐘。
+    """自癒閘 = 牆鐘時段 **AND 那一場有開盤**;`calendar=None` 逐字等於改動前的純牆鐘。
 
     純牆鐘的失效樣態:週末 / 國定假日整天閘都成立 → 每 5s 巡檢一次、對 TC4 上游
     送 UNSUB+SUB,而那些 symbol 在休市日本來就不會有推播 → 退避爬到 300s 之後仍
     整天不停。我方全鏈零訊號(自癒 log 本來就是 warning 級的日常),只有 TC4 那頭
     的 QuoteZMQService log 看得出來。
 
-    日期取樣一律經 `_today()`(日曆推導的唯一取樣點)。**已知邊界**:夜盤跨午夜,
-    週六凌晨 00:00–05:00 屬週五那一場,`is_trading_day(週六)` 為 False → 那一段
-    不自癒。取「寧可少救不可空 churn」,與 R3 個股健檢的盤外早退同一取捨。
+    日期取樣走 `_session_date()`(**場別起始日**,不是牆鐘今天):夜盤跨午夜,凌晨
+    那幾小時屬前一日開的那一場。用 `_today()` 的話兩頭都錯 —— 週六 00:00–05:00
+    查到週六 → 該救不救;週一 01:00 查到週一 → 空 churn(週日沒有夜盤,而凌晨的
+    clock_gate 為真)。stock / index 的 clock_gate 凌晨恆 False,不受這一改影響。
     """
     if calendar is None:
         return clock_gate
-    return lambda: calendar.is_trading_day(_today()) and clock_gate()
+    return lambda: calendar.is_trading_day(_session_date()) and clock_gate()
 
 
 def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
@@ -377,8 +378,26 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
     return []
 
 
+def _session_date() -> _date:
+    """現在這一刻所屬**場別的起始日**(夜盤跨午夜歸前一日),**不是 TAIFEX 交易日**。
+
+    06:00 切換:夜盤 05:00 收盤 + 自癒閘的 5 分寬放都在門檻內,日盤 08:45 尚未開。
+    只有 `_heal_gate` 用它 —— `_resolve_trade_date`(兩處)、`/api/calendar.today`、
+    breadth 今日、overlay 基準日(兩個 handler)一律仍走 `_today()`,那些要的是
+    「資料屬於哪個交易日」,不是「現在是誰的場」。
+
+    **近似誤差**:夜盤存在與否其實取決於**次一營業日**(封關夜那類:起始日是交易日
+    但隔天休市 → 當晚無夜盤,閘仍為真 → 空 churn)。方向安全(不會該救不救),頻率
+    也低,故不引入「下一交易日」判定。
+    """
+    now = _now()
+    d = now.date()
+    return d - _timedelta(days=1) if now.hour < 6 else d
+
+
 def _today() -> _date:
-    """牆鐘今天 —— **日曆推導的唯一取樣點**(mod/trading-calendar Q9)。
+    """牆鐘今天 —— 日曆**交易日**推導的唯一取樣點(mod/trading-calendar Q9);
+    場別起始日另見 `_session_date`。
 
     涵蓋範圍逐條:`trade_date` 推導(`_resolve_trade_date`)、overlay 基準日、
     `/api/calendar.today`。散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的
