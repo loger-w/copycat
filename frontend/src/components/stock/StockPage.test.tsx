@@ -10,7 +10,8 @@ import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
-import { FEE_DISCOUNT_KEY } from "@/lib/constants";
+import { FEE_DISCOUNT_KEY, STOCK_VIEW_KEY } from "@/lib/constants";
+import type { StockView } from "@/lib/stock-view";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
 import { pnlText } from "@/lib/pnl-format";
@@ -748,6 +749,64 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     // it 自己的 timeout 也要放寬:預設 5s 與 waitFor 的 5s 撞在一起,失敗訊息會變成
     // 「Test timed out」而看不出是哪一條斷言沒過
   }, 10_000);
+
+  // 🔴 review F1:`view` 有**兩份初值**(本元件與 App 各自 `readStockView()`)。同一個
+  // 分頁內兩者相等,但另一個視窗改過 localStorage 之後,App 讀到的是它自己掛載當下那
+  // 一份 —— 本元件掛在「群組」而 App 以為「單檔」,那趟 `/api/stock/state` 照樣拖回整份
+  // tape(MB 級),而畫面上完全看不出來(B15 省流量整條失效)。掛載通知一則就對齊。
+  it("掛載時把實際檢視通知上層一次(localStorage=group)", async () => {
+    mockGroupApi();
+    window.localStorage.setItem(STOCK_VIEW_KEY, "group");
+    const onViewChange = vi.fn();
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream()}
+        onViewChange={onViewChange}
+      />,
+    );
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("group"));
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("掛載通知也涵蓋單檔(壞值 / 未設 → 兩邊都得知道是 single)", async () => {
+    mockGroupApi();
+    window.localStorage.setItem(STOCK_VIEW_KEY, "亂寫");
+    const onViewChange = vi.fn();
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream()}
+        onViewChange={onViewChange}
+      />,
+    );
+    await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("single"));
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+  });
+
+  // 掛載通知會讓 App setState → 本元件重繪。沒有「只發一次」的守門就是 render 迴圈,
+  // 而 App 傳下來的 `onViewChange` 每次重繪都是新的函式(setState 的 setter 其實穩定,
+  // 但這裡不倚賴那個巧合)。
+  it("上層重繪(換 props / 換 onViewChange 身分)不重發掛載通知", async () => {
+    mockGroupApi();
+    window.localStorage.setItem(STOCK_VIEW_KEY, "group");
+    // 同一個 client 重繪(不能用 `wrap` 的 rerender:那會換掉 QueryClient)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (cb: (next: StockView) => void) => (
+      <QueryClientProvider client={client}>
+        <StockPage code="2330" onSelect={vi.fn()} stream={stream()} onViewChange={cb} />
+      </QueryClientProvider>
+    );
+    const first = vi.fn();
+    const { rerender } = render(tree(first));
+    await waitFor(() => expect(first).toHaveBeenCalledTimes(1));
+    const second = vi.fn();
+    rerender(tree(second));
+    expect(second).not.toHaveBeenCalled();
+    expect(first).toHaveBeenCalledTimes(1);
+  });
 
   it("檢視選擇存進 localStorage,重掛後還原", async () => {
     mockGroupApi();
