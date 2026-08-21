@@ -1909,3 +1909,112 @@ describe("StockIntradayChart 當日成交點(SC-3/4/5/9)", () => {
     expect(counted.mock.calls.length).toBe(FILLS.length);
   });
 });
+
+// 🔴 R1 SC-1 / SC-2 / SC-3(mod/cdp-edge-label-avoid):右緣**帶內**標籤(走廊 A)避讓。
+//
+// 帶內每條疊線一顆文字(CDP 印 `價位*`、MA 印名稱),y 至今直接 = 線 y。2330 平靜日
+// CDP 五值 + MA5/MA20 七顆常態擠在 36px 內,整組疊字糊成一團(2026-08-20 實證截圖)。
+// 這裡鎖的是「標籤離線、線不離」:文字兩兩 ≥ EDGE_LABEL_H,而 <line y1> 逐條仍等於
+// 幾何算出的線 y（相鄰只差 6px)。
+describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () => {
+  /** 七條全落在 y 域內、相鄰 y 差 ≈6px(< 10px 必疊);snap 後五個價位文字互異 */
+  const CROWDED = {
+    cdp: { ah: 2_364_000, nh: 2_352_400, cdp: 2_340_800, nl: 2_329_200, al: 2_317_600 },
+    ma5: 2_306_000,
+    ma20: 2_294_400,
+    date: "2026-07-25",
+  };
+  /** 帶內文字的 x(`w − R_AXIS_W + 2`,anchor=start);全檔僅此一處用這個 x */
+  const BAND_X = "762";
+
+  function mainSvg(container: HTMLElement): SVGSVGElement {
+    return [...container.querySelectorAll("svg")].find(
+      (s) => s.getAttribute("aria-label") === "分時走勢圖",
+    )! as SVGSVGElement;
+  }
+
+  /** 帶內標籤 = x 落在右緣帶、anchor=start 的那組 <text> */
+  function bandTexts(container: HTMLElement): SVGTextElement[] {
+    return [...mainSvg(container).querySelectorAll("text")].filter(
+      (t) => t.getAttribute("x") === BAND_X,
+    );
+  }
+
+  /** 疊線線體 = 虛線樣式 "3 2" 且自左軸起畫的那組 <line>(平盤線是 "2 3") */
+  function overlayLineEls(container: HTMLElement): SVGLineElement[] {
+    return [...mainSvg(container).querySelectorAll("line")].filter(
+      (l) => l.getAttribute("stroke-dasharray") === "3 2" && l.getAttribute("x1") === "36",
+    );
+  }
+
+  async function renderCrowded(): Promise<HTMLElement> {
+    overlayResponse = CROWDED;
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() => expect(bandTexts(container).length).toBe(7));
+    return container;
+  }
+
+  it("SC-2:帶內 7 顆全印,文字集合不變(CDP 五顆帶 `*` + MA5 / MA20 名稱)", async () => {
+    const container = await renderCrowded();
+    const texts = bandTexts(container).map((t) => t.textContent);
+    // fmtTickPrice 口徑(5 元 tick,snapNearest):2_364_000 → 2365、2_317_600 → 2320
+    expect(texts).toEqual(["2365*", "2350*", "2340*", "2330*", "2320*", "MA5", "MA20"]);
+    expect(texts.filter((t) => t!.endsWith("*")).length).toBe(5);
+  });
+
+  it("SC-1:帶內文字相鄰中心距 ≥ 10px(七顆不再疊字)", async () => {
+    const container = await renderCrowded();
+    // 文字 baseline = 中心 + 3(D5:既有近似,本輪不改渲染方式)
+    const ys = bandTexts(container)
+      .map((t) => Number(t.getAttribute("y")))
+      .sort((a, b) => a - b);
+    expect(ys.length).toBe(7);
+    for (let i = 1; i < ys.length; i += 1) {
+      // 10 = EDGE_LABEL_H;未避讓時這裡是 ≈6.0(fixture 的線距)
+      expect(ys[i]! - ys[i - 1]!).toBeGreaterThanOrEqual(10);
+    }
+  });
+
+  it("SC-3:線體不動 —— <line y1> 逐條仍等於幾何線 y,相鄰只差約 6px", async () => {
+    const container = await renderCrowded();
+    const g = buildIntradayGeometry(
+      { minutes: ACCUM.minutes, meta: ACCUM.meta, high: ACCUM.high, low: ACCUM.low },
+      { width: 800, height: 260 },
+    );
+    const lines = overlayLineEls(container);
+    expect(lines.length).toBe(7);
+    const prices = [2_364_000, 2_352_400, 2_340_800, 2_329_200, 2_317_600, 2_306_000, 2_294_400];
+    for (const [i, l] of lines.entries()) {
+      expect(Number(l.getAttribute("y1"))).toBeCloseTo(g.toY(prices[i]!), 6);
+      expect(l.getAttribute("y2")).toBe(l.getAttribute("y1"));
+    }
+    // 線仍擠在一起(標籤被推開的同時線沒跟著走):相鄰 ≈6px < EDGE_LABEL_H
+    const ys = lines.map((l) => Number(l.getAttribute("y1"))).sort((a, b) => a - b);
+    for (let i = 1; i < ys.length; i += 1) {
+      expect(ys[i]! - ys[i - 1]!).toBeCloseTo(6.0, 1);
+    }
+  });
+
+  it("SC-1:最下面那顆標籤真的離開了自己的線(避讓有作用,不是 vacuous)", async () => {
+    const container = await renderCrowded();
+    const lastText = bandTexts(container).at(-1)!; // MA20,輸出順序 = 輸入順序
+    const lastLine = overlayLineEls(container).at(-1)!;
+    const textY = Number(lastText.getAttribute("y"));
+    const lineY = Number(lastLine.getAttribute("y1"));
+    // 未避讓時 textY === lineY + 3;七顆全擠時 MA20 被推開 24px
+    expect(textY - (lineY + 3)).toBeCloseTo(24.0, 1);
+  });
+
+  it("W3:文字的 x / 顏色 / 字級不變(只動 y)", async () => {
+    const container = await renderCrowded();
+    const texts = bandTexts(container);
+    for (const t of texts) {
+      expect(t.getAttribute("x")).toBe(BAND_X);
+      expect(t.getAttribute("font-size")).toBe("0.5625rem");
+    }
+    expect(texts[0]!.getAttribute("class")).toContain("fill-bull");
+    expect(texts[5]!.getAttribute("class")).toContain("fill-ma5");
+    expect(texts[6]!.getAttribute("class")).toContain("fill-ma20");
+  });
+});
