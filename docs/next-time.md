@@ -273,11 +273,11 @@
 
 ## 2026-08-17(mod/ladder-pills-avgpct R6 留尾)
 
-- [ ] **aria-pressed pill 群的單選語意 → radiogroup**(review A3):交易別 pill(PriceLadder)、
+- [x] **aria-pressed pill 群的單選語意 → radiogroup**〔2026-08-21 已出貨 PR #79 mod/a11y-radiogroup-tablist-contrast:共用 `ui/RadioPills`(label 包 sr-only radio),九組單選 pill 全換;RiverPanel 並排/重疊未納,見下方新條〕(review A3):交易別 pill(PriceLadder)、
   StockPage 檢視切換、GroupGridView 檔數、OrderPanel 四處同構 `role=group + aria-pressed button`,
   對 AT 是「四個互不相干的開關」且 tab stop ×4;正解 = sr-only radio + label(單選 / 方向鍵 / roving
   tabindex 免費)。與 08-14 tablist ARIA 半套條同批處理(樣板級決定,四處一併)。
-- [ ] **零態 `text-ink-dim` 對 `bg-surface` 對比 2.92:1 未達 AA**(review A6):群組平均漲幅 0.00% /
+- [x] **零態 `text-ink-dim` 對 `bg-surface` 對比 2.92:1 未達 AA**〔2026-08-21 已出貨 PR #79:三處 → ink-muted〕(review A6):群組平均漲幅 0.00% /
   stockRow / GroupGridView QuoteCell 零態同口徑;改 `text-ink-muted`(6.06:1)要三處一起,獨立 chore。
 - [ ] 群組平均漲幅**不設覆蓋率門檻**(review C4 auto-default):1/10 檔有成交仍顯示,靠 title「n/N 檔有成交」
   可查證;若 user 盤前掃側欄覺得誤導,候選 = n < ceil(N/2) 時降 ink-dim。
@@ -364,7 +364,7 @@
 
 ## 2026-08-14(mod/overview-subtabs 收尾沉澱)
 
-- [ ] **tablist 的 ARIA 半套(台股綜合 + RightRail 同型)**(review A-4):兩處
+- [x] **tablist 的 ARIA 半套(台股綜合 + RightRail 同型)**〔2026-08-21 已出貨 PR #79:RightRail + App 主分頁兩處補 aria-controls / tabpanel / roving,manual activation(方向鍵只移焦點,Enter 才切 — 切 tab 會解除武裝);IndexPage subtab 已退役〕(review A-4):兩處
   `role="tablist"`/`role="tab"` 都沒有 `aria-controls` / panel 的 `role="tabpanel"` +
   `aria-labelledby` / roving tabindex(方向鍵不能切)。IndexPage 新列是照 RightRail
   樣板抄的,非本輪回歸 — 修就兩處一併(樣板級決定),獨立小輪。
@@ -1580,9 +1580,15 @@ XR-7、FE-4 隨之作廢;HR-6 / HR-3 / HR-5 是 hub 通用議題仍成立,但「
   `buildOverlayGeometry` filter 掉 ref null/0 的 series,`g.lines` index 與
   OVERLAY_LINES 錯位 —— twse.ref 缺時僅剩的櫃買線會畫成加權色標「加權」。
   修法 = callee 帶回原始 index(或 filter 改保位 null),OVERLAY_LINES 註解已標。
-- [ ] **P2:WatchlistSidebar row div 無鍵盤路徑**(既存;doctor
+- [x] **P2:WatchlistSidebar row div 無鍵盤路徑**〔2026-08-21 已出貨 PR #79:列內容改 `wl-select-{code}` button(Tab 可達 / Enter 選取 / aria-current),row div 不再掛 onClick〕(既存;doctor
   no-static-element-interactions :298):`wl-row-*` div onClick 選股無 role/tabIndex/
   鍵盤 handler。要嘛換 button / 補 key handler,要嘛確認選股有其他鍵盤入口後 ignore。
+- [ ] **RiverPanel 並排 / 重疊是單選 pill 但無 aria-pressed / radiogroup**(2026-08-21 a11y 批 spec review R13):
+  `corr/RiverPanel.tsx:86-100`;換 `ui/RadioPills` 即可(RiverPanel.test 6+ 處以 button 定位要改 radio)。S 級,順手批。
+- [ ] **App `<nav role="tablist">` 含非 tab 子節點**(既有;2026-08-21 a11y review A11Y-p2-2):`App.tsx` nav 內同時包
+  `VersionDriftBadge` + `IndexBar`,違反 aria-required-children。修法:tablist role 收到只包五顆 tab 的內層 div。S 級。
+- [ ] **RadioPills `onInteract` 每次 label 點擊觸發兩次**(2026-08-21 fix 波實測:label activation 轉發 click 到內層 input 再冒泡):
+  現僅用於 PriceLadder 重置武裝閒置計時,冪等無害;若之後有人拿它計數,要在 label onClick 過濾 `e.target` 為 input 的那次。
 - [ ] **P2:自選列組內排序無鍵盤路徑**(既存):拖拉握把是唯一排序入口(pointer
   only;aria-hidden 化後對 AT 不可見)。管理 Dialog 只有移組/移除,無排序。
   補鍵盤排序入口(如 Dialog 內上移/下移鈕)列排期。

@@ -151,3 +151,6 @@ MarketPane.test.tsx(130 `btn()` helper、164 parentElement)、FuturesChart.test.
 - **tablist-keys `[A11Y-4]`**:helper 改吃 `{ key, altKey, ctrlKey, metaKey }`,修飾鍵 → null。
 - MarketPane 標的列「台指期」value 固定 `"FUT"`、呼叫端映射 futKey(A11Y-p2-1)。
 - next-time:App `<nav role=tablist>` 含 VersionDriftBadge / IndexBar(aria-required-children,既有);RiverPanel 單選 pill。
+
+## self_review_head
+cb1579af(code review round 1 + fix 波後 HEAD;fix 波源碼 diff 主 session 快篩)
