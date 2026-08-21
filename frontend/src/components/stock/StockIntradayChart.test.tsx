@@ -2006,6 +2006,34 @@ describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () =>
     expect(textY - (lineY + 3)).toBeCloseTo(24.0, 1);
   });
 
+  /** 🟢 code review TC-4:D7 —— 走廊 A 用**自己的界** `bandBounds = { PAD_Y, plotBottom − PAD_Y }`
+   *  (= 線 y 的值域),不是走廊 B 的 `edgeBounds = { MARK_LABEL_TOP, plotBottom − 5 }`。
+   *  兩者上界差 5px(4 vs 9),而 `edgeBounds` 的上界是為了「極值文字不要頂到 viewBox 外」
+   *  留的 —— 帶內沒有極值文字,套上去只會把**貼近日高的那條線**的標籤無故往下推 5px,
+   *  線卻留在原地(標籤與線脫節)。這一條就是在量那 5px:任一顆線 y 落在 [PAD_Y, MARK_LABEL_TOP)
+   *  且不與別人相疊時,標籤必須**完全不動**。
+   *
+   *  AH 貼近域頂(2_548_000,域 = 漲跌停 [2_090_000, 2_550_000]),其餘四條相距 ≥ 25px。 */
+  it("D7:貼近繪圖區頂緣(y < MARK_LABEL_TOP)且不相疊的線 → 標籤不位移(界是 bandBounds 不是 edgeBounds)", async () => {
+    overlayResponse = {
+      cdp: { ah: 2_548_000, nh: 2_400_000, cdp: 2_350_000, nl: 2_300_000, al: 2_250_000 },
+      ma5: null,
+      ma20: null,
+      date: "2026-07-25",
+    };
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    await waitFor(() => expect(bandTexts(container).length).toBe(5));
+    const topText = bandTexts(container)[0]!; // AH,輸出順序 = 輸入順序
+    const topLine = overlayLineEls(container)[0]!;
+    const lineY = Number(topLine.getAttribute("y1"));
+    // 推導:plotH = 260 − X_LABEL_H(14) − 2×PAD_Y(8) = 238;
+    // y = PAD_Y + (2_550_000 − 2_548_000) / 460_000 × 238 = 4 + 1.0348 = 5.0348 ∈ [4, 9)
+    expect(lineY).toBeCloseTo(5.035, 3);
+    // 不位移 → 文字 baseline = 線 y + 3(D5)。換成 edgeBounds(top = 9)會 clamp 成 9 → 12
+    expect(Number(topText.getAttribute("y"))).toBeCloseTo(lineY + 3, 6);
+    expect(Number(topText.getAttribute("y"))).toBeCloseTo(8.035, 3);
+  });
+
   it("W3:文字的 x / 顏色 / 字級不變(只動 y)", async () => {
     const container = await renderCrowded();
     const texts = bandTexts(container);

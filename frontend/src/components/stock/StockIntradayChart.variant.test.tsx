@@ -1,11 +1,12 @@
 /** @vitest-environment jsdom */
-import { cleanup } from "@testing-library/react";
+import { cleanup, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IntradayChartCore, StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import type { FillPoint } from "@/lib/fill-marks";
 import { fromSnapshot } from "@/lib/stock-accum";
+import { R_AXIS_W } from "@/lib/stock-intraday-svg";
 import { wrap } from "@/test-utils";
 
 /** 圖牆卡片與單檔頁共用同一份渲染碼(change-spec §6 A):**圖形語彙全同、文字 chrome 精簡**。
@@ -16,11 +17,15 @@ import { wrap } from "@/test-utils";
 
 const OVERLAY = { cdp: null, ma5: null, ma20: null, date: "2026-08-14" };
 
+/** 疊線回應可逐案覆寫(帶內標籤那組要真的有 CDP / MA 值);預設仍是全 null 的 OVERLAY */
+let overlayResponse: object = OVERLAY;
+
 beforeEach(() => {
   window.localStorage.removeItem("copycat-chart-toggles");
+  overlayResponse = OVERLAY;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(OVERLAY))),
+    vi.fn(async () => new Response(JSON.stringify(overlayResponse))),
   );
 });
 
@@ -126,6 +131,71 @@ describe("IntradayChartCore variant=card", () => {
     expect(container.querySelector('[data-testid="last-dot"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="energy-bar"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="y-tick-price"]')).toBeTruthy();
+  });
+});
+
+/** 🟢 code review TC-5(mod/cdp-edge-label-avoid,D6 / SC-4 R11):圖牆卡片的右緣**帶內**標籤。
+ *
+ *  D6 的取捨是「寧疊不丟」—— 帶內的 `價位*` 是 CDP 唯一的價位訊息,而 `cardSvgBox` 沒有高度
+ *  地板(4×4 圖牆 mainH ≈ 80 時 capacity 6 < 7)。這一組鎖的就是那個取捨:**顆數與文字集合
+ *  在 card 變體上與單檔頁完全相同**,不因寬度縮到 246 就少印一顆。
+ *  幾何(兩兩不相疊)刻意**不在這裡斷言**:R11 明訂矮卡片允許貼齊界邊疊印,幾何由
+ *  `lib/stock-intraday-svg.test.ts` 的 `bandLabels` describe 逐點量。 */
+describe("IntradayChartCore variant=card 右緣帶內標籤(TC-5)", () => {
+  /** 帶內文字的 x = `w − R_AXIS_W + 2`(anchor=start);card 的 w = CARD_W */
+  const BAND_X = String(CARD_W - R_AXIS_W + 2);
+
+  /** 七條擠在一起(相鄰 11_600 毫元;card mainH=140 → 相鄰約 3px,遠小於 EDGE_LABEL_H) */
+  const CROWDED = {
+    cdp: { ah: 2_364_000, nh: 2_352_400, cdp: 2_340_800, nl: 2_329_200, al: 2_317_600 },
+    ma5: 2_306_000,
+    ma20: 2_294_400,
+    date: "2026-07-25",
+  };
+
+  const ON: ChartToggles = { ...TOGGLES, cdp: true, ma: true };
+
+  function bandTexts(container: HTMLElement): SVGTextElement[] {
+    const main = container.querySelector("svg")!;
+    return [...main.querySelectorAll("text")].filter((t) => t.getAttribute("x") === BAND_X);
+  }
+
+  it("CDP + MA 全開 → 帶內 7 顆全印,文字集合與單檔頁相同(D6:不截斷、不丟棄)", async () => {
+    overlayResponse = CROWDED;
+    const { container } = wrap(
+      <IntradayChartCore
+        accum={ACCUM}
+        toggles={ON}
+        variant="card"
+        width={CARD_W}
+        mainHeight={140}
+        subHeight={38}
+      />,
+    );
+    await waitFor(() => expect(bandTexts(container).length).toBe(7));
+    // fmtTickPrice 口徑(5 元 tick,snapNearest):2_364_000 → 2365、2_317_600 → 2320
+    expect(bandTexts(container).map((t) => t.textContent)).toEqual([
+      "2365*",
+      "2350*",
+      "2340*",
+      "2330*",
+      "2320*",
+      "MA5",
+      "MA20",
+    ]);
+  });
+
+  /** 負控:CDP / MA 兩鈕皆關時帶內一顆都不印(**後端資料備妥也一樣** —— 閘在 toggle 不在資料)。
+   *  同時是上一條的 vacuity 檢查:BAND_X 這個 x 沒有誤收到別的 `<text>`(時間標 / 價位刻度)。
+   *  「連 `/api/stock/overlay` 都不打」與「一顆都不印」要一起斷言:少了前者,兩鈕皆關卻照樣
+   *  發查詢時這條仍會綠(render 當下 fetch 尚未 resolve,顆數本來就是 0)—— 恆綠的負控。 */
+  it("CDP / MA 兩鈕皆關(即使疊線資料可得)→ 不打 overlay 查詢、帶內一顆文字都沒有", () => {
+    overlayResponse = CROWDED;
+    expect(TOGGLES.cdp).toBe(false);
+    expect(TOGGLES.ma).toBe(false);
+    const { container } = card();
+    expect(vi.mocked(globalThis.fetch).mock.calls.length).toBe(0);
+    expect(bandTexts(container).length).toBe(0);
   });
 });
 
