@@ -76,7 +76,11 @@ interface WsMsg {
   [key: string]: unknown;
 }
 
-/** 主圖 snapshot 的 REST URL —— **五個 refetch 觸發共用的唯一產生點**(R2-7)。
+/** 主圖 snapshot 的 REST URL —— **六個 refetch 觸發共用的唯一產生點**(R2-7)。
+ *
+ *  六個列在這裡,漂掉時才看得出來(review F3:B15 多了 tape 那個之後數字沒跟著改):
+ *  ① 切標的 effect ② tape 由關轉開 effect ③ tick 跳號 ④ 主圖回補完成(status)
+ *  ⑤ WS onOpen 重連對齊 ⑥ 失敗重試 `scheduleRetry`。③④⑤ 活在 WS callback 的閉包裡。
  *
  *  路徑段恆為股號、合約走 query string:instrument key(`F:CDF:202609`)放進路徑會被
  *  後端 `_valid_code` 400,而且 D7 白名單需要股號才驗得了「這個合約屬於這檔股票」。
@@ -162,7 +166,7 @@ export function useStockStream(
   codeRef.current = code;
   const contractRef = useRef(contract);
   contractRef.current = contract;
-  // ref 化的理由同 contractRef:五個 refetch 觸發裡有三個活在 WS callback(deps `[]`)
+  // ref 化的理由同 contractRef:六個 refetch 觸發裡有三個活在 WS callback(deps `[]`)
   // 的閉包內 —— 讓它捕獲 `tape` 的話,切回單檔之後由 seq-gap / 重連觸發的 refetch 還會
   // 帶著掛載當時的 `tape=0`,主圖的明細因此永遠是空的,而畫面上不會有任何錯誤。
   //
@@ -308,6 +312,15 @@ export function useStockStream(
   //
   // **無條件補**,不做「這份到底是不是 tape=0 來的」的最佳化:多打一趟的代價是一次
   // 請求(且 in-flight 時會被 CR1 合併),漏打的代價是主圖整天空明細而畫面不講原因。
+  //
+  // **不變式(review F2)**:本 effect 是 `tapeRef` 的唯一寫入點,且順序恆為「先同步、
+  // 再判斷要不要補打」。由此推出兩件事:
+  //   1. render 到本 effect 之間有一個窗,窗內 WS callback / 重試 timer 讀到的是**上一輪**
+  //      的 tape。那一窗最壞是多打或少打一趟明細,而**少打的那個方向(false→true)正是
+  //      本 effect 緊接著補上的那趟** —— 所以缺口不會留到下一次 refetch。
+  //   2. 反向(true→false)的舊值窗只會讓那一趟多帶回 ticks,無害,故不補。
+  // 哪天把同步搬到 render 期(比照 codeRef / contractRef),`wasOff` 就恆等於 `!tape`,
+  // 補打那趟永遠不會發生 —— 症狀是切回單檔後明細整天空著,零錯誤訊號。
   useEffect(() => {
     const wasOff = !tapeRef.current;
     tapeRef.current = tape;  // 上面那支 ref 的**唯一**寫入點(順序:先同步再補打)

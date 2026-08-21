@@ -256,6 +256,12 @@ class EngineRuntime:
             # 緊接 `_mark_changed()`(冪等):現況上一行 `_set_status` 已經標過一次,
             # 這裡不依賴那個巧合 —— 日後 `_set_status` 改成「值沒變就不標」時,漏的
             # 就是重試期間唯一一則推播,而且零錯誤訊號。
+            #
+            # ⚠ 語意界線(review C2):`attempt` 是**進度指示不是事件流**。`snapshots()`
+            # 是 latest-wins 節流(版本有變才取最新一份),consumer 慢或 attempt 之間
+            # 靠得太近時,前端會**跳號** —— 看到 1 之後直接跳 3 是正常的。要「每一次
+            # 重試都留下紀錄」得另開事件通道(不在本輪 scope);badge 只講「現在第幾
+            # 次」,跳號對它無害。
             self._mark_changed()
             self._buffer = HandoverBuffer()
             try:

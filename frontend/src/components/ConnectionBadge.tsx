@@ -1,6 +1,24 @@
 import { cn } from "@/lib/utils";
 import type { WsStatus } from "@/hooks/useTxoSnapshot";
-import type { Snapshot } from "@/types";
+
+/** 後端交接(回補)進度;產生點 `EngineRuntime._handover`(copycat/server/engine.py)。
+ *
+ *  **型別住在這裡、由 `Snapshot` 反過來引用**(review F4):唯一的讀者是本 badge,而
+ *  TXO 的 `Snapshot` 只是目前**其中一條**運送管道 —— 個股 / 期貨面日後要送同一份進度時,
+ *  badge 不該為了拿型別而 import 一個它不消費的 TXO 快照。
+ *
+ *  **全欄選填**:交接還沒跑過時整份是 `null`,而每個 attempt **開頭**那則刻意不帶五個
+ *  統計欄(後端 D1'':上一輪的 backfill_secs 掛在新一輪的進度上是假資料)。 */
+export interface HandoverProgress {
+  attempt?: number;
+  attempts_max?: number;
+  phase?: string;
+  backfill_secs?: number;
+  buffer_used?: number;
+  buffer_cap?: number;
+  buffer_warned?: boolean;
+  overflows?: number;
+}
 
 const WARN_TONE = "bg-bull/15 text-bull border-bull/40";
 const DEFAULT_TONE = "bg-surface text-ink-muted border-line";
@@ -23,7 +41,7 @@ export function ConnectionBadge({
   status: string;
   wsStatus: WsStatus;
   /** 後端交接進度(選填):`attempt` ≥ 2 時 badge 講到第幾次。 */
-  handover?: Snapshot["handover"];
+  handover?: HandoverProgress | null;
 }) {
   const broken = wsStatus !== "open";
   // 只在**回補中**才帶次數:attempt 是上一次交接留下的值,live / degraded 時掛著
