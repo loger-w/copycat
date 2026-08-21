@@ -998,6 +998,62 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     expect(putBodies).toEqual([]);
   });
 
+  // 🔴 TQ-1 / TQ-2(review round-1):上面那條的 fixture 是 `[0, 20]` —— top=0 讓
+  // `bottom`(20)與 `height`(20)**同值**,`zonesNow` 把 `.bottom` 誤寫成 `.height`
+  // 的 mutant 照樣綠。下面三條把 sticky 釘在**非零上緣** `[40, 60]`:
+  //   - 帶內 y=50 作廢;`.height` mutant 下界退成 20 → 50 不作廢 → 真的搬組 = 紅。
+  //   - 邊界 y=60 照常落點(`<` 而非 `<=`)。
+  //   - 帶外 y=160 的正常落點不受影響(over-void 的反向對照)。
+  // 來源刻意取**觀察**的 3231 而不是主力的 5483:落到主力是真的搬組,而從主力起拖時
+  // slot 1 會被 `insertAt` 的「自身先移除」折成 no-op → 零 PUT,與作廢的觀測值分不開
+  // (= 假綠)。
+  function dragFromWatch(): void {
+    stubRects({ "wl-sticky": [40, 60] });
+    const handle = within(screen.getByTestId("wl-group-觀察")).getByTestId("wl-handle-3231");
+    fireEvent(handle, ptr("pointerdown", 10, 200));
+  }
+
+  it("作廢帶(非零上緣)內放開 → 零 PUT", async () => {
+    sidebar();
+    await waitGroups();
+    dragFromWatch();
+    fireEvent(window, ptr("pointermove", 100, 50));
+    fireEvent(window, ptr("pointerup", 100, 50));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  it("作廢帶下緣(y === bottom)放開 → 照常落點(界是 `<`,不含下緣)", async () => {
+    sidebar();
+    await waitGroups();
+    dragFromWatch();
+    fireEvent(window, ptr("pointermove", 100, 60));
+    fireEvent(window, ptr("pointerup", 100, 60));
+    // 主力 listTop 24 + ROW_H 52 → (60-24)/52 四捨五入 = slot 1(2330 與 5483 之間)
+    await waitFor(() =>
+      expect(putGroups()).toEqual([
+        [
+          { name: "主力", codes: ["2330", "3231", "5483"] },
+          { name: "觀察", codes: ["2330"] },
+        ],
+      ]),
+    );
+  });
+
+  it("同一個非零作廢帶下,帶外落點照常搬組(作廢不外溢)", async () => {
+    await startDrag({ "wl-sticky": [40, 60] });
+    fireEvent(window, ptr("pointermove", 100, 160));
+    fireEvent(window, ptr("pointerup", 100, 160));
+    await waitFor(() =>
+      expect(putGroups()).toEqual([
+        [
+          { name: "主力", codes: ["2330"] },
+          { name: "觀察", codes: ["5483", "3231", "2330"] },
+        ],
+      ]),
+    );
+  });
+
   // review R7:作廢帶內的 hover 高亮要**回到來源組**,否則畫面停在「放不進去的那一組」
   // 高亮著,使用者只會再按一次。**來源必須是非最上面的那組**:作廢帶在所有 zone 上方,
   // 舊行為的最近 zone 恆為主力,從主力起拖的話修不修都亮主力(vacuous)。
@@ -1013,6 +1069,24 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     fireEvent(window, ptr("pointermove", 100, 10));
     expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
     expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
+    fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
+  // 🔴 F2(review round-1):「回來源組」是對**任何** null 落點的一致行為,不只作廢帶 ——
+  // 側欄外(x 越界)也是 null。這條把該語意擴張釘住:不釘的話「作廢帶回來源、側欄外
+  // 亮未分組」這種分歧改法照樣綠,而畫面會說「放開會掉到未分組」(實際是取消)。
+  it("拖曳中移到側欄外 → 落點高亮同樣回到來源組(null 落點一致)", async () => {
+    sidebar();
+    await waitGroups();
+    stubRects();
+    const handle = within(screen.getByTestId("wl-group-觀察")).getByTestId("wl-handle-3231");
+    fireEvent(handle, ptr("pointerdown", 10, 200));
+    fireEvent(window, ptr("pointermove", 100, 60));
+    expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent"); // 前提
+    fireEvent(window, ptr("pointermove", 900, 60));
+    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
+    expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
+    expect(screen.getByTestId("wl-ungrouped").className).not.toContain("border-accent");
     fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
