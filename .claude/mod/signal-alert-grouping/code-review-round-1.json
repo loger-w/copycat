@@ -1,0 +1,125 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness/state-machine(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "TQ-1",
+   "severity": "P1",
+   "summary": "5s 節流無 lock(192 第二則由合併窗勝出)",
+   "disposition": "accepted",
+   "resolution": "補窗內第二則案"
+  },
+  {
+   "id": "TQ-2",
+   "severity": "P1",
+   "summary": "通知合併文案零覆蓋、期望同源",
+   "disposition": "accepted",
+   "resolution": "hidden + TICK 三則字面案"
+  },
+  {
+   "id": "TQ-3",
+   "severity": "P1",
+   "summary": "dismiss 後同鍵訊號被吞無案",
+   "disposition": "accepted",
+   "resolution": "補 dismiss → 同鍵 emit 案"
+  },
+  {
+   "id": "TQ-4",
+   "severity": "P2",
+   "summary": "merge 不重設 TTL 無斷言",
+   "disposition": "accepted",
+   "resolution": "補 D3 案"
+  },
+  {
+   "id": "TQ-5",
+   "severity": "P2",
+   "summary": "錨 price 無鑑別力",
+   "disposition": "accepted",
+   "resolution": "TICK_B/C price 改"
+  },
+  {
+   "id": "TQ-6",
+   "severity": "P2",
+   "summary": "unmount timer 案半 vacuous",
+   "disposition": "accepted",
+   "resolution": "getTimerCount"
+  },
+  {
+   "id": "TQ-7",
+   "severity": "P2",
+   "summary": "丟棄不記帳無斷言",
+   "disposition": "accepted",
+   "resolution": "續 emit 案"
+  },
+  {
+   "id": "TQ-8",
+   "severity": "P2",
+   "summary": "同 kind 兩規則 hook 層無案",
+   "disposition": "accepted",
+   "resolution": "補案"
+  },
+  {
+   "id": "C1",
+   "severity": "P2",
+   "summary": "hidden tab timer ≥1s clamp(真環境)",
+   "disposition": "accepted",
+   "resolution": "spec 註記,過目量測"
+  },
+  {
+   "id": "C2",
+   "severity": "P2",
+   "summary": "窗尾丟棄無痕窗",
+   "disposition": "accepted",
+   "resolution": "spec Edge 4 註記"
+  },
+  {
+   "id": "C3",
+   "severity": "P2",
+   "summary": "groupKey 死欄位",
+   "disposition": "accepted",
+   "resolution": "移除欄位"
+  },
+  {
+   "id": "C4",
+   "severity": "P2",
+   "summary": "牆鐘/單調混用",
+   "disposition": "accepted",
+   "resolution": "註解取捨"
+  },
+  {
+   "id": "C5",
+   "severity": "P2",
+   "summary": "cleanup 清 index 不清 queue",
+   "disposition": "accepted",
+   "resolution": "註解明寫"
+  },
+  {
+   "id": "C6",
+   "severity": "P2",
+   "summary": "兩組合案缺",
+   "disposition": "accepted",
+   "resolution": "同 TQ-2/TQ-3"
+  },
+  {
+   "id": "C7",
+   "severity": "P2",
+   "summary": "多行 toast 過目條件",
+   "disposition": "accepted",
+   "resolution": "截圖條件記 memory 待 user"
+  },
+  {
+   "id": "C8",
+   "severity": "P2",
+   "summary": "重複條件",
+   "disposition": "accepted",
+   "resolution": "簡化"
+  }
+ ],
+ "evidence": {
+  "full_suite": "2463 passed",
+  "mutants": "m1..m12 harness in scratchpad"
+ }
+}
