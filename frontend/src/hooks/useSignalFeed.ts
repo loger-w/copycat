@@ -20,7 +20,17 @@ import { mergeSignals, type SignalMsg } from "@/lib/signal-model";
 const TODAY_KEY = ["stock-signals-today"];
 
 /** 跨午夜 / stage2 rollover 後標題要跟上(AR4)。WS 重連的 invalidate 只在斷線時發生,
- *  而長跑分頁可以整晚不斷線 —— 沒有這條週期,標題會停在昨天的日期直到有人重整。 */
+ *  而長跑分頁可以整晚不斷線 —— 沒有這條週期,標題會停在昨天的日期直到有人重整。
+ *
+ *  **「日期最多晚 5 分鐘」的前提是分頁可見**(review C-4):TanStack 預設
+ *  `refetchIntervalInBackground: false`,分頁被切走時這條輪詢停擺 —— 看盤機把瀏覽器
+ *  縮到背景放隔夜,回來的第一眼標題還是昨天的日期,直到分頁重新可見觸發一次。這是刻意
+ *  接受的:背景輪詢整晚打同一條端點,而畫面沒人在看。
+ *
+ *  **代價落在後端同一個 executor**:`/api/stock/signals/today` 的 jsonl 讀取走
+ *  `asyncio.to_thread`,與 daily_bars / capital close 共用 loop 預設池(見
+ *  `app.py::stock_signals_today`)。5 分一次 × 開著的分頁數是那個池的常態底噪 ——
+ *  要再縮短週期前先看池的排隊,不是只看這條端點自己有多快。 */
 const BASELINE_REFETCH_MS = 5 * 60_000;
 
 interface TodayPayload {
