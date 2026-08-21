@@ -389,6 +389,120 @@ async def test_snapshot_reports_handover_stats() -> None:
         await rt.close()
 
 
+class _GatedOverflowSource(FakeQuoteSource):
+    """指定的 attempt 讓交接 buffer 溢出(engine 因此重試),並可在回補中途交握。
+
+    溢出的製造方式是**直接翻 `rt._buffer.overflowed`**(私寫;沿本檔 `rt._handover = …`
+    的前例):真溢出要灌滿 20 萬則 tick,而這條測的是「重試期間進度欄有沒有推出去」,
+    不是 buffer 自己的計數。
+
+    `gated=True` 時每次進 `fetch_backfill` 先 `entered.set()` 再等 `gate` —— 回補跑在
+    `to_thread` 上、event loop 是空的,測試因此能停在「attempt N 已開始、還沒結束」
+    的那一刻讀 `latest_snapshot()`。沒有這個交握就只看得到最後一則,而「重試期間畫面
+    卡在『回補中』不知第幾次」正是本輪要修的東西。
+    """
+
+    def __init__(self, *, overflow_on: set[int], gated: bool = True) -> None:
+        super().__init__(backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]})
+        self.overflow_on = overflow_on
+        self.gated = gated
+        self.rt: EngineRuntime | None = None
+        self.attempts = 0
+        self.entered = threading.Event()
+        self.gate = threading.Event()
+
+    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+        self.attempts += 1
+        if self.gated:
+            self.entered.set()
+            self.gate.wait(15)
+            self.gate.clear()
+        if self.attempts in self.overflow_on:
+            rt = self.rt
+            assert rt is not None and rt._buffer is not None
+            rt._buffer.overflowed = True
+        return super().fetch_backfill(series)
+
+
+async def _await_attempt(fake: _GatedOverflowSource, n: int) -> None:
+    """等到第 n 次回補真的進了 `fetch_backfill`(交握點)。"""
+    entered = await asyncio.to_thread(fake.entered.wait, 5)
+    assert entered, f"attempt {n} 沒進 fetch_backfill"
+    assert fake.attempts == n
+    fake.entered.clear()  # 先清再放行:worker 下一輪才不會撞到上一輪殘留的旗標
+
+
+async def test_handover_attempt_progress_visible_during_retries() -> None:
+    """SC-1:重試期間 `handover.attempt` / `phase` 要跟著走,且**每 attempt 推一則**。
+
+    08-19 R1 起快照只在內容有變才推,而重試期間唯一會變的就是這幾個欄位 —— 沒有它們
+    的話 WS 整段靜默(心跳已解保活),前端 badge 固定「回補中」,使用者分不出「還在
+    第一次」與「重試到第三次」。
+    """
+    fake = _GatedOverflowSource(overflow_on={1})
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    fake.rt = rt
+    pushed: list[dict] = []
+
+    async def consume() -> None:
+        async for snap in rt.snapshots():
+            pushed.append(snap)
+
+    consumer = asyncio.create_task(consume())
+    task = asyncio.create_task(rt.start())
+    try:
+        await _await_attempt(fake, 1)
+        h = rt.latest_snapshot()["handover"]
+        assert h["attempt"] == 1
+        assert h["attempts_max"] == 3
+        assert h["phase"] == "backfilling"
+        # D1'':五個既有觀測欄只在 attempt **結束**時出現,開頭那則不帶(不 merge 舊值 ——
+        # 上一輪的 backfill_secs 掛在新一輪的進度上是假資料)
+        assert "buffer_used" not in h
+        fake.gate.set()  # 放行 attempt 1 → buffer 溢出 → 重試
+
+        await _await_attempt(fake, 2)
+        h = rt.latest_snapshot()["handover"]
+        assert h["attempt"] == 2
+        assert h["phase"] == "backfilling"
+        fake.gate.set()
+        await task
+
+        h = rt.latest_snapshot()["handover"]
+        assert h["attempt"] == 2
+        assert h["phase"] == "live"
+        assert h["overflows"] == 1  # 既有欄位語意不變(W1)
+        assert h["buffer_cap"] == 200_000
+        assert rt.status == "live"
+        # 「推播」這半:攤平 attempt 序列,1 與 2 都要真的被送出去過
+        await asyncio.sleep(0.05)
+        attempts = [s["handover"]["attempt"] for s in pushed if s.get("handover")]
+        assert 1 in attempts, "attempt 1 從沒被推出去 → 前端看不到第一次"
+        assert 2 in attempts, "重試那一則沒推 → 畫面停在第 1 次(本輪的病灶)"
+    finally:
+        consumer.cancel()
+        with suppress(asyncio.CancelledError):
+            await consumer
+        await rt.close()
+
+
+async def test_handover_degraded_reports_last_attempt_and_phase() -> None:
+    """SC-1 降級面:三次全溢出 → `attempt == 3`、`phase == "degraded"`(與 status 同義)。"""
+    fake = _GatedOverflowSource(overflow_on={1, 2, 3}, gated=False)
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    fake.rt = rt
+    await rt.start()
+    try:
+        assert rt.status == "degraded"
+        h = rt.latest_snapshot()["handover"]
+        assert h["attempt"] == 3
+        assert h["attempts_max"] == 3
+        assert h["phase"] == "degraded"
+        assert h["overflows"] == 3
+    finally:
+        await rt.close()
+
+
 async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
     """request_self_heal 後即使 tick 連續流入(queue 永不 timeout),自癒仍須觸發。"""
     fake = FakeQuoteSource()
