@@ -686,3 +686,32 @@ export function edgePriceLabels(
   }
   return layoutEdgeLabels(labels, obstacles, bounds, { dropOverflow: true });
 }
+
+/** 右緣**帶內**標籤(走廊 A)的佈局(R1 SC-1)。
+ *
+ *  帶內每條疊線一顆文字:CDP 五線印 `價位*`、MA 印名稱(文字由呼叫端的 `levelText`
+ *  現算)。至今 y 直接取線 y,平靜日 CDP 五值 + MA5/MA20 常態擠在 36px 內整組疊字。
+ *
+ *  `obstacles` 空(D3):走廊 A 在 `x ≥ w − R_AXIS_W + 2`(anchor=start)、走廊 B 的
+ *  MA 價位標與極值文字在 `x ≤ w − R_AXIS_W − 2`(anchor=end),**水平不相交** ——
+ *  互避只會讓兩邊的標籤都無故位移。
+ *
+ *  `dropOverflow: false`(D6):帶內的 `價位*` 是 CDP 唯一的價位訊息(走廊 B 只印 MA),
+ *  截斷或丟棄 = 價位靜默消失;裝不下時寧可疊在界邊。
+ *
+ *  **輸出順序 = 輸入順序**:核心會依 y 排序,這裡用 `_i` 記原索引再排回來。
+ *  拆節點後 DOM 次序穩定、測試逐條對位;配色 / React key 一律走 `level` 不走順序。 */
+export function bandLabels(
+  oLines: readonly OverlayLine[],
+  bounds: { top: number; bottom: number },
+): OverlayLine[] {
+  const laid = layoutEdgeLabels(
+    oLines.map((line, i) => ({ ...line, _i: i })),
+    [],
+    bounds,
+    { dropOverflow: false },
+  );
+  laid.sort((a, b) => a._i - b._i);
+  // 顯式列欄而不是 rest 解構剝 `_i`:`_i` 是本函式的內部記號,不該有機會漏進 JSX。
+  return laid.map((l) => ({ y: l.y, priceMilli: l.priceMilli, level: l.level }));
+}
