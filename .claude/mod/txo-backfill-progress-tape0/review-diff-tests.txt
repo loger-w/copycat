@@ -1,0 +1,428 @@
+diff --git a/frontend/src/components/ConnectionBadge.test.tsx b/frontend/src/components/ConnectionBadge.test.tsx
+index e00dc114..997c9646 100644
+--- a/frontend/src/components/ConnectionBadge.test.tsx
++++ b/frontend/src/components/ConnectionBadge.test.tsx
+@@ -17,11 +17,63 @@ describe("ConnectionBadge", () => {
+     expect(screen.getByText("回補中")).toBeTruthy();
+   });
+ 
++  // 🔴 SC-2:重試期間後端每 attempt 推一則(handover.attempt),badge 要講到第幾次 ——
++  // 沒有這個數字時「還在第一次」與「重試到第三次」在畫面上一模一樣,而後者代表回補
++  // 一直失敗、快要降級。
++  it("回補中第 2 次:label 帶次數", () => {
++    render(
++      <ConnectionBadge
++        status="backfilling"
++        wsStatus="open"
++        handover={{ attempt: 2, attempts_max: 3, phase: "backfilling" }}
++      />,
++    );
++    expect(screen.getByText("回補中(第 2 次)")).toBeTruthy();
++  });
++
++  it("attempt 1 = 第一次回補 → 逐字「回補中」不變(W2)", () => {
++    render(
++      <ConnectionBadge
++        status="backfilling"
++        wsStatus="open"
++        handover={{ attempt: 1, attempts_max: 3, phase: "backfilling" }}
++      />,
++    );
++    expect(screen.getByText("回補中")).toBeTruthy();
++  });
++
++  it("舊後端不發 handover → 逐字「回補中」", () => {
++    render(<ConnectionBadge status="backfilling" wsStatus="open" handover={null} />);
++    expect(screen.getByText("回補中")).toBeTruthy();
++  });
++
++  it("非 backfilling 不帶次數(attempt 留在上一輪的值也不得外洩到別的狀態)", () => {
++    render(
++      <ConnectionBadge
++        status="live"
++        wsStatus="open"
++        handover={{ attempt: 3, attempts_max: 3, phase: "live" }}
++      />,
++    );
++    expect(screen.getByText("即時連線中")).toBeTruthy();
++  });
++
+   it("WS 斷線優先顯示連線中斷", () => {
+     render(<ConnectionBadge status="live" wsStatus="closed" />);
+     expect(screen.getByText("連線中斷,重試中")).toBeTruthy();
+   });
+ 
++  it("WS 斷線時 handover 的次數不得蓋掉斷線文案(W2:broken 分支優先)", () => {
++    render(
++      <ConnectionBadge
++        status="backfilling"
++        wsStatus="closed"
++        handover={{ attempt: 3, attempts_max: 3, phase: "backfilling" }}
++      />,
++    );
++    expect(screen.getByText("連線中斷,重試中")).toBeTruthy();
++  });
++
+   it("degraded 用警示 tone", () => {
+     render(<ConnectionBadge status="degraded" wsStatus="open" />);
+     const el = screen.getByText("資料降級");
+diff --git a/frontend/src/hooks/useStockStream.test.ts b/frontend/src/hooks/useStockStream.test.ts
+index 99891a8d..857fe384 100644
+--- a/frontend/src/hooks/useStockStream.test.ts
++++ b/frontend/src/hooks/useStockStream.test.ts
+@@ -819,3 +819,71 @@ describe("useStockStream(主圖 trial 補寫)", () => {
+     expect(hook.result.current.accum?.trial).toBe(false);
+   });
+ });
++
++// 🔴 SC-4:群組檢視沒有明細 / 主圖讀者,點卡片那趟不該把整份 tape(deque 上限兩萬筆,
++// 盤中實測 0.5–1.5 MB/檔)拖回來。`tape` 必須比照 code / contract 走 **ref**:WS callback
++// 是 `[]` deps 的閉包,由它捕獲的話「切回單檔之後由 seq-gap 觸發的那次 refetch」還會用
++// 掛載當時的舊值 → 主圖永遠拿不到 tape,而畫面只是「明細一直空著」。
++describe("useStockStream(tape 選項)", () => {
++  const C9 = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
++
++  function stateUrls(): string[] {
++    return fetchMock.mock.calls
++      .map((c) => String(c[0]))
++      .filter((u) => u.startsWith("/api/stock/state/"));
++  }
++
++  async function setupTape(tape: boolean, contract: StkfutSelection | null = null) {
++    const hook = renderHook(({ t }: { t: boolean }) => useStockStream("2330", contract, { tape: t }), {
++      initialProps: { t: tape },
++      wrapper,
++    });
++    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
++    return { hook, ws: FakeWS.instances[0]! };
++  }
++
++  it("tape=false → URL 帶 tape=0(現貨態用 ?)", async () => {
++    await setupTape(false);
++    expect(stateUrls()).toEqual(["/api/stock/state/2330?tape=0"]);
++  });
++
++  it("tape=false + 合約態 → 兩個 query 用 & 接(順序固定)", async () => {
++    await setupTape(false, C9);
++    expect(stateUrls()).toEqual(["/api/stock/state/2330?contract=CDF:202609&tape=0"]);
++  });
++
++  it("tape=true(預設語意)→ URL 逐字不變", async () => {
++    await setupTape(true);
++    expect(stateUrls()).toEqual(["/api/stock/state/2330"]);
++  });
++
++  it("false→true 補打一次全量;true→false 不打(多出來的 ticks 無害)", async () => {
++    const { hook } = await setupTape(false);
++    const before = stateUrls().length;
++    await act(async () => {
++      hook.rerender({ t: true });
++    });
++    await waitFor(() => expect(stateUrls().length).toBe(before + 1));
++    expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
++    const afterUp = stateUrls().length;
++    await act(async () => {
++      hook.rerender({ t: false });
++    });
++    // 再排一輪 microtask/macrotask,確認「不打」不是還沒打
++    await act(async () => {
++      await Promise.resolve();
++    });
++    expect(stateUrls().length).toBe(afterUp);
++  });
++
++  it("WS 掛載期閉包用的是**當下**的 tape:切回單檔後的 seq-gap refetch 要全量", async () => {
++    const { hook, ws } = await setupTape(false);
++    await act(async () => {
++      hook.rerender({ t: true });
++    });
++    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(1));
++    act(() => ws.emit(T(9))); // 1→9 跳號 → WS handler 內的 refetch
++    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(2));
++    expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
++  });
++});
+diff --git a/tests/live/test_stock_state.py b/tests/live/test_stock_state.py
+index ea1be8f8..7896b925 100644
+--- a/tests/live/test_stock_state.py
++++ b/tests/live/test_stock_state.py
+@@ -308,6 +308,42 @@ class TestDayHighLow:
+         assert st.snapshot()["ticks"][0]["a"] == 2_380_000
+ 
+ 
++class _ExplodingTick:
++    """被讀任何欄位就炸 —— `tape=False` 的契約是「**跳過**逐筆展開」(D3''),不是
++    「展開完再把結果丟掉」。只斷言 `ticks == []` 的話,後者照樣綠,而兩萬筆 dict 的
++    建構成本(本輪要省的正是它)一分不少。"""
++
++    def __getattr__(self, name: str) -> object:
++        raise AssertionError(f"tape=False 不該讀 tick 欄位(讀了 {name})")
++
++
++class TestSnapshotTape:
++    """`snapshot(tape=False)`:群組檢視點卡片時沒有 tape 讀者(B15)。"""
++
++    def test_tape_false_returns_empty_ticks_without_touching_them(self) -> None:
++        st = StockDayState()
++        for i in range(5):
++            st.ingest(_tick(10 + i, price=2_380_000 + i * 1_000))
++        full = st.snapshot()
++        assert len(full["ticks"]) == 5  # 基準非空,否則兩邊都空是 vacuous
++        # 用 appendleft:`last` 是 `ticks[-1]`,塞在尾端會連帶改掉基準值
++        st.ticks.appendleft(_ExplodingTick())  # type: ignore[arg-type]
++        light = st.snapshot(tape=False)
++        assert light["ticks"] == []
++        # tape 以外一鍵不少、一值不改(route 的 `tape=0` 只省 tape)
++        assert light["seq"] == full["seq"]
++        assert light["last"] == full["last"]
++        assert light["vwap"] == full["vwap"]
++        assert light["vwap_vol"] == full["vwap_vol"]
++        assert set(light) == set(full)
++
++    def test_default_is_full_tape(self) -> None:
++        """預設值不可漂:唯一呼叫點(單檔頁)漏帶參數時要回全量,不是靜默空 tape。"""
++        st = StockDayState()
++        st.ingest(_tick(10))
++        assert len(st.snapshot()["ticks"]) == 1
++
++
+ class TestLightSnapshot:
+     """群組 batch 專用的輕量 payload(code review A1)。
+ 
+diff --git a/tests/server/test_engine.py b/tests/server/test_engine.py
+index 4abc9da8..b6009910 100644
+--- a/tests/server/test_engine.py
++++ b/tests/server/test_engine.py
+@@ -389,6 +389,120 @@ async def test_snapshot_reports_handover_stats() -> None:
+         await rt.close()
+ 
+ 
++class _GatedOverflowSource(FakeQuoteSource):
++    """指定的 attempt 讓交接 buffer 溢出(engine 因此重試),並可在回補中途交握。
++
++    溢出的製造方式是**直接翻 `rt._buffer.overflowed`**(私寫;沿本檔 `rt._handover = …`
++    的前例):真溢出要灌滿 20 萬則 tick,而這條測的是「重試期間進度欄有沒有推出去」,
++    不是 buffer 自己的計數。
++
++    `gated=True` 時每次進 `fetch_backfill` 先 `entered.set()` 再等 `gate` —— 回補跑在
++    `to_thread` 上、event loop 是空的,測試因此能停在「attempt N 已開始、還沒結束」
++    的那一刻讀 `latest_snapshot()`。沒有這個交握就只看得到最後一則,而「重試期間畫面
++    卡在『回補中』不知第幾次」正是本輪要修的東西。
++    """
++
++    def __init__(self, *, overflow_on: set[int], gated: bool = True) -> None:
++        super().__init__(backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]})
++        self.overflow_on = overflow_on
++        self.gated = gated
++        self.rt: EngineRuntime | None = None
++        self.attempts = 0
++        self.entered = threading.Event()
++        self.gate = threading.Event()
++
++    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
++        self.attempts += 1
++        if self.gated:
++            self.entered.set()
++            self.gate.wait(15)
++            self.gate.clear()
++        if self.attempts in self.overflow_on:
++            rt = self.rt
++            assert rt is not None and rt._buffer is not None
++            rt._buffer.overflowed = True
++        return super().fetch_backfill(series)
++
++
++async def _await_attempt(fake: _GatedOverflowSource, n: int) -> None:
++    """等到第 n 次回補真的進了 `fetch_backfill`(交握點)。"""
++    entered = await asyncio.to_thread(fake.entered.wait, 5)
++    assert entered, f"attempt {n} 沒進 fetch_backfill"
++    assert fake.attempts == n
++    fake.entered.clear()  # 先清再放行:worker 下一輪才不會撞到上一輪殘留的旗標
++
++
++async def test_handover_attempt_progress_visible_during_retries() -> None:
++    """SC-1:重試期間 `handover.attempt` / `phase` 要跟著走,且**每 attempt 推一則**。
++
++    08-19 R1 起快照只在內容有變才推,而重試期間唯一會變的就是這幾個欄位 —— 沒有它們
++    的話 WS 整段靜默(心跳已解保活),前端 badge 固定「回補中」,使用者分不出「還在
++    第一次」與「重試到第三次」。
++    """
++    fake = _GatedOverflowSource(overflow_on={1})
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    fake.rt = rt
++    pushed: list[dict] = []
++
++    async def consume() -> None:
++        async for snap in rt.snapshots():
++            pushed.append(snap)
++
++    consumer = asyncio.create_task(consume())
++    task = asyncio.create_task(rt.start())
++    try:
++        await _await_attempt(fake, 1)
++        h = rt.latest_snapshot()["handover"]
++        assert h["attempt"] == 1
++        assert h["attempts_max"] == 3
++        assert h["phase"] == "backfilling"
++        # D1'':五個既有觀測欄只在 attempt **結束**時出現,開頭那則不帶(不 merge 舊值 ——
++        # 上一輪的 backfill_secs 掛在新一輪的進度上是假資料)
++        assert "buffer_used" not in h
++        fake.gate.set()  # 放行 attempt 1 → buffer 溢出 → 重試
++
++        await _await_attempt(fake, 2)
++        h = rt.latest_snapshot()["handover"]
++        assert h["attempt"] == 2
++        assert h["phase"] == "backfilling"
++        fake.gate.set()
++        await task
++
++        h = rt.latest_snapshot()["handover"]
++        assert h["attempt"] == 2
++        assert h["phase"] == "live"
++        assert h["overflows"] == 1  # 既有欄位語意不變(W1)
++        assert h["buffer_cap"] == 200_000
++        assert rt.status == "live"
++        # 「推播」這半:攤平 attempt 序列,1 與 2 都要真的被送出去過
++        await asyncio.sleep(0.05)
++        attempts = [s["handover"]["attempt"] for s in pushed if s.get("handover")]
++        assert 1 in attempts, "attempt 1 從沒被推出去 → 前端看不到第一次"
++        assert 2 in attempts, "重試那一則沒推 → 畫面停在第 1 次(本輪的病灶)"
++    finally:
++        consumer.cancel()
++        with suppress(asyncio.CancelledError):
++            await consumer
++        await rt.close()
++
++
++async def test_handover_degraded_reports_last_attempt_and_phase() -> None:
++    """SC-1 降級面:三次全溢出 → `attempt == 3`、`phase == "degraded"`(與 status 同義)。"""
++    fake = _GatedOverflowSource(overflow_on={1, 2, 3}, gated=False)
++    rt = EngineRuntime(fake, throttle_secs=0.01)
++    fake.rt = rt
++    await rt.start()
++    try:
++        assert rt.status == "degraded"
++        h = rt.latest_snapshot()["handover"]
++        assert h["attempt"] == 3
++        assert h["attempts_max"] == 3
++        assert h["phase"] == "degraded"
++        assert h["overflows"] == 3
++    finally:
++        await rt.close()
++
++
+ async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
+     """request_self_heal 後即使 tick 連續流入(queue 永不 timeout),自癒仍須觸發。"""
+     fake = FakeQuoteSource()
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 657bd48f..dafde33b 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -4,6 +4,7 @@ import datetime as _dt
+ import json
+ import threading
+ import time
++from collections.abc import Callable
+ from pathlib import Path
+ from typing import cast
+ 
+@@ -481,6 +482,99 @@ class TestStateRoute:
+         assert r.json()["detail"]["error"] == "NOT_READY"
+ 
+ 
++#: 餵一則成交進 engine(讓 tape 非空;欄位比照 TestStockWs 的真 TC4 payload)。
++#: **刻意不帶 Upper/LowerLimitPrice**:漲跌停值變(None → 有值)是 engine 的回補入列點
++#: 之一,而回補是原子重建 —— 帶了就會在餵完 tick 之後非同步把 tape 清掉。
++TICK_MSG: dict[str, str] = {
++    "Symbol": "TC.S.TWS.2330",
++    "Security": "2330",
++    "SecurityName": "台積電",
++    "TradingPrice": "2380",
++    "TradeQuantity": "1",
++    "TradeVolume": "1",
++    "TradeDate": "20260721",
++    "FilledTime": "25751",
++    "PreciseTime": "25751000000",
++    "Bid": "2375",
++    "Ask": "2380",
++    "BidVolume": "10",
++    "AskVolume": "10",
++    "ReferencePrice": "2320",
++    "YClosedPrice": "2320",
++    "YTradeVolume": "100",
++    "OpenTime": "90000",
++    "CloseTime": "133000",
++    "TradeStatus": "0",
++}
++
++
++class TestStateRouteTape:
++    """`?tape=0` 省略逐筆明細(B15)。
++
++    群組檢視點卡片的**唯一目的**是換右欄閃電梯的標的(檢視停在群組),而群組檢視裡
++    沒有主圖 / 明細 —— 那趟卻照樣拖回整份 tape(M0 盤中實測 0.5–1.5 MB/檔,50 檔輪點
++    20–70 MB)。`set_main` 仍要打(W-4:訂閱與回補靠它),省的只有 payload。
++    """
++
++    def _wait(self, client: TestClient, pred: Callable[[StockEngine], bool], why: str) -> None:
++        stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
++        for _ in range(300):
++            if pred(stock):
++                return
++            time.sleep(0.01)
++        raise AssertionError(why)
++
++    def _quiet_state_with_one_tick(self, client: TestClient, fake: FakeStockSource) -> None:
++        """把 2330 帶到「tape 有一筆、且不會再有回補落地」的穩定點。
++
++        `apply_backfill` 是**原子重建**(seq +1001、ticks 整份換掉),落在餵 tick 與
++        兩次 GET 之間就會把全量那份的 tape 清空 —— 對照退化成「兩邊都空」的假綠。
++        所以:(a) 先等 `set_main` 那趟回補落地才餵;(b) 餵的那則**不帶漲跌停**,
++        否則 meta 值變(None → 有值)會再排一趟非同步回補(engine 既有行為)。
++        """
++        assert fake.on_message is not None
++        client.get("/api/stock/state/2330")  # set_main → 唯一一趟回補
++        self._wait(client, lambda s: "2330" in s._backfilled, "set_main 的回補沒落地")
++        fake.on_message(dict(TICK_MSG))
++        self._wait(
++            client,
++            lambda s: (st := s._states.get("2330")) is not None and len(st.ticks) == 1,
++            "餵進去的成交沒進 tape",
++        )
++
++    def test_tape_0_omits_ticks_and_leaves_every_other_key_intact(self, tmp_path: Path) -> None:
++        client, fake = make_client(tmp_path)
++        with client:
++            self._quiet_state_with_one_tick(client, fake)
++            full = client.get("/api/stock/state/2330").json()
++            light = client.get("/api/stock/state/2330?tape=0").json()
++        assert full["ticks"], "基準 tape 是空的 → 兩邊都空,測不出東西"
++        assert light["ticks"] == []
++        assert light["tape_omitted"] is True
++        assert "tape_omitted" not in full, "全量路徑多一個鍵 = 契約漂移(W3 位元不變)"
++        assert {k: v for k, v in light.items() if k != "tape_omitted"} == full | {"ticks": []}
++
++    def test_tape_0_still_sets_main(self, tmp_path: Path) -> None:
++        """W-4:省 payload 不等於省 set_main —— 漏掉的話點卡片就換不了訂閱標的,
++        而畫面上只表現為右欄「沒有資料」,沒有任何錯誤。"""
++        client, fake = make_client(tmp_path)
++        with client:
++            r = client.get("/api/stock/state/2317?tape=0")
++        assert r.status_code == 200
++        assert "2317" in fake.subscribed
++
++    def test_unknown_tape_value_falls_back_to_full(self, tmp_path: Path) -> None:
++        """`tape` 收字串不收 int(D3'):`?tape=abc` 走全量,不產生 422 ——
++        422 的 detail 是 list 形,不符全站 `{"detail": {"error": code}}` 契約。"""
++        client, fake = make_client(tmp_path)
++        with client:
++            self._quiet_state_with_one_tick(client, fake)
++            r = client.get("/api/stock/state/2330?tape=abc")
++        assert r.status_code == 200
++        assert r.json()["ticks"], "非 0 一律全量"
++        assert "tape_omitted" not in r.json()
++
++
+ STKFUT_CATALOG: dict[str, dict] = {
+     "2330": {
+         "name": "台積電",
