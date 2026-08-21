@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { GroupGridView } from "@/components/stock/GroupGridView";
 import { OrderBook } from "@/components/stock/OrderBook";
@@ -82,6 +82,29 @@ export function StockPage({
   const { soundOn, setSoundOn } = useSignalSound();
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
   const [view, setView] = useState<StockView>(readStockView);
+  // 掛載時把**實際**檢視通知上層一次(review F1)。`view` 有兩份初值 —— 本元件與 App
+  // 各自 `readStockView()`。同一個分頁內兩者相等,但另一個視窗改過 localStorage 之後,
+  // App 讀到的是它自己掛載當下那一份:本元件掛在「群組」而 App 以為「單檔」,那趟
+  // `/api/stock/state` 照樣拖回整份 tape(MB 級),而畫面上完全看不出來。
+  //
+  // `notifiedRef` 守門是**必要**的,不是保險:通知會讓 App setState → 本元件重繪,
+  // deps 裡的 `onViewChange` 身分若跟著換就是 render 迴圈。其後的切換由 `selectView`
+  // 自己通知,這裡只負責開場對齊。
+  //
+  // 通知的來源刻意是 `readStockView()` **不是** `view` state:要傳的本來就是「localStorage
+  // 這一刻是什麼」(兩邊初值同源的那個讀取),而不是本元件的中間狀態 —— 兩者在掛載當下
+  // 恆等,但寫成前者才說得清這則通知與 `selectView` 的分工。
+  //
+  // lint 抑制的理由(規則:you-might-not-need-an-effect「考慮把 state 上提」):上提整份
+  // `view` 正是 spec 階段評估後否決的做法(動到 50+ 個呼叫點);而這裡也不是持續同步 ——
+  // 只在掛載發一次外部 store(localStorage)的讀值,其後的每次切換都走 `selectView`。
+  const notifiedRef = useRef(false);
+  useEffect(() => {
+    if (notifiedRef.current) return;
+    notifiedRef.current = true;
+    // eslint-disable-next-line react-you-might-not-need-an-effect/you-might-not-need-an-effect
+    onViewChange?.(readStockView());
+  }, [onViewChange]);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
   // `isPending` / `isError` 要一路帶到群組檢視(review A4):`wl?.groups ?? []` 把

@@ -269,13 +269,20 @@ class EngineRuntime:
                 # 狀態誠實降 degraded 後把例外交還呼叫端 — user 路徑(select/start)
                 # 由 route 層轉 502(TC4_DOWN 合約);自癒路徑由 _maybe_self_heal 接住。
                 self._buffer = None
+                # `phase` 與 status 同義(SC-1),這裡也要一起降 —— 只降 status 的話
+                # 進度欄停在 "backfilling",badge 掛著「回補中(第 n 次)」而後端已經
+                # 放棄,使用者等一個永遠不會來的完成。merge 而非重建:`attempt` /
+                # `attempts_max` 留著,才看得出是第幾次失敗的。
+                self._handover = {**(self._handover or {}), "phase": "degraded"}
                 self._set_status("degraded")
                 raise
             except asyncio.CancelledError:
                 # 對稱分支:cancel 一樣會穿過上面兩個 to_thread,孤兒 buffer 留著的話
                 # 之後每一則 tick 都被塞進沒人 flush 的 buffer(totals 靜默凍結)。
-                # **不設 degraded**:現況 cancel 只來自關機(lifespan 收 engine),
-                # 那不是「來源壞掉」;新增別的 cancel 來源時要一併回頭想狀態語意。
+                # **不設 degraded、`phase` 也不動**:現況 cancel 只來自關機(lifespan
+                # 收 engine),那不是「來源壞掉」—— 關機途中把進度改寫成 degraded 只會
+                # 在最後一份快照上留下假的失敗紀錄;新增別的 cancel 來源時要一併回頭
+                # 想狀態語意(兩個欄位一起想)。
                 self._buffer = None
                 raise
             backfill_secs = time.monotonic() - t0
