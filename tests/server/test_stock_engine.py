@@ -15,6 +15,7 @@ from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import stock_engine as stock_engine_mod
 from copycat.server.stock_engine import StockEngine
+from tests.helpers.wait import wait_until
 
 
 def _quote(
@@ -899,12 +900,12 @@ class TestBackfillTimeoutRetry:
                       is_trial=False)
         ]
         await engine.set_main("2330")
-        await _wait_until(lambda: src.backfills.count("2330") >= 1)
+        await wait_until(lambda: src.backfills.count("2330") >= 1)
         # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
         assert engine.tc4_status != "down"
         assert engine._backfill_failed.get("2330", 0) == 0
         # 等**終態**(分鐘套用進去了)而不是等固定圈數 —— `backfills` 是進場時記的
-        await _wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
+        await wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
         assert src.backfills.count("2330") == 2  # 重排且第二發成功
         assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
         await engine.close()
@@ -917,7 +918,7 @@ class TestBackfillTimeoutRetry:
         src.backfill_error = HistoryTimeoutError("first page not ready")
         with caplog.at_level(logging.WARNING):
             await engine.set_main("2330")
-            await _wait_until(lambda: src.backfills.count("2330") == 3)
+            await wait_until(lambda: src.backfills.count("2330") == 3)
             await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 4 發(若有)現形
             await _drain(engine)
         # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
@@ -955,7 +956,7 @@ class TestBackfillTimeoutRetry:
         engine, src = await _make()
         src.backfill_error = HistoryTimeoutError("first page not ready")
         await engine.set_main("2330")
-        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
+        await wait_until(lambda: bool(engine._backfill_timeout_handles))
         handles = list(engine._backfill_timeout_handles.values())
         await engine.close()
         assert handles and all(h.cancelled() for h in handles)
@@ -968,7 +969,7 @@ class TestBackfillTimeoutRetry:
         engine, src = await _make()
         src.backfill_error = HistoryTimeoutError("first page not ready")
         await engine.set_main("2330")
-        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
+        await wait_until(lambda: bool(engine._backfill_timeout_handles))
         handles = list(engine._backfill_timeout_handles.values())
         engine.rollover_stage1("2026-07-22")
         assert src.on_message is not None
@@ -989,13 +990,13 @@ class TestBackfillTimeoutRetry:
         engine, src = await _make()
         src.backfill_error = HistoryTimeoutError("first page not ready")
         await engine.set_main("2330")
-        await _wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
+        await wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
         before = src.backfills.count("2330")
         engine.rollover_stage1("2026-07-22")
         assert src.on_message is not None
         src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
         # 記帳沒清的話 stage2 排的那一發會**當場**放棄(+1 就到頂),等不到 +3
-        await _wait_until(lambda: src.backfills.count("2330") >= before + 3)
+        await wait_until(lambda: src.backfills.count("2330") >= before + 3)
         await engine.close()
 
 
@@ -1107,15 +1108,6 @@ async def _make_retry(
     return engine, src
 
 
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件逾時未成立")
-
-
 # 恆失敗的自選檔:重試輪的**可觀察計數器**。用牆鐘 sleep 換輪數在 Windows 上是假的
 # (timer 解析度 15.6ms,`sleep(0.05)` 對 interval=0.01 實際只跑 ~3 輪),否定斷言的
 # 強度會比註解寫的低一半以上(review W-4)。
@@ -1125,7 +1117,7 @@ _SENTINEL = "8888"
 async def _wait_rounds(src: _RetrySource, rounds: int, timeout: float = 2.0) -> None:
     """等重試迴圈確實跑滿 `rounds` 輪(以哨兵檔被重試的次數計)。"""
     base = src.attempts.count(_SENTINEL)
-    await _wait_until(lambda: src.attempts.count(_SENTINEL) >= base + rounds, timeout=timeout)
+    await wait_until(lambda: src.attempts.count(_SENTINEL) >= base + rounds, timeout=timeout)
 
 
 async def _collect(stream) -> list[dict]:
@@ -1152,7 +1144,7 @@ class TestWatchlistRetry:
         await engine.set_watchlist(["9999"])
         assert "9999" not in src.subscribed
         src.fail_subscribe.discard("9999")
-        await _wait_until(lambda: "9999" in src.subscribed)
+        await wait_until(lambda: "9999" in src.subscribed)
         await _drain(engine)
         got = await _collect(stream)
         quotes = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "9999"]
@@ -1202,9 +1194,9 @@ class TestWatchlistRetry:
         await engine.set_main("2330")
         src.fail_subscribe.add("2330")
         engine.rollover_stage1("2026-07-22")
-        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        await wait_until(lambda: "2330" in engine._failed_resubs)
         src.fail_subscribe.discard("2330")
-        await _wait_until(lambda: "2330" not in engine._failed_resubs)
+        await wait_until(lambda: "2330" not in engine._failed_resubs)
         assert src.subscribed.count("2330") >= 2  # 重掛真的發出去了
         await engine.close()
 
@@ -1215,9 +1207,9 @@ class TestWatchlistRetry:
         await engine.set_main("2330")
         src.fail_subscribe.add("2330")
         engine.rollover_stage1("2026-07-22")
-        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        await wait_until(lambda: "2330" in engine._failed_resubs)
         await engine.set_main("5483")  # 2330 last owner 退 → 已不在 _refs
-        await _wait_until(lambda: not engine._failed_resubs)
+        await wait_until(lambda: not engine._failed_resubs)
         n = src.attempts.count("2330")
         await _wait_rounds(src, 5)
         assert src.attempts.count("2330") == n  # 已退訂的檔不再被重試
@@ -1230,7 +1222,7 @@ class TestWatchlistRetry:
         src.fail_subscribe.update({"9998", "9999"})
         await engine.set_watchlist(["9998", "9999"])  # 9998 排在前面且恆失敗
         src.fail_subscribe.discard("9999")  # 只修好排在後面的那檔
-        await _wait_until(lambda: "9999" in src.subscribed)
+        await wait_until(lambda: "9999" in src.subscribed)
         await engine.close()
 
     async def test_head_of_line_failure_does_not_starve_failed_resubs(self) -> None:
@@ -1239,9 +1231,9 @@ class TestWatchlistRetry:
         await engine.set_watchlist(["9997", "9998"])  # 先真訂上 → owner 在 _refs
         src.fail_subscribe.update({"9997", "9998"})
         engine.rollover_stage1("2026-07-22")  # 全量重掛兩檔皆失敗
-        await _wait_until(lambda: engine._failed_resubs == {"9997", "9998"})
+        await wait_until(lambda: engine._failed_resubs == {"9997", "9998"})
         src.fail_subscribe.discard("9998")  # 只修 sorted 順序在後的那檔
-        await _wait_until(lambda: "9998" not in engine._failed_resubs)
+        await wait_until(lambda: "9998" not in engine._failed_resubs)
         await engine.close()
 
     async def test_failed_resub_merge_waits_for_pool_lock(self) -> None:
@@ -1256,11 +1248,11 @@ class TestWatchlistRetry:
         await engine.set_main("2330")
         src.fail_subscribe.add("2330")
         engine.rollover_stage1("2026-07-22")
-        await _wait_until(lambda: src.attempts.count("2330") >= 2)  # 重掛已進到慢失敗窗
+        await wait_until(lambda: src.attempts.count("2330") >= 2)  # 重掛已進到慢失敗窗
         async with engine._pool_lock:
             await asyncio.sleep(0.4)  # 慢失敗早已結束;合併必須還卡在鎖外
             assert engine._failed_resubs == set()
-        await _wait_until(lambda: "2330" in engine._failed_resubs)  # 放鎖後才進帳
+        await wait_until(lambda: "2330" in engine._failed_resubs)  # 放鎖後才進帳
         await engine.close()
 
     async def test_close_stops_retry_loop(self) -> None:
@@ -1268,7 +1260,7 @@ class TestWatchlistRetry:
         engine, src = await _make_retry()
         src.fail_subscribe.add("9999")
         await engine.set_watchlist(["9999"])
-        await _wait_until(lambda: src.attempts.count("9999") > 4)  # 迴圈確實在跑
+        await wait_until(lambda: src.attempts.count("9999") > 4)  # 迴圈確實在跑
         await engine.close()
         n = len(src.attempts)
         # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
@@ -1289,7 +1281,7 @@ class TestStkfutRetry:
         await engine.set_main("2330")
         assert "F:CDF" not in src.subscribed
         src.fail_subscribe.discard("F:CDF")
-        await _wait_until(lambda: "F:CDF" in src.subscribed)
+        await wait_until(lambda: "F:CDF" in src.subscribed)
         assert engine._refs["F:CDF"] == {"stkfut:2330"}
         await engine.close()
 
@@ -1697,7 +1689,7 @@ class TestRetryLoopStarvation:
         codes = [str(9000 + i) for i in range(12)]
         src.fail_subscribe.update(codes)
         await engine.set_watchlist(codes)
-        await _wait_until(lambda: len(src.attempts) > len(codes))  # 重試迴圈確實已在跑
+        await wait_until(lambda: len(src.attempts) > len(codes))  # 重試迴圈確實已在跑
         t0 = asyncio.get_running_loop().time()
         await engine.set_main("2330")
         elapsed = asyncio.get_running_loop().time() - t0
@@ -1714,9 +1706,9 @@ class TestRetryLoopStarvation:
         await engine.set_main("2330")  # 段 4 的 stkfut 腿失敗
         src.fail_subscribe.add("2330")
         engine.rollover_stage1("2026-07-22")  # 段 3 的 failed_resubs
-        await _wait_until(lambda: "2330" in engine._failed_resubs)
+        await wait_until(lambda: "2330" in engine._failed_resubs)
         src.fail_subscribe.difference_update({"2330", "F:CDF"})  # 9999 仍恆失敗
-        await _wait_until(
+        await wait_until(
             lambda: "F:CDF" in src.subscribed and "2330" not in engine._failed_resubs
         )
         assert "9999" not in src.subscribed  # 前提:段 2 確實每輪都在失敗
@@ -3210,7 +3202,7 @@ class TestCheckpointTradingDay:
         )
         engine._checkpoint_secs = 0.01  # type: ignore[attr-defined]
         await engine.start()
-        await _wait_until(lambda: clock.ticks >= 3)
+        await wait_until(lambda: clock.ticks >= 3)
         return engine, src, clock
 
     async def test_non_trading_weekday_does_not_arm_stage1(self) -> None:
@@ -3230,7 +3222,7 @@ class TestCheckpointTradingDay:
             _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: True
         )
         try:
-            await _wait_until(lambda: engine._pending_date == "2026-08-13")
+            await wait_until(lambda: engine._pending_date == "2026-08-13")
             assert src.trade_dates == ["2026-08-12", "2026-08-13"]
         finally:
             await engine.close()

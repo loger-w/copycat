@@ -7,6 +7,7 @@ from typing import Callable
 
 from copycat.corr_config import CorrConfig, Leg
 from copycat.server.corr_engine import CorrelationEngine
+from tests.helpers.wait import wait_until
 
 NIGHT = ("20260730", "night")
 
@@ -349,15 +350,6 @@ class _BadRetrySource(_FakeSource):
         super().subscribe_raw(symbol)
 
 
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件逾時未成立")
-
-
 class TestPendingResubscribe:
     """腿訂閱失敗的**零重試路徑**(mod/subscribe-retry-recovery SC-1)。
 
@@ -373,7 +365,7 @@ class TestPendingResubscribe:
         await eng.start()
         assert src.subscribed == ["TC.F.TWF.SXF.HOT"]  # 首輪只有費半成功
         try:
-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
         finally:
             await eng.close()
         assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 失敗 2 次 + 成功 1 次
@@ -387,7 +379,7 @@ class TestPendingResubscribe:
         )
         await eng.start()
         try:
-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
             assert src.cb is not None
             src.cb(_quote("TC.F.CME.NQ.HOT", 27_000_000, 27_002_000))
             await asyncio.sleep(0)
@@ -419,7 +411,7 @@ class TestPendingResubscribe:
             src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), resub_interval_secs=0.01
         )
         await eng.start()
-        await _wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
+        await wait_until(lambda: len(src.attempts) > 4)  # 重試迴圈確實在跑
         await eng.close()
         n = len(src.attempts)
         # close 後沒有哨兵可數(整條迴圈就是被停掉的那個東西),誠實記帳:0.2s 遠超 interval
@@ -438,7 +430,7 @@ class TestPendingResubscribe:
         )
         await eng.start()
         try:
-            await _wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
+            await wait_until(lambda: "TC.F.CME.NQ.HOT" in src.subscribed)
             assert src.attempts.count("TC.F.CME.NQ.HOT") == 3  # 連線類 + 非連線類 + 成功
         finally:
             await eng.close()
@@ -455,7 +447,7 @@ class TestPendingResubscribe:
         )
         await eng.start()
         try:
-            await _wait_until(lambda: src.fetched.count("TC.F.CME.NQ.HOT") >= 2)
+            await wait_until(lambda: src.fetched.count("TC.F.CME.NQ.HOT") >= 2)
         finally:
             await eng.close()
 
@@ -471,7 +463,7 @@ class TestPendingResubscribe:
         )
         await eng.start()
         try:
-            await _wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
+            await wait_until(lambda: src.attempts.count("TC.F.CME.NQ.HOT") >= 5)
             assert "TC.F.TWF.TXF.HOT" not in src.attempts
             assert "TC.F.TWF.TXF.HOT" not in src.subscribed
         finally:

@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import json
-import time as _time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +21,7 @@ import pytest
 import copycat.server.breadth_engine as be
 from copycat.breadth_config import BreadthConfig
 from copycat.server.breadth_fetch import BreadthFetchError
+from tests.helpers.wait import wait_until
 
 _TRADE_DATE = "2026-08-05"
 _STAMP = f"{_TRADE_DATE} 10:23:45"
@@ -240,15 +240,6 @@ def _make(
         **extra,
     )
     return engine, snap, inf, disp, clk
-
-
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = _time.monotonic() + timeout
-    while _time.monotonic() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件未在時限內成立")
 
 
 def _series_file(tmp_path: Path, trade_date: str = _TRADE_DATE) -> Path:
@@ -746,7 +737,7 @@ class TestSeriesPersistence:
 
         await engine.start()
         try:
-            await _wait_until(lambda: engine.state()["counts"] is not None)
+            await wait_until(lambda: engine.state()["counts"] is not None)
         finally:
             await engine.close()
 
@@ -1028,7 +1019,7 @@ class TestPollLoop:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 1)
+            await wait_until(lambda: snap.calls >= 1)
             await asyncio.sleep(0.1)  # 夠跑約 10 圈
         finally:
             await engine.close()
@@ -1040,7 +1031,7 @@ class TestPollLoop:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 3)
+            await wait_until(lambda: snap.calls >= 3)
         finally:
             await engine.close()
 
@@ -1067,7 +1058,7 @@ class TestPollLoop:
 
         await engine.start()
         try:
-            await _wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
+            await wait_until(lambda: seen["n"] >= 3 and snap.calls >= 1)
         finally:
             await engine.close()
 
@@ -1095,12 +1086,12 @@ class TestPollLoop:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 1)  # 首圈(無條件)已跑過
+            await wait_until(lambda: snap.calls >= 1)  # 首圈(無條件)已跑過
             assert engine._streak_armed_day is None  # 05:30 未到武裝時刻
             assert daily.calls == []
 
             clock.now = _dt.datetime.fromisoformat(f"{_TRADE_DATE} 06:30:00")
-            await _wait_until(lambda: engine._streaks_day == _TRADE_DATE)
+            await wait_until(lambda: engine._streaks_day == _TRADE_DATE)
         finally:
             await engine.close()
 
@@ -1127,7 +1118,7 @@ class TestPollLoop:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 3)
+            await wait_until(lambda: snap.calls >= 3)
         finally:
             await engine.close()
 
@@ -1507,7 +1498,7 @@ class TestStreakScheduling:
         engine._maybe_arm_streaks()
         task = engine._streak_task
         assert task is not None
-        await _wait_until(lambda: len(daily.calls) >= 1)
+        await wait_until(lambda: len(daily.calls) >= 1)
 
         await engine.close()
 
@@ -1526,7 +1517,7 @@ class TestStreakCache:
 
         await engine.start()
         try:
-            await _wait_until(lambda: engine.state()["counts"] is not None)
+            await wait_until(lambda: engine.state()["counts"] is not None)
             await asyncio.sleep(0.1)  # 夠跑約 10 圈武裝檢查
         finally:
             await engine.close()
@@ -1921,7 +1912,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: engine.state()["counts"] is not None)
+            await wait_until(lambda: engine.state()["counts"] is not None)
         finally:
             await engine.close()
 
@@ -1957,7 +1948,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: rounds["n"] >= 4)
+            await wait_until(lambda: rounds["n"] >= 4)
         finally:
             await engine.close()
 
@@ -1974,7 +1965,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 3)
+            await wait_until(lambda: snap.calls >= 3)
         finally:
             await engine.close()
 
@@ -1992,7 +1983,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: snap.calls >= 3)
+            await wait_until(lambda: snap.calls >= 3)
         finally:
             await engine.close()
 
@@ -2017,7 +2008,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: engine.state()["counts"] is not None)
+            await wait_until(lambda: engine.state()["counts"] is not None)
         finally:
             await engine.close()
 
@@ -2051,7 +2042,7 @@ class TestTradingDayGate:
 
         await engine.start()
         try:
-            await _wait_until(lambda: rounds["n"] >= 4)
+            await wait_until(lambda: rounds["n"] >= 4)
         finally:
             await engine.close()
 

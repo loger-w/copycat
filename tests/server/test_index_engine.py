@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
-import time as _time
 from typing import Any, Callable
 
 import pytest
@@ -13,6 +12,7 @@ import pytest
 from copycat.server.index_engine import IndexEngine, minute_key
 from copycat.server.mis import OtcSnap
 from tests.helpers.fake_sources import FakeIndexSource
+from tests.helpers.wait import wait_until
 
 
 def _quote(price: str = "42039.92", filled: str = "13015") -> dict:
@@ -27,20 +27,6 @@ def _quote(price: str = "42039.92", filled: str = "13015") -> dict:
 
 
 OTC_SNAP = OtcSnap(p=359_800, ref=378_090, open=373_420, high=373_420, low=358_430, time="101610")
-
-
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    """等條件成立,不用 `sleep(N)` 換圈數。
-
-    Windows timer 解析度 15.6ms:`sleep(0.15)` 名目「約 5 拍」實際可能一拍都沒轉,
-    否定型斷言(「沒多打」)就變成「迴圈根本沒跑」的假綠。
-    """
-    deadline = _time.monotonic() + timeout
-    while _time.monotonic() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件未在時限內成立")
 
 
 def make_engine(
@@ -655,7 +641,7 @@ async def test_rollover_skips_non_trading_day() -> None:
     await eng.start()
     try:
         calls_after_start = fake.fetch_minutes_calls  # start() 的回補那一次
-        await _wait_until(lambda: ticks["n"] >= 3)
+        await wait_until(lambda: ticks["n"] >= 3)
         assert eng.state()["trade_date"] == "2026-08-14"
         assert eng._pending_date is None  # type: ignore[attr-defined]
         assert fake.trade_dates == ["2026-08-14"]  # 只有 start 同步那次
@@ -681,7 +667,7 @@ async def test_rollover_runs_on_trading_day() -> None:
     try:
         # 等的是**結果**不是時間:換日要經 pending → 重掛 → 回補 → swap 四步,
         # 固定 sleep 只要有一步比預期慢就是 flake(慢機 / CI 上必現)。
-        await _wait_until(lambda: eng.state()["trade_date"] == "2026-08-14")
+        await wait_until(lambda: eng.state()["trade_date"] == "2026-08-14")
         state = eng.state()
         assert state["trade_date"] == "2026-08-14"
         assert state["twse"]["minutes"] == {"0901": 2_000}
@@ -708,7 +694,7 @@ async def test_default_rolls_over_on_weekend() -> None:
     eng._rollover_check_secs = 0.005  # type: ignore[attr-defined]
     await eng.start()
     try:
-        await _wait_until(lambda: eng.state()["trade_date"] == "2026-08-15")
+        await wait_until(lambda: eng.state()["trade_date"] == "2026-08-15")
         assert eng.state()["twse"]["minutes"] == {"0901": 2_000}
     finally:
         await eng.close()
