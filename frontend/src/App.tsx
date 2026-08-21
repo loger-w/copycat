@@ -27,6 +27,7 @@ import {
   TAB_KEY,
 } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
+import { readStockView, type StockView } from "@/lib/stock-view";
 import type { StkfutSelection } from "@/lib/stkfut";
 import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
@@ -162,6 +163,10 @@ export default function App() {
   // 一樣要跳出來 —— 掛在個股頁內就只有停在該 tab 時才收得到。**唯一**的 bus 訂閱點,
   // 多掛一份會重複發聲與重複桌面通知。
   const alerts = useSignalAlerts();
+  // 個股頁的檢視(單檔 / 群組)。**持有者仍是 StockPage**,這裡只是跟著它走 ——
+  // 初值同源 `readStockView()`,其後由 `onViewChange` 通知(B15 spec review R3)。
+  // 群組檢視沒有明細 / 主圖讀者,那趟 state 不必拖回整份 tape(兩萬筆、MB 級)。
+  const [stockView, setStockView] = useState<StockView>(readStockView);
   // D-16:沒訪問過個股 tab 時傳 null —— /api/stock/state/{code} 內含 set_main,
   // 會觸發訂閱池變更 + 當日 tick 全量回補,不該只因開了 TXO 頁就發生。
   //
@@ -175,6 +180,7 @@ export default function App() {
   const stockStream = useStockStream(
     tab === "stock" || visited.stock ? stockCode : null,
     stkfutContract,
+    { tape: stockView !== "group" },
   );
   const futuresStream = useFuturesStream();
 
@@ -319,6 +325,7 @@ export default function App() {
                   stream={stockStream}
                   contract={stkfutContract}
                   onContract={setStkfutContract}
+                  onViewChange={setStockView}
                 />
               </Suspense>
             </div>

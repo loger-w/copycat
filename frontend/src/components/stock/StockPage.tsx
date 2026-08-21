@@ -16,6 +16,7 @@ import { useStkfutContracts } from "@/hooks/useStkfutContracts";
 import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
 import { pnlTone } from "@/lib/pnl-format";
@@ -37,25 +38,18 @@ interface Props {
    *  與右欄都要吃同一份,留在本元件內餵不到那兩處。 */
   contract?: StkfutSelection | null;
   onContract?: (next: StkfutSelection | null) => void;
+  /** 檢視換了要通知誰(B15:App 依此決定 `/api/stock/state` 要不要帶 tape)。
+   *
+   *  **view 仍留在本元件**(localStorage 與 `selectView` 不動),只是多發一則通知 ——
+   *  上提整份 state 會動到 50+ 個既有呼叫點,而通知一則就夠 App 做決定。
+   *  optional:不關心檢視的呼叫端(既有測試、未來別的頁)零改動。 */
+  onViewChange?: (next: StockView) => void;
 }
-
-/** 中間主區的檢視(group-grid SC-3):單檔看盤 vs 群組 mini 圖牆。 */
-type StockView = "single" | "group";
 
 const VIEW_LABELS: [StockView, string][] = [
   ["single", "單檔"],
   ["group", "群組"],
 ];
-
-/** 只認得 `"group"`,其餘(未設 / 被人手動改壞 / 舊版遺留值)一律回單檔 ——
- *  預設檢視必須是「有主圖」的那個,壞值把使用者丟進群組檢視會像整頁不見了。 */
-function initialView(): StockView {
-  try {
-    return window.localStorage.getItem(STOCK_VIEW_KEY) === "group" ? "group" : "single";
-  } catch {
-    return "single";
-  }
-}
 
 /** jsdom 與不支援 Notification 的瀏覽器沒有這個全域 → 一律當「已拒絕」降級:
  *  rail 只在 `default` 時顯示「允許通知」鈕,denied 就是不出現那顆鈕。 */
@@ -67,7 +61,14 @@ function currentPermission(): NotificationPermission {
   }
 }
 
-export function StockPage({ code, onSelect, stream, contract = null, onContract }: Props) {
+export function StockPage({
+  code,
+  onSelect,
+  stream,
+  contract = null,
+  onContract,
+  onViewChange,
+}: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
@@ -80,7 +81,7 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
   const [rulesOpen, setRulesOpen] = useState(false);
   const { soundOn, setSoundOn } = useSignalSound();
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
-  const [view, setView] = useState<StockView>(initialView);
+  const [view, setView] = useState<StockView>(readStockView);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
   // `isPending` / `isError` 要一路帶到群組檢視(review A4):`wl?.groups ?? []` 把
@@ -158,6 +159,7 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
    *  切換本身已生效,代價僅是下次重開回到單檔。 */
   function selectView(next: StockView): void {
     setView(next);
+    onViewChange?.(next);
     try {
       window.localStorage.setItem(STOCK_VIEW_KEY, next);
     } catch {

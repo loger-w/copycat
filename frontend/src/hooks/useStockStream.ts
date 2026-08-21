@@ -81,16 +81,29 @@ interface WsMsg {
  *  路徑段恆為股號、合約走 query string:instrument key(`F:CDF:202609`)放進路徑會被
  *  後端 `_valid_code` 400,而且 D7 白名單需要股號才驗得了「這個合約屬於這檔股票」。
  *  任何一條 refetch 路徑漏帶 `?contract=` 都會靜默把畫面拉回現貨資料。 */
-function stateUrl(code: string, contract: { prod: string; ym: string } | null): string {
-  return contract === null
+function stateUrl(
+  code: string,
+  contract: { prod: string; ym: string } | null,
+  tape: boolean,
+): string {
+  const query = [
+    ...(contract === null ? [] : [`contract=${contract.prod}:${contract.ym}`]),
+    // **只在關閉時附加**:預設路徑的 URL 因此逐字不變(舊快取 / 既有斷言 / 後端 log
+    // 都不受本輪影響),而後端對非 `"0"` 的值一律回全量。
+    ...(tape ? [] : ["tape=0"]),
+  ];
+  return query.length === 0
     ? `/api/stock/state/${code}`
-    : `/api/stock/state/${code}?contract=${contract.prod}:${contract.ym}`;
+    : `/api/stock/state/${code}?${query.join("&")}`;
 }
 
 export function useStockStream(
   code: string | null,
   contract: StkfutSelection | null = null,
+  opts: { tape?: boolean } = {},
 ): StockStreamState {
+  // `tape=false` = 呼叫端(群組檢視)沒有明細 / 主圖讀者 → 後端省掉整份逐筆。
+  const tape = opts.tape ?? true;
   // WS 是全站唯一一條 → 自選失效的註冊點也只在這裡一處(design §8.1 / impl-review R10)。
   // 多處註冊(App + feed hook)會對同一則 watchlist_changed 重複 refetch。
   const queryClient = useQueryClient();
@@ -149,6 +162,15 @@ export function useStockStream(
   codeRef.current = code;
   const contractRef = useRef(contract);
   contractRef.current = contract;
+  // ref 化的理由同 contractRef:五個 refetch 觸發裡有三個活在 WS callback(deps `[]`)
+  // 的閉包內 —— 讓它捕獲 `tape` 的話,切回單檔之後由 seq-gap / 重連觸發的 refetch 還會
+  // 帶著掛載當時的 `tape=0`,主圖的明細因此永遠是空的,而畫面上不會有任何錯誤。
+  //
+  // **同步點在下面的 effect 不在 render**(與 codeRef / contractRef 那三支不同):那三支
+  // 是切檔核心鍵,render 寫入 = 「commit 當下即生效」的刻意時序(2026-08-11 doctor triage
+  // 列為 needs-human);tape 沒有那個需求 —— 讀到舊值最壞是多打 / 少打一趟明細,而那一趟
+  // 緊接著就會被 transition effect 補上。
+  const tapeRef = useRef(tape);
   // 主圖標的的**識別**是 instrument key,不是股號:同一檔股票的現貨與各月合約是
   // 不同標的,而 WS 推播的 `code` 欄、engine 的訂閱槽位鍵用的都是它(R9)。
   // ref 化的理由同 codeRef —— WS callback 只建立一次(effect deps `[]`),閉包裡讀
@@ -219,7 +241,7 @@ export function useStockStream(
     // 非 2xx 與 throw 走同一條復原路徑(F-3);`finally` 讀得到才能與「切檔補發」分岔
     let failed = false;
     try {
-      const res = await fetch(stateUrl(currentCode, contractRef.current));
+      const res = await fetch(stateUrl(currentCode, contractRef.current, tapeRef.current));
       if (res.ok) {
         cancelRetry(); // 成功即歸零 backoff,並丟掉還沒打出去的重試
         const snap = fromSnapshot(await res.json());
@@ -280,6 +302,17 @@ export function useStockStream(
     if (instrumentKey === null) return;
     void refetch();
   }, [instrumentKey]);
+
+  // tape 由關轉開(群組 → 單檔):手上這份 accum 是 `tape=0` 取回來的,明細與 VP 都是
+  // 空的 —— 補一次全量。反向(單檔 → 群組)不打:多出來的 ticks 無害。
+  //
+  // **無條件補**,不做「這份到底是不是 tape=0 來的」的最佳化:多打一趟的代價是一次
+  // 請求(且 in-flight 時會被 CR1 合併),漏打的代價是主圖整天空明細而畫面不講原因。
+  useEffect(() => {
+    const wasOff = !tapeRef.current;
+    tapeRef.current = tape;  // 上面那支 ref 的**唯一**寫入點(順序:先同步再補打)
+    if (tape && wasOff) void refetch();
+  }, [tape]);
 
   // WS 連線(單條,頁面生命週期)
   useEffect(() => {
