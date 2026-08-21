@@ -388,23 +388,32 @@ class TestBackfillTimeoutRetry:
         # 也算通過,那正是這條要擋的失效
         assert all(t.cancelled() for t in tasks)
 
-    async def test_single_flight_full_round_merges_all_legs_into_pending(
+    async def test_reconnect_during_inflight_round_merges_all_legs_and_tail_refetches(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """2026-08-22 review R8 P2:被 single-flight 擋下的**整輪**(legs=None,reconnect 觸發)
-        原本什麼都不併、函式直接 return,log 卻印「併回 pending(legs=全部)」。
-        併回全部腿,讓進行中那一輪的尾巴真的重排。"""
+        """2026-08-22 review R8 P2 + round-2 P1:reconnect 觸發的**整輪**回補撞上進行中那一輪,
+        真正的丟棄點是 `_schedule_backfill` 的 inflight 早退(連 task 都不建、零 log),
+        不是 `_backfill_river` 的 merge 分支。整輪要併回全部腿、由進行中那一輪的尾巴重抓;
+        併回 = 新 episode(reconnect),連續失敗輪數歸零、不吃逾時重試預算。"""
         src = _FakeSource()
+        src.gate = threading.Event()  # NQ 那一發卡在閘門上 → 整輪維持 in-flight
+        src.minutes["TC.F.TWF.SXF.HOT"] = [(601, 12_000_000)]
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            await _drain()
-            eng._backfill_inflight = True  # 模擬另一輪進行中
+            await wait_until(lambda: eng._backfill_inflight)
+            eng._backfill_retry_round = 2  # 上一個 episode 留下的連續失敗數
             with caplog.at_level(logging.INFO):
-                await eng._backfill_river(legs=None)
+                eng._schedule_backfill()  # = _on_reconnect_threadsafe 落到 loop 後的那一步
             assert eng._backfill_pending_legs == set(eng._legs)
+            assert "single-flight" in caplog.text
+            src.gate.set()
+            # 尾巴接手:SXF 被重抓第二次(首輪 + 併回);輪數歸零後不因併回被 bump 到 3 放棄
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") >= 2)
+            await _drain()
+            assert eng._backfill_retry_round == 0
         finally:
-            eng._backfill_inflight = False
+            src.gate.set()
             await eng.close()
 
     async def test_retry_task_unexpected_error_resets_round_budget(

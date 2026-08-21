@@ -959,6 +959,34 @@ class TestBackfillTimeoutRetry:
         assert "2330" not in engine._backfill_timeouts
         await engine.close()
 
+    async def test_timeout_after_release_does_not_rearm_or_bookkeep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-08-22 review round-2 P2:release 時已在佇列 / 正跑的 job 之後逾時,worker 不得
+        替一支**已無 owner** 的 code 記逾時帳、武裝新 timer(15s 後再打 TC4 → 再逾時 → 終局
+        `_backfilled.add` 把 release 清掉的記帳寫回)。判準 = `_refs`(訂閱池唯一真相)。"""
+        import threading
+
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
+        engine, src = await _make()
+        gate = threading.Event()
+
+        def slow_backfill(code: str) -> list[object]:
+            gate.wait(2.0)
+            raise HistoryTimeoutError("first page not ready")
+
+        monkeypatch.setattr(src, "backfill", slow_backfill)
+        await engine.set_main("2330")
+        await wait_until(lambda: engine._backfilling == "2330")  # job 正跑著
+        await engine.set_main("2317")  # 2330 真退訂
+        gate.set()
+        await wait_until(lambda: engine._backfilling != "2330")
+        await _drain(engine)
+        assert "2330" not in engine._backfill_timeout_handles
+        assert "2330" not in engine._backfill_timeouts
+        assert "2330" not in engine._backfilled
+        await engine.close()
+
     async def test_give_up_stops_group_snapshot_from_reenqueueing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
