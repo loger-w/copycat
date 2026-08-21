@@ -439,6 +439,37 @@ class TestSignalsTodayRoute:
         assert body["trade_date"] == "2026-08-20"
         assert body["today"] == "2026-08-21"
 
+    def test_dates_are_sampled_before_the_await(self, tmp_path: Path) -> None:
+        """review C-1:兩個日期必須在 `await to_thread(today_signals)` **之前**取樣。
+
+        取樣點在 await 之後時,jsonl 讀取那段(worker thread,可長)橫跨 rollover
+        stage2 的話,回傳體會是「舊日的訊號 + 新日的日期」—— 前端拿它比對得出
+        `trade_date == today` → 標題印「今日訊號」,而列的內容其實是昨天的。錯位不可
+        避免(兩件事本來就不是原子的),但方向要選得對:先取樣 = 最壞情況印出舊日期,
+        使用者看到的是「MM-DD 訊號」配那一天的列,兩邊一致且說得通。
+
+        探針:`today_signals` 執行中把 hub 的兩顆時鐘推到新日別(= 讀檔期間發生
+        rollover)。取樣在 await 後的實作會回新日別。
+        """
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            hub = app.state.signal_hub
+            assert hub is not None
+            hub._trade_date_fn = lambda: "2019-03-01"
+            hub._now_fn = lambda: _dt.datetime(2019, 3, 1, 13, 40, 0)
+
+            def _rolls_over_while_reading() -> list[dict]:
+                hub._trade_date_fn = lambda: "2019-03-04"
+                hub._now_fn = lambda: _dt.datetime(2019, 3, 4, 9, 0, 0)
+                return []
+
+            hub.today_signals = _rolls_over_while_reading  # type: ignore[method-assign]
+            body = client.get("/api/stock/signals/today").json()
+            # 前提自檢:探針真的改到了 hub(沒改到的話下面兩條會假綠)
+            assert hub.trade_date == "2019-03-04"
+        assert body["trade_date"] == "2019-03-01"
+        assert body["today"] == "2019-03-01"
+
     def test_returns_jsonl_rows(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
