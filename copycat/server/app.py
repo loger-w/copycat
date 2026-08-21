@@ -1314,6 +1314,10 @@ def create_app(
 
         前端 reconnect 後拿它當 baseline 自癒 —— WS 斷線期間丟掉的訊號由這裡補回。
 
+        `trade_date`(引擎日別)/ `today`(牆鐘日)是 additive 兩欄(D3'):前端拿它
+        判標題該印「今日訊號」還是「MM-DD 訊號」。日期只能由**這裡**給 —— 瀏覽器
+        時鐘與後端日別可以差一天(假日開站掛的是上一交易日的訊號),各算各的必錯。
+
         **無查參**:未宣告的查參 FastAPI 一律忽略,舊 bundle 打 `?market=exclude`
         照樣 200(前後端部署順序無關)。
         """
@@ -1322,7 +1326,13 @@ def create_app(
         # to_thread 走 loop 預設 executor,與 daily_bars / capital close 同池且工作
         # 執行緒不可中斷 —— TC4 半死的殭屍執行緒堆積時這條會跟著排隊(review C-1);
         # today 若變慢先查同池鄰居,別急著懷疑 jsonl。
-        return {"signals": await asyncio.to_thread(_signals(request).today_signals)}
+        hub = _signals(request)
+        # 兩個日期是純屬性(no IO)→ 留在 loop 上讀;只有 jsonl 那段丟 worker thread。
+        return {
+            "signals": await asyncio.to_thread(hub.today_signals),
+            "trade_date": hub.trade_date,
+            "today": hub.today,
+        }
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
 
