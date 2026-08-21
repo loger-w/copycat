@@ -71,7 +71,8 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
   // 提示音(localStorage 共用 store,與 App 的 useSignalAlerts 同一份真值)
-  const { signals } = useSignalFeed();
+  // 兩個日期原樣往下傳、由 rail 判文案(AR5:標題邏輯只有一個註冊點)
+  const { signals, tradeDate: signalsTradeDate, today: signalsToday } = useSignalFeed();
   // `isError` 要一路帶到畫面:退回 `[]` 之後,「載入失敗」與「零規則」在 rail 與
   // Dialog 上長得一模一樣,而後者會讓使用者照著空態去新增(只會撞名失敗)。
   const { data: rules = [], isError: rulesError } = useSignalRules();
@@ -194,6 +195,8 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
         onRequestNotif={requestNotif}
         soundOn={soundOn}
         onToggleSound={setSoundOn}
+        tradeDate={signalsTradeDate}
+        today={signalsToday}
       />
       {/* 常駐掛載、只切 open(dialog 樣板慣例);規則清單由本層餵,Dialog 不自己抓 */}
       <SignalRulesDialog
