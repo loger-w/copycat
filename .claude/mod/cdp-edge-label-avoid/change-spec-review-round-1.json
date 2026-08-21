@@ -1,0 +1,76 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "共用核心就地改寫會推走 oLines 線體並汙染 memo",
+   "disposition": "accepted",
+   "resolution": "D6 核心純函式(map 複製)+ 純函式 lock 測試"
+  },
+  {
+   "id": "R2",
+   "severity": "P0",
+   "summary": "SC-2 全印 vs D4 截斷/丟棄互斥;矮卡片 capacity 6<7 可達",
+   "disposition": "accepted",
+   "resolution": "D6 bandLabels dropOverflow=false,不截斷不丟棄,界退化回原 y"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "沿用 edgeBounds 會把 y∈[4,9) 標籤無故下推",
+   "disposition": "accepted",
+   "resolution": "D7 bandBounds={PAD_Y, plotBottom−PAD_Y}"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "既有測試未逐檔標紅/不該紅,漏 variant/futures/GroupGridView/MarketChart 段",
+   "disposition": "accepted",
+   "resolution": "盤點表 + W7"
+  },
+  {
+   "id": "R5",
+   "severity": "P1",
+   "summary": "SC-4 漏矮卡片與 index 面;W5 futures 無實質",
+   "disposition": "accepted",
+   "resolution": "SC-4 增兩張截圖;W5 改寫"
+  },
+  {
+   "id": "R6",
+   "severity": "P2",
+   "summary": "caller map 誤列 AdvanceDeclineChart / GroupGridView 直接",
+   "disposition": "accepted",
+   "resolution": "current-state 更正"
+  },
+  {
+   "id": "R7",
+   "severity": "P2",
+   "summary": "11 顆原句與 7 顆 fixture 對不上",
+   "disposition": "accepted",
+   "resolution": "SC-1 註水平不相交推導"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "無位移上限 SC",
+   "disposition": "accepted",
+   "resolution": "SC-1 位移 ≤ (n−1)×EDGE_LABEL_H 斷言"
+  },
+  {
+   "id": "R9",
+   "severity": "P2",
+   "summary": "+3 vs dy 0.35em 兩把尺",
+   "disposition": "accepted",
+   "resolution": "D5 註記"
+  },
+  {
+   "id": "R10",
+   "severity": "P2",
+   "summary": "🟢 單獨 commit 造成短暫死碼窗口",
+   "disposition": "accepted",
+   "resolution": "commit 順序明寫,同 PR"
+  }
+ ]
+}
