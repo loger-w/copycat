@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OrderPanel } from "@/components/OrderPanel";
@@ -224,6 +224,31 @@ describe("OrderPanel(群益)", () => {
     // 無估價合約(PUT last_price=null)→ 市價鈕 disabled
     fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
     expectMarketLocked();
+  });
+
+  // 🔴 A11Y-2:選了市價之後換到**無估價**的合約 —— 市價 radio 變 disabled,但 `kind`
+  // 還停在 market 所以它仍是 checked。HTML 的 radio group 只有 checked 的那顆進 tab 序,
+  // 而它 disabled → **整組零可聚焦**:鍵盤使用者再也切不回限價,而畫面上兩顆 pill 都在。
+  // 收斂回 limit 是唯一出路(送出鈕本來就會因估價缺失而 disabled,不是替代品)。
+  it("A11Y-2:市價態換到無估價合約 → 收斂回限價,radiogroup 仍有可聚焦項", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.click(screen.getByRole("radio", { name: "市價" }));
+    expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
+    expectMarketLocked();
+    expect((screen.getByRole("radio", { name: "限價" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(false);
+    // 可聚焦 = 「未 disabled 且 checked」的那顆(原生 roving tabindex 的落點)恰一個
+    const group = screen.getByRole("radiogroup", { name: "委託類型" });
+    const radios = within(group).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.filter((r) => r.checked && !r.disabled).length).toBe(1);
+    // 限價態的價格欄跟著回來(否則使用者連價都填不了)
+    expect(screen.getByLabelText("價格(點)")).toBeTruthy();
   });
 
   it("選單以 /api/txo/contracts 全鏈為主:props 子集仍列全鏈;鏈上無估價合約鎖市價", async () => {
