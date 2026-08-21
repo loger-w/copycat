@@ -44,6 +44,12 @@ const NAMES: Record<MarketKey, string> = {
   TMF: "台指期(微台)",
 };
 
+/** 標的列**顯示層**的三個選項(A11Y-p2-1)。第三顆是「台指期」這個位置本身,不是它
+ *  當下指到的哪一款期指 —— 直接拿 `futKey` 當 value 的話,換商品會連 React 的 `key` 一起
+ *  換掉,整顆 label + input 被卸載重建、焦點掉回 body,而畫面看起來毫無變化。
+ *  `FUT ↔ futKey` 的映射留在呼叫端(選中 = `isFut`,與改前的 `active={isFut}` 等價)。 */
+type TargetKey = "TWSE" | "OTC" | "FUT";
+
 /** 一個 pane 的 localStorage key 組。**每個 pane 一組**,不共用 —— 兩張圖各自記自己的
  *  標的 / 週期 / 期指商品,共用等於右圖跟著左圖動。
  *
@@ -372,6 +378,9 @@ export function MarketPane({
   }
 
   const isFut = marketKey === "TXF" || marketKey === "MXF" || marketKey === "TMF";
+  // 標的列顯示層的選中值(見 `TargetKey`)。寫成 narrowing 而不是 `isFut ? "FUT" : marketKey`
+  // —— TS 不會用布林變數去窄化 `marketKey`,那樣要多一個 cast。
+  const targetKey: TargetKey = marketKey === "TWSE" || marketKey === "OTC" ? marketKey : "FUT";
   const series = marketKey === "TWSE" ? twse : marketKey === "OTC" ? otc : null;
   const futState = isFut ? (futures?.[marketKey] ?? null) : null;
 
@@ -438,18 +447,19 @@ export function MarketPane({
     >
       {/* 標的列(SC-2)。a11y 批 D2':**拆兩個 radiogroup** —— 「標的」與「期貨商品」
           語意不同(選了台指期才談大/小/微台),合成一群的話「恰一顆 checked」不成立
-          (台指期與大台會同時亮)。第三顆的 value 是 `futKey`:期貨態時 `marketKey`
-          恆等於它(`selectFut` 會同步兩者),所以 checked 判定與原本的 `active={isFut}` 等價。 */}
+          (台指期與大台會同時亮)。第三顆的 value 固定 `"FUT"`(A11Y-p2-1,見 `TargetKey`)
+          —— 期貨態時 `marketKey` 恆等於 `futKey`(`selectFut` 會同步兩者),所以 checked
+          判定與原本的 `active={isFut}` 等價,但換商品不再重掛那顆 radio。 */}
       <div className="flex flex-wrap items-center gap-3">
-        <RadioPills<MarketKey>
+        <RadioPills<TargetKey>
           ariaLabel="標的"
           className="flex gap-1"
-          value={marketKey}
-          onChange={selectKey}
+          value={targetKey}
+          onChange={(next) => selectKey(next === "FUT" ? futKey : next)}
           items={[
             { value: "TWSE", label: "加權" },
             { value: "OTC", label: "櫃買" },
-            { value: futKey, label: "台指期" },
+            { value: "FUT", label: "台指期" },
           ]}
           pillClass={pillClass}
         />
