@@ -887,17 +887,21 @@ describe("App 日曆休市膠囊(SC-1)", () => {
 
   /** 負例的 settle 點:等 calendar 真的打過並把 promise chain 排乾,
    *  否則「還沒回」與「判定不顯示」在 queryBy 下同形。 */
-  async function settleCalendar() {
-    await waitFor(() =>
-      expect(
-        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
-          String(c[0]).includes("/api/calendar"),
-        ),
-      ).toBe(true),
+  async function settleCalendar(calls = 1) {
+    await waitFor(
+      () => expect(calendarCalls()).toBeGreaterThanOrEqual(calls),
+      // retry 的 backoff 首次是 1s,waitFor 預設 1s 逾時抓不到第二次
+      { timeout: 5000 },
     );
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
+  }
+
+  function calendarCalls(): number {
+    return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((c) =>
+      String(c[0]).includes("/api/calendar"),
+    ).length;
   }
 
   it("後端資料日 ≠ 今日(平日、且 payload 的今天就是本機今天)→ 膠囊出現", async () => {
@@ -965,7 +969,11 @@ describe("App 日曆休市膠囊(SC-1)", () => {
     expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
   });
 
-  it("calendar 取數失敗 → 無膠囊(降級成現況,不誤報)", async () => {
+  // [lock] review TQ-2:失敗案的 settle 點必須等到 **retry 終態**。`calendarQueryOptions`
+  // 帶 `retry: 1` —— 只等第一次 fetch 的話,斷言跑在「第一次已失敗、重試還沒發」的空窗
+  // 內,`data` 必然是 undefined,元件連判定式都還沒執行到:把整個判定刪掉這條照樣綠。
+  // 等到第二次(= 最後一次)呼叫並排乾 promise chain,error 才是終態。
+  it("calendar 取數失敗(retry 用盡)→ 無膠囊(降級成現況,不誤報)", async () => {
     atBrowserDate(2026, 9, 9);
     const base = appFetch();
     vi.stubGlobal(
@@ -978,7 +986,8 @@ describe("App 日曆休市膠囊(SC-1)", () => {
       }),
     );
     renderApp();
-    await settleCalendar();
+    await settleCalendar(2);
+    expect(calendarCalls()).toBe(2); // 上界也釘住:retry 1 次 = 共 2 次,不是還在重試中
     expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
   });
 });

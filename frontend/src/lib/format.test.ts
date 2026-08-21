@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chgPct, fmtIndexPts, fmtPct, formatNtd, formatPts } from "@/lib/format";
+import { chgPct, fmtIndexPts, fmtPct, formatNtd, formatPts, monthDay } from "@/lib/format";
 
 describe("formatNtd", () => {
   it("億級縮寫", () => {
@@ -49,5 +49,22 @@ describe("fmtIndexPts(指數軸帶價位口徑)", () => {
     expect(fmtIndexPts(238_970)).toBe("238.97");
     expect(fmtIndexPts(1_005_000)).toBe("1005");
     expect(fmtIndexPts(1_234_560)).toBe("1235");
+  });
+});
+
+// [lock] review TQ-7:`monthDay` 從 LimitList 抽到 lib(SC-10)後成為兩個消費端
+// (漲跌停列表 + SignalRail 標題)的共用點,而它的**形狀守門**原本零測試 ——
+// 把 regex 拿掉、或把 `slice(5)` 改成 `slice(4)` / `substring(5, 10)` 全綠。
+// 守門的理由:形狀不合就原樣印出來(寧可醜也不要靜默切錯字串),而「切錯」在畫面上
+// 長得像一個正常的日期。
+describe("monthDay", () => {
+  it("`YYYY-MM-DD` → `MM-DD`", () => {
+    expect(monthDay("2026-08-20")).toBe("08-20");
+  });
+  it("空字串原樣回(缺值的形之一,呼叫端據此退回「今日訊號」)", () => {
+    expect(monthDay("")).toBe("");
+  });
+  it("斜線分隔(形狀不合)原樣回,不切", () => {
+    expect(monthDay("2026/08/20")).toBe("2026/08/20");
   });
 });
