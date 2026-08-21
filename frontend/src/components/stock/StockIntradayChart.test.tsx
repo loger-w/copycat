@@ -2055,3 +2055,58 @@ describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () =>
     expect(texts[6]!.getAttribute("class")).toContain("fill-ma20");
   });
 });
+
+// ---- 2026-08-22 review R1 P1:VWAP 就地標籤 × MA 價位標 ----
+describe("VWAP 就地標籤進 MA 價位標的 obstacles(mod/vwap-label-avoid)", () => {
+  function geomOf(accum: typeof ACCUM) {
+    return buildIntradayGeometry(
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+      { width: 800, height: 260 },
+    );
+  }
+  const lateSnap = {
+    code: "2330", seq: 2,
+    last: { p: 2_390_000, t: "13:30:10.000", cum_vol: 12 },
+    vwap: 2_390_000,
+    minutes: {
+      "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0, h: 2_380_000, l: 2_380_000 },
+      "810": { c: 2_390_000, v: 2, i: 2, o: 0, u: 0, h: 2_390_000, l: 2_390_000 },
+    },
+    ticks: [], book: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  } as const;
+
+  /** PR #78 SC-4 近拍實證:末點貼右界時 VWAP 標籤右緣 = w−R_AXIS_W,與 MA 價位標
+   *  (anchor=end 在 w−R_AXIS_W−2、向左佔 EDGE_LABEL_W)x 區間完全重疊;y 相近即疊印。
+   *  VWAP 是就地標籤(位置 = 線末點在哪,是資訊)不動,MA 價位標是冗餘數值 → 讓位。 */
+  it("末點貼右界且 MA5 價位≈VWAP → MA5 標籤讓位(中心距 ≥ EDGE_LABEL_H),VWAP 標籤不動", async () => {
+    overlayResponse = { ...OVERLAY, ma5: 2_390_000, ma20: 2_310_000 };
+    const late = fromSnapshot(lateSnap);
+    const { container } = wrap(<StockIntradayChart accum={late} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const vwap = container.querySelector('[data-testid="edge-price-vwap"]')!;
+    const ma5 = container.querySelector('[data-testid="edge-price-ma5"]')!;
+    const end = geomOf(late).vwapLine.at(-1)!;
+    expect(Number(vwap.getAttribute("y"))).toBeCloseTo(end.y, 6); // VWAP 就地不動
+    expect(
+      Math.abs(Number(ma5.getAttribute("y")) - Number(vwap.getAttribute("y"))),
+    ).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+  });
+
+  it("末點在畫面中段(x 區間不碰 MA 走廊)且 MA5 價位≈VWAP → MA5 標籤不位移", async () => {
+    // ACCUM 只有 09:01 一分鐘,vwapLine 末點在繪圖區左側;VWAP=2_380_000
+    overlayResponse = { ...OVERLAY, ma5: 2_380_000, ma20: 2_310_000 };
+    const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
+    fireEvent.click(screen.getByRole("button", { name: "MA" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="edge-price-ma5"]')).toBeTruthy(),
+    );
+    const g = geomOf(ACCUM);
+    expect(
+      Number(container.querySelector('[data-testid="edge-price-ma5"]')!.getAttribute("y")),
+    ).toBeCloseTo(g.toY(2_380_000), 6);
+  });
+});
