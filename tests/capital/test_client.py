@@ -1862,3 +1862,32 @@ async def test_correct_price_forgets_price_type(
         ),
     )
     assert client.store.orders()[0].price_type is None
+
+
+def test_two_dead_queries_then_two_late_end_markers_keep_positions(tmp_path: Path) -> None:
+    """R7 review P0(2026-08-22,探針實錄 seeded 3357 → []):連續兩輪零事件死查詢,
+    COM 解卡後兩個遲到的零列 `##` 接連抵達。欠帳若是一次性時間戳,第一個吞掉即關窗,
+    第二個照 flush 空集合 → `set_positions([])` 清空有庫存部位、平倉鍵鎖住(原 bug 兩輪重現)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    clock = _FakeClock()
+    client._balance = BalanceCollector(on_complete=client._on_balance_complete, clock=clock)
+    _mark_ready(client)
+    _seed_positions_via_round(client, _BAL_3357)
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    for n in (1, 2, 3):
+        client._balance_due = time.monotonic() - 1.0
+        if n > 1:
+            client._balance_inflight_until = time.monotonic() - 1.0  # 上一輪逾期解卡
+        client._maybe_query_balance()
+        assert _balance_queries(com) == n
+    clock.now += 1.0
+    client._handle_balance("##")  # 第 1 輪遲到
+    client._handle_balance("##")  # 第 2 輪遲到
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    assert client._pending_sec is None
+    client._handle_balance(_BAL_2493)  # 第 3 輪真回應
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]

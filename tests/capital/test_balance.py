@@ -439,3 +439,49 @@ def test_parse_open_interest_bad_avg_price_kept_as_none() -> None:
     p = parse_open_interest_line("TF,1234567890,TXFI6,B,2,0,x,0,0")
     assert p is not None
     assert p.qty == 2 and p.avg_price is None
+
+
+def test_collector_two_abandoned_rounds_swallow_two_late_end_markers() -> None:
+    """R7 review P0(2026-08-22):欠帳是**計數 + 時間窗**,不是一次性時間戳。
+    連續兩輪零事件死查詢各欠一個 `##`;COM 解卡後兩個遲到終止符接連抵達 ——
+    第一個吞掉即關窗的話,第二個零列 `##` 照 flush 空集合,把有庫存清成無部位(原 bug 兩輪重現)。"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()  # 第 1 輪死查詢
+    c.reset(keep_abandoned=True)
+    c.abandon()  # 第 2 輪死查詢
+    c.reset(keep_abandoned=True)  # 第 3 輪查詢出手
+    clock.now += 1.0
+    c.feed(RAW_END)  # 第 1 輪遲到 ##
+    c.feed(RAW_END)  # 第 2 輪遲到 ##
+    assert got == []  # 兩個都是欠帳,一個都不得 flush
+    c.feed(RAW_C_MARGIN)  # 第 3 輪真回應
+    c.feed(RAW_END)
+    assert len(got) == 1
+    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["3357"]
+
+
+def test_collector_rows_do_not_cancel_remaining_debt() -> None:
+    """R7 review P1(2026-08-22):rows 抵達不可把欠帳整個清掉 —— 損益段第一筆固定是
+    `000` 查詢結果表頭,它一到就關窗的話,欠帳窗對 profit 段形同虛設。
+    語意:每個 `##` 消耗一筆欠帳;帶列的 `##` 照 flush(那批列就是它的快照),
+    之後窗內的零列 `##` 仍按剩餘欠帳吞掉。"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()
+    c.reset(keep_abandoned=True)
+    c.abandon()  # 欠兩筆
+    c.reset(keep_abandoned=True)
+    c.feed(RAW_C_MARGIN)  # 某一輪的列 + ## → flush,消耗一筆
+    c.feed(RAW_END)
+    assert len(got) == 1
+    c.reset(keep_abandoned=True)
+    clock.now += 1.0
+    c.feed(RAW_END)  # 剩下那一筆欠帳的零列 ## → 吞掉
+    assert len(got) == 1
+    c.feed(RAW_END)  # 欠帳已清 → 零列 ## 照 flush(真空帳戶)
+    assert got[-1] == []
