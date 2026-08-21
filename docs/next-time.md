@@ -6,6 +6,8 @@ P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod
   不吃 `priceText`,加權 `24283.54` 實寬 ≈45px > `VWAP_LABEL_W`=40 → clamp 字尾溢右緣帶(既有)+ 新 obstacle 判定多一道 ≈5px 誤判窄帶。
   修法 = VWAP 文字走 priceText 或寬度依 mode 取值。
 - [ ] **VWAP 就地標籤 × 極值標記文字不互相避讓**(同上 review P2):兩者都「不可動」,日高/低落在盤末最後幾分鐘且價位≈VWAP 時疊印仍可達。
+- [ ] **VP 圖層在 tapeOmitted 時的佔位**(2026-08-22 mod/calendar-poll-tape-omitted out of scope):群組切單檔首 paint VP 空,
+  與「無成交」同形;可沿 `accum.tapeOmitted` 讓 VP toggle 區印載入中。
 - [ ] **R1 超容 clamp 全堆界邊**:`lib/stock-intraday-svg.ts:643-666` dropOverflow=false 時上緣標籤被
   clamp 成完全同 y(測試字面量 `[4,4,4,4,10,20,30]`),4×4 圖牆 capacity 6 / n=7 會踩到;改成界內等距壓縮。
 - [ ] **R2 MarketPane 週期 radiogroup 內混「重疊」toggle**(`MarketPane.tsx:493` trailing):新引入的
@@ -34,7 +36,9 @@ P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod
 - [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
   鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
 - [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
-  路徑 phase≠status 無測;`handover.attempt` 與 `tape=0` 字面值登記 CLAUDE.md §4。
+  路徑 phase≠status 無測。〔`handover.attempt` 與 `tape=0` 契約已於 2026-08-22 mod/calendar-poll-tape-omitted 登記 CLAUDE.md §4〕
+- [x] **R6 calendar 6h 前景輪詢跨午夜膠囊遲到 / R9 前端不讀 `tape_omitted`**〔2026-08-22 已出貨 mod/calendar-poll-tape-omitted:
+  5 min + refetchIntervalInBackground;`accum.tapeOmitted` → TickTape「載入明細…」;VP 圖層佔位未做〕
 - [ ] **R10 `corr_config.py:97/100/104/108` 四條 logger 仍印「預設六腿」**(現 7 腿;08-21 C2 條已 `[x]` 但此處未追蹤)
   → 🔴 微幅,下次動 corr_config 帶走。
 
