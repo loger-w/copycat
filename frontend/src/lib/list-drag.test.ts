@@ -62,6 +62,28 @@ describe("dropTargetFromPointer", () => {
     expect(dropTargetFromPointer({ x: 100, y: 32 }, [], ROW, BOUNDS)).toBeNull();
   });
 
+  // 🔴 B10(SC-1):sticky 搜尋區下緣以上 = 作廢帶。舊行為是「在所有 zone 上方 → 取最上
+  // 的 zone」,所以游標停在搜尋框上放開會靜默把股票搬到第一組 index 0(不可逆的移動語意)。
+  it("y 在作廢帶內(< voidBelowY)→ null(拖到 sticky 搜尋區放開 = 整個作廢)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 39 }, ZONES, ROW, BOUNDS, 40)).toBeNull();
+    // 作廢帶向上無界:側欄上方(負座標)照樣作廢
+    expect(dropTargetFromPointer({ x: 100, y: -5 }, ZONES, ROW, BOUNDS, 40)).toBeNull();
+  });
+
+  it("y 恰等於 voidBelowY → 照舊取最近 zone(邊界是 `<` 不是 `<=`)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 40 }, ZONES, ROW, BOUNDS, 40)).toEqual({
+      group: "主力",
+      index: 0,
+    });
+  });
+
+  it("未傳 voidBelowY → 四參數行為位元不變(W1)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 39 }, ZONES, ROW, BOUNDS)).toEqual({
+      group: "主力",
+      index: 0,
+    });
+  });
+
   // 未分組區塊也是一個 drop zone,用 `group: null` 表示(round5 §🔴-8)
   it("group 為 null 的 zone(未分組)→ 回 { group: null, index }", () => {
     const zones: DropZone[] = [
