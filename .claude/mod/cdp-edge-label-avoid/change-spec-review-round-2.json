@@ -1,0 +1,42 @@
+{
+ "round": 2,
+ "scope": "narrow(amendment 段)",
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R11",
+   "severity": "P1",
+   "summary": "SC-4 圖牆「不疊且全印」與 D6 在 mainH≈80 不可同時成立",
+   "disposition": "accepted",
+   "resolution": "SC-4 圖牆判準改全印+單調,不以不疊驗收"
+  },
+  {
+   "id": "R12",
+   "severity": "P1",
+   "summary": "SC-1 全稱與 D6 退化/超容反例互斥",
+   "disposition": "accepted",
+   "resolution": "SC-1 加前提,退化/超容另立條款"
+  },
+  {
+   "id": "R13",
+   "severity": "P2",
+   "summary": "SC-1 驗證行「容量截斷」與 Diff 章「全印」相反",
+   "disposition": "accepted",
+   "resolution": "措辭統一為全印"
+  },
+  {
+   "id": "R14",
+   "severity": "P2",
+   "summary": "純函式下「按原 index 還原」無通道",
+   "disposition": "accepted",
+   "resolution": "_i 包裝還原,不改核心簽名"
+  },
+  {
+   "id": "R15",
+   "severity": "P2",
+   "summary": "順序理由誤引配色",
+   "disposition": "accepted",
+   "resolution": "理由改 DOM 次序穩定"
+  }
+ ]
+}
