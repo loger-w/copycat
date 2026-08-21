@@ -102,8 +102,11 @@ export function StockPage({
   useEffect(() => {
     if (notifiedRef.current) return;
     notifiedRef.current = true;
-    // eslint-disable-next-line react-you-might-not-need-an-effect/you-might-not-need-an-effect
-    onViewChange?.(readStockView());
+    // 兩個掃描器對同一行的同一件事各叫一次(規則不同、建議相同 = 上提 state);抑制的
+    // 理由與上面那段註解同一條,不是「先關掉再說」。doctor 的抑制註解必須**緊貼**診斷
+    // 行,所以 eslint 那條改成行尾 disable-line 形式。
+    // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent
+    onViewChange?.(readStockView()); // eslint-disable-line react-you-might-not-need-an-effect/you-might-not-need-an-effect
   }, [onViewChange]);
   // 「加入自選」入口(round4 項 4):側欄搜尋改成預覽後,收藏動作移到這裡 ——
   // 使用者先看到資料,再決定要不要收藏、收到哪一組。
