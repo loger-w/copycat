@@ -1,0 +1,217 @@
+diff --git a/copycat/live/river_models.py b/copycat/live/river_models.py
+index 8123297d..0843cf30 100644
+--- a/copycat/live/river_models.py
++++ b/copycat/live/river_models.py
+@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
+ __all__ = [
+     "SESSION_WINDOWS",
+     "all_day_utc_window",
++    "close_clamp_rank",
+     "minute_end_from_1k",
+     "minute_end_from_taipei",
+     "minute_end_from_utc_hhmmss",
+@@ -51,14 +52,24 @@ def window_bounds(kind: str) -> tuple[int, int]:
+     return SESSION_WINDOWS.get(kind, SESSION_WINDOWS["day"])
+ 
+ 
++def _expand(minute_end: int, kind: str) -> tuple[int, int, int]:
++    """跨午夜展開後的 `(m, start, end)` —— `offset_of` 與 `close_clamp_rank` 的同一把尺。
++
++    兩者若各自展開,clamp 判定與分桶會在夜盤跨午夜那一段悄悄錯開(00:30 這種分鐘一邊
++    是 30、一邊是 1470)。
++    """
++    start, end = window_bounds(kind)
++    m = minute_end + _DAY_MINUTES if minute_end < start else minute_end
++    return m, start, end
++
++
+ def offset_of(minute_end: int, kind: str) -> int | None:
+     """台北 minute-of-day(終點標記)→ 窗內 offset(1..N);窗外 None。
+ 
+     跨午夜:小於窗首的分鐘先 +1440 展開(夜盤 00:30 排在 23:00 之後)。
+     收盤補正:`end < m <= end + 5` 併入 `end`。
+     """
+-    start, end = window_bounds(kind)
+-    m = minute_end + _DAY_MINUTES if minute_end < start else minute_end
++    m, start, end = _expand(minute_end, kind)
+     if m > end:
+         if m > end + _CLOSE_CLAMP:
+             return None
+@@ -67,6 +78,21 @@ def offset_of(minute_end: int, kind: str) -> int | None:
+     return offset if offset >= 1 else None
+ 
+ 
++def close_clamp_rank(minute_end: int, kind: str) -> int | None:
++    """收盤補正的「第幾分鐘」:非 clamp 0、`end+1` → 1、…、`end+5` → 5;超出 clamp 窗 None。
++
++    `offset_of` 把 `end+1..end+5` 全部併進 `end` 格,少了名次就分不出「13:45:xx 的收盤
++    撮合」(桶 = end+1,必須寫得進來)與「13:46 之後的殘留取樣」(蓋掉真收盤)。
++    判定由 `RiverState.push` 使用;`offset_of` 的輸出不受影響。
++    """
++    m, _start, end = _expand(minute_end, kind)
++    if m <= end:
++        return 0
++    if m > end + _CLOSE_CLAMP:
++        return None
++    return m - end
++
++
+ def _hh_mm(hh_raw: str, mm_raw: str) -> tuple[int, int] | None:
+     try:
+         hh, mm = int(hh_raw), int(mm_raw)
+diff --git a/copycat/live/river_state.py b/copycat/live/river_state.py
+index f7e01948..47af91af 100644
+--- a/copycat/live/river_state.py
++++ b/copycat/live/river_state.py
+@@ -5,6 +5,8 @@ per-leg `{offset: 收盤毫點}`,offset = 當場盤別窗內的分鐘位移(`riv
+ 三條規則決定了它為什麼長這樣:
+ 
+ 1. **同分鐘 last-write-wins**:一分鐘內多筆成交,圖上那一點的語意是「該分鐘收盤」。
++   唯一例外是收盤補正窗(`river_models.close_clamp_rank`):`end+2` 起(13:46– / 05:01–)
++   的取樣不覆寫已有值的 end 格,否則收盤後的殘留成交會蓋掉真收盤價。
+ 2. **換場清空**:盤別或 UTC 日期一變,舊場的點與新場的 x 軸無關(窗也不同)。
+    `set_session` 讓「還沒有任何報價」的情形也能換窗 —— TC4 掛掉時 `push` 永不被呼叫,
+    窗若只靠 push 更新,畫面會停在上一場的軸上。
+@@ -22,7 +24,7 @@ from __future__ import annotations
+ 
+ from collections.abc import Mapping, Sequence
+ 
+-from copycat.live.river_models import offset_of, window_bounds
++from copycat.live.river_models import close_clamp_rank, offset_of, window_bounds
+ 
+ __all__ = ["RiverState", "SessionKey"]
+ 
+@@ -59,6 +61,12 @@ class RiverState:
+         offset = offset_of(minute_end, session[1])
+         if offset is None:
+             return
++        # 收盤 clamp 第 2 分鐘起(13:46– / 05:01–)不覆寫已有值的 end 格:那些是收盤後
++        # 的殘留取樣。end+1 = 收盤撮合那一分鐘,必須寫得進來(base 腿每秒取樣在 13:44:xx
++        # 就先填了 end 格)。end 格還空著時照寫 —— tick 稀疏沒落 end 格時它就是最佳近似。
++        rank = close_clamp_rank(minute_end, session[1])
++        if rank is not None and rank >= 2 and offset in minutes:
++            return
+         minutes[offset] = price_milli
+         self._last_write[key] = (offset, price_milli)
+ 
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index ab596b12..53c1a33f 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -299,20 +299,21 @@ class _Booted:
+ def _heal_gate(
+     calendar: TradingCalendar | None, clock_gate: Callable[[], bool]
+ ) -> Callable[[], bool]:
+-    """自癒閘 = 牆鐘時段 **AND 今天有開盤**;`calendar=None` 逐字等於改動前的純牆鐘。
++    """自癒閘 = 牆鐘時段 **AND 那一場有開盤**;`calendar=None` 逐字等於改動前的純牆鐘。
+ 
+     純牆鐘的失效樣態:週末 / 國定假日整天閘都成立 → 每 5s 巡檢一次、對 TC4 上游
+     送 UNSUB+SUB,而那些 symbol 在休市日本來就不會有推播 → 退避爬到 300s 之後仍
+     整天不停。我方全鏈零訊號(自癒 log 本來就是 warning 級的日常),只有 TC4 那頭
+     的 QuoteZMQService log 看得出來。
+ 
+-    日期取樣一律經 `_today()`(日曆推導的唯一取樣點)。**已知邊界**:夜盤跨午夜,
+-    週六凌晨 00:00–05:00 屬週五那一場,`is_trading_day(週六)` 為 False → 那一段
+-    不自癒。取「寧可少救不可空 churn」,與 R3 個股健檢的盤外早退同一取捨。
++    日期取樣走 `_session_date()`(**場別起始日**,不是牆鐘今天):夜盤跨午夜,凌晨
++    那幾小時屬前一日開的那一場。用 `_today()` 的話兩頭都錯 —— 週六 00:00–05:00
++    查到週六 → 該救不救;週一 01:00 查到週一 → 空 churn(週日沒有夜盤,而凌晨的
++    clock_gate 為真)。stock / index 的 clock_gate 凌晨恆 False,不受這一改影響。
+     """
+     if calendar is None:
+         return clock_gate
+-    return lambda: calendar.is_trading_day(_today()) and clock_gate()
++    return lambda: calendar.is_trading_day(_session_date()) and clock_gate()
+ 
+ 
+ def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
+@@ -377,8 +378,26 @@ async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
+     return []
+ 
+ 
++def _session_date() -> _date:
++    """現在這一刻所屬**場別的起始日**(夜盤跨午夜歸前一日),**不是 TAIFEX 交易日**。
++
++    06:00 切換:夜盤 05:00 收盤 + 自癒閘的 5 分寬放都在門檻內,日盤 08:45 尚未開。
++    只有 `_heal_gate` 用它 —— `_resolve_trade_date`(兩處)、`/api/calendar.today`、
++    breadth 今日、overlay 基準日(兩個 handler)一律仍走 `_today()`,那些要的是
++    「資料屬於哪個交易日」,不是「現在是誰的場」。
++
++    **近似誤差**:夜盤存在與否其實取決於**次一營業日**(封關夜那類:起始日是交易日
++    但隔天休市 → 當晚無夜盤,閘仍為真 → 空 churn)。方向安全(不會該救不救),頻率
++    也低,故不引入「下一交易日」判定。
++    """
++    now = _now()
++    d = now.date()
++    return d - _timedelta(days=1) if now.hour < 6 else d
++
++
+ def _today() -> _date:
+-    """牆鐘今天 —— **日曆推導的唯一取樣點**(mod/trading-calendar Q9)。
++    """牆鐘今天 —— 日曆**交易日**推導的唯一取樣點(mod/trading-calendar Q9);
++    場別起始日另見 `_session_date`。
+ 
+     涵蓋範圍逐條:`trade_date` 推導(`_resolve_trade_date`)、overlay 基準日、
+     `/api/calendar.today`。散在各處的 `date.today()` 讓「跨午夜那一瞬用了兩個不同的
+diff --git a/frontend/src/components/corr/RiverOverlay.tsx b/frontend/src/components/corr/RiverOverlay.tsx
+index 5178fe7a..a6a2872b 100644
+--- a/frontend/src/components/corr/RiverOverlay.tsx
++++ b/frontend/src/components/corr/RiverOverlay.tsx
+@@ -73,13 +73,18 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
+     setCursor(offsetAtX(px, win, SIZE));
+   }
+ 
+-  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)
++  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)。
++  // 由 `entries`(不是 `g.lines`)產生:`buildOverlayGeometry` 會把全窗無值的腿濾掉 ——
++  // 那是**圖上**的正確語意(沒有第一筆就沒有 0% 基準,畫出來會被看成一條 0% 直線),但讀值列
++  // 照抄這份過濾的話,那一腿在勾選列上亮著、讀值列卻整格消失,使用者看不出是「這腿沒資料」
++  // 還是自己數錯腿。改以 entries 對位(順序 = legend 順序,以 key 找幾何),空腿印「—」。
+   const readout =
+     cursor === null
+       ? null
+-      : g.lines.map((line) => {
+-          const hit = line.pts.find((p) => p.offset === cursor);
+-          return { key: line.key, label: line.label, colorIndex: line.colorIndex, hit };
++      : entries.map((e) => {
++          const line = g.lines.find((l) => l.key === e.key);
++          const hit = line?.pts.find((p) => p.offset === cursor);
++          return { key: e.key, label: e.label, colorIndex: e.colorIndex, hit };
+         });
+ 
+   return (
+diff --git a/frontend/src/components/corr/RiverPanel.test.tsx b/frontend/src/components/corr/RiverPanel.test.tsx
+index ede46c84..f0f1f455 100644
+--- a/frontend/src/components/corr/RiverPanel.test.tsx
++++ b/frontend/src/components/corr/RiverPanel.test.tsx
+@@ -195,7 +195,7 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
+     expect(screen.queryByText("台指 +1.00%")).toBeNull();
+   });
+ 
+-  it("該分鐘沒有點的腿顯示「—」(全窗無值的道瓊不進讀值列)", () => {
++  it("全窗無值的腿也進讀值列印「—」", () => {
+     mockRect();
+     const svg = overlay();
+ 
+@@ -203,8 +203,19 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
+ 
+     expect(screen.getByText("台指 —")).toBeTruthy();
+     expect(screen.getByText("富台 —")).toBeTruthy();
+-    // 道瓊全窗無值 → buildOverlayGeometry 不收它,讀值列沒有這一腿(勾選鈕上的字不算)
+-    expect(screen.queryByText(/^道瓊 /)).toBeNull();
++    // 道瓊全窗無值 → `buildOverlayGeometry` 照舊不收它(不畫線,免得看成 0% 直線),但讀值列
++    // **要**列出來:讀值列由 `entries` 產生,使用者才看得到「這一腿沒資料」而非這一腿憑空消失。
++    expect(screen.getByText("道瓊 —")).toBeTruthy();
++    // 圖上仍只有兩條線,右緣腿名標籤也沒有道瓊(勾選鈕上的字不在 svg 內,不算)
++    expect(svg.querySelectorAll("polyline").length).toBe(2);
++    const svgTexts = Array.from(svg.querySelectorAll("text")).map((t) => t.textContent);
++    expect(svgTexts).not.toContain("道瓊");
++    // 讀值列順序 = entries 順序(legs 鍵序,與勾選列 / 顏色序位一致),不是幾何回傳的順序
++    const row = screen.getByText("台指 —").parentElement!;
++    const readout = Array.from(row.querySelectorAll("span"))
++      .map((s) => s.textContent ?? "")
++      .filter((t) => /^(台指|富台|道瓊) /.test(t));
++    expect(readout).toEqual(["台指 —", "富台 —", "道瓊 —"]);
+   });
+ 
+   it("游標移出 → 讀值列收回提示文案", () => {
