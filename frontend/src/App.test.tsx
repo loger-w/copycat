@@ -428,6 +428,30 @@ describe("App 群組圖牆點卡片換主檔(group-grid-full-chart SC-3)", () =>
     await waitFor(() => expect(within(rail).getByLabelText("交易別")).toBeTruthy());
     expect(rail.textContent).toContain("2317");
   });
+
+  // 🔴 SC-4:群組檢視下沒有明細 / 主圖讀者,點卡片那趟只為換右欄標的 —— 卻照樣拖回
+  // 整份 tape(盤中實測 0.5–1.5 MB/檔)。切回單檔時要補一次全量,否則主圖與明細
+  // 會停在「今天沒有任何成交」的空 tape 上,而畫面不會講原因。
+  // 走整條真鏈(StockPage 的檢視 → App 的 tape → useStockStream 的 URL):中間少接
+  // 一根線在 hook 級測試全綠。
+  it("群組檢視的 state 走 tape=0;切回單檔補一次全量", async () => {
+    window.localStorage.setItem("copycat-tab", "stock");
+    window.localStorage.setItem("copycat-stock-view", "group");
+    vi.stubGlobal("fetch", stockFetch());
+    renderApp();
+    const stateUrls = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.startsWith("/api/stock/state/"));
+
+    fireEvent.click(await screen.findByTestId("group-card-2317"));
+    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(0));
+    expect(stateUrls().every((u) => u.includes("tape=0"))).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "單檔" }));
+    await waitFor(() => expect(stateUrls().some((u) => !u.includes("tape=0"))).toBe(true));
+    expect(stateUrls().at(-1)).toBe("/api/stock/state/2317");
+  });
 });
 
 // 台股綜合頁背景輪詢的 active gate 全鏈鎖。
