@@ -284,6 +284,14 @@ describe("futMarketEdgeMilli 期貨市價邊價(FUT_TICK 對齊)", () => {
     expect(futMarketEdgeMilli("sell", 25_080_000, 0)).toBeNull();
     expect(futMarketEdgeMilli("buy", -1_000, 20_520_000)).toBeNull();
   });
+
+  // 🔴 F1(review round-1):`edgeMilli` 的守門在 **snap 之前**,買側 floor 會把
+  // `0 < upper < FUT_TICK` 的界壓成 0 —— 而 0 一路送出去就是「用 0 元送真錢單」。
+  // 同一份行情下 `futCloseEstimate` 回傳前自己守 ≤0(回 null,平倉鍵鎖住),
+  // 市價鈕卻拿到 0 而照樣可按 = 兩處對同一份行情給出不同答案。
+  it("界正但 snap 後歸零 → null(不是 0;與平倉估價同號)", () => {
+    expect(futMarketEdgeMilli("buy", 500, 20_000_000)).toBeNull();
+  });
 });
 
 // 🔴 B11(SC-3):平倉估價原本吃 **raw** 界,與市價鈕的 snap 後邊價不同值 ——
