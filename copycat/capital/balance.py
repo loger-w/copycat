@@ -210,6 +210,12 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
     )
 
 
+#: 放棄一輪後,「遲到終止符」的有效窗(秒)。COM 回呼無查詢識別 → 只能用時間分辨:
+#: 鏈 timeout 10s 後才放棄,群益端遲到的回應落在數秒內,20s 足夠涵蓋;窗外的零列
+#: 終止符一律當成「這一輪帳戶真的空了」照 flush —— 否則真空帳戶會永遠清不掉幽靈部位。
+STALE_WINDOW_S = 20.0
+
+
 class BalanceCollector:
     """收集一輪查詢的多筆事件,結束標記或 timeout 後一次 flush(全量替換語意)。
     只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset/abandon=發查詢前),無鎖。
@@ -218,11 +224,18 @@ class BalanceCollector:
 
     ⚠ 輪次識別:COM 回呼(OnRealBalanceReport / OnProfitLossGWReport / OnOpenInterest)
     **不帶任何查詢識別欄**,遲到的 `##` 無法與發出的查詢配對。client 在「零事件死查詢
-    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記下「那一輪還欠一個終止符」
-    (`_stale_terminators`);之後第一個**零列**終止符即視為舊輪遲到、忽略不 flush。
-    有 row 抵達 = 活的回應(不論屬哪一輪,flush 它都是最新快照)→ 欠帳歸零。
-    代價(明示):真空帳戶在死查詢後的第一個空 `##` 會被當舊終止符忽略,最多晚一輪
+    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 開一個 `STALE_WINDOW_S` 的
+    **時間窗**(`_stale_until`):窗內的第一個**零列**終止符視為舊輪遲到、忽略不 flush;
+    窗外照 flush。有 row 抵達 = 活的回應(不論屬哪一輪,flush 它都是最新快照)→ 立即關窗。
+    `_awaiting`(reset 開、flush 關)守門:沒在等回應的 collector 不記欠帳 —— 否則
+    pending watchdog 會替已正常收尾的那一段多記一筆,白吞掉下一輪合法的空回應。
+
+    為什麼是時間窗不是計數:計數對**真空帳戶**會自我延續(每輪死查詢記一筆、每輪零列
+    `##` 被吞),幽靈部位永遠清不掉。
+    代價(明示):真空帳戶在死查詢後的第一個空 `##` 會被當舊終止符忽略,最晚下一輪
     (≤60s)才顯示「無部位」— 寧可晚 60s,不可誤把有庫存清空(平倉鍵依部位鎖解)。
+    殘餘風險(F7,無 token 不可解):新輪已收到 rows 之後舊輪的 `##` 才到 → 會 flush
+    一份截斷的快照並關閉本輪(機率 = 兩份回應交錯在同一 ms 級窗口)。
     """
 
     def __init__(
@@ -230,52 +243,64 @@ class BalanceCollector:
         on_complete: Callable[[list[Any]], None],
         timeout_s: float = 1.0,
         parse: Callable[[str], object | None] = parse_balance_line,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._on_complete = on_complete
         self._timeout_s = timeout_s
         self._parse = parse
+        self._clock = clock  # 可注入:欠帳時間窗的兩態(窗內/窗外)測試不能靠 sleep
         self._staging: list[Any] = []
         self._last_feed: float | None = None
         self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
-        self._stale_terminators = 0  # 已放棄的輪各欠一個 `##`(見 class docstring)
-        self._fed_rows = 0  # 本輪已收的事件列數(含解析失敗列)— 判「零列終止符」用
+        self._stale_until: float | None = None  # 放棄輪的遲到終止符有效到此刻(見 docstring)
+        self._awaiting = False  # 已發查詢、還在等這一輪的回應(abandon 的守門)
 
     def reset(self, *, keep_abandoned: bool = False) -> None:
-        """發新查詢前清空本輪。預設把欠帳歸零(正常路徑 = 上一輪已正常收尾);
-        `keep_abandoned=True` 供 client 在「放棄輪的 `##` 還沒到」時保留欠帳 —
-        abandon() 已記過帳,這裡再記一次會多吞掉一輪合法的空回應。"""
+        """發新查詢前清空本輪。預設把欠帳窗關掉(正常路徑 = 上一輪已正常收尾);
+        `keep_abandoned=True` 供 client 在「放棄輪的 `##` 還沒到」時保留窗 —
+        abandon() 開的窗必須跨到下一輪才擋得住那個遲到的終止符。"""
         self._staging = []
         self._last_feed = None
         self._closed = False
-        self._fed_rows = 0
+        self._awaiting = True
         if not keep_abandoned:
-            self._stale_terminators = 0
+            self._stale_until = None
 
-    def abandon(self) -> None:
-        """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 記一筆欠終止符。
+    def abandon(self, now_monotonic: float | None = None) -> None:
+        """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 開遲到終止符窗。
         必須在放棄的當下呼叫,不能延到下一次發查詢 —— 兩者之間(balance 段最長 60s)
-        遲到的 `##` 正是要擋的那一個。"""
-        self.reset(keep_abandoned=True)
-        self._stale_terminators += 1
+        遲到的 `##` 正是要擋的那一個。`_awaiting` 為假(沒發查詢/本輪已 flush)= no-op:
+        watchdog 會對已收尾的那一段照樣呼叫,記帳等於白吞一輪合法的空回應。
+        窗開著仍算 awaiting(還在等新一輪的回應),重複呼叫只是把窗往後推。"""
+        if not self._awaiting:
+            logger.debug("collector 未在等待回應,abandon 略過")
+            return
+        now = self._clock() if now_monotonic is None else now_monotonic
+        self._stale_until = now + STALE_WINDOW_S
+        self._staging = []
+        self._last_feed = None
+        self._closed = False
+        logger.debug("collector 放棄本輪,%.0fs 內的零列終止符視為遲到", STALE_WINDOW_S)
 
-    def feed(self, raw: str) -> None:
+    def feed(self, raw: str, now_monotonic: float | None = None) -> None:
         # flush 後本輪即關閉:timeout 保險先 flush 的話,殘餘事件+遲到的 ## 不可
         # 再 flush 一次 — on_complete 是全量取代語意,尾段幾檔或空集合會整批蓋掉部位
         if self._closed:
             logger.debug("collector 本輪已 flush,事件丟棄: %r", raw)
             return
+        now = self._clock() if now_monotonic is None else now_monotonic
         if raw and raw.startswith("#"):  # 結束標記
-            if self._stale_terminators > 0 and self._fed_rows == 0:
-                # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)
-                self._stale_terminators -= 1
-                logger.info("collector 忽略放棄輪遲到的終止符(尚欠 %d)", self._stale_terminators)
+            stale_until, self._stale_until = self._stale_until, None
+            if stale_until is not None and now < stale_until:
+                # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)。
+                # WARNING 不是 INFO:代價是這一輪的部位更新被整個抑制掉。
+                logger.warning("collector 忽略放棄輪遲到的終止符(部位更新抑制一次)")
                 return
             self._flush()
             return
         p = self._parse(raw)
-        self._last_feed = time.monotonic()
-        self._stale_terminators = 0  # 有回應=活的,不論屬哪一輪,flush 它都是最新快照
-        self._fed_rows += 1
+        self._last_feed = now
+        self._stale_until = None  # 有回應=活的,不論屬哪一輪,flush 它都是最新快照
         if p is not None:
             self._staging.append(p)
 
@@ -283,11 +308,12 @@ class BalanceCollector:
         """COM 幫浦圈呼叫:距最後一筆事件超過 timeout → flush(沒等到 ## 的保險)。"""
         if self._last_feed is None:
             return
-        now = time.monotonic() if now_monotonic is None else now_monotonic
+        now = self._clock() if now_monotonic is None else now_monotonic
         if now - self._last_feed >= self._timeout_s:
             self._flush()
 
     def _flush(self) -> None:
         out, self._staging, self._last_feed = self._staging, [], None
         self._closed = True
+        self._awaiting = False  # 這一輪收尾了:之後的 abandon 不該再記欠帳
         self._on_complete(out)
