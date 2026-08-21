@@ -1079,3 +1079,28 @@ describe("StockPage header 倉位(SC-3)", () => {
     expect(screen.queryByTestId("page-position")).toBeNull();
   });
 });
+
+// 🔴 SC-2(D3'):資料日 ≠ 後端今日(假日 / 盤前開站)時,rail 標題帶日期。
+// 接線正向鎖:`useSignalFeed` 的兩欄要真的走到 rail —— 只測 rail 自己會在
+// StockPage 忘了傳 props 時照樣綠。
+describe("StockPage 訊號欄標題資料日(SC-2)", () => {
+  it("signals/today 回 trade_date ≠ today → rail 標題「08-20 訊號」", async () => {
+    const base = globalThis.fetch as ReturnType<typeof vi.fn>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/signals/today")) {
+          return new Response(
+            JSON.stringify({ signals: [], trade_date: "2026-08-20", today: "2026-08-21" }),
+          );
+        }
+        return base(url);
+      }),
+    );
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("signal-rail").getAttribute("aria-label")).toBe("08-20 訊號"),
+    );
+    expect(screen.getByRole("heading", { name: "08-20 訊號" })).toBeTruthy();
+  });
+});

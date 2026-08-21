@@ -142,3 +142,35 @@ describe("useSignalFeed — 單一 baseline 來源", () => {
     expect(ids(hook.result.current.b.signals)).toEqual(["live-1", "new", "old"]);
   });
 });
+
+// 🔴 D3' / AR4:baseline payload 自帶「這是哪一天的訊號」+「後端今天是哪天」。
+// 前端不拿瀏覽器時鐘比 —— 看盤機時區 / 時鐘與後端日別是兩回事。
+describe("useSignalFeed — 資料日兩欄(D3')", () => {
+  it("payload 帶 trade_date / today → 原樣透出", async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ signals: today, trade_date: "2026-08-20", today: "2026-08-21" }),
+        ),
+    );
+    const hook = renderHook(() => useSignalFeed(), { wrapper });
+    await waitFor(() => expect(hook.result.current.tradeDate).toBe("2026-08-20"));
+    expect(hook.result.current.today).toBe("2026-08-21");
+  });
+
+  it("payload 缺兩欄(舊後端)→ 皆 null(不猜、不拿本機日期補)", async () => {
+    const hook = renderHook(() => useSignalFeed(), { wrapper });
+    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
+    expect(hook.result.current.tradeDate).toBeNull();
+    expect(hook.result.current.today).toBeNull();
+  });
+
+  // AR4 新鮮度:跨午夜 / stage2 rollover 後,沒有 WS 重連事件的話標題會一直停在昨天。
+  // fake timers 在 RTL waitFor 下不可靠(skill frontend-testing)→ 白盒斷言 query option。
+  it("baseline query 帶 5 分鐘 refetchInterval(跨午夜 / rollover 後自行跟上)", async () => {
+    const hook = renderHook(() => useSignalFeed(), { wrapper });
+    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
+    const query = client.getQueryCache().find({ queryKey: ["stock-signals-today"] });
+    expect(query?.options.refetchInterval).toBe(5 * 60_000);
+  });
+});
