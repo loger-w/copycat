@@ -69,8 +69,12 @@ class TestOffsetOfNight:
 class TestCloseClampRank:
     """clamp 名次(B8):`push` 靠它分辨「收盤撮合那一分鐘」與「收盤後的殘留取樣」。
 
-    只鎖 end / end+1 / end+2 / end+5 / end+6 五個邊界 —— 中間值由同一把尺(`_expand`)
-    保證,多鎖只是把實作抄一遍。
+    每個盤別只鎖 end / end+1 / end+2 / end+5 / end+6 五個邊界 —— 中間值由同一把尺
+    (`_expand`)保證,多鎖只是把實作抄一遍。
+
+    夜盤那五案不是日盤的抄寫:夜盤 end = 05:00,而 05:0x 的 minute-of-day(300–305)
+    全都**小於**窗首 900,名次只有吃了 `_expand` 的 +1440 才算得出來。少了展開,收盤
+    那幾分鐘會一律回 0(= 不 clamp),真收盤價就被殘留取樣蓋掉。
     """
 
     def test_end_minute_is_not_clamped(self) -> None:
@@ -87,6 +91,21 @@ class TestCloseClampRank:
 
     def test_beyond_clamp_window_is_none(self) -> None:
         assert close_clamp_rank(831, "day") is None  # 與 offset_of 同時失效
+
+    def test_night_end_minute_is_not_clamped(self) -> None:
+        assert close_clamp_rank(300, "night") == 0  # 05:00 bar 本身(展開後 = 1740 = end)
+
+    def test_night_close_auction_minute_is_rank_one(self) -> None:
+        assert close_clamp_rank(301, "night") == 1  # 05:00:xx 的成交 → 仍要進得來
+
+    def test_night_first_stale_minute_is_rank_two(self) -> None:
+        assert close_clamp_rank(302, "night") == 2  # 05:01 起 = 收盤後殘留
+
+    def test_night_last_clamped_minute_is_rank_five(self) -> None:
+        assert close_clamp_rank(305, "night") == 5
+
+    def test_night_beyond_clamp_window_is_none(self) -> None:
+        assert close_clamp_rank(306, "night") is None
 
 
 class TestMinuteEndFromTaipei:

@@ -68,6 +68,36 @@ class TestCloseClampPush:
         s.push("TXF", 829, 40_700_000, DAY)  # 13:48 殘留取樣 → 丟棄
         assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_650_000
 
+    def test_first_stale_minute_is_already_blocked(self) -> None:
+        # rank >= 2 的**下邊界**:13:46 就已經是「收盤後殘留」。門檻若鬆成 rank >= 3,
+        # 上面那條(13:48 = rank 4)照樣綠,只有這一分鐘看得出來。
+        s = _state()
+        s.push("TXF", 825, 40_646_000, DAY)
+        s.push("TXF", 826, 40_650_000, DAY)
+        s.push("TXF", 827, 40_700_000, DAY)  # 13:46 = clamp rank 2 → 丟棄
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"][300] == 40_650_000
+
+    def test_night_close_clamp_uses_the_expanded_scale(self) -> None:
+        # 夜盤 end = 05:00,而 05:0x 的 minute-of-day(300–305)全都 < 窗首 900 →
+        # 名次與分桶都得吃 `_expand` 的 +1440。少了展開,收盤那幾分鐘整段落窗外被丟掉。
+        s = _state()
+        s.push("TXF", 1740, 40_600_000, NIGHT)  # 05:00 bar 本身,offset 840
+        s.push("TXF", 301, 40_650_000, NIGHT)  # 05:00:xx 收盤撮合(桶 05:01)= rank 1 → 要進得來
+        s.push("TXF", 302, 40_700_000, NIGHT)  # 05:01 殘留 = rank 2 → 丟棄
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"] == {840: 40_650_000}
+
+    def test_guard_runs_after_the_session_switch(self) -> None:
+        # 守門必須在 `set_session` **之後**:換場後新場的 end 格是空的,rank 2 的第一筆
+        # 就是它當下最好的近似。順序顛倒的失效樣態 = 拿上一場的 end 格擋掉新場第一筆,
+        # 而新場那一格永遠空著(畫面上是「收盤那一分鐘沒有點」,零錯誤訊號)。
+        s = _state()
+        s.push("TXF", 825, 40_646_000, DAY)
+        s.push("ES", 825, 7_400_000, DAY)
+        s.push("TXF", 827, 40_900_000, NEXT_DAY)  # 換日 + clamp rank 2
+        legs = s.snapshot(LABELS, 2)["legs"]
+        assert legs["TXF"]["minutes"] == {300: 40_900_000}
+        assert legs["ES"]["minutes"] == {}  # 舊場的點一併清掉
+
     def test_discarded_push_does_not_become_a_delta_point(self) -> None:
         s = _state()
         s.push("TXF", 826, 40_650_000, DAY)
@@ -79,8 +109,9 @@ class TestCloseClampPush:
         s = _state()
         s.push("TXF", 827, 40_700_000, DAY)
         assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {300: 40_700_000}
+        # clamp 窗最後一分鐘(13:50 = rank 5)同理:名次再大,end 格空著就照寫
         s2 = _state()
-        s2.push("ES", 826, 7_400_000, DAY)
+        s2.push("ES", 830, 7_400_000, DAY)
         assert s2.snapshot(LABELS, 1)["legs"]["ES"]["minutes"] == {300: 7_400_000}
 
     def test_non_clamp_minutes_keep_last_write_wins(self) -> None:
@@ -129,6 +160,20 @@ class TestApplyBackfill:
     def test_unknown_leg_returns_zero(self) -> None:
         s = _state()
         assert s.apply_backfill("NOPE", [(600, 1_000)], DAY) == 0
+
+    def test_clamp_approximation_blocks_the_real_close_bar(self) -> None:
+        """characterization —— **已知留尾(R5)**:end 格一旦被 clamp 近似值佔住,1K 回補
+        的真 end bar 就補不進來。`apply_backfill` 只看「這格有沒有值」,分不出裡面是
+        13:46 的殘留近似還是 13:45 的真收盤。
+
+        影響有限(差一個殘留分鐘的價),故本輪不改。日後若替 end 格加上 per-leg
+        「這是 clamp 近似」旗標讓回補得以覆寫,**本案就該紅** —— 屆時改的是期望值,
+        不是把測試刪掉。
+        """
+        s = _state()
+        s.push("TXF", 827, 40_700_000, DAY)  # 13:46 殘留取樣;end 格還空著 → 進得來
+        assert s.apply_backfill("TXF", [(825, 40_646_000)], DAY) == 0
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_700_000
 
 
 class TestSnapshot:
