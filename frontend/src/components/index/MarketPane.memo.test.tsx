@@ -25,7 +25,7 @@ import {
  *
  *  量法(refactor-plan R11):`importOriginal` partial mock `@/lib/index-chart-svg`,
  *  **只包住** `buildOverlayGeometry` 計次,其餘 export(`X_START_MIN` / `X_END_MIN` /
- *  `buildIndexGeometry` / `rightEdgeLabels` …)一律保留真身 —— 漏了 `X_START_MIN`
+ *  `outOfDomainLevels` …)一律保留真身 —— 漏了 `X_START_MIN`
  *  這對常數,MarketPane 自己的 `toX` 立刻變 NaN,測試會以為自己在量 memo,
  *  其實在量壞掉的圖。
  *
