@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import time
+
+import pytest
 
 from copycat.live.river_models import (
     SESSION_WINDOWS,
@@ -173,10 +176,39 @@ class TestParse1kMinutes:
             {"Date": "20260730", "Time": "004700", "Volume": "3"},  # 缺 Close → 略過
             {"Date": "20260730", "Time": "013500", "Close": "51900", "Volume": "0"},
         ]
-        assert parse_1k_minutes(rows) == [(526, 51_666_000), (575, 51_900_000)]
+        assert parse_1k_minutes(rows).minutes == [(526, 51_666_000), (575, 51_900_000)]
 
     def test_empty_rows(self) -> None:
-        assert parse_1k_minutes([]) == []
+        assert parse_1k_minutes([]).minutes == []
+
+    def test_rows_without_date_are_kept_and_warned_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """缺 `Date` 的列**保留**(docstring 的既有承諾),但 Date 閘對它形同不存在。
+
+        真實 1K 恆有此欄,缺值只可能是治具或 TC4 換了欄名 —— 丟資料是更壞的失效
+        (江波圖整條線消失)。但「閘還在跑」與「閘被繞過」在畫面上完全一樣,
+        所以要留一行 warning,否則換欄名那天全鏈零訊號。
+        """
+        rows = [
+            {"Time": "004600", "Close": "51666"},
+            {"Time": "004700", "Close": "51680"},
+        ]
+        with caplog.at_level(logging.WARNING):
+            parsed = parse_1k_minutes(rows, "20260730")
+        assert parsed.minutes == [(526, 51_666_000), (527, 51_680_000)]
+        assert parsed.dropped == 0
+        assert caplog.text.count("Date 閘失效") == 1, "每列一行會把 log 洗掉;要的是一行"
+
+    def test_skipped_and_dropped_are_counted_separately(self) -> None:
+        """「解析不了」與「被 Date 閘丟掉」必須分帳:只有後者是凍結 stub 的簽名。"""
+        rows = [
+            {"Date": "20260730", "Time": "004600", "Close": "51666"},
+            {"Date": "20260730", "Time": "004700"},  # 缺 Close → skipped
+            {"Date": "20200101", "Time": "004800", "Close": "51700"},  # 窗外日 → dropped
+        ]
+        parsed = parse_1k_minutes(rows, "20260730")
+        assert parsed == ([(526, 51_666_000)], 1, 1)
 
 
 class TestAllDayUtcWindow:

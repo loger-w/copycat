@@ -21,6 +21,7 @@ import pytest
 from copycat.live.stock_models import StockBook, StockMeta, StockTick
 from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
 from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
@@ -161,15 +162,24 @@ def _state(
 class _FakeBars:
     """engine.daily_bars 的替身;`bars` 可中途換掉以模擬換日新增一根。"""
 
-    def __init__(self, bars: list[DailyBar] | None = None, *, error: bool = False) -> None:
+    def __init__(
+        self,
+        bars: list[DailyBar] | None = None,
+        *,
+        error: bool = False,
+        error_exc: Exception | None = None,
+    ) -> None:
         self.bars = list(bars or [])
-        self.error = error
+        self.error = error or error_exc is not None
+        #: 拋哪一型由呼叫端指定 —— `HistoryTimeoutError`(逾時)與其餘例外在 hub 的
+        #: **處置相同**,差別只在 log 等級與有沒有 traceback,分不出型別就測不到那件事
+        self.error_exc = error_exc
         self.calls: list[tuple[str, int]] = []
 
     async def __call__(self, code: str, n: int = 25) -> list[DailyBar]:
         self.calls.append((code, n))
         if self.error:
-            raise ConnectionError("TC4 不可用")
+            raise self.error_exc if self.error_exc is not None else ConnectionError("TC4 不可用")
         return list(self.bars)
 
 
@@ -1575,6 +1585,46 @@ class TestBasisRetry:
             assert _cache(h) == (_DATE, None)
             await asyncio.sleep(0.05)
             assert len(bars.calls) == 3, "重試沒有上限"
+        finally:
+            await h.hub.close()
+
+    async def test_history_timeout_warns_without_traceback_and_still_retries(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """逾時走 `logger.warning`(無 traceback),**處置與其他例外完全相同**。
+
+        `logger.exception` 對它零資訊量:堆疊每次都是同一條 `to_thread` → raise。
+        盤前 basis sweep 逐檔 0.2s,TC4 忙窗一來就是幾十份 traceback,把真正該看的
+        例外(型別錯 / 解析爆)整段沖掉 —— 而那正是 traceback 唯一有用的場合。
+        """
+        bars = _FakeBars([_BAR_A], error_exc=HistoryTimeoutError("first page not ready"))
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.WARNING):
+                h.hub.on_watchlist(["2330"])
+                await _wait_calls(bars, 3)
+                await h.settle()
+            assert len(bars.calls) == 3, "逾時的重試預算必須與其他例外相同"
+            assert _cache(h) == (_DATE, None)
+            assert "Traceback" not in caplog.text
+            assert "逾時" in caplog.text
+        finally:
+            await h.hub.close()
+
+    async def test_other_exception_keeps_the_traceback(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """逾時之外的例外照舊 `logger.exception` —— 逾時那條分支不得把整個 except 降級。"""
+        bars = _FakeBars([_BAR_A], error_exc=ValueError("wrapper 內部型別錯"))
+        h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.WARNING):
+                h.hub.on_watchlist(["2330"])
+                await _wait_calls(bars, 3)
+                await h.settle()
+            assert "Traceback" in caplog.text
         finally:
             await h.hub.close()
 

@@ -126,18 +126,27 @@ class TestBackfill:
 
         回空的話 `_backfill_worker` 把它當成功套用(`_backfilled` 進帳)→ 當日再也
         不重排,分時圖整天空著且零錯誤訊號(repro §症狀)。
+
+        另鎖 **`poll_wait=0` 不 busy loop**(沿 `river_backfill` 的同名語意 = 探測一次
+        就走):`budget` 的地板是 1.0s,沒有這道早退的話那一秒會被拿去空轉幾十萬次
+        GETHISDATA —— 測試每跑一條付一秒,而真實組態(poll_wait>0)完全看不到。
         """
+        calls = {"n": 0}
 
         def handler(obj: dict) -> bytes:
             if obj["Request"] == "GETHISDATA":
+                calls["n"] += 1
                 return ("TICKS:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
             return ok()
 
         src = StockQuoteSource(
             api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
         )
+        started = time.monotonic()
         with pytest.raises(HistoryTimeoutError):
             src.backfill("2330")
+        assert time.monotonic() - started < 0.5
+        assert calls["n"] == 1
 
 
 class TestFetchDailyBars:
