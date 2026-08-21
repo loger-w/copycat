@@ -1,3 +1,25 @@
+## 2026-08-21(refactor/housekeeping-batch-2026-08-21 R10 留尾)
+
+- [ ] **全站 `localStorage` get/set 收斂到 `lib/storage.ts::readLocal` / `writeLocal`**(/mod)。
+  先例已有、但只做在單一模組:`lib/fut-chart-mode.ts::initialFutChartMode` / `persistFutChartMode`
+  兩支都包 try/catch,註解也寫明理由(「在 `useState` 初始器裡跑,拋出去就是整頁白屏」)——
+  問題是同一套 try/catch 每個呼叫端各抄一次,漏抄的那份零訊號。
+  **散落規模(2026-08-21 grep,不含測試)= 22 處 `getItem` + 23 處 `setItem`,分佈 13 個檔**:
+  `App.tsx` / `RightRail.tsx`(`initialTab()`)/ `MarketPane.tsx` / `RiverPanel.tsx` /
+  `LimitListSection.tsx` / `GroupGridView.tsx` / `StockChart.tsx` / `WatchlistSidebar.tsx` /
+  `useChartToggles.ts` / `useSignalSound.ts` / `fee-discount.ts` / `fut-chart-mode.ts` /
+  `stock-view.ts`(判準 `grep -rn "localStorage\.\(get\|set\)Item" frontend/src`,不寫死行號)。
+  失效面:Safari 私密視窗 / 企業政策鎖儲存時,光是**存取** localStorage 就拋 → 讀取端在 render
+  路徑上 = 白屏(全 frontend 零 ErrorBoundary);quota 滿時 `setItem` 拋 → 使用者操作中途炸掉。
+  **紅測試先行**(這是升成 /mod 而非 🔵 順手批的理由):(a) `getItem` stub 成「存取即拋」→ 元件
+  仍掛得起來且退回預設值;(b) `setItem` stub 成拋 `QuotaExceededError` → 呼叫端不炸。
+  承接 2026-08-14 mod/overview-subtabs 節的舊條(已標作廢改指本條);2026-08-06 節
+  「`MarketPane.tsx` 七個 localStorage 呼叫點裸奔」是同一批,動工時一併帶走。
+- [ ] **`outOfDomainLevels` 的邊界案 `p === yTop` / `p === yBottom` 無測試**(既有,R10 review T-4):
+  `index-chart-svg.test.ts` 只有「明顯域外(±50~100 萬)/ 明顯域內」兩組,價位**恰好落在域端點**時
+  沒有任何 assertion 釘住。現行實作是嚴格不等式(`p > yTop` / `p < yBottom`,`lib/index-chart-svg.ts:48`)
+  → 端點值算**域內**、不掛牌;改成 `>=` 就會多掛一顆而全套照樣綠。補 2 案即可(純測試,🟢)。
+
 ## 2026-08-21(bug/history-timeout-propagation code review round-1 留尾)
 
 - [ ] **F9/TQ-12:純格式改動夾在 🔴 commit 裡**(review accepted,本輪刻意不動)——
@@ -127,8 +149,13 @@
   左緣 `fmtIndexPts` 兩套口徑(index 態既有同型)。候選 = VWAP 標籤吃注入口徑並重估寬。
 - [ ] **近全軸 hover 命中率**(KR-5):1139 索引壓 724 單位,無 bar 分鐘反演回 null → 十字退化;夜盤薄量常見。
   候選 = futures 態限定「±N 索引最近 snap」(動 `minuteOf` 白名單,另案)。
-- [ ] **主副圖比例 260:70 三份口徑**(FuturesChart `MAIN_RATIO_*` / StockChart 行內 / chart-frame `CARD_MAIN_RATIO`)
+- [x] **主副圖比例 260:70 三份口徑**(FuturesChart `MAIN_RATIO_*` / StockChart 行內 / chart-frame `CARD_MAIN_RATIO`)
   → 🔵 收成 chart-frame 單一 export;`EMPTY_HLINES` 兩份(CandleChart private + core)同批搬 lib。
+  〔2026-08-21 已出貨 PR #87 refactor/housekeeping-batch-2026-08-21(C4):`MAIN_RATIO_NUM` /
+  `MAIN_RATIO_DEN` 由 `chart-frame.ts` export,三處算式逐字不變;`EMPTY_HLINES` 原訂由
+  `CandleChart` export(零新檔),react-doctor `only-export-components` 逼出新檔
+  `lib/chart-hlines.ts` —— `ChartHLine` 型別同遷、`CandleChart` 保留 `export type` re-export,
+  既有 import 路徑與常數 identity 不變〕
 - [ ] **副圖 1140 根 1 單位寬 rect 每 tick 重建**(KR-4):真環境 hover 目視未見掉幀(TMF 夜盤);若日後 TXF
   日盤高頻 tick 卡,候選 = EnergySub 改單一 path。
 - [ ] 真 TC4 層 user 過目點:對稱域 ±1% 地板讓平靜日線視覺變平(同 index R4);量欄「-」佔位語意。
@@ -144,9 +171,13 @@
 - [ ] **TXO session 與 futures session 雙持 `TXF.HOT` 同 key**:單 session UNSUB→SUB 永遠到不了 count 0,靠第 3 次
   heal 的 window variant 才救得回(多一輪 backoff)。候選 = TXO source 的 SPOT 訂閱改用不同窗(例如 EndTime 07)或
   由 futures_engine 單持、TXO 讀 futures.state。
-- [ ] **futures_engine leaf fallback 的註解與 07-28 事實一起改口**:HOT 零推播的真因不是「跨 session 只推一邊」而是
+- [x] **futures_engine leaf fallback 的註解與 07-28 事實一起改口**:HOT 零推播的真因不是「跨 session 只推一邊」而是
   reap 殺 key;leaf 仍有效是因為 leaf 是新 symbol/新 key。註解 `futures_engine.py:117` 與 `corr_engine.py:6/149`、
   `corr_config.py:7`、`app.py:775` 都引用舊說法,下次動這些檔時順手校正(本輪不動 server/*.py)。
+  〔2026-08-21 已出貨 PR #87 refactor/housekeeping-batch-2026-08-21(C7):站點以
+  `grep -rln "跨 session 只推一邊" copycat configs tests spikes` 全清單為準(不只四處),口徑統一
+  指向 skill `tc4-market-facts`;保留「corr base 腿必須 source=futures_engine」的架構約束,理由改寫為
+  避免兩 session 重複訂閱同 symbol 的 refcount churn〕
 - [ ] **prod 復活側車 `holder_sidecar.py`(scratchpad)不入 repo**:它退訂時會帶走 symbol feed;fix 上線後就停,
   再需要時從 TC4 log 的 `AddSubQuoteCount` 抓 prod key 重做即可(repro.md 有做法)。
 - [x] **自癒閘週六凌晨 00:00–05:00 不開**〔2026-08-21 已出貨 PR #82(同上條)〕(round-1 C-5 逐字用 `is_trading_day(today)`):週五夜盤跨午夜那 5 小時若 key 被殺,
@@ -217,7 +248,9 @@
 - [ ] **江波圖 end 格被 clamp 近似值先佔後,1K 回補的真收盤 bar 被「只填尚無值」擋掉**(2026-08-21 R5 spec review R5;characterization 已鎖
   `test_clamp_approximation_blocks_the_real_close_bar`,改時該案該紅):per-leg 旗標「end 格為近似值」讓 `apply_backfill` 覆寫一次。S 級。
 - [ ] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。
-- [ ] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關(review R7/R2-4):判準 `grep -rn 六腿 copycat frontend/src`
+- [x] 🔵 程式碼註解 / docstring「六腿」字樣批次改腿數無關〔2026-08-21 已出貨 PR #87
+  refactor/housekeeping-batch-2026-08-21(C2):純註解 / docstring,`corr_config.py` 的執行期
+  logger 字串排除〕(review R7/R2-4):判準 `grep -rn 六腿 copycat frontend/src`
   (corr_engine / river_models / river_state / app.py / types.ts / CorrPage / RiverCards / RiverOverlay / useRiver /
   river-chart-svg(+test)/ RiverPanel 檔頭 …),不寫死行號。純註解,零行為。
 - [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
@@ -235,11 +268,16 @@
   code review C-3):`--idx-adl-min` 10rem 地板 + 家數帶兩列固定 chrome ≈ 306px > 分到的 5/11。1080p /
   864p 實測不捲;命中再降地板或 section 改 `5 1 auto`。〔2026-08-20 機械實測釘邊界:1536×700
   主 grid 622/676 = 54px 捲軸、溢出源家數帶 section 262/316;1536×864 = 786/786 不捲〕
-- [ ] **`lib/index-chart-svg.ts` 死碼 cluster**:`buildIndexGeometry` / `rightEdgeLabels` / `IndexPt` /
+- [x] **`lib/index-chart-svg.ts` 死碼 cluster**〔2026-08-21 已出貨 PR #87
+  refactor/housekeeping-batch-2026-08-21(C3):五符號 + 連帶 `SeriesInput` / `LEVEL_ORDER` /
+  `EDGE_LABEL_H` 全刪,`IndexGeometry` 一併刪(`outOfDomainLevels` 參數改本地結構型別
+  `{ yDomain: [number, number] }`);測試同步刪 3 個 describe(14 → 4 案)〕:`buildIndexGeometry` / `rightEdgeLabels` / `IndexPt` /
   `RightEdgeLabel` / `RightEdgeInput` 自本輪起無 production caller(`outOfDomainLevels` / `IndexGeometry` /
   `buildOverlayGeometry` 仍活),`index-chart-svg.test.ts` 有 3 個 describe 只測沒人走的碼 → 🔵 清理連測試一起。
-- [ ] `INTRADAY_CHROME_Y` export 無外部讀者(`MarketPane.size.test` 硬寫 26 / 272)→ 測試改 import 它,
-  免常數與註解各漂各的。
+- [x] `INTRADAY_CHROME_Y` export 無外部讀者(`MarketPane.size.test` 硬寫 26 / 272)→ 測試改 import 它,
+  免常數與註解各漂各的。〔2026-08-21 **本條作廢**(不是已修):R10 C3 動到該檔時複審 —— 期望值不由
+  同源常數算回是 `frontend-testing` skill 的明文規矩(改壞常數時字面量才會紅,import 回來就一起漂),
+  `MarketPane.size.test` 的 26 / 272 字面量刻意保留〕
 - [x] 加權 pane 週期列在 ~350px 寬 pane 折 3 行(1536 兩欄態)〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕,吃掉 35px 圖高(TWSE svg 121 vs OTC 156);
   既有折行行為,可考慮週期鈕收窄或折疊。〔2026-08-20 MCP 實測:350px pane 週期列 3 行、總高 74px
   (單鈕 22px),兩個 pane 皆命中;截圖 docs/specs/next-time-mcp-verification-2026-08-20/screenshots/
@@ -326,7 +364,11 @@
   時 disabled + level 觸發,武裝鈕未跟進(維持既有);要一致化可把 `armDisabled` 也吃 wsStatus。
 - [ ] **後端 source="flash-locked" 稽核**(spec §8):payload source 可擴,讓審計檔看得出鎖定態送單。
 - [ ] `FuturesLadder.tsx` 內 `futExchangeContract` 未 try/catch(App.tsx 那份有;既有問題,review p2 (d))。
-- [ ] 三梯武裝列 JSX 三份(LadderView + FuturesLadder 自帶)可合一(/refactor 素材)。
+- [x] 三梯武裝列 JSX 三份(LadderView + FuturesLadder 自帶)可合一(/refactor 素材)。
+  〔2026-08-21 已出貨 PR #87 refactor/housekeeping-batch-2026-08-21(C5):實為 **2 份**
+  (PriceLadder / StkfutLadder 早已委派 LadderView)→ 抽 `components/ladder/ArmRow.tsx`,差異全走
+  props(容器 className / `lockTitle` / `onToggleLock` 未給則整顆不渲染 / children slot);
+  先落 `ArmRow.characterization.test.tsx` 鎖兩梯 outerHTML 逐字 + 武裝鈕 rerender 焦點不掉〕
 
 ## 2026-08-17(mod/group-grid-full-chart R4 留尾)
 
@@ -395,9 +437,11 @@
   `unitScale` 字級補償(`lib/pane-frame.ts::paneUnitScale` + `svgFontRem`)。修法候選:
   CandleChart 收 `unitScale` prop 套進五處 fontSize;或 MarketPane 在窄 pane 時傳較小
   viewBox 寬(需 CandleChart 開 `width` prop)。個股頁 CandleChart 不受影響。
-- [ ] **`rightEdgeLabels` 的 `EDGE_LABEL_H` 未隨 unitScale 縮放**(fix 波偏離 2):字放大後右緣
+- [x] **`rightEdgeLabels` 的 `EDGE_LABEL_H` 未隨 unitScale 縮放**(fix 波偏離 2):字放大後右緣
   標籤(昨收 / CDP / MA)間距相對變密,極端時可能相疊;`lib/index-chart-svg.ts` 是個股圖共用
   契約故本輪不動。修法:clamp 高度也乘 unitScale(需連 StockIntradayChart 的呼叫端一起看)。
+  〔2026-08-21 隨 R10 C3 刪碼消滅,不再適用:`rightEdgeLabels` 與 `EDGE_LABEL_H` 自 PR #78
+  改走個股側 `layoutEdgeLabels` 後已成死碼,PR #87 刪除〕
 - [x] **1536 寬右欄漲跌停表水平捲軸**(截圖觀察)〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕(< 41rem 藏金額/量比 + px-1,431 = 431):th / 徽章已 `whitespace-nowrap`
   防折行截字;9 欄在窄容器內本就擠。候選:金額(億)/ 量比 兩欄在窄容器 `@[…]:hidden`,或縮
   px-2 → px-1。看 user 實際使用感受再決定。〔2026-08-20 機械實測:1536×864 下 scroller
@@ -412,23 +456,29 @@
   `role="tablist"`/`role="tab"` 都沒有 `aria-controls` / panel 的 `role="tabpanel"` +
   `aria-labelledby` / roving tabindex(方向鍵不能切)。IndexPage 新列是照 RightRail
   樣板抄的,非本輪回歸 — 修就兩處一併(樣板級決定),獨立小輪。
-- [ ] **RightRail `initialTab()` 與 MarketPane 四處裸 `localStorage.getItem` 無 try/catch**
+- [x] **RightRail `initialTab()` 與 MarketPane 四處裸 `localStorage.getItem` 無 try/catch**
   (本輪 out-of-scope 既有債,round-2 P0-1 因此限定 (s5) 只能按 key 部分 stub):Safari
   私密視窗下是白屏風險面;修法照四殼/IndexPage `initialSubTab()` 慣例包 try/catch,
-  純 🔵 順手批。
+  純 🔵 順手批。〔2026-08-21 **移出 R10 範圍**(不是已修):散落點不只讀取側,全站另有 23 處
+  `setItem`(quota 也會拋),而且要紅測試先行才有意義 → 不屬「行為零差異」的 🔵 批,升格成 /mod;
+  見本檔最上方新條「全站 `localStorage` get/set 收斂到 `lib/storage.ts`」(C8)〕
 
 ## 2026-08-14(mod/index-overlay 收尾沉澱)
 
-- [ ] **`localYmd()` 兩份重複**(useStockOverlay.ts / useIndexOverlay.ts 各一份,包 C
+- [x] **`localYmd()` 兩份重複**〔2026-08-21 已出貨 PR #87 refactor/housekeeping-batch-2026-08-21(C1):
+  兩份 body 逐字相同,且與既有 `lib/trading-calendar.ts::isoLocalDate` 同語意 → 兩 hook 直接改用
+  `isoLocalDate(new Date())`,**不新開** `lib/format::localYmd`〕(useStockOverlay.ts / useIndexOverlay.ts 各一份,包 C
   刻意不動既有檔以免擴散 diff):抽到 `@/lib/format` 或 `@/lib/utils` 單一來源;
   漂掉的失效是兩 hook 的 queryKey 換日時刻不一致,靜默。純 🔵,/refactor 順手批。
 - [x] **個股 CDP 右緣標籤帶疊字修法可借 index 側 rightEdgeLabels**〔2026-08-21 已出貨 PR #78 mod/cdp-edge-label-avoid:stock 側抽 layoutEdgeLabels 共用核心,index 側 rightEdgeLabels 不借用(死碼留 R10 C3 刪)〕:index-chart-svg 的
   rightEdgeLabels(fixed 錨 + 三段式 + 殘餘丟棄)與個股 edgePriceLabels 擴到 CDP 的
   既有 next-time 項(2026-08-14 fix/index-line-vanish 節)同族,動工時先比對兩份演算法
   可否合一,不要各長一套。
-- [ ] **rightEdgeLabels 的 clamp-vs-fixed 隱性前提**(自評 correctness lens 註記):
+- [x] **rightEdgeLabels 的 clamp-vs-fixed 隱性前提**(自評 correctness lens 註記):
   (d) 段 clamp 後只對前一顆 movable 查距離、不回查 fixed 昨收;現標籤上限 8 顆不可達,
   未來 index overlay 加種類(如 VWAP 掛牌)時要補回查或補測試。
+  〔2026-08-21 隨 R10 C3 刪碼消滅,不再適用:index 側 `rightEdgeLabels` 已於 PR #87 刪除;
+  同族的**個股側** `layoutEdgeLabels`(PR #78 抽出)若日後加標籤種類,這個前提要重新檢查〕
 
 ## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
 
@@ -566,7 +616,11 @@
   caller = app.py boot 還原,安全前提是「service 在 restore 之後才建構 + routes 前置
   503」,這條不變式沒在任何地方斷言;Protocol 預設 None → 未來 caller 漏帶 keyword
   零訊號。最便宜的硬化 = boot 顯式帶 sentinel(seq=0)、刪 None 分支。
-- [ ] **測試 deadline-poll helper 已有 6 份手抄(/refactor 素材)**:`_wait_until`
+- [x] **測試 deadline-poll helper 已有 6 份手抄(/refactor 素材)**〔2026-08-21 已出貨 PR #87
+  refactor/housekeeping-batch-2026-08-21(C6):async `_wait_until` 六份收 `tests/helpers/wait.py::
+  wait_until`;四個**同步式** `deadline = time.monotonic()+…`(boot / breadth_routes /
+  calendar_wiring / capital_api)簽名不相容不收,三個專屬 predicate helper(`_wait_calls` /
+  `_wait_codes` 等)亦不收 —— 理由見 commit body〕:`_wait_until`
   (test_stock_engine:931 / test_corr_engine:352 / test_futures_engine:359 /
   test_breadth_engine:234)+ 本輪 `_wait_calls`(test_signal_hub:372)/ `_wait_codes`
   (test_watchlist_service:54);fail-N-then-succeed fake 也有 3 份(_FlakyBars /
