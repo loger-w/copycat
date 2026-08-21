@@ -19,7 +19,9 @@ P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod
 - [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
   守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
 - [ ] **R6 膠囊不讀 `years_loaded`**(日曆過期零提示);盤前 hub 聯集 vs 標題 trade_date 落差歸 R3b。
-- [ ] **R7 P2 四條**:profit 段 `000` 表頭先關窗(`client.py:425`,測試只餵裸 `##`);吞終止符 WARNING 帶
+- [ ] **R7 欠帳窗續命**(2026-08-22 round-2 review P2):`abandon()` 把單一 `_stale_until` 推到 now+20 會替所有未清欠帳續命
+  (profit/OI 段兩次 abandon 相距 60s,第 1 筆早該過期)→ 多吞一次合法空回應。正解 = 每筆欠帳各自 deadline(deque),或 abandon 時先剔除已過期。
+- [ ] **R7 P2 三條**(profit 段 `000` 表頭先關窗已由 2026-08-22 fix/balance-collector-owed-count「rows 不動欠帳 + 吞終止符清 _last_feed」一併消滅):吞終止符 WARNING 帶
   collector 名;`_set_status("ok")` 改專用 clear 不走 reset(`client.py:240`);`_query_open_interest` 無期貨
   帳號提前 return 不清 `_oi_abandoned`(`client.py:467`)。
 - [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
@@ -594,9 +596,11 @@ P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod
 
 ## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
 
-- [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷快照並關閉本輪**(2026-08-21 R7 review F7):COM 無查詢識別不可根治;
-  機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。
-- [ ] 真空帳戶在死查詢後最晚下一輪(≤60s)才顯示無部位(R7 時間窗代價,刻意);若嫌慢可縮 `STALE_WINDOW_S`。
+- [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷 / 跨輪混合快照並關閉本輪**(2026-08-21 R7 review F7;2026-08-22 review P1 補:舊輪 rows 與新輪 rows 落同一 staging 時會復活已出清的幽靈部位):COM 無查詢識別不可根治;
+  機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 / 多一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。
+- [ ] **R7 時間窗代價兩面**(2026-08-22 fix/balance-collector-owed-count 改口):(a) 真空帳戶在死查詢後最晚下一輪(≤60s)才顯示無部位(刻意);
+  (b) **窗外(>`STALE_WINDOW_S`=20s,未量測)才遲到的舊輪零列 `##` 仍會把有庫存清成空集合**(最壞 60s 自癒)—— 不是只影響真空帳戶。
+  若 prod log 出現「忽略放棄輪遲到的終止符」後接部位瞬清,代表 20s 窗太短,量到實際延遲再調。
 - [x] **`_collect_history` timeout「靜默回空」語意是家族性風險**〔2026-08-21 已出貨 PR #85 bug/history-timeout-propagation:`HistoryTimeoutError(ConnectionError)`;stock 回補 / fetch_daily_bars(雙段皆 timeout)/ futures bars / river 首頁 raise,上游逐 caller 接(有界重排 / hub X-2b / engine 內吃掉只 log / 腿重試 ≤3 輪);index fetch_day_minutes 刻意不改(variant 逃逸已覆蓋)〕:本次事故根源之一
   (`history ... 30.0s 內首頁未備妥,回空` 不 raise → caller 無從排 retry)。index 側已用
   產出面 lag 偵測繞開,但同一語意的其他 caller(river_backfill 六腿、bars_range 各處)
