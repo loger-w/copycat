@@ -199,6 +199,65 @@ describe("App 相關係數升回頂層 tab(R2 SC-1)", () => {
   });
 });
 
+// a11y 批 SC-2'' / D3':主分頁列原本只有 `role=tab` + `aria-selected`,panel 是五個
+// `hidden` div —— tab 與 panel 之間沒有任何 ARIA 連結,方向鍵也不通。
+// **manual activation**(與 RightRail 同款):方向鍵只移焦點,Enter / Space 才切。
+describe("App 主分頁 tablist 補全(a11y SC-2'')", () => {
+  const tab = (name: string) => screen.getByRole("tab", { name });
+
+  it("已 mount 的 panel 與 tab 互指;index / txo 恆掛(visited 不閘門)", () => {
+    renderApp();
+    // 未造訪的 stock / futures / corr 尚未 mount → `aria-controls` 允許 dangling
+    // (D-13 條件 render 的既定代價,spec 明記)。只鎖「掛出來的那些」互指。
+    const panels = screen.getAllByRole("tabpanel", { hidden: true });
+    const byId = new Map(panels.map((p) => [p.id, p]));
+    expect(byId.size).toBe(panels.length); // id 不重複
+    for (const t of screen.getAllByRole("tab")) {
+      const target = byId.get(t.getAttribute("aria-controls") ?? "");
+      if (target === undefined) continue;
+      expect(target.getAttribute("aria-labelledby")).toBe(t.id);
+    }
+    // index / txo 兩顆恆有 panel(App 的 visited.index 恆 true、TxoPage 不受 visited 管)
+    for (const name of ["台股綜合", "選擇權"]) {
+      const target = byId.get(tab(name).getAttribute("aria-controls") ?? "");
+      expect(target).toBeTruthy();
+      expect(target!.getAttribute("aria-labelledby")).toBe(tab(name).id);
+    }
+  });
+
+  it("roving tabindex:只有選中的 tab 是 0", () => {
+    renderApp();
+    // 收斂到主分頁 tablist —— 常駐右欄自己也有三顆 tab(它們的 roving 由 RightRail.test 鎖)
+    const mainTabs = () =>
+      within(screen.getByRole("tablist", { name: "主要分頁" })).getAllByRole("tab");
+    expect(mainTabs().map((el) => el.tabIndex)).toEqual([0, -1, -1, -1, -1]);
+    fireEvent.click(tab("選擇權"));
+    expect(mainTabs().map((el) => el.tabIndex)).toEqual([-1, -1, 0, -1, -1]);
+  });
+
+  it("ArrowRight 只移焦點不切換;Enter 才切(manual activation)", () => {
+    renderApp();
+    fireEvent.keyDown(tab("台股綜合"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("個股(期)"));
+    expect(tab("台股綜合").getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(tab("個股(期)"), { key: "Enter" });
+    expect(tab("個股(期)").getAttribute("aria-selected")).toBe("true");
+    expect(window.localStorage.getItem("copycat-tab")).toBe("stock");
+  });
+
+  it("End / Home 到尾 / 首,ArrowLeft 在首顆繞回尾顆", () => {
+    renderApp();
+    fireEvent.keyDown(tab("台股綜合"), { key: "End" });
+    expect(document.activeElement).toBe(tab("相關係數"));
+    fireEvent.keyDown(tab("相關係數"), { key: "Home" });
+    expect(document.activeElement).toBe(tab("台股綜合"));
+    fireEvent.keyDown(tab("台股綜合"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tab("相關係數"));
+    expect(tab("台股綜合").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
 // 🟢 台股綜合 R3(SC-5):列表 → 個股(期)的一鍵銜接。走**整條真鏈**
 // (App → IndexPage → LimitListSection → 列 onClick),不 mock 中間任何一層 ——
 // 少接一根線(IndexPage 沒把 onOpenStock 往下傳、App 沒 setStockCode)在元件級測試
