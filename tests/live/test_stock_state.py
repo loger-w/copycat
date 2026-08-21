@@ -308,6 +308,41 @@ class TestDayHighLow:
         assert st.snapshot()["ticks"][0]["a"] == 2_380_000
 
 
+class _ExplodingTick:
+    """被讀任何欄位就炸 —— `tape=False` 的契約是「**跳過**逐筆展開」(D3''),不是
+    「展開完再把結果丟掉」。只斷言 `ticks == []` 的話,後者照樣綠,而兩萬筆 dict 的
+    建構成本(本輪要省的正是它)一分不少。"""
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"tape=False 不該讀 tick 欄位(讀了 {name})")
+
+
+class TestSnapshotTape:
+    """`snapshot(tape=False)`:群組檢視點卡片時沒有 tape 讀者(B15)。"""
+
+    def test_tape_false_returns_empty_ticks_without_touching_them(self) -> None:
+        st = StockDayState()
+        for i in range(5):
+            st.ingest(_tick(10 + i, price=2_380_000 + i * 1_000))
+        full = st.snapshot()
+        assert len(full["ticks"]) == 5  # 基準非空,否則兩邊都空是 vacuous
+        st.ticks.append(_ExplodingTick())  # type: ignore[arg-type]
+        light = st.snapshot(tape=False)
+        assert light["ticks"] == []
+        # tape 以外一鍵不少、一值不改(route 的 `tape=0` 只省 tape)
+        assert light["seq"] == full["seq"]
+        assert light["last"] == full["last"]
+        assert light["vwap"] == full["vwap"]
+        assert light["vwap_vol"] == full["vwap_vol"]
+        assert set(light) == set(full)
+
+    def test_default_is_full_tape(self) -> None:
+        """預設值不可漂:唯一呼叫點(單檔頁)漏帶參數時要回全量,不是靜默空 tape。"""
+        st = StockDayState()
+        st.ingest(_tick(10))
+        assert len(st.snapshot()["ticks"]) == 1
+
+
 class TestLightSnapshot:
     """群組 batch 專用的輕量 payload(code review A1)。
 
