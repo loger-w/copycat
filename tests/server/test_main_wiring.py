@@ -395,10 +395,14 @@ class TestHealGateThresholdCoversSessionClose:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import copycat.live.futures_source as futures_mod
-
         from copycat.server import app as app_mod
 
         monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 5, 6))
+        # 拆腿:先釘死日期腿為**真**,False 才只能來自牆鐘腿。少了這兩條,`_session_date`
+        # 若退化成牆鐘今天(週六、非交易日),日期腿也是 False —— 整案照樣綠,
+        # 而「閘由誰關掉」正是本案唯一要鎖的東西。
+        assert app_mod._session_date() == _FRIDAY
+        assert _CAL.is_trading_day(app_mod._session_date()) is True
         gate = app_mod._heal_gate(_CAL, lambda: futures_mod.in_futures_session_now(time(5, 6)))
         assert gate() is False, "寬放外由牆鐘閘關掉(日期仍是週五交易日)"
 
