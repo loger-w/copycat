@@ -30,6 +30,7 @@ import { useStockOverlay } from "@/hooks/useStockOverlay";
 import { isInstrumentKey } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import {
+  bandLabels,
   buildEnergyBars,
   buildIntradayGeometry,
   edgePriceLabels,
@@ -39,6 +40,7 @@ import {
   LOW_DECIDED_PCT,
   minuteToX,
   overlayLines,
+  PAD_Y,
   pegLabels,
   plotWidth,
   R_AXIS_W,
@@ -239,6 +241,11 @@ const ChartStatic = memo(function ChartStatic({
   // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
   // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
   const edgeBounds = { top: MARK_LABEL_TOP, bottom: plotBottom - 5 };
+  // 走廊 A(右緣帶內)的界(D7):`[PAD_Y, plotBottom − PAD_Y]` 就是線 y 的值域
+  // (`toY` 的映射範圍),所以任何不相疊的標籤都不會被 clamp 無故位移。
+  // **在 ChartStatic 內算、不從外面傳**(W6):新增 prop 會打穿本元件的 memo,
+  // 而症狀只是 hover 掉幀,沒有任何 assertion 會紅。
+  const bandBounds = { top: PAD_Y, bottom: plotBottom - PAD_Y };
   // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
   // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
   const pegList = pegLabels(pegs, edgeBounds);
@@ -391,7 +398,7 @@ const ChartStatic = memo(function ChartStatic({
           />
         </>
       ) : null}
-      {/* 疊線(CDP/MA)+ 右緣價位標(round3 SC-2) */}
+      {/* 疊線線體(CDP/MA)。標籤已拆成下一組節點:線畫在**真價位**上,推的只有文字 */}
       {oLines.map((l) => (
         // key 用 level 不用文字:文字現在是價位,兩條線同價時會撞 key
         <g key={`o-${l.level}`}>
@@ -404,15 +411,25 @@ const ChartStatic = memo(function ChartStatic({
             strokeDasharray="3 2"
             strokeWidth={0.8}
           />
-          <text
-            x={w - R_AXIS_W + 2}
-            y={l.y + 3}
-            className={LEVEL_FILL[l.level]}
-            fontSize="0.5625rem"
-          >
-            {levelText(l.level, l.priceMilli, priceText)}
-          </text>
         </g>
+      ))}
+      {/* 右緣帶內標籤(round3 SC-2 的價位文字;R1 起走 1D 避讓)。
+          y 吃 `bandLabels` 的**中心**,渲染仍用既有的 `+3` baseline 近似(D5)——
+          走廊 B 用 `dy=0.35em`(≈3.15px),兩者差 0.15px;本輪刻意不改渲染方式,
+          不相疊時像素逐點與改動前相同,後續勿當 bug 順手統一。
+          `bandBounds` 是走廊 A 自己的界(D7):`[PAD_Y, plotBottom − PAD_Y]` 正是線 y
+          的值域,不相疊的標籤不會被 clamp 無故位移。與走廊 B 的 `edgeBounds` 刻意不同
+          (那條要對齊極值文字 / 掛牌)。obstacles 空 = 兩條走廊不互避(D3:x 不相交)。 */}
+      {bandLabels(oLines, bandBounds).map((lab) => (
+        <text
+          key={`ob-${lab.level}`}
+          x={w - R_AXIS_W + 2}
+          y={lab.y + 3}
+          className={LEVEL_FILL[lab.level]}
+          fontSize="0.5625rem"
+        >
+          {levelText(lab.level, lab.priceMilli, priceText)}
+        </text>
       ))}
       {showVwap ? (
         // 均價線白色(SC-2.3);原本是琥珀金 profit,與新的紅綠雙色價線對比不足
