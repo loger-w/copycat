@@ -204,6 +204,42 @@ def test_collector_new_query_resets_staging() -> None:
     assert got == [[]]  # staging 已清,flush 空集合(全部出清的合法狀態)
 
 
+def test_collector_abandoned_round_ignores_late_end_marker() -> None:
+    """零事件死查詢逾期解卡 = 放棄一輪,但那一輪還欠一個 `##`(COM 回呼不帶查詢識別,
+    遲到的終止符無法從內容分辨屬哪一輪)。放棄後的第一個「零列 ##」必須忽略 —
+    flush 空集合會以全量取代語意把庫存整批清空(平倉鍵跟著鎖住)。"""
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.abandon()
+    c.feed(RAW_END)  # 放棄輪遲到的終止符 → 吞掉,不 flush、不關閉本輪
+    assert got == []
+    c.feed(RAW_T_BOUGHT)  # 新一輪真回應照常收
+    c.feed(RAW_END)
+    assert len(got) == 1
+    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["2493"]
+
+
+def test_collector_reset_after_abandon_clears_stale_debt() -> None:
+    # 正常 reset(發查詢路徑)= 上一輪已正常收尾 → 欠帳歸零,真空帳戶的空 ## 照常 flush
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.abandon()
+    c.reset()
+    c.feed(RAW_END)
+    assert got == [[]]
+
+
+def test_collector_rows_clear_stale_debt() -> None:
+    # 有 row 抵達 = 活的回應(不論屬哪一輪),flush 它就是最新快照 → 欠帳歸零
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.abandon()
+    c.feed(RAW_C_MARGIN)
+    c.feed(RAW_END)
+    assert len(got) == 1
+    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["3357"]
+
+
 # 未實現-彙總(4-2-p)= 2026-06-11 正式環境真實回報(ID/帳號去敏)。
 # 實際 30 欄(比文件 25 欄多尾端含費均價等);[1]=股票代號、[10]=平均買進(券賣)成本。
 # 第一筆=查詢結果(000,訊息可空);總計列股號為空。
