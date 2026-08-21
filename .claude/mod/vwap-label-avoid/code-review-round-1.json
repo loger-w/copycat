@@ -1,0 +1,7 @@
+{"round":1,"reviewer":"general-purpose (opus, read-only)","scope":"git diff master...HEAD -- frontend/src",
+ "findings":[
+  {"id":"P2-1","severity":"P2","file":"StockIntradayChart.tsx:261","title":"index 態 VWAP 文字走 fmt,VWAP_LABEL_W=40 低估 → 約 5px 誤判窄帶","disposition":"deferred → docs/next-time.md"},
+  {"id":"P2-2","severity":"P2","file":"StockIntradayChart.tsx:259","title":"VWAP × 極值標記文字互不避讓","disposition":"deferred → docs/next-time.md(out of scope 補點名)"},
+  {"id":"P2-3","severity":"P2","file":"StockIntradayChart.test.tsx:2099","title":"守門案前置條件未寫進案內;ACCUM 註解不符;撞擊案 fixture 文字/位置兩源","disposition":"accepted → 🔵 註解修正"}],
+ "p2_summary":{"count":3,"themes":["寬度估值","scope 點名","測試前置"]},
+ "whitelist":"4/4 ok","self_review_head":"see git log mod/vwap-label-avoid"}
