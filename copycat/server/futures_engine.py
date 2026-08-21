@@ -313,6 +313,9 @@ class FuturesEngine:
 
         阻塞呼叫,呼叫端負責丟 `asyncio.to_thread`。source 未建(未 start / 已 close)→ 回空;
         `ConnectionError` 照原樣往外拋 —— 回補是可降級的,由呼叫端逐腿處置。
+        **含 `HistoryTimeoutError`(其子類,首頁未備妥)**:這條 passthrough 刻意不吃掉它
+        (與同檔 `bars_range` 的「在 engine 內吃掉」相反)—— 江波圖那條路要靠它排重補,
+        engine 這裡先降級成空就等於把訊號丟在半路(bug/history-timeout-propagation)。
         本引擎持有 `TC.F.TWF.<product>.HOT` 的 REALTIME 訂閱,所以這檔的歷史也只能從這裡問
         (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。
         """

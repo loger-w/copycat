@@ -80,7 +80,15 @@ class CorrQuoteSource(TC4QuoteSource):
     # ---- 江波圖當日回補(index-river-chart SC-3)----
 
     def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
-        """當日 1K → [(台北 minute_end, close 毫點)];首頁未備妥回空(引擎逐腿降級)。"""
+        """當日 1K → [(台北 minute_end, close 毫點)]。
+
+        **首頁在預算內未備妥 → `HistoryTimeoutError`**(bug/history-timeout-propagation;
+        舊契約是「回空」)。回空是唯一把「暫時取不到」這個訊號丟掉的地方 —— 引擎會讀成
+        「這條腿今天沒有 1K」而整天不再回補(2026-08-23 08:23 三腿同秒逾時的真實事故)。
+        **首頁備妥但收割 0 列仍回 `[]`**:TC4 答得出首頁就代表它不忙,空就是空。
+        `HistoryTimeoutError` 是 `ConnectionError` 子類 → 只寫 `except ConnectionError`
+        的呼叫端行為不變(逐腿降級);要重試的 `corr_engine` 自己寫在它**之前**。
+        """
         self._ensure_connected()
         return collect_1k_minutes(
             sub_history=self._sub_history,
