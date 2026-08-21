@@ -378,7 +378,7 @@
 - [ ] **`localYmd()` 兩份重複**(useStockOverlay.ts / useIndexOverlay.ts 各一份,包 C
   刻意不動既有檔以免擴散 diff):抽到 `@/lib/format` 或 `@/lib/utils` 單一來源;
   漂掉的失效是兩 hook 的 queryKey 換日時刻不一致,靜默。純 🔵,/refactor 順手批。
-- [ ] **個股 CDP 右緣標籤帶疊字修法可借 index 側 rightEdgeLabels**:index-chart-svg 的
+- [x] **個股 CDP 右緣標籤帶疊字修法可借 index 側 rightEdgeLabels**〔2026-08-21 已出貨 PR #78 mod/cdp-edge-label-avoid:stock 側抽 layoutEdgeLabels 共用核心,index 側 rightEdgeLabels 不借用(死碼留 R10 C3 刪)〕:index-chart-svg 的
   rightEdgeLabels(fixed 錨 + 三段式 + 殘餘丟棄)與個股 edgePriceLabels 擴到 CDP 的
   既有 next-time 項(2026-08-14 fix/index-line-vanish 節)同族,動工時先比對兩份演算法
   可否合一,不要各長一套。
@@ -409,7 +409,7 @@
   in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
   升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。
 
-- [ ] **CDP 五個右緣帶標籤自身互疊**(盤中截圖附帶觀察,2330 實證 `2455*`…`2415*` 五個
+- [x] **CDP 五個右緣帶標籤自身互疊**〔2026-08-21 已出貨 PR #78 mod/cdp-edge-label-avoid:bandLabels 1D 避讓,七顆不截斷不丟棄,矮卡允許貼界;截圖 docs/specs/mod-cdp-edge-label-avoid/screenshots/〕(盤中截圖附帶觀察,2330 實證 `2455*`…`2415*` 五個
   擠成一團字疊字):既有擁擠問題、本輪 out of scope 已列。〔2026-08-20 MCP 量測:2330 平靜日
   右緣 11 顆標籤(5 CDP* + MA5/MA20/VWAP/昨收/現價)擠 36px 縱距,**9 對兩兩相疊**;截圖
   docs/specs/next-time-mcp-verification-2026-08-20/screenshots/102-cdp-label-cluster-2330.jpg〕收斂方向 = 把本輪
