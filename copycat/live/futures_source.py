@@ -18,7 +18,12 @@ from copycat.live.futures_models import PRODUCTS
 from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.session import in_txo_session
 from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
-from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, always_active
+from copycat.live.tc4 import (
+    BARS_POLL_DEADLINE,
+    HistoryTimeoutError,
+    TC4QuoteSource,
+    always_active,
+)
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -173,6 +178,11 @@ class FuturesQuoteSource(TC4QuoteSource):
           —— 這才是 filter 真正擋掉的那段(次日凌晨盤)。
 
         所以 parse 後的台北日期 filter 是**單邊**防線(擋高端);低端不需要它。
+
+        **首頁逾時 → `HistoryTimeoutError`**(bug/history-timeout-propagation):回空的話
+        route 的 tag 是 `"unavailable"`、status 恆 `"ok"`,「TC4 現在忙」與「這個商品真沒
+        K 線」在畫面上長得一模一樣 —— 而前者本來只要重打一次就有。降級由
+        `futures_engine.bars_range` 在引擎內完成(payload 零變),不外洩到 route。
         """
         self._ensure_connected()
         sym = futures_symbol(product)
@@ -184,12 +194,17 @@ class FuturesQuoteSource(TC4QuoteSource):
             start = f"{start_date.replace('-', '')}00"
         end = f"{end_date.replace('-', '')}23"
         if tf == "1":
-            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows
+            rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
+            if timed_out:
+                raise HistoryTimeoutError(f"futures bars {sym}(1K):首頁未備妥")
             if not allday:
                 return parse_1k_bars(rows, FUTURES_MINUTE_DOMAIN)
             bars = parse_1k_bars(rows, FUTURES_ALLDAY_DOMAIN)
             return [b for b in bars if start_date <= b["t"][:10] <= end_date]
-        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
+        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
+        if dk_timed_out:
+            raise HistoryTimeoutError(f"futures bars {sym}(DK):首頁未備妥")
+        return parse_dk_bars(dk_rows)
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
 

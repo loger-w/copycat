@@ -726,7 +726,10 @@ class TC4QuoteSource:
             remaining = deadline - time.monotonic()
             if wait <= 0 or remaining <= 0:
                 logger.info(
-                    "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
+                    "history %s(%s): %.1fs 內首頁未備妥,回空(timeout,非無資料)",
+                    sym,
+                    data_type,
+                    budget,
                 )
                 return HistoryResult([], True)
             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget

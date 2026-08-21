@@ -165,15 +165,29 @@ def minute_end_from_1k(row: dict) -> int | None:
     return ((hh + 8) % 24) * 60 + mm
 
 
-def parse_1k_minutes(rows: list[dict]) -> list[tuple[int, int]]:
+def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> list[tuple[int, int]]:
     """1K rows → [(minute_end, close 毫點)],保持原始列序。
 
     壞列略過並計數 warning(沿用 `stock_source` 慣例:靜默丟列會讓回補缺口無從診斷)。
     同一分鐘可能出現多列(收盤 clamp 區)→ 不在這裡去重,由 `RiverState` 的 dict 寫入收斂。
+
+    `utc_day`(`"YYYYMMDD"`,= 回補窗的起點日)給定時,`Date` 存在且不等於它的列一律丟棄。
+    **這裡的比對是純 UTC,刻意不做台北換算**:回補窗本身就是 `all_day_utc_window()` 產的
+    UTC 全天窗(兩個盤別各自完整落在單一 UTC 日),兩邊用同一把尺才不會在夜盤跨午夜那
+    一段自己跟自己錯開。丟的是**凍結 stub**:TC4 對「窗內當下無資料時建立的 history
+    訂閱」回的是別日的殘留列,而 `minute_end_from_1k` 只讀 `Time` → 那些列會變成今日分鐘
+    餵進江波圖,畫出一條來自別天的線且零錯誤訊號(`Date` 缺值的列照舊保留:真實 1K 恆有
+    此欄,缺值只可能是治具/新欄位,不該連帶丟資料)。
     """
     out: list[tuple[int, int]] = []
     skipped = 0
+    dropped = 0
     for row in rows:
+        if utc_day is not None:
+            raw_date = str(row.get("Date", "") or "")
+            if raw_date and raw_date != utc_day:
+                dropped += 1
+                continue
         minute = minute_end_from_1k(row)
         if minute is None:
             skipped += 1
@@ -186,6 +200,8 @@ def parse_1k_minutes(rows: list[dict]) -> list[tuple[int, int]]:
         out.append((minute, close))
     if skipped:
         logger.warning("1K rows 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
+    if dropped:
+        logger.warning("1K rows 丟棄 %d/%d 列(Date ≠ 窗口日 %s)", dropped, len(rows), utc_day)
     return out
 
 

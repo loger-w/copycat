@@ -507,7 +507,9 @@ class IndexEngine:
                 self._twse.stale = True
                 self._dirty = True
             # 分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級
-            # 成空(_collect_history 不 raise → start 不排 retry)+ 當日推播整段靜默時,
+            # 成空(`fetch_day_minutes` **刻意**沿用「回空不 raise」——
+            # bug/history-timeout-propagation 覆核過:這條路改 raise 會把 `_retry_loop`
+            # 釘成無限退避、`_heal_variant` 永不遞增,比回空更糟)+ 當日推播整段靜默時,
             # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。

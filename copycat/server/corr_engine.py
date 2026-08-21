@@ -27,8 +27,14 @@ from copycat.live.river_models import minute_end_from_taipei, minute_end_from_ut
 from copycat.live.river_state import RiverState
 from copycat.live.session import session_key
 from copycat.live.stock_models import parse_stock_realtime
+from copycat.live.tc4 import HistoryTimeoutError
 
 logger = logging.getLogger(__name__)
+
+#: 逾時腿的重補退避(秒)與輪數上限。真實事故是「三腿同秒逾時 → 整天不再回補」,
+#: 而 TC4 端的 1K 一直都在;沒有輪數上限則反過來變成整天重打必敗請求。
+_BACKFILL_RETRY_SECS = 30.0
+_BACKFILL_RETRY_MAX_ROUNDS = 3
 
 
 def _taipei_hhmmss() -> str:
@@ -105,6 +111,13 @@ class CorrelationEngine:
         self._river_seq = 0
         self._backfill_task: asyncio.Task[None] | None = None
         self._backfill_inflight = False
+        # 逾時腿的重補記帳(bug/history-timeout-propagation):`_backfill_pending_legs`
+        # 由 `_fetch_leg_minutes` 在逾時分支寫入、每輪開頭重置;`_backfill_retry_round`
+        # 是**連續**失敗輪數(補齊一輪就歸零),`_backfill_retry_tasks` 讓 close() 有
+        # 唯一取消點(專用欄位存放會被下一次排程覆寫成孤兒 task)。
+        self._backfill_pending_legs: set[str] = set()
+        self._backfill_retry_round = 0
+        self._backfill_retry_tasks: set[asyncio.Task[None]] = set()
         # 訂閱失敗腿的唯一重試路徑(照抄 futures_engine 形狀):`_on_reconnect` 只重跑
         # 江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天零推播且無錯誤訊號
         self._resub_interval_secs = resub_interval_secs
@@ -199,9 +212,13 @@ class CorrelationEngine:
         tick_task, self._task = self._task, None
         backfill_task, self._backfill_task = self._backfill_task, None
         resub_task, self._resub_task = self._resub_task, None
+        # 快照後清空:`add_done_callback` 會在 cancel 期間就地 discard,直接迭代本體
+        # 就是 RuntimeError(而 close 之後的每一步都不會跑)
+        retry_tasks = list(self._backfill_retry_tasks)
+        self._backfill_retry_tasks.clear()
         # 重試迴圈**排最前**:留著會在 source close 後繼續 subscribe → 重連 TC4
         # (同 futures_engine close 的理由)
-        for task in (resub_task, tick_task, backfill_task):
+        for task in (resub_task, tick_task, backfill_task, *retry_tasks):
             if task is None:
                 continue
             task.cancel()
@@ -272,9 +289,7 @@ class CorrelationEngine:
                         st.last_update = now
             else:
                 bids, asks = self._books.get(leg.key, ([], []))
-            fresh = (
-                st.last_update is not None and (now - st.last_update) <= self._config.stale_secs
-            )
+            fresh = st.last_update is not None and (now - st.last_update) <= self._config.stale_secs
             st.mid = mid_from_book(bids, asks) if fresh else None
             mids[leg.key] = st.mid
         session = self._session_fn()
@@ -305,8 +320,11 @@ class CorrelationEngine:
         if self._river_broadcast is not None:
             self._river_broadcast(self._river.delta(self._river_seq))
 
-    async def _backfill_river(self) -> None:
-        """逐腿 1K 回補(single-flight);單腿失敗只降級該腿(SC-3)。"""
+    async def _backfill_river(self, legs: set[str] | None = None) -> None:
+        """逐腿 1K 回補(single-flight);單腿失敗只降級該腿(SC-3)。
+
+        `legs` = 只補這些腿(逾時重試輪用)。`None` = 全部腿,與修復前逐字相同。
+        """
         if self._backfill_inflight:
             return
         self._backfill_inflight = True
@@ -316,13 +334,44 @@ class CorrelationEngine:
             # 換場邊界上晚到的回補會把狀態機拉回發起時那一場,清掉新場已累積的點並退回舊窗
             # (Phase 4 自評 finding)。盤別由每秒的 _river_tick 單點驅動;
             # apply_backfill 自己會用 session 比對丟棄過期回補。
+            self._backfill_pending_legs = set()  # 本輪重新收集(上一輪的名單已用完)
             for leg in self._config.legs:
+                if legs is not None and leg.key not in legs:
+                    continue
                 rows = await self._fetch_leg_minutes(leg.key, leg.symbol, leg.source)
                 if rows:
                     filled = self._river.apply_backfill(leg.key, rows, session)
                     logger.info("river 回補 %s:%d 分鐘", leg.key, filled)
+            pending = set(self._backfill_pending_legs)
         finally:
             self._backfill_inflight = False
+        # 排程放在 inflight 旗標之外:重試 task 自己也要能通過 single-flight 的門
+        if not pending:
+            self._backfill_retry_round = 0  # 補齊一輪 → 連續失敗歸零
+            return
+        if self._backfill_retry_round >= _BACKFILL_RETRY_MAX_ROUNDS:
+            logger.warning(
+                "river 回補逾時腿 %s 已重試 %d 輪仍未補齊,放棄(只從啟動後累積)",
+                sorted(pending),
+                _BACKFILL_RETRY_MAX_ROUNDS,
+            )
+            return
+        self._backfill_retry_round += 1
+        self._schedule_backfill_retry(pending)
+
+    def _schedule_backfill_retry(self, legs: set[str]) -> None:
+        """`_BACKFILL_RETRY_SECS` 後只補 `legs`;task 進集合供 close() 統一取消。"""
+        loop = self._loop
+        if loop is None:  # close 中 / 尚未 start
+            return
+        task = loop.create_task(self._backfill_retry(legs))
+        self._backfill_retry_tasks.add(task)
+        task.add_done_callback(self._backfill_retry_tasks.discard)
+
+    async def _backfill_retry(self, legs: set[str]) -> None:
+        await asyncio.sleep(_BACKFILL_RETRY_SECS)
+        logger.info("river 回補重試(第 %d 輪):%s", self._backfill_retry_round, sorted(legs))
+        await self._backfill_river(legs=legs)
 
     async def _fetch_leg_minutes(
         self, key: str, symbol: str, source_kind: str
@@ -343,6 +392,13 @@ class CorrelationEngine:
             if source is None:
                 return []
             return await asyncio.to_thread(source.fetch_day_1k, symbol)
+        except HistoryTimeoutError:
+            # **先於** ConnectionError(它是子類):TC4 沒掛,只是這一檔的 history 首頁
+            # 還沒備妥 —— 這條路本來就會在幾十秒後成功。舊碼把它與斷線一起降級成
+            # 「只從啟動後累積」,08:23 三腿同秒逾時就讓江波圖整天缺前半段。
+            logger.warning("river 回補 %s(%s)逾時(非 TC4 down),排入重補", key, symbol)
+            self._backfill_pending_legs.add(key)
+            return []
         except ConnectionError:
             logger.warning("river 回補 %s(%s)失敗,該腿只從啟動後累積", key, symbol)
             return []

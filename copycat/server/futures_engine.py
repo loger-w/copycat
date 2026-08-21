@@ -22,6 +22,7 @@ import logging
 from typing import Callable, Protocol
 
 from copycat.live.stock_source import Bar
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.live.futures_models import (
     PRODUCTS,
     parse_futures_realtime,
@@ -292,6 +293,12 @@ class FuturesEngine:
             return await asyncio.to_thread(
                 functools.partial(fetch, product, tf, start, end, session=session)
             )
+        except HistoryTimeoutError as e:
+            # **先於** ConnectionError(它是子類):逾時在**引擎內**吃掉 —— payload 與
+            # 前端零變(期貨三態 status 通道記 next-time),但 3am 的判準要分得出來,
+            # 不然「TC4 忙一下」會被 proxy miss 那條字串讀成「TC4 掛了」。
+            logger.warning("市場:期貨 K 線 timeout(非 TC4 down)%s(%s)", product, e)
+            return []
         except ConnectionError as e:
             logger.warning("market: futures history proxy miss %s(%s)", product, e)
             return []

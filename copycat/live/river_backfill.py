@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable
 
 from copycat.live.river_models import all_day_utc_window, parse_1k_minutes
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.tc4common import iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -38,9 +39,13 @@ def collect_1k_minutes(
 ) -> list[tuple[int, int]]:
     """SubHistory(1K)→ 首頁退避輪詢 → QryIndex 收割 → `[(minute_end, close 毫點)]`。
 
-    首頁在預算內未備妥 → 回 `[]`(呼叫端據此降級為「只從啟動後累積」)。
+    **首頁在預算內未備妥 → `HistoryTimeoutError`**(2026-08-23 08:23 事故:TXF/TWN/SXF
+    三腿同秒逾時回空 → 引擎讀成「這幾腿今天沒有 1K」,整天不再回補而江波圖缺前半段)。
+    回空是唯一把「暫時取不到」這個訊號丟掉的地方;**首頁備妥但收割 0 列仍回 `[]`**
+    —— TC4 答得出首頁就代表它不忙,空就是空,不該讓引擎排重試。
     `poll_wait == 0` 是測試組態,語意 = 不等待(探測一次就回,不 busy loop)。
-    TC4 通訊失敗由 `_req` 收斂成 `ConnectionError` 往外拋 —— 引擎層逐腿降級,不在這裡吞。
+    TC4 通訊失敗由 `_req` 收斂成 `ConnectionError` 往外拋 —— 引擎層逐腿降級,不在這裡吞
+    (`HistoryTimeoutError` 是它的子類,所以沒特別處置的呼叫端行為不變)。
     """
     start, end = all_day_utc_window()
     sub_history(symbol, start, end, "1K")
@@ -53,8 +58,8 @@ def collect_1k_minutes(
             break
         remaining = deadline - time.monotonic()
         if wait <= 0 or remaining <= 0:
-            logger.info("1K 回補 %s:%.1fs 內首頁未備妥,回空", symbol, budget)
-            return []
+            logger.info("1K 回補 %s:%.1fs 內首頁未備妥(timeout,非無資料)", symbol, budget)
+            raise HistoryTimeoutError(f"1K 回補 {symbol}:{budget:.1f}s 內首頁未備妥")
         time.sleep(min(wait, remaining))
         wait = min(wait * 2, poll_wait)
 
@@ -64,6 +69,12 @@ def collect_1k_minutes(
     rows: list[dict] = []
     for page in iter_qry_pages(_page):
         rows.extend(page)
-    minutes = parse_1k_minutes(rows)
+    # 窗口日比對交給 parse_1k_minutes(純 UTC,不做台北換算 —— 窗本身就是 UTC 全天窗)
+    minutes = parse_1k_minutes(rows, start[:8])
+    if rows and not minutes:
+        # 沿 `stock_source._taipei_minute_key` 那條的固定字串:rows 非空但一分鐘都留不下來
+        # = 毒化 / 凍結的 history 訂閱簽名。少了這行,呼叫端只看得到一個空 list,
+        # 與「TC4 真沒這天的資料」無從分辨且全鏈零 log。
+        logger.warning("1K 回補 %s:%d 列全數丟棄(疑似凍結 stub)", symbol, len(rows))
     logger.info("1K 回補 %s:%d 列 → %d 分鐘", symbol, len(rows), len(minutes))
     return minutes

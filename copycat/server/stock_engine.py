@@ -32,6 +32,7 @@ from copycat.live.stock_source import (
     trial_windows_for,
 )
 from copycat.live.stock_state import StockDayState
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.bars import BarsResult
 from copycat.server.ws import WsBroadcaster
 from copycat.stkfut_map import load_map
@@ -42,6 +43,11 @@ _CLIENT_QUEUE_MAX = 1000
 # 同一檔當日回補失敗幾次之後就不再入列(code review A2)。群組 batch 每 60s 一輪,
 # 沒有這道冷卻的話一檔壞碼會對 TC4 發整天的必敗請求,還把單工 worker 排到滿。
 _BACKFILL_MAX_FAILS = 3
+# 回補**逾時**(`HistoryTimeoutError`)的處置與斷線不同:TC4 好得很,只是這一檔的
+# history 首頁還沒備妥 → 隔一段時間重排即可。退避固定 15s(= server 層負向快取的同
+# 一個節奏),per-code 上限 2 次:沒有上限的話一檔冷門股會對 TC4 發整天的必敗請求。
+_BACKFILL_TIMEOUT_RETRY_SECS = 15.0
+_BACKFILL_TIMEOUT_MAX_RETRIES = 2
 # 未知 / 未訂閱 code 的空 payload。由狀態機自己產一次(而不是手抄一份字面值):
 # 鍵名只有 `light_snapshot()` 一份定義,抄第二份就是下一個會漂的地方。
 # 建構一次是為了避開每格空卡都 new 一個 `deque(maxlen=20_000)` 的狀態機;
@@ -275,6 +281,10 @@ class StockEngine:
         self._backfill_pending: dict[str, int] = {}
         self._backfilled: set[str] = set()
         self._backfill_failed: dict[str, int] = {}
+        #   `_backfill_timeouts` = 當日**逾時**重排次數(與 `_backfill_failed` 分帳:
+        #     逾時不是失敗,不該吃掉「三次就冷卻」那個給真失敗用的額度)。日別語意,
+        #     與 `_backfill_failed` 同在 rollover 清空。
+        self._backfill_timeouts: dict[str, int] = {}
         # 可注入(XR-3):app 層要把同一顆 broadcaster 同時給 engine 與 SignalHub,
         # 讓 `/ws/stock` 這條匯流排的存在性不再綁 engine 的生命週期。不傳 = 自建,
         # 既有 caller(直接建構的測試)行為逐字不變。
@@ -652,9 +662,17 @@ class StockEngine:
         return out
 
     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
-        """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
+        """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。
+
+        **逾時例外照原樣往外拋**(bug/history-timeout-propagation):兩個消費端就是靠
+        「空清單 vs 例外」分辨資料面與暫時性 —— SignalHub 對空清單的處置是「無已完成
+        日 K,CDP 停用」且當日不再重試(app.py:369-375),對例外才走 X-2b 有限重試;
+        overlay route 則把它與既有 `OVERLAY_FETCH_TIMEOUT_S` 逾時歸同一條降級。
+        """
         try:
             return await asyncio.to_thread(self._source.fetch_daily_bars, code, n)
+        except HistoryTimeoutError:
+            raise
         except ConnectionError as e:
             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
             return []
@@ -865,6 +883,7 @@ class StockEngine:
         # (在途 job 自己會結清;跨日的 in-flight 另由 generation guard 作廢)
         self._backfilled.clear()
         self._backfill_failed.clear()
+        self._backfill_timeouts.clear()
         # TradeStatus 前值同屬**日別**(D6/S4):跨日殘留會把隔日首則推播誤判成「恢復」
         # 並帶昨日值記一則 WARNING —— 污染的正是蒐證樣本本身,而那一則讀起來像真事件。
         self._trade_status.clear()
@@ -1202,6 +1221,34 @@ class StockEngine:
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
             try:
                 ticks = await asyncio.to_thread(self._source.backfill, code)
+            except HistoryTimeoutError:
+                # **先於** ConnectionError(它是子類):逾時 ≠ TC4 掛了。打 `tc4_status`
+                # 會讓整個畫面掛上「達錢 4 連線中斷」而達錢 4 好得很;計進
+                # `_backfill_failed` 則會吃掉真失敗的冷卻額度。這條路唯一該做的是
+                # **隔一會兒再排一次** —— 而那正是舊碼(回空)整天都不會做的事。
+                self._backfilling = None
+                self._backfill_settled(code)
+                tries = self._backfill_timeouts.get(code, 0) + 1
+                if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
+                    self._backfill_timeouts[code] = tries
+                    logger.warning(
+                        "backfill %s timeout(非 TC4 down),%.0fs 後重排(第 %d/%d 次)",
+                        code,
+                        _BACKFILL_TIMEOUT_RETRY_SECS,
+                        tries,
+                        _BACKFILL_TIMEOUT_MAX_RETRIES,
+                    )
+                    loop = self._loop
+                    if loop is not None:
+                        loop.call_later(_BACKFILL_TIMEOUT_RETRY_SECS, self._enqueue_backfill, code)
+                else:
+                    logger.warning(
+                        "backfill %s timeout 重試 %d 次仍未備妥,放棄(當日不再重排)",
+                        code,
+                        _BACKFILL_TIMEOUT_MAX_RETRIES,
+                    )
+                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+                continue
             except ConnectionError:
                 # 全域 `tc4_status` **只由主圖的失敗決定**(A2)。群組檢視把非主圖成員
                 # 也送進這條單工 worker 之後,一檔成員的 SubHistory 失敗會把整個畫面

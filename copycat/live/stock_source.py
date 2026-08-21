@@ -19,7 +19,12 @@ import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 
 from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
-from copycat.live.tc4 import BARS_POLL_DEADLINE, HEAL_VARIANT_AFTER, TC4QuoteSource
+from copycat.live.tc4 import (
+    BARS_POLL_DEADLINE,
+    HEAL_VARIANT_AFTER,
+    HistoryTimeoutError,
+    TC4QuoteSource,
+)
 from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -585,12 +590,19 @@ class StockQuoteSource(TC4QuoteSource):
     # ---- 回補(收割分頁;跨 symbol 序列化由 engine worker queue 統籌)----
 
     def backfill(self, code: str) -> list[StockTick]:
+        """當日 tick 回補;**首頁等滿預算仍未備妥 → `HistoryTimeoutError`**。
+
+        回空的話 worker 會把它當成功套用(`_backfilled` 進帳)→ 當日不再重排,
+        分時圖整天空著而零錯誤訊號。逾時與「今天真的沒有成交」在 TC4 協定上只有
+        「有沒有等滿」這一個區分訊號(同 `_collect_history` 的 `timed_out`)。
+        """
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
         self._sub_history(sym, start, end)
         rows: list[dict] = []
-        deadline = time.monotonic() + max(self._poll_wait * 30, 1.0)
+        budget = max(self._poll_wait * 30, 1.0)
+        deadline = time.monotonic() + budget
         while time.monotonic() < deadline:
             first = self._get_history(sym, start, end, "0")
             if first.get("HisData"):
@@ -598,7 +610,7 @@ class StockQuoteSource(TC4QuoteSource):
             if self._poll_wait:
                 time.sleep(self._poll_wait)
         else:
-            return []
+            raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
 
         def _page(qry_index: str) -> list[dict]:
             return self._get_history(sym, start, end, qry_index).get("HisData", [])
@@ -712,16 +724,31 @@ class StockQuoteSource(TC4QuoteSource):
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
 
-        含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。"""
+        含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。
+
+        **DK 逾時仍走 fallback、兩段都逾時才 raise**(plan review P0-1):fallback 是
+        「DK 不支援這檔」與「DK 現在忙」共用的那條路,逾時就直接放棄等於把還可能有貨的
+        1K 也一起丟了;反過來,兩段都逾時卻回空,SignalHub 會讀成「無已完成日 K,
+        CDP 停用」而且**永不重試**(空清單 = 資料面沒有;例外 = 暫時性 → X-2b 有限重試)。
+
+        兩段都顯式帶 `BARS_POLL_DEADLINE`:預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞
+        60s,hub 的重試會把 executor 佔滿,而畫面只是疊線遲遲不來(P2-13)。
+        """
         self._ensure_connected()
         sym = stock_symbol(code)
         end_d = _dt.date.today()
         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
-        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end).rows)
+        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
+        bars = _parse_dk_rows(dk_rows)
         if not bars:
             logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
-            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end).rows)
+            fb_rows, fb_timed_out = self._collect_history(
+                sym, "1K", start, end, BARS_POLL_DEADLINE
+            )
+            if dk_timed_out and fb_timed_out:
+                raise HistoryTimeoutError(f"daily bars {sym}:DK 與 1K 兩段首頁皆未備妥")
+            bars = _aggregate_1k_rows(fb_rows)
         return bars[-n:]
 
     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑)----
