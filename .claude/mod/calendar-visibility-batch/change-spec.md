@@ -70,3 +70,20 @@ R3b 交易日盤前冷啟動(待 user 拍板);後端 boot WARNING 文案;週末�
   行為斷言該紅 0 條;新增正向鎖 SC-3(`is_trading_day=lambda d: False` + 窗內 → trial False、flush 不翻轉)。App.test / StockPage.test / SignalRail.test / useSignalFeed.test:不該紅(新欄 optional)。
 - **R9 Out of scope 明列**:週末真開盤(補班)而 `extra_trading_days` 漏設 → 後端判休市但膠囊不顯示(週末守門排除),本輪不覆蓋。
 - **R10 SC-4 通道**:側車 server(另 port,ops-discipline)—— 標題:`TXO_BACKFILL_DATE=2026-08-20` 使 trade_date ≠ today;膠囊:tmp holidays config 含今日起同一支側車(環境變數或複製 configs 到 tmp 並指向);prod 8721 不動。
+
+---
+## Spec review round 2 amendments(限縮輪,`change-spec-review-round-2.json`,9 條全 accepted;收斂)
+- **AR1 後端契約擴張該紅**:Caller / Diff 級補 `copycat/server/app.py`(route 🟢 additive)、`copycat/server/signal_hub.py`(🟢 additive property)、`tests/server/test_signal_routes.py`;
+  既有 **L423 / L433 / L457 / L496** 四條整 dict 全等 → 該紅(契約 additive 擴張,test-infra-fix):改 `body["signals"] == ...`,另立新案鎖 `trade_date` / `today` 兩欄。
+- **AR6 / AR7 hub 公開 API + 同一時鐘**:`SignalHub` 加唯讀 `@property trade_date -> str`(`self._trade_date_fn()`)與 `@property today -> str`(`self._now_fn().date().isoformat()`,與 `today_signals()` 聯集日同時鐘);
+  route 回 `{"signals", "trade_date": hub.trade_date, "today": hub.today}`(**不**用 `_today()`);取樣錯位一拍在 stage2 瞬間可接受,註解記。
+- **AR5 唯一 prop 形 + SC-2 重寫**:`SignalRail` 兩 optional prop `tradeDate?: string | null` / `today?: string | null`,rail 內算標題;
+  SC-2:tradeDate=today → 「今日訊號」;tradeDate=`2026-08-20`、today=`2026-08-21` → 「08-20 訊號」(aria-label 同);任一 undefined/null → 「今日訊號」。
+  StockPage.test:stub `/api/stock/signals/today` 回 `{signals:[], trade_date:"2026-08-20", today:"2026-08-21"}` → rail 標題「08-20 訊號」。
+- **AR4 新鮮度**:`useSignalFeed` baseline query 加 `refetchInterval: 5 min`(自癒 baseline 本就可重取;WS open 重抓不變)→ 跨午夜 / stage2 rollover 後 ≤5 分更新標題。原 Edge case 1 作廢改寫。
+- **AR2 SC-1 固定平日假日 payload**:正向 `today: "2026-10-09"`(週五、版控 config 內國定假日)+ `holidays: ["2026-10-09"]` → 膠囊;反向 holidays 不含;週末守門案 `today: "2026-08-16"`(週日)+ holidays 含它 → 不顯示。
+  **在該 it 內覆寫 appFetch**,不改共用 stub。
+- **AR8 週末判定**:`new Date(today + "T00:00:00Z").getUTCDay()`(或 split 組 UTC),明寫不用本機 `getDay()`。
+- **AR3 SC-4 通道修正**:膠囊 = 前端測試(SC-1)為自動化證據,真環境截圖**不開側車**(verify 側車 calendar_loaded=false 無法顯示;改 prod config 不允許)→ `browser_unavailable: verify 側車無日曆` + user 過目說明。
+  標題 = verify 側車 `TXO_SERVER_PORT=8722 TXO_BACKFILL_DATE=2026-08-20 python -m copycat.server --verify`(fake TXO,其餘引擎不啟)—— 但 signals route 需 hub;若 verify 模式無 hub → 以 StockPage.test 為證據 + 同樣標 browser_unavailable。
+- **AR9 Out of scope**:tick 層 `stock_models.is_trial`(丟棄語意)維持純時間窗不接日曆;R9 補班漏設情境症狀 = 報價凍住 + 無 (緩),記 next-time。

@@ -1,0 +1,70 @@
+{
+ "round": 2,
+ "scope": "narrow",
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "AR1",
+   "severity": "P0",
+   "summary": "test_signal_routes 四條全等斷言該紅未列",
+   "disposition": "accepted",
+   "resolution": "契約 additive 該紅清單"
+  },
+  {
+   "id": "AR2",
+   "severity": "P0",
+   "summary": "週末守門 vs 2026-08-16(週日)payload 永不顯示",
+   "disposition": "accepted",
+   "resolution": "10-09 平日假日 payload"
+  },
+  {
+   "id": "AR3",
+   "severity": "P1",
+   "summary": "verify 側車無日曆、無 config 覆寫點",
+   "disposition": "accepted",
+   "resolution": "膠囊 browser_unavailable"
+  },
+  {
+   "id": "AR4",
+   "severity": "P1",
+   "summary": "baseline 無 refetch → 長跑標題凍結",
+   "disposition": "accepted",
+   "resolution": "refetchInterval 5 min"
+  },
+  {
+   "id": "AR5",
+   "severity": "P1",
+   "summary": "prop 形分叉 + SC-2 未改",
+   "disposition": "accepted",
+   "resolution": "唯一形 + 重寫"
+  },
+  {
+   "id": "AR6",
+   "severity": "P2",
+   "summary": "hub 無公開 trade_date",
+   "disposition": "accepted",
+   "resolution": "@property"
+  },
+  {
+   "id": "AR7",
+   "severity": "P2",
+   "summary": "today 兩時鐘",
+   "disposition": "accepted",
+   "resolution": "hub.today"
+  },
+  {
+   "id": "AR8",
+   "severity": "P2",
+   "summary": "weekday 時區",
+   "disposition": "accepted",
+   "resolution": "getUTCDay"
+  },
+  {
+   "id": "AR9",
+   "severity": "P2",
+   "summary": "tick 層 is_trial 未表態",
+   "disposition": "accepted",
+   "resolution": "out of scope + next-time"
+  }
+ ]
+}
