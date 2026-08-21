@@ -613,6 +613,24 @@ describe("FuturesLadder 一鍵平倉(SC-10)", () => {
     ]);
   });
 
+  /** 🔴 TQ-3(review round-1):上面兩條的 `TXF_STATE` 界都**已對齊** FUT_TICK
+   *  (snap 前後同值)—— 元件層把 `edgeOf` 接錯口徑照樣綠。這條的 fixture 刻意未對齊:
+   *    raw `20_520_600` 毫點 = 20520.6 點
+   *    → 期貨 FUT_TICK(1 點)賣側 ceil = **20521**(本案期望值)
+   *    → 個股期的股票 tick 表(2 萬點在 5 元檔)ceil = 20525(接錯口徑的觀測值)
+   *  兩者差 4,足以把「FuturesLadder:110 誤傳 `stkfutMarketEdgeMilli`」照出來。 */
+  it("跌停未對齊 FUT_TICK → 多單估價 ceil 到 1 點(20521,不是股票檔位的 20525)", async () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos({ qty: 3 })] }),
+    });
+    render(ladder({ ...TXF_STATE, lower: 20_520_600 }));
+    const btn = await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    expect(screen.getByText("多 3 口 · 估價 20521")).toBeTruthy();
+  });
+
   it("他契約 / 他市場部位不入清單 → 平倉鈕 disabled 且點擊不開彈窗", async () => {
     mockFetch({
       "/api/capital/orders": () => json({ orders: [] }),
@@ -709,6 +727,25 @@ describe("FuturesLadder 一鍵平倉(SC-10)", () => {
       expect(btn.hasAttribute("disabled")).toBe(true);
       expect(btn.getAttribute("title")).toBe("無行情估價");
     });
+  });
+
+  /** 🔴 TQ-5(review round-1):`0` 是後端界不可得時的**缺值哨符**,不是價 —— 與上面
+   *  那條的 `null` 走不同路徑(型別缺值 vs `edgeMilli` 的 ≤0 守門),元件層只驗過 null。
+   *  漏掉的症狀是「用 0 元送真錢單」。同一份界餵給市價鈕(`marketEdge("sell")`),
+   *  所以兩顆鈕必須同時鎖 —— 一邊鎖一邊不鎖 = 同一份行情兩個矛盾答案。 */
+  it("跌停為 0(缺值哨符)→ 平倉鈕 + 賣側市價鈕同時 disabled", async () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [futPos({ qty: 2 })] }),
+    });
+    render(ladder({ ...TXF_STATE, lower: 0 }));
+    await screen.findByRole("button", { name: "平倉" });
+    await waitFor(() => {
+      const btn = screen.getByRole("button", { name: "平倉" });
+      expect(btn.hasAttribute("disabled")).toBe(true);
+      expect(btn.getAttribute("title")).toBe("無行情估價");
+    });
+    expect(marketBtn("賣").hasAttribute("disabled")).toBe(true);
   });
 });
 
