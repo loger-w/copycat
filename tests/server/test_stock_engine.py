@@ -945,10 +945,14 @@ class TestBackfillTimeoutRetry:
         assert "2330" not in engine._backfill_timeout_handles
         assert handle.cancelled()
         assert "2330" not in engine._backfill_timeouts
-        # 自選路徑同款:訂閱 → 逾時 → 移出自選
+        # 自選路徑:主圖 + 自選共同持有 → 主圖切走**不**釋放(記帳歸還在的 owner),
+        # 移出自選才真退訂 → 此時才取消
+        await engine.set_main("2330")
         await engine.set_watchlist(["2330"])
         await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
         handle = engine._backfill_timeout_handles["2330"]
+        await engine.set_main("2317")
+        assert "2330" in engine._backfill_timeout_handles and not handle.cancelled()
         await engine.set_watchlist([])
         assert "2330" not in engine._backfill_timeout_handles
         assert handle.cancelled()
