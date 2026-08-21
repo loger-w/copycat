@@ -321,9 +321,12 @@ export function useStockStream(
   //   2. 反向(true→false)的舊值窗只會讓那一趟多帶回 ticks,無害,故不補。
   // 哪天把同步搬到 render 期(比照 codeRef / contractRef),`wasOff` 就恆等於 `!tape`,
   // 補打那趟永遠不會發生 —— 症狀是切回單檔後明細整天空著,零錯誤訊號。
+  // doctor `no-set-state-after-await-in-effect`:與上方 instrumentKey effect 同型(refetch 內
+  // 以 instrumentKeyRef 比對丟棄過期結果,08-11 triage 已判 needs-human 保留),非新樣態。
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect
   useEffect(() => {
     const wasOff = !tapeRef.current;
-    tapeRef.current = tape;  // 上面那支 ref 的**唯一**寫入點(順序:先同步再補打)
+    tapeRef.current = tape; // 上面那支 ref 的**唯一**寫入點(順序:先同步再補打)
     if (tape && wasOff) void refetch();
   }, [tape]);
 
