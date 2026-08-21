@@ -485,3 +485,43 @@ def test_collector_rows_do_not_cancel_remaining_debt() -> None:
     assert len(got) == 1
     c.feed(RAW_END)  # 欠帳已清 → 零列 ## 照 flush(真空帳戶)
     assert got[-1] == []
+
+
+def test_collector_profit_header_then_swallowed_end_marker_does_not_timeout_flush() -> None:
+    """R7 review round-2 P0(2026-08-22):損益段遲到回應 = `000` 表頭(parse 成 None,staging 仍空)
+    + `##`。終止符被當欠帳吞掉後,`_last_feed` 若仍停在表頭抵達時刻,幫浦圈 1s 後的 `poll()`
+    會以 timeout 保險 flush 空集合 —— 均價/含費稅基底整批洗掉(balance 段則是清空部位)。"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, parse=parse_profit_line, clock=clock)
+    c.reset()
+    c.abandon()
+    c.reset(keep_abandoned=True)
+    clock.now += 1.0
+    c.feed(RAW_PNL_STATUS)  # 放棄輪遲到的表頭
+    c.feed(RAW_END)  # 放棄輪遲到的終止符 → 吞掉
+    assert got == []
+    clock.now += 1.5
+    c.poll()  # timeout 保險不得把吞掉的那一輪 flush 成空集合
+    assert got == []
+    c.feed(RAW_PNL_STATUS)  # 新一輪真回應
+    c.feed(RAW_PNL_ROW)
+    c.feed(RAW_END)
+    assert len(got) == 1 and [r.stock_no for r in got[0] if isinstance(r, ProfitRow)] == ["2493"]
+
+
+def test_collector_closed_round_terminator_still_consumes_debt() -> None:
+    """放棄輪的 `##` 若在本輪已 flush(`_closed`)後才到,仍須消耗一筆欠帳 ——
+    否則欠帳殘留到下一輪,白吞一次合法的零列回應(真空帳戶多掛一輪幽靈部位)。"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()
+    c.reset(keep_abandoned=True)
+    c.feed(RAW_C_MARGIN)
+    clock.now += 1.5
+    c.poll()  # 本輪由 timeout 保險 flush
+    assert len(got) == 1
+    c.feed(RAW_END)  # 放棄輪遲到的 ## 在 _closed 期間抵達
+    assert c._owed == 0
