@@ -89,3 +89,10 @@ Discord 合併訊息(後端已做)、SignalRail、toast 顯示規則名、通知
 - **A8**:`formatGroupToastText` 沿用 `.filter(x => x !== "")`;signal-model.test 補 name === "" 單則等價案。
 - **A10**:注入口寫 `declare global { interface Window { __emitSignal?: typeof emitSignal } }` + `if (import.meta.env.DEV) window.__emitSignal = emitSignal;`(截圖後移除)。
 - A9:本體五處已就地標 `[amendment → 末節]`。
+
+---
+## Code review round 1 amendments(`code-review-round-1.json`)
+- C1:真實 hidden tab 的 setTimeout 最低 1s clamp → 合併窗實測 ≈1s(可接受;user 過目時量首則延遲)。
+- C2:fire 時已回前景 → 丟棄,與 toast TTL 同長 → 極端情況兩邊皆無痕(接受:前景抵達路徑 = rail)。
+- C3:`SignalToast.groupKey` 移除(drop 反查不需要)。C4:expiresAt 牆鐘與 setTimeout 單調混用 → 註解記 NTP 取捨(同 lastNotifyRef)。C5:cleanup 刻意不清 queue(effect 僅掛一次)註解。
+- C7:SC-5 過目條件補「1 張三段合併 + 3 張單則 + 溢出列」多行觀感由 user 判斷是否比照 B3 加 line-clamp。
