@@ -423,7 +423,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           <button
             type="button"
             data-testid={`wl-select-${code}`}
-            aria-label={name !== undefined ? `選取 ${code} ${name}` : `選取 ${code}`}
+            /* 🔴 A11Y-1(D5'''):**不掛 aria-label** —— button 的子孫在可及名稱計算時是
+               presentational,一掛 aria-label 就把價與漲跌幅整段蓋掉,螢幕閱讀器唸完一列
+               只知道是哪一檔、不知道現在多少錢(而這一列存在的理由正是報價)。名稱由內容
+               計算 = 代號 / 名稱 / 價 / 漲跌幅(或「無資料」)全在。 */
             aria-current={active === code ? "true" : undefined}
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
             onClick={() => onSelect(code)}
@@ -433,7 +436,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                 主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
                 漲幅刻意不跟著放大:四個元素同權重反而更難掃。
                 `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
-            <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
+            {/* 🔴 A11Y-7:`<span>`(不是 div)—— button 的 content model 只吃 phrasing
+                content,巢狀 flow content 是無效 HTML(瀏覽器容錯但 parser 行為未定義)。
+                class 逐字不變,`flex` 自帶 display:flex → 版面零差。 */}
+            <span className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
               {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
                   flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
                   列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
@@ -480,7 +486,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                   ) : null}
                 </span>
               ) : null}
-            </div>
+            </span>
             {q?.no_data ? (
               <span className="shrink-0 text-xs text-ink-dim">無資料</span>
             ) : (
