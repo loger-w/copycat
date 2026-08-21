@@ -587,43 +587,48 @@ export function pegLabels(
   return out;
 }
 
-/** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
+/** 右緣文字的 1D 避讓核心(走廊 A 的帶內標籤與走廊 B 的 MA 價位標共用)。
  *
- *  只管 MA:CDP 五線在右緣帶內已有 `價位*`,VWAP 走**就地標示**(末點右側)不經此函式。
+ *  **第一步就複製** `items`(`map(i => ({ ...i }))`):呼叫端餵的往往是 `useMemo` 的
+ *  `oLines`,而同一份物件的 `y` 還被 `<line y1>` 讀 —— 就地改寫會把線體一起推走,
+ *  並且汙染 memo 快取(下一次 render 拿到的是已經被推過的 y,推兩次)。
  *
  *  `obstacles` = 已經佔住那條 y 的固定圖元,**單位一律是視覺中心**(review B-1):
  *  呼叫端傳右緣區極值的文字(baseline 先扣 0.35em 正規化)與標記圓(圓心即中心)。
  *  它們**不可動** —— 極值標記承載的是「最高/最低發生在哪一分鐘」,推開它就是改資訊;
- *  能讓位的只有 MA 標籤(它的 y 只是「這條線在哪」,而線本身照畫)。
+ *  能讓位的只有標籤(它的 y 只是「這條線在哪」,而線本身照畫)。
  *
  *  佈局 = 由上而下掃一遍推開重疊(對 obstacle 一律往下讓,方向固定才決定性),
- *  再由下而上回推處理底部溢出,最後 clamp 進 `bounds`。標籤數 ≤ 2,不需要更聰明的解法。 */
-export function edgePriceLabels(
-  oLines: readonly OverlayLine[],
+ *  再由下而上回推處理底部溢出,最後 clamp 進 `bounds`。
+ *
+ *  `opts.dropOverflow` 分開兩種走廊的「裝不下時怎麼辦」(D6):
+ *  - `true`(走廊 B / `edgePriceLabels`):capacity 截斷 + clamp 後殘餘重疊丟棄 +
+ *    界退化回 `[]`。那條走廊的標籤是「這條線在哪」的**冗餘**訊息(線本身照畫),
+ *    疊印兩段數字比少畫一顆更不可讀。
+ *  - `false`(走廊 A / `bandLabels`):不截斷、不丟棄、界退化回原 y。帶內的
+ *    `價位*` 是 CDP 的**唯一**價位訊息,靜默消失等於改資訊 —— 寧可疊在界邊。 */
+export function layoutEdgeLabels<T extends { y: number }>(
+  items: readonly T[],
   obstacles: readonly number[],
   bounds: { top: number; bottom: number },
-): EdgePriceLabel[] {
-  const labels: EdgePriceLabel[] = [];
-  for (const l of oLines) {
-    // level 逐個列舉而不是 `!== cdp 系`:未來多一種 overlay 時,新 level 會**預設不進**
-    // 這組標籤(要進就得顯式加),而不是靜默多出一顆沒人設計過位置的文字。
-    if (l.level === "ma5" || l.level === "ma20") {
-      labels.push({ y: l.y, priceMilli: l.priceMilli, level: l.level });
-    }
-  }
+  opts: { dropOverflow: boolean },
+): T[] {
+  const labels = items.map((i) => ({ ...i }));
   if (labels.length === 0) return [];
   // bounds 退化(review B-5):top > bottom 時任何 y 都在界外,clamp 的語意會讓 bottom
-  // 勝出、把標籤壓到界外 —— 一律不畫。可達性:svgBox 的 minPx 地板 + 超寬容器會把
-  // mainH 壓到 30px 以下。
-  if (bounds.top > bounds.bottom) return [];
-  // 排序穩定(Array#sort 規範保證):同 y 時維持 oLines 的 ma5 → ma20 順序,
+  // 勝出、把標籤壓到界外 —— 走廊 B 一律不畫。可達性:svgBox 的 minPx 地板 + 超寬容器
+  // 會把 mainH 壓到 30px 以下。走廊 A 不能靜默丟資訊 → 回傳原 y(複本)照畫。
+  if (bounds.top > bounds.bottom) return opts.dropOverflow ? [] : labels;
+  // 排序穩定(Array#sort 規範保證):同 y 時維持輸入順序(如 oLines 的 ma5 → ma20),
   // 不因浮點比較而讓兩顆標籤在兩次 render 之間互換上下。
   labels.sort((a, b) => a.y - b.y);
   // 空間裝不下全部(review B-5):疊印(兩段數字印在同一 y)比少畫一顆更不可讀。
   // 依 y 排序保留裝得下的前幾顆 —— 決定性,且與最後一道 clamp 的「寧可貼近不裁掉」
   // 分工:那條管的是「裝得下但被 obstacle 擠到界邊」,這條管的是「根本裝不下」。
-  const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
-  if (labels.length > capacity) labels.length = capacity;
+  if (opts.dropOverflow) {
+    const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
+    if (labels.length > capacity) labels.length = capacity;
+  }
   const fixed = [...obstacles].sort((a, b) => a - b);
 
   let floor = bounds.top;
@@ -653,11 +658,31 @@ export function edgePriceLabels(
   // 在前者(review B-5)—— capacity 截斷管「根本裝不下」,這裡管「裝得下但被 obstacle
   // 擠到界邊」的殘餘重疊;疊印(兩段數字印在同一 y)比少畫一顆更不可讀。
   // 兩輪 sweep 各自維持遞增序、clamp 單調 → 這裡順序仍是由上而下,單趟即可。
-  const placed: EdgePriceLabel[] = [];
+  const placed: T[] = [];
   for (const l of labels) {
     l.y = Math.min(Math.max(l.y, bounds.top), bounds.bottom);
     const prev = placed[placed.length - 1];
-    if (prev === undefined || l.y - prev.y >= EDGE_LABEL_H) placed.push(l);
+    if (!opts.dropOverflow || prev === undefined || l.y - prev.y >= EDGE_LABEL_H) placed.push(l);
   }
   return placed;
+}
+
+/** MA5 / MA20 的右緣價位標籤佈局(SC-1/SC-3)。
+ *
+ *  只管 MA:CDP 五線在右緣帶內已有 `價位*`(那條走廊走 `bandLabels`),
+ *  VWAP 走**就地標示**(末點右側)不經此函式。 */
+export function edgePriceLabels(
+  oLines: readonly OverlayLine[],
+  obstacles: readonly number[],
+  bounds: { top: number; bottom: number },
+): EdgePriceLabel[] {
+  const labels: EdgePriceLabel[] = [];
+  for (const l of oLines) {
+    // level 逐個列舉而不是 `!== cdp 系`:未來多一種 overlay 時,新 level 會**預設不進**
+    // 這組標籤(要進就得顯式加),而不是靜默多出一顆沒人設計過位置的文字。
+    if (l.level === "ma5" || l.level === "ma20") {
+      labels.push({ y: l.y, priceMilli: l.priceMilli, level: l.level });
+    }
+  }
+  return layoutEdgeLabels(labels, obstacles, bounds, { dropOverflow: true });
 }
