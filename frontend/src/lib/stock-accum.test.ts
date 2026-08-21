@@ -54,6 +54,14 @@ describe("fromSnapshot 的 trial", () => {
     });
     expect(next.trial).toBe(true);
   });
+
+  it("applyTick 保留 tapeOmitted(同 trial:tick 不帶這個欄位,spread 不可漏)", () => {
+    const acc = fromSnapshot({ ...SNAP, ticks: [], tape_omitted: true });
+    const next = applyTick(acc, {
+      type: "tick", code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
+    });
+    expect(next.tapeOmitted).toBe(true);
+  });
 });
 
 describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
