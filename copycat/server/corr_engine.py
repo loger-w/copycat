@@ -326,6 +326,18 @@ class CorrelationEngine:
         `legs` = 只補這些腿(逾時重試輪用)。`None` = 全部腿,與修復前逐字相同。
         """
         if self._backfill_inflight:
+            # single-flight 互吃(重試 task 醒來時撞上 reconnect 觸發的整輪回補)。
+            # 舊碼是靜默 `return`,被擋掉那一發負責的腿就這樣蒸發,全鏈零訊號 ——
+            # 江波圖只是缺前半段。併回 pending 之後由**進行中那一輪的尾巴**接手重排
+            # (它的 `pending` 快照與 `_backfill_inflight = False` 之間沒有 await,
+            # 所以此刻的寫入必定被它讀到,恰好排一次、不會與它自己的重排重複)。
+            # **不 bump `_backfill_retry_round`**:被擋下不等於試過一次。
+            logger.info(
+                "river 回補 single-flight:已有一輪進行中,本次併回 pending(legs=%s)",
+                sorted(legs) if legs else "全部",
+            )
+            if legs:
+                self._backfill_pending_legs |= legs
             return
         self._backfill_inflight = True
         try:
@@ -355,6 +367,11 @@ class CorrelationEngine:
                 sorted(pending),
                 _BACKFILL_RETRY_MAX_ROUNDS,
             )
+            # 計數是**連續**失敗輪數 → 放棄那一刻也要歸零(同「補齊一輪」那條路)。
+            # 不歸零的話它永久停在上限:當天稍後每一次 reconnect 回補都會在第一次逾時
+            # 就直接放棄(零重試),而 log 只有一行「已重試 3 輪」讀起來像真的試過。
+            # 第二個 episode 是新的抖動,該有自己的完整預算。
+            self._backfill_retry_round = 0
             return
         self._backfill_retry_round += 1
         self._schedule_backfill_retry(pending)

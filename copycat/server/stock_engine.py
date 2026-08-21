@@ -285,6 +285,13 @@ class StockEngine:
         #     逾時不是失敗,不該吃掉「三次就冷卻」那個給真失敗用的額度)。日別語意,
         #     與 `_backfill_failed` 同在 rollover 清空。
         self._backfill_timeouts: dict[str, int] = {}
+        #   `_backfill_timeout_handles` = 上面那條重排的 `loop.call_later` handle,per code。
+        #     排了就要有取消點:close 之後醒來的 callback 會對已關閉的 engine 起
+        #     `_backfill_pending` 帳並塞一筆沒有 worker 會取的 job;rollover 之後醒來的
+        #     則是用新一天的 generation 重排一筆 stage2 已經排過的 job。per code 是為了
+        #     「同一檔重排前先取消上一支」—— 五個入列點任一個在 timer 在途時把同一檔
+        #     再送進 worker,就會多出一支孤兒 timer(重試預算雙倍燒,而上界看起來還在)。
+        self._backfill_timeout_handles: dict[str, asyncio.TimerHandle] = {}
         # 可注入(XR-3):app 層要把同一顆 broadcaster 同時給 engine 與 SignalHub,
         # 讓 `/ws/stock` 這條匯流排的存在性不再綁 engine 的生命週期。不傳 = 自建,
         # 既有 caller(直接建構的測試)行為逐字不變。
@@ -362,6 +369,10 @@ class StockEngine:
         # 先斷 threadsafe callback 入口(比照 index_engine):close 期間 TC4 推播不得再
         # `call_soon_threadsafe` 到即將關閉的 loop
         self._loop = None
+        # 在途的逾時重排 timer 不歸 `_tasks` 管(它們是 `call_later` handle 不是 task)
+        # → 這裡是唯一的取消點。留著的話 callback 會在已關閉的 engine 上起
+        # `_backfill_pending` 帳並塞一筆永遠沒有 worker 會取的 job。
+        self._cancel_backfill_timeout_retries()
         # 快照:cancel/await 期間 rollover 仍可能 append(`_tasks` 是唯一持有點),
         # 迭代中被改動會漏取消或炸 RuntimeError
         tasks = list(self._tasks)
@@ -884,6 +895,9 @@ class StockEngine:
         self._backfilled.clear()
         self._backfill_failed.clear()
         self._backfill_timeouts.clear()
+        # 記帳清空了,在途的那幾支 timer 也要一起 —— 它們醒來時會用**新一天**的
+        # generation 重排一筆沒有人要的 job(主圖那筆 stage2 自己下面就排了)。
+        self._cancel_backfill_timeout_retries()
         # TradeStatus 前值同屬**日別**(D6/S4):跨日殘留會把隔日首則推播誤判成「恢復」
         # 並帶昨日值記一則 WARNING —— 污染的正是蒐證樣本本身,而那一則讀起來像真事件。
         self._trade_status.clear()
@@ -1208,6 +1222,34 @@ class StockEngine:
         else:
             self._backfill_pending.pop(code, None)
 
+    def _arm_backfill_timeout_retry(self, loop: asyncio.AbstractEventLoop, code: str) -> None:
+        """`_BACKFILL_TIMEOUT_RETRY_SECS` 後重新入列;**同 code 的舊 timer 先取消**。
+
+        孤兒 timer 的失效樣態(同 SignalHub `_schedule_basis_retry` 那條):它照樣醒來
+        多打一次 TC4,重試預算雙倍燒掉,而 `_backfill_timeouts` 的上界看起來還在。
+        """
+        old = self._backfill_timeout_handles.pop(code, None)
+        if old is not None:
+            old.cancel()
+        self._backfill_timeout_handles[code] = loop.call_later(
+            _BACKFILL_TIMEOUT_RETRY_SECS, self._fire_backfill_timeout_retry, code
+        )
+
+    def _fire_backfill_timeout_retry(self, code: str) -> None:
+        """timer 到期 → 出帳後入列。
+
+        **先出帳**:handle 已經用掉了,留在 dict 裡會讓 `close()` / rollover 去取消一支
+        死 handle,而下一輪逾時排的那支新 timer 反而被當成「舊的」取消掉。
+        """
+        self._backfill_timeout_handles.pop(code, None)
+        self._enqueue_backfill(code)
+
+    def _cancel_backfill_timeout_retries(self) -> None:
+        """取消並清空全部在途重排 timer(`close()` 與 rollover stage2 共用的唯一取消點)。"""
+        for handle in self._backfill_timeout_handles.values():
+            handle.cancel()
+        self._backfill_timeout_handles.clear()
+
     async def _backfill_worker(self) -> None:
         while True:
             code, generation = await self._backfill_jobs.get()
@@ -1240,13 +1282,19 @@ class StockEngine:
                     )
                     loop = self._loop
                     if loop is not None:
-                        loop.call_later(_BACKFILL_TIMEOUT_RETRY_SECS, self._enqueue_backfill, code)
+                        self._arm_backfill_timeout_retry(loop, code)
                 else:
                     logger.warning(
                         "backfill %s timeout 重試 %d 次仍未備妥,放棄(當日不再重排)",
                         code,
                         _BACKFILL_TIMEOUT_MAX_RETRIES,
                     )
+                    # 放棄 = **當日不再入列**(與逾時旗標之前的行為逐字相同)。
+                    # `group_snapshot` 那條 60s 輪詢的四道 guard 看得到的是 `_backfilled`
+                    # / `_no_data` / 在途 / `_backfill_failed`,唯獨看不到逾時記帳 ——
+                    # 不進 `_backfilled` 的話它會每 60s 把同一檔重新推回單工 worker,
+                    # 重試上界形同虛設,而 TC4 歷史通道是整個群組檢視共用的稀缺資源。
+                    self._backfilled.add(code)
                 self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
                 continue
             except ConnectionError:

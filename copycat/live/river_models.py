@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "SESSION_WINDOWS",
+    "Parsed1k",
     "all_day_utc_window",
     "close_clamp_rank",
     "minute_end_from_1k",
@@ -165,7 +167,20 @@ def minute_end_from_1k(row: dict) -> int | None:
     return ((hh + 8) % 24) * 60 + mm
 
 
-def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> list[tuple[int, int]]:
+class Parsed1k(NamedTuple):
+    """`parse_1k_minutes` 的回傳:分鐘序列 + 兩種「沒留下來」的**分帳**。
+
+    呼叫端要分得出「列解析不了」(`skipped`,欄位缺漏 / 格式)與「列被 Date 閘丟掉」
+    (`dropped`)—— 只有後者是凍結 stub 的簽名。合成一個數字的話,`rows` 非空而
+    `minutes` 全空這件事就同時對兩種完全不同的故障成立,那句固定字串也就失去診斷力。
+    """
+
+    minutes: list[tuple[int, int]]
+    skipped: int
+    dropped: int
+
+
+def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> Parsed1k:
     """1K rows → [(minute_end, close 毫點)],保持原始列序。
 
     壞列略過並計數 warning(沿用 `stock_source` 慣例:靜默丟列會讓回補缺口無從診斷)。
@@ -177,15 +192,19 @@ def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> list[tuple
     一段自己跟自己錯開。丟的是**凍結 stub**:TC4 對「窗內當下無資料時建立的 history
     訂閱」回的是別日的殘留列,而 `minute_end_from_1k` 只讀 `Time` → 那些列會變成今日分鐘
     餵進江波圖,畫出一條來自別天的線且零錯誤訊號(`Date` 缺值的列照舊保留:真實 1K 恆有
-    此欄,缺值只可能是治具/新欄位,不該連帶丟資料)。
+    此欄,缺值只可能是治具/新欄位,不該連帶丟資料 —— 但**閘對它形同不存在**,所以缺值
+    要留一行 warning:TC4 哪天換了欄名,「閘還在跑」與「閘被繞過」在畫面上完全一樣)。
     """
     out: list[tuple[int, int]] = []
     skipped = 0
     dropped = 0
+    missing_date = 0
     for row in rows:
         if utc_day is not None:
             raw_date = str(row.get("Date", "") or "")
-            if raw_date and raw_date != utc_day:
+            if not raw_date:
+                missing_date += 1
+            elif raw_date != utc_day:
                 dropped += 1
                 continue
         minute = minute_end_from_1k(row)
@@ -202,7 +221,11 @@ def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> list[tuple
         logger.warning("1K rows 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
     if dropped:
         logger.warning("1K rows 丟棄 %d/%d 列(Date ≠ 窗口日 %s)", dropped, len(rows), utc_day)
-    return out
+    if missing_date:
+        # 整批**一行**(不是每列一行):換欄名那天 rows 是整頁上千列,逐列印等於把
+        # 這則診斷自己洗掉
+        logger.warning("1K rows 缺 Date 欄,Date 閘失效(%d/%d 列)", missing_date, len(rows))
+    return Parsed1k(out, skipped, dropped)
 
 
 def all_day_utc_window(now: time.struct_time | None = None) -> tuple[str, str]:
