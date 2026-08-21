@@ -22,15 +22,23 @@ const EDGE_TOLERANCE = 16;
  *
  *  **x 必須驗**:只看 y 的話,在中間 K 線圖上放開只要 y 恰好與某群組同高就會把股票搬組,
  *  而「移動」語意是不可逆的(來源會被移除),舊行為最壞只是同組換位。
- *  y 落在 zone 之間的縫隙(標題列之間)→ 取最近的 zone,拖到縫隙不失敗。 */
+ *  y 落在 zone 之間的縫隙(標題列之間)→ 取最近的 zone,拖到縫隙不失敗。
+ *
+ *  `voidBelowY` = **作廢帶下緣**(sticky 搜尋區的 `bottom`)。`(−∞, voidBelowY)` 一律作廢:
+ *  sticky 區浮在第一組上面,少了這條的話「游標停在搜尋框放開」會落到最上面那組的 index 0
+ *  —— 使用者以為是取消,實際是不可逆的搬組。向上無界是刻意的(側欄上方也不是落點)。
+ *  邊界是 `<`:`y === voidBelowY` 已在 sticky 之外,照舊取最近 zone。
+ *  未傳(ref 還沒掛上)→ 舊行為,不猜一個假的界。 */
 export function dropTargetFromPointer(
   p: { x: number; y: number },
   zones: readonly DropZone[],
   rowHeight: number,
   bounds: { left: number; right: number },
+  voidBelowY?: number,
 ): { group: string | null; index: number } | null {
   if (zones.length === 0) return null;
   if (p.x < bounds.left - EDGE_TOLERANCE || p.x > bounds.right + EDGE_TOLERANCE) return null;
+  if (voidBelowY !== undefined && p.y < voidBelowY) return null;
   let best: DropZone | null = null;
   let bestDist = Infinity;
   for (const z of zones) {
