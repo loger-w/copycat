@@ -1,0 +1,415 @@
+diff --git a/frontend/src/components/rail/RightRail.test.tsx b/frontend/src/components/rail/RightRail.test.tsx
+index 435f77c8..f31129a4 100644
+--- a/frontend/src/components/rail/RightRail.test.tsx
++++ b/frontend/src/components/rail/RightRail.test.tsx
+@@ -467,6 +467,19 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
+     expect(screen.getByText("90")).toBeTruthy();
+   });
+ 
++  // 🔴 B11(SC-3):個股期平倉估價必須走**股票 tick 表**snap(與市價鈕同一支)——
++  // 未 snap 的 90.03 是不合法檔位,後端 `_require_legal_tick` 直接 400 BAD_TICK。
++  // fixture 的 lower 刻意用未對齊的 90_030(90_000 對齊 tick,snap 前後同值 = 測不出來)。
++  it("個股期部位估價 snap 到股票檔位(未對齊的界不得原樣送出)", async () => {
++    positions = [position({ market: "fut", stock_no: "CDFI6", name: "台積電期貨", qty: 2 })];
++    render(rail({ ...STKFUT_CTX, meta: { ...META, lower: 90_030 } }));
++    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
++    fireEvent.click(await screen.findByRole("button", { name: "平倉" }));
++    expect(screen.getByText("確認平倉")).toBeTruthy();
++    // 多單平倉貼跌停,賣側往上收到 0.1 元檔:90.03 → 90.1(未接 edgeOf 會是 90.03)
++    expect(screen.getByText("90.1")).toBeTruthy();
++  });
++
+   it("他契約的期貨部位估不出價 → 平倉鍵鎖住(不放行跨商品平倉)", async () => {
+     positions = [position({ market: "fut", stock_no: "TXFH6", name: "台指期", qty: 1 })];
+     render(rail(STKFUT_CTX));
+diff --git a/frontend/src/components/rail/RightRail.tsx b/frontend/src/components/rail/RightRail.tsx
+index da7e3033..e61e7fa3 100644
+--- a/frontend/src/components/rail/RightRail.tsx
++++ b/frontend/src/components/rail/RightRail.tsx
+@@ -10,7 +10,7 @@ import { useFlashArm } from "@/hooks/useFlashArm";
+ import { RAIL_TAB_KEY } from "@/lib/constants";
+ import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
+ import { initialQtyState, type QtyState } from "@/lib/qty-quick";
+-import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
++import { instrumentKeyOf, stkfutMarketEdgeMilli, type StkfutSelection } from "@/lib/stkfut";
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
+ import { tablistKeyAction } from "@/lib/tablist-keys";
+ import { cn } from "@/lib/utils";
+@@ -278,10 +278,14 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext })
+           <CapitalPositionsList
+             market="fut"
+             closePriceOf={(pos) =>
+-              futCloseEstimate(pos, futKey, {
+-                upper: meta?.upper ?? null,
+-                lower: meta?.lower ?? null,
+-              })
++              futCloseEstimate(
++                pos,
++                futKey,
++                { upper: meta?.upper ?? null, lower: meta?.lower ?? null },
++                // 個股期走**股票 tick 表**(與同頁市價鈕 stkfutMarketEdgeMilli 同一支):
++                // FUT_TICK 的 1 點對股票是 1 元,拿它 snap 出來的檔位後端會 400 BAD_TICK
++                (side, upper, lower) => stkfutMarketEdgeMilli(side, { upper, lower }),
++              )
+             }
+           />
+         );
+diff --git a/frontend/src/components/stock/WatchlistSidebar.test.tsx b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+index aeed1aa2..1f96f4c5 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.test.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.test.tsx
+@@ -824,7 +824,10 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     "wl-list-ungrouped": [284, 340],
+   };
+ 
+-  function stubRects(): void {
++  /** `extra` 只給 B10 作廢帶用:預設**不**含 `wl-sticky`(→ box(0,0) → voidBelowY 0 →
++   *  不作廢),既有 7 條拖曳測試的落點幾何位元不變。 */
++  function stubRects(extra: Record<string, [number, number]> = {}): void {
++    const rects = { ...RECTS, ...extra };
+     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+       this: Element,
+     ) {
+@@ -835,7 +838,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+         }) as DOMRect;
+       if (this.tagName === "ASIDE") return box(0, 600);
+       const id = this.getAttribute("data-testid") ?? "";
+-      const span = RECTS[id];
++      const span = rects[id];
+       return span ? box(span[0], span[1]) : box(0, 0);
+     });
+   }
+@@ -845,10 +848,10 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+   }
+ 
+-  async function startDrag(): Promise<void> {
++  async function startDrag(extra: Record<string, [number, number]> = {}): Promise<void> {
+     sidebar();
+     await waitGroups();
+-    stubRects();
++    stubRects(extra);
+     const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+     fireEvent(handle, ptr("pointerdown", 10, 80));
+   }
+@@ -984,6 +987,35 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
+     expect(putBodies[0]!.groups).toEqual([{ name: "主力", codes: ["2330"] }]);
+   });
+ 
++  // 🔴 B10(SC-1):sticky 搜尋區蓋在第一組上面,游標停在搜尋框放開時舊行為會落到
++  // 主力 index 0 —— 使用者以為「放到沒有東西的地方 = 取消」,實際是靜默改資料。
++  // 拖 5483(主力 index 1)才有鑑別力:落到 index 0 是真的重排(對照「同組內拖曳」那條)。
++  it("拖到 sticky 搜尋區放開 → 零 PUT(作廢帶)", async () => {
++    await startDrag({ "wl-sticky": [0, 20] });
++    fireEvent(window, ptr("pointermove", 100, 10));
++    fireEvent(window, ptr("pointerup", 100, 10));
++    await new Promise((r) => setTimeout(r, 30));
++    expect(putBodies).toEqual([]);
++  });
++
++  // review R7:作廢帶內的 hover 高亮要**回到來源組**,否則畫面停在「放不進去的那一組」
++  // 高亮著,使用者只會再按一次。**來源必須是非最上面的那組**:作廢帶在所有 zone 上方,
++  // 舊行為的最近 zone 恆為主力,從主力起拖的話修不修都亮主力(vacuous)。
++  it("拖曳中移入作廢帶 → 落點高亮回到來源組(不是最上面那組)", async () => {
++    sidebar();
++    await waitGroups();
++    stubRects({ "wl-sticky": [0, 20] });
++    const handle = within(screen.getByTestId("wl-group-觀察")).getByTestId("wl-handle-3231");
++    fireEvent(handle, ptr("pointerdown", 10, 200));
++    fireEvent(window, ptr("pointermove", 100, 60));
++    // 前提:高亮真的會跟著移動(否則下面的斷言 vacuous)
++    expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent");
++    fireEvent(window, ptr("pointermove", 100, 10));
++    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
++    expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
++    fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
++  });
++
+   it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
+     mockWatchlist([{ name: "空組", codes: [] }], []);
+     sidebar();
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 160d8bfc..f404187a 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -151,6 +151,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
+   const uid = safeIdToken(useId());
+   const asideRef = useRef<HTMLElement | null>(null);
++  // sticky 搜尋區:它浮在第一組上面,所以它的下緣就是拖曳落點的作廢帶下緣(B10)
++  const stickyRef = useRef<HTMLDivElement | null>(null);
+   // key = 群組名;`null` = 未分組區塊
+   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+   const listRefs = useRef<Map<string | null, HTMLElement>>(new Map());
+@@ -251,7 +253,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+ 
+   /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
+    *  錯誤文案出現消失都會讓 rect 失效,而失效樣態是「拖到別組結果落錯組」= 靜默改資料。 */
+-  function zonesNow(): { zones: DropZone[]; bounds: { left: number; right: number } } {
++  function zonesNow(): {
++    zones: DropZone[];
++    bounds: { left: number; right: number };
++    voidBelowY: number | undefined;
++  } {
+     const zones: DropZone[] = [];
+     const push = (key: string | null, count: number): void => {
+       const section = sectionRefs.current.get(key);
+@@ -272,7 +278,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+     push(null, ungrouped.length);
+     for (const g of groups) push(g.name, g.codes.length);
+     const aside = asideRef.current?.getBoundingClientRect();
+-    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 } };
++    // ref 沒掛上 → undefined = 不作廢(不猜一個假的界);與 zones 一樣每次 move 重算,
++    // 側欄捲動 / 建議清單長出來讓 sticky 區變高時界跟著走。
++    const voidBelowY = stickyRef.current?.getBoundingClientRect().bottom;
++    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 }, voidBelowY };
+   }
+ 
+   /** 四條落點路徑(SC-12)。拖進未分組 = 從**所有**群組移除:只移除來源組的話,
+@@ -302,15 +311,29 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+       setDrag(null);
+     };
+     const move = (ev: PointerEvent): void => {
+-      const { zones, bounds } = zonesNow();
+-      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
+-      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group }));
++      const { zones, bounds, voidBelowY } = zonesNow();
++      const target = dropTargetFromPointer(
++        { x: ev.clientX, y: ev.clientY },
++        zones,
++        ROW_H,
++        bounds,
++        voidBelowY,
++      );
++      // 落點作廢 → 高亮**回到來源組**(review R7):停在「放不進去的那一組」亮著的話,
++      // 使用者只會再按一次;回來源組等於畫面說「放開就是原樣」。
++      setDrag((p) => (p === null ? p : { ...p, to: target === null ? p.from : target.group }));
+     };
+     const up = (ev: PointerEvent): void => {
+-      const { zones, bounds } = zonesNow();
+-      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
++      const { zones, bounds, voidBelowY } = zonesNow();
++      const target = dropTargetFromPointer(
++        { x: ev.clientX, y: ev.clientY },
++        zones,
++        ROW_H,
++        bounds,
++        voidBelowY,
++      );
+       teardown();
+-      if (target === null) return; // 側欄外放開 → 整個作廢(移動語意不可逆)
++      if (target === null) return; // 側欄外 / sticky 搜尋區放開 → 整個作廢(移動語意不可逆)
+       commit(applyDrop(code, from, target.group, target.index));
+     };
+     const onKey = (ev: KeyboardEvent): void => {
+@@ -603,7 +626,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+       aria-label="自選清單"
+     >
+       {/* 搜尋框恆存且 sticky:群組多起來捲動後仍要看得到(W-16 的新實體) */}
+-      <div className="sticky top-0 z-10 bg-bg pb-1">
++      <div ref={stickyRef} data-testid="wl-sticky" className="sticky top-0 z-10 bg-bg pb-1">
+         <div className="flex gap-1">
+           <input
+             aria-label="股號或名稱"
+diff --git a/frontend/src/lib/futures-ladder.test.ts b/frontend/src/lib/futures-ladder.test.ts
+index c62d932c..31af43a8 100644
+--- a/frontend/src/lib/futures-ladder.test.ts
++++ b/frontend/src/lib/futures-ladder.test.ts
+@@ -4,11 +4,13 @@ import {
+   FUT_TICK_MILLI,
+   buildFuturesLadder,
+   edgeMilli,
++  futCloseEstimate,
+   futExchangeContract,
+   futMarketEdgeMilli,
+   splitMyLots,
+   type FutOrderSource,
+ } from "@/lib/futures-ladder";
++import { stkfutMarketEdgeMilli } from "@/lib/stkfut";
+ 
+ const noDepth = { bids: [], asks: [], myLots: [] };
+ const wide = { upperMilli: 25_300_000, lowerMilli: 20_700_000 };
+@@ -234,7 +236,7 @@ describe("futExchangeContract 商品 + YYYYMM → 期交所契約碼", () => {
+   });
+ });
+ 
+-describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
++describe("edgeMilli 貼漲跌停選邊(raw 不 snap;≤0 = 缺值哨符)", () => {
+   it("buy → 漲停、sell → 跌停", () => {
+     expect(edgeMilli("buy", 25_300_000, 20_700_000)).toBe(25_300_000);
+     expect(edgeMilli("sell", 25_300_000, 20_700_000)).toBe(20_700_000);
+@@ -249,6 +251,15 @@ describe("edgeMilli 貼漲跌停選邊(raw,不 snap)", () => {
+     expect(edgeMilli("buy", 25_300_500, 20_699_500)).toBe(25_300_500);
+     expect(edgeMilli("sell", 25_300_500, 20_699_500)).toBe(20_699_500);
+   });
++
++  // 🔴 B11(SC-2):後端缺值以 0 給,0 不是「免費」的價 —— 放行的話市價鈕與平倉鍵
++  // 都會拿一個假想界去送真錢單(stkfut 版早就擋,兩版口徑必須一致)。
++  it("界為 0 或負(資料壞 / 後端缺值哨符)→ null", () => {
++    expect(edgeMilli("buy", 0, 20_700_000)).toBeNull();
++    expect(edgeMilli("sell", 25_300_000, 0)).toBeNull();
++    expect(edgeMilli("buy", -1, 20_700_000)).toBeNull();
++    expect(edgeMilli("sell", 25_300_000, -1)).toBeNull();
++  });
+ });
+ 
+ describe("futMarketEdgeMilli 期貨市價邊價(FUT_TICK 對齊)", () => {
+@@ -266,4 +277,45 @@ describe("futMarketEdgeMilli 期貨市價邊價(FUT_TICK 對齊)", () => {
+     expect(futMarketEdgeMilli("buy", null, 20_520_000)).toBeNull();
+     expect(futMarketEdgeMilli("sell", 25_080_000, null)).toBeNull();
+   });
++
++  // 🔴 B11(SC-2):守門在 edgeMilli,市價鈕連帶受益 —— 沒有的話 0 會 floor 成 0 送出去
++  it("界為 0 / 負 → null(鎖鈕,不用假想界送真錢單)", () => {
++    expect(futMarketEdgeMilli("buy", 0, 20_520_000)).toBeNull();
++    expect(futMarketEdgeMilli("sell", 25_080_000, 0)).toBeNull();
++    expect(futMarketEdgeMilli("buy", -1_000, 20_520_000)).toBeNull();
++  });
++});
++
++// 🔴 B11(SC-3):平倉估價原本吃 **raw** 界,與市價鈕的 snap 後邊價不同值 ——
++// 同一個標的兩處顯示不同價,且未對齊的檔位券商直接退單。
++describe("futCloseEstimate 平倉估價吃 snap 後邊價(edgeOf 注入)", () => {
++  const pos = (qty: number) => ({ stock_no: "TXFI6", qty });
++  /** 未對齊 FUT_TICK 的界(既有 fixture 都對齊了,對齊的值 snap 前後同值 = 測不出來) */
++  const OFF = { upper: 25_080_400, lower: 20_520_600 };
++
++  it("空單平倉(買)→ 漲停 floor 到 1 點(25_080_400 → 25_080 元)", () => {
++    expect(futCloseEstimate(pos(-1), "TXFI6", OFF)).toBe(25_080);
++  });
++
++  it("多單平倉(賣)→ 跌停 ceil 到 1 點(20_520_600 → 20_521 元)", () => {
++    expect(futCloseEstimate(pos(2), "TXFI6", OFF)).toBe(20_521);
++  });
++
++  it("界為 0 → null(守門在 edgeMilli,平倉鍵鎖住)", () => {
++    expect(futCloseEstimate(pos(-1), "TXFI6", { upper: 0, lower: 20_520_000 })).toBeNull();
++  });
++
++  // review R5:回傳前自己再守一次 —— 注入者是呼叫端寫的,不能假設它守門
++  it("注入的 edgeOf 不守門而回 0 → 仍 null(不依賴注入者)", () => {
++    expect(futCloseEstimate(pos(-1), "TXFI6", OFF, () => 0)).toBeNull();
++  });
++
++  it("注入的 edgeOf 決定檔位口徑(個股期走股票 tick 表)", () => {
++    // 買側往下收到 100 毫元檔:90_030 → 90_000 → 90 元
++    expect(
++      futCloseEstimate(pos(-1), "TXFI6", { upper: 90_030, lower: null }, (side, u, l) =>
++        stkfutMarketEdgeMilli(side, { upper: u, lower: l }),
++      ),
++    ).toBe(90);
++  });
+ });
+diff --git a/frontend/src/lib/futures-ladder.ts b/frontend/src/lib/futures-ladder.ts
+index d57fa1cb..30f1038c 100644
+--- a/frontend/src/lib/futures-ladder.ts
++++ b/frontend/src/lib/futures-ladder.ts
+@@ -109,13 +109,18 @@ export interface FutCloseQuote {
+ /** 「貼漲跌停」的選邊(raw,不 snap 檔位):買 → 漲停、賣 → 跌停;缺界 → null。
+  *  平倉估價與市價鈕邊價共用同一條選邊規則 —— 兩處各寫一次時,改一邊漏另一邊
+  *  的症狀是「送到反方向的極端價」。snap 到合法檔位是各路徑自己的事(期貨 FUT_TICK /
+- *  個股期現股 tick 表口徑不同),本函式只回原始界值。 */
++ *  個股期現股 tick 表口徑不同),本函式只回原始界值。
++ *
++ *  **`≤ 0` 是缺值哨符,不是價**:後端界不可得時以 0 給,而 0 一路傳下去會變成
++ *  「用 0 元送真錢單」——`null` / `0` / 負值三者一律回 null(與 `stkfutMarketEdgeMilli`
++ *  同口徑),讓市價鈕與平倉鍵鎖住。 */
+ export function edgeMilli(
+   side: "buy" | "sell",
+   upper: number | null,
+   lower: number | null,
+ ): number | null {
+-  return side === "buy" ? upper : lower;
++  const raw = side === "buy" ? upper : lower;
++  return raw === null || raw <= 0 ? null : raw;
+ }
+ 
+ /** 期貨「市價」鈕的送單價(毫點)—— 貼漲跌停 + IOC(D3a),不是真市價單。
+@@ -137,15 +142,22 @@ export function futMarketEdgeMilli(
+ 
+ /** 平倉閘用估價(design amendment:期貨平倉限價貼漲跌停)——
+  *  多單平倉(賣)用跌停價、空單平倉(買)用漲停價;單位元 = Milli/1000。
+- *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。 */
++ *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。
++ *
++ *  `edgeOf` = 該路徑的**邊價口徑**,預設期貨 FUT_TICK。注入而不是各寫一支:同一個
++ *  標的的市價鈕與平倉估價必須同值,而個股期走的是股票 tick 表(RightRail 傳
++ *  `stkfutMarketEdgeMilli`)—— raw 界未對齊檔位時後端 `_require_legal_tick` 直接 400。
++ *  回傳前**自己再守一次 ≤ 0**:注入者是呼叫端寫的,不能假設它守門。 */
+ export function futCloseEstimate(
+   pos: FutClosePos,
+   contract: string | null,
+   prod: FutCloseQuote | null,
++  edgeOf: (side: "buy" | "sell", upper: number | null, lower: number | null) => number | null =
++    futMarketEdgeMilli,
+ ): number | null {
+   if (contract === null || prod === null || pos.stock_no !== contract) return null;
+-  const edge = edgeMilli(pos.qty > 0 ? "sell" : "buy", prod.upper, prod.lower);
+-  return edge !== null ? edge / 1000 : null;
++  const edge = edgeOf(pos.qty > 0 ? "sell" : "buy", prod.upper, prod.lower);
++  return edge === null || edge <= 0 ? null : edge / 1000;
+ }
+ 
+ export function buildFuturesLadder(opts: {
+diff --git a/frontend/src/lib/list-drag.test.ts b/frontend/src/lib/list-drag.test.ts
+index e3298b85..37faab20 100644
+--- a/frontend/src/lib/list-drag.test.ts
++++ b/frontend/src/lib/list-drag.test.ts
+@@ -62,6 +62,28 @@ describe("dropTargetFromPointer", () => {
+     expect(dropTargetFromPointer({ x: 100, y: 32 }, [], ROW, BOUNDS)).toBeNull();
+   });
+ 
++  // 🔴 B10(SC-1):sticky 搜尋區下緣以上 = 作廢帶。舊行為是「在所有 zone 上方 → 取最上
++  // 的 zone」,所以游標停在搜尋框上放開會靜默把股票搬到第一組 index 0(不可逆的移動語意)。
++  it("y 在作廢帶內(< voidBelowY)→ null(拖到 sticky 搜尋區放開 = 整個作廢)", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 39 }, ZONES, ROW, BOUNDS, 40)).toBeNull();
++    // 作廢帶向上無界:側欄上方(負座標)照樣作廢
++    expect(dropTargetFromPointer({ x: 100, y: -5 }, ZONES, ROW, BOUNDS, 40)).toBeNull();
++  });
++
++  it("y 恰等於 voidBelowY → 照舊取最近 zone(邊界是 `<` 不是 `<=`)", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 40 }, ZONES, ROW, BOUNDS, 40)).toEqual({
++      group: "主力",
++      index: 0,
++    });
++  });
++
++  it("未傳 voidBelowY → 四參數行為位元不變(W1)", () => {
++    expect(dropTargetFromPointer({ x: 100, y: 39 }, ZONES, ROW, BOUNDS)).toEqual({
++      group: "主力",
++      index: 0,
++    });
++  });
++
+   // 未分組區塊也是一個 drop zone,用 `group: null` 表示(round5 §🔴-8)
+   it("group 為 null 的 zone(未分組)→ 回 { group: null, index }", () => {
+     const zones: DropZone[] = [
+diff --git a/frontend/src/lib/list-drag.ts b/frontend/src/lib/list-drag.ts
+index 65411f42..da2ee26d 100644
+--- a/frontend/src/lib/list-drag.ts
++++ b/frontend/src/lib/list-drag.ts
+@@ -22,15 +22,23 @@ const EDGE_TOLERANCE = 16;
+  *
+  *  **x 必須驗**:只看 y 的話,在中間 K 線圖上放開只要 y 恰好與某群組同高就會把股票搬組,
+  *  而「移動」語意是不可逆的(來源會被移除),舊行為最壞只是同組換位。
+- *  y 落在 zone 之間的縫隙(標題列之間)→ 取最近的 zone,拖到縫隙不失敗。 */
++ *  y 落在 zone 之間的縫隙(標題列之間)→ 取最近的 zone,拖到縫隙不失敗。
++ *
++ *  `voidBelowY` = **作廢帶下緣**(sticky 搜尋區的 `bottom`)。`(−∞, voidBelowY)` 一律作廢:
++ *  sticky 區浮在第一組上面,少了這條的話「游標停在搜尋框放開」會落到最上面那組的 index 0
++ *  —— 使用者以為是取消,實際是不可逆的搬組。向上無界是刻意的(側欄上方也不是落點)。
++ *  邊界是 `<`:`y === voidBelowY` 已在 sticky 之外,照舊取最近 zone。
++ *  未傳(ref 還沒掛上)→ 舊行為,不猜一個假的界。 */
+ export function dropTargetFromPointer(
+   p: { x: number; y: number },
+   zones: readonly DropZone[],
+   rowHeight: number,
+   bounds: { left: number; right: number },
++  voidBelowY?: number,
+ ): { group: string | null; index: number } | null {
+   if (zones.length === 0) return null;
+   if (p.x < bounds.left - EDGE_TOLERANCE || p.x > bounds.right + EDGE_TOLERANCE) return null;
++  if (voidBelowY !== undefined && p.y < voidBelowY) return null;
+   let best: DropZone | null = null;
+   let bestDist = Infinity;
+   for (const z of zones) {
