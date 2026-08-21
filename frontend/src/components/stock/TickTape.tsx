@@ -19,7 +19,17 @@ function volTone(side: string): string {
   return side === "outer" ? "text-bull" : side === "inner" ? "text-bear" : "text-ink-dim";
 }
 
-export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | null }) {
+export function TickTape({
+  ticks,
+  ref_,
+  loading = false,
+}: {
+  ticks: TickRow[];
+  ref_: number | null;
+  /** 這份 ticks 是 `tape=0` 省略來的、全量補打中(`accum.tapeOmitted`):空態印「載入明細…」
+   *  而非終態「尚無成交」—— 兩者畫面同形,使用者分不出「沒成交」與「還沒載」。 */
+  loading?: boolean;
+}) {
   const [limit, setLimit] = useState(PAGE);
   // reverse 吃整份 ticks(上限 200 筆),而 hover / 展開等純 UI state 變動也會 re-render
   // —— 複製 + 反轉的成本與 ticks 綁定就好,不必跟著每次 render 重付。
@@ -30,7 +40,7 @@ export function TickTape({ ticks, ref_ }: { ticks: TickRow[]; ref_: number | nul
     return (
       // h-full 而非 h-40:空態(盤前 / 剛切股)也要與五檔卡片底邊齊平(round3 SC-6)
       <div className="flex h-full items-center justify-center rounded-md border border-line bg-surface">
-        <p className="text-sm text-ink-muted">尚無成交</p>
+        <p className="text-sm text-ink-muted">{loading ? "載入明細…" : "尚無成交"}</p>
       </div>
     );
   }

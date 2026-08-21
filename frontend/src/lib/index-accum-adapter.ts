@@ -54,6 +54,7 @@ export function indexSeriesToAccum(series: IndexSeries, code: string, name: stri
     book: null,
     meta: { name, ref: series.ref, upper: null, lower: null, y_vol: null },
     noData: false,
+    tapeOmitted: false,
     trial: false,
     high,
     low,

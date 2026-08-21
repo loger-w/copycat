@@ -130,6 +130,7 @@ export function futuresBarsToAccum(input: Input): StockAccum {
     // 走以昨收置中的對稱 autofit(同 index adapter),也不亮漲跌停燈。
     meta: { name: input.name, ref: input.ref, upper: null, lower: null, y_vol: null },
     noData: false,
+    tapeOmitted: false,
     trial: false,
     high,
     low,

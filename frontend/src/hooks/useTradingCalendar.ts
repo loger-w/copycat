@@ -10,9 +10,11 @@ import type { CalendarState } from "@/types";
  *  **掛在 App 層且只掛一支**:消費端(三支交易時段函式)是模組級的,多掛幾份只是多打
  *  幾次同一個端點。
  *
- *  `staleTime: Infinity` + 6 小時 `refetchInterval`:日曆是靜態 config,盤中不會變;
- *  留一個長週期重取是給**長跑分頁跨日**用的(開著不關的看盤機,隔天要吃到同一份即可,
- *  但也要能在後端更新 config 重啟後跟上)。
+ *  `staleTime: Infinity` + 5 分鐘 `refetchInterval`(**背景分頁照輪詢**):日曆是靜態
+ *  config,盤中不會變;重取是給**長跑分頁跨日**用的(看盤日常 = preview 整天掛在背景)。
+ *  原本 6 小時:TanStack 預設背景分頁停掉 interval、而 staleTime Infinity 又消解
+ *  focus 重取 → 跨午夜後膠囊最壞要等前景 6 小時才亮(2026-08-22 review R6 P2)。
+ *  5 分鐘與 useSignalFeed 的 BASELINE_REFETCH_MS 同口徑,/api/calendar 是靜態 JSON,成本可忽略。
  *
  *  `retry: 1`:失敗的樣態是後端不在 —— 重試三輪只是延後降級,而降級本身是安全的
  *  (空集合 = 只擋週末 = 改動前行為)。
@@ -20,7 +22,7 @@ import type { CalendarState } from "@/types";
  *  寫入放 `useEffect` 而不是 `queryFn` 內:queryFn 也會在 refetch / 背景重取時跑,
  *  但它是「取資料」的位置;副作用綁在 data 上,重取到同一份 reference 時不重複寫。 */
 
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const CALENDAR_REFETCH_MS = 5 * 60_000;
 
 async function fetchCalendar(): Promise<CalendarState> {
   const res = await fetch("/api/calendar");
@@ -36,7 +38,8 @@ export const calendarQueryOptions = {
   queryFn: fetchCalendar,
   staleTime: Infinity,
   retry: 1,
-  refetchInterval: SIX_HOURS_MS,
+  refetchInterval: CALENDAR_REFETCH_MS,
+  refetchIntervalInBackground: true,
 } as const;
 
 export function useTradingCalendar() {
