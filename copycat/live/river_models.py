@@ -84,6 +84,13 @@ def close_clamp_rank(minute_end: int, kind: str) -> int | None:
     `offset_of` 把 `end+1..end+5` 全部併進 `end` 格,少了名次就分不出「13:45:xx 的收盤
     撮合」(桶 = end+1,必須寫得進來)與「13:46 之後的殘留取樣」(蓋掉真收盤)。
     判定由 `RiverState.push` 使用;`offset_of` 的輸出不受影響。
+
+    **`minute_end` 只收 live 慣例(floor+1)的分鐘鍵** —— `minute_end_from_taipei` /
+    `minute_end_from_utc_hhmmss` 那一路,**不收** `minute_end_from_1k`(1K 的 `Time`
+    已是終點標記,不加 1)。同一個牆鐘分鐘在兩種慣例下差 1,名次跟著整排位移一格:
+    13:46 那一分鐘的成交在 1K 鍵下算出 rank 1(= 收盤撮合,放行),守門就漏掉第一個
+    殘留分鐘 —— 而它正是最常見的那一個。這條慣例目前只靠呼叫點成立(`RiverState.push`
+    吃的是 live 鍵;回補走 `apply_backfill`,只填空缺、根本不查名次)。
     """
     m, _start, end = _expand(minute_end, kind)
     if m <= end:
