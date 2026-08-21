@@ -8,6 +8,7 @@ import {
   EDGE_LABEL_H,
   edgePriceLabels,
   hasWindowedMinutes,
+  layoutEdgeLabels,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -1133,14 +1134,51 @@ describe("bandLabels(R1 SC-1)", () => {
     expect(out.map((l) => l.y)).toEqual([100, 110, 120, 130, 140, 150, 160]);
   });
 
-  it("y 排序與輸入線 y 排序一致(上下次序不互換),且輸出順序 = 輸入順序", () => {
+  it("y 排序與輸入線 y 排序一致(上下次序不互換),且輸出順序 = 輸入順序【CROWDED = 已依 y 遞增】", () => {
     const out = bandLabels(CROWDED, BOUNDS);
     // 輸出順序:逐條對位(第 i 顆對應第 i 條線),不是佈局後的由上而下序
     expect(out.map((l) => l.level)).toEqual(CROWDED.map((l) => l.level));
-    // y 次序:輸入 y 遞增 → 輸出 y 也遞增(ah 不會跑到 ma20 下面)
+    // y 次序:輸入 y 遞增 → 輸出 y 也遞增(ah 不會跑到 ma20 下面)。
+    // **這一段的鑑別力只到「輸入本來就 y 遞增」為止**(code review TC-1):CROWDED 已依 y
+    // 排好,拿掉 `_i` 還原一樣全綠。一般情形(輸入未依 y 排序)由下一條交錯 fixture 鎖。
     for (let i = 1; i < out.length; i += 1) {
       expect(out[i]!.y).toBeGreaterThan(out[i - 1]!.y);
     }
+  });
+
+  /** 🟢 code review TC-1:生產的 `oLines` 是 `ah→nh→cdp→nl→al→ma5→ma20` 的**固定 push 序**,
+   *  y 完全不保證遞增(MA5 高於 CDP 全組、MA20 低於全組是常態)。上一條 fixture 剛好 y 遞增,
+   *  所以「輸出順序 = 輸入順序」在它身上恆綠 —— 這裡用交錯 fixture 讓 `_i` 還原真的被量到。 */
+  it("輸入未依 y 排序(MA 夾在 CDP 外側)→ 輸出仍逐條對位,且上下次序不互換", () => {
+    const interleaved: OverlayLine[] = [
+      { level: "ah", y: 100, priceMilli: 2_365_000 },
+      { level: "nh", y: 106, priceMilli: 2_350_000 },
+      { level: "cdp", y: 112, priceMilli: 2_340_000 },
+      { level: "nl", y: 118, priceMilli: 2_330_000 },
+      { level: "al", y: 124, priceMilli: 2_320_000 },
+      { level: "ma5", y: 40, priceMilli: 2_400_000 }, // 全組**之上**
+      { level: "ma20", y: 210, priceMilli: 2_200_000 }, // 全組**之下**
+    ];
+    const out = bandLabels(interleaved, BOUNDS);
+    // (a) 輸出順序 = 輸入順序:核心內部依 y 排過(ma5 會排到第一顆),`_i` 把它排回來。
+    //     拿掉 `sort((a,b) => a._i − b._i)` → 這裡變成 ma5,ah,nh,cdp,nl,al,ma20 → 紅。
+    expect(out.map((l) => l.level)).toEqual([
+      "ah",
+      "nh",
+      "cdp",
+      "nl",
+      "al",
+      "ma5",
+      "ma20",
+    ]);
+    // (b) 上下次序不互換:依**輸出 y** 排出來的 level 序,必須等於依**輸入 y** 排的 level 序
+    const byOutY = [...out].sort((a, b) => a.y - b.y).map((l) => l.level);
+    const byInY = [...interleaved].sort((a, b) => a.y - b.y).map((l) => l.level);
+    expect(byOutY).toEqual(byInY);
+    expect(byOutY).toEqual(["ma5", "ah", "nh", "cdp", "nl", "al", "ma20"]);
+    // 逐顆字面量(推導:排序後 40 / 100 / 106 / 112 / 118 / 124 / 210,由上而下推開 —— 40 與
+    // 210 各自離群 > 10px 不動,中間五顆自 100 起每顆 +10;再依 `_i` 排回輸入順序)
+    expect(out.map((l) => l.y)).toEqual([100, 110, 120, 130, 140, 40, 210]);
   });
 
   it("level / priceMilli 原樣帶出(顯示文字的口徑留在呼叫端,只動 y)", () => {
@@ -1201,6 +1239,19 @@ describe("bandLabels(R1 SC-1)", () => {
     expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
   });
 
+  /** 🟢 code review TC-3 / Edge case 1:CDP 五值相等(平靜到 AH=NH=CDP=NL=AL)+ MA 同價 →
+   *  七顆線 y 完全相同。這是「排序穩定性」唯一真正被量到的地方:比較子恆回 0,輸出次序
+   *  只能靠 Array#sort 的穩定保證,而槽位分配退化成純粹的由上而下展開。 */
+  it("七條全同 y(Edge 1)→ 自線位起每顆 +10,level 次序 = 輸入次序", () => {
+    const tied = CROWDED.map((l) => ({ ...l, y: 130 }));
+    const out = bandLabels(tied, BOUNDS);
+    // 推導:全部 y=130,界 [4,246] 夠寬 → 第一顆留 130,其後每顆 +EDGE_LABEL_H(10);
+    // 末顆 190 ≤ 246 故回推不作用、clamp 不作用
+    expect(out.map((l) => l.y)).toEqual([130, 140, 150, 160, 170, 180, 190]);
+    // 穩定排序:同 y 時不得依比較子的實作細節重排(否則兩次 render 之間標籤上下互換)
+    expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
+  });
+
   /** D6 純函式 lock:呼叫端餵的是 `useMemo` 的 `oLines`,而同一份物件的 y 還被
    *  `<line y1>` 讀 —— 就地改寫會把**線體**一起推走,而且 memo 快取被汙染後
    *  下一次 render 會再推一次(標籤逐幀往下漂)。兩種症狀都沒有別的 assertion 會紅。 */
@@ -1215,6 +1266,36 @@ describe("bandLabels(R1 SC-1)", () => {
     const input: OverlayLine[] = CROWDED.map((l) => ({ ...l }));
     const out = bandLabels(input, BOUNDS);
     for (const lab of out) expect(input).not.toContain(lab);
+  });
+
+  /** 🟢 code review TC-2:純函式的**核心 lock 下在這裡**,不在上面兩條 `bandLabels` 身上。
+   *  `bandLabels` 呼叫核心前已經自己 `oLines.map(line => ({ ...line, _i: i }))` 複製過一層,
+   *  所以就算核心第一步的 `items.map(i => ({ ...i }))` 退化成 `[...items]`(共用元素),
+   *  透過 `bandLabels` 進來的輸入依然毫髮無傷 —— 兩條 caller 級測試恆綠。
+   *  而 `edgePriceLabels` 也是先自己 push 出新物件,同樣蓋不到。直接對核心下 lock 才有訊號。 */
+  it("layoutEdgeLabels 核心:輸入陣列與元素逐位元不變(不得就地改寫)", () => {
+    const items = [{ y: 100 }, { y: 103 }];
+    const snap = structuredClone(items);
+    const out = layoutEdgeLabels(items, [], BOUNDS, { dropOverflow: false });
+    // 103 與 100 只差 3 < 10 → 第二顆必被推到 110;若核心就地改寫,items[1].y 會跟著變
+    expect(out.map((i) => i.y)).toEqual([100, 110]);
+    expect(items).toEqual(snap);
+  });
+
+  /** 🟢 code review C-1:前置條件 = `bounds` 必須涵蓋輸入 y 的值域(呼叫端傳的正是線 y 的
+   *  值域)。界外輸入不是拋錯也不是原樣帶出 —— 一律 clamp 進界內,而且「位移 ≤ (n−1)×10」
+   *  這條上限**不成立**。釘住現行行為,將來若改成拋錯 / 原樣回傳會有訊號。 */
+  it("輸入 y 在界外(違反前置條件)→ clamp 進界內,位移上限不再成立", () => {
+    const outOfBounds: OverlayLine[] = [
+      { level: "ma5", y: 300, priceMilli: 2_310_000 },
+      { level: "ma20", y: 310, priceMilli: 2_300_000 },
+    ];
+    const out = bandLabels(outOfBounds, BOUNDS);
+    // 推導:兩顆都在 bottom(246)之下 → 回推讓末顆貼 246、前一顆退到 236
+    expect(out.map((l) => l.y)).toEqual([236, 246]);
+    // 位移 64 / 64 遠超 (n−1) × EDGE_LABEL_H = 10 —— SC-1 的位移上限只在前置條件成立時有效
+    expect(Math.abs(out[0]!.y - outOfBounds[0]!.y)).toBe(64);
+    expect(Math.abs(out[1]!.y - outOfBounds[1]!.y)).toBe(64);
   });
 
   it("EDGE_LABEL_H 與 edgePriceLabels 同一顆(D4:同一條走廊語意,不另設常數)", () => {
