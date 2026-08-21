@@ -1,0 +1,135 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness/blast-radius(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "F1/TQ-2",
+   "severity": "P1",
+   "summary": "超限後 group_snapshot 仍無限重排(guard 不看 _backfill_timeouts)",
+   "disposition": "accepted",
+   "resolution": "放棄分支 _backfilled.add(code) + group_snapshot 測試"
+  },
+  {
+   "id": "F2/TQ-3",
+   "severity": "P1",
+   "summary": "corr 輪數放棄後不歸零 → 第二 episode 零重試",
+   "disposition": "accepted",
+   "resolution": "放棄分支歸零 + 兩 episode 測試"
+  },
+  {
+   "id": "TQ-1",
+   "severity": "P1",
+   "summary": "ConnectionError 子類契約無 lock",
+   "disposition": "accepted",
+   "resolution": "issubclass + 只 except ConnectionError 的 caller 降級測試"
+  },
+  {
+   "id": "F3",
+   "severity": "P2",
+   "summary": "single-flight 互吃無 log / 無重排",
+   "disposition": "accepted",
+   "resolution": "早退 log + 併回 pending"
+  },
+  {
+   "id": "F4",
+   "severity": "P2",
+   "summary": "overlay 分支不可達、常數理由書過期",
+   "disposition": "accepted",
+   "resolution": "註解更正 10s/20s + 標 defensive"
+  },
+  {
+   "id": "F5",
+   "severity": "P2",
+   "summary": "hub logger.exception 噪音",
+   "disposition": "accepted",
+   "resolution": "HistoryTimeoutError 先 warning"
+  },
+  {
+   "id": "F6",
+   "severity": "P2",
+   "summary": "call_later handle 無取消點",
+   "disposition": "accepted",
+   "resolution": "handles dict + rollover/close cancel"
+  },
+  {
+   "id": "F7/TQ-6",
+   "severity": "P2",
+   "summary": "缺 Date 穿透 / stub warning 誤報",
+   "disposition": "accepted",
+   "resolution": "warning 一次 + `and not skipped`;缺 Date 保留案"
+  },
+  {
+   "id": "F8",
+   "severity": "P2",
+   "summary": "三處 docstring 過期",
+   "disposition": "accepted",
+   "resolution": "改"
+  },
+  {
+   "id": "F9/TQ-12",
+   "severity": "P2",
+   "summary": "格式改動夾 🔴",
+   "disposition": "accepted",
+   "resolution": "next-time 記"
+  },
+  {
+   "id": "F10",
+   "severity": "P2",
+   "summary": "fetch_daily_bars fallback 無縮窗",
+   "disposition": "accepted",
+   "resolution": "next-time"
+  },
+  {
+   "id": "TQ-4",
+   "severity": "P2",
+   "summary": "_backfill_timeouts rollover clear 無 lock",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "TQ-5",
+   "severity": "P2",
+   "summary": "Date fixture 與實作同時鐘",
+   "disposition": "accepted",
+   "resolution": "凍結窗口 + 16:30 UTC 案"
+  },
+  {
+   "id": "TQ-7",
+   "severity": "P2",
+   "summary": "dk_timed_out and 半鎖",
+   "disposition": "accepted",
+   "resolution": "DK 備妥 0 bars + 1K timeout → [] 案"
+  },
+  {
+   "id": "TQ-8",
+   "severity": "P2",
+   "summary": "純 ConnectionError 不進重試無 lock",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "TQ-9/10",
+   "severity": "P2",
+   "summary": "固定迴圈 drain 慢 / cancelled or done",
+   "disposition": "accepted",
+   "resolution": "_wait_until;cancelled()"
+  },
+  {
+   "id": "TQ-11",
+   "severity": "P2",
+   "summary": "5 支 futures 測試耦合 raise",
+   "disposition": "rejected_with_reason",
+   "resolution": "optional,不動"
+  },
+  {
+   "id": "TQ-13",
+   "severity": "P2",
+   "summary": "backfill poll_wait 0 busy loop 1s",
+   "disposition": "accepted",
+   "resolution": "早退 + elapsed 斷言"
+  }
+ ]
+}

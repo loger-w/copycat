@@ -1,0 +1,649 @@
+diff --git a/tests/live/test_futures_bars.py b/tests/live/test_futures_bars.py
+index b623395a..ac55c63d 100644
+--- a/tests/live/test_futures_bars.py
++++ b/tests/live/test_futures_bars.py
+@@ -9,7 +9,10 @@ from __future__ import annotations
+ 
+ import json
+ 
++import pytest
++
+ from copycat.live.futures_source import FuturesQuoteSource
++from copycat.live.tc4 import HistoryTimeoutError
+ from tests.helpers.tc4_fakes import FakeApi
+ 
+ 
+@@ -78,7 +81,9 @@ class TestFetchBarsRange:
+     def test_product_routing(self) -> None:
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("MXF", "D", "2026-07-30", "2026-07-30")
++        # 空頁 → 首頁未備妥 → 逾時(SUBQUOTE 早已送出,routing 斷言不受影響)
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_bars_range("MXF", "D", "2026-07-30", "2026-07-30")
+         assert sent[0]["Param"]["Symbol"] == "TC.F.TWF.MXF.HOT"
+ 
+     def test_minute_uses_1k_and_futures_session_domain(self) -> None:
+@@ -98,8 +103,20 @@ class TestFetchBarsRange:
+             "2026-07-30 13:45",
+         ]
+ 
+-    def test_empty_first_page_returns_empty(self) -> None:
++    def test_first_page_timeout_raises_history_timeout(self) -> None:
++        """**事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty`)。
++
++        回空時 route 的 tag 是 `"unavailable"`、status 恆 `"ok"` —— 「TC4 現在忙」與
++        「這個商品真沒 K 線」在畫面上長得一模一樣,而前者本來只要重打一次就有。
++        `HistoryTimeoutError` 是 `ConnectionError` 子類 → 上游既有的降級網照樣接得住。
++        """
+         src = _source([])
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
++
++    def test_ready_first_page_with_no_usable_rows_still_returns_empty(self) -> None:
++        """首頁備妥(非逾時)但域內無 bar → 照舊回空,不 raise。"""
++        src = _source([_k1_row("20260730", "150000", "1", "1", "1", "1")])  # 夜盤列,日盤域外
+         assert src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30") == []
+ 
+ 
+@@ -115,36 +132,43 @@ class TestAlldaySession:
+         hist = [o for o in sent if o["Request"] in ("SUBQUOTE", "GETHISDATA")]
+         return hist[0]["Param"]["StartTime"], hist[0]["Param"]["EndTime"]
+ 
++    @staticmethod
++    def _fetch(src: FuturesQuoteSource, *args: str, **kw: str) -> None:
++        """窗斷言只看 SUBQUOTE 的參數 —— 空頁治具現在會逾時(見 `TestFetchBarsRange`),
++        窗早在 raise 之前就送出去了,所以吃掉例外不影響這一組要鎖的東西。"""
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_bars_range(*args, **kw)  # type: ignore[arg-type]
++
+     def test_window_start_shifts_back_one_day(self) -> None:
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30", session="allday")
++        self._fetch(src, "TXF", "1", "2026-07-30", "2026-07-30", session="allday")
+         assert self._window(sent) == ("2026072916", "2026073023")
+ 
+     def test_window_shift_crosses_month(self) -> None:
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("TXF", "1", "2026-08-01", "2026-08-03", session="allday")
++        self._fetch(src, "TXF", "1", "2026-08-01", "2026-08-03", session="allday")
+         assert self._window(sent) == ("2026073116", "2026080323")
+ 
+     def test_window_shift_crosses_year(self) -> None:
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("TXF", "1", "2026-01-01", "2026-01-01", session="allday")
++        self._fetch(src, "TXF", "1", "2026-01-01", "2026-01-01", session="allday")
+         assert self._window(sent) == ("2025123116", "2026010123")
+ 
+     def test_day_session_window_unchanged(self) -> None:
+         """預設 session(day)的窗與行為零改動 —— 既有 caller 全不受影響。"""
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
++        self._fetch(src, "TXF", "1", "2026-07-30", "2026-07-30")
+         assert self._window(sent) == ("2026073000", "2026073023")
+ 
+     def test_daily_ignores_session(self) -> None:
+         """tf="D" 無 session 維度:窗與 SubDataType 都不因 allday 而變。"""
+         sent: list[dict] = []
+         src = _source([], sent)
+-        src.fetch_bars_range("TXF", "D", "2026-07-30", "2026-07-30", session="allday")
++        self._fetch(src, "TXF", "D", "2026-07-30", "2026-07-30", session="allday")
+         assert self._window(sent) == ("2026073000", "2026073023")
+         assert sent[0]["Param"]["SubDataType"] == "DK"
+ 
+diff --git a/tests/live/test_river_backfill.py b/tests/live/test_river_backfill.py
+index 471442b1..d55d8f38 100644
+--- a/tests/live/test_river_backfill.py
++++ b/tests/live/test_river_backfill.py
+@@ -3,12 +3,16 @@
+ from __future__ import annotations
+ 
+ import json
++import logging
+ import time
+ from typing import Any
+ 
++import pytest
++
+ from copycat.live.corr_source import CorrQuoteSource
+ from copycat.live.futures_source import FuturesQuoteSource
+ from copycat.live.river_models import all_day_utc_window
++from copycat.live.tc4 import HistoryTimeoutError
+ from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ 
+@@ -17,9 +21,14 @@ def _his(rows: list[dict]) -> bytes:
+     return ("1K:" + json.dumps({"Success": "OK", "HisData": rows}) + "\0").encode()
+ 
+ 
+-def _row(qry: int, time_utc: str, close: str) -> dict:
++def _row(qry: int, time_utc: str, close: str, date: str | None = None) -> dict:
++    """`Date` 預設 = **窗口的 UTC 日**(不是寫死的過去日期)。
++
++    回補窗是「今天(UTC)」,而收割器現在會丟掉 `Date` 不等於窗口日的列(凍結 stub 的
++    簽名)—— 治具寫死舊日期的話,鎖分頁/解析的那幾條會被 Date 閘整批丟掉而變成假紅。
++    """
+     return {
+-        "Date": "20260730",
++        "Date": date if date is not None else all_day_utc_window()[0][:8],
+         "Time": time_utc,
+         "Open": close,
+         "High": close,
+@@ -68,16 +77,75 @@ class TestCorrSourceFetchDay1k:
+         assert sub["Param"]["SubDataType"] == "1K"
+         assert (sub["Param"]["StartTime"], sub["Param"]["EndTime"]) == all_day_utc_window()
+ 
+-    def test_empty_first_page_returns_empty_without_blocking(self) -> None:
++    def test_empty_first_page_raises_without_blocking(self) -> None:
++        """**事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty_without_blocking`)。
++
++        2026-08-23 08:23 真實事故:TXF/TWN/SXF 三腿同秒逾時回空 → 引擎讀成「這幾腿今天
++        沒有 1K」,整天不再回補。回空是唯一把逾時訊號丟掉的地方,所以改 raise;
++        「不阻塞」那一半照舊鎖住(poll_wait=0 = 探測一次就走)。
++        """
++
+         def handler(obj: dict) -> bytes:
+             return _his([]) if obj["Request"] == "GETHISDATA" else ok()
+ 
+         src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
+         started = time.monotonic()
+ 
+-        assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_day_1k("TC.F.SGX.TWN.HOT")
+         assert time.monotonic() - started < 0.5  # poll_wait=0 → 探測一次就回
+ 
++    def test_ready_first_page_with_zero_harvested_rows_returns_empty(self) -> None:
++        """首頁備妥(非逾時)但收割 0 列 → 回空、**不** raise。
++
++        契約邊界:`timed_out` 是唯一「暫時取不到」的正面訊號;首頁答得出來就代表
++        TC4 不忙,空就是空,不該讓引擎排重試。
++        """
++        calls = {"n": 0}
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] != "GETHISDATA":
++                return ok()
++            calls["n"] += 1
++            # 第一發 = 首頁探測(備妥);之後的收割回空頁 → iter_qry_pages 立即收斂
++            return _his([_row(1, "004600", "51666")] if calls["n"] == 1 else [])
++
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
++        assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
++
++    def test_rows_from_another_utc_day_are_dropped(self) -> None:
++        """凍結 stub 的列帶著**別的日期**,只讀 `Time` 會把它變成今日分鐘(repro §症狀)。"""
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] != "GETHISDATA":
++                return ok()
++            qi = obj["Param"]["QryIndex"]
++            if qi != "0":
++                return _his([])
++            return _his(
++                [
++                    _row(1, "004600", "51666", date="20200101"),  # 窗外日 → 丟
++                    _row(2, "004700", "51680"),  # 窗口日 → 留
++                ]
++            )
++
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
++        assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == [(527, 51_680_000)]
++
++    def test_all_rows_dropped_warns_frozen_stub(self, caplog: pytest.LogCaptureFixture) -> None:
++        """rows 非空但 minutes 全空 = 毒化訂閱簽名 —— 沿 `stock_source` 的固定字串。"""
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] != "GETHISDATA":
++                return ok()
++            qi = obj["Param"]["QryIndex"]
++            return _his([_row(1, "004600", "51666", date="20200101")] if qi == "0" else [])
++
++        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
++        with caplog.at_level(logging.WARNING):
++            assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
++        assert "疑似凍結 stub" in caplog.text
++
+ 
+ class TestFuturesSourceFetchDay1k:
+     def test_product_maps_to_twf_hot_symbol(self) -> None:
+diff --git a/tests/live/test_stock_source.py b/tests/live/test_stock_source.py
+index d1f5da28..bd02901a 100644
+--- a/tests/live/test_stock_source.py
++++ b/tests/live/test_stock_source.py
+@@ -9,6 +9,7 @@ from typing import Callable
+ import pytest
+ 
+ from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
++from copycat.live.tc4 import BARS_POLL_DEADLINE, HistoryTimeoutError
+ from tests.helpers.tc4_fakes import FakeApi, ok
+ 
+ HIST_ROW = {
+@@ -120,6 +121,24 @@ class TestBackfill:
+         assert ticks[0].price_milli == 2_415_000
+         assert ticks[0].time == "09:00:06.840"
+ 
++    def test_first_page_timeout_raises_history_timeout(self) -> None:
++        """首頁等滿預算仍未備妥 = 「現在取不到」,不是「當日無 tick」。
++
++        回空的話 `_backfill_worker` 把它當成功套用(`_backfilled` 進帳)→ 當日再也
++        不重排,分時圖整天空著且零錯誤訊號(repro §症狀)。
++        """
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] == "GETHISDATA":
++                return ("TICKS:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
++            return ok()
++
++        src = StockQuoteSource(
++            api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=0.0
++        )
++        with pytest.raises(HistoryTimeoutError):
++            src.backfill("2330")
++
+ 
+ class TestFetchDailyBars:
+     """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
+@@ -218,6 +237,102 @@ class TestFetchDailyBars:
+         ]
+         assert any(o["Param"].get("SubDataType") == "1K" for o in sent)
+ 
++    def test_dk_timeout_still_falls_back_to_1k(self) -> None:
++        """DK 逾時**不**直接 raise:fallback 是 timeout 時唯一還可能有貨的那條路。
++
++        (`test_dk_empty_falls_back_to_1k_aggregation` 走的正是這條 —— poll_wait=0 下
++        DK 空頁就是 `timed_out=True`,所以「DK 逾時即 raise」會把它一起打紅。)
++        """
++        k1_pages = {
++            "0": [
++                {
++                    "Date": "20260724",
++                    "Time": "10000",
++                    "Open": "100",
++                    "High": "101",
++                    "Low": "100",
++                    "Close": "100.5",
++                    "Volume": "10",
++                    "QryIndex": "1",
++                }
++            ],
++            "1": [],
++        }
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] == "GETHISDATA":
++                if obj["Param"]["SubDataType"] == "DK":
++                    return ("DK:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
++                qi = obj["Param"]["QryIndex"]
++                return (
++                    "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
++                ).encode()
++            return ok()
++
++        src = StockQuoteSource(
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++        )
++        assert src.fetch_daily_bars("2330") == [
++            {"date": "2026-07-24", "high": 101_000, "low": 100_000, "close": 100_500}
++        ]
++
++    def test_both_segments_timeout_raises_history_timeout(self) -> None:
++        """兩段都逾時 → raise:回空會讓 SignalHub 讀成「無已完成日 K,CDP 停用」且永不重試。"""
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] == "GETHISDATA":
++                dtype = obj["Param"]["SubDataType"]
++                return (f"{dtype}:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
++            return ok()
++
++        src = StockQuoteSource(
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++        )
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_daily_bars("2330")
++
++    def test_both_segments_get_the_short_bars_deadline(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """兩段都要顯式帶 `BARS_POLL_DEADLINE`。
++
++        漏傳的話預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞 60s;hub 的有限重試會把
++        整個 executor 佔滿,而畫面只是疊線遲遲不來。
++        """
++        k1_pages = {"0": [], "1": []}
++
++        def handler(obj: dict) -> bytes:
++            if obj["Request"] == "GETHISDATA":
++                dtype = obj["Param"]["SubDataType"]
++                if dtype == "DK":
++                    return ("DK:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
++                qi = obj["Param"]["QryIndex"]
++                return (
++                    "1K:" + json.dumps({"Success": "OK", "HisData": k1_pages.get(qi, [])}) + "\0"
++                ).encode()
++            return ok()
++
++        src = StockQuoteSource(
++            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
++        )
++        seen: list[tuple[str, float | None]] = []
++        original = src._collect_history
++
++        def spy(
++            sym: str,
++            data_type: str,
++            start: str,
++            end: str,
++            deadline_secs: float | None = None,
++        ):
++            seen.append((data_type, deadline_secs))
++            return original(sym, data_type, start, end, deadline_secs)
++
++        monkeypatch.setattr(src, "_collect_history", spy)
++        with pytest.raises(HistoryTimeoutError):
++            src.fetch_daily_bars("2330")
++        assert seen == [("DK", BARS_POLL_DEADLINE), ("1K", BARS_POLL_DEADLINE)]
++
+     def test_tail_limited_to_n(self) -> None:
+         rows = [self._dk_row(f"202607{d:02d}", "10", "9", "9.5") for d in range(1, 28)]
+         for i, r in enumerate(rows):
+diff --git a/tests/server/test_corr_engine_river.py b/tests/server/test_corr_engine_river.py
+index 5a8246ad..6008992b 100644
+--- a/tests/server/test_corr_engine_river.py
++++ b/tests/server/test_corr_engine_river.py
+@@ -5,7 +5,11 @@ from __future__ import annotations
+ import asyncio
+ from typing import Callable
+ 
++import pytest
++
+ from copycat.corr_config import CorrConfig, Leg
++from copycat.live.tc4 import HistoryTimeoutError
++from copycat.server import corr_engine as corr_engine_mod
+ from copycat.server.corr_engine import CorrelationEngine
+ 
+ DAY = ("20260730", "day")
+@@ -31,6 +35,9 @@ class _FakeSource:
+         self.fetched: list[str] = []
+         self.minutes: dict[str, list[tuple[int, int]]] = {}
+         self.fail_1k: set[str] = set()
++        #: 恆逾時(重試上界要測的那條);`timeout_1k_once` 只逾時第一發,之後正常
++        self.fail_1k_timeout: set[str] = set()
++        self.timeout_1k_once: set[str] = set()
+ 
+     def subscribe_raw(self, symbol: str) -> None:
+         self.subscribed.append(symbol)
+@@ -46,6 +53,11 @@ class _FakeSource:
+         self.fetched.append(symbol)
+         if symbol in self.fail_1k:
+             raise ConnectionError(f"1K fail {symbol}")
++        if symbol in self.fail_1k_timeout:
++            raise HistoryTimeoutError(f"1K timeout {symbol}")
++        if symbol in self.timeout_1k_once:
++            self.timeout_1k_once.discard(symbol)
++            raise HistoryTimeoutError(f"1K timeout {symbol}")
+         return self.minutes.get(symbol, [])
+ 
+     def close(self) -> None:
+@@ -310,6 +322,63 @@ class TestBackfill:
+             await eng.close()
+ 
+ 
++class TestBackfillTimeoutRetry:
++    """bug/history-timeout-propagation:逾時的腿要排重試,不是「整天只從啟動後累積」。
++
++    真實事故(08:23):TXF/TWN/SXF 三腿同秒逾時 → 江波圖三條線整天缺前半段,
++    而 TC4 端的 1K 一直都在。
++    """
++
++    async def test_timed_out_leg_is_retried_and_only_that_leg(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
++        src = _FakeSource()
++        src.minutes["TC.F.CME.NQ.HOT"] = [(600, 27_600_000)]
++        src.timeout_1k_once.add("TC.F.TWF.SXF.HOT")
++        src.minutes["TC.F.TWF.SXF.HOT"] = [(601, 12_000_000)]
++        eng = _engine(src, futures_minutes_fetch=lambda p: [])
++        await eng.start()
++        try:
++            for _ in range(10):
++                await asyncio.sleep(0.01)
++                await _drain()
++            # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
++            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
++            assert _minutes(eng, "SXF") == {76: 12_000_000}
++            # 只重補 pending 腿:成功的腿不該被再打一次(TC4 歷史通道是稀缺資源)
++            assert src.fetched.count("TC.F.CME.NQ.HOT") == 1
++        finally:
++            await eng.close()
++
++    async def test_retry_rounds_are_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
++        src = _FakeSource()
++        src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")  # 永遠逾時
++        eng = _engine(src, futures_minutes_fetch=lambda p: [])
++        await eng.start()
++        try:
++            for _ in range(20):
++                await asyncio.sleep(0.01)
++                await _drain()
++            # 首輪 + 3 輪重試 = 4;沒有上界的話會一路重試到收盤
++            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4
++        finally:
++            await eng.close()
++
++    async def test_close_cancels_pending_retry_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 5.0)
++        src = _FakeSource()
++        src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")
++        eng = _engine(src, futures_minutes_fetch=lambda p: [])
++        await eng.start()
++        await _drain()
++        assert eng._backfill_retry_tasks, "逾時腿必須留下一個待跑的重試 task"
++        tasks = list(eng._backfill_retry_tasks)
++        await eng.close()
++        assert all(t.cancelled() or t.done() for t in tasks)
++
++
+ class TestBackfillSessionOrdering:
+     """Phase 4 自評 finding:回補任務不得把狀態機的盤別「拉回」發起時的那一場。
+ 
+diff --git a/tests/server/test_futures_engine.py b/tests/server/test_futures_engine.py
+index 18aacd91..d6ad33dc 100644
+--- a/tests/server/test_futures_engine.py
++++ b/tests/server/test_futures_engine.py
+@@ -8,6 +8,7 @@ from typing import Callable
+ import pytest
+ 
+ from copycat.live.stock_source import Bar
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server.futures_engine import FuturesEngine
+ 
+ 
+@@ -1022,6 +1023,30 @@ class TestBarsRangeProxy:
+         assert got == []
+         assert "market: futures history proxy miss" in caplog.text
+ 
++    @pytest.mark.asyncio
++    async def test_history_timeout_degrades_here_with_its_own_log(self, caplog) -> None:
++        """逾時在 **engine 內**吃掉:payload / 前端零變,但 log 分得出「TC4 掛了」。
++
++        `HistoryTimeoutError` 是 `ConnectionError` 子類 → 沒有專屬分支的話會被下面那條
++        接走並印成 proxy miss,3am 判準就把「忙一下」讀成「TC4 掛了」。
++        """
++
++        class Slow(FakeSource):
++            def fetch_bars_range(
++                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
++            ) -> list[dict]:
++                raise HistoryTimeoutError("first page not ready")
++
++        engine = FuturesEngine(lambda: Slow())
++        await engine.start()
++        try:
++            got = await self._run(engine, caplog)
++        finally:
++            await engine.close()
++        assert got == []
++        assert "期貨 K 線 timeout(非 TC4 down)" in caplog.text
++        assert "market: futures history proxy miss" not in caplog.text
++
+     @pytest.mark.asyncio
+     async def test_connection_error_returns_empty_with_fixed_log(self, caplog) -> None:
+         class Boom(FakeSource):
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index fa766777..4f451cbb 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -12,6 +12,7 @@ from typing import Callable
+ import pytest
+ 
+ from copycat.live.stock_source import Bar, BarsStatus, stock_symbol
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server import stock_engine as stock_engine_mod
+ from copycat.server.stock_engine import StockEngine
+ 
+@@ -75,6 +76,10 @@ class FakeSource:
+         # 那些值來自各自的 job)。收件人正確性要鎖,就得讓不同 code 的回補可分辨。
+         self.backfill_results: dict[str, list] = {}
+         self.backfill_error: Exception | None = None
++        # 逐次結果:pop(0) 取一個,取完退回 `backfill_error`(重試路徑要能表達
++        # 「第一發逾時、第二發成功」,單一 `backfill_error` 只表達得出恆錯)
++        self.backfill_errors: list[Exception | None] = []
++        self.daily_bars_error: Exception | None = None
+         self.on_message: Callable[[dict], None] | None = None
+         self.on_no_data: Callable[[str], None] | None = None
+         self.on_reconnect: Callable[[], None] | None = None
+@@ -104,7 +109,11 @@ class FakeSource:
+ 
+     def backfill(self, code: str) -> list:
+         self.backfills.append(code)
+-        if self.backfill_error is not None:
++        if self.backfill_errors:
++            err = self.backfill_errors.pop(0)
++            if err is not None:
++                raise err
++        elif self.backfill_error is not None:
+             raise self.backfill_error
+         if self.backfill_gate is not None:
+             self.backfill_gate.wait(timeout=5)
+@@ -119,6 +128,8 @@ class FakeSource:
+         return [], "ok"
+ 
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list:
++        if self.daily_bars_error is not None:
++            raise self.daily_bars_error
+         return []
+ 
+     def set_on_message(self, cb: Callable[[dict], None]) -> None:
+@@ -823,6 +834,72 @@ class TestBarsRangeStatus:
+         await engine.close()
+ 
+ 
++class TestDailyBarsTimeout:
++    """bug/history-timeout-propagation:逾時 ≠ 資料面沒有。
++
++    `daily_bars` 回空時 SignalHub 讀成「無已完成日 K,CDP 停用」且**永不重試**
++    (app.py 的分工:空清單 = 資料面沒有;拋例外 = 暫時性 → X-2b 有限重試)。
++    """
++
++    async def test_history_timeout_propagates(self) -> None:
++        engine, src = await _make()
++        src.daily_bars_error = HistoryTimeoutError("first page not ready")
++        with pytest.raises(HistoryTimeoutError):
++            await engine.daily_bars("2330")
++        await engine.close()
++
++    async def test_plain_connection_error_still_degrades_to_empty(self) -> None:
++        engine, src = await _make()
++        src.daily_bars_error = ConnectionError("tc4 down")
++        assert await engine.daily_bars("2330") == []
++        await engine.close()
++
++
++class TestBackfillTimeoutRetry:
++    """回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。"""
++
++    async def test_timeout_reenqueues_without_touching_tc4_status(
++        self, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
++        engine, src = await _make()
++        from copycat.live.stock_models import StockTick
++
++        src.backfill_errors = [HistoryTimeoutError("first page not ready")]
++        src.backfill_result = [
++            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
++                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
++                      is_trial=False)
++        ]
++        await engine.set_main("2330")
++        await _drain(engine)
++        # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
++        assert engine.tc4_status != "down"
++        assert engine._backfill_failed.get("2330", 0) == 0
++        await asyncio.sleep(0.05)
++        await _drain(engine)
++        assert src.backfills.count("2330") == 2  # 重排且第二發成功
++        assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
++        await engine.close()
++
++    async def test_retry_is_bounded_then_gives_up(
++        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
++    ) -> None:
++        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
++        engine, src = await _make()
++        src.backfill_error = HistoryTimeoutError("first page not ready")
++        with caplog.at_level(logging.WARNING):
++            await engine.set_main("2330")
++            for _ in range(6):
++                await asyncio.sleep(0.03)
++                await _drain(engine)
++        # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
++        assert src.backfills.count("2330") == 3
++        assert engine.tc4_status != "down"
++        assert "放棄" in caplog.text
++        await engine.close()
++
++
+ class TestStkfut:
+     async def test_stkfut_subscribed_with_future_prefix(self) -> None:
+         engine, src = await _make()
+diff --git a/tests/server/test_stock_routes.py b/tests/server/test_stock_routes.py
+index 13e57c07..657bd48f 100644
+--- a/tests/server/test_stock_routes.py
++++ b/tests/server/test_stock_routes.py
+@@ -11,6 +11,7 @@ import pytest
+ from fastapi.testclient import TestClient
+ 
+ from copycat.live.stock_models import StockTick
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server import app as app_module
+ from copycat.server.app import create_app
+ from copycat.server.signal_hub import SignalHub
+@@ -307,6 +308,20 @@ class TestOverlayRoute:
+             assert r.status_code == 200
+             assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
+ 
++    def test_overlay_history_timeout_degrades_like_asyncio_timeout(self, tmp_path: Path) -> None:
++        """`daily_bars` 現在會把 TC4 首頁逾時往外拋(hub 靠它排重試)。
++
++        route 這一端的語意與既有 `OVERLAY_FETCH_TIMEOUT_S` 逾時完全相同 —— 200 + 全 null
++        + 不寫 cache。沒有這條分支的話,`ConnectionError` 的降級接不到子類以外的任何
++        地方,疊線會變成 500/502。
++        """
++        client, fake = make_client(tmp_path)
++        fake.daily_bars_result = HistoryTimeoutError("first page not ready")
++        with client:
++            r = client.get("/api/stock/overlay/2330")
++            assert r.status_code == 200
++            assert r.json() == {"cdp": None, "ma5": None, "ma20": None, "date": None}
++
+ 
+ class _GatedDailyBarsSource(FakeStockSource):
+     """`fetch_daily_bars` 記併發峰值,且**等到本批到齊 `cap` 個才放行**。
