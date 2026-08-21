@@ -48,10 +48,16 @@ interface Props {
  *  兩欄任一缺(舊後端 / 未接線)一律退「今日訊號」:單邊日期推不出「是不是今天」,
  *  拿本機時鐘補那一半只會在時區 / 跨午夜時給出比沉默更糟的答案。
  *
+ *  **缺值的形有兩種**(review C-6):`null`(缺欄)與 `""`(欄在但空)—— 後者用
+ *  `!= null` 擋不住,會走到 `monthDay("")` = `""`,標題印成「 訊號」:讀不懂,而且與
+ *  「今日訊號」在畫面上只差一個空格。`Boolean()` 把兩種形收成同一條退路。
+ *
  *  已知落差(D3'):hub `today_signals()` 是 {engine 日, 牆鐘日} 聯集,rollover
  *  stage2 前標題 = engine 日(與列的內容一致),接受。 */
 function railTitle(tradeDate: string | null | undefined, today: string | null | undefined): string {
-  const stale = tradeDate != null && today != null && tradeDate !== today;
+  // `!!x` 而非 `Boolean(x)`:兩者語意相同,但只有前者是 TS 認得的 aliased condition
+  // —— `Boolean()` 呼叫不縮型,下一行的 `monthDay(tradeDate)` 就會收到 `| undefined`。
+  const stale = !!tradeDate && !!today && tradeDate !== today;
   return stale ? `${monthDay(tradeDate)} 訊號` : "今日訊號";
 }
 
