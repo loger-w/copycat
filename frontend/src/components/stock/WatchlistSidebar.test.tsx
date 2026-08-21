@@ -824,7 +824,10 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     "wl-list-ungrouped": [284, 340],
   };
 
-  function stubRects(): void {
+  /** `extra` 只給 B10 作廢帶用:預設**不**含 `wl-sticky`(→ box(0,0) → voidBelowY 0 →
+   *  不作廢),既有 7 條拖曳測試的落點幾何位元不變。 */
+  function stubRects(extra: Record<string, [number, number]> = {}): void {
+    const rects = { ...RECTS, ...extra };
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
       this: Element,
     ) {
@@ -835,7 +838,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
         }) as DOMRect;
       if (this.tagName === "ASIDE") return box(0, 600);
       const id = this.getAttribute("data-testid") ?? "";
-      const span = RECTS[id];
+      const span = rects[id];
       return span ? box(span[0], span[1]) : box(0, 0);
     });
   }
@@ -845,10 +848,10 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     return new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
   }
 
-  async function startDrag(): Promise<void> {
+  async function startDrag(extra: Record<string, [number, number]> = {}): Promise<void> {
     sidebar();
     await waitGroups();
-    stubRects();
+    stubRects(extra);
     const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
     fireEvent(handle, ptr("pointerdown", 10, 80));
   }
@@ -982,6 +985,35 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     await waitFor(() => expect(putBodies).toHaveLength(1));
     expect(putBodies[0]!.codes).toEqual(["2330", "3231", "5483"]);
     expect(putBodies[0]!.groups).toEqual([{ name: "主力", codes: ["2330"] }]);
+  });
+
+  // 🔴 B10(SC-1):sticky 搜尋區蓋在第一組上面,游標停在搜尋框放開時舊行為會落到
+  // 主力 index 0 —— 使用者以為「放到沒有東西的地方 = 取消」,實際是靜默改資料。
+  // 拖 5483(主力 index 1)才有鑑別力:落到 index 0 是真的重排(對照「同組內拖曳」那條)。
+  it("拖到 sticky 搜尋區放開 → 零 PUT(作廢帶)", async () => {
+    await startDrag({ "wl-sticky": [0, 20] });
+    fireEvent(window, ptr("pointermove", 100, 10));
+    fireEvent(window, ptr("pointerup", 100, 10));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  // review R7:作廢帶內的 hover 高亮要**回到來源組**,否則畫面停在「放不進去的那一組」
+  // 高亮著,使用者只會再按一次。**來源必須是非最上面的那組**:作廢帶在所有 zone 上方,
+  // 舊行為的最近 zone 恆為主力,從主力起拖的話修不修都亮主力(vacuous)。
+  it("拖曳中移入作廢帶 → 落點高亮回到來源組(不是最上面那組)", async () => {
+    sidebar();
+    await waitGroups();
+    stubRects({ "wl-sticky": [0, 20] });
+    const handle = within(screen.getByTestId("wl-group-觀察")).getByTestId("wl-handle-3231");
+    fireEvent(handle, ptr("pointerdown", 10, 200));
+    fireEvent(window, ptr("pointermove", 100, 60));
+    // 前提:高亮真的會跟著移動(否則下面的斷言 vacuous)
+    expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent");
+    fireEvent(window, ptr("pointermove", 100, 10));
+    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
+    expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
+    fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
   it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
