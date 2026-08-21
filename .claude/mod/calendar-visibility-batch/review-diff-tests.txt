@@ -1,0 +1,399 @@
+diff --git a/frontend/src/components/stock/SignalRail.test.tsx b/frontend/src/components/stock/SignalRail.test.tsx
+index 437f23e4..f9f04778 100644
+--- a/frontend/src/components/stock/SignalRail.test.tsx
++++ b/frontend/src/components/stock/SignalRail.test.tsx
+@@ -47,7 +47,14 @@ function renderRail(
+   o: Partial<
+     Pick<
+       Props,
+-      "signals" | "rules" | "notifPermission" | "soundOn" | "rulesError" | "toggleError"
++      | "signals"
++      | "rules"
++      | "notifPermission"
++      | "soundOn"
++      | "rulesError"
++      | "toggleError"
++      | "tradeDate"
++      | "today"
+     >
+   > = {},
+ ) {
+@@ -415,3 +422,41 @@ describe("SignalRail 提示區", () => {
+     expect(screen.queryByText(/允許通知/)).toBeNull();
+   });
+ });
++
++// 🔴 SC-2(D3' / AR5):標題帶資料日。假日 / 盤前開站時 rail 掛的是**上一交易日**的
++// jsonl,而「今日訊號」四個字會讓人把昨天的鎖漲停當成剛剛發生的。日期一律由後端
++// 兩欄(hub 的 engine 日 vs 牆鐘日)決定 —— 瀏覽器時鐘與後端日別是兩回事。
++describe("SignalRail 標題資料日(SC-2)", () => {
++  function titleText(): string {
++    return screen.getByRole("heading", { name: /訊號$/ }).textContent ?? "";
++  }
++  function railLabel(): string | null {
++    return screen.getByTestId("signal-rail").getAttribute("aria-label");
++  }
++
++  it("兩欄皆不傳(既有呼叫端 / 舊後端)→ 今日訊號", () => {
++    renderRail();
++    expect(titleText()).toBe("今日訊號");
++    expect(railLabel()).toBe("今日訊號");
++  });
++
++  it("tradeDate = today(當日盤中)→ 今日訊號(W2 逐字不變)", () => {
++    renderRail({ tradeDate: "2026-08-21", today: "2026-08-21" });
++    expect(titleText()).toBe("今日訊號");
++    expect(railLabel()).toBe("今日訊號");
++  });
++
++  it("tradeDate ≠ today(假日 / 盤前)→ 「MM-DD 訊號」,aria-label 同步", () => {
++    renderRail({ tradeDate: "2026-08-20", today: "2026-08-21" });
++    expect(titleText()).toBe("08-20 訊號");
++    expect(railLabel()).toBe("08-20 訊號");
++  });
++
++  it("任一欄為 null(payload 缺欄)→ 今日訊號(不拿單邊猜)", () => {
++    renderRail({ tradeDate: "2026-08-20", today: null });
++    expect(titleText()).toBe("今日訊號");
++    cleanup();
++    renderRail({ tradeDate: null, today: "2026-08-21" });
++    expect(titleText()).toBe("今日訊號");
++  });
++});
+diff --git a/frontend/src/components/stock/StockPage.test.tsx b/frontend/src/components/stock/StockPage.test.tsx
+index dc1db47f..ff21012d 100644
+--- a/frontend/src/components/stock/StockPage.test.tsx
++++ b/frontend/src/components/stock/StockPage.test.tsx
+@@ -1079,3 +1079,28 @@ describe("StockPage header 倉位(SC-3)", () => {
+     expect(screen.queryByTestId("page-position")).toBeNull();
+   });
+ });
++
++// 🔴 SC-2(D3'):資料日 ≠ 後端今日(假日 / 盤前開站)時,rail 標題帶日期。
++// 接線正向鎖:`useSignalFeed` 的兩欄要真的走到 rail —— 只測 rail 自己會在
++// StockPage 忘了傳 props 時照樣綠。
++describe("StockPage 訊號欄標題資料日(SC-2)", () => {
++  it("signals/today 回 trade_date ≠ today → rail 標題「08-20 訊號」", async () => {
++    const base = globalThis.fetch as ReturnType<typeof vi.fn>;
++    vi.stubGlobal(
++      "fetch",
++      vi.fn(async (url: string) => {
++        if (String(url).includes("/api/stock/signals/today")) {
++          return new Response(
++            JSON.stringify({ signals: [], trade_date: "2026-08-20", today: "2026-08-21" }),
++          );
++        }
++        return base(url);
++      }),
++    );
++    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
++    await waitFor(() =>
++      expect(screen.getByTestId("signal-rail").getAttribute("aria-label")).toBe("08-20 訊號"),
++    );
++    expect(screen.getByRole("heading", { name: "08-20 訊號" })).toBeTruthy();
++  });
++});
+diff --git a/frontend/src/hooks/useSignalFeed.test.tsx b/frontend/src/hooks/useSignalFeed.test.tsx
+index 5c24439d..8b51efad 100644
+--- a/frontend/src/hooks/useSignalFeed.test.tsx
++++ b/frontend/src/hooks/useSignalFeed.test.tsx
+@@ -142,3 +142,38 @@ describe("useSignalFeed — 單一 baseline 來源", () => {
+     expect(ids(hook.result.current.b.signals)).toEqual(["live-1", "new", "old"]);
+   });
+ });
++
++// 🔴 D3' / AR4:baseline payload 自帶「這是哪一天的訊號」+「後端今天是哪天」。
++// 前端不拿瀏覽器時鐘比 —— 看盤機時區 / 時鐘與後端日別是兩回事。
++describe("useSignalFeed — 資料日兩欄(D3')", () => {
++  it("payload 帶 trade_date / today → 原樣透出", async () => {
++    fetchMock.mockImplementation(
++      async () =>
++        new Response(
++          JSON.stringify({ signals: today, trade_date: "2026-08-20", today: "2026-08-21" }),
++        ),
++    );
++    const hook = renderHook(() => useSignalFeed(), { wrapper });
++    await waitFor(() => expect(hook.result.current.tradeDate).toBe("2026-08-20"));
++    expect(hook.result.current.today).toBe("2026-08-21");
++  });
++
++  it("payload 缺兩欄(舊後端)→ 皆 null(不猜、不拿本機日期補)", async () => {
++    const hook = renderHook(() => useSignalFeed(), { wrapper });
++    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
++    expect(hook.result.current.tradeDate).toBeNull();
++    expect(hook.result.current.today).toBeNull();
++  });
++
++  // AR4 新鮮度:跨午夜 / stage2 rollover 後,沒有 WS 重連事件的話標題會一直停在昨天。
++  // fake timers 在 RTL waitFor 下不可靠(skill frontend-testing)→ 白盒斷言 query option。
++  it("baseline query 帶 5 分鐘 refetchInterval(跨午夜 / rollover 後自行跟上)", async () => {
++    const hook = renderHook(() => useSignalFeed(), { wrapper });
++    await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
++    const query = client.getQueryCache().find({ queryKey: ["stock-signals-today"] });
++    // `Query.options` 的型別是 QueryOptions(不含 observer 級的 refetchInterval),
++    // 但 observer 建 query 時傳的是完整 options → 執行期有值。窄轉型只為讀這一欄。
++    const options = query?.options as { refetchInterval?: number } | undefined;
++    expect(options?.refetchInterval).toBe(5 * 60_000);
++  });
++});
+diff --git a/frontend/src/lib/trading-calendar.test.ts b/frontend/src/lib/trading-calendar.test.ts
+index 366f7939..1e1c1f61 100644
+--- a/frontend/src/lib/trading-calendar.test.ts
++++ b/frontend/src/lib/trading-calendar.test.ts
+@@ -4,7 +4,13 @@
+  *  也是「日曆沒回來」時該有的行為)。 */
+ import { beforeEach, describe, expect, it } from "vitest";
+ 
+-import { clearHolidays, isTradingDay, isoLocalDate, setHolidays } from "@/lib/trading-calendar";
++import {
++  clearHolidays,
++  isTradingDay,
++  isWeekendIso,
++  isoLocalDate,
++  setHolidays,
++} from "@/lib/trading-calendar";
+ 
+ /** 2026-10-08 四 / 10-09 五(國慶調整假)/ 10-10 六 / 10-11 日。 */
+ const THU = new Date(2026, 9, 8, 10, 0);
+@@ -62,3 +68,20 @@ describe("isTradingDay", () => {
+     expect(isTradingDay(SAT)).toBe(false);
+   });
+ });
++
++// AR8:膠囊的週末守門子。**輸入是後端給的 ISO 字串**(不是 Date)—— 用本機
++// `getDay()` 解析會在時區偏移下把週一算成週日,所以固定以 UTC 午夜解讀。
++describe("isWeekendIso", () => {
++  it("週六 / 週日為 true,週一至週五為 false", () => {
++    expect(isWeekendIso("2026-08-15")).toBe(true); // 週六
++    expect(isWeekendIso("2026-08-16")).toBe(true); // 週日
++    expect(isWeekendIso("2026-08-14")).toBe(false); // 週五
++    expect(isWeekendIso("2026-08-17")).toBe(false); // 週一
++    expect(isWeekendIso("2026-10-09")).toBe(false); // 週五(國定假日仍非週末)
++  });
++
++  it("形狀不合(空字串 / 亂字串)→ false(寧可少擋也不要因 NaN 誤判)", () => {
++    expect(isWeekendIso("")).toBe(false);
++    expect(isWeekendIso("not-a-date")).toBe(false);
++  });
++});
+diff --git a/tests/server/test_signal_routes.py b/tests/server/test_signal_routes.py
+index 3329933c..4adea628 100644
+--- a/tests/server/test_signal_routes.py
++++ b/tests/server/test_signal_routes.py
+@@ -420,7 +420,24 @@ class TestSignalsTodayRoute:
+     def test_empty_when_no_jsonl(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
++            assert client.get("/api/stock/signals/today").json()["signals"] == []
++
++    def test_carries_trade_date_and_today(self, tmp_path: Path) -> None:
++        """D3'/AR6:標題用的日期由回傳體自帶 —— 前端不看瀏覽器時鐘也不多打 /api/calendar。
++
++        `trade_date` = hub 的引擎日別、`today` = hub 牆鐘日(與 `today_signals()` 取
++        聯集的那顆時鐘同源,AR7)。缺欄的失效樣態是前端永遠印「今日訊號」:假日開站
++        掛的是上一交易日的訊號,畫面上零提示 —— 所以在這裡把兩欄的來源釘死。
++        """
++        app, _ = make_app(tmp_path)
++        with BootedClient(app, raise_server_exceptions=False) as client:
++            hub = app.state.signal_hub
++            assert hub is not None
++            hub._trade_date_fn = lambda: "2026-08-20"  # 引擎日別
++            hub._now_fn = lambda: _dt.datetime(2026, 8, 21, 9, 30, 0)  # 牆鐘
++            body = client.get("/api/stock/signals/today").json()
++        assert body["trade_date"] == "2026-08-20"
++        assert body["today"] == "2026-08-21"
+ 
+     def test_returns_jsonl_rows(self, tmp_path: Path) -> None:
+         app, _ = make_app(tmp_path)
+@@ -430,7 +447,7 @@ class TestSignalsTodayRoute:
+             path = tmp_path / "signals" / f"{trade_date.replace('-', '')}.jsonl"
+             path.parent.mkdir(parents=True, exist_ok=True)
+             path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+-            assert client.get("/api/stock/signals/today").json() == {"signals": [row]}
++            assert client.get("/api/stock/signals/today").json()["signals"] == [row]
+ 
+     def test_reads_jsonl_off_event_loop(self, tmp_path: Path) -> None:
+         """handoff R5:同步讀整份 jsonl 會卡住 event loop(8 條 WS 推播/心跳一起頓),
+@@ -454,7 +471,7 @@ class TestSignalsTodayRoute:
+                 return []
+ 
+             hub.today_signals = _probing_today  # type: ignore[method-assign]
+-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
++            assert client.get("/api/stock/signals/today").json()["signals"] == []
+         # dict 全等:probe 空(route 沒呼叫 today_signals)與 True(跑在 loop 上)
+         # 兩種回歸都要印出實際值,不能壓成無訊息的 KeyError(review TC-1/T-1)
+         assert probe == {"in_event_loop": False}, f"today_signals 未被呼叫或跑在 loop 上:{probe}"
+@@ -493,7 +510,8 @@ class TestSignalsTodayRoute:
+             bare = client.get("/api/stock/signals/today")
+             legacy = client.get("/api/stock/signals/today", params={"market": "exclude"})
+         assert legacy.status_code == 200
+-        assert legacy.json() == bare.json() == {"signals": [row]}
++        assert legacy.json() == bare.json()
++        assert bare.json()["signals"] == [row]
+ 
+ 
+ class TestLegacyEnabledRouteGone:
+@@ -767,7 +785,7 @@ class TestSignalRoutesWithoutStock:
+ 
+             today = client.get("/api/stock/signals/today")
+             assert today.status_code == 200
+-            assert today.json() == {"signals": []}
++            assert today.json()["signals"] == []
+ 
+     def test_rule_signal_reaches_today_on_wall_clock_date(
+         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@@ -781,7 +799,7 @@ class TestSignalRoutesWithoutStock:
+         _seed_watchlist(tmp_path)
+         app, _ = make_app(tmp_path, with_stock=False)
+         with BootedClient(app, raise_server_exceptions=False) as client:
+-            assert client.get("/api/stock/signals/today").json() == {"signals": []}
++            assert client.get("/api/stock/signals/today").json()["signals"] == []
+             hub = app.state.signal_hub
+             assert hub is not None
+             assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
+diff --git a/tests/server/test_stock_engine.py b/tests/server/test_stock_engine.py
+index 3a6da1a9..8bbb546d 100644
+--- a/tests/server/test_stock_engine.py
++++ b/tests/server/test_stock_engine.py
+@@ -2287,7 +2287,7 @@ _OBSERVE_PREFIX = "trade-status-observe"
+ 
+ 
+ async def _make_with_clock(
+-    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01
++    monkeypatch: pytest.MonkeyPatch, clock: str, *, throttle: float = 0.01, trading_day: bool = True
+ ) -> tuple[StockEngine, FakeSource]:
+     """假時鐘**先注入再 `start()`**(D3 amendment R3)。
+ 
+@@ -2295,10 +2295,20 @@ async def _make_with_clock(
+     「真實時鐘 → 假時鐘」的假翻轉並補推一輪,否定型斷言(固定時鐘不補推)就永遠假綠。
+     注入的是**模組屬性**而非 engine 方法:`_now_taipei_time` 是模組級函式(同
+     `_now_taipei_hhmm` 慣例),per-code 的 `_trial_now` 走它。
++
++    `is_trading_day` 顯式注入(test-infra-fix,D4'):試撮旗標接日曆之後,不注入的
++    engine 會落到預設 `weekday() < 5` → 整組窗內測試在週末跑就集體轉紅(而它們要測的
++    是**窗**,不是日曆)。`trading_day=False` 則是 SC-3 的反向案共用入口。
+     """
+     monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: clock)
+     src = FakeSource()
+-    engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=throttle, checkpoint=False)
++    engine = StockEngine(
++        src,
++        trade_date="2026-07-21",
++        throttle_secs=throttle,
++        checkpoint=False,
++        is_trading_day=lambda _d: trading_day,
++    )
+     await engine.start()
+     return engine, src
+ 
+@@ -2394,6 +2404,18 @@ class TestTrialFlag:
+         assert engine.snapshot("2330")["trial"] is False
+         await engine.close()
+ 
++    async def test_trial_false_on_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """SC-3(D4'):日曆說今天不開盤 → 窗內也不標(緩)。
++
++        只看窗不看日曆的話,週末 / 國定假日開著的站在 08:30–09:00 會讓全自選一起亮
++        「(緩)」—— 那是完全沒有撮合的時段,畫面上是純噪音,還跟後端「非交易日不輪詢」
++        的事實直接打架。日曆來源 = engine 既有的 `is_trading_day` 注入(單一來源)。
++        """
++        engine, _src = await _make_with_clock(monkeypatch, "08:50:00.000", trading_day=False)
++        assert engine.snapshot("2330")["trial"] is False  # 對照:同一時鐘交易日為 True
++        assert engine._quote_payload("2330")["trial"] is False
++        await engine.close()
++
+ 
+ class TestTrialWindowFlipPush:
+     """SC-4:窗邊界翻轉 → 自選各碼 + 現貨主圖碼各補推一則帶新 `trial` 的 quote(D3)。
+@@ -2408,7 +2430,13 @@ class TestTrialWindowFlipPush:
+         now = {"t": "08:29:59.000"}
+         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+         src = FakeSource()
+-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
++        engine = StockEngine(
++            src,
++            trade_date="2026-07-21",
++            throttle_secs=0.01,
++            checkpoint=False,
++            is_trading_day=lambda _d: True,  # test-infra-fix(D4'):測的是窗,不是日曆
++        )
+         await engine.start()
+         await engine.set_watchlist(["2330"])
+         await engine.set_main("5483")  # 現貨主圖且**不在自選** + 全程零成交(last is None)
+@@ -2447,7 +2475,13 @@ class TestTrialWindowFlipPush:
+         now = {"t": "08:29:59.000"}
+         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+         src = FakeSource()
+-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
++        engine = StockEngine(
++            src,
++            trade_date="2026-07-21",
++            throttle_secs=0.01,
++            checkpoint=False,
++            is_trading_day=lambda _d: True,  # test-infra-fix(D4')
++        )
+         await engine.start()
+         await engine.set_watchlist(["2330"])
+         await engine.set_main("2330")  # 第二個 owner:自選 + 主圖
+@@ -2470,7 +2504,13 @@ class TestTrialWindowFlipPush:
+         now = {"t": "08:29:59.000"}
+         monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
+         src = FakeSource()
+-        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
++        engine = StockEngine(
++            src,
++            trade_date="2026-07-21",
++            throttle_secs=0.01,
++            checkpoint=False,
++            is_trading_day=lambda _d: True,  # test-infra-fix(D4')
++        )
+         await engine.start()
+         await engine.set_main_contract(_CONTRACT)
+         got, tap = _tap(engine.stream())
+@@ -2483,6 +2523,36 @@ class TestTrialWindowFlipPush:
+         await _untap(tap)
+         await engine.close()
+ 
++    async def test_no_flip_push_on_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        """SC-3(D4'):非交易日跨過窗邊界 → 一則都不補推(旗標恆 False = 根本沒有翻轉)。
++
++        翻轉偵測若只看窗,休市日的 08:30 / 09:00 / 13:25 / 13:30 各會替全自選 + 現貨
++        主圖補推一輪 quote —— 那是打穿節流的空推,且畫面上的「(緩)」會在沒有撮合的
++        日子亮起又熄掉。
++        """
++        now = {"t": "08:29:59.000"}
++        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: now["t"])
++        src = FakeSource()
++        engine = StockEngine(
++            src,
++            trade_date="2026-07-21",
++            throttle_secs=0.01,
++            checkpoint=False,
++            is_trading_day=lambda _d: False,
++        )
++        await engine.start()
++        await engine.set_watchlist(["2330"])
++        await engine.set_main("5483")
++        got, tap = _tap(engine.stream())
++        await _drain(engine)
++        mark = len(got)
++
++        now["t"] = "08:30:00.000"  # 「進窗」但今天休市
++        await _drain(engine)
++        assert [m for m in got[mark:] if m["type"] == "watchlist_quote"] == []
++        await _untap(tap)
++        await engine.close()
++
+ 
+ class TestTradeStatusObserve:
+     """SC-5:engine 層 per-code TradeStatus 轉態觀測 log(D6)= 第二段的蒐證通道。
+@@ -2818,7 +2888,7 @@ class TestObserveClockContract:
+             "_dt",
+             SimpleNamespace(datetime=SimpleNamespace(now=lambda: wall), timedelta=_dt.timedelta),
+         )
+-        assert stock_engine_mod._spot_trial_now() is expected
++        assert stock_engine_mod._spot_trial_window_now() is expected
+ 
+     def test_observe_windows_widen_trial_windows_by_two_seconds(self) -> None:
+         """D6-1 的推導式落地值(改 `TRIAL_WINDOWS` 時這條會提醒觀測窗要跟著動)。"""
