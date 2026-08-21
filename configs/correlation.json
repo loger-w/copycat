@@ -1,5 +1,5 @@
 {
-  "_comment": "相關係數引擎的腿設定。新增一腿只需在 legs 加一筆(SC-8),不必改引擎程式碼。source: tc4 = 本引擎自行 SUBQUOTE;futures_engine = 讀既有期貨引擎狀態(base 腿必須用這個,TXF.HOT 已被 futures_engine 訂閱,同 symbol 跨 session 只推一邊)。label 是前端顯示名,前端不寫死對照表。窗長/樣本門檻/stale 秒數目前在 copycat/corr_config.py 的 CorrConfig 預設值,此檔不覆寫。",
+  "_comment": "相關係數引擎的腿設定。新增一腿只需在 legs 加一筆(SC-8),不必改引擎程式碼。source: tc4 = 本引擎自行 SUBQUOTE;futures_engine = 讀既有期貨引擎狀態(base 腿必須用這個,TXF.HOT 已被 futures_engine 訂閱;不重複訂閱同一 symbol 是為了不多掛一把 TC4 refcount key —— 上游 feed 以 symbol 為單位,任一把 key 歸零就退訂整個 symbol,見 .claude/skills/tc4-market-facts/SKILL.md)。label 是前端顯示名,前端不寫死對照表。窗長/樣本門檻/stale 秒數目前在 copycat/corr_config.py 的 CorrConfig 預設值,此檔不覆寫。",
   "_todo_tsm": "CME single stock futures(含 TSMC ADR)2026-07-27 上市,達錢 4 尚未上架(2026-07-29 實測 64 種命名組合全 fail)。上架後在 legs 加一筆即可,symbol 待實測確認。",
   "base": "TXF",
   "legs": [

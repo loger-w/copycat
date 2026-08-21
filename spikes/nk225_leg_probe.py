@@ -8,7 +8,8 @@
 3. UNSUB→SUB REALTIME(全天窗,同 corr_source.all_day_window)監聽 N 秒推播計數,比較
    OSE NK225 / OSE NK225M / SGX NK 流動性;每檔留一則原始 quote,並實跑
    `parse_stock_realtime` + `minute_end_from_utc_hhmmss`(新交易所段必實跑 parse 層,
-   core-flow §1)。對照組 = CME MES。**同 symbol 跨 session 只推一邊,會搶走 prod 推播**:
+   core-flow §1)。對照組 = CME MES。**對 prod 已訂的 symbol 多掛一把 refcount key,
+   收工退訂時會把 prod 的 feed 一起帶走**(見 `.claude/skills/tc4-market-facts/SKILL.md`):
    NK225M 自 2026-08-17 起已是 prod 第七腿 → 本腳本 `main()` 開頭檢查 :8721 是否有 server 在跑,
    有就拒跑(`--force` 才放行);其餘候選(NK225 / SGX NK / MES)不在 prod 訂閱清單。
 4. 1K 當日窗回補支援度(SubHistory 1K → 首頁 rows)+ `parse_1k_minutes` 實跑。

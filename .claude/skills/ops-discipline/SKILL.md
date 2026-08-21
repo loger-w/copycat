@@ -9,8 +9,10 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
 
 ## 盤中驗證通道
 
-- **盤中不要起第二台連 TC4 的後端**(2026-07-31 紀律):同 symbol 跨 session 只推一邊
-  (見 tc4-market-facts),第二台會靜默搶走跑著那台的推播 — 失效樣態「原本好好的面板突然全空,
+- **盤中不要起第二台連 TC4 的後端**(2026-07-31 紀律,理由於 2026-08-18 更正 — 結論不變):
+  第二台會對 prod 已訂的 symbol 多掛一把 TC4 refcount key,而上游 feed 以 symbol 為單位 ——
+  那把 key 歸零(收工退訂、或 process 死掉被 reap)就把整個 symbol 的推播帶走(**不是**舊說
+  的「同 symbol 跨 session 只推一邊」,見 tc4-market-facts)— 失效樣態「原本好好的面板突然全空,
   兩邊都沒錯誤訊息」。**驗前端改動只起 vite dev server**(proxy 指 8721,零新增訂閱);**驗後端
   HTTP 層(route 形狀 / 非行情 endpoint)用 fake source + 另一個 port**(不碰 ZMQ,盤中安全)。
   同理:**不要為了看新 code 就重啟跑著的 server** — 櫃買當日序列純 in-memory,重啟即歸零;

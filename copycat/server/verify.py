@@ -1,8 +1,10 @@
 """verify 模式支援:fake TXO source + 外部 IO env 壓制(`python -m copycat.server --verify`)。
 
-盤中不可起第二台連 TC4 的後端(CLAUDE.md §8:同 symbol 跨 session 只推一邊,會靜默搶走
-prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本模組的 fake source +
-另一個 port,整條路不碰 ZMQ。
+盤中不可起第二台連 TC4 的後端:第二台會對 prod 已訂的 symbol 多掛一把 TC4 refcount key,
+而上游 feed 以 symbol 為單位 —— 那把 key 歸零(收工退訂、或 process 死掉被 reap)就把 prod
+的推播一起帶走,靜默且無錯誤訊號(2026-08-18 實證,見
+`.claude/skills/tc4-market-facts/SKILL.md`)。驗 HTTP 層(route 形狀 / 非行情 endpoint)
+一律走本模組的 fake source + 另一個 port,整條路不碰 ZMQ。
 
 **本模組刻意不 import fastapi / uvicorn**:tests/conftest.py 全域 import 這裡的 key 清單,
 不能因此把 [live] extras 變成整個測試套件的硬依賴;組 app 的那步留在 `__main__`。

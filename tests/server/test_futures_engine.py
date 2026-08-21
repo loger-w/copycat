@@ -478,8 +478,10 @@ class TestResolvedContract:
 
 class TestLeafFallbackSubscribe:
     """Phase 6 real-env finding:TXO runtime 同 process 已訂 TC.F.TWF.TXF.HOT(spot),
-    TC4 對同 symbol 跨 session 只推一邊 → futures 的 TXF HOT 永收不到。
-    解法:resolve 已知後,寬限期內仍零推播的商品補訂 leaf 契約(symbol 字串不同無衝突)。"""
+    TC4 refcount 的另一把 key 歸零時上游退訂整個 symbol → futures 的 TXF HOT 永收不到
+    (2026-08-18 定調,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
+    解法:resolve 已知後,寬限期內仍零推播的商品補訂 leaf 契約 —— leaf 是不同 symbol,
+    天然是一把新 key,所以補得回來。"""
 
     async def test_empty_product_gets_leaf_subscribe_after_grace(self) -> None:
         src = FakeSource()

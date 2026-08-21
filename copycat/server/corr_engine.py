@@ -3,8 +3,9 @@
 **pull 而非 push**:需求是每秒更新,不是每 tick 更新。每秒主動讀各腿當前最佳買賣算
 中價,取樣率與推播率解耦(台指 516 則/分 vs 費半 146 則/分不需對齊)。更關鍵的是
 base 腿(台指)因此可以直接讀既有 `FuturesEngine.state()`,完全不發 SUBQUOTE ——
-`TC.F.TWF.TXF.HOT` 已被 futures_engine 訂閱,同 symbol 跨 session 只推一邊
-(CLAUDE.md §8,2026-07-28 實證),重複訂閱會讓其中一邊永久零推播且無錯誤訊號。
+`TC.F.TWF.TXF.HOT` 已被 futures_engine 訂閱,本引擎不對同一個 symbol 再掛一把 TC4
+refcount key —— 上游 feed 以 symbol 為單位,任一把 key 歸零就退訂整個 symbol,失效樣態是
+永久零推播且無錯誤訊號(2026-08-18 實證,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
 
 **兩種腿的新鮮度判定不同**:
 - `tc4` 腿:收到推播即更新 `last_update`。
@@ -396,7 +397,8 @@ class CorrelationEngine:
         """一條腿的 1K 取得;失敗回空(該腿只從啟動後累積,不影響其餘腿)。
 
         `futures_engine` 腿走注入的 fetch —— 台指的歷史也必須從持有 TXF 訂閱的那條 session 問
-        (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。leg.key 即期貨產品碼(design §4 假設,
+        (別條 session 問會多掛一把 refcount key,歸零時退訂整個 symbol;見
+        `.claude/skills/tc4-market-facts/SKILL.md`)。leg.key 即期貨產品碼(design §4 假設,
         與既有 `_futures_leg_book` 同一個假設)。
         """
         try:

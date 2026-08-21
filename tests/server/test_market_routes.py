@@ -1,7 +1,8 @@
 """大盤 K 線 route(index-board N-5 / SC-4/5/6)。
 
 三個分派各自向**持有該 symbol REALTIME 訂閱的那條 session** 問歷史
-(CLAUDE.md §8 同 symbol 跨 session 只推一邊):
+(別條 session 問 = 對同一 symbol 多掛一把 TC4 refcount key,歸零時退訂整個 symbol;
+見 `.claude/skills/tc4-market-facts/SKILL.md`):
 `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(TC4 無此 symbol)。
 """
 

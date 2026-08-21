@@ -288,7 +288,7 @@ class TestBackfill:
             await eng.close()
 
     async def test_never_requests_base_leg_symbol(self) -> None:
-        """SC-4:台指的歷史也不可從 corr session 問(同 symbol 跨 session 只推一邊)。"""
+        """SC-4:台指的歷史也不可從 corr session 問(多掛一把 refcount key = 多一個退訂引信)。"""
         src = _FakeSource()
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()

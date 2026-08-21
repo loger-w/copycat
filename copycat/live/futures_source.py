@@ -127,9 +127,10 @@ class FuturesQuoteSource(TC4QuoteSource):
     def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
         """當日 1K → [(台北 minute_end, close 毫點)]。
 
-        台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡,
-        同 symbol 跨 session 只推一邊(CLAUDE.md §8),從別的 session 問同一檔有把推播
-        搶走的風險。
+        台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡。
+        別條 session 問同一檔會多掛一把 refcount key,而 TC4 的上游 feed 以 symbol 為單位:
+        那把 key 歸零時整個 symbol 的推播一起斷(2026-08-18 實證;見
+        `.claude/skills/tc4-market-facts/SKILL.md`)。
 
         **首頁在預算內未備妥 → `HistoryTimeoutError`**(bug/history-timeout-propagation;
         舊契約是「回空」)。回空會被引擎讀成「這條腿今天沒有 1K」而整天不再回補;
@@ -157,9 +158,10 @@ class FuturesQuoteSource(TC4QuoteSource):
     ) -> list[Bar]:
         """期指 K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
 
-        **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡,
-        TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從別的 session 問同一檔
-        有把推播搶走的風險,而失效樣態是「訂閱成功但零推播」,零錯誤訊號。
+        **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡。
+        從別的 session 問同一檔會多掛一把 TC4 refcount key,而上游 feed 以 symbol 為單位
+        —— 那把 key 歸零就退訂整個 symbol(2026-08-18 實證,見
+        `.claude/skills/tc4-market-facts/SKILL.md`),失效樣態是「訂閱成功但零推播」,零錯誤訊號。
 
         窗:**只有 SubHistory 的 start/end** 用 `YYYYMMDDHH` 全天範圍(與 stock_source
         的歷史窗同款)。**不覆寫 `_rt_window`** —— 期貨 REALTIME 訂閱窗維持盤別窗
