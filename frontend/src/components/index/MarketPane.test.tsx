@@ -199,6 +199,23 @@ describe("MarketPane radiogroup 語意(a11y SC-1')", () => {
     expect(futRadios[0]!.name).not.toBe(pill("加權").name);
   });
 
+  // 🔴 A11Y-p2-1:第三顆「台指期」的 value 改前直接是 `futKey` —— 換期貨商品
+  // (大台 → 小台)連帶換掉 `key={item.value}`,React 於是把整顆 label + input 卸載重建。
+  // 症狀:焦點掉回 body(鍵盤使用者每換一次商品就得從頭 Tab 回來),而畫面完全一樣。
+  // value 固定 `"FUT"`,futKey 的映射留在呼叫端。
+  it("切換期貨商品時「台指期」radio 不重掛(DOM node 恆等)", () => {
+    renderPane();
+    fireEvent.click(pill("台指期"));
+    const before = pill("台指期");
+    expect(before.checked).toBe(true);
+    fireEvent.click(pill("小台"));
+    expect(pill("台指期")).toBe(before);
+    expect(before.checked).toBe(true);
+    // 映射仍生效:選的是小台(標的與商品兩群各自恰一顆 checked)
+    expect(pill("小台").checked).toBe(true);
+    expect(screen.getByText("台指期(小台)")).toBeTruthy();
+  });
+
   it("週期列 = radiogroup「週期」,「重疊」toggle 仍在同一列且保留 aria-pressed", () => {
     renderPane();
     const modeGroup = screen.getByRole("radiogroup", { name: "週期" });
