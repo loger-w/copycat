@@ -516,7 +516,7 @@
 - [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷快照並關閉本輪**(2026-08-21 R7 review F7):COM 無查詢識別不可根治;
   機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。
 - [ ] 真空帳戶在死查詢後最晚下一輪(≤60s)才顯示無部位(R7 時間窗代價,刻意);若嫌慢可縮 `STALE_WINDOW_S`。
-- [ ] **`_collect_history` timeout「靜默回空」語意是家族性風險**:本次事故根源之一
+- [x] **`_collect_history` timeout「靜默回空」語意是家族性風險**〔2026-08-21 已出貨 PR #85 bug/history-timeout-propagation:`HistoryTimeoutError(ConnectionError)`;stock 回補 / fetch_daily_bars(雙段皆 timeout)/ futures bars / river 首頁 raise,上游逐 caller 接(有界重排 / hub X-2b / engine 內吃掉只 log / 腿重試 ≤3 輪);index fetch_day_minutes 刻意不改(variant 逃逸已覆蓋)〕:本次事故根源之一
   (`history ... 30.0s 內首頁未備妥,回空` 不 raise → caller 無從排 retry)。index 側已用
   產出面 lag 偵測繞開,但同一語意的其他 caller(river_backfill 六腿、bars_range 各處)
   在「TC4 冷啟動忙碌」窗口同樣拿到空結果且無重試 —— river 六腿 08:23 實錄裡 TXF/TWN/SXF
@@ -525,6 +525,8 @@
   〔2026-08-20 caller 盤點:`HistoryResult.timed_out` 旗標已存在(08-05 bars 三態),但只有
   stock bars 路徑(stock_source:691-709)在讀;`futures_source:187/192`、`stock_source:643/721/724`
   皆 `.rows` 直取丟旗標,river_backfill 另有自己的「首頁非空即 break」迴圈 —— 家族名單就這五處+river〕
+- [ ] **期貨 K 線三態 status 通道**(2026-08-21 R8 plan review P1-6):`_market_payload` 無 status 欄、`build_minute` 丟棄第二元素、前端 BarsMeta 只看 `source === "unavailable"`;
+  timeout 目前在 `futures_engine.bars_range` 內吃掉只 log。要三態需 payload + route + 前端 FuturesChart 分支同批。
 - [ ] **盤外時段啟動踩 timeout 無自癒**:分時自癒 gate 在 watch window(09:00–13:25),
   盤後/晚間啟動若 1K 回補 timeout,線缺到次日 09:06 才自癒。實測晚間 TC4 閒時回補快
   (18:17 啟動無 timeout),風險低;若要覆蓋,detector 改「窗外以 min(now, 13:30) 為
