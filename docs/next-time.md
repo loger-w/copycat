@@ -1,3 +1,15 @@
+## 2026-08-21(bug/history-timeout-propagation code review round-1 留尾)
+
+- [ ] **F9/TQ-12:純格式改動夾在 🔴 commit 裡**(review accepted,本輪刻意不動)——
+  `copycat/server/corr_engine.py` 的 `fresh = (...)` 在修復 commit `d73477ba` 被順手
+  收成單行(行為零關係)。三類分離的規矩是「不在這次動」而不是「回頭再改一次」,
+  所以留到下次真的碰該檔時,單獨走一個 🔵 commit 帶走。
+- [ ] **F10:`stock_source.fetch_daily_bars` 的 1K fallback 沒有縮窗**。同檔的
+  `fetch_bars_range_tagged` 對 DK 空的 fallback 會把視窗縮到 `_OHLC_FALLBACK_WINDOW_DAYS`
+  (避免 4.5× 量級放大,R2-7),`fetch_daily_bars` 兩段卻都用整個 `_DAILY_WINDOW_DAYS`。
+  兩段各自的 deadline 已收到 10s,所以不是延遲問題,是**收割量**問題(DK 不支援的股號
+  每次 overlay 都整窗拉 1K)。要動之前先量一次真實列數,別憑感覺調窗。
+
 ## 2026-08-21(mod/overview-narrow-pane-legibility B1 留尾)
 
 - [ ] **1536×864 高度下 K 線態仍吃地板 96 → CandleChart svg 被 figure 壓到 81px(實縮 0.84)**:
