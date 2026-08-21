@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "general-purpose (opus, read-only)",
+  "scope": "git diff master...HEAD -- copycat tests(紅測試 3c2b785d + 🔴 欠帳改計數)",
+  "findings": [
+    {"id": "P0-1", "severity": "P0", "file": "copycat/capital/balance.py:309-329", "title": "吞終止符時沒清 _last_feed → poll() 1s 後 timeout flush 空集合", "disposition": "accepted", "fix": "🔴 清 _last_feed + 🟢 [red] test_collector_profit_header_then_swallowed_end_marker_does_not_timeout_flush"},
+    {"id": "P1-1", "severity": "P1", "file": "tests/capital/test_balance.py:469-487", "title": "profit 000 表頭路徑無測試;rows_do_not_cancel 用 client 到不了的序列", "disposition": "accepted(partial)", "fix": "補 profit parser + abandon + 000 + ## + poll 測試;rows_do_not_cancel 保留為 collector 層語意 lock"},
+    {"id": "P2-1", "severity": "P2", "file": "copycat/capital/balance.py:331-335", "title": "_flush / _closed 路徑不消欠帳", "disposition": "accepted", "fix": "_settle_debt:_closed 期間 ## 仍扣一筆 + test_collector_closed_round_terminator_still_consumes_debt"},
+    {"id": "P2-2", "severity": "P2", "file": "copycat/capital/balance.py:287-288", "title": "abandon 單一 deadline 替所有欠帳續命", "disposition": "deferred → docs/next-time.md"},
+    {"id": "P2-3", "severity": "P2", "file": "copycat/capital/balance.py:240-242", "title": "docstring ≤60s 自癒對 10–30s 慢回應帳戶不成立", "disposition": "accepted", "fix": "docstring 改口"},
+    {"id": "P2-4", "severity": "P2", "file": "tests/capital/test_balance.py:293 / test_client.py reconnect", "title": "既有 lock 只釘 _stale_until 不釘 _owed", "disposition": "accepted", "fix": "🟢 [lock] 補 _owed 斷言,mutation-verified"},
+    {"id": "P2-5", "severity": "P2", "file": "copycat/capital/balance.py:292", "title": "debug log 135 字元;WARNING 無 collector 名", "disposition": "accepted(行長)/ deferred(collector 名,next-time 既有條)"}
+  ],
+  "p2_summary": {"count": 5, "themes": ["欠帳生命週期邊角", "docstring 口徑", "測試強度"]},
+  "sequence_table_verdict": "a/b/d/f/g/h ok;c(慢回應真空帳戶永遠幽靈)= 舊版同,非 regression,docstring 已改口;e(profit 000)= P0 已修",
+  "self_review_head": "see git log fix/balance-collector-owed-count"
+}
