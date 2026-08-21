@@ -1,0 +1,107 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness/state-machine(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "F1/T1",
+   "severity": "P0",
+   "summary": "deadline 分支誤刪 inflight=None → 每 50ms 重複 abandon、清 staging",
+   "disposition": "accepted",
+   "resolution": "補回 + 回歸測試"
+  },
+  {
+   "id": "F2",
+   "severity": "P0",
+   "summary": "欠帳對真空帳戶自我延續永不清空",
+   "disposition": "accepted",
+   "resolution": "欠帳改時間窗 STALE_WINDOW_S=20"
+  },
+  {
+   "id": "F3",
+   "severity": "P1",
+   "summary": "abandoned 旗標在 rc 判定前清",
+   "disposition": "accepted",
+   "resolution": "rc==0 後才清(三處)"
+  },
+  {
+   "id": "F4",
+   "severity": "P1",
+   "summary": "_poll_pending 對已正常收尾的 collector 記欠帳",
+   "disposition": "accepted",
+   "resolution": "_awaiting 守門,abandon no-op"
+  },
+  {
+   "id": "T2",
+   "severity": "P1",
+   "summary": "_fed_rows reset 未釘(非處女 collector)",
+   "disposition": "accepted",
+   "resolution": "T6(b) 刪 _fed_rows,守門只看時間窗;鏈測改真餵一輪"
+  },
+  {
+   "id": "T3",
+   "severity": "P1",
+   "summary": "watchdog 後遲到 OI ## 無案",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "T4",
+   "severity": "P1",
+   "summary": "profit/OI keep_abandoned 接線未釘",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "T5",
+   "severity": "P1",
+   "summary": "欠帳算術未釘、≤1 輪契約無測試",
+   "disposition": "accepted",
+   "resolution": "時間窗到期後零列 ## flush [] 案"
+  },
+  {
+   "id": "F5",
+   "severity": "P2",
+   "summary": "_set_status ok 未清新狀態",
+   "disposition": "accepted",
+   "resolution": "補清"
+  },
+  {
+   "id": "F6",
+   "severity": "P2",
+   "summary": "吞 log 等級 / abandon 無 log",
+   "disposition": "accepted",
+   "resolution": "吞 WARNING、abandon DEBUG、clamp"
+  },
+  {
+   "id": "F7",
+   "severity": "P2",
+   "summary": "新輪已收 rows 時舊 ## flush 截斷快照",
+   "disposition": "accepted",
+   "resolution": "docstring + repro 代價明記"
+  },
+  {
+   "id": "T6",
+   "severity": "P2",
+   "summary": "_fed_rows 與 debt 互為冗餘",
+   "disposition": "accepted",
+   "resolution": "刪 _fed_rows"
+  },
+  {
+   "id": "T7",
+   "severity": "P2",
+   "summary": "abandon 清本輪未釘",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "T8",
+   "severity": "P2",
+   "summary": "鏈測涵蓋範圍註記",
+   "disposition": "accepted",
+   "resolution": "docstring"
+  }
+ ]
+}
