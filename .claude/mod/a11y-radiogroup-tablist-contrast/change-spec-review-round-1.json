@@ -1,0 +1,125 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "SC-1 tabIndex 分佈在 jsdom/規範皆不成立",
+   "disposition": "accepted",
+   "resolution": "SC-1' 改鎖 count/checked/name/click/Enter"
+  },
+  {
+   "id": "R2",
+   "severity": "P0",
+   "summary": "SC-2 與 D-13 條件 render 矛盾",
+   "disposition": "accepted",
+   "resolution": "SC-2' 允許未選中 tab dangling"
+  },
+  {
+   "id": "R3",
+   "severity": "P0",
+   "summary": "peer-focus-visible 整排亮",
+   "disposition": "accepted",
+   "resolution": "D1' input 放 label 內 + has-focus-visible"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "漏 App.tsx 主 tablist",
+   "disposition": "accepted",
+   "resolution": "D2' 納入包 B"
+  },
+  {
+   "id": "R5",
+   "severity": "P1",
+   "summary": "該紅清單漏 getByRole(button) 定位的測試",
+   "disposition": "accepted",
+   "resolution": "🔴 清單擴充"
+  },
+  {
+   "id": "R6",
+   "severity": "P1",
+   "summary": "零態測試未標該紅/不該紅",
+   "disposition": "accepted",
+   "resolution": "D4' 逐行"
+  },
+  {
+   "id": "R7",
+   "severity": "P1",
+   "summary": "pillClass 無 disabled/title 通道",
+   "disposition": "accepted",
+   "resolution": "D1' item shape + title 掛 label"
+  },
+  {
+   "id": "R8",
+   "severity": "P1",
+   "summary": "MarketPane 結構寫錯、重疊 toggle 會被掃進",
+   "disposition": "accepted",
+   "resolution": "D2' 兩 radiogroup + toggle 保留"
+  },
+  {
+   "id": "R9",
+   "severity": "P1",
+   "summary": "row role=button nested-interactive / 無 aria-label / doctor 新 finding",
+   "disposition": "accepted",
+   "resolution": "D5' 內層 button"
+  },
+  {
+   "id": "R10",
+   "severity": "P1",
+   "summary": "tabpanel wrapper 破 flex 鏈",
+   "disposition": "accepted",
+   "resolution": "D3' wrapper class / 掛既有層"
+  },
+  {
+   "id": "R11",
+   "severity": "P1",
+   "summary": "automatic activation 會解除武裝",
+   "disposition": "accepted",
+   "resolution": "D3' manual activation"
+  },
+  {
+   "id": "R12",
+   "severity": "P1",
+   "summary": "OrderPanel radio Enter implicit submit",
+   "disposition": "accepted",
+   "resolution": "D1' Enter preventDefault + W9"
+  },
+  {
+   "id": "R13",
+   "severity": "P2",
+   "summary": "RiverPanel 單選無 aria-pressed 漏列",
+   "disposition": "accepted",
+   "resolution": "out of scope 記 next-time"
+  },
+  {
+   "id": "R14",
+   "severity": "P2",
+   "summary": "SC-3 查法不明",
+   "disposition": "accepted",
+   "resolution": "D4' 查法"
+  },
+  {
+   "id": "R15",
+   "severity": "P2",
+   "summary": "重複點擊路徑消失 / 方向鍵連續副作用",
+   "disposition": "accepted",
+   "resolution": "D1' 記錄並接受"
+  },
+  {
+   "id": "R16",
+   "severity": "P2",
+   "summary": "fieldset 尺寸語意 / 容器 class / overflow-hidden 裁 ring / id 規則",
+   "disposition": "accepted",
+   "resolution": "D1' div role=radiogroup + ring-inset + id 規則"
+  },
+  {
+   "id": "R17",
+   "severity": "P2",
+   "summary": "SC-5 漏窄容器與點擊後 focus 態",
+   "disposition": "accepted",
+   "resolution": "SC-5' 1536 + 說明"
+  }
+ ]
+}
