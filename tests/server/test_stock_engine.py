@@ -151,6 +151,21 @@ async def _drain(engine: StockEngine) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    """等到 `pred()` 成立(沿 `test_corr_engine.py` / `test_breadth_engine.py` 的慣例)。
+
+    固定圈數的 `_drain()` 對「要等一個排程醒來」的斷言是兩頭錯:CI 慢一點就假紅,
+    本機快的時候又白等滿全部圈數。條件式等待兩邊都對,而且失敗訊息說得出等的是什麼。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("條件逾時未成立")
+
+
 async def _make() -> tuple[StockEngine, FakeSource]:
     src = FakeSource()
     engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
@@ -897,6 +912,57 @@ class TestBackfillTimeoutRetry:
         assert src.backfills.count("2330") == 3
         assert engine.tc4_status != "down"
         assert "放棄" in caplog.text
+        await engine.close()
+
+    async def test_give_up_stops_group_snapshot_from_reenqueueing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """放棄 = **當日不再入列**(與舊行為同),而 `group_snapshot` 也是入列點之一。
+
+        逾時記帳(`_backfill_timeouts`)與失敗記帳分帳的代價:`group_snapshot` 那條
+        60s 輪詢的四道 guard 一條都看不到它。放棄後不進 `_backfilled` 的話,輪詢會
+        每 60s 把同一檔重新推回 worker —— 重試上界形同虛設,而 TC4 的歷史通道是全站
+        共用的稀缺資源(整個群組檢視都排在後面)。
+        """
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_watchlist(["2330"])  # 進訂閱池(group_snapshot 的第一道 guard)
+        expected = 1 + stock_engine_mod._BACKFILL_TIMEOUT_MAX_RETRIES
+        for _ in range(6):
+            engine.group_snapshot(["2330"])
+            await asyncio.sleep(0.03)
+            await _drain(engine)
+        assert src.backfills.count("2330") == expected
+        await engine.close()
+
+    async def test_close_cancels_the_pending_timeout_reenqueue(self) -> None:
+        """`loop.call_later` 的 handle 必須有取消點:關機後醒來的那一發會對已關閉的
+        engine 入列(`_backfill_pending` 起帳、job 進佇列而 worker 已死),測試環境下
+        則是 loop 已關而 callback 還在排程表上。"""
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
+        handles = list(engine._backfill_timeout_handles.values())
+        await engine.close()
+        assert handles and all(h.cancelled() for h in handles)
+        assert not engine._backfill_timeout_handles
+
+    async def test_rollover_cancels_the_pending_timeout_reenqueue(self) -> None:
+        """換日 = 日別記帳重來(`_backfill_timeouts` 已在 stage2 清空)。留著昨天排的
+        那一發 handle,它醒來時會用**新一天**的 generation 重新入列一筆沒有人要的 job,
+        而 stage2 自己已經替主圖排過一筆了。"""
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await _wait_until(lambda: bool(engine._backfill_timeout_handles))
+        handles = list(engine._backfill_timeout_handles.values())
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+        await _drain(engine)
+        assert all(h.cancelled() for h in handles)
         await engine.close()
 
 

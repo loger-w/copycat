@@ -146,6 +146,43 @@ class TestCorrSourceFetchDay1k:
             assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
         assert "疑似凍結 stub" in caplog.text
 
+    def test_unparsable_rows_do_not_claim_frozen_stub(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """全數列都**解析不了**(欄位缺漏 / 格式)≠ 凍結 stub。
+
+        「rows 非空但 minutes 全空」對兩件事都成立,但處置差很遠:凍結 stub 要換窗口
+        逃逸,欄位壞掉要看 TC4 是不是換了欄名。混報的代價是那句固定字串失去診斷力
+        —— 它是這條路上唯一的 grep 判準。
+        """
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] != "GETHISDATA":
+                return ok()
+            qi = obj["Param"]["QryIndex"]
+            row = _row(1, "004600", "51666")
+            del row["Close"]  # Date 是窗口日、Time 正常,只有 Close 缺 → skipped
+            return _his([row] if qi == "0" else [])
+
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
+        with caplog.at_level(logging.WARNING):
+            assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
+        assert "疑似凍結 stub" not in caplog.text
+
+    def test_rows_without_date_still_reach_the_chart(self) -> None:
+        """缺 `Date` 的列不被 Date 閘丟掉 —— 丟資料比放過凍結 stub 更壞(整條線消失)。"""
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] != "GETHISDATA":
+                return ok()
+            qi = obj["Param"]["QryIndex"]
+            row = _row(1, "004700", "51680")
+            del row["Date"]
+            return _his([row] if qi == "0" else [])
+
+        src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
+        assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == [(527, 51_680_000)]
+
 
 class TestFuturesSourceFetchDay1k:
     def test_product_maps_to_twf_hot_symbol(self) -> None:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 from typing import Callable
 
 import pytest
@@ -38,6 +40,9 @@ class _FakeSource:
         #: 恆逾時(重試上界要測的那條);`timeout_1k_once` 只逾時第一發,之後正常
         self.fail_1k_timeout: set[str] = set()
         self.timeout_1k_once: set[str] = set()
+        #: 掛上後**每一發** fetch 都卡在閘門上(`to_thread` 執行緒,loop 不受阻)——
+        #: 用來造「一輪回補確實還在進行中」的 single-flight 互吃現場
+        self.gate: threading.Event | None = None
 
     def subscribe_raw(self, symbol: str) -> None:
         self.subscribed.append(symbol)
@@ -51,6 +56,8 @@ class _FakeSource:
 
     def fetch_day_1k(self, symbol: str) -> list[tuple[int, int]]:
         self.fetched.append(symbol)
+        if self.gate is not None:
+            self.gate.wait()
         if symbol in self.fail_1k:
             raise ConnectionError(f"1K fail {symbol}")
         if symbol in self.fail_1k_timeout:
@@ -144,6 +151,21 @@ class _Clock:
 async def _drain() -> None:
     for _ in range(30):
         await asyncio.sleep(0.001)
+
+
+async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    """等到 `pred()` 成立(沿 `test_corr_engine.py` / `test_breadth_engine.py` 的慣例)。
+
+    固定圈數的 `_drain()` 對「要等一個延遲重試醒來」的斷言是兩頭錯:CI 慢一點就假紅,
+    本機快的時候又白等滿全部圈數。條件式等待兩邊都對,失敗訊息也說得出等的是什麼。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("條件逾時未成立")
 
 
 def _engine(
@@ -377,6 +399,56 @@ class TestBackfillTimeoutRetry:
         tasks = list(eng._backfill_retry_tasks)
         await eng.close()
         assert all(t.cancelled() or t.done() for t in tasks)
+
+    async def test_giving_up_resets_the_round_for_the_next_episode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_backfill_retry_round` 是**連續**失敗輪數 —— 放棄那一刻也要歸零。
+
+        只在「補齊一輪」歸零的話,放棄後計數永久停在上限:當天稍後的每一次 reconnect
+        回補都會在第一次逾時就直接放棄(零重試),而 log 只有一行「已重試 3 輪」讀起來
+        像是真的試過。第二個 episode 是新的抖動,該有自己的完整預算。
+        """
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
+        src = _FakeSource()
+        src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")  # 永遠逾時
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            # episode 1:首輪 + 3 輪重試 = 4,然後放棄
+            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+            await _drain()
+            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4, "上界失效"
+            # episode 2:reconnect 觸發全新一輪 —— 預算沒歸零的話這裡只會有 1 發
+            eng._on_reconnect_threadsafe()
+            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 8)
+        finally:
+            await eng.close()
+
+    async def test_retry_blocked_by_single_flight_keeps_its_legs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """single-flight 互吃:被擋掉那一發的腿要併回 pending,並留下一行 log。
+
+        舊碼是靜默 `return` —— 重試 task 醒來時撞上 reconnect 觸發的整輪回補,它負責的
+        那幾腿就這樣蒸發,全鏈零訊號(江波圖只是缺前半段)。併回 pending 之後由進行中
+        那一輪的尾巴接手重排(**恰好一次**,不重複排);被擋下不算試過,所以不 bump 輪數。
+        """
+        src = _FakeSource()
+        src.gate = threading.Event()  # NQ 那一發卡在閘門上 → 整輪維持 in-flight
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            await _wait_until(lambda: eng._backfill_inflight)
+            round_before = eng._backfill_retry_round
+            with caplog.at_level(logging.INFO):
+                await eng._backfill_river(legs={"SXF"})  # 重試醒來,撞上進行中那一輪
+            assert eng._backfill_pending_legs == {"SXF"}
+            assert eng._backfill_retry_round == round_before
+            assert "single-flight" in caplog.text
+        finally:
+            src.gate.set()
+            await eng.close()
 
 
 class TestBackfillSessionOrdering:
