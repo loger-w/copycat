@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PriceLadder, type TradeKind } from "@/components/stock/PriceLadder";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
-import { ARM_IDLE_MS, LOCK_TITLE } from "@/lib/flash-arm";
+import type { FlashArmControl } from "@/hooks/useFlashArm";
+import { ARM_IDLE_MS, initialArm, LOCK_TITLE } from "@/lib/flash-arm";
 import type { CapitalOrder, CapitalPosition } from "@/types";
 
 const META = {
@@ -1204,6 +1205,31 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // 🔴 A11Y-6:改前 `touchIdle` 掛在 `onChange` —— 原生 radio 點**已選中**的那顆不發
+  // change,使用者一直在挑交易別(而且每次都停在現股)卻等於完全沒操作,閒置計時照跑
+  // 到底就把武裝解掉。互動訊號因此改走 label 的 click(`onInteract`),每一次點都算。
+  // 用外部 `armCtl` 觀測:`touch` 是本元件唯一對外的「使用者還在」訊號。
+  it("A11Y-6:點已選中的交易別 pill 仍觸碰閒置計時(touch)", () => {
+    mockCapitalFetch();
+    const touch = vi.fn();
+    const armCtl: FlashArmControl = {
+      state: initialArm(),
+      dispatch: () => {},
+      touch,
+      wsStatus: "open",
+    };
+    render(
+      <QueryClientProvider client={qc}>
+        <PriceLadder code="2330" book={BOOK} last={LAST} meta={META} armCtl={armCtl} />
+      </QueryClientProvider>,
+    );
+    touch.mockClear(); // 掛載期間的觸碰(置中 / effect)不計
+    const current = screen.getByRole("radio", { name: "現股" }) as HTMLInputElement;
+    expect(current.checked).toBe(true);
+    fireEvent.click(current.closest("label")!);
+    expect(touch).toHaveBeenCalled();
   });
 });
 
