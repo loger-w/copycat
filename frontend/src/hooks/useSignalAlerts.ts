@@ -7,18 +7,39 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getSoundOn, useSignalSound } from "@/hooks/useSignalSound";
 import { onSignal } from "@/lib/signal-bus";
-import { formatToastText, type SignalMsg } from "@/lib/signal-model";
+import { formatGroupToastText, type SignalGroup, type SignalMsg } from "@/lib/signal-model";
 
 /** 同時顯示上限(design R7):再多就疊成一片沒人讀得完,其餘走「+N」計數。 */
 const VISIBLE = 4;
 const TTL_MS = 5_000;
+/** 併入既有 toast 的最低 TTL 剩餘。低於它就另開新張:後到的那則若併進一張再 0.3 秒
+ *  就消失的 toast,等於根本沒顯示過(spec A2;後到者最短可見 1500ms)。 */
+const MERGE_MIN_REMAIN_MS = 1_500;
 
 export interface SignalToast {
   /** React key。**不是 `sig.id`** —— 重啟後 cooldown 不持久,同 id 會重發,
-   *  拿 id 當 key 會撞。 */
+   *  拿 id 當 key 會撞。同一組後續併入時**不換 key**(換 key = 整張卸載重掛閃爍)。 */
   key: string;
+  /** 組內**最早到**那則(錨):文案的價格與名稱都取它,與 Discord 合併訊息 rows[0] 同口徑。 */
   sig: SignalMsg;
+  /** 組內全部訊號,**新在前**(沿 `SignalGroup.items` 慣例)。 */
+  items: SignalMsg[];
+  /** 合併鍵 `code|time` —— 與 `groupSignals` 同口徑(同一 tick 同一檔)。 */
+  groupKey: string;
   text: string;
+}
+
+/** 由 toast 的 items 組出 `SignalGroup` 餵文案函式。錨(`key`/`name`/`price`)取
+ *  **最早到**那則 = `items` 的最後一則(items 新在前)。 */
+function toGroup(anchor: SignalMsg, items: SignalMsg[]): SignalGroup {
+  return {
+    key: anchor.id,
+    code: anchor.code,
+    name: anchor.name,
+    time: anchor.time,
+    price: anchor.price,
+    items,
+  };
 }
 
 /** Web Audio 單例。每次嗶都開新 AudioContext 會撞瀏覽器的並存數上限(Chrome 約 6 個),
@@ -74,10 +95,12 @@ export function playBeep(): void {
 }
 
 /** 固定 tag:全部訊號共用一格 OS 通知,跨窗的新通知覆蓋前一則、不疊成一排;
- *  同一節流窗內至多發一則(取首則),窗內不會發生覆蓋(handoff R4 / review F3)。 */
+ *  同一節流窗內至多發一則(handoff R4 / review F3)。 */
 const NOTIFY_TAG = "copycat-signal";
-/** 通知節流窗(leading edge):固定 tag 已在 OS 層合併,節流只防通知系統 churn。 */
+/** 通知節流窗:固定 tag 已在 OS 層合併,節流只防通知系統 churn。 */
 const NOTIFY_MIN_INTERVAL_MS = 5_000;
+/** 合併窗:同一 tick 的數則(ms 級間隔)先併起來再發,OS 上只出現一則完整文案。 */
+const COALESCE_MS = 300;
 
 /** 分頁在背景時才發桌面通知 —— 前景有 toast,兩個一起跳是重複打擾。
  *  回傳「是否真的發出」供節流記帳:permission 擋掉的不該消耗窗口。 */
@@ -103,8 +126,17 @@ export function useSignalAlerts() {
   const timersRef = useRef(new Map<string, number>());
   /** 上次真的發出桌面通知的時刻;hook 常駐 App 單掛載,ref 即全域節流狀態。 */
   const lastNotifyRef = useRef(-Infinity);
+  /** 合併真值:`code|time` → 目前承接該組的 toast。**放 ref 不放 state** ——
+   *  `setQueue` 的 updater 必須是純函式(StrictMode 會 double-invoke),累加 items
+   *  這種副作用得在 updater 之外先算完。 */
+  const groupIndexRef = useRef(
+    new Map<string, { key: string; items: SignalMsg[]; expiresAt: number }>(),
+  );
+  /** 待發桌面通知的文案(**全域單槽**:固定 tag 本來就只有一格,後到者覆寫)。 */
+  const pendingRef = useRef<string | null>(null);
+  const notifyTimerRef = useRef<number | undefined>(undefined);
 
-  /** deps **必須恆為 `[]`**:函式體只碰 `timersRef` 與 `setQueue`(兩者恆定),而下面的
+  /** deps **必須恆為 `[]`**:函式體只碰 ref 與 `setQueue`(兩者恆定),而下面的
    *  bus 訂閱 effect 以它為 dep —— 只要 `drop` 換身分,effect 就會重跑並在 cleanup 清光
    *  還在倒數的 TTL timer。 */
   const drop = useCallback((key: string): void => {
@@ -113,38 +145,95 @@ export function useSignalAlerts() {
       window.clearTimeout(timer);
       timersRef.current.delete(key);
     }
+    // A3 stale drop 守衛:同鍵可能已經另開新張(TTL 剩餘不足時),舊張的 TTL 到期
+    // **不得**把新張的索引刪掉 —— 反查 `entry.key === key` 才刪,等價於「先取該 toast
+    // 的 groupKey 再比對」,但不必額外維護一張 toastKey → groupKey 表。
+    for (const [groupKey, entry] of groupIndexRef.current) {
+      if (entry.key === key) {
+        groupIndexRef.current.delete(groupKey);
+        break;
+      }
+    }
     setQueue((prev) => prev.filter((t) => t.key !== key));
   }, []);
 
   useEffect(() => {
+    /** 合併窗尾:把單槽裡的最後一則推到 OS。 */
+    const fire = (): void => {
+      notifyTimerRef.current = undefined;
+      const text = pendingRef.current;
+      pendingRef.current = null;
+      if (text === null) return;
+      // 排程時是背景、到期時人已回到前景 → 丟棄且**不記帳**(前景有 toast,
+      // 再跳一則 OS 通知是重複打擾;spec Edge 4a)。
+      if (!document.hidden) return;
+      // 牆鐘記帳:NTP 回跳只會讓通知靜默多擋跳幅秒數,一次性可接受;
+      // 換 performance.now 的測試成本不成比例(review F5 rejected)。
+      if (notifyDesktop(text)) lastNotifyRef.current = Date.now();
+    };
+
     const off = onSignal((sig) => {
-      seqRef.current += 1;
-      const key = `${sig.id}#${seqRef.current}`;
-      const text = formatToastText(sig);
-      setQueue((prev) => [{ key, sig, text }, ...prev]);
-      timersRef.current.set(
-        key,
-        window.setTimeout(() => drop(key), TTL_MS),
-      );
+      const now = Date.now();
+      const index = groupIndexRef.current;
+      const groupKey = `${sig.code}|${sig.time}`;
+      const entry = index.get(groupKey);
+      // 合併條件(spec D1''):同鍵那張還在,且 TTL 剩餘夠久值得併進去。
+      const merge = entry !== undefined && entry.expiresAt - now >= MERGE_MIN_REMAIN_MS;
+      let text: string;
+
+      if (entry !== undefined && merge) {
+        const items = [sig, ...entry.items];
+        const anchor = items.at(-1) ?? sig;
+        const toastKey = entry.key;
+        entry.items = items;
+        text = formatGroupToastText(toGroup(anchor, items));
+        // 純 reorder:key / TTL 不變(D3),但被擠進 overflow 的那張要浮回可見區,
+        // 否則新到的那則等於沒顯示。
+        setQueue((prev) => {
+          const hit = prev.find((t) => t.key === toastKey);
+          if (hit === undefined) return prev;
+          return [{ ...hit, items, text }, ...prev.filter((t) => t.key !== toastKey)];
+        });
+      } else {
+        seqRef.current += 1;
+        const key = `${sig.id}#${seqRef.current}`;
+        const items = [sig];
+        text = formatGroupToastText(toGroup(sig, items));
+        index.set(groupKey, { key, items, expiresAt: now + TTL_MS });
+        setQueue((prev) => [{ key, sig, items, groupKey, text }, ...prev]);
+        timersRef.current.set(
+          key,
+          window.setTimeout(() => drop(key), TTL_MS),
+        );
+        // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的
+        // soundOn。**每新組一聲**(D4):併入既有那張不再嗶,同 tick 三則只響一次。
+        if (getSoundOn()) playBeep();
+      }
+
       // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
       // 「不要出聲」不是「不要通知」(design §8.3 / SC-10)—— 人離開分頁時桌面通知
       // 是唯一的抵達路徑,被音效開關順帶關掉等於整條提示鏈斷掉。
       if (document.hidden) {
-        // 牆鐘記帳:NTP 回跳只會讓通知靜默多擋跳幅秒數,一次性可接受;
-        // 換 performance.now 的測試成本不成比例(review F5 rejected)。
-        const now = Date.now();
-        if (now - lastNotifyRef.current >= NOTIFY_MIN_INTERVAL_MS) {
-          if (notifyDesktop(text)) lastNotifyRef.current = now;
+        // trailing(latest-wins):窗內只留最後一則的合併文案,窗尾才推出去。
+        // leading 會把「還沒併完的首則」送進 OS,而固定 tag 在 5s 節流內無法更新 ——
+        // 人看到的永遠是最舊那則。排程時刻同時吃合併窗與節流窗:兩者取晚的那個。
+        pendingRef.current = text;
+        if (notifyTimerRef.current === undefined) {
+          const at = Math.max(now + COALESCE_MS, lastNotifyRef.current + NOTIFY_MIN_INTERVAL_MS);
+          notifyTimerRef.current = window.setTimeout(fire, at - now);
         }
       }
-      // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的 soundOn
-      if (getSoundOn()) playBeep();
     });
     const timers = timersRef.current;
+    const index = groupIndexRef.current;
     return () => {
       off();
       for (const timer of timers.values()) window.clearTimeout(timer);
       timers.clear();
+      index.clear();
+      if (notifyTimerRef.current !== undefined) window.clearTimeout(notifyTimerRef.current);
+      notifyTimerRef.current = undefined;
+      pendingRef.current = null;
     };
   }, [drop]);
 
