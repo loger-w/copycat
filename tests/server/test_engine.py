@@ -432,6 +432,27 @@ async def _await_attempt(fake: _GatedOverflowSource, n: int) -> None:
     fake.entered.clear()  # 先清再放行:worker 下一輪才不會撞到上一輪殘留的旗標
 
 
+async def _await_push(
+    pushed: list[dict], pred: Callable[[dict], bool], *, what: str
+) -> dict:
+    """輪詢 `pushed` 直到出現符合 `pred` 的那一則(上限 200 × 0.01s = 2s)。
+
+    **不可改回 `await asyncio.sleep(0.05)` 之後直接斷言**:那是在賭「節流 + consumer
+    排程 + to_thread 交握」三者的時序,慢機器上偶紅、而且紅的訊息會指向斷言不是時序。
+    輪詢的上限是**失敗上限**不是等待時間 —— 正常路徑第一圈就命中。
+    """
+    for _ in range(200):
+        for snap in pushed:
+            if pred(snap):
+                return snap
+        await asyncio.sleep(0.01)
+    raise AssertionError(what)
+
+
+def _handover_of(snap: dict) -> dict:
+    return snap.get("handover") or {}
+
+
 async def test_handover_attempt_progress_visible_during_retries() -> None:
     """SC-1:重試期間 `handover.attempt` / `phase` 要跟著走,且**每 attempt 推一則**。
 
@@ -456,15 +477,39 @@ async def test_handover_attempt_progress_visible_during_retries() -> None:
         assert h["attempt"] == 1
         assert h["attempts_max"] == 3
         assert h["phase"] == "backfilling"
-        # D1'':五個既有觀測欄只在 attempt **結束**時出現,開頭那則不帶(不 merge 舊值 ——
-        # 上一輪的 backfill_secs 掛在新一輪的進度上是假資料)
-        assert "buffer_used" not in h
+        await _await_push(
+            pushed,
+            lambda s: _handover_of(s).get("attempt") == 1
+            and _handover_of(s).get("phase") == "backfilling",
+            what="attempt 1 的開頭那則從沒被推出去 → 前端看不到第一次",
+        )
         fake.gate.set()  # 放行 attempt 1 → buffer 溢出 → 重試
 
         await _await_attempt(fake, 2)
         h = rt.latest_snapshot()["handover"]
         assert h["attempt"] == 2
         assert h["phase"] == "backfilling"
+        # D1'' 的鎖**掛在 attempt 2 的開頭**(review T1):attempt 1 的開頭斷言是同義
+        # 反覆 —— 那時根本還沒有任何一輪寫過這五個欄。到這裡 attempt 1 已經寫完
+        # (backfill_secs / buffer_used / overflows 都有值),此刻仍不得出現,才真的
+        # 證明「不 merge 上一輪」。merge 的失效樣態是上一輪的耗時掛在新一輪的進度上,
+        # 畫面看起來完全正常。
+        assert "buffer_used" not in h
+        assert "backfill_secs" not in h
+        assert "overflows" not in h
+        assert "buffer_cap" not in h
+        assert "buffer_warned" not in h
+        # 「推播」這半的鑑別點也在**這一刻**(review T2):attempt 2 還卡在 gate 上,
+        # 它的結束那則(phase=live/degraded)根本還沒寫 —— 現在能看到一則
+        # `attempt == 2 且 phase == "backfilling"`,就只可能來自重試開頭那次
+        # `_mark_changed`。等到跑完再攤平序列的話,末則的 attempt 也是 2,斷言
+        # 對「重試期間有沒有推」毫無鑑別力。
+        await _await_push(
+            pushed,
+            lambda s: _handover_of(s).get("attempt") == 2
+            and _handover_of(s).get("phase") == "backfilling",
+            what="重試那一則沒推 → 畫面停在第 1 次(本輪的病灶)",
+        )
         fake.gate.set()
         await task
 
@@ -474,11 +519,6 @@ async def test_handover_attempt_progress_visible_during_retries() -> None:
         assert h["overflows"] == 1  # 既有欄位語意不變(W1)
         assert h["buffer_cap"] == 200_000
         assert rt.status == "live"
-        # 「推播」這半:攤平 attempt 序列,1 與 2 都要真的被送出去過
-        await asyncio.sleep(0.05)
-        attempts = [s["handover"]["attempt"] for s in pushed if s.get("handover")]
-        assert 1 in attempts, "attempt 1 從沒被推出去 → 前端看不到第一次"
-        assert 2 in attempts, "重試那一則沒推 → 畫面停在第 1 次(本輪的病灶)"
     finally:
         consumer.cancel()
         with suppress(asyncio.CancelledError):
