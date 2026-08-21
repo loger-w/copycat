@@ -1,0 +1,104 @@
+{
+ "round": 1,
+ "reviewer": "refactor-plan-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "刪 buildIndexGeometry 紅 outOfDomainLevels 測試",
+   "disposition": "accepted",
+   "resolution": "字面量 yDomain"
+  },
+  {
+   "id": "R2",
+   "severity": "P0",
+   "summary": "IndexPt 被 IndexGeometry 引用",
+   "disposition": "accepted",
+   "resolution": "瘦身/一併刪"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "size.test 改 import 違 skill",
+   "disposition": "accepted",
+   "resolution": "不動"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "武裝列非逐字同構;實為 2 份",
+   "disposition": "accepted",
+   "resolution": "ArmRow props 差異 + outerHTML 驗收"
+  },
+  {
+   "id": "R5",
+   "severity": "P1",
+   "summary": "C8 先例不存在",
+   "disposition": "accepted",
+   "resolution": "fut-chart-mode"
+  },
+  {
+   "id": "R6",
+   "severity": "P1",
+   "summary": "C8 覆蓋不足且 🔴 掛 refactor",
+   "disposition": "accepted",
+   "resolution": "移出本批"
+  },
+  {
+   "id": "R7",
+   "severity": "P1",
+   "summary": "C7 站點漏過半",
+   "disposition": "accepted",
+   "resolution": "完整 grep 清單"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "C1 測試保護不成立",
+   "disposition": "accepted",
+   "resolution": "用 isoLocalDate"
+  },
+  {
+   "id": "R9",
+   "severity": "P2",
+   "summary": "EMPTY_HLINES 新檔迴圈",
+   "disposition": "accepted",
+   "resolution": "CandleChart export"
+  },
+  {
+   "id": "R10",
+   "severity": "P2",
+   "summary": "比例算式形狀",
+   "disposition": "accepted",
+   "resolution": "NUM/DEN"
+  },
+  {
+   "id": "R11",
+   "severity": "P2",
+   "summary": "C2 執行期字串",
+   "disposition": "accepted",
+   "resolution": "排除"
+  },
+  {
+   "id": "R12",
+   "severity": "P2",
+   "summary": "C6 漏 6 站點 / 同步式不相容",
+   "disposition": "accepted",
+   "resolution": "納入 / 不收"
+  },
+  {
+   "id": "R13",
+   "severity": "P2",
+   "summary": "ArmRow 巢狀定義重掛",
+   "disposition": "accepted",
+   "resolution": "module-level"
+  },
+  {
+   "id": "R14",
+   "severity": "P2",
+   "summary": "死碼判定時效",
+   "disposition": "accepted",
+   "resolution": "commit body 記"
+  }
+ ]
+}
