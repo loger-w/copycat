@@ -494,6 +494,9 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
     expect(el.textContent).toContain("參考");
     expect(el.className).not.toContain("text-bull");
     expect(el.className).not.toContain("text-bear");
+    // 🔴 SC-3(D4''):無成交態的中性色由 ink-dim(對 surface 2.92:1)改 ink-muted(6.06:1)
+    expect(el.className).toContain("text-ink-muted");
+    expect(el.className).not.toContain("text-ink-dim");
   });
 
   // B3-b:`toContain("-")` 對 `-5.00%`、`2,380-` 之類的內容全都會通過 —— 缺值占位要
@@ -502,6 +505,20 @@ describe("GroupGridView 卡片價格(R11:p ?? ref)", () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const el = await screen.findByTestId("group-quote-2330");
     expect(el.textContent).toBe("-");
+    // 🔴 SC-3:`-` 與參考價同屬「無成交」一態(D4'' 的口徑是整格 tone)
+    expect(el.className).toContain("text-ink-muted");
+    expect(el.className).not.toContain("text-ink-dim");
+  });
+
+  // 反向 lock(D4''):**有成交**的零漲跌不在這批 —— 它是正常報價,維持 text-ink。
+  // 少了這條,「整格一律 ink-muted」的過度修改會全綠。
+  it("有成交但零漲跌 → 仍是 text-ink(不套零態灰)", async () => {
+    const quotes = { "2330": quote({ p: 2_320_000, chg_pct: 0 }) };
+    wrap(<GroupGridView groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />);
+    const el = await screen.findByTestId("group-quote-2330");
+    expect(el.className).toContain("text-ink");
+    expect(el.className).not.toContain("text-ink-muted");
+    expect(el.className).not.toContain("text-ink-dim");
   });
 });
 

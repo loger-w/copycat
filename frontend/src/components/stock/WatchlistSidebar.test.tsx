@@ -1017,6 +1017,35 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
     expect(row.style.height).toBe(`${ROW_H}px`);
   });
 
+  // 🔴 SC-3(D4''):有成交但平盤的那一列,漲跌欄是**要讀的數字**(「這檔今天沒動」
+  // 與「這檔還沒開始」是兩件事),ink-dim 對 surface 只有 2.92:1 → 換 ink-muted 6.06:1。
+  it("有成交、零漲跌 → 列漲跌欄 ink-muted(不是 ink-dim)", async () => {
+    const quotes = {
+      ...QUOTES,
+      "3231": {
+        p: 100_000,
+        chg_pct: 0,
+        vol: 10,
+        ref: 100_000,
+        upper: null,
+        lower: null,
+        no_data: false,
+        trial: false,
+      },
+    };
+    const { container } = wrap(
+      <WatchlistSidebar active={null} onSelect={() => {}} quotes={quotes} />,
+    );
+    await waitGroups();
+    const row = container.querySelector('[data-testid="wl-row-3231"]') as HTMLElement;
+    const pct = within(row).getByText("0.00%");
+    expect(pct.getAttribute("class")).toContain("text-ink-muted");
+    expect(pct.getAttribute("class")).not.toContain("text-ink-dim");
+  });
+
+  // 反向 lock(D4''):側欄這批只動「零漲跌」兩處 —— 參考價 / 無資料的 dim 不在其中
+  // (它們是「今天還沒開始」的弱化,不是要讀的數字)。少了這條,整檔一律換 token 的
+  // 過度修改會全綠。
   it("尚無成交但有參考價 → 灰色參考價 + 灰字「參考」,不顯示 0.00%", async () => {
     const quotes = {
       ...QUOTES,
@@ -1180,11 +1209,12 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
     );
     await waitGroups();
     const z = within(headerOf("主力")).getByText("0.00%");
-    expect(z.className).toContain("text-ink-dim");
+    // 🔴 SC-3(D4''):零漲跌的灰由 ink-dim(對 surface 2.92:1)改 ink-muted(6.06:1)
+    expect(z.className).toContain("text-ink-muted");
     expect(z.className).not.toContain("text-bear");
   });
 
-  it("負值綠字;零 = ink-dim", async () => {
+  it("負值綠字;零 = ink-muted", async () => {
     wrap(
       <WatchlistSidebar
         active={null}
@@ -1198,7 +1228,8 @@ describe("WatchlistSidebar 群組平均漲幅(R6 SC-4)", () => {
     await waitGroups();
     expect(within(headerOf("主力")).getByText("-3.00%").className).toContain("text-bear");
     const zero = within(headerOf("觀察")).getByText("0.00%");
-    expect(zero.className).toContain("text-ink-dim");
+    expect(zero.className).toContain("text-ink-muted");
+    expect(zero.className).not.toContain("text-ink-dim");
     expect(zero.className).not.toContain("text-bull");
   });
 
