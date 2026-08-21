@@ -69,3 +69,43 @@ Gate:`pytest -q` **2844 passed**(166s)/ `ruff check copycat tests` All checks pa
 - client:`*_abandoned` 旗標在 `rc == 0` 後才清(F3,三處);`_set_status("ok")` 清三旗標 + 三 collector `reset()`(F5)。
 - log:吞 → WARNING(部位更新被抑制);abandon → DEBUG。
 - 殘餘風險(F7,無 token 不可解):新輪已收 rows 時舊 `##` 會 flush 截斷快照並關閉本輪(機率 = 兩回應交錯在同一 ms 級窗),記 next-time。
+
+## 反向驗證結果(round 2)
+
+紅測試(commit `b4151b37`,3 支,全在 `tests/capital/test_client.py`):
+- `test_dead_query_unlock_clears_inflight_and_abandons_once`(F1/T1)
+- `test_empty_account_clears_positions_after_stale_window`(F2)
+- `test_requery_rc_failure_keeps_abandon_debt`(F3)
+
+修復前(fix 未進)訊息:
+`TypeError: BalanceCollector.abandon() takes 1 positional argument but 2 were given`(F1,
+spy 帶 `now_monotonic`)/ `TypeError: BalanceCollector.__init__() got an unexpected keyword
+argument 'clock'`(F2)/ `assert False is True ... _balance_abandoned`(F3)。
+
+修復 `21931840`(時間窗 + `_awaiting` 守門 + client 三處旗標)後 → `pytest -q tests/capital`
+**341 passed**;再加 lock commit `d59267bf`(T2–T8 / F4 / F5)→ **347 passed**。
+
+反向驗證:`git revert --no-commit 21931840` → 上述 3 支全部 **FAILED**(失敗訊息與修復前
+一致,`3 failed in 0.20s`);同時 `tests/capital` 整包 collection error
+(`ImportError: cannot import name 'STALE_WINDOW_S'` — lock 測試已依賴新常數,預期內)。
+還原:`git revert --quit` + `git checkout HEAD -- copycat/capital/balance.py
+copycat/capital/client.py tests/capital/test_balance.py`(revert 連同 fix commit 內的
+既有測試改接一起退,故三檔一起還原)→ `git status --short` 只剩 node_modules 未追蹤 →
+重跑 `pytest -q tests/capital` → **347 passed**。
+
+Mutation 驗證(13 個變異體,逐一改壞 source → 跑 `tests/capital` → 還原;腳本在 scratchpad):
+abandon 不清 staging / 不清 `_last_feed` / 無 `_awaiting` 守門、吞終止符不看時間窗、
+`_flush` 不關 `_awaiting`、收到 row 不關窗、`reset` 不理 `keep_abandoned`、
+client 解卡不清 inflight、balance 旗標在 rc 判定前清、profit/OI `reset` 丟掉
+`keep_abandoned`、重連不清欠帳、`STALE_WINDOW_S` 20→0 —— **13/13 KILLED**。
+
+Gate:`pytest -q` **2853 passed**(165s)/ `ruff check copycat tests` All checks passed /
+`pyright` 0 errors, 0 warnings。
+
+既有測試的適配(允許範圍內,明列):`test_collector_abandoned_round_ignores_late_end_marker`
+/ `test_collector_reset_after_abandon_clears_stale_debt` / `test_collector_rows_clear_stale_debt`
+三支在 `abandon()` 前補一行 `c.reset()` —— 新語意下 `abandon()` 只對「已發查詢、還在等
+回應」(`_awaiting`)的 collector 記帳,處女態 collector 記帳等於 F4 要擋的那個 bug;
+`reset()` = 發查詢,是最貼近真實 client 路徑的寫法。斷言本身未改動。
+`test_late_end_marker_from_abandoned_round_keeps_positions` 的部位改由「真餵一輪」做出來
+(取代 `store.set_positions`,review T2),斷言不變。
