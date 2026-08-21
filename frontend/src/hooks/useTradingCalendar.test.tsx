@@ -73,3 +73,13 @@ describe("useTradingCalendar", () => {
     expect(isTradingDay(HOLIDAY)).toBe(true);
   });
 });
+
+describe("calendarQueryOptions 輪詢口徑(2026-08-22 review R6 P2)", () => {
+  it("5 分鐘 + 背景分頁照輪詢(跨午夜膠囊不得遲到數小時)", async () => {
+    const { calendarQueryOptions } = await import("@/hooks/useTradingCalendar");
+    // 看盤日常 = preview 整天掛背景:6h 前景計時器在背景停擺、staleTime Infinity 又消解 focus 重取
+    expect(calendarQueryOptions.refetchInterval).toBe(5 * 60_000);
+    expect(calendarQueryOptions.refetchIntervalInBackground).toBe(true);
+    expect(calendarQueryOptions.staleTime).toBe(Infinity); // 白名單 1
+  });
+});

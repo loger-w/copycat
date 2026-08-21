@@ -518,3 +518,10 @@ describe("accumFromGroupSnapshot", () => {
     expect(acc.last?.p).toBe(2_355_000);
   });
 });
+
+describe("tape_omitted(2026-08-22 review R9 P2)", () => {
+  it("fromSnapshot 讀 tape_omitted → tapeOmitted;缺欄(舊後端 / 全量)→ false", () => {
+    expect(fromSnapshot({ ...SNAP, ticks: [], tape_omitted: true }).tapeOmitted).toBe(true);
+    expect(fromSnapshot(SNAP).tapeOmitted).toBe(false);
+  });
+});

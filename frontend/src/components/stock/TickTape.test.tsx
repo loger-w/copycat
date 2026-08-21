@@ -135,3 +135,15 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
     expect(screen.getAllByRole("row").slice(1)).toHaveLength(60);
   });
 });
+
+describe("TickTape 空態分流(2026-08-22 review R9 P2)", () => {
+  it("loading(tape=0 取回、全量補打中)→「載入明細…」而非終態「尚無成交」", () => {
+    render(<TickTape ticks={[]} ref_={REF} loading />);
+    expect(screen.getByText("載入明細…")).toBeTruthy();
+    expect(screen.queryByText("尚無成交")).toBeNull();
+  });
+  it("未傳 loading → 既有「尚無成交」", () => {
+    render(<TickTape ticks={[]} ref_={REF} />);
+    expect(screen.getByText("尚無成交")).toBeTruthy();
+  });
+});
