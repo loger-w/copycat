@@ -700,7 +700,13 @@ export function edgePriceLabels(
  *  截斷或丟棄 = 價位靜默消失;裝不下時寧可疊在界邊。
  *
  *  **輸出順序 = 輸入順序**:核心會依 y 排序,這裡用 `_i` 記原索引再排回來。
- *  拆節點後 DOM 次序穩定、測試逐條對位;配色 / React key 一律走 `level` 不走順序。 */
+ *  拆節點後 DOM 次序穩定、測試逐條對位;配色 / React key 一律走 `level` 不走順序。
+ *
+ *  **前置條件:`bounds` 必須涵蓋輸入 y 的值域**(呼叫端傳的正是線 y 的值域
+ *  `[PAD_Y, plotBottom − PAD_Y]`,即 `toY` 的映射範圍)。違反時界外的 y 會被 clamp 進界內,
+ *  於是兩條保證同時失效:(a)「位移 ≤ (n−1) × EDGE_LABEL_H」的上限不再成立;
+ *  (b)「不相疊就不動」不再成立(界外那顆本來就要被拉回來)。行為由
+ *  `stock-intraday-svg.test.ts` 的「輸入 y 在界外」一條釘住(code review C-1)。 */
 export function bandLabels(
   oLines: readonly OverlayLine[],
   bounds: { top: number; bottom: number },

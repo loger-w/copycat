@@ -419,7 +419,12 @@ const ChartStatic = memo(function ChartStatic({
           不相疊時像素逐點與改動前相同,後續勿當 bug 順手統一。
           `bandBounds` 是走廊 A 自己的界(D7):`[PAD_Y, plotBottom − PAD_Y]` 正是線 y
           的值域,不相疊的標籤不會被 clamp 無故位移。與走廊 B 的 `edgeBounds` 刻意不同
-          (那條要對齊極值文字 / 掛牌)。obstacles 空 = 兩條走廊不互避(D3:x 不相交)。 */}
+          (那條要對齊極值文字 / 掛牌)。obstacles 空 = 兩條走廊不互避(D3:x 不相交)。
+
+          **z-order 附帶改變(code review C-2:刻意保留)**:原本文字與線體同在一個
+          `<g key="o-…">` 裡,所以是「線 A、字 A、線 B、字 B…」交錯;拆成兩組節點後,
+          **所有帶內文字一律畫在所有疊線之上**。七條擠在一起時被推開的文字常常橫跨別條線,
+          原本會被後畫的線壓過(字上一條虛線),現在字完整可讀 —— 視覺是變好的,不是回歸。 */}
       {bandLabels(oLines, bandBounds).map((lab) => (
         <text
           key={`ob-${lab.level}`}

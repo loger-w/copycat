@@ -1940,7 +1940,9 @@ describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () =>
     );
   }
 
-  /** 疊線線體 = 虛線樣式 "3 2" 且自左軸起畫的那組 <line>(平盤線是 "2 3") */
+  /** 疊線線體 = 虛線樣式 "3 2" 且自左軸起畫的那組 <line>(平盤線是 "2 3")。
+   *  `"36"` = `Y_AXIS_W`(左價軸寬,`stock-intraday-svg.ts`)—— 疊線是唯一自左軸緣起畫的
+   *  水平虛線。動了 `Y_AXIS_W` 要一起改這個字面量(改漏的症狀是 selector 收到空陣列)。 */
   function overlayLineEls(container: HTMLElement): SVGLineElement[] {
     return [...mainSvg(container).querySelectorAll("line")].filter(
       (l) => l.getAttribute("stroke-dasharray") === "3 2" && l.getAttribute("x1") === "36",
@@ -1989,7 +1991,11 @@ describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () =>
       expect(Number(l.getAttribute("y1"))).toBeCloseTo(g.toY(prices[i]!), 6);
       expect(l.getAttribute("y2")).toBe(l.getAttribute("y1"));
     }
-    // 線仍擠在一起(標籤被推開的同時線沒跟著走):相鄰 ≈6px < EDGE_LABEL_H
+    // 線仍擠在一起(標籤被推開的同時線沒跟著走):相鄰 ≈6px < EDGE_LABEL_H。
+    // `6.0` 由**檔案級 ACCUM 的 y 域**推得,不是憑感覺挑的:域 = meta 的漲跌停
+    // [2_090_000, 2_550_000](跨度 460_000),plotH = 260 − X_LABEL_H(14) − 2×PAD_Y(8) = 238,
+    // fixture 相鄰價差 11_600 毫元 → 11_600 / 460_000 × 238 = 6.0017px。
+    // 動 ACCUM 的 meta / 本檔 CROWDED 的價位 / 圖高 → 這個字面量要一起重算。
     const ys = lines.map((l) => Number(l.getAttribute("y1"))).sort((a, b) => a - b);
     for (let i = 1; i < ys.length; i += 1) {
       expect(ys[i]! - ys[i - 1]!).toBeCloseTo(6.0, 1);
@@ -2002,7 +2008,10 @@ describe("StockIntradayChart 右緣帶內標籤避讓(R1 SC-1/SC-2/SC-3)", () =>
     const lastLine = overlayLineEls(container).at(-1)!;
     const textY = Number(lastText.getAttribute("y"));
     const lineY = Number(lastLine.getAttribute("y1"));
-    // 未避讓時 textY === lineY + 3;七顆全擠時 MA20 被推開 24px
+    // 未避讓時 textY === lineY + 3;七顆全擠時 MA20 被推開 24px。
+    // `24` 與上一條的 `6.0` **同源**(檔案級 ACCUM 的 y 域):七顆自第一顆起每顆 +10 →
+    // 末顆離第一顆 60px,而線只離 6 × 6.0017 = 36.01px,差 23.99 ≈ 24。
+    // 動 ACCUM 的 meta / CROWDED 價位 / 圖高 → 6.0 與 24 兩個字面量要一起重算。
     expect(textY - (lineY + 3)).toBeCloseTo(24.0, 1);
   });
 
