@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MinuteAgg } from "@/lib/stock-accum";
 import {
+  bandLabels,
   buildEnergyBars,
   buildIntradayGeometry,
   EDGE_LABEL_H,
@@ -1094,6 +1095,130 @@ describe("edgePriceLabels(SC-1/SC-3)", () => {
       expect(labels[0]!.y).toBeGreaterThanOrEqual(9);
       expect(labels[0]!.y).toBeLessThanOrEqual(20);
     });
+  });
+});
+
+// 🟢 SC-1(mod/cdp-edge-label-avoid):右緣**帶內**標籤(走廊 A)的 1D 避讓。
+//
+// 走廊 A 的 y 至今直接 = 線 y,平靜日 CDP 五值 + MA5/MA20 七顆常態擠在 36px 內
+// (2330 2026-08-20 實證截圖:9 對兩兩相疊、字全糊在一起)。這裡測的是純幾何,
+// 元件層只看得出「有 7 個 text 節點」,座標對不對完全沒有訊號。
+//
+// 與 `edgePriceLabels` 的差別在 D6:走廊 A **不截斷、不丟棄**(帶內的 `價位*` 是
+// CDP 唯一的價位訊息,靜默消失等於改資訊),裝不下時寧可疊在界邊。
+describe("bandLabels(R1 SC-1)", () => {
+  /** 呼叫端(ChartStatic)實際傳的那組界:繪圖區上下各留 PAD_Y(D7,= 線 y 的值域) */
+  const BOUNDS = { top: 4, bottom: 246 };
+
+  /** 2330 平靜日型:CDP 五值 + MA5/MA20 七條擠在 36px(相鄰 6px < 10px 必疊) */
+  const CROWDED: OverlayLine[] = [
+    { level: "ah", y: 100, priceMilli: 2_365_000 },
+    { level: "nh", y: 106, priceMilli: 2_350_000 },
+    { level: "cdp", y: 112, priceMilli: 2_340_000 },
+    { level: "nl", y: 118, priceMilli: 2_330_000 },
+    { level: "al", y: 124, priceMilli: 2_320_000 },
+    { level: "ma5", y: 130, priceMilli: 2_310_000 },
+    { level: "ma20", y: 136, priceMilli: 2_300_000 },
+  ];
+
+  it("擁擠七條 → 兩兩中心距 ≥ 10px,無一對相疊", () => {
+    const out = bandLabels(CROWDED, BOUNDS);
+    expect(out.length).toBe(7);
+    const ys = [...out.map((l) => l.y)].sort((a, b) => a - b);
+    for (let i = 1; i < ys.length; i += 1) {
+      // 10 = EDGE_LABEL_H(字高 ≈9px + 1px 呼吸);相鄰輸入只差 6px
+      expect(ys[i]! - ys[i - 1]!).toBeGreaterThanOrEqual(10);
+    }
+    // 由上而下推開 + 底部回推(界夠高 → 回推不作用):第一顆留原位,其後每顆 +10
+    expect(out.map((l) => l.y)).toEqual([100, 110, 120, 130, 140, 150, 160]);
+  });
+
+  it("y 排序與輸入線 y 排序一致(上下次序不互換),且輸出順序 = 輸入順序", () => {
+    const out = bandLabels(CROWDED, BOUNDS);
+    // 輸出順序:逐條對位(第 i 顆對應第 i 條線),不是佈局後的由上而下序
+    expect(out.map((l) => l.level)).toEqual(CROWDED.map((l) => l.level));
+    // y 次序:輸入 y 遞增 → 輸出 y 也遞增(ah 不會跑到 ma20 下面)
+    for (let i = 1; i < out.length; i += 1) {
+      expect(out[i]!.y).toBeGreaterThan(out[i - 1]!.y);
+    }
+  });
+
+  it("level / priceMilli 原樣帶出(顯示文字的口徑留在呼叫端,只動 y)", () => {
+    const out = bandLabels(CROWDED, BOUNDS);
+    expect(out.map((l) => l.priceMilli)).toEqual([
+      2_365_000, 2_350_000, 2_340_000, 2_330_000, 2_320_000, 2_310_000, 2_300_000,
+    ]);
+    expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
+  });
+
+  /** SC-1 位移上限(R8):核心是「下推 + 底部回推」不是對稱展開,cluster 整體偏下 ——
+   *  但任一顆離自己的線都不會超過 (n−1) 個槽位,否則標籤與線的對應就讀不出來了。 */
+  it("每顆離自己的線 ≤ (n−1) × 10px", () => {
+    const out = bandLabels(CROWDED, BOUNDS);
+    for (const [i, lab] of out.entries()) {
+      expect(Math.abs(lab.y - CROWDED[i]!.y)).toBeLessThanOrEqual(60); // (7−1) × EDGE_LABEL_H
+    }
+    // 實際最大位移 24(第 7 顆 136 → 160):上限是鬆的,不是同義反覆
+    expect(Math.max(...out.map((l, i) => Math.abs(l.y - CROWDED[i]!.y)))).toBe(24);
+  });
+
+  it("單顆 → y 不動(不無故位移)", () => {
+    expect(bandLabels([{ level: "cdp", y: 100, priceMilli: 2_340_000 }], BOUNDS)).toEqual([
+      { level: "cdp", y: 100, priceMilli: 2_340_000 },
+    ]);
+  });
+
+  it("相距夠遠(只有 MA 開)→ y 全部原樣", () => {
+    const sparse: OverlayLine[] = [
+      { level: "ma5", y: 50, priceMilli: 2_330_000 },
+      { level: "ma20", y: 120, priceMilli: 2_310_000 },
+    ];
+    expect(bandLabels(sparse, BOUNDS).map((l) => l.y)).toEqual([50, 120]);
+  });
+
+  it("空輸入 → []", () => {
+    expect(bandLabels([], BOUNDS)).toEqual([]);
+  });
+
+  /** D6:與 `edgePriceLabels` 的 `[]` 刻意不同。帶內的 `價位*` 是 CDP 唯一的價位訊息,
+   *  超矮圖時靜默一顆都不畫 = 改資訊;線體照畫,標籤就跟著線畫。 */
+  it("界退化(top > bottom,超壓縮畫布)→ 回傳 y = 線 y 原樣,不是 []", () => {
+    const out = bandLabels(CROWDED, { top: 9, bottom: 6 });
+    expect(out.map((l) => l.y)).toEqual([100, 106, 112, 118, 124, 130, 136]);
+    expect(out.map((l) => l.level)).toEqual(CROWDED.map((l) => l.level));
+  });
+
+  /** D6:圖牆最小卡(mainH ≈ 80 → 可用高 58px,capacity 6 < 7)。寧可疊在界邊也不丟。 */
+  it("容量不足(7 顆 > capacity)→ 仍全印 7 顆,y 單調不減、貼齊界邊", () => {
+    const out = bandLabels(CROWDED, { top: 4, bottom: 30 });
+    expect(out.length).toBe(7);
+    expect(out.map((l) => l.y)).toEqual([4, 4, 4, 4, 10, 20, 30]);
+    for (const l of out) {
+      expect(l.y).toBeGreaterThanOrEqual(4);
+      expect(l.y).toBeLessThanOrEqual(30);
+    }
+    // 文字來源(level / priceMilli)一顆都沒少
+    expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
+  });
+
+  /** D6 純函式 lock:呼叫端餵的是 `useMemo` 的 `oLines`,而同一份物件的 y 還被
+   *  `<line y1>` 讀 —— 就地改寫會把**線體**一起推走,而且 memo 快取被汙染後
+   *  下一次 render 會再推一次(標籤逐幀往下漂)。兩種症狀都沒有別的 assertion 會紅。 */
+  it("純函式:輸入陣列與元素逐位元不變", () => {
+    const input: OverlayLine[] = CROWDED.map((l) => ({ ...l }));
+    const snap = structuredClone(input);
+    bandLabels(input, BOUNDS);
+    expect(input).toEqual(snap);
+  });
+
+  it("回傳新物件(不是輸入元素的參照)", () => {
+    const input: OverlayLine[] = CROWDED.map((l) => ({ ...l }));
+    const out = bandLabels(input, BOUNDS);
+    for (const lab of out) expect(input).not.toContain(lab);
+  });
+
+  it("EDGE_LABEL_H 與 edgePriceLabels 同一顆(D4:同一條走廊語意,不另設常數)", () => {
+    expect(EDGE_LABEL_H).toBe(10);
   });
 });
 
