@@ -43,6 +43,7 @@ from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.live.stock_source import Bar, DailyBar
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.bars import (
     BarsCache,
@@ -1264,7 +1265,11 @@ def create_app(
                 bars = await asyncio.wait_for(
                     stock.daily_bars(code), timeout=OVERLAY_FETCH_TIMEOUT_S
                 )
-            except TimeoutError:
+            except (TimeoutError, HistoryTimeoutError):
+                # 兩種逾時同一條路(plan review P0-2):`asyncio.wait_for` 的整體逾時、
+                # 與 TC4 歷史首頁未備妥(`daily_bars` 現在會往外拋)在使用者那一端是
+                # 同一件事 —— 「這一檔現在取不到」。少了後者這半,`ConnectionError`
+                # 的降級接不到它,疊線會變成 500。
                 # 逾時 = 「這一檔現在取不到」,與 TC4 離線同一種降級:全 null + 200。
                 # **不寫 cache**(沿 overlay.py 空結果不 cache):快取一則空值等於
                 # 這檔今天再也拿不到疊線。放掉的是 semaphore 名額 —— `to_thread` 的

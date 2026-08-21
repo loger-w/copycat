@@ -340,12 +340,12 @@ class TestBackfillTimeoutRetry:
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            await _drain()
-            assert _minutes(eng, "SXF") == {}  # 首輪該腿逾時
             for _ in range(10):
                 await asyncio.sleep(0.01)
                 await _drain()
-            assert _minutes(eng, "SXF") == {76: 12_000_000}  # 重試補回來
+            # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
+            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
+            assert _minutes(eng, "SXF") == {76: 12_000_000}
             # 只重補 pending 腿:成功的腿不該被再打一次(TC4 歷史通道是稀缺資源)
             assert src.fetched.count("TC.F.CME.NQ.HOT") == 1
         finally:
