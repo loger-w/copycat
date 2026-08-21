@@ -155,6 +155,14 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   (30 s 靜默 watchdog,**必須 > 心跳間隔**,否則健康連線會被誤判半死而狂重連)。
   改值 = 改契約要同時改兩邊;前端 hook 的 `onMessage` 看不到 ping(helper 已過濾)。
 
+- **TXO 回補進度欄 `handover.attempt`**(2026-08-21 起):產生點 `copycat/server/engine.py::_run_handover_locked`
+  寫 `_handover={attempt,attempts_max,phase}`;唯一讀者 `frontend/src/components/ConnectionBadge.tsx`(只讀 `attempt`,
+  `status==='backfilling' && attempt>1` 才印「第 n 次」)。後端改欄名 → badge 靜默退回逐字「回補中」,零錯誤訊號。
+- **`/api/stock/state/{code}?tape=0` 字面值 + `tape_omitted`**(2026-08-21 起):後端 `app.py` 只認字串 `"0"`
+  省略 ticks 並回 `tape_omitted: true`;讀者 `frontend/src/hooks/useStockStream.ts::stateUrl`(送 `tape=0`)與
+  `lib/stock-accum.ts::fromSnapshot`(讀 `tape_omitted` → `accum.tapeOmitted`,TickTape 空態分流)。漂掉的症狀:
+  群組檢視省不到流量 / 切回單檔空態永遠印「尚無成交」。
+
 ## 5. 資料源
 
 - **主資料源 = Touchance 4.0**:國內外期貨即時行情 + 歷史(分 K/日 K)+ 帳務。**無下單功能
