@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, type KeyboardEvent } from "react";
 
 import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
 import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
@@ -12,6 +12,7 @@ import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
+import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
 
@@ -38,6 +39,12 @@ function initialTab(): RailTab {
   const saved = window.localStorage.getItem(RAIL_TAB_KEY);
   return saved === "orders" || saved === "positions" ? saved : "flash";
 }
+
+/** tab ↔ tabpanel 的 id 對(a11y 批 SC-2')。RightRail 全站只有一個實例(App 常駐
+ *  單掛),所以用固定字串而不是 `useId` —— 固定 id 讓 `aria-controls` 在 panel 還沒
+ *  mount 時仍是可預期的命名,而不是每次 render 換一個值。 */
+const tabId = (id: RailTab) => `rail-tab-${id}`;
+const panelId = (id: RailTab) => `rail-panel-${id}`;
 
 export type RailContext =
   | {
@@ -95,6 +102,20 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
     // 註:ladder 的 `follow` 也隨 unmount 回到預設 true(重新掛載即置中於現價)—— 這是
     // D-13 的既定代價,刻意不上提:它沒有「誤觸即送單」的性質,回到跟隨現價是合理預設。
     if (next !== "flash") setCenterRequest(null);
+  }
+
+  /** manual activation(D3'):方向鍵只移焦點,Enter / Space 才 `selectTab`。
+   *  焦點目標從 tablist 現場查 —— 三顆 tab 恆掛,不必為此多存一組 ref。 */
+  function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: RailTab): void {
+    const action = tablistKeyAction(e.key, TABS.findIndex(([t]) => t === id), TABS.length);
+    if (action === null) return;
+    e.preventDefault();
+    if (action === "select") {
+      selectTab(id);
+      return;
+    }
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[action]?.focus();
   }
 
   // R4:選中個股期合約 → 右欄整組換到期貨市場。委託 / 部位若還停在 `sec`,使用者
@@ -294,7 +315,15 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
             key={id}
             type="button"
             role="tab"
+            id={tabId(id)}
+            // ⚠ 未選中的 tab 指向一個**還沒 mount** 的 panel(dangling):panel 是條件
+            // render(D-13,見檔頭),不可改 hidden。這是 spec 明記的既定代價 —— 選中
+            // 的那顆恆指得到,AT 的實際使用路徑不受影響。
+            aria-controls={panelId(id)}
             aria-selected={tab === id}
+            // roving tabindex:整組 tablist 只佔一個 tab stop,組內用方向鍵走
+            tabIndex={tab === id ? 0 : -1}
+            onKeyDown={(e) => onTabKeyDown(e, id)}
             onClick={() => selectTab(id)}
             className={cn(
               "flex-1 rounded px-2 py-1 text-sm",
@@ -305,11 +334,38 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
           </button>
         ))}
       </div>
-      {/* 條件 render(非 hidden)—— 見檔頭 D-13 說明,改動前先讀 */}
-      {tab === "flash" ? flashContent() : null}
-      {tab === "orders" ? <div className="min-h-0 flex-1 overflow-y-auto">{ordersContent()}</div> : null}
+      {/* 條件 render(非 hidden)—— 見檔頭 D-13 說明,改動前先讀。
+          閃電分支要一層 wrapper 才掛得上 `role=tabpanel`(它回傳的是各家 ladder 本體);
+          委託 / 部位則把 role 掛在**既有**捲動層上,不新增節點。 */}
+      {tab === "flash" ? (
+        <div
+          role="tabpanel"
+          id={panelId("flash")}
+          aria-labelledby={tabId("flash")}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          {flashContent()}
+        </div>
+      ) : null}
+      {tab === "orders" ? (
+        <div
+          role="tabpanel"
+          id={panelId("orders")}
+          aria-labelledby={tabId("orders")}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          {ordersContent()}
+        </div>
+      ) : null}
       {tab === "positions" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">{positionsContent()}</div>
+        <div
+          role="tabpanel"
+          id={panelId("positions")}
+          aria-labelledby={tabId("positions")}
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          {positionsContent()}
+        </div>
       ) : null}
     </aside>
   );
