@@ -184,6 +184,78 @@ describe("RightRail 三 tab(SC-2 / D1)", () => {
   });
 });
 
+// a11y 批 SC-2' / D3':tablist 原本只有 `role=tab` + `aria-selected` 半套 —— 沒有
+// `aria-controls` / `role=tabpanel` / `aria-labelledby`,螢幕閱讀器聽不出「這顆分頁
+// 控制的是哪塊內容」;三顆 tab 各自是一個 tab stop,也沒有方向鍵。
+//
+// **manual activation**(D3' / R2):方向鍵**只移焦點**,Enter / Space 才切換。
+// 自動切換(focus 即 select)會在方向鍵掃過閃電 tab 時 unmount 閃電梯 = 靜默解除武裝。
+describe("RightRail tablist 補全(a11y SC-2')", () => {
+  const tab = (name: string) => screen.getByRole("tab", { name });
+
+  it("選中 tab ↔ tabpanel 互指(aria-controls / aria-labelledby)", () => {
+    render(rail(STOCK_CTX));
+    const flash = tab("閃電");
+    const panel = screen.getByRole("tabpanel");
+    expect(flash.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(flash.id);
+    expect(flash.id).toBeTruthy();
+    expect(panel.id).toBeTruthy();
+  });
+
+  it("委託 / 部位 tab 也有互指的 panel(role 掛既有捲動層,不新增節點)", () => {
+    render(rail(STOCK_CTX));
+    for (const name of ["委託", "部位"]) {
+      fireEvent.click(tab(name));
+      const panel = screen.getByRole("tabpanel");
+      expect(tab(name).getAttribute("aria-controls")).toBe(panel.id);
+      expect(panel.getAttribute("aria-labelledby")).toBe(tab(name).id);
+      // 不新增節點:role 掛在既有的 `min-h-0 flex-1 overflow-y-auto` 那層
+      expect(panel.className).toContain("overflow-y-auto");
+    }
+  });
+
+  it("roving tabindex:只有選中的 tab 是 0,其餘 −1", () => {
+    render(rail(STOCK_CTX));
+    expect(screen.getAllByRole("tab").map((el) => el.tabIndex)).toEqual([0, -1, -1]);
+    fireEvent.click(tab("委託"));
+    expect(screen.getAllByRole("tab").map((el) => el.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it("ArrowRight 只移焦點,不切換(manual activation);Enter 才切", () => {
+    render(rail(STOCK_CTX));
+    tab("閃電").focus();
+    fireEvent.keyDown(tab("閃電"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("委託"));
+    // 關鍵:選取態沒動 —— 閃電梯還掛著,武裝不會被方向鍵掃掉
+    expect(tab("閃電").getAttribute("aria-selected")).toBe("true");
+    expect(tab("委託").getAttribute("aria-selected")).toBe("false");
+
+    fireEvent.keyDown(tab("委託"), { key: "Enter" });
+    expect(tab("委託").getAttribute("aria-selected")).toBe("true");
+    expect(window.localStorage.getItem("copycat-rail-tab")).toBe("orders");
+  });
+
+  it("Space 也切換(且 preventDefault,避免頁面捲動 / 二次觸發)", () => {
+    render(rail(STOCK_CTX));
+    const evt = fireEvent.keyDown(tab("部位"), { key: " ", cancelable: true });
+    expect(evt).toBe(false); // dispatchEvent 回 false = 有人呼叫 preventDefault
+    expect(tab("部位").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("ArrowLeft 在首顆繞回尾顆;Home / End 到首 / 尾", () => {
+    render(rail(STOCK_CTX));
+    fireEvent.keyDown(tab("閃電"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tab("部位"));
+    fireEvent.keyDown(tab("部位"), { key: "Home" });
+    expect(document.activeElement).toBe(tab("閃電"));
+    fireEvent.keyDown(tab("閃電"), { key: "End" });
+    expect(document.activeElement).toBe(tab("部位"));
+    // 全程沒切換過
+    expect(tab("閃電").getAttribute("aria-selected")).toBe("true");
+  });
+});
+
 describe("RightRail 內容跟隨 context(SC-3 / D2)", () => {
   it("個股 context → 個股閃電梯,標題列顯示股號 + 股名(D-12)", () => {
     render(rail(STOCK_CTX));
