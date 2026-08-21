@@ -38,8 +38,14 @@ export const CARD_CHROME = {
 } as const;
 
 /** 主圖佔可用高的比例分子 / 分母 = 單檔頁 `MAIN.height` : `MAIN.height + SUB.height`。
- *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。 */
-const CARD_MAIN_RATIO = 260 / 330;
+ *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。
+ *
+ *  **分子 / 分母分開 export**:呼叫端算的是 `Math.round((h * NUM) / DEN)`(先乘後除),
+ *  改用比值 `Math.round(h * CARD_MAIN_RATIO)` 會在 `260/330` 這個無限循環小數上差 1px
+ *  —— 而 1px 正好是「兩張圖相加溢出格軌」的臨界。要比值的自己 derive。 */
+export const MAIN_RATIO_NUM = 260;
+export const MAIN_RATIO_DEN = 330;
+const CARD_MAIN_RATIO = MAIN_RATIO_NUM / MAIN_RATIO_DEN;
 
 export interface CardSvgBox {
   /** viewBox 寬 = 量到的 px 寬(1:1);**主圖與副圖共用** */

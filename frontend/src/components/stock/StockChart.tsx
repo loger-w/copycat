@@ -9,7 +9,7 @@ import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/us
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { aggregateBars } from "@/lib/candle";
 import { CHART_MODE_KEY } from "@/lib/constants";
-import { svgBox } from "@/lib/chart-frame";
+import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fillDates, fillPoints, stkfutFillKey } from "@/lib/fill-marks";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { StockAccum } from "@/lib/stock-accum";
@@ -141,7 +141,9 @@ export function StockChart({
   const box = svgBox(size, showIntraday ? INTRADAY_VB_W : CANDLE_VB_W);
   // 江波圖兩張 svg 上下相接:總 viewBox 高度按現行 260:70 拆分,且用減法讓兩者相加
   // 恰等於總高(各自 round 會多出 1px 誤差)。
-  const mainH = box.usable ? Math.round((box.viewBoxHeight * 260) / 330) : undefined;
+  const mainH = box.usable
+    ? Math.round((box.viewBoxHeight * MAIN_RATIO_NUM) / MAIN_RATIO_DEN)
+    : undefined;
   const subH = box.usable ? box.viewBoxHeight - (mainH ?? 0) : undefined;
 
   return (
