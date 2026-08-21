@@ -492,7 +492,7 @@
 
 ## 2026-08-13(mod/ladder-order-status review rejected 候選)
 
-- [ ] **BalanceCollector 無輪次識別:遲到的 `##` 可 flush 空集合全量蓋部位**(review C2/W2,
+- [x] **BalanceCollector 無輪次識別:遲到的 `##` 可 flush 空集合全量蓋部位**〔2026-08-21 已出貨 PR #84 bug/balance-collector-round-token:COM 回呼無關聯欄 → 改 `abandon()` 時間窗(20s 內零列 `##` 吞掉、WARNING)+ `_awaiting` 守門;client 解卡補回 inflight=None、rc==0 後才清旗標、reconnect 清欠帳〕(review C2/W2,
   rejected — collector 輪次化超出該輪 scope):零事件死查詢 10s 逾期解卡後 `_balance.reset()`
   再發第二次查詢,第一輪遲到的 `##` 會以空 staging flush → `set_positions([])` → 有庫存
   顯示無部位(最壞 60s 自癒)。master 原本無守門時暴露面更大(任一筆重查都可撞),守門
@@ -501,6 +501,9 @@
 
 ## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
 
+- [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷快照並關閉本輪**(2026-08-21 R7 review F7):COM 無查詢識別不可根治;
+  機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。
+- [ ] 真空帳戶在死查詢後最晚下一輪(≤60s)才顯示無部位(R7 時間窗代價,刻意);若嫌慢可縮 `STALE_WINDOW_S`。
 - [ ] **`_collect_history` timeout「靜默回空」語意是家族性風險**:本次事故根源之一
   (`history ... 30.0s 內首頁未備妥,回空` 不 raise → caller 無從排 retry)。index 側已用
   產出面 lag 偵測繞開,但同一語意的其他 caller(river_backfill 六腿、bars_range 各處)
