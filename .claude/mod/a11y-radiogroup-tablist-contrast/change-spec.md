@@ -129,3 +129,16 @@ MarketPane.test.tsx(130 `btn()` helper、164 parentElement)、FuturesChart.test.
 ### 白名單補
 - W8 StockChart / OrderPanel 的 `title` 文案與觸發條件不變(掛 label)。
 - W9 OrderPanel 焦點在 pill 按 Enter 不進 handleOpen(新鎖)。
+
+---
+## Spec review round 2 amendments(限縮輪,`change-spec-review-round-2.json`,8 條全 accepted;收斂)
+
+- **SC-2'' App.tsx**(R2-1):五個 tab(index/stock/txo/futures/corr)、五個 panel 掛點 App.tsx:264-336(hidden div);stock/futures/corr 受 `visited` 閘門延後 mount → 未造訪 tab 的 `aria-controls` 允許 dangling(同 RightRail);測試只鎖「已 mount 的 panel 有 role=tabpanel / id / aria-labelledby 且與 tab 互指」+ index/txo 恆掛兩顆互指。
+- **D1'' RadioPills slot**(R2-2):加 `leading?: ReactNode` / `trailing?: ReactNode` 渲染於容器內 radio 之前 / 之後(GroupGridView `<span>群組</span>` 走 leading;MarketPane 週期列「重疊」toggle 的 `<span className="ml-2">` 走 trailing)→ 容器仍逐字沿用、不新增層;`MarketPane.size.test` 不該紅;SC-5' 含 1536 窄 pane 週期列折行對照。
+- **D4'' 零態兩套口徑**(R2-3):WatchlistSidebar 改「零漲跌」(94 群組平均 / 498 列漲跌),反向 lock = 參考價(test:1040)/ 倉位 chip(test:1280)仍 dim;
+  GroupGridView 改「無成交 p==null 整格 tone」(涵蓋參考價與 `-` 兩態),該紅 = GroupGridView.test:489-497 / 501-505(新增 ink-muted 正向斷言),反向 lock = 有成交零漲跌仍 `text-ink`。SC-3 的「不含 ink-dim」只對被改元素本身。
+- **該紅清單再補**(R2-4 / R2-6):PriceLadder.test.tsx(404 / 1159-1191)、StkfutLadder.test.tsx 交易別段;容器 `role=group → radiogroup` 類:PriceLadder.test:1162、GroupGridView.test:233(+217 註解);
+  App.test.tsx:740、App.memo.test.tsx:477 / 508(改點 `wl-select-{code}`)。不該紅:MarketPane.test:275(`role=group` 左圖 pane 外框)、WatchlistSidebar.test:206 與 1006-1118 `within(row)` 系列。
+- **SC-1'(d) / W9 改可證偽**(R2-5):RadioPills.test 斷言 Enter keydown `defaultPrevented === true`;OrderPanel 真 form 提交靠 SC-5' 真環境列一條(焦點在 pill 按 Enter 不跳確認窗)。
+- **D5'' 選取態**(R2-7):`wl-select-{code}` button 掛 `aria-current={active === code ? "true" : undefined}`;`cursor-pointer` 從 row div 移到 button;SC-4' 加 aria-current 斷言。
+- **符號更正**(R2-8):MarketPane 的 pill 元件是 `MarketPane.tsx::Btn`(非 PeriodButton);App panel 行號 264-336。

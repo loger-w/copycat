@@ -1,0 +1,63 @@
+{
+ "round": 2,
+ "scope": "narrow",
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R2-1",
+   "severity": "P0",
+   "summary": "App.tsx 5 tab、3 panel 受 visited 閘門 → SC-2' 「無 dangling」不成立",
+   "disposition": "accepted",
+   "resolution": "SC-2'' 允許未造訪 dangling"
+  },
+  {
+   "id": "R2-2",
+   "severity": "P1",
+   "summary": "RadioPills 容器獨占裝不下 群組 span / 重疊 toggle",
+   "disposition": "accepted",
+   "resolution": "D1'' leading/trailing slot"
+  },
+  {
+   "id": "R2-3",
+   "severity": "P1",
+   "summary": "GroupGridView 零態反向 lock 恆假、查法對不上",
+   "disposition": "accepted",
+   "resolution": "D4'' 兩套口徑"
+  },
+  {
+   "id": "R2-4",
+   "severity": "P1",
+   "summary": "該紅漏 PriceLadder.test / StkfutLadder.test / 容器 role=group 斷言",
+   "disposition": "accepted",
+   "resolution": "清單再補"
+  },
+  {
+   "id": "R2-5",
+   "severity": "P1",
+   "summary": "SC-1'(d) 在 jsdom vacuous",
+   "disposition": "accepted",
+   "resolution": "改 defaultPrevented 斷言 + 真環境"
+  },
+  {
+   "id": "R2-6",
+   "severity": "P2",
+   "summary": "wl-row click 該紅未落點(App.test:740 / App.memo.test)",
+   "disposition": "accepted",
+   "resolution": "清單補"
+  },
+  {
+   "id": "R2-7",
+   "severity": "P2",
+   "summary": "D5' 丟掉選取態語意;cursor-pointer 殘留",
+   "disposition": "accepted",
+   "resolution": "aria-current + cursor 移 button"
+  },
+  {
+   "id": "R2-8",
+   "severity": "P2",
+   "summary": "PeriodButton 名不存在;panel 行號錯",
+   "disposition": "accepted",
+   "resolution": "符號更正"
+  }
+ ]
+}
