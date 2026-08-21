@@ -361,18 +361,21 @@
   server 不受影響(兩段式 rollover stage2 前不清狀態),但那個時段**重啟**的話 source
   日窗 = 今天而今天還沒開盤。要做需同時對齊 stock stage1 08:00 / index 08:30 /
   breadth streak 06:00 三個時序 → 待 user 決定是否開 R3b。
-- [ ] **試撮(緩)badge 假日仍純時間照標**(next-time:97 第二段的殘留):同一份日曆
+- [x] **試撮(緩)badge 假日仍純時間照標**〔2026-08-21 已出貨 PR #83 mod/calendar-visibility-batch:StockEngine `_trial_now` / `_spot_trial_now` AND `is_trading_day`;observe log 與 tick 層 is_trial 維持純窗〕(next-time:97 第二段的殘留):同一份日曆
   (`GET /api/calendar` 的 holidays)可直接餵給那條判定,本輪 scope 外。
-- [ ] **錯標日目前沒有可見訊號**(review S5 / spec KR-1 影響面):日曆把真交易日標成假日時,
+- [x] **錯標日目前沒有可見訊號**〔2026-08-21 已出貨 PR #83:`CalendarHolidayBadge`(calendar_trade_date ≠ today 且平日且 payload today = 本機日 → 「日曆判今日休市」);週末補班漏設仍無提示(out of scope)〕(review S5 / spec KR-1 影響面):日曆把真交易日標成假日時,
   breadth 全天不取數且 stale 被壓成 False、前端三支時段函式全 false = 全站輪詢停擺,而唯一提示是
   SC-7 的 boot WARNING(沒重啟就什麼都沒有)。補法:前端拿 `/api/calendar.holidays` 命中本機今日 →
   標頭掛一顆膠囊「日曆判今日休市」,讓「畫面不動」有個解釋。
-- [ ] **SignalRail 標題在非交易日仍寫「今日訊號」**(review S6,與 SC-10 同族):假日開站掛的是
+- [x] **SignalRail 標題在非交易日仍寫「今日訊號」**〔2026-08-21 已出貨 PR #83:`/api/stock/signals/today` additive 加 trade_date / today(hub 同時鐘),rail 顯示「MM-DD 訊號」;baseline 5 分 refetch〕(review S6,與 SC-10 同族):假日開站掛的是
   **上一交易日**的訊號(hub 的 jsonl 日別已跟著日曆走),標題卻寫今日 → 同 LimitList 那組處理,
   改成「`MM-DD` 訊號」(等於今日時仍顯示「今日訊號」)。
 
 ## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
 
+- [ ] **週末補班(extra_trading_days)漏設無膠囊提示**(2026-08-21 R6 spec review R9):膠囊週末守門排除;後端判休市 → 報價凍住 + 無(緩)(tick 層 is_trial 純窗丟棄)。
+  候選:`/api/calendar` additive 加 extra_trading_days,條件改「後端判非交易日且(非週末 或 …)」。
+- [ ] **`TXO_BACKFILL_DATE` 忘了清造成整盤凍結無提示**(R6 review 觀察):payload 已有 `backfill_env`,可比照膠囊掛一顆。S 級。
 - [x] **K 線態(日K / 分K)在台股綜合窄 pane 下 CandleChart 文字 ≈ 2–4px 不可讀**〔2026-08-21 已出貨 PR #77 mod/overview-narrow-pane-legibility〕(1:1 viewBox,1536 實測 computed 10px)(review WL-3
   partial / KR-3):CandleChart 是共用元件、viewBox 寬 1400 寫死,一頁總覽後 pane svg 寬
   ≈ 312–420px(改版前 ≈ 550,當時也已 3.9px)。〔2026-08-20 機械實測:1536×864 兩欄態加權
