@@ -1,0 +1,69 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "B7 測試檔名錯、RiverPanel.test L198-208 實為該紅",
+   "disposition": "accepted",
+   "resolution": "更正 + 改名反轉"
+  },
+  {
+   "id": "R2",
+   "severity": "P0",
+   "summary": "守門會丟掉 base 腿 13:45 收盤撮合價",
+   "disposition": "accepted",
+   "resolution": "end+1 允許覆寫、end+2 起不覆寫"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "SC-1 數字對不上三腿治具",
+   "disposition": "accepted",
+   "resolution": "改三腿字面"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "SC-4 log 不可觀測",
+   "disposition": "accepted",
+   "resolution": "探針命令 + 期望輸出"
+  },
+  {
+   "id": "R5",
+   "severity": "P2",
+   "summary": "回補真 bar 被近似值擋",
+   "disposition": "accepted",
+   "resolution": "next-time"
+  },
+  {
+   "id": "R6",
+   "severity": "P2",
+   "summary": "四處註解/__all__ 未列",
+   "disposition": "accepted",
+   "resolution": "同批改"
+  },
+  {
+   "id": "R7",
+   "severity": "P2",
+   "summary": "_session_date 與 _today 語意分岔未釘",
+   "disposition": "accepted",
+   "resolution": "docstring + W3 五處"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "hour<6 與夜盤收盤對齊無測試",
+   "disposition": "accepted",
+   "resolution": "不變式案"
+  },
+  {
+   "id": "R9",
+   "severity": "P2",
+   "summary": "守門位置與 SC-2 歧義",
+   "disposition": "accepted",
+   "resolution": "明寫"
+  }
+ ]
+}
