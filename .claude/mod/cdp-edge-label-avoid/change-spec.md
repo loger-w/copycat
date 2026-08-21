@@ -126,3 +126,6 @@ R6 accepted→current-state caller map 更正 / R7 accepted→SC-1 註 / R8 acce
 有 accepted P0 → 限縮加輪 1 次(只審 amendment 段)。
 Round 2(`change-spec-review-round-2.json`):R11 accepted→SC-4 圖牆判準改全印 / R12 accepted→SC-1 加前提 / R13 accepted→措辭 /
 R14 accepted→`_i` 還原機制 / R15 accepted→理由改寫。無 P0,收斂。
+
+## self_review_head
+c5d7b9be(code review round 1 + fix 波收斂後的 HEAD;收尾增量以此為基準)

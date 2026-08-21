@@ -1,0 +1,5 @@
+{"round":1,"lenses":["correctness+whitelist(opus)","test-coverage(opus)"],"p0":[],
+"p1":[{"id":"TC-1","file":"frontend/src/lib/stock-intraday-svg.test.ts","claim":"輸出順序=輸入順序(_i 還原)無鑑別力測試;fixture 皆已依 y 遞增,刪 _i sort 仍全綠;生產 oLines(ah..al 再 ma5/ma20)本就不保證 y 遞增","disposition":"accepted","resolution":"加交錯 fixture 鎖 level 序 + 依 y 排序後 level 序一致"}],
+"p2_summary":"C-1 bandLabels 前置條件 bounds ⊇ 輸入 y 值域未寫(doc+測試釘界外行為)/ C-2 拆節點附帶文字 z-order 提到所有疊線之上(註解記為刻意)/ C-3 測試 BOUNDS 註解精度 / TC-2 核心 map 複製無 lock(直接對 layoutEdgeLabels 下 lock)/ TC-3 七條全同 y 無 fixture / TC-4 bandBounds vs edgeBounds 選擇無 lock(貼頂線不位移)/ TC-5 card 變體全印 7 顆 + oLines 空無帶內文字 / TC-6 字面量註解(36=Y_AXIS_W、6.0 由 ACCUM 推得)。全部 accepted,fix 波一次補。",
+"evidence":{"W1_fuzz":"50000 組新舊 edgePriceLabels 逐欄相同 0 mismatch","dropOverflow_false_fuzz":"200000 組 in-bounds 無 NaN/越界/互換/超位移上限","full_suite":"2375 passed, tsc 0, eslint 0, react-doctor 0 new"},
+"incident":"correctness reviewer 驗證時 rm -rf 掉 frontend/public/__shot_host.html 與 docs/specs/mod-cdp-edge-label-avoid/screenshots/(主 session 剛產的 SC-4 證據,未入版控)→ 重拍;流程瑕疵入 feat-improvements"}
