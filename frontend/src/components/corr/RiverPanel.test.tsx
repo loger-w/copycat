@@ -57,7 +57,8 @@ describe("RiverPanel", () => {
     expect(screen.getByRole("checkbox", { name: "台指" })).toBeTruthy();
   });
 
-  it("取消勾選 → 記進 localStorage 且該腿線消失", () => {
+  it("取消勾選 → 記進 localStorage、該腿線消失、且不進讀值列", () => {
+    mockRect();
     render(<RiverPanel state={state()} />);
     fireEvent.click(screen.getByRole("button", { name: "重疊" }));
 
@@ -67,8 +68,14 @@ describe("RiverPanel", () => {
     expect(screen.getByRole("checkbox", { name: "富台" }).getAttribute("aria-checked")).toBe(
       "false",
     );
-    // 圖上腿名標籤消失(SVG 內的 text),checkbox 上的字不算
     const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
+    // 由上而下:先讀值列,再圖。讀值列改由 `entries` 產生(RiverOverlay 讀值列註解),
+    // 而 `entries` 正是**已濾掉 off** 的那份 —— 誤用全量 legs 的失效樣態是「線消失了、
+    // 讀值卻還在跳」,底下兩條 svg 斷言對它零訊號。
+    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
+    expect(screen.getByText("台指 +1.00%")).toBeTruthy();
+    expect(screen.queryByText(/^富台 /)).toBeNull(); // 勾選鈕上的字是「富台」無空格,不會誤中
+    // 圖上腿名標籤消失(SVG 內的 text),checkbox 上的字不算
     expect(svg.textContent).not.toContain("富台");
     expect(svg.textContent).toContain("台指");
   });
@@ -166,6 +173,18 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
     return screen.getByRole("img", { name: "各腿重疊走勢" }) as unknown as SVGElement;
   }
 
+  /** 標頭列裡「哪些 span 是讀值」以**形狀**認:`腿名 —` 或 `腿名 ±x.xx%`。
+   *
+   *  不用腿名白名單(原本是 `/^(台指|富台|道瓊) /`)—— 白名單會把「少了一腿」讀成
+   *  「這腿本來就不該在」,正是 TQ-6 要鎖的失效樣態。同列的時刻文字(`09:05` / 提示
+   *  文案)不合形狀自然被濾掉;基準分歧註記(`納指 自 09:55 起算 0%`)也以 `%` 結尾,
+   *  故另行排除 —— 它是註記不是讀值。 */
+  function readoutTexts(row: Element): string[] {
+    return Array.from(row.querySelectorAll("span"))
+      .map((s) => s.textContent ?? "")
+      .filter((t) => /(—|%)$/.test(t) && !t.endsWith("起算 0%"));
+  }
+
   it("游標移入 → 讀值列出現各腿 % 與該分鐘時刻", () => {
     mockRect();
     const svg = overlay();
@@ -211,11 +230,33 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
     const svgTexts = Array.from(svg.querySelectorAll("text")).map((t) => t.textContent);
     expect(svgTexts).not.toContain("道瓊");
     // 讀值列順序 = entries 順序(legs 鍵序,與勾選列 / 顏色序位一致),不是幾何回傳的順序
-    const row = screen.getByText("台指 —").parentElement!;
-    const readout = Array.from(row.querySelectorAll("span"))
-      .map((s) => s.textContent ?? "")
-      .filter((t) => /^(台指|富台|道瓊) /.test(t));
-    expect(readout).toEqual(["台指 —", "富台 —", "道瓊 —"]);
+    expect(readoutTexts(screen.getByText("台指 —").parentElement!)).toEqual([
+      "台指 —",
+      "富台 —",
+      "道瓊 —",
+    ]);
+  });
+
+  it("讀值列順序 = entries 順序,空腿夾在中間也不位移", () => {
+    mockRect();
+    const s = state();
+    // 空腿(道瓊)刻意排**中間**:讀值列若改由 `g.lines` 產生,`buildOverlayGeometry`
+    // 會把它整條濾掉,剩下的兩腿順序仍是 [台指, 富台] —— 空腿在末尾的既有案(上一條)
+    // 對這個失效樣態零鑑別力,順序看起來還是對的,只是少了一格。
+    s.legs = { TXF: s.legs.TXF!, YM: s.legs.YM!, TWN: s.legs.TWN! };
+    render(<RiverPanel state={s} />);
+    fireEvent.click(screen.getByRole("button", { name: "重疊" }));
+    const svg = screen.getByRole("img", { name: "各腿重疊走勢" });
+
+    fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
+
+    // 錨點取**畫得出線**的那一腿:錨在道瓊上的話,g.lines 版會先死在「找不到元素」,
+    // 看不出順序是否也錯了(而順序正是本案要鎖的)。
+    expect(readoutTexts(screen.getByText("台指 +1.00%").parentElement!)).toEqual([
+      "台指 +1.00%",
+      "道瓊 —",
+      "富台 -1.00%",
+    ]);
   });
 
   it("游標移出 → 讀值列收回提示文案", () => {
