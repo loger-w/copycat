@@ -1328,10 +1328,15 @@ def create_app(
         # today 若變慢先查同池鄰居,別急著懷疑 jsonl。
         hub = _signals(request)
         # 兩個日期是純屬性(no IO)→ 留在 loop 上讀;只有 jsonl 那段丟 worker thread。
+        # **先取樣再 await**(review C-1):讀檔那段可長,橫跨 rollover stage2 時「訊號
+        # 的日別」與「回傳的日期」必然錯位一拍 —— 方向由取樣順序決定。先取樣 = 最壞
+        # 情況回舊日期配舊訊號(前端印「MM-DD 訊號」,兩邊一致);後取樣 = 新日期配舊
+        # 訊號,前端據此印「今日訊號」而列的內容是昨天的,零錯誤訊號。
+        trade_date, today = hub.trade_date, hub.today
         return {
             "signals": await asyncio.to_thread(hub.today_signals),
-            "trade_date": hub.trade_date,
-            "today": hub.today,
+            "trade_date": trade_date,
+            "today": today,
         }
 
     # ---- 訊號規則 CRUD(signal-rules design「SC-4/6 routes」)----
