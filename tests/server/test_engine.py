@@ -503,6 +503,28 @@ async def test_handover_degraded_reports_last_attempt_and_phase() -> None:
         await rt.close()
 
 
+async def test_handover_source_error_marks_phase_degraded() -> None:
+    """review C1:來源 REQ 失敗時 `status` 降 degraded,`phase` 不可停在 "backfilling"。
+
+    兩者是同義欄(SC-1:phase = 這一次 attempt 結束後的去向)。分岔的樣態是後端早已
+    放棄、badge 卻掛著「回補中(第 n 次)」—— 使用者等一個永遠不會來的完成,而畫面上
+    零錯誤訊號。`attempt` 保留:失敗在第幾次仍是診斷資訊。
+    """
+    fake = FlakyQuoteSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    await rt.start()
+    try:
+        fake.fail = True  # TC4 app「死亡」
+        rt.request_self_heal()
+        await asyncio.sleep(0.2)
+        assert rt.status == "degraded"
+        h = rt.latest_snapshot()["handover"]
+        assert h["phase"] == "degraded"
+        assert h["attempt"] == 1  # 例外從 attempt 1 直接穿出去(不重試)
+    finally:
+        await rt.close()
+
+
 async def test_reconnect_self_heal_fires_under_continuous_ticks() -> None:
     """request_self_heal 後即使 tick 連續流入(queue 永不 timeout),自癒仍須觸發。"""
     fake = FakeQuoteSource()
