@@ -1,3 +1,34 @@
+## 2026-08-22(日間鏈 R1–R10 review 留尾;結論 `docs/superpowers/specs/2026-08-22-daytime-chain-review.md`)
+
+P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod),以下為本次不動的 P2:
+
+- [ ] **R1 超容 clamp 全堆界邊**:`lib/stock-intraday-svg.ts:643-666` dropOverflow=false 時上緣標籤被
+  clamp 成完全同 y(測試字面量 `[4,4,4,4,10,20,30]`),4×4 圖牆 capacity 6 / n=7 會踩到;改成界內等距壓縮。
+- [ ] **R2 MarketPane 週期 radiogroup 內混「重疊」toggle**(`MarketPane.tsx:493` trailing):新引入的
+  aria-required-children 違規,與 GroupGridView.tsx:346 同批相反決定不一致;搬出容器。
+- [ ] **R2 OrderPanel kind 單向靜默收斂**(`OrderPanel.tsx:66`):估價暫缺(WS 快照空窗)時市價翻回限價且不復原;
+  改回 disabled 送出鈕或估價回來時還原。
+- [ ] **R2 StockChart 停用 pill 新增 cursor-not-allowed**(`RadioPills.tsx:84` vs `StockChart.tsx:169`,視覺零變偏差);
+  `RadioPills.test.tsx:260/276` onInteract 改 `toHaveBeenCalledTimes`。
+- [ ] **R3 toast 合併與 `groupSignals` 不等價**(`useSignalAlerts.ts:187` 全索引 vs 相鄰)→ hook 內補註解;
+  `formatToastText` 只剩測試在用要標明;`ToastStack.tsx:29` 比照 B3 clamp;背景 >5 分鐘 intensive throttling
+  首則延遲待 user 實測。
+- [ ] **R4 `RightRail.tsx:285` / `futures-ladder.ts:156` 註解「後端會 400 BAD_TICK」不實**(平倉路由不過
+  `_require_legal_tick`,前端 edgeOf 是唯一守門)→ 改口;`WatchlistSidebar.tsx:334` `to` 未變時回同 reference;
+  補兩處邊價顯式等值 lock;作廢態給視覺回饋。
+- [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
+  守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
+- [ ] **R6 膠囊不讀 `years_loaded`**(日曆過期零提示);盤前 hub 聯集 vs 標題 trade_date 落差歸 R3b。
+- [ ] **R7 P2 四條**:profit 段 `000` 表頭先關窗(`client.py:425`,測試只餵裸 `##`);吞終止符 WARNING 帶
+  collector 名;`_set_status("ok")` 改專用 clear 不走 reset(`client.py:240`);`_query_open_interest` 無期貨
+  帳號提前 return 不清 `_oi_abandoned`(`client.py:467`)。
+- [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
+  鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
+- [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
+  路徑 phase≠status 無測;`handover.attempt` 與 `tape=0` 字面值登記 CLAUDE.md §4。
+- [ ] **R10 `corr_config.py:97/100/104/108` 四條 logger 仍印「預設六腿」**(現 7 腿;08-21 C2 條已 `[x]` 但此處未追蹤)
+  → 🔴 微幅,下次動 corr_config 帶走。
+
 ## 2026-08-21(refactor/housekeeping-batch-2026-08-21 R10 留尾)
 
 - [ ] **全站 `localStorage` get/set 收斂到 `lib/storage.ts::readLocal` / `writeLocal`**(/mod)。
