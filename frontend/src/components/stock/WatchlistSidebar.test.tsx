@@ -1015,9 +1015,12 @@ describe("WatchlistSidebar 列選取 button(SC-4')", () => {
     expect(btn.getAttribute("type")).toBe("button");
     expect(btn.getAttribute("aria-label")).toBeNull();
     // 代號 / 名稱 / 漲跌幅同樣要能從可及名稱找到它(同一顆 button)
-    expect(main.getByRole("button", { name: /2330/ })).toBe(btn);
+    // `^2330`:代號是名稱的**開頭**(「加入群組 2330」/「移除 2330」也含代號,但不以它起始)
+    expect(main.getByRole("button", { name: /^2330/ })).toBe(btn);
     expect(main.getByRole("button", { name: /台積電/ })).toBe(btn);
-    expect(main.getByRole("button", { name: /\+2\.59%/ })).toBe(btn);
+    // 漲跌幅不另用 getByRole 定位:群組標題列也印同一個平均漲幅字串(會撞多元素)。
+    // 名稱由內容計算已由上面三條證成 → 這裡確認漲跌幅確實在同一顆 button 的內容裡。
+    expect(btn.textContent).toContain("+2.59%");
     // 🔴 A11Y-7:button 內不得有 div(HTML content model:button 只吃 phrasing content)
     expect(btn.querySelector("div")).toBeNull();
     fireEvent.click(btn);
