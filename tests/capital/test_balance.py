@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from copycat.capital.balance import (
+    STALE_WINDOW_S,
     BalanceCollector,
     ProfitRow,
     merge_fut_positions,
@@ -195,6 +198,16 @@ def test_collector_timeout_flush_closes_round() -> None:
     assert [p.stock_no for p in got[1] if isinstance(p, Position)] == ["3357"]
 
 
+class _FakeClock:
+    """collector 可注入時鐘:欠帳時間窗的窗內/窗外兩態不能靠 sleep 20s 來測。"""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def test_collector_new_query_resets_staging() -> None:
     got: list[list[object]] = []
     c = BalanceCollector(on_complete=got.append)
@@ -229,6 +242,58 @@ def test_collector_reset_after_abandon_clears_stale_debt() -> None:
     c.reset()
     c.feed(RAW_END)
     assert got == [[]]
+
+
+def test_collector_stale_window_expires_and_empty_round_flushes() -> None:
+    """T5:欠帳是**時間窗**不是計數 —— 窗外的零列 `##` = 帳戶這一輪真的空了,必須 flush。
+    (計數式的失效模式:連續死查詢每輪各記一筆,真空帳戶的空回應被無限期吞掉。)"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()
+    clock.now += STALE_WINDOW_S - 0.5  # 窗內
+    c.feed(RAW_END)
+    assert got == []
+    c.reset(keep_abandoned=True)
+    c.abandon()  # 又一輪死查詢(計數式在這裡開始自我延續)
+    clock.now += STALE_WINDOW_S + 0.5  # 窗外
+    c.feed(RAW_END)
+    assert got == [[]]
+
+
+def test_collector_abandon_clears_partial_round() -> None:
+    """T7:abandon 必須把本輪已收的殘列清掉。留著的話 (a) 新一輪的列會接在舊列後面
+    flush 出混合快照;(b) `_last_feed` 不清 → 幫浦圈的 timeout poll 會把殘列
+    當成「全部部位」flush 出去(全量取代語意 = 沒收到的那些檔全消失)。"""
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.reset()
+    c.feed(RAW_C_MARGIN)  # 本輪只收到一列就卡死
+    c.abandon()
+    c.poll(now_monotonic=time.monotonic() + 5.0)  # timeout 保險不得 flush 殘列
+    assert got == []
+    # 放棄到下一次 reset(發查詢)之間正是要防守的空窗:此時抵達的列屬新回應,
+    # 不可與被放棄那輪的殘列混在同一份快照裡
+    c.feed(RAW_T_BOUGHT)
+    c.feed(RAW_END)
+    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["2493"]  # 舊列沒混進來
+
+
+def test_collector_abandon_after_flush_is_noop() -> None:
+    """F4:abandon() 只對「還在等這一輪回應」的 collector 記帳(`_awaiting` 守門)。
+    pending watchdog 逾時會對 profit/OI 兩段一起呼叫,已正常收尾的那一段若也開窗,
+    下一輪合法的空回應(帳戶真的沒部位)就被白吞一次 → 幽靈部位多掛一輪。"""
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.reset()
+    c.feed(RAW_END)  # 本輪正常收尾
+    assert got == [[]]
+    c.abandon()  # watchdog 對已收尾的段呼叫 → no-op
+    assert c._stale_until is None
+    c.reset()
+    c.feed(RAW_END)
+    assert got == [[], []]  # 下一輪的空回應照常 flush
 
 
 def test_collector_rows_clear_stale_debt() -> None:

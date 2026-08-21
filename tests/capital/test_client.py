@@ -1406,37 +1406,13 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
     assert _balance_queries(com) == 2
 
 
-def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) -> None:
-    """R7/A4:死查詢逾期解卡(SC-7(d))放棄了第一輪,但那一輪的 `##` 可能才遲到 —
-    COM 回呼不帶任何查詢識別,終止符無法與查詢配對。遲到的零列 `##` 若照 flush,
-    on_complete 的全量取代語意會把有庫存的部位清成空集合(平倉鍵鎖住,真錢面不可操作),
-    且 `_closed` 之後第二輪的 rows 全被丟棄 → 最壞 60s 才自癒。"""
-    com = FakeCom()
-    client = _client(com, tmp_path)
-    _mark_ready(client)
-    client.store.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
-    client._balance_due = time.monotonic() - 1.0
-    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
-    assert _balance_queries(com) == 1
-    client._balance_due = time.monotonic() - 1.0
-    client._balance_inflight_until = time.monotonic() - 1.0  # deadline 逾期 → 解卡放行
-    client._maybe_query_balance()
-    assert _balance_queries(com) == 2
-
-    client._handle_balance("##")  # 第一輪遲到的終止符
-    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
-    assert client._pending_sec is None  # 鏈不得被空集合啟動
-
-    bal = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
-    client._handle_balance(bal)  # 第二輪真回應
-    client._handle_balance("##")
-    client._handle_profit("##,,,,")
-    client._handle_open_interest("##")
-    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
-
-
 _BAL_3357 = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
 _BAL_2493 = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
+_PNL_3357 = (
+    "臺慶科,3357,新台幣,融資,3000,288.00,-7.50,864000.00,301364.00,-74636.00,311.75,"
+    "376240.00,935000.00,240.00,221.00,0.00,2592.00,376000,559000,583,0.00,-7.98,0,,Y,2,3,"
+    "312.950000,A123456789,1234567890"
+)
 
 
 class _FakeClock:
@@ -1457,6 +1433,41 @@ def _seed_positions_via_round(client: CapitalClient, raw: str) -> None:
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
+
+
+def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) -> None:
+    """R7/A4:死查詢逾期解卡(SC-7(d))放棄了第一輪,但那一輪的 `##` 可能才遲到 —
+    COM 回呼不帶任何查詢識別,終止符無法與查詢配對。遲到的零列 `##` 若照 flush,
+    on_complete 的全量取代語意會把有庫存的部位清成空集合(平倉鍵鎖住,真錢面不可操作),
+    且 `_closed` 之後第二輪的 rows 全被丟棄 → 最壞 60s 才自癒。
+
+    ⚠ 涵蓋範圍(T8):這支只釘 **balance 段**的遲到終止符,且是「窗內」那一態。
+    profit / OI 段(pending watchdog 放棄)另有兩支;窗外照 flush 由
+    `test_empty_account_clears_positions_after_stale_window` 釘。
+    部位用真餵一輪做出來(不用 store.set_positions):collector 因此不是處女態,
+    跨輪殘留狀態才真的被考驗(review T2)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    _seed_positions_via_round(client, _BAL_3357)
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
+    assert _balance_queries(com) == 1
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0  # deadline 逾期 → 解卡放行
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 2
+
+    client._handle_balance("##")  # 第一輪遲到的終止符
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    assert client._pending_sec is None  # 鏈不得被空集合啟動
+
+    client._handle_balance(_BAL_2493)  # 第二輪真回應
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
 
 
 def test_dead_query_unlock_clears_inflight_and_abandons_once(tmp_path: Path) -> None:
@@ -1559,6 +1570,103 @@ def test_requery_rc_failure_keeps_abandon_debt(tmp_path: Path) -> None:
     client._handle_balance("##")  # 第一輪遲到的零列終止符(窗內)→ 吞掉
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
     assert client._pending_sec is None
+
+
+def test_reconnect_ok_clears_abandon_debt(tmp_path: Path) -> None:
+    """F5:`_set_status("ok")`(重登/重連落地)必須把放棄輪欠帳與三個 collector 一起清。
+    斷線前記的欠帳跨不過重連 —— 那一輪的 `##` 隨連線一起沒了,窗留著只會白吞重連後
+    第一個合法的空回應(帳戶真的沒部位時多掛一輪幽靈)。清點與 inflight/pending 同組。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._status = "degraded"
+    for collector in (client._balance, client._profit, client._oi):
+        collector.reset()
+        collector.abandon()
+        assert collector._stale_until is not None
+    client._balance_abandoned = True
+    client._profit_abandoned = True
+    client._oi_abandoned = True
+
+    client._set_status("ok")
+    assert (client._balance_abandoned, client._profit_abandoned, client._oi_abandoned) == (
+        False,
+        False,
+        False,
+    )
+    assert [c._stale_until for c in (client._balance, client._profit, client._oi)] == [
+        None,
+        None,
+        None,
+    ]
+
+
+def test_late_oi_end_marker_after_watchdog_keeps_fut_positions(tmp_path: Path) -> None:
+    """T3/T4(b):pending watchdog 逾時放棄的是 **OI 段**,它的 `##` 同樣會遲到。
+    `_query_open_interest` 必須用 `reset(keep_abandoned=...)` 把欠帳窗帶進下一輪 —
+    plain reset 會關窗 → 遲到的零列 OI `##` flush 空集合 → 期貨部位被清光
+    (A7「查詢失敗沿用上一輪」繞不過 `_on_oi_complete` 的全量覆蓋)。
+    順便釘 F4:profit 段這一輪已正常收尾,watchdog 對它的 abandon 必須是 no-op。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client.store.set_positions([Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0)])
+
+    # 第 1 輪:證券段收齊 → 損益段正常收尾 → OI 查詢發出後零事件卡死 → watchdog 放棄
+    client._handle_balance(_BAL_3357)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    assert ("get_open_interest", "F9999999") in com.sent
+    client._pending_deadline = 0.0
+    client._pump_once()
+    assert client._profit._stale_until is None  # 已收尾的段不記欠帳(F4)
+    assert client._oi._stale_until is not None  # 放棄的 OI 段才開窗
+    fut = client.store.position_for("TXFI6", market="fut")
+    assert fut is not None and fut.qty == 2  # A7:OI 未完成 → 沿用上一輪
+
+    # 第 2 輪:證券+損益照常 → 進 OI 查詢;第 1 輪遲到的零列 OI `##` 必須被吞
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    client._handle_balance(_BAL_3357)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")  # 第 1 輪遲到的終止符
+    fut = client.store.position_for("TXFI6", market="fut")
+    assert fut is not None and fut.qty == 2
+    # 第 2 輪真的 OI 回應照常收(吞終止符不得關閉本輪)
+    client._handle_open_interest("TF,F9999999,TXFI6,B,3,0,23000.0")
+    client._handle_open_interest("##")
+    fut = client.store.position_for("TXFI6", market="fut")
+    assert fut is not None and fut.qty == 3
+
+
+def test_late_profit_end_marker_after_watchdog_keeps_avg_price(tmp_path: Path) -> None:
+    """T4(a):watchdog 放棄 **損益段**時同理 —— `_on_balance_complete` 必須用
+    `reset(keep_abandoned=...)`。plain reset 會讓第 1 輪遲到的零列 profit `##`
+    在第 2 輪 flush 空集合:鏈提前推進到 OI,第 2 輪真的損益列被當「遲到」丟棄 →
+    均價/含費稅損益基底整批消失(前端部位列的成本基礎歸零)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    # 第 1 輪:證券段收齊 → 損益查詢發出後零事件卡死 → watchdog 放棄
+    client._handle_balance(_BAL_3357)
+    client._handle_balance("##")
+    client._pending_deadline = 0.0
+    client._pump_once()
+    assert client._profit._stale_until is not None
+
+    # 第 2 輪
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    client._handle_balance(_BAL_3357)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")  # 第 1 輪遲到的零列終止符 → 吞
+    client._handle_profit("000,查詢成功")  # 第 2 輪真回應
+    client._handle_profit(_PNL_3357)
+    client._handle_profit("##,,,,")
+    pending = client._pending_sec  # OI 未回,鏈尚未收尾 → 斷言看暫存
+    assert pending is not None
+    assert [p.avg_price for p in pending] == [311.75]
 
 
 def test_balance_query_rc_failure_rearms_due_with_backoff(tmp_path: Path) -> None:
