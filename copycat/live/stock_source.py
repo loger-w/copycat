@@ -603,14 +603,18 @@ class StockQuoteSource(TC4QuoteSource):
         rows: list[dict] = []
         budget = max(self._poll_wait * 30, 1.0)
         deadline = time.monotonic() + budget
-        while time.monotonic() < deadline:
+        while True:
             first = self._get_history(sym, start, end, "0")
             if first.get("HisData"):
                 break
-            if self._poll_wait:
-                time.sleep(self._poll_wait)
-        else:
-            raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
+            remaining = deadline - time.monotonic()
+            # `poll_wait <= 0` = 測試組態,語意 = **不等待**(探測一次就走,沿
+            # `river_backfill.collect_1k_minutes` 的同名慣例)。少了這道早退,`budget`
+            # 的 1.0s 地板會被拿去空轉幾十萬次 GETHISDATA —— 每條測試付一秒,而真實
+            # 組態(poll_wait > 0)完全看不到。
+            if self._poll_wait <= 0 or remaining <= 0:
+                raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
+            time.sleep(min(self._poll_wait, remaining))
 
         def _page(qry_index: str) -> list[dict]:
             return self._get_history(sym, start, end, qry_index).get("HisData", [])

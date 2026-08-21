@@ -151,21 +151,6 @@ async def _drain(engine: StockEngine) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    """等到 `pred()` 成立(沿 `test_corr_engine.py` / `test_breadth_engine.py` 的慣例)。
-
-    固定圈數的 `_drain()` 對「要等一個排程醒來」的斷言是兩頭錯:CI 慢一點就假紅,
-    本機快的時候又白等滿全部圈數。條件式等待兩邊都對,而且失敗訊息說得出等的是什麼。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件逾時未成立")
-
-
 async def _make() -> tuple[StockEngine, FakeSource]:
     src = FakeSource()
     engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)

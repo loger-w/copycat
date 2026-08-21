@@ -61,6 +61,7 @@ from copycat.live.signal_state import (
 from copycat.live.stock_models import StockTick, _best_limit_price
 from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.overlay import compute_cdp
 from copycat.signal_rules import (
     MAX_RULES,
@@ -728,11 +729,19 @@ class SignalHub:
             return False
         try:
             bars = await self._daily_bars(code, _BASIS_BARS)
-        except Exception:
+        except Exception as exc:
             # 具體處理 = 有限重試(X-2b,收窄 design §4.2),超限才落 None
             # (CDP 跳過、其他 kind 照常)。過期的失敗不排重試 —— 日別都換了,
             # 這則 job 的答案已經沒有人要。
-            logger.exception("CDP 基準日 K 取得失敗:%s", code)
+            if isinstance(exc, HistoryTimeoutError):
+                # 逾時是**預期中的暫時態**(TC4 首頁還沒備妥,不是 TC4 掛了):堆疊每次
+                # 都是同一條 `to_thread` → raise,零資訊量。盤前 basis sweep 逐檔 0.2s,
+                # TC4 忙窗一來就是幾十份 traceback,把真正該看的例外(型別錯 / 解析爆)
+                # 整段沖掉 —— 而那正是 traceback 唯一有用的場合。
+                # **處置完全相同**,差別只有 log 等級與有沒有 traceback。
+                logger.warning("CDP 基準日 K 逾時(非 TC4 down):%s(%s)", code, exc)
+            else:
+                logger.exception("CDP 基準日 K 取得失敗:%s", code)
             if not self._stale(basis_date, staged) and self._schedule_basis_retry(
                 code, basis_date, staged
             ):
