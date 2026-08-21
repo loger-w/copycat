@@ -1,0 +1,1069 @@
+diff --git a/configs/correlation.json b/configs/correlation.json
+index 1bd23091..c93fe19b 100644
+--- a/configs/correlation.json
++++ b/configs/correlation.json
+@@ -1,5 +1,5 @@
+ {
+-  "_comment": "相關係數引擎的腿設定。新增一腿只需在 legs 加一筆(SC-8),不必改引擎程式碼。source: tc4 = 本引擎自行 SUBQUOTE;futures_engine = 讀既有期貨引擎狀態(base 腿必須用這個,TXF.HOT 已被 futures_engine 訂閱,同 symbol 跨 session 只推一邊)。label 是前端顯示名,前端不寫死對照表。窗長/樣本門檻/stale 秒數目前在 copycat/corr_config.py 的 CorrConfig 預設值,此檔不覆寫。",
++  "_comment": "相關係數引擎的腿設定。新增一腿只需在 legs 加一筆(SC-8),不必改引擎程式碼。source: tc4 = 本引擎自行 SUBQUOTE;futures_engine = 讀既有期貨引擎狀態(base 腿必須用這個,TXF.HOT 已被 futures_engine 訂閱;不重複訂閱同一 symbol 是為了不多掛一把 TC4 refcount key —— 上游 feed 以 symbol 為單位,任一把 key 歸零就退訂整個 symbol,見 .claude/skills/tc4-market-facts/SKILL.md)。label 是前端顯示名,前端不寫死對照表。窗長/樣本門檻/stale 秒數目前在 copycat/corr_config.py 的 CorrConfig 預設值,此檔不覆寫。",
+   "_todo_tsm": "CME single stock futures(含 TSMC ADR)2026-07-27 上市,達錢 4 尚未上架(2026-07-29 實測 64 種命名組合全 fail)。上架後在 legs 加一筆即可,symbol 待實測確認。",
+   "base": "TXF",
+   "legs": [
+diff --git a/copycat/corr_config.py b/copycat/corr_config.py
+index b2357294..aa4b9026 100644
+--- a/copycat/corr_config.py
++++ b/copycat/corr_config.py
+@@ -5,8 +5,12 @@
+ 只需在 `configs/correlation.json` 加一筆。
+ 
+ `base` 腿的 `source` 必須是 `"futures_engine"`:台指 `TC.F.TWF.TXF.HOT` 已被既有
+-`futures_engine` 訂閱,同 symbol 跨 session 只推一邊(CLAUDE.md §8,2026-07-28 實證),
+-本引擎重複訂閱會讓其中一邊永久零推播且無錯誤訊號。
++`futures_engine` 訂閱,本引擎不重複訂閱同一個 symbol。**理由不是「跨 session 只推一邊」**
++(那是 07-28 的錯誤結論,08-18 已推翻):REALTIME 是單一 PUB port 廣播,人人收得到;真正的
++風險是 TC4 的 refcount 以 `symbol|DataType|窗` 為 key 計、上游 feed 卻以 **symbol** 為單位
++—— 多一把 key 就多一個「它歸零時把整個 symbol 的 feed 一起退掉」的引信(死掉沒 LOGOUT 的
++session 被 reap 時尤其明顯),而失效樣態是永久零推播且無錯誤訊號。詳見
++`.claude/skills/tc4-market-facts/SKILL.md`。
+ """
+ 
+ from __future__ import annotations
+@@ -82,7 +86,7 @@ def load_config(path: Path | None = None) -> CorrConfig:
+     """讀設定檔;不存在 / 壞格式 / base 不在 legs → 記 warning 後回 DEFAULT_CONFIG。
+ 
+     never-raise(沿用 notify.py 慣例):設定檔壞掉不該讓整個 server 起不來,
+-    降級成預設六腿仍是可用狀態。
++    降級成預設腿組仍是可用狀態。
+     """
+     target = CONFIG_PATH if path is None else path
+     if not target.exists():
+diff --git a/copycat/live/corr_source.py b/copycat/live/corr_source.py
+index 64eb5fe9..e48f9194 100644
+--- a/copycat/live/corr_source.py
++++ b/copycat/live/corr_source.py
+@@ -10,7 +10,7 @@
+    CME 會落在窗外。且 TC4 對訂閱一律回 `Success: OK`(CLAUDE.md §8),窗不匹配的
+    失效樣態是「訂閱成功但零推播」,沒有錯誤訊號 —— 靠 log 抓不到,只能靠設計避開。
+ 
+-全天窗 `({ymd}00, {ymd}23)` 即 Phase 0 probe 實測有效者(2026-07-29 23:09 六腿全推播)。
++全天窗 `({ymd}00, {ymd}23)` 即 Phase 0 probe 實測有效者(2026-07-29 23:09 各腿全推播)。
+ """
+ 
+ from __future__ import annotations
+diff --git a/copycat/live/futures_source.py b/copycat/live/futures_source.py
+index 8fe1c21d..968fedc1 100644
+--- a/copycat/live/futures_source.py
++++ b/copycat/live/futures_source.py
+@@ -127,9 +127,10 @@ class FuturesQuoteSource(TC4QuoteSource):
+     def fetch_day_1k(self, product: str) -> list[tuple[int, int]]:
+         """當日 1K → [(台北 minute_end, close 毫點)]。
+ 
+-        台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡,
+-        同 symbol 跨 session 只推一邊(CLAUDE.md §8),從別的 session 問同一檔有把推播
+-        搶走的風險。
++        台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡。
++        別條 session 問同一檔會多掛一把 refcount key,而 TC4 的上游 feed 以 symbol 為單位:
++        那把 key 歸零時整個 symbol 的推播一起斷(2026-08-18 實證;見
++        `.claude/skills/tc4-market-facts/SKILL.md`)。
+ 
+         **首頁在預算內未備妥 → `HistoryTimeoutError`**(bug/history-timeout-propagation;
+         舊契約是「回空」)。回空會被引擎讀成「這條腿今天沒有 1K」而整天不再回補;
+@@ -157,9 +158,10 @@ class FuturesQuoteSource(TC4QuoteSource):
+     ) -> list[Bar]:
+         """期指 K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。
+ 
+-        **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡,
+-        TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從別的 session 問同一檔
+-        有把推播搶走的風險,而失效樣態是「訂閱成功但零推播」,零錯誤訊號。
++        **必須從這條 session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這裡。
++        從別的 session 問同一檔會多掛一把 TC4 refcount key,而上游 feed 以 symbol 為單位
++        —— 那把 key 歸零就退訂整個 symbol(2026-08-18 實證,見
++        `.claude/skills/tc4-market-facts/SKILL.md`),失效樣態是「訂閱成功但零推播」,零錯誤訊號。
+ 
+         窗:**只有 SubHistory 的 start/end** 用 `YYYYMMDDHH` 全天範圍(與 stock_source
+         的歷史窗同款)。**不覆寫 `_rt_window`** —— 期貨 REALTIME 訂閱窗維持盤別窗
+diff --git a/copycat/live/models.py b/copycat/live/models.py
+index 99f6a519..690d07b1 100644
+--- a/copycat/live/models.py
++++ b/copycat/live/models.py
+@@ -14,12 +14,13 @@ SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 T
+ #: 現價源判定前綴 = **台指期產品樹**,含 HOT 與月份 leaf(`TC.F.TWF.TXF.202609`)。
+ #:
+ #: **不可放寬成 `"TC.F."`**:TXO runtime 的 ZMQ SUB 訂 `""`,會收到同 process 其他引擎訂的
+-#: 所有期貨推播 —— 個股期(`TC.F.TWF.DHF.HOT`)、六腿海外(`TC.F.CME.YM.HOT` 等)、
++#: 所有期貨推播 —— 個股期(`TC.F.TWF.DHF.HOT`)、海外腿(`TC.F.CME.YM.HOT` 等)、
+ #: 費半、小台微台。整棵樹前綴會讓它們輪流覆寫現價,右上角台指與 TXO 綜合損益的
+ #: `spot_pnl` 一起亂跳(2026-07-29 盤中實測個股期 232.5 顯示成台指)。
+ #:
+-#: 留 leaf 而非只認 `SPOT_SYMBOL` 完全相等:`futures_engine` 在 HOT 推播被搶走時會補訂
+-#: 月份 leaf(CLAUDE.md §8 同 symbol 跨 session 只推一邊),那是同一標的同一價位,
++#: 留 leaf 而非只認 `SPOT_SYMBOL` 完全相等:`futures_engine` 在 HOT 零推播時會補訂月份
++#: leaf(refcount 被別把 key 帶走後的復活路徑 —— leaf 是不同 symbol,天然是新 key;見
++#: `.claude/skills/tc4-market-facts/SKILL.md`),那是同一標的同一價位,
+ #: 也是該情境下唯一的現價來源。
+ SPOT_PREFIX = "TC.F.TWF.TXF."
+ 
+diff --git a/copycat/live/river_backfill.py b/copycat/live/river_backfill.py
+index 16a0ea9a..2d9d70b2 100644
+--- a/copycat/live/river_backfill.py
++++ b/copycat/live/river_backfill.py
+@@ -5,9 +5,10 @@
+ 碰別人的私有面。`stock_source._collect_history` 是同型邏輯的既有實作(那條服務 K 線 / overlay,
+ 語意與參數已被四個呼叫點綁住,不在本輪動它;共用化條件記 `docs/next-time.md`)。
+ 
+-**為什麼回補要各走自己的 session**:TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8),
+-台指 `TC.F.TWF.TXF.HOT` 的訂閱在 futures session 手上 → 台指的 1K 也必須從那條 session 問,
+-不可從 corr session 發(疑似與既有 bug 1 同源)。
++**為什麼回補要各走自己的 session**:台指 `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在 futures
++session 手上 → 台指的 1K 也必須從那條 session 問,不可從 corr session 發。corr 那邊發等於
++對同一個 symbol 多掛一把 TC4 refcount key,而上游 feed 以 symbol 為單位 —— 那把 key 歸零就
++把整個 symbol 的推播帶走(2026-08-18 實證,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
+ """
+ 
+ from __future__ import annotations
+diff --git a/copycat/live/river_models.py b/copycat/live/river_models.py
+index 447eba35..73fdac67 100644
+--- a/copycat/live/river_models.py
++++ b/copycat/live/river_models.py
+@@ -1,4 +1,4 @@
+-"""六腿江波圖的純對映層(design v2 §1/§4;零 IO、只依賴 stdlib)。
++"""江波圖的純對映層(design v2 §1/§4;零 IO、只依賴 stdlib)。
+ 
+ **分鐘鍵一律「終點標記」**(bar end),與 TC4 1K 的 `Time` 語意一致:
+ 
+diff --git a/copycat/live/river_state.py b/copycat/live/river_state.py
+index 4fb7efeb..70a89ae1 100644
+--- a/copycat/live/river_state.py
++++ b/copycat/live/river_state.py
+@@ -1,4 +1,4 @@
+-"""六腿江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。
++"""江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。
+ 
+ per-leg `{offset: 收盤毫點}`,offset = 當場盤別窗內的分鐘位移(`river_models.offset_of`)。
+ 
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 9dcc05c6..60e22cdc 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -655,7 +655,7 @@ def create_app(
+             app.state.stock = stock
+             booted.stock = stock
+             # 合約查詢與個股訂閱共用同一條 session:QUERYALLINSTRUMENT 是 REQ 不是訂閱,
+-            # 不會有「同 symbol 跨 session 只推一邊」的問題,但多開一條 TC4 登入沒有理由
++            # 不會多掛 TC4 refcount key(那才是零推播的引信),但多開一條 TC4 登入沒有理由
+             fetch = getattr(stkfut_source, "list_stock_futures", None)
+             if stock is not None and callable(fetch):
+                 app.state.stkfut_catalog = StkfutCatalog(cast(Callable[[], dict], fetch))
+@@ -1553,7 +1553,8 @@ def create_app(
+         五秒內答出來的問題。400/503 只留給「請求本身錯」與「引擎沒起來」。
+ 
+         分派 = 每個 symbol 都向**持有它 REALTIME 訂閱的那條 session** 問歷史
+-        (CLAUDE.md §8 同 symbol 跨 session 只推一邊):
++        (別條 session 問 = 對同一 symbol 多掛一把 TC4 refcount key,歸零時退訂整個 symbol;
++        見 `.claude/skills/tc4-market-facts/SKILL.md`):
+         `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(無 TC4 來源)。
+ 
+         `session`(`day` 預設 / `allday` 近全,futures-allday SC-3)只對期指 tf=1 有意義:
+@@ -1742,7 +1743,7 @@ def create_app(
+         except WebSocketDisconnect:
+             return
+ 
+-    # ---- river(六腿江波圖;index-river-chart SC-5)----
++    # ---- river(江波圖;index-river-chart SC-5)----
+ 
+     @app.get("/api/river/state")
+     async def river_state(request: Request) -> dict:
+diff --git a/copycat/server/corr_engine.py b/copycat/server/corr_engine.py
+index f503c42f..5a4ad469 100644
+--- a/copycat/server/corr_engine.py
++++ b/copycat/server/corr_engine.py
+@@ -1,10 +1,11 @@
+-"""相關係數引擎:每秒 pull 六腿中價 → 滾動相關 → 廣播(SC-5/6;design §6)。
++"""相關係數引擎:每秒 pull 各腿中價 → 滾動相關 → 廣播(SC-5/6;design §6)。
+ 
+ **pull 而非 push**:需求是每秒更新,不是每 tick 更新。每秒主動讀各腿當前最佳買賣算
+ 中價,取樣率與推播率解耦(台指 516 則/分 vs 費半 146 則/分不需對齊)。更關鍵的是
+ base 腿(台指)因此可以直接讀既有 `FuturesEngine.state()`,完全不發 SUBQUOTE ——
+-`TC.F.TWF.TXF.HOT` 已被 futures_engine 訂閱,同 symbol 跨 session 只推一邊
+-(CLAUDE.md §8,2026-07-28 實證),重複訂閱會讓其中一邊永久零推播且無錯誤訊號。
++`TC.F.TWF.TXF.HOT` 已被 futures_engine 訂閱,本引擎不對同一個 symbol 再掛一把 TC4
++refcount key —— 上游 feed 以 symbol 為單位,任一把 key 歸零就退訂整個 symbol,失效樣態是
++永久零推播且無錯誤訊號(2026-08-18 實證,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
+ 
+ **兩種腿的新鮮度判定不同**:
+ - `tc4` 腿:收到推播即更新 `last_update`。
+@@ -135,7 +136,7 @@ class CorrelationEngine:
+             # 只有失敗腿才起這個 task —— 訂閱全成功時行為與修復前完全相同
+             self._resub_task = self._loop.create_task(self._resub_loop())
+         self._task = self._loop.create_task(self._run())
+-        # 回補放背景:六腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
++        # 回補放背景:各腿各要 SubHistory + 分頁收割,阻塞 start 會讓整個 app 起動變慢,
+         # 而畫面本來就可以先有 live 點再補歷史(design §3)
+         self._backfill_task = self._loop.create_task(self._backfill_river())
+         if hasattr(self._source, "on_reconnect"):
+@@ -396,7 +397,8 @@ class CorrelationEngine:
+         """一條腿的 1K 取得;失敗回空(該腿只從啟動後累積,不影響其餘腿)。
+ 
+         `futures_engine` 腿走注入的 fetch —— 台指的歷史也必須從持有 TXF 訂閱的那條 session 問
+-        (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。leg.key 即期貨產品碼(design §4 假設,
++        (別條 session 問會多掛一把 refcount key,歸零時退訂整個 symbol;見
++        `.claude/skills/tc4-market-facts/SKILL.md`)。leg.key 即期貨產品碼(design §4 假設,
+         與既有 `_futures_leg_book` 同一個假設)。
+         """
+         try:
+diff --git a/copycat/server/futures_engine.py b/copycat/server/futures_engine.py
+index dee271b0..3330cafb 100644
+--- a/copycat/server/futures_engine.py
++++ b/copycat/server/futures_engine.py
+@@ -124,8 +124,9 @@ class FuturesEngine:
+         self._flush_interval_secs = flush_interval_secs
+         self._dirty: dict[str, None] = {}
+         self._flush_timer: asyncio.TimerHandle | None = None
+-        # leaf fallback:HOT 與 TXO runtime spot 同 symbol 跨 session 只推一邊
+-        # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
++        # leaf fallback:HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol,
++        # 2026-08-18 實證)時 → resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約。
++        # leaf 是**不同 symbol**,天然是一把新 key,所以補得回來(重訂 HOT 補不回來)
+         self._leaf_grace_secs = leaf_grace_secs
+         self._leaf_done: set[tuple[str, str]] = set()
+         self._leaf_inflight: set[tuple[str, str]] = set()
+@@ -317,7 +318,8 @@ class FuturesEngine:
+         (與同檔 `bars_range` 的「在 engine 內吃掉」相反)—— 江波圖那條路要靠它排重補,
+         engine 這裡先降級成空就等於把訊號丟在半路(bug/history-timeout-propagation)。
+         本引擎持有 `TC.F.TWF.<product>.HOT` 的 REALTIME 訂閱,所以這檔的歷史也只能從這裡問
+-        (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。
++        (別處問會多掛一把 refcount key,歸零時退訂整個 symbol;見
++        `.claude/skills/tc4-market-facts/SKILL.md`)。
+         """
+         source = self._source
+         if source is None:
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index a062aeda..15be5c88 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -573,9 +573,9 @@ class IndexEngine:
+         現價源自 2026-07-30 起收斂為 `TC.F.TWF.TXF.*`(修掉「任何期貨都當台指」的亂跳)。
+         判定窗用**台指期交易時段**(日盤 + 夜盤),不是 watchdog 的 09:00–13:25 ——
+         已實證的零推播案例發生在夜盤(review P1-2)。
+-        代價是多了一個**安靜**的新失效態:若 TXF 推播被 futures session 搶走
+-        (同 symbol 跨 session 只推一邊)或 futures engine 整段零推播(CLAUDE.md §8 的
+-        間歇性症狀),或 TXF 鎖停只推 0 價市價佇列(aggregate 0 價閘擋掉、冷啟動從未
++        代價是多了一個**安靜**的新失效態:若 futures engine 整段零推播(TC4 refcount 被
++        別把 key 帶走 —— 見 `.claude/skills/tc4-market-facts/SKILL.md` 的重啟 60s 症狀),
++        或 TXF 鎖停只推 0 價市價佇列(aggregate 0 價閘擋掉、冷啟動從未
+         收過真價),`spot` 會恆 `None` —— 右上角台指與 TXO 綜合損益的現貨點位一起
+         空白,比亂跳更難察覺。固定字串供 grep:`txo spot 無 TXF 推播`。
+         """
+diff --git a/copycat/server/verify.py b/copycat/server/verify.py
+index 5595d2e0..f02b3498 100644
+--- a/copycat/server/verify.py
++++ b/copycat/server/verify.py
+@@ -1,8 +1,10 @@
+ """verify 模式支援:fake TXO source + 外部 IO env 壓制(`python -m copycat.server --verify`)。
+ 
+-盤中不可起第二台連 TC4 的後端(CLAUDE.md §8:同 symbol 跨 session 只推一邊,會靜默搶走
+-prod 的推播)——驗 HTTP 層(route 形狀 / 非行情 endpoint)一律走本模組的 fake source +
+-另一個 port,整條路不碰 ZMQ。
++盤中不可起第二台連 TC4 的後端:第二台會對 prod 已訂的 symbol 多掛一把 TC4 refcount key,
++而上游 feed 以 symbol 為單位 —— 那把 key 歸零(收工退訂、或 process 死掉被 reap)就把 prod
++的推播一起帶走,靜默且無錯誤訊號(2026-08-18 實證,見
++`.claude/skills/tc4-market-facts/SKILL.md`)。驗 HTTP 層(route 形狀 / 非行情 endpoint)
++一律走本模組的 fake source + 另一個 port,整條路不碰 ZMQ。
+ 
+ **本模組刻意不 import fastapi / uvicorn**:tests/conftest.py 全域 import 這裡的 key 清單,
+ 不能因此把 [live] extras 變成整個測試套件的硬依賴;組 app 的那步留在 `__main__`。
+diff --git a/frontend/src/components/corr/CorrPage.tsx b/frontend/src/components/corr/CorrPage.tsx
+index 69a01f29..9f7e0a14 100644
+--- a/frontend/src/components/corr/CorrPage.tsx
++++ b/frontend/src/components/corr/CorrPage.tsx
+@@ -7,7 +7,7 @@ import { useRiver } from "@/hooks/useRiver";
+  * 兩條 WS 常駐 —— 與其他 lazy tab 同慣例)。兩條 WS 都在此建立,沒點進來過就不 mount,
+  * 也就沒有每秒推播的流量(gate 在 App 的 `visited.corr`)。
+  *
+- * 版面:上半 六腿江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
++ * 版面:上半 江波圖(方向與時點)/ 下半 相關係數表(連動強度)。兩者互補 ——
+  * 係數是數字,看不出哪條腿先動;圖看得出時點,看不出強度。
+  */
+ export default function CorrPage() {
+diff --git a/frontend/src/components/corr/RiverCards.tsx b/frontend/src/components/corr/RiverCards.tsx
+index 79354c43..bb724f1b 100644
+--- a/frontend/src/components/corr/RiverCards.tsx
++++ b/frontend/src/components/corr/RiverCards.tsx
+@@ -1,6 +1,6 @@
+ /** 並排模式:六張小卡各自的絕對價走勢(SC-7)。
+  *
+- * 每腿 y 域各自 autofit —— 六腿價格量級差 15 倍(富台 3462 vs 道瓊 51909),共用域會讓
++ * 每腿 y 域各自 autofit —— 各腿價格量級差 15 倍(富台 3462 vs 道瓊 51909),共用域會讓
+  * 低價腿壓成一條直線。跨腿比較走「重疊」模式(那邊才正規化成 %)。
+  */
+ import { memo, useMemo } from "react";
+diff --git a/frontend/src/components/corr/RiverOverlay.tsx b/frontend/src/components/corr/RiverOverlay.tsx
+index a6a2872b..951ff6a5 100644
+--- a/frontend/src/components/corr/RiverOverlay.tsx
++++ b/frontend/src/components/corr/RiverOverlay.tsx
+@@ -1,4 +1,4 @@
+-/** 重疊模式:六腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
++/** 重疊模式:各腿正規化成「相對窗首 %」疊在一張圖 + 十字線讀值(SC-8/SC-9)。 */
+ import { useMemo, useState } from "react";
+ 
+ import { fmtPct } from "@/lib/format";
+@@ -41,7 +41,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
+   // **不能**進來(進來就會被凍在 cursor === null,讀值列永遠是「—」而線照畫)。
+   const { g, labelYs, lateStarts } = useMemo(() => {
+     const geo = buildOverlayGeometry(entries, win, SIZE);
+-    // 右緣腿名防疊(real-env 截圖:六腿價位接近時標籤互相蓋住)
++    // 右緣腿名防疊(real-env 截圖:各腿價位接近時標籤互相蓋住)
+     const ys = spreadLabelYs(
+       geo.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
+       11,
+diff --git a/frontend/src/components/corr/RiverPanel.tsx b/frontend/src/components/corr/RiverPanel.tsx
+index 831add26..f5b85135 100644
+--- a/frontend/src/components/corr/RiverPanel.tsx
++++ b/frontend/src/components/corr/RiverPanel.tsx
+@@ -1,4 +1,4 @@
+-/** 六腿江波圖面板:模式鈕(並排 / 重疊)+ 勾選列 + 兩種呈現的容器(SC-7/SC-8)。
++/** 江波圖面板:模式鈕(並排 / 重疊)+ 勾選列 + 兩種呈現的容器(SC-7/SC-8)。
+  *
+  * 吃 props 不自己呼叫 `useRiver` —— 與 `CorrPanel` 同款(資料流留在 `CorrPage`),
+  * 元件測試才能直接餵狀態(`[phase-3 補註]`:design §2 原寫 RiverPanel 內呼叫 hook)。
+diff --git a/frontend/src/components/futures/FuturesChart.tsx b/frontend/src/components/futures/FuturesChart.tsx
+index fd01f6ea..cc9086a6 100644
+--- a/frontend/src/components/futures/FuturesChart.tsx
++++ b/frontend/src/components/futures/FuturesChart.tsx
+@@ -18,7 +18,7 @@ import {
+   sliceCurrentAllday,
+ } from "@/lib/allday";
+ import { aggregateBars, type Bar } from "@/lib/candle";
+-import { svgBox } from "@/lib/chart-frame";
++import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
+ import { fmt } from "@/lib/format";
+ import {
+   FUT_CHART_MODES,
+@@ -44,9 +44,6 @@ import type { FuturesProductState } from "@/types";
+  * (clamp 到邊緣會把「圖外的價位」講成「圖緣的價位」)。
+  */
+ 
+-/** 主圖佔可用高的比例(= core 的 `MAIN.height : MAIN.height + SUB.height`,同個股頁)。 */
+-const MAIN_RATIO_NUM = 260;
+-const MAIN_RATIO_DEN = 330;
+ /** 分時 viewBox 寬 = core 的 `DEFAULT_W`;`svgBox` 反解要用同一個值。 */
+ const INTRADAY_VB_W = 800;
+ 
+diff --git a/frontend/src/components/futures/FuturesLadder.tsx b/frontend/src/components/futures/FuturesLadder.tsx
+index a9b48278..1fce28a2 100644
+--- a/frontend/src/components/futures/FuturesLadder.tsx
++++ b/frontend/src/components/futures/FuturesLadder.tsx
+@@ -1,6 +1,7 @@
+ import { useEffect, useRef, useState } from "react";
+ 
+ import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
++import { ArmRow } from "@/components/ladder/ArmRow";
+ import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
+ import {
+   useCancelOrder,
+@@ -351,47 +352,23 @@ export function FuturesLadder({
+       ) : null}
+       {/* 武裝列:武裝/解除 + 當沖 + 口數快捷 + 全撤/平倉 */}
+       <div className="border-b border-line px-2 py-1.5">
+-        <div className="flex items-center gap-2">
+-          <button
+-            type="button"
+-            aria-pressed={arm.state.armed}
+-            /* disabled 只擋進入方向:已武裝時解除鈕恆可按(review R2) */
+-            disabled={contract === null && !arm.state.armed}
+-            title={contract === null ? "合約未解析" : undefined}
+-            onClick={() => {
+-              touchIdle();
+-              dispatchArm({ type: "toggle" });
+-            }}
+-            className={cn(
+-              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
+-              arm.state.armed
+-                ? "border-loss bg-loss text-bg"
+-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-              contract === null && !arm.state.armed && "opacity-40",
+-            )}
+-          >
+-            {arm.state.armed ? "解除" : "武裝"}
+-          </button>
+-          {/* 鎖定鈕(LadderView 的第三份複本;三梯合一屬 out of scope,見 change-spec §8) */}
+-          <button
+-            type="button"
+-            aria-pressed={arm.state.locked}
+-            disabled={lockDisabled}
+-            title={lockDisabled && arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
+-            onClick={() => {
+-              touchIdle();
+-              dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
+-            }}
+-            className={cn(
+-              "shrink-0 rounded border px-2 py-1 text-xs font-bold",
+-              arm.state.locked
+-                ? "border-accent bg-accent text-bg"
+-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-              lockDisabled && "opacity-40",
+-            )}
+-          >
+-            {arm.state.locked ? "鎖定中" : "鎖定"}
+-          </button>
++        <ArmRow
++          className="flex items-center gap-2"
++          armed={arm.state.armed}
++          armDisabled={contract === null}
++          armTitle={contract === null ? "合約未解析" : undefined}
++          onToggleArm={() => {
++            touchIdle();
++            dispatchArm({ type: "toggle" });
++          }}
++          locked={arm.state.locked}
++          lockDisabled={lockDisabled}
++          lockTitle={lockDisabled && arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
++          onToggleLock={() => {
++            touchIdle();
++            dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
++          }}
++        >
+           <label className="flex items-center gap-1 text-xs text-ink-muted">
+             <input
+               type="checkbox"
+@@ -405,7 +382,7 @@ export function FuturesLadder({
+             />
+             當沖
+           </label>
+-        </div>
++        </ArmRow>
+         <div className="mt-1 flex items-center gap-1">
+           {QTY_PRESETS.map((p) => (
+             <button
+diff --git a/frontend/src/components/ladder/ArmRow.tsx b/frontend/src/components/ladder/ArmRow.tsx
+new file mode 100644
+index 00000000..62bddc89
+--- /dev/null
++++ b/frontend/src/components/ladder/ArmRow.tsx
+@@ -0,0 +1,89 @@
++/** 閃電梯武裝列(武裝 / 解除 + 鎖定 / 鎖定中 + 商品別控制項)的唯一畫法。
++ *
++ *  兩座梯(`stock/LadderView` = 現股 / 個股期,`futures/FuturesLadder` = 期貨)原本各寫
++ *  一份逐字相同的 JSX。**這一列是誤送風險最高的 UI**:武裝態的配色與鎖定態的字是使用者
++ *  判斷「現在點價會不會真的送出去」的唯一訊號,兩份分開演化的失效樣態是「其中一梯的
++ *  武裝態顏色沒跟上」—— 沒有任何測試會紅。
++ *
++ *  **差異一律走 props,不在元件內判梯別**:容器 `className`(gap 兩梯不同)、鎖定鈕
++ *  是否存在(`onToggleLock` 未給 = 整顆不渲染)、`lockTitle`(期貨態會換成連線未就緒
++ *  的說明)、右側 `children` slot(現股交易別 select / 個股期 + 期貨的當沖 checkbox)。
++ *  加「if 期貨」分支就等於把兩份複本搬進同一個檔案,沒解決任何東西。
++ *
++ *  DOM 逐字受 `ArmRow.characterization.test.tsx` 的 outerHTML 字面量守著。 */
++import type { ReactNode } from "react";
++
++import { cn } from "@/lib/utils";
++
++export function ArmRow({
++  className,
++  armed,
++  armDisabled = false,
++  armTitle,
++  onToggleArm,
++  locked = false,
++  lockDisabled = false,
++  lockTitle,
++  onToggleLock,
++  children,
++}: {
++  /** 容器 class(含 gap —— 兩梯不同,見檔頭) */
++  className: string;
++  armed: boolean;
++  /** 進入武裝的阻擋理由(現股 blocked / 期貨合約未解析) */
++  armDisabled?: boolean;
++  armTitle?: string;
++  onToggleArm: () => void;
++  locked?: boolean;
++  lockDisabled?: boolean;
++  /** 鎖定鈕的 title;呼叫端負責選字(期貨態會在連線未就緒時換成另一句) */
++  lockTitle?: string;
++  /** 未給 = 鎖定鈕整顆不渲染(現股梯的部分呼叫端不帶鎖定) */
++  onToggleLock?: () => void;
++  /** 武裝鈕右側的商品別控制項(交易別 select / 當沖 checkbox) */
++  children?: ReactNode;
++}) {
++  return (
++    <div className={className}>
++      <button
++        type="button"
++        aria-pressed={armed}
++        /* disabled 只擋**進入**方向:已武裝時解除鈕恆可按,否則 blocked 契約上
++           武裝態就沒有 UI 出口(change-spec review R2)。 */
++        disabled={armDisabled && !armed}
++        title={armTitle}
++        onClick={onToggleArm}
++        className={cn(
++          // min-w-0:288px 右欄下與鎖定鈕 + 商品別控制項同列,長出去會把列擠換行
++          "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
++          armed
++            ? "border-loss bg-loss text-bg"
++            : "border-line text-ink-dim hover:border-accent hover:text-ink",
++          armDisabled && !armed && "opacity-40",
++        )}
++      >
++        {armed ? "解除" : "武裝"}
++      </button>
++      {onToggleLock !== undefined ? (
++        <button
++          type="button"
++          aria-pressed={locked}
++          disabled={lockDisabled}
++          title={lockTitle}
++          onClick={onToggleLock}
++          className={cn(
++            // shrink-0:武裝鈕才是可壓縮的那顆 —— 鎖定鈕被壓到看不出字就等於沒有訊號
++            "shrink-0 rounded border px-2 py-1 text-xs font-bold",
++            locked
++              ? "border-accent bg-accent text-bg"
++              : "border-line text-ink-dim hover:border-accent hover:text-ink",
++            lockDisabled && "opacity-40",
++          )}
++        >
++          {locked ? "鎖定中" : "鎖定"}
++        </button>
++      ) : null}
++      {children}
++    </div>
++  );
++}
+diff --git a/frontend/src/components/stock/CandleChart.tsx b/frontend/src/components/stock/CandleChart.tsx
+index d19aeeb7..30065018 100644
+--- a/frontend/src/components/stock/CandleChart.tsx
++++ b/frontend/src/components/stock/CandleChart.tsx
+@@ -10,6 +10,7 @@ import {
+   type CandleGeometry,
+ } from "@/lib/candle";
+ import { clampTagX, clampTagY, overlaps } from "@/lib/chart-crosshair";
++import { EMPTY_HLINES, type ChartHLine } from "@/lib/chart-hlines";
+ import { useCandleHover } from "@/hooks/useCandleHover";
+ import { useCandleViewport } from "@/hooks/useCandleViewport";
+ import { CANDLE_MARK, clampLabelX, markLabelY } from "@/lib/chart-extreme";
+@@ -52,22 +53,9 @@ function shortStamp(t: string): string {
+ /** 穩定 identity 的空線:`[]` 字面量每次 render 都是新 array,會打穿 ChartStatic 的 memo。 */
+ const EMPTY_LINE: { x: number; y: number }[] = [];
+ 
+-/** 水平 overlay 線(持倉均價 / OI 撐壓;futures-allday SC-7/SC-11)。
+- *
+- *  `className` 是 **stroke-\* 家族**(線的顏色語意),不套到標籤文字上 —— 套上去
+- *  文字會被描邊而不是填色。標籤一律中性 ink + 底色描邊,方向語意由線本身承載。 */
+-export interface ChartHLine {
+-  priceMilli: number;
+-  label: string;
+-  className: string;
+-  /** hover 提示(SVG `<title>` 子節點)。線上只寫得下價位,證據(OI 口數 / 資料日 /
+-   *  部位口數)掛這裡。 */
+-  title?: string;
+-}
+-
+-/** 同 `EMPTY_LINE` 的理由:預設值寫 `hlines = []` 會讓每次 render 產生新 array,
+- *  打穿 ChartStatic 的 memo —— 而且是**所有既有頁面**(個股 / 大盤)都被打穿。 */
+-const EMPTY_HLINES: readonly ChartHLine[] = [];
++/** 型別本體在 `lib/chart-hlines.ts`(與 `EMPTY_HLINES` 同居 —— 非元件 export 不留在
++ *  元件檔);此處 re-export 保住既有 `@/components/stock/CandleChart` 的 import 路徑。 */
++export type { ChartHLine };
+ 
+ /** 視窗高低標記(round4 項 1)。`cx` = 造成該極值那根蠟燭的中心 x。 */
+ interface WindowMark {
+diff --git a/frontend/src/components/stock/LadderView.tsx b/frontend/src/components/stock/LadderView.tsx
+index 1ce29a4a..b8b55ec3 100644
+--- a/frontend/src/components/stock/LadderView.tsx
++++ b/frontend/src/components/stock/LadderView.tsx
+@@ -10,6 +10,7 @@
+  */
+ import { useEffect, useRef, useState, type ReactNode } from "react";
+ 
++import { ArmRow } from "@/components/ladder/ArmRow";
+ import { LOCK_TITLE } from "@/lib/flash-arm";
+ import { fmt } from "@/lib/format";
+ import type { LadderLot } from "@/lib/ladder-lots";
+@@ -189,47 +190,19 @@ export function LadderView({
+       {banner}
+       {/* 武裝列:武裝/解除 + 鎖定/鎖定中 + 商品別控制項 + 數量快捷 */}
+       <div className="border-b border-line px-2 py-1.5">
+-        <div className="flex items-center gap-1">
+-          <button
+-            type="button"
+-            aria-pressed={armed}
+-            /* disabled 只擋**進入**方向:已武裝時解除鈕恆可按,否則 blocked 契約上
+-               武裝態就沒有 UI 出口(change-spec review R2)。 */
+-            disabled={armDisabled && !armed}
+-            title={armTitle}
+-            onClick={onToggleArm}
+-            className={cn(
+-              // min-w-0:288px 右欄下與鎖定鈕 + 商品別控制項同列,長出去會把列擠換行
+-              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
+-              armed
+-                ? "border-loss bg-loss text-bg"
+-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-              armDisabled && !armed && "opacity-40",
+-            )}
+-          >
+-            {armed ? "解除" : "武裝"}
+-          </button>
+-          {onToggleLock !== undefined ? (
+-            <button
+-              type="button"
+-              aria-pressed={locked}
+-              disabled={lockDisabled}
+-              title={lockTitle ?? LOCK_TITLE}
+-              onClick={onToggleLock}
+-              className={cn(
+-                // shrink-0:武裝鈕才是可壓縮的那顆 —— 鎖定鈕被壓到看不出字就等於沒有訊號
+-                "shrink-0 rounded border px-2 py-1 text-xs font-bold",
+-                locked
+-                  ? "border-accent bg-accent text-bg"
+-                  : "border-line text-ink-dim hover:border-accent hover:text-ink",
+-                lockDisabled && "opacity-40",
+-              )}
+-            >
+-              {locked ? "鎖定中" : "鎖定"}
+-            </button>
+-          ) : null}
++        <ArmRow
++          className="flex items-center gap-1"
++          armed={armed}
++          armDisabled={armDisabled}
++          armTitle={armTitle}
++          onToggleArm={onToggleArm}
++          locked={locked}
++          lockDisabled={lockDisabled}
++          lockTitle={lockTitle ?? LOCK_TITLE}
++          onToggleLock={onToggleLock}
++        >
+           {armControls}
+-        </div>
++        </ArmRow>
+         <div className="mt-1 flex items-center gap-1">
+           {QTY_PRESETS.map((p) => (
+             <button
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index f5541252..74e52c14 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -9,7 +9,7 @@ import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/us
+ import { useContainerSize } from "@/hooks/useContainerSize";
+ import { aggregateBars } from "@/lib/candle";
+ import { CHART_MODE_KEY } from "@/lib/constants";
+-import { svgBox } from "@/lib/chart-frame";
++import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
+ import { fillDates, fillPoints, stkfutFillKey } from "@/lib/fill-marks";
+ import { ymdOf } from "@/lib/ladder-lots";
+ import type { StockAccum } from "@/lib/stock-accum";
+@@ -141,7 +141,9 @@ export function StockChart({
+   const box = svgBox(size, showIntraday ? INTRADAY_VB_W : CANDLE_VB_W);
+   // 江波圖兩張 svg 上下相接:總 viewBox 高度按現行 260:70 拆分,且用減法讓兩者相加
+   // 恰等於總高(各自 round 會多出 1px 誤差)。
+-  const mainH = box.usable ? Math.round((box.viewBoxHeight * 260) / 330) : undefined;
++  const mainH = box.usable
++    ? Math.round((box.viewBoxHeight * MAIN_RATIO_NUM) / MAIN_RATIO_DEN)
++    : undefined;
+   const subH = box.usable ? box.viewBoxHeight - (mainH ?? 0) : undefined;
+ 
+   return (
+diff --git a/frontend/src/components/stock/StockIntradayChart.tsx b/frontend/src/components/stock/StockIntradayChart.tsx
+index 236d3c1e..41ccfc25 100644
+--- a/frontend/src/components/stock/StockIntradayChart.tsx
++++ b/frontend/src/components/stock/StockIntradayChart.tsx
+@@ -4,7 +4,7 @@ import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout
+ // 型別借用既有 export(K 線圖的水平 overlay 與分時圖畫的是同一組語意:持倉均價 / OI 撐壓)。
+ // CandleChart 不 import 本檔,不成環;兩邊各定義一份的失效樣態是「K 線加了 title 欄、
+ // 分時圖沒有」這種同一份資料在兩張圖上長不一樣,沒有 assertion 會紅。
+-import type { ChartHLine } from "@/components/stock/CandleChart";
++import { EMPTY_HLINES, type ChartHLine } from "@/lib/chart-hlines";
+ import { clampLabelX, INTRADAY_MARK, markCenterX, markLabelY, markTone } from "@/lib/chart-extreme";
+ import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+ import { clampTagX, clampTagY, overlaps, toSvgPoint } from "@/lib/chart-crosshair";
+@@ -122,11 +122,6 @@ const EMPTY_PEGS: readonly PegInput[] = [];
+ /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
+ const EMPTY_ENERGY: { bars: EnergyBar[]; maxTotal: number } = { bars: [], maxTotal: 1 };
+ 
+-/** 水平參考線的空集合(stock / index 態恆為它)。**模組層常數**,理由同 `EMPTY_PEGS`:
+- *  預設值寫成 `hlines = []` 會讓**所有既有頁面**每次 render 都打穿 ChartStatic 的 memo,
+- *  而症狀只是 hover 掉幀,沒有任何測試會紅。 */
+-const EMPTY_HLINES: readonly ChartHLine[] = [];
+-
+ /** 極值標記文字的 baseline 上界(字高 0.5625rem ≈ 9px,再留 1px 呼吸) */
+ const MARK_LABEL_TOP = 9;
+ 
+diff --git a/frontend/src/hooks/useIndexOverlay.ts b/frontend/src/hooks/useIndexOverlay.ts
+index a6d0c0e5..559e16b6 100644
+--- a/frontend/src/hooks/useIndexOverlay.ts
++++ b/frontend/src/hooks/useIndexOverlay.ts
+@@ -1,14 +1,7 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
+ import type { StockOverlay } from "@/lib/stock-intraday-svg";
+-
+-function localYmd(): string {
+-  // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)
+-  const d = new Date();
+-  const mm = String(d.getMonth() + 1).padStart(2, "0");
+-  const dd = String(d.getDate()).padStart(2, "0");
+-  return `${d.getFullYear()}-${mm}-${dd}`;
+-}
++import { isoLocalDate } from "@/lib/trading-calendar";
+ 
+ async function fetchIndexOverlay(): Promise<StockOverlay> {
+   const res = await fetch("/api/index/overlay");
+@@ -28,7 +21,8 @@ async function fetchIndexOverlay(): Promise<StockOverlay> {
+  *  只寫 `data != null && 全 null` 的條件會讓 503 那條路永遠不輪詢。 */
+ export function useIndexOverlay(enabled: boolean) {
+   return useQuery({
+-    queryKey: ["index-overlay", localYmd()],
++    // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)
++    queryKey: ["index-overlay", isoLocalDate(new Date())],
+     queryFn: fetchIndexOverlay,
+     enabled,
+     staleTime: Infinity,
+diff --git a/frontend/src/hooks/useRiver.ts b/frontend/src/hooks/useRiver.ts
+index fb7ac151..4c014e98 100644
+--- a/frontend/src/hooks/useRiver.ts
++++ b/frontend/src/hooks/useRiver.ts
+@@ -1,4 +1,4 @@
+-/** 六腿江波圖資料流:`GET /api/river/state` 全量 + `/ws/river` 每秒 delta(design v2 §5)。
++/** 江波圖資料流:`GET /api/river/state` 全量 + `/ws/river` 每秒 delta(design v2 §5)。
+  *
+  * 與 `useCorrelation` 的關鍵差異:corr 每秒推**全量快照**,river 不能 —— 滿窗夜盤 840 分鐘
+  * × 6 腿 ≈ 5,000 個數字(60–80 KB),每秒推等於每分鐘 4.8 MB。所以這裡是
+diff --git a/frontend/src/hooks/useStockOverlay.ts b/frontend/src/hooks/useStockOverlay.ts
+index 0866d1a3..1396c11c 100644
+--- a/frontend/src/hooks/useStockOverlay.ts
++++ b/frontend/src/hooks/useStockOverlay.ts
+@@ -1,14 +1,7 @@
+ import { useQuery } from "@tanstack/react-query";
+ 
+ import type { StockOverlay } from "@/lib/stock-intraday-svg";
+-
+-function localYmd(): string {
+-  // 本機日界 = 台北(部署綁本機;design R13);跨日換 queryKey 自然失效(R9)
+-  const d = new Date();
+-  const mm = String(d.getMonth() + 1).padStart(2, "0");
+-  const dd = String(d.getDate()).padStart(2, "0");
+-  return `${d.getFullYear()}-${mm}-${dd}`;
+-}
++import { isoLocalDate } from "@/lib/trading-calendar";
+ 
+ async function fetchOverlay(code: string): Promise<StockOverlay> {
+   const res = await fetch(`/api/stock/overlay/${code}`);
+@@ -18,7 +11,8 @@ async function fetchOverlay(code: string): Promise<StockOverlay> {
+ 
+ export function useStockOverlay(code: string | null, enabled: boolean) {
+   return useQuery({
+-    queryKey: ["stock-overlay", code, localYmd()],
++    // 本機日界 = 台北(部署綁本機;design R13);跨日換 queryKey 自然失效(R9)
++    queryKey: ["stock-overlay", code, isoLocalDate(new Date())],
+     queryFn: () => fetchOverlay(code!),
+     enabled: enabled && code !== null,
+     staleTime: Infinity,
+diff --git a/frontend/src/lib/chart-frame.ts b/frontend/src/lib/chart-frame.ts
+index aee99eec..26b4f5dc 100644
+--- a/frontend/src/lib/chart-frame.ts
++++ b/frontend/src/lib/chart-frame.ts
+@@ -38,8 +38,14 @@ export const CARD_CHROME = {
+ } as const;
+ 
+ /** 主圖佔可用高的比例分子 / 分母 = 單檔頁 `MAIN.height` : `MAIN.height + SUB.height`。
+- *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。 */
+-const CARD_MAIN_RATIO = 260 / 330;
++ *  比例寫在這裡而不是元件裡:元件端另算一次的話,卡片的主副比會與單檔頁靜默岔開。
++ *
++ *  **分子 / 分母分開 export**:呼叫端算的是 `Math.round((h * NUM) / DEN)`(先乘後除),
++ *  改用比值 `Math.round(h * CARD_MAIN_RATIO)` 會在 `260/330` 這個無限循環小數上差 1px
++ *  —— 而 1px 正好是「兩張圖相加溢出格軌」的臨界。要比值的自己 derive。 */
++export const MAIN_RATIO_NUM = 260;
++export const MAIN_RATIO_DEN = 330;
++const CARD_MAIN_RATIO = MAIN_RATIO_NUM / MAIN_RATIO_DEN;
+ 
+ export interface CardSvgBox {
+   /** viewBox 寬 = 量到的 px 寬(1:1);**主圖與副圖共用** */
+diff --git a/frontend/src/lib/chart-hlines.ts b/frontend/src/lib/chart-hlines.ts
+new file mode 100644
+index 00000000..fcd1ff00
+--- /dev/null
++++ b/frontend/src/lib/chart-hlines.ts
+@@ -0,0 +1,23 @@
++/** 圖表水平 overlay 線的型別與空集合常數(K 線 / 分時共用)。
++ *
++ *  **為什麼獨立成 lib 檔而不是留在 `CandleChart.tsx`**:`EMPTY_HLINES` 是非元件 export,
++ *  放在元件檔會被 react-doctor `only-export-components` 擋下(fast-refresh 邊界)。型別
++ *  跟著常數走 —— 兩者分家的話,`ChartHLine` 改欄位時空集合的型別註記會靜默過期。
++ *  `CandleChart.tsx` 對 `ChartHLine` 有 `export type` re-export,既有 import 路徑不變。 */
++
++/** 水平 overlay 線(持倉均價 / OI 撐壓;futures-allday SC-7/SC-11)。
++ *
++ *  `className` 是 **stroke-\* 家族**(線的顏色語意),不套到標籤文字上 —— 套上去
++ *  文字會被描邊而不是填色。標籤一律中性 ink + 底色描邊,方向語意由線本身承載。 */
++export interface ChartHLine {
++  priceMilli: number;
++  label: string;
++  className: string;
++  /** hover 提示(SVG `<title>` 子節點)。線上只寫得下價位,證據(OI 口數 / 資料日 /
++   *  部位口數)掛這裡。 */
++  title?: string;
++}
++
++/** 同 `EMPTY_LINE` 的理由:預設值寫 `hlines = []` 會讓每次 render 產生新 array,
++ *  打穿 ChartStatic 的 memo —— 而且是**所有既有頁面**(個股 / 大盤)都被打穿。 */
++export const EMPTY_HLINES: readonly ChartHLine[] = [];
+diff --git a/frontend/src/lib/index-chart-svg.ts b/frontend/src/lib/index-chart-svg.ts
+index 9f07c639..c407c812 100644
+--- a/frontend/src/lib/index-chart-svg.ts
++++ b/frontend/src/lib/index-chart-svg.ts
+@@ -4,50 +4,16 @@
+  * minutes 鍵 = "HHMM"(bar 終點標記,後端契約)。
+  */
+ 
+-import {
+-  EDGE_LABEL_H,
+-  type OverlayLevel,
+-  type OverlayLine,
+-  type StockOverlay,
+-} from "@/lib/stock-intraday-svg";
++import { type OverlayLevel, type StockOverlay } from "@/lib/stock-intraday-svg";
+ 
+ export const X_START_MIN = 9 * 60;
+ export const X_END_MIN = 13 * 60 + 30;
+ 
+-interface SeriesInput {
+-  minutes: Record<string, number>;
+-  ref: number | null;
+-  high?: number | null;
+-  low?: number | null;
+-}
+-
+ interface Size {
+   width: number;
+   height: number;
+ }
+ 
+-export interface IndexPt {
+-  x: number;
+-  y: number;
+-  minute: string;
+-  p: number;
+-}
+-
+-export interface IndexGeometry {
+-  line: IndexPt[];
+-  /** 分鐘收盤的**累計算術平均**線(SC-1;指數無成交量 → 不是 VWAP)。
+-   *
+-   *  第 k 點 = 前 k 個**已有**分鐘收盤的平均。缺分鐘不補值 —— 補了就等於替沒發生的
+-   *  分鐘捏造一筆收盤,而分母被灌水的失效樣態是「均價線在午盤缺報價時緩慢偏向昨收」,
+-   *  目視完全看不出來。點的 x 與 `line` 逐點同源。 */
+-  avgLine: IndexPt[];
+-  refY: number;
+-  yDomain: [number, number];
+-  yTicks: { y: number; priceMilli: number }[];
+-  /** 價格 → y(疊線 / 標籤共用同一縮放;內部閉包直接掛出,不讓呼叫端自行重算) */
+-  toY: (p: number) => number;
+-}
+-
+ function sortedEntries(minutes: Record<string, number>): [string, number][] {
+   return Object.entries(minutes)
+     .filter(([k]) => k >= "0900" && k <= "1330")
+@@ -59,33 +25,6 @@ function toX(key: string, width: number): number {
+   return ((m - X_START_MIN) / (X_END_MIN - X_START_MIN)) * width;
+ }
+ 
+-export function buildIndexGeometry(input: SeriesInput, size: Size): IndexGeometry {
+-  const entries = sortedEntries(input.minutes);
+-  const closes = entries.map(([, p]) => p);
+-  const ref =
+-    input.ref ?? (closes.length ? closes.reduce((s, p) => s + p, 0) / closes.length : 0);
+-  const hi = Math.max(ref, input.high ?? -Infinity, ...closes);
+-  const lo = Math.min(ref, input.low ?? Infinity, ...closes);
+-  const yTop = (Number.isFinite(hi) ? hi : ref) * 1.003 || 1;
+-  const yBottom = (Number.isFinite(lo) ? lo : ref) * 0.997;
+-  const span = yTop - yBottom || 1;
+-  const toY = (p: number): number => ((yTop - p) / span) * size.height;
+-
+-  const line = entries.map(([minute, p]) => ({ minute, p, x: toX(minute, size.width), y: toY(p) }));
+-  let sum = 0;
+-  const avgLine = entries.map(([minute, p], i) => {
+-    sum += p;
+-    const avg = sum / (i + 1);
+-    return { minute, p: avg, x: toX(minute, size.width), y: toY(avg) };
+-  });
+-  const yTicks = [yBottom, ref, yTop].map((p) => ({ y: toY(p), priceMilli: Math.round(p) }));
+-  return { line, avgLine, refY: toY(ref), yDomain: [yBottom, yTop], yTicks, toY };
+-}
+-
+-/** 疊線層級的固定次序(由上而下)。右緣標籤同 y 時的決勝鍵 —— 少了它,兩條同 y 的線
+- *  誰被推開會由 `Array#sort` 對相等鍵的處理決定,兩次 render 之間可能互換上下。 */
+-const LEVEL_ORDER: readonly OverlayLevel[] = ["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"];
+-
+ /** 落在 y 域外的疊線(SC-7)。`dir` = 在域上方 / 下方 —— 線體不畫,改在右緣掛牌。 */
+ export interface OutOfDomainLevel {
+   level: OverlayLevel;
+@@ -99,7 +38,7 @@ export interface OutOfDomainLevel {
+  *  push 次序刻意與 `overlayLines` 逐行對齊(ah→nh→cdp→nl→al→ma5→ma20)。 */
+ export function outOfDomainLevels(
+   overlay: StockOverlay,
+-  g: Pick<IndexGeometry, "yDomain">,
++  g: { yDomain: [number, number] },
+   toggles: { cdp: boolean; ma: boolean },
+ ): OutOfDomainLevel[] {
+   const [yBottom, yTop] = g.yDomain;
+@@ -123,104 +62,6 @@ export function outOfDomainLevels(
+   return out;
+ }
+ 
+-/** 右緣標籤(決策 6)。`kind` 決定文字組法與配色,y 一律由 `rightEdgeLabels` 給。 */
+-export type RightEdgeLabel =
+-  | { kind: "ref"; y: number; text: string }
+-  | { kind: "line"; y: number; level: OverlayLevel; priceMilli: number }
+-  | { kind: "peg"; y: number; level: OverlayLevel; priceMilli: number; dir: "up" | "down" };
+-
+-export interface RightEdgeInput {
+-  /** 昨收標籤。**fixed** —— y 恆為 refY,其餘標籤對它讓位(它與昨收虛線是同一條資訊,
+-   *  被推開就等於指著錯的價位)。缺 ref → null = 不畫。 */
+-  ref: { y: number; text: string } | null;
+-  /** 域內疊線(`overlayLines` 的結果);初始 y = 線 y */
+-  oLines: readonly OverlayLine[];
+-  /** 域外掛牌(`outOfDomainLevels` 的結果);初始 y = 上緣 / 下緣 */
+-  outOfDomain: readonly OutOfDomainLevel[];
+-  bounds: { top: number; bottom: number };
+-}
+-
+-/** 指數分時圖**所有**右緣文字的唯一佈局來源(決策 6)。
+- *
+- *  刻意不重用個股的 `edgePriceLabels`:那支只收 ma5/ma20,且 `obstacles` 是「極值標記
+- *  圓 + 文字」語意,與這裡的「昨收 fixed 標籤」不同 —— 硬套會讓昨收既不在輸入也不在
+- *  輸出,而它正是最容易與 cdp 疊字的那一顆。
+- *
+- *  三段式(與 `edgePriceLabels` 同精神,逐段可測):
+- *  (a) 容量截斷 —— 根本裝不下的,依排序末端優先丟(疊印比少畫一顆更不可讀);
+- *  (b) 由上而下 10px 最小距下推,撞到 fixed 昨收一律往下讓(方向固定才決定性);
+- *  (c) 由下而上回推 —— (b) 只會往下推,推出界就等於沒畫;
+- *  (d) clamp 進界後仍相距 <10px 者丟棄。 */
+-export function rightEdgeLabels(input: RightEdgeInput): RightEdgeLabel[] {
+-  const { bounds } = input;
+-  // 界退化(容器被壓到極矮)→ 任何 y 都在界外,clamp 會把全部標籤壓成一坨,不如不畫
+-  if (bounds.top > bounds.bottom) {
+-    return input.ref !== null ? [{ kind: "ref", y: input.ref.y, text: input.ref.text }] : [];
+-  }
+-  interface Movable {
+-    y: number;
+-    rank: number;
+-    label: RightEdgeLabel;
+-  }
+-  const movable: Movable[] = [];
+-  for (const l of input.oLines) {
+-    movable.push({
+-      y: l.y,
+-      rank: LEVEL_ORDER.indexOf(l.level),
+-      label: { kind: "line", y: l.y, level: l.level, priceMilli: l.priceMilli },
+-    });
+-  }
+-  for (const o of input.outOfDomain) {
+-    const y = o.dir === "up" ? bounds.top : bounds.bottom;
+-    movable.push({
+-      y,
+-      rank: LEVEL_ORDER.indexOf(o.level),
+-      label: { kind: "peg", y, level: o.level, priceMilli: o.priceMilli, dir: o.dir },
+-    });
+-  }
+-  movable.sort((a, b) => a.y - b.y || a.rank - b.rank);
+-
+-  // (a) 容量
+-  const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
+-  if (movable.length > capacity) movable.length = capacity;
+-
+-  const fixed = input.ref !== null ? [input.ref.y] : [];
+-
+-  // (b) 由上而下
+-  let floor = bounds.top;
+-  for (const m of movable) {
+-    let y = Math.max(m.y, floor);
+-    for (const o of fixed) if (Math.abs(y - o) < EDGE_LABEL_H) y = o + EDGE_LABEL_H;
+-    m.y = y;
+-    floor = y + EDGE_LABEL_H;
+-  }
+-
+-  // (c) 由下而上回推
+-  let ceil = bounds.bottom;
+-  for (let i = movable.length - 1; i >= 0; i -= 1) {
+-    const m = movable[i]!;
+-    let y = Math.min(m.y, ceil);
+-    for (let k = fixed.length - 1; k >= 0; k -= 1) {
+-      const o = fixed[k]!;
+-      if (Math.abs(y - o) < EDGE_LABEL_H) y = o - EDGE_LABEL_H;
+-    }
+-    m.y = y;
+-    ceil = y - EDGE_LABEL_H;
+-  }
+-
+-  // (d) clamp + 殘餘重疊丟棄
+-  const out: RightEdgeLabel[] = [];
+-  if (input.ref !== null) out.push({ kind: "ref", y: input.ref.y, text: input.ref.text });
+-  let prevY: number | null = null;
+-  for (const m of movable) {
+-    const y = Math.min(Math.max(m.y, bounds.top), bounds.bottom);
+-    if (prevY !== null && y - prevY < EDGE_LABEL_H) continue;
+-    prevY = y;
+-    out.push({ ...m.label, y });
+-  }
+-  return out;
+-}
+-
+ export interface OverlayLinePts {
+   pts: { x: number; y: number; pct: number }[];
+ }
+diff --git a/frontend/src/lib/river-chart-svg.ts b/frontend/src/lib/river-chart-svg.ts
+index 458de642..eb4f50ce 100644
+--- a/frontend/src/lib/river-chart-svg.ts
++++ b/frontend/src/lib/river-chart-svg.ts
+@@ -1,4 +1,4 @@
+-/** 六腿江波圖幾何純函數(零 React 依賴;design v2 §5)。
++/** 江波圖幾何純函數(零 React 依賴;design v2 §5)。
+  *
+  * 與既有 `index-chart-svg.ts` / `stock-intraday-svg.ts` 的差別:那兩支把 x 軸寫死在
+  * 09:00–13:30(台股日盤),本圖的窗**跟盤別走**(日盤 08:45–13:45 / 夜盤 15:00–次日 05:00),
+@@ -7,7 +7,7 @@
+  * 兩種呈現:
+  * - 並排(`buildLegGeometry`):單腿絕對價 + 「窗內第一筆」的平盤基準線 → autofit 域。
+  *   指數期貨沒有漲跌停可當域邊界,只能 autofit。
+- * - 重疊(`buildOverlayGeometry`):各腿一律以窗內第一筆為 0%,y 為百分比 —— 六腿價格量級
++ * - 重疊(`buildOverlayGeometry`):各腿一律以窗內第一筆為 0%,y 為百分比 —— 各腿價格量級
+  *   差 15 倍(富台 3462 vs 道瓊 51909),不正規化根本疊不起來。
+  */
+ 
+@@ -188,7 +188,7 @@ export function timeTicks(window: RiverWindow): { offset: number; label: string
+ 
+ /** 右緣腿名的防疊:把靠太近的 y 往下推開至 `minGap`,推到底再往上回折。
+  *
+- * 六腿收盤價位接近時(real-env 截圖實見),原位標籤會互相疊住 —— 既有 `IndexPage` 只有
++ * 各腿收盤價位接近時(real-env 截圖實見),原位標籤會互相疊住 —— 既有 `IndexPage` 只有
+  * 兩條線所以沒踩到。回傳陣列與**輸入順序**對應(呼叫端依 index 取用)。
+  */
+ export function spreadLabelYs(ys: number[], minGap: number, maxY: number): number[] {
+diff --git a/frontend/src/lib/stock-intraday-svg.ts b/frontend/src/lib/stock-intraday-svg.ts
+index 125e3c9b..7620fabb 100644
+--- a/frontend/src/lib/stock-intraday-svg.ts
++++ b/frontend/src/lib/stock-intraday-svg.ts
+@@ -495,7 +495,7 @@ export function lastPoint(g: IntradayGeometry): (Pt & { minute: number }) | null
+ /** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。
+  *
+  *  第二參數刻意收窄成 `Pick<IntradayGeometry, "yDomain" | "toY">`(函式體只用這兩欄):
+- *  指數分時圖的 `IndexGeometry` 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
++ *  指數分時圖的 geometry 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
+  *  不必為了型別把整包個股 geometry(vwap / energyBars / 五檔…)硬湊出來。 */
+ export function overlayLines(
+   overlay: StockOverlay,
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+index 5d99e4df..8bba60b9 100644
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -220,7 +220,7 @@ export interface CorrState {
+   pairs: Record<string, CorrPairState>;
+ }
+ 
+-// ---- 六腿江波圖(對應 copycat/live/river_state.py;index-river-chart)----
++// ---- 江波圖(對應 copycat/live/river_state.py;index-river-chart)----
+ 
+ /** 當場盤別的 x 軸窗(台北 minute-of-day;夜盤 end_min > 1440 = 跨午夜展開)。 */
+ export interface RiverWindow {
