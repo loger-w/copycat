@@ -327,18 +327,7 @@ class CorrelationEngine:
         `legs` = 只補這些腿(逾時重試輪用)。`None` = 全部腿,與修復前逐字相同。
         """
         if self._backfill_inflight:
-            # single-flight 互吃(重試 task 醒來時撞上 reconnect 觸發的整輪回補)。
-            # 舊碼是靜默 `return`,被擋掉那一發負責的腿就這樣蒸發,全鏈零訊號 ——
-            # 江波圖只是缺前半段。併回 pending 之後由**進行中那一輪的尾巴**接手重排
-            # (它的 `pending` 快照與 `_backfill_inflight = False` 之間沒有 await,
-            # 所以此刻的寫入必定被它讀到,恰好排一次、不會與它自己的重排重複)。
-            # **不 bump `_backfill_retry_round`**:被擋下不等於試過一次。
-            merged = set(legs) if legs else set(self._legs)  # 整輪(None)= 全部腿,不可靜默丟掉
-            logger.info(
-                "river 回補 single-flight:已有一輪進行中,本次併回 pending(legs=%s)",
-                sorted(merged),
-            )
-            self._backfill_pending_legs |= merged
+            self._merge_into_inflight_round(legs)
             return
         self._backfill_inflight = True
         try:
@@ -376,6 +365,28 @@ class CorrelationEngine:
             return
         self._backfill_retry_round += 1
         self._schedule_backfill_retry(pending)
+
+    def _merge_into_inflight_round(self, legs: set[str] | None) -> None:
+        """single-flight 互吃:把被擋下那一發的腿併回進行中那一輪的 pending。
+
+        舊碼兩處都是靜默 `return`(`_schedule_backfill` 連 task 都不建、零 log;
+        `_backfill_river` 的重試腿蒸發),全鏈零訊號 —— 江波圖只是缺前半段。併回之後由
+        **進行中那一輪的尾巴**接手重排(它的 `pending` 快照與 `_backfill_inflight = False`
+        之間沒有 await,此刻的寫入必定被它讀到,恰好排一次)。
+        `None` = 整輪(reconnect 觸發)= 全部腿;`set()` 空集合照字面 = 一腿都不補
+        (與 `_backfill_river` 的 `legs is not None` 語意一致)。
+        整輪併回 = 新 episode:連續失敗輪數歸零,否則它會吃掉上一個 episode 剩下的逾時
+        重試預算,round 已達上限時更會整批落進「放棄」分支、log 還誣賴健康腿逾時。
+        重試腿併回則**不**動輪數:被擋下不等於試過一次。
+        """
+        merged = set(self._legs) if legs is None else set(legs)
+        logger.info(
+            "river 回補 single-flight:已有一輪進行中,本次併回 pending(legs=%s)",
+            sorted(merged),
+        )
+        self._backfill_pending_legs |= merged
+        if legs is None:
+            self._backfill_retry_round = 0
 
     def _schedule_backfill_retry(self, legs: set[str]) -> None:
         """`_BACKFILL_RETRY_SECS` 後只補 `legs`;task 進集合供 close() 統一取消。"""
@@ -437,7 +448,12 @@ class CorrelationEngine:
 
     def _schedule_backfill(self) -> None:
         loop = self._loop
-        if loop is None or self._backfill_inflight:
+        if loop is None:
+            return
+        if self._backfill_inflight:
+            # reconnect 撞上進行中那一輪:這裡才是整輪真正的丟棄點(2026-08-22 review P1),
+            # 不建 task 但要併回,否則 reconnect 後的整輪回補零訊號蒸發。
+            self._merge_into_inflight_round(None)
             return
         self._backfill_task = loop.create_task(self._backfill_river())
 

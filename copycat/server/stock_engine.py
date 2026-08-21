@@ -1289,6 +1289,14 @@ class StockEngine:
                 # **隔一會兒再排一次** —— 而那正是舊碼(回空)整天都不會做的事。
                 self._backfilling = None
                 self._backfill_settled(code)
+                if code not in self._refs:
+                    # release 時已在佇列 / 正跑的 job 之後才逾時:這一檔已無 owner,不記帳
+                    # 不武裝 —— 否則 15s 後對已退訂的 code 再打 TC4,終局 `_backfilled.add`
+                    # 把 release 清掉的記帳寫回去(2026-08-22 review;判準 = 訂閱池 `_refs`)。
+                    logger.info("backfill %s timeout 但已退訂,不重排", code)
+                    # 補推與其他離開路徑同款:不推的話「回補中…」徽章永遠掛著(TQ-4)
+                    self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+                    continue
                 tries = self._backfill_timeouts.get(code, 0) + 1
                 if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
                     self._backfill_timeouts[code] = tries
