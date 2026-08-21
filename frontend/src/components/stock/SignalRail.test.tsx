@@ -459,4 +459,16 @@ describe("SignalRail 標題資料日(SC-2)", () => {
     renderRail({ tradeDate: null, today: "2026-08-21" });
     expect(titleText()).toBe("今日訊號");
   });
+
+  // review C-6:`!= null` 放空字串過去 —— 後端欄位存在但為 ""(hub 未就緒 / 舊 jsonl
+  // 的空日別)時 `monthDay("")` 回 ""、標題變成「 訊號」,那是誰都讀不懂的字串,
+  // 而且與「今日」在畫面上只差一個空格。缺值的兩種形(null / "")要走同一條退路。
+  it("任一欄為空字串 → 今日訊號(空字串與缺欄同義,不印「 訊號」)", () => {
+    renderRail({ tradeDate: "", today: "2026-08-21" });
+    expect(titleText()).toBe("今日訊號");
+    expect(railLabel()).toBe("今日訊號");
+    cleanup();
+    renderRail({ tradeDate: "2026-08-20", today: "" });
+    expect(titleText()).toBe("今日訊號");
+  });
 });
