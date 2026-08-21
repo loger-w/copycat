@@ -7,6 +7,7 @@ import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
 import { StockChart } from "@/components/stock/StockChart";
 import { TickTape } from "@/components/stock/TickTape";
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
+import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalPositions } from "@/hooks/useCapital";
 import { useSignalFeed } from "@/hooks/useSignalFeed";
 import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
@@ -212,22 +213,19 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract 
             `accum === null` 兩個條件分支**之外**(design R6)—— 掛進任一分支內,
             未選股 / 主圖 snapshot 還沒回來時就永遠切不到群組檢視,而那兩個時機
             恰恰是最想看「整組今天在幹嘛」的時候。 */}
-        <div className="flex shrink-0 flex-wrap items-center gap-1">
-          {VIEW_LABELS.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={view === id}
-              onClick={() => selectView(id)}
-              className={cn(
-                "rounded border px-2 py-0.5 text-xs",
-                view === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <RadioPills<StockView>
+          ariaLabel="檢視"
+          className="flex shrink-0 flex-wrap items-center gap-1"
+          value={view}
+          onChange={selectView}
+          items={VIEW_LABELS.map(([id, label]) => ({ value: id, label }))}
+          pillClass={(_item, checked) =>
+            cn(
+              "rounded border px-2 py-0.5 text-xs",
+              checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+            )
+          }
+        />
         {view === "group" ? (
           // 群組檢視吃掉整個 main 主體(header / 圖表 / 下半列全部讓位),訊號欄與
           // 自選欄在 main 之外不受影響。載入 / 失敗 / 零群組的分態由 GroupGridView

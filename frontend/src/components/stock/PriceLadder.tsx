@@ -8,6 +8,7 @@ import {
   type LadderLot,
 } from "@/components/stock/LadderView";
 import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
+import { RadioPills } from "@/components/ui/RadioPills";
 import {
   useCancelOrder,
   useCapitalOrders,
@@ -45,7 +46,8 @@ export type { TradeKind } from "@/lib/trade-kinds";
 
 /** 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,pill 讓
  *  「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。`aria-label` 掛在
- *  role=group 容器(同 GroupGridView),既有以「交易別」定位的測試 / a11y 關聯不變;`shrink-0`
+ *  `RadioPills` 的 radiogroup 容器(a11y 批:原 `role=group` + `aria-pressed` button 群 ——
+ *  AT 聽成四個互不相干的開關),既有以「交易別」定位的測試 / a11y 關聯不變;`shrink-0`
  *  + 窄 padding:288px 右欄下由武裝鈕(flex-1 min-w-0)吸收壓縮,pill 群與鎖定鈕不換行
  *  (R5 SC-1 同策略;px-0.5 = review C2 實測 解除+鎖定中+四顆 pill 貼齊零餘裕後收的 16px)。
  *  選中色分兩檔(review C1):現股 = accent(預設態);融資 / 融券 / 無券 = warn 琥珀 ——
@@ -59,26 +61,23 @@ function TradeKindPills({
   onChange: (kind: TradeKind) => void;
 }) {
   return (
-    <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
-      {TRADE_KINDS.map(([v, label]) => (
-        <button
-          key={v}
-          type="button"
-          aria-pressed={value === v}
-          onClick={() => onChange(v)}
-          className={cn(
-            "rounded border px-0.5 py-0.5 text-xs",
-            value === v
-              ? v === "cash"
-                ? "border-accent text-accent"
-                : "border-warn text-warn"
-              : "border-line text-ink-dim hover:text-ink",
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
+    <RadioPills<TradeKind>
+      ariaLabel="交易別"
+      className="flex shrink-0 items-center gap-0.5"
+      value={value}
+      onChange={onChange}
+      items={TRADE_KINDS.map(([v, label]) => ({ value: v, label }))}
+      pillClass={(item, checked) =>
+        cn(
+          "rounded border px-0.5 py-0.5 text-xs",
+          checked
+            ? item.value === "cash"
+              ? "border-accent text-accent"
+              : "border-warn text-warn"
+            : "border-line text-ink-dim hover:text-ink",
+        )
+      }
+    />
   );
 }
 
