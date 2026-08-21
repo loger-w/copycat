@@ -400,9 +400,9 @@ describe("PriceLadder 武裝直送(SC-7)", () => {
     });
     render(ladder());
     armUp();
-    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」鈕(舊 fireEvent.change 已無 select 可改)
-    fireEvent.click(screen.getByRole("button", { name: "無券" }));
-    expect(screen.getByRole("button", { name: "無券" }).getAttribute("aria-pressed")).toBe("true");
+    // 🔴 R6 該變:交易別 select → 四顆 pill,選取 = 點「無券」(a11y 批:pill 改 radio)
+    fireEvent.click(screen.getByRole("radio", { name: "無券" }));
+    expect((screen.getByRole("radio", { name: "無券" }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(true);
     expect(screen.getByLabelText("賣 100.5").hasAttribute("disabled")).toBe(false);
     fireEvent.click(screen.getByLabelText("買 100"));
@@ -1156,23 +1156,31 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
 });
 
 describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
-  it("四顆並列 pill 現股/融資/融券/無券,單選 aria-pressed 轉移;容器 role=group aria-label=交易別", () => {
+  it("四顆並列 pill 現股/融資/融券/無券,單選 checked 轉移;容器 role=radiogroup aria-label=交易別", () => {
     mockCapitalFetch();
     render(ladder());
-    const group = screen.getByRole("group", { name: "交易別" });
+    // a11y 批:role=group + aria-pressed button → radiogroup + sr-only radio(單選語意)
+    const group = screen.getByRole("radiogroup", { name: "交易別" });
     const labels = ["現股", "融資", "融券", "無券"];
-    const pills = labels.map((l) => within(group).getByRole("button", { name: l }));
+    const pills = labels.map(
+      (l) => within(group).getByRole("radio", { name: l }) as HTMLInputElement,
+    );
+    const pillLabel = (r: HTMLInputElement) => r.closest("label")!;
     // DOM 次序 = TRADE_KINDS 次序(review A7:無券在最右,不與最常用的現股對調)
-    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(labels);
-    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["true", "false", "false", "false"]);
-    expect(pills[0]!.className).toContain("border-accent"); // 現股選中 = accent
-    expect(pills[1]!.className).toContain("border-line");
+    expect(
+      (within(group).getAllByRole("radio") as HTMLInputElement[]).map(
+        (r) => pillLabel(r).textContent,
+      ),
+    ).toEqual(labels);
+    expect(pills.map((r) => r.checked)).toEqual([true, false, false, false]);
+    expect(pillLabel(pills[0]!).className).toContain("border-accent"); // 現股選中 = accent
+    expect(pillLabel(pills[1]!).className).toContain("border-line");
     fireEvent.click(pills[2]!);
-    expect(pills.map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "false", "true", "false"]);
+    expect(pills.map((r) => r.checked)).toEqual([false, false, true, false]);
     // 非現股選中 = warn 琥珀(review C1:改送單語意的單擊必須在梯面外就刺眼)
-    expect(pills[2]!.className).toContain("border-warn");
-    expect(pills[2]!.className).not.toContain("border-accent");
-    expect(pills[0]!.className).toContain("border-line");
+    expect(pillLabel(pills[2]!).className).toContain("border-warn");
+    expect(pillLabel(pills[2]!).className).not.toContain("border-accent");
+    expect(pillLabel(pills[0]!).className).toContain("border-line");
     // 舊 select 已退場
     expect(group.querySelector("select")).toBeNull();
     // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
@@ -1188,7 +1196,7 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
       render(ladder());
       armUp();
       act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
-      fireEvent.click(screen.getByRole("button", { name: "融資" }));
+      fireEvent.click(screen.getByRole("radio", { name: "融資" }));
       act(() => vi.advanceTimersByTime(ARM_IDLE_MS - 60_000));
       expect(screen.getByRole("button", { name: "解除" })).toBeTruthy();
       act(() => vi.advanceTimersByTime(60_001));

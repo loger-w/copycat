@@ -213,24 +213,21 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
 });
 
 // SC-3:`<select>` 換成一排 pill(與 StockPage 的「單檔/群組」view pill 同語彙)。
-// 選中態的真相源改成 `aria-pressed`,切換靠 click —— 但**可及名稱契約不變**:
-// pill 列容器保留 `role="group" aria-label="選擇群組"`,StockPage.test.tsx 的
+// 選中態的真相源是 radio 的 `checked`(a11y 批:aria-pressed button → RadioPills 的
+// sr-only radio),切換靠 click —— 但**可及名稱契約不變**:
+// pill 列容器保留 `role="radiogroup" aria-label="選擇群組"`,StockPage.test.tsx 的
 // 671/713/746/750 四處 `ByLabelText("選擇群組")` 靠它接住(改成別的名字 = 那四條
 // 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
 describe("GroupGridView 群組切換 pill", () => {
   it("預設第一個群組;成員卡片全數渲染", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
-    expect(
-      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
-    ).toBe("true");
-    // 反向斷言不可省(review B-5):少了它,「每顆 pill 恆 pressed」全綠 ——
-    // aria-pressed 是 SC-3 指名的選中態真相源,兩側都要釘
-    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
-      "false",
-    );
+    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+    // 反向斷言不可省(review B-5):少了它,「每顆 pill 恆 checked」全綠 ——
+    // 選中態是 SC-3 指名的真相源,兩側都要釘
+    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(false);
     // 容器名稱契約 + select 真的走了(留著兩套切換 UI 才是最糟的中間態)
     const rail = screen.getByLabelText("選擇群組");
-    expect(rail.getAttribute("role")).toBe("group");
+    expect(rail.getAttribute("role")).toBe("radiogroup");
     expect(screen.queryByRole("combobox")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.getByTestId("group-card-2317")).toBeTruthy();
@@ -241,7 +238,7 @@ describe("GroupGridView 群組切換 pill", () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await waitFor(() => expect(groupCalls()).toHaveLength(1));
     expect(groupCalls()[0]).toContain("codes=2330,2317");
-    fireEvent.click(screen.getByRole("button", { name: "金融" }));
+    fireEvent.click(screen.getByRole("radio", { name: "金融" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
     expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
     // 寫入側也要鎖(review B-1):刪掉 persistGroupName 整條路徑,其餘測試照樣全綠,
@@ -249,15 +246,22 @@ describe("GroupGridView 群組切換 pill", () => {
     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
   });
 
-  // review A-3:舊 <select> 的 change 事件在 value 未變時不發火,localStorage 的
-  // 失效舊名會永遠留著;pill 的 click 無條件回寫 —— 這是**刻意的 stale-key 清理**
-  // (spec 白名單 #7 amendment),不是不變行為,所以要有測試把新語意釘住。
-  it("點已選中的 pill 也回寫 localStorage(清掉 stale 舊名)", async () => {
+  // 🔴 a11y 批 D1' R15a 該變:pill 改原生 radio 後,**點已 checked 的項不發 change**
+  // (瀏覽器 / React 都以 checkedness 有沒有變為準)→ 舊的「無條件回寫」stale-key
+  // 清理路徑消失。spec 逐處確認過那是冪等寫入、失去無影響:失效舊名由**讀取端的
+  // fallback**(下一條測試)承接,換到別組再換回來也會覆蓋掉。這裡把新語意釘住,
+  // 免得哪天有人在 onChange 外再補一顆 onClick 回寫(等於把 radio 的單選語意繞掉)。
+  it("點已選中的 pill 不發 change(stale 舊名留著,由讀取端 fallback 承接)", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
-    fireEvent.click(screen.getByRole("button", { name: "半導體" }));
-    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
-    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+    const picked = screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement;
+    expect(picked.checked).toBe(true);
+    fireEvent.click(picked);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("已刪掉的組");
+    // 換到別組 → 回寫,舊名不會永遠留著
+    fireEvent.click(screen.getByRole("radio", { name: "金融" }));
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
+    await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
   });
 
   // edge 5(R10):群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名。
@@ -265,18 +269,14 @@ describe("GroupGridView 群組切換 pill", () => {
   it("記住的群組已被刪 → fallback 第一個群組", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "已刪掉的組");
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
-    expect(
-      screen.getByRole("button", { name: "半導體" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
   });
 
   it("記住的群組仍在 → 沿用它(不重設回第一個)", async () => {
     window.localStorage.setItem(STOCK_GROUP_KEY, "金融");
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
-    expect(screen.getByRole("button", { name: "金融" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
   });
 });

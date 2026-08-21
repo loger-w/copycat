@@ -667,8 +667,12 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   it("預設單檔檢視:pill 在、群組 grid 不在", () => {
     mockGroupApi();
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
-    expect(screen.getByRole("button", { name: "單檔" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "群組" })).toBeTruthy();
+    // a11y 批:檢視 pill 改 RadioPills(sr-only radio),單選態由 checked 表達
+    const single = screen.getByRole("radio", { name: "單檔" }) as HTMLInputElement;
+    const grid = screen.getByRole("radio", { name: "群組" }) as HTMLInputElement;
+    expect(single.checked).toBe(true);
+    expect(grid.checked).toBe(false);
+    expect(screen.getByRole("radiogroup", { name: "檢視" })).toBeTruthy();
     expect(screen.queryByLabelText("選擇群組")).toBeNull();
     expect(screen.getByTestId("stock-lower-row")).toBeTruthy();
   });
@@ -676,7 +680,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   it("切到群組 → header / 圖表 / 下半列讓位給卡片 grid;訊號欄與自選欄不動", async () => {
     mockGroupApi();
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.queryByTestId("stock-lower-row")).toBeNull();
     expect(screen.queryByTestId("page-quote")).toBeNull();
@@ -688,7 +692,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   it("未選股(code=null)仍切得到群組檢視", async () => {
     mockGroupApi();
     wrap(<StockPage code={null} onSelect={vi.fn()} stream={stream({ accum: null })} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.queryByText(/從自選清單選擇/)).toBeNull();
   });
@@ -697,7 +701,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   it("主圖 snapshot 未到(accum=null)仍切得到群組檢視", async () => {
     mockGroupApi();
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum: null })} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.queryByText("載入中…")).toBeNull();
   });
@@ -710,7 +714,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     mockGroupApi();
     const onSelect = vi.fn();
     wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     const card = await screen.findByTestId("group-card-2317");
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledWith("2317");
@@ -736,7 +740,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
       }),
     );
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     // `useStockWatchlist` 是 retry: 1 + 指數退避 → 錯誤終態要等第二次失敗(skill:
     // TanStack Query error path 的 waitFor 必須放寬 timeout)
     await waitFor(() => expect(screen.getByText("自選載入失敗")).toBeTruthy(), { timeout: 5000 });
@@ -748,7 +752,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   it("檢視選擇存進 localStorage,重掛後還原", async () => {
     mockGroupApi();
     const { unmount } = wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
-    fireEvent.click(screen.getByRole("button", { name: "群組" }));
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
     await waitFor(() => expect(screen.getByLabelText("選擇群組")).toBeTruthy());
     unmount();
     mockGroupApi();
