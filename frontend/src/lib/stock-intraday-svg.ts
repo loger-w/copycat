@@ -495,7 +495,7 @@ export function lastPoint(g: IntradayGeometry): (Pt & { minute: number }) | null
 /** overlay(CDP/MA)→ 域內水平線;toggle 關的類別不給(SC-4)。
  *
  *  第二參數刻意收窄成 `Pick<IntradayGeometry, "yDomain" | "toY">`(函式體只用這兩欄):
- *  指數分時圖的 `IndexGeometry` 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
+ *  指數分時圖的 geometry 帶同名同義的兩欄,結構相容就能共用同一份域內判定,
  *  不必為了型別把整包個股 geometry(vwap / energyBars / 五檔…)硬湊出來。 */
 export function overlayLines(
   overlay: StockOverlay,
