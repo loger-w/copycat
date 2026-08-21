@@ -73,13 +73,18 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     setCursor(offsetAtX(px, win, SIZE));
   }
 
-  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)
+  // 讀值列:唯一依賴 cursor 的量,刻意留在幾何 useMemo 之外(見上)。
+  // 由 `entries`(不是 `g.lines`)產生:`buildOverlayGeometry` 會把全窗無值的腿濾掉 ——
+  // 那是**圖上**的正確語意(沒有第一筆就沒有 0% 基準,畫出來會被看成一條 0% 直線),但讀值列
+  // 照抄這份過濾的話,那一腿在勾選列上亮著、讀值列卻整格消失,使用者看不出是「這腿沒資料」
+  // 還是自己數錯腿。改以 entries 對位(順序 = legend 順序,以 key 找幾何),空腿印「—」。
   const readout =
     cursor === null
       ? null
-      : g.lines.map((line) => {
-          const hit = line.pts.find((p) => p.offset === cursor);
-          return { key: line.key, label: line.label, colorIndex: line.colorIndex, hit };
+      : entries.map((e) => {
+          const line = g.lines.find((l) => l.key === e.key);
+          const hit = line?.pts.find((p) => p.offset === cursor);
+          return { key: e.key, label: e.label, colorIndex: e.colorIndex, hit };
         });
 
   return (
