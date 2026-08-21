@@ -172,8 +172,9 @@ class CapitalClient:
         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
-        # 放棄輪旗標:collector.abandon() 已記欠帳,下一次發查詢的 reset 要保留它
-        # (COM 回呼無查詢識別 → 遲到的 `##` 只能靠欠帳擋;見 BalanceCollector docstring)
+        # 放棄輪旗標:collector.abandon() 已開遲到終止符的時間窗,下一次發查詢的 reset
+        # 要保留它(COM 回呼無查詢識別 → 遲到的 `##` 只能靠這個窗擋;見 collector docstring)。
+        # 只有查詢真的出手(rc==0)才清,否則窗會在鏈沒啟動的那一輪被白白關掉。
         self._balance_abandoned = False
         self._profit_abandoned = False
         self._oi_abandoned = False
@@ -223,14 +224,22 @@ class CapitalClient:
         self._status = new
         if new == "ok":
             # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查。
-            # 目前唯一的 ok caller 是 _init_com(啟動時三者必為初值,此分支等同 no-op);
+            # 目前唯一的 ok caller 是 _init_com(啟動時全為初值,此分支等同 no-op);
             # 這裡是 reconnect 落地時的預留 —— 清點必須與 _finalize_positions 同組
             # (三個旗標),只清 inflight 會留下半清狀態卡在 _pending_sec 守門判上,
             # 鏈永遠不再放行(pending 段無 collector 事件時只有 _poll_pending 能解,
             # 而它同樣看 _pending_deadline)。
+            # 放棄輪欠帳同組清:斷線前記的欠帳跨不過重連(那一輪的 `##` 隨連線一起沒了),
+            # 留著只會白吞重連後第一個合法的空回應 → 幽靈部位多掛一輪(review F5)。
             self._balance_inflight_until = None
             self._pending_sec = None
             self._pending_deadline = None
+            self._balance_abandoned = False
+            self._profit_abandoned = False
+            self._oi_abandoned = False
+            self._balance.reset()
+            self._profit.reset()
+            self._oi.reset()
         self._emit(
             {"event": "capital_status", "data": {"status": new, "last_error": self._last_error}}
         )
@@ -381,6 +390,10 @@ class CapitalClient:
             # 那段空窗抵達的零列 `##` 照 flush 會把有庫存的部位清成空集合。
             self._balance.abandon()
             self._balance_abandoned = True
+            # 守門旗標必須在同一條路徑清掉:留著的話幫浦圈每 50ms 重入這裡,
+            # 每圈再 abandon 一次(欠帳窗一路往後推、staging 每圈被清空),
+            # 真回應永遠拼不完整 —— 比原本「遲到 ## 清空一次」更糟(review F1/T1)。
+            self._balance_inflight_until = None
         due = self._balance_due is not None and now >= self._balance_due
         stale = now - self._balance_last_ts >= 60.0
         if not due and not stale:
@@ -388,7 +401,6 @@ class CapitalClient:
         self._balance_due = None
         self._balance_last_ts = now  # 先記,失敗也不連發
         self._balance.reset(keep_abandoned=self._balance_abandoned)
-        self._balance_abandoned = False
         self._balance_inflight_until = now + _BALANCE_CHAIN_TIMEOUT_S
         rc = self._com.get_real_balance(self._user_id, self._full_account)
         if rc != 0:
@@ -398,6 +410,10 @@ class CapitalClient:
             # 舊 due 已過期,下一圈幫浦(50ms)就會再打一次 1019 成緊迴圈。
             self._mark_balance_dirty(1.0)
             logger.warning("GetRealBalanceReport rc=%s: %s", rc, self._com.return_code_message(rc))
+            return
+        # 查詢真的出手才交棒給 collector 的欠帳窗:rc≠0 時鏈沒啟動、放棄輪的 `##`
+        # 還在路上,旗標先清掉會讓下一次成功查詢的 reset 順手關掉窗(review F3)
+        self._balance_abandoned = False
 
     def _on_balance_complete(self, positions: list[Position]) -> None:
         """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
@@ -407,11 +423,12 @@ class CapitalClient:
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()
         self._profit.reset(keep_abandoned=self._profit_abandoned)
-        self._profit_abandoned = False
         rc = self._com.get_profit_loss_gw(self._user_id, self._full_account)
         if rc != 0:
             logger.warning("GetProfitLossGWReport rc=%s: %s", rc, self._com.return_code_message(rc))
             self._query_open_interest()  # 損益跳過,鏈不可斷 — pending 靠期貨段收尾
+            return
+        self._profit_abandoned = False  # 出手才交棒(review F3,與 balance 段同語意)
 
     def _on_profit_complete(self, rows: list[ProfitRow]) -> None:
         """損益回填進 pending 證券部位(均價+含費稅息基底)→ 串行接期貨部位查詢。
@@ -451,11 +468,12 @@ class CapitalClient:
             self._finalize_positions([])
             return
         self._oi.reset(keep_abandoned=self._oi_abandoned)
-        self._oi_abandoned = False
         rc = self._com.get_open_interest(self._user_id, self._futures_account)
         if rc != 0:
             logger.warning("GetOpenInterestGW rc=%s: %s", rc, self._com.return_code_message(rc))
             self._finalize_positions(self._stale_fut_positions())
+            return
+        self._oi_abandoned = False  # 出手才交棒(review F3,與 balance 段同語意)
 
     def _stale_fut_positions(self) -> list[Position]:
         """OI 查詢失敗/逾時:沿用 store 既有 fut 部位(review A7)。
@@ -491,8 +509,8 @@ class CapitalClient:
             # 這一輪的損益/期貨段被放棄:兩者的 `##` 都可能才遲到(COM 回呼無查詢識別),
             # 下一輪收到會 flush 空集合 —— profit 空集合 = 均價/損益基底整批消失,
             # OI 空集合更會把期貨部位清光(A7 沿用邏輯繞不過 _on_oi_complete)。
-            # 已收尾的那一段被多記一筆欠帳是可接受代價:真實回應都帶列
-            # (profit 的 000 查詢結果列 / OI 的「無資料」訊息列)→ 一有列欠帳就歸零。
+            # 已正常收尾的那一段不會被多記:collector 的 `_awaiting` 在 flush 時就關了,
+            # abandon() 對它是 no-op(review F4)—— 否則會白吞下一輪合法的空回應。
             self._profit.abandon()
             self._oi.abandon()
             self._profit_abandoned = True

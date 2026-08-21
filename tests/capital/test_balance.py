@@ -206,10 +206,11 @@ def test_collector_new_query_resets_staging() -> None:
 
 def test_collector_abandoned_round_ignores_late_end_marker() -> None:
     """零事件死查詢逾期解卡 = 放棄一輪,但那一輪還欠一個 `##`(COM 回呼不帶查詢識別,
-    遲到的終止符無法從內容分辨屬哪一輪)。放棄後的第一個「零列 ##」必須忽略 —
+    遲到的終止符無法從內容分辨屬哪一輪)。放棄後窗內的第一個「零列 ##」必須忽略 —
     flush 空集合會以全量取代語意把庫存整批清空(平倉鍵跟著鎖住)。"""
     got: list[list[object]] = []
     c = BalanceCollector(on_complete=got.append)
+    c.reset()  # 發查詢(= 開始等這一輪的回應;abandon 只對 awaiting 的 collector 記帳)
     c.abandon()
     c.feed(RAW_END)  # 放棄輪遲到的終止符 → 吞掉,不 flush、不關閉本輪
     assert got == []
@@ -220,9 +221,10 @@ def test_collector_abandoned_round_ignores_late_end_marker() -> None:
 
 
 def test_collector_reset_after_abandon_clears_stale_debt() -> None:
-    # 正常 reset(發查詢路徑)= 上一輪已正常收尾 → 欠帳歸零,真空帳戶的空 ## 照常 flush
+    # 正常 reset(發查詢路徑)= 上一輪已正常收尾 → 欠帳窗關掉,真空帳戶的空 ## 照常 flush
     got: list[list[object]] = []
     c = BalanceCollector(on_complete=got.append)
+    c.reset()
     c.abandon()
     c.reset()
     c.feed(RAW_END)
@@ -230,9 +232,10 @@ def test_collector_reset_after_abandon_clears_stale_debt() -> None:
 
 
 def test_collector_rows_clear_stale_debt() -> None:
-    # 有 row 抵達 = 活的回應(不論屬哪一輪),flush 它就是最新快照 → 欠帳歸零
+    # 有 row 抵達 = 活的回應(不論屬哪一輪),flush 它就是最新快照 → 欠帳窗關掉
     got: list[list[object]] = []
     c = BalanceCollector(on_complete=got.append)
+    c.reset()
     c.abandon()
     c.feed(RAW_C_MARGIN)
     c.feed(RAW_END)
