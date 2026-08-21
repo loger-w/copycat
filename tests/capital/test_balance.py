@@ -290,7 +290,7 @@ def test_collector_abandon_after_flush_is_noop() -> None:
     c.feed(RAW_END)  # 本輪正常收尾
     assert got == [[]]
     c.abandon()  # watchdog 對已收尾的段呼叫 → no-op
-    assert c._stale_until is None
+    assert c._stale_until is None and c._owed == 0
     c.reset()
     c.feed(RAW_END)
     assert got == [[], []]  # 下一輪的空回應照常 flush
@@ -306,6 +306,7 @@ def test_collector_rows_then_end_marker_flush_and_consume_debt() -> None:
     c.feed(RAW_END)
     assert len(got) == 1
     assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["3357"]
+    assert c._owed == 0  # 帶列的 ## 也消耗了那一筆
 
 
 # 未實現-彙總(4-2-p)= 2026-06-11 正式環境真實回報(ID/帳號去敏)。

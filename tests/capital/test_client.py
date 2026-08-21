@@ -1596,10 +1596,10 @@ def test_reconnect_ok_clears_abandon_debt(tmp_path: Path) -> None:
         False,
         False,
     )
-    assert [c._stale_until for c in (client._balance, client._profit, client._oi)] == [
-        None,
-        None,
-        None,
+    assert [(c._stale_until, c._owed) for c in (client._balance, client._profit, client._oi)] == [
+        (None, 0),
+        (None, 0),
+        (None, 0),
     ]
 
 
