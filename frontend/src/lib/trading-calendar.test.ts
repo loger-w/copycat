@@ -84,4 +84,22 @@ describe("isWeekendIso", () => {
     expect(isWeekendIso("")).toBe(false);
     expect(isWeekendIso("not-a-date")).toBe(false);
   });
+
+  // [lock] review TQ-1:上面那組在 UTC+8(台北,開發機與 CI 的預設)下,`getUTCDay()`
+  // 與本機 `getDay()` 同值 —— 把實作改回 `new Date(iso).getDay()` 全綠,而那正是這支
+  // 函式存在的理由。負偏移時區才分得出來:`new Date("2026-08-17")` 是 UTC 午夜 =
+  // 洛杉磯 08-16 17:00 → 本機 `getDay()` 回 0(週日),週一會被當成週末。
+  //
+  // Node 16+ 起 `process.env.TZ` 的指派會重設 ICU 時區快取(改完立即生效);
+  // 還原放 `finally` —— 漏還原會讓同一個 worker 之後所有含日期的測試在 UTC−7 下跑。
+  it("UTC−7 時區下仍以 UTC 午夜解讀(本機 getDay() 會把週一算成週日)", () => {
+    const orig = process.env.TZ;
+    try {
+      process.env.TZ = "America/Los_Angeles";
+      expect(isWeekendIso("2026-08-15")).toBe(true); // 週六(本機 getDay() = 5)
+      expect(isWeekendIso("2026-08-17")).toBe(false); // 週一(本機 getDay() = 0)
+    } finally {
+      process.env.TZ = orig;
+    }
+  });
 });
