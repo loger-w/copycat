@@ -1443,7 +1443,7 @@ def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) ->
 
     ⚠ 涵蓋範圍(T8):這支只釘 **balance 段**的遲到終止符,且是「窗內」那一態。
     profit / OI 段(pending watchdog 放棄)另有兩支;窗外照 flush 由
-    `test_empty_account_clears_positions_after_stale_window` 釘。
+    `test_late_end_marker_outside_stale_window_flushes_empty` 釘。
     部位用真餵一輪做出來(不用 store.set_positions):collector 因此不是處女態,
     跨輪殘留狀態才真的被考驗(review T2)。"""
     com = FakeCom()
@@ -1508,11 +1508,13 @@ def test_dead_query_unlock_clears_inflight_and_abandons_once(tmp_path: Path) -> 
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
 
 
-def test_empty_account_clears_positions_after_stale_window(tmp_path: Path) -> None:
-    """F2:欠帳若是「計數」就會對真空帳戶自我延續 —— 每輪死查詢記一筆欠帳、
+def test_late_end_marker_outside_stale_window_flushes_empty(tmp_path: Path) -> None:
+    """F2:欠帳若是「純計數」就會對真空帳戶自我延續 —— 每輪死查詢記一筆欠帳、
     每輪零列 `##` 被吞,幽靈部位永不清空(全出清的帳戶永遠顯示有庫存)。
-    改時間窗後:窗內(STALE_WINDOW_S)的零列終止符才當遲到吞掉,
-    窗外照 flush 空集合 → 最晚下一輪(≤60s)清空。"""
+    時間窗是逃生路:窗內(STALE_WINDOW_S)的零列終止符按欠帳吞掉,窗外欠帳作廢、照 flush
+    空集合 → 真空帳戶最晚下一輪(≤60s)清空。
+    ⚠ 誠實代價(2026-08-22 review P1):這支 fixture 持有 3357,被清掉的是**有庫存**的部位 ——
+    窗外才遲到的舊輪 `##` 與真空帳戶的回應無法分辨,這是無查詢識別的固有殘餘,不是只影響真空帳戶。"""
     com = FakeCom()
     client = _client(com, tmp_path)
     clock = _FakeClock()

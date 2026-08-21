@@ -210,9 +210,10 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
     )
 
 
-#: 放棄一輪後,「遲到終止符」的有效窗(秒)。COM 回呼無查詢識別 → 只能用時間分辨:
-#: 鏈 timeout 10s 後才放棄,群益端遲到的回應落在數秒內,20s 足夠涵蓋;窗外的零列
-#: 終止符一律當成「這一輪帳戶真的空了」照 flush —— 否則真空帳戶會永遠清不掉幽靈部位。
+#: 放棄一輪後,欠帳(遲到終止符)的有效窗(秒)。COM 回呼無查詢識別 → 只能用時間分辨:
+#: 鏈 timeout 10s 後才放棄,假設群益端遲到的回應落在數秒內(**未量測**,2026-08-22 review);
+#: 窗外的零列終止符一律當成「這一輪帳戶真的空了」照 flush —— 否則真空帳戶會永遠清不掉
+#: 幽靈部位;代價是窗外才到的舊輪 `##` 會把有庫存清空一次(最壞 60s 自癒)。
 STALE_WINDOW_S = 20.0
 
 
@@ -224,18 +225,23 @@ class BalanceCollector:
 
     ⚠ 輪次識別:COM 回呼(OnRealBalanceReport / OnProfitLossGWReport / OnOpenInterest)
     **不帶任何查詢識別欄**,遲到的 `##` 無法與發出的查詢配對。client 在「零事件死查詢
-    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 開一個 `STALE_WINDOW_S` 的
-    **時間窗**(`_stale_until`):窗內的第一個**零列**終止符視為舊輪遲到、忽略不 flush;
-    窗外照 flush。有 row 抵達 = 活的回應(不論屬哪一輪,flush 它都是最新快照)→ 立即關窗。
+    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記一筆**欠帳**(`_owed` 計數)
+    並把時間窗 `_stale_until` 推到 `now + STALE_WINDOW_S`。每個 `##` 消耗一筆欠帳:
+    零列且窗內 → 視為舊輪遲到、吞掉不 flush;帶列 → 照 flush(那批列就是它的快照);
+    窗外 → 欠帳歸零、零列 `##` 照 flush。rows 抵達**不動**欠帳(損益段首列固定是 `000`
+    表頭,一到就關窗會讓欠帳對 profit 段形同虛設)。
     `_awaiting`(reset 開、flush 關)守門:沒在等回應的 collector 不記欠帳 —— 否則
     pending watchdog 會替已正常收尾的那一段多記一筆,白吞掉下一輪合法的空回應。
 
-    為什麼是時間窗不是計數:計數對**真空帳戶**會自我延續(每輪死查詢記一筆、每輪零列
-    `##` 被吞),幽靈部位永遠清不掉。
-    代價(明示):真空帳戶在死查詢後的第一個空 `##` 會被當舊終止符忽略,最晚下一輪
-    (≤60s)才顯示「無部位」— 寧可晚 60s,不可誤把有庫存清空(平倉鍵依部位鎖解)。
+    為什麼是計數 + 時間窗(2026-08-22 review P0):純時間戳吞一個終止符即關窗,連續兩輪
+    死查詢的第二個遲到 `##` 照 flush 空集合 → 有庫存清成無部位(原 bug 兩輪重現);
+    純計數對**真空帳戶**會自我延續(每輪死查詢記一筆、每輪零列 `##` 被吞),幽靈部位
+    永遠清不掉 → 時間窗是逃生路:窗外欠帳一律作廢。
+    代價(明示):窗內的零列 `##` 一律被當舊終止符 —— 真空帳戶最晚下一輪(≤60s)才顯示
+    「無部位」;反過來,**窗外**(>STALE_WINDOW_S)才遲到的舊輪零列 `##` 無法分辨,會把
+    有庫存清成空集合(最壞 60s 自癒)—— 這是無 token 的固有殘餘,不是只影響真空帳戶。
     殘餘風險(F7,無 token 不可解):新輪已收到 rows 之後舊輪的 `##` 才到 → 會 flush
-    一份截斷的快照並關閉本輪(機率 = 兩份回應交錯在同一 ms 級窗口)。
+    一份截斷 / 跨輪混合的快照並關閉本輪(機率 = 兩份回應交錯在同一 ms 級窗口)。
     """
 
     def __init__(
@@ -252,7 +258,8 @@ class BalanceCollector:
         self._staging: list[Any] = []
         self._last_feed: float | None = None
         self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
-        self._stale_until: float | None = None  # 放棄輪的遲到終止符有效到此刻(見 docstring)
+        self._stale_until: float | None = None  # 欠帳有效到此刻(見 docstring)
+        self._owed = 0  # 放棄輪還欠幾個終止符(每個 `##` 消耗一筆)
         self._awaiting = False  # 已發查詢、還在等這一輪的回應(abandon 的守門)
 
     def reset(self, *, keep_abandoned: bool = False) -> None:
@@ -265,22 +272,24 @@ class BalanceCollector:
         self._awaiting = True
         if not keep_abandoned:
             self._stale_until = None
+            self._owed = 0
 
     def abandon(self, now_monotonic: float | None = None) -> None:
         """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 開遲到終止符窗。
         必須在放棄的當下呼叫,不能延到下一次發查詢 —— 兩者之間(balance 段最長 60s)
         遲到的 `##` 正是要擋的那一個。`_awaiting` 為假(沒發查詢/本輪已 flush)= no-op:
         watchdog 會對已收尾的那一段照樣呼叫,記帳等於白吞一輪合法的空回應。
-        窗開著仍算 awaiting(還在等新一輪的回應),重複呼叫只是把窗往後推。"""
+        窗開著仍算 awaiting(還在等新一輪的回應),每次呼叫多記一筆欠帳並把窗往後推。"""
         if not self._awaiting:
             logger.debug("collector 未在等待回應,abandon 略過")
             return
         now = self._clock() if now_monotonic is None else now_monotonic
         self._stale_until = now + STALE_WINDOW_S
+        self._owed += 1
         self._staging = []
         self._last_feed = None
         self._closed = False
-        logger.debug("collector 放棄本輪,%.0fs 內的零列終止符視為遲到", STALE_WINDOW_S)
+        logger.debug("collector 放棄本輪(欠 %d 個終止符),%.0fs 內的零列終止符視為遲到", self._owed, STALE_WINDOW_S)
 
     def feed(self, raw: str, now_monotonic: float | None = None) -> None:
         # flush 後本輪即關閉:timeout 保險先 flush 的話,殘餘事件+遲到的 ## 不可
@@ -290,17 +299,24 @@ class BalanceCollector:
             return
         now = self._clock() if now_monotonic is None else now_monotonic
         if raw and raw.startswith("#"):  # 結束標記
-            stale_until, self._stale_until = self._stale_until, None
-            if stale_until is not None and now < stale_until:
-                # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)。
-                # WARNING 不是 INFO:代價是這一輪的部位更新被整個抑制掉。
-                logger.warning("collector 忽略放棄輪遲到的終止符(部位更新抑制一次)")
-                return
+            if self._stale_until is not None and now >= self._stale_until:
+                self._stale_until = None  # 窗外:欠帳作廢(真空帳戶的逃生路,見 docstring)
+                self._owed = 0
+            if self._owed > 0:
+                self._owed -= 1  # 每個 ## 消耗一筆欠帳,帶列的照 flush、零列的吞掉
+                if self._owed == 0:
+                    self._stale_until = None
+                if not self._staging:
+                    # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)。
+                    # WARNING 不是 INFO:代價是這一輪的部位更新被整個抑制掉。
+                    logger.warning(
+                        "collector 忽略放棄輪遲到的終止符(部位更新抑制一次,尚欠 %d)", self._owed
+                    )
+                    return
             self._flush()
             return
         p = self._parse(raw)
         self._last_feed = now
-        self._stale_until = None  # 有回應=活的,不論屬哪一輪,flush 它都是最新快照
         if p is not None:
             self._staging.append(p)
 
