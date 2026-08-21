@@ -389,12 +389,13 @@ class TestBackfillTimeoutRetry:
         assert all(t.cancelled() for t in tasks)
 
     async def test_reconnect_during_inflight_round_merges_all_legs_and_tail_refetches(
-        self, caplog: pytest.LogCaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """2026-08-22 review R8 P2 + round-2 P1:reconnect 觸發的**整輪**回補撞上進行中那一輪,
         真正的丟棄點是 `_schedule_backfill` 的 inflight 早退(連 task 都不建、零 log),
         不是 `_backfill_river` 的 merge 分支。整輪要併回全部腿、由進行中那一輪的尾巴重抓;
         併回 = 新 episode(reconnect),連續失敗輪數歸零、不吃逾時重試預算。"""
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
         src = _FakeSource()
         src.gate = threading.Event()  # NQ 那一發卡在閘門上 → 整輪維持 in-flight
         src.minutes["TC.F.TWF.SXF.HOT"] = [(601, 12_000_000)]
