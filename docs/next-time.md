@@ -54,7 +54,7 @@
 
 ## 2026-08-20(mod/signal-alert-side-effects 訊號提示副作用留尾)
 
-- [ ] **背景通知 trailing/latest-wins**(code review F3 選項 b):現行 leading-edge 節流 + 固定 tag
+- [x] **背景通知 trailing/latest-wins**〔2026-08-21 已出貨 PR #80 mod/signal-alert-grouping:300ms 合併 + lastSent+5s 窗尾補發、全域單槽 latest-wins、fire 時重驗 hidden〕(code review F3 選項 b):現行 leading-edge 節流 + 固定 tag
   下,每個 5 s 窗使用者看到的是**窗內最舊**那則;若嫌過時,改「窗內記最後一則、窗尾補發一次」
   (latest-wins)。本輪拍板取首則(實作最簡、跨窗仍會覆蓋更新),真環境嫌舊再做。
 - [ ] **訊號 grouping 合成一張 toast**(承 08-18 降噪留尾):useSignalAlerts 走 groupSignals
@@ -150,8 +150,12 @@
   以單位時間事件率對照(各日檔案跨度不同):CDP 35.9/h(08-17 基準)→ 25.0 / 27.0 / 27.5(08-18/19/20),
   三日一致 −23%~−30%,吻合回放預測 −29.9%;CDP 覆蓋檔數 30→32→34→42 不減反增、單檔最高重複 12→5,
   無漏發跡象。剩 **Discord 同 tick 合併真發過目**(翻頻道 08-18 起的訊息即可,log 無逐則記錄)。
-- [ ] **toast / 桌面通知不合併**(spec D5 刻意 out of scope):同 tick 三則仍跳三張 toast;若盤中覺得吵,
+- [x] **toast / 桌面通知不合併**〔2026-08-21 已出貨 PR #80:同 (code,time) 併一張(TTL 剩 ≥1500ms 才併、併入即浮首)、嗶每組一聲、通知文案 = 合併文案〕(spec D5 刻意 out of scope):同 tick 三則仍跳三張 toast;若盤中覺得吵,
   候選 = `useSignalAlerts` 走同一個 `groupSignals` 口徑合成一張。
+- [ ] **合併 toast 多行觀感**(2026-08-21 R3 review C7):三段 kind 文案 ~45 字在 `w-72` 下折 2–3 行,ToastStack 無 clamp;
+  user 過目「1 張三段 + 3 張單則 + 溢出列」後決定是否比照 B3 加 line-clamp。
+- [ ] **背景分頁首則通知延遲 ≈1s**(2026-08-21 R3 review C1):trailing 模型的 300ms 合併窗在 hidden tab 受瀏覽器 timer ≥1s clamp;
+  若嫌慢,候選 = 首則 leading 發、窗尾同 tag 補發合併文案。
 - [ ] **規則 UI `rearm_dwell_secs` step="1" 且前端不擋 0–3600 值域**(code review T-10 rejected):沿
   `window_secs` 既有慣例(值域由後端 INVALID_RULE 擋、文案泛用);要做就連 rearm_ticks / window_secs 一起
   加前端值域提示。
