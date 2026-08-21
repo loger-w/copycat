@@ -75,3 +75,6 @@ ES/NQ/YM 以外的收盤 clamp 常數調整、corr 引擎取樣節奏、heal 退
 - **A5 W3 改以名稱列舉**:`_resolve_trade_date` 兩處、`/api/calendar.today`、breadth 今日、overlay 基準日兩 handler(行號為改動前)。
 - **A6 `_session_date` docstring 補近似誤差**:夜盤存在與否取決於**次一營業日**;起始日交易日而次一營業日休市(封關夜等)仍空 churn,方向安全;Edge case 補此條。
 - **A7 push predicate 字面**:`rank = close_clamp_rank(minute_end, kind); if rank is not None and rank >= 2 and offset in minutes: return`;rank 0 = 窗內非 clamp 或窗前(由 offset_of 先擋);helper 測試只鎖 end / end+1 / end+2 / end+5 / end+6 五個邊界。
+
+## self_review_head
+8c73e939
