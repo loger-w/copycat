@@ -28,6 +28,9 @@ P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod
 - [ ] **R7 P2 三條**(profit 段 `000` 表頭先關窗已由 2026-08-22 fix/balance-collector-owed-count「rows 不動欠帳 + 吞終止符清 _last_feed」一併消滅):吞終止符 WARNING 帶
   collector 名;`_set_status("ok")` 改專用 clear 不走 reset(`client.py:240`);`_query_open_interest` 無期貨
   帳號提前 return 不清 `_oi_abandoned`(`client.py:467`)。
+- [x] **R8 退訂不取消逾時 timer / corr retry task 無兜底 / single-flight 整輪假 log**〔2026-08-22 已出貨 fix/history-timeout-leftovers:
+  `_forget_backfill_timeout` + worker 逾時對已退訂 code(`_refs`)不記帳;`_merge_into_inflight_round` 下沉到 `_schedule_backfill`(reconnect 真丟棄點)
+  + 整輪併回歸零輪數;`_backfill_retry` except → exception log + 歸零〕
 - [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
   鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
 - [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
