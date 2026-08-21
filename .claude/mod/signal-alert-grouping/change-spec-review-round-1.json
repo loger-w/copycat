@@ -1,0 +1,97 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "該紅表誤讀 fixture(code=id)→ 216/103 誤改 lock",
+   "disposition": "accepted",
+   "resolution": "103 不動;216 僅通知該紅"
+  },
+  {
+   "id": "R2",
+   "severity": "P0",
+   "summary": "137 同 id 重發實為同鍵 → 該紅未標;W3 自相矛盾",
+   "disposition": "accepted",
+   "resolution": "137 該紅 + W3 改寫"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "items 排序慣例未釘(新在前)",
+   "disposition": "accepted",
+   "resolution": "D2' 前插、錨 at(-1)"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "W2 可見不發 vs Edge 4 矛盾",
+   "disposition": "accepted",
+   "resolution": "fire 時重驗 hidden"
+  },
+  {
+   "id": "R5",
+   "severity": "P1",
+   "summary": "併入 overflow 區 / TTL 尾端零回饋",
+   "disposition": "accepted",
+   "resolution": "D1' VISIBLE 內且 TTL ≥500ms 才併"
+  },
+  {
+   "id": "R6",
+   "severity": "P1",
+   "summary": "跨組 pending 未定義",
+   "disposition": "accepted",
+   "resolution": "全域單槽"
+  },
+  {
+   "id": "R7",
+   "severity": "P1",
+   "summary": "SC-3 時間軸與文案錯",
+   "disposition": "accepted",
+   "resolution": "絕對時刻重寫"
+  },
+  {
+   "id": "R8",
+   "severity": "P1",
+   "summary": "SignalToast 新欄位 → ToastStack.test 型別紅未標",
+   "disposition": "accepted",
+   "resolution": "該紅(型別)"
+  },
+  {
+   "id": "R9",
+   "severity": "P1",
+   "summary": "updater 內做副作用 StrictMode 雙觸發;drop 未同步",
+   "disposition": "accepted",
+   "resolution": "groupIndexRef + StrictMode 測試"
+  },
+  {
+   "id": "R10",
+   "severity": "P1",
+   "summary": "165/173 退化 vacuous",
+   "disposition": "accepted",
+   "resolution": "補推進"
+  },
+  {
+   "id": "R11",
+   "severity": "P1",
+   "summary": "SC-5 無注入口",
+   "disposition": "accepted",
+   "resolution": "臨時 window.__emitSignal"
+  },
+  {
+   "id": "R12",
+   "severity": "P2",
+   "summary": "caller map 問號",
+   "disposition": "accepted",
+   "resolution": "結論化"
+  },
+  {
+   "id": "R13",
+   "severity": "P2",
+   "summary": "leading 註解未列改寫",
+   "disposition": "accepted",
+   "resolution": "同批改"
+  }
+ ]
+}
