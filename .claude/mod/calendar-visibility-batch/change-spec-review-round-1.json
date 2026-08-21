@@ -1,0 +1,90 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "_spot_trial_now 改方法打紅 TestObserveClockContract",
+   "disposition": "accepted",
+   "resolution": "保留純窗模組函式更名 + 方法 AND"
+  },
+  {
+   "id": "R2",
+   "severity": "P1",
+   "summary": "TAIPEI 常數不存在、繞過 now_fn",
+   "disposition": "accepted",
+   "resolution": "用 self._now_fn().date()"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "既有 trial 測試週末 flake、未逐條",
+   "disposition": "accepted",
+   "resolution": "fixture 清單 test-infra-fix"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "瀏覽器時鐘比後端日期",
+   "disposition": "accepted",
+   "resolution": "改 payload today 同源"
+  },
+  {
+   "id": "R5",
+   "severity": "P1",
+   "summary": "必填 prop 打紅 renderRail tsc",
+   "disposition": "accepted",
+   "resolution": "optional"
+  },
+  {
+   "id": "R6",
+   "severity": "P1",
+   "summary": "calendar trade_date ≠ rail 內容日",
+   "disposition": "accepted",
+   "resolution": "signals/today additive trade_date/today"
+  },
+  {
+   "id": "R7",
+   "severity": "P2",
+   "summary": "title 文案不精確",
+   "disposition": "accepted",
+   "resolution": "帶 trade_date + 動作"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "週末不在 holidays 是假設",
+   "disposition": "accepted",
+   "resolution": "程式守門"
+  },
+  {
+   "id": "R9",
+   "severity": "P2",
+   "summary": "補班漏設無提示未明列",
+   "disposition": "accepted",
+   "resolution": "out of scope"
+  },
+  {
+   "id": "R10",
+   "severity": "P2",
+   "summary": "SC-4 無通道",
+   "disposition": "accepted",
+   "resolution": "側車"
+  },
+  {
+   "id": "R11",
+   "severity": "P2",
+   "summary": "observe log trial_window 分岔未表態",
+   "disposition": "accepted",
+   "resolution": "維持純窗 + docstring"
+  },
+  {
+   "id": "R12",
+   "severity": "P2",
+   "summary": "StockPage.test 無 calendar stub",
+   "disposition": "accepted",
+   "resolution": "D3' 免 calendar query"
+  }
+ ]
+}
