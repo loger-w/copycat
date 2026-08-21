@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
 import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
+import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
@@ -201,23 +202,22 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   const minutes = futMinutesOf(mode);
   const candleBars = useMemo(() => aggregateBars(bars, minutes), [bars, minutes]);
 
+  // a11y 批:模式列是單選 —— 15 顆 `aria-pressed` button 讓 AT 聽成 15 個互不相干的開關、
+  // 鍵盤要按 15 次 Tab 才穿得過。改 RadioPills 後一個 tab stop + 方向鍵切換(class 逐字沿用)。
   const modeRow = (
-    <div className="mb-1 flex flex-wrap items-center gap-1">
-      {FUT_CHART_MODES.map(([id, label]) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={mode === id}
-          onClick={() => selectMode(id)}
-          className={cn(
-            "rounded border px-2 py-0.5 text-xs",
-            mode === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
+    <RadioPills<FutChartMode>
+      ariaLabel="圖表模式"
+      className="mb-1 flex flex-wrap items-center gap-1"
+      value={mode}
+      onChange={selectMode}
+      items={FUT_CHART_MODES.map(([id, label]) => ({ value: id, label }))}
+      pillClass={(_item, checked) =>
+        cn(
+          "rounded border px-2 py-0.5 text-xs",
+          checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+        )
+      }
+    />
   );
 
   function body(): ReactNode {
