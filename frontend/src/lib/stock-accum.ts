@@ -87,6 +87,10 @@ export interface StockAccum {
    *  同 `WatchlistQuote.trial`:選填會讓漏帶靜默成 false = badge 永遠不亮。
    *  snapshot 缺欄位(舊後端)由 `fromSnapshot` 以 `?? false` 降級。 */
   trial: boolean;
+  /** 這份 accum 是 `?tape=0` 取回的(後端 `tape_omitted`):明細與 VP 為空是「省略」不是
+   *  「尚無成交」。**必填**(同 noData/trial):選填會讓漏帶靜默成 false = 空態永遠印終態文案。
+   *  群組 → 單檔切換時 useStockStream 會補打全量,重建後回到 false。 */
+  tapeOmitted: boolean;
   /** 當日最高 / 最低成交價(毫元,後端 running max/min)。**top-level 不掛 meta** ——
    *  meta 是 TC4 來的靜態盤別資料,把「由成交推導的當日狀態」塞進去語意錯位,
    *  而且只跑過回補、未收 REALTIME 時 meta 為 null,高低照樣要有值 */
@@ -158,6 +162,7 @@ interface SnapshotShape {
    *  同名反義的兩個欄位同時在前端手上,誤用不會報錯只會讓 VWAP 靜默偏移(FC-2)。 */
   vwap_vol?: number | null;
   no_data?: boolean;
+  tape_omitted?: boolean;
   /** 緩撮旗標;**選填** —— 舊後端沒給(全 additive 契約),缺欄位一律當窗外。 */
   trial?: boolean;
 }
@@ -203,6 +208,7 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     low: snap.low ?? null,
     noData: snap.no_data ?? false,
     trial: snap.trial ?? false,
+    tapeOmitted: snap.tape_omitted ?? false,
     amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
     volume,
   };
@@ -303,6 +309,7 @@ export function accumFromGroupSnapshot(
     meta: snap.meta,
     noData: snap.noData,
     trial: false,
+    tapeOmitted: false,
     high: snap.high ?? null,
     low: snap.low ?? null,
     amountMilli: 0,

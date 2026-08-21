@@ -460,7 +460,12 @@ export function StockPage({
                         用 key 而不是 effect-on-code:重掛即歸零,零新 state 邏輯。
                         鍵是 instrument key 不是股號(F-4):同一檔股票的現貨與各月合約是
                         不同標的,而 `code` 在換月與現貨↔合約時恆不變 → 用它當 key 不重掛。 */}
-                    <TickTape key={instrumentKey} ticks={accum.ticks} ref_={meta?.ref ?? null} />
+                    <TickTape
+                      key={instrumentKey}
+                      ticks={accum.ticks}
+                      ref_={meta?.ref ?? null}
+                      loading={accum.tapeOmitted}
+                    />
                   </div>
                 </div>
               </>
