@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 
-import { cn } from "@/lib/utils";
+import { cn, safeIdToken } from "@/lib/utils";
 
 /** 單選 pill 群的共用元件(a11y 批 D1' / D1'')。
  *
@@ -34,6 +34,12 @@ interface Props<V extends string> {
   className?: string;
   leading?: ReactNode;
   trailing?: ReactNode;
+  /** 「使用者點了這組 pill」的訊號,**每一次點 label 都發**(含點已選中的那顆)。
+   *
+   *  `onChange` 不夠用:原生 radio 點已選中項不發 change,而閃電梯用「有沒有在操作」
+   *  重置武裝閒置計時(A11Y-6)—— 一直點同一顆的使用者會被判定閒置而解除武裝。
+   *  停用項不觸發(原 `<button disabled>` 連 click 都不派)。 */
+  onInteract?: () => void;
 }
 
 export function RadioPills<V extends string>({
@@ -45,24 +51,37 @@ export function RadioPills<V extends string>({
   className,
   leading,
   trailing,
+  onInteract,
 }: Props<V>) {
   /** 同頁多組 pill(OrderPanel 兩組 / 圖牆與週期列)必須各自獨立的 `name`,
-   *  否則原生 radio 會把它們當同一組互搶選取。 */
-  const uid = useId();
+   *  否則原生 radio 會把它們當同一組互搶選取。
+   *  `safeIdToken`:React 19 的 useId 是 «r0» 形態,含非識別字元。 */
+  const uid = safeIdToken(useId());
   return (
     <div role="radiogroup" aria-label={ariaLabel} className={className}>
       {leading}
-      {items.map((item) => {
+      {items.map((item, i) => {
         const checked = item.value === value;
+        /** **按 index 編號,不拼 value**:value 是呼叫端資料(合約鍵 / 使用者群組名),
+         *  可能帶空白或標點 —— 拼出來的 id 不是合法 token,`querySelector("#…")` 與
+         *  CSS 選擇器會直接語法錯誤,而畫面完全正常(靜默)。 */
+        const id = `${uid}-${i}`;
         return (
           <label
             key={item.value}
-            htmlFor={`${uid}-${item.value}`}
+            htmlFor={id}
             title={item.title}
             aria-disabled={item.disabled ? "true" : undefined}
+            /** 每一次點都算「使用者還在操作」——`onChange` 對已選中項不發(A11Y-6)。 */
+            onClick={() => {
+              if (item.disabled) return;
+              onInteract?.();
+            }}
             className={cn(
               pillClass(item, checked),
-              item.disabled && "cursor-not-allowed",
+              // `<label>` 沒有 UA cursor / user-select 樣式:不補的話每顆 pill 都是
+              // I-beam 游標、文字可被反白拖選 —— 原 `<button>` 兩者皆無(A11Y-3)。
+              item.disabled ? "cursor-not-allowed" : "cursor-default select-none",
               "has-focus-visible:ring-1 has-focus-visible:ring-inset has-focus-visible:ring-accent",
             )}
           >
@@ -70,7 +89,7 @@ export function RadioPills<V extends string>({
               type="radio"
               className="sr-only"
               name={uid}
-              id={`${uid}-${item.value}`}
+              id={id}
               value={item.value}
               checked={checked}
               disabled={item.disabled}
