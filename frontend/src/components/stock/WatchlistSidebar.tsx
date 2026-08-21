@@ -151,6 +151,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
   const uid = safeIdToken(useId());
   const asideRef = useRef<HTMLElement | null>(null);
+  // sticky 搜尋區:它浮在第一組上面,所以它的下緣就是拖曳落點的作廢帶下緣(B10)
+  const stickyRef = useRef<HTMLDivElement | null>(null);
   // key = 群組名;`null` = 未分組區塊
   const sectionRefs = useRef<Map<string | null, HTMLElement>>(new Map());
   const listRefs = useRef<Map<string | null, HTMLElement>>(new Map());
@@ -251,7 +253,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
   /** 落點幾何。**每次 pointermove 重算** —— 只在 pointerdown 算一次的話,側欄捲動或
    *  錯誤文案出現消失都會讓 rect 失效,而失效樣態是「拖到別組結果落錯組」= 靜默改資料。 */
-  function zonesNow(): { zones: DropZone[]; bounds: { left: number; right: number } } {
+  function zonesNow(): {
+    zones: DropZone[];
+    bounds: { left: number; right: number };
+    voidBelowY: number | undefined;
+  } {
     const zones: DropZone[] = [];
     const push = (key: string | null, count: number): void => {
       const section = sectionRefs.current.get(key);
@@ -272,7 +278,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     push(null, ungrouped.length);
     for (const g of groups) push(g.name, g.codes.length);
     const aside = asideRef.current?.getBoundingClientRect();
-    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 } };
+    // ref 沒掛上 → undefined = 不作廢(不猜一個假的界);與 zones 一樣每次 move 重算,
+    // 側欄捲動 / 建議清單長出來讓 sticky 區變高時界跟著走。
+    const voidBelowY = stickyRef.current?.getBoundingClientRect().bottom;
+    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 }, voidBelowY };
   }
 
   /** 四條落點路徑(SC-12)。拖進未分組 = 從**所有**群組移除:只移除來源組的話,
@@ -302,15 +311,29 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       setDrag(null);
     };
     const move = (ev: PointerEvent): void => {
-      const { zones, bounds } = zonesNow();
-      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
-      setDrag((p) => (p === null || target === null ? p : { ...p, to: target.group }));
+      const { zones, bounds, voidBelowY } = zonesNow();
+      const target = dropTargetFromPointer(
+        { x: ev.clientX, y: ev.clientY },
+        zones,
+        ROW_H,
+        bounds,
+        voidBelowY,
+      );
+      // 落點作廢 → 高亮**回到來源組**(review R7):停在「放不進去的那一組」亮著的話,
+      // 使用者只會再按一次;回來源組等於畫面說「放開就是原樣」。
+      setDrag((p) => (p === null ? p : { ...p, to: target === null ? p.from : target.group }));
     };
     const up = (ev: PointerEvent): void => {
-      const { zones, bounds } = zonesNow();
-      const target = dropTargetFromPointer({ x: ev.clientX, y: ev.clientY }, zones, ROW_H, bounds);
+      const { zones, bounds, voidBelowY } = zonesNow();
+      const target = dropTargetFromPointer(
+        { x: ev.clientX, y: ev.clientY },
+        zones,
+        ROW_H,
+        bounds,
+        voidBelowY,
+      );
       teardown();
-      if (target === null) return; // 側欄外放開 → 整個作廢(移動語意不可逆)
+      if (target === null) return; // 側欄外 / sticky 搜尋區放開 → 整個作廢(移動語意不可逆)
       commit(applyDrop(code, from, target.group, target.index));
     };
     const onKey = (ev: KeyboardEvent): void => {
@@ -603,7 +626,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       aria-label="自選清單"
     >
       {/* 搜尋框恆存且 sticky:群組多起來捲動後仍要看得到(W-16 的新實體) */}
-      <div className="sticky top-0 z-10 bg-bg pb-1">
+      <div ref={stickyRef} data-testid="wl-sticky" className="sticky top-0 z-10 bg-bg pb-1">
         <div className="flex gap-1">
           <input
             aria-label="股號或名稱"
