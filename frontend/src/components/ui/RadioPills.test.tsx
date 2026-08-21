@@ -88,6 +88,38 @@ describe("RadioPills", () => {
     expect(other?.className).not.toContain("border-accent");
   });
 
+  // TC-4:「視覺零變」的前提是 radio 本體看不見 —— `sr-only` 掉了的話畫面上每顆 pill
+  // 前面會多一個原生圓鈕(而所有語意測試照樣全綠)。反向也要鎖:label 不能是 sr-only,
+  // 否則整組 pill 從畫面上消失。
+  it("radio 本體 sr-only、label 不是(視覺零變的前提)", () => {
+    render(<Harness />);
+    const radio = screen.getByRole("radio", { name: "現股" });
+    expect(radio.className).toBe("sr-only");
+    expect(radio.closest("label")!.className).not.toContain("sr-only");
+  });
+
+  // TC-5:使用者點的是 **label**(radio 本體 sr-only,滑鼠根本點不到)—— 只測
+  // `fireEvent.click(radio)` 等於從來沒走過真實路徑。
+  it("點 label(不是 radio 本體)也換選;disabled 的 label 點了沒事", () => {
+    const onChange = vi.fn();
+    render(
+      <Harness
+        onChange={onChange}
+        items={[ITEMS[0]!, ITEMS[1]!, { value: "short", label: "無券", disabled: true }]}
+      />,
+    );
+    const margin = screen.getByRole("radio", { name: "融資" }) as HTMLInputElement;
+    fireEvent.click(margin.closest("label")!);
+    expect(onChange.mock.calls).toEqual([["margin"]]);
+    expect(margin.checked).toBe(true);
+
+    const off = screen.getByRole("radio", { name: "無券" }) as HTMLInputElement;
+    fireEvent.click(off.closest("label")!);
+    expect(onChange.mock.calls).toEqual([["margin"]]); // 沒有第二次
+    expect(off.checked).toBe(false);
+    expect(margin.checked).toBe(true);
+  });
+
   it("同組 name 全同;兩組同時掛載時 name 互異(不互搶選取)", () => {
     render(
       <>

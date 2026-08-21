@@ -167,6 +167,16 @@ describe("MarketPane 窄容器週期列(SC-3)", () => {
     expect(cls).toContain("px-2");
   });
 
+  // TC-8:「重疊」是唯一還是 `<button>` 的那顆,class 與 pill 同源(`pillClass`)——
+  // 同源這件事沒有斷言的話,哪天有人把 Btn 的 class 抄成自己一份,窄 pane 下它不縮 padding
+  // 而旁邊的週期鈕縮了,折行行為與版面就與 SC-3 的量測脫節。
+  it("「重疊」toggle 與週期鈕吃同一份 class(窄容器 px-1 / 寬容器 px-2)", () => {
+    renderPane();
+    const overlay = btn("重疊");
+    expect(overlay.className).toContain("@max-[26.5rem]:px-1");
+    expect(overlay.className).toContain("px-2");
+  });
+
   it("週期列容器:窄容器 gap-0.5,寬容器仍是既有 gap-1", () => {
     renderPane();
     // 週期列 = radiogroup 容器本身(label 的父層);容器 class 逐字沿用
@@ -281,7 +291,9 @@ describe("MarketPane 參數化(SC-2)", () => {
 
   it("(e) 期指子鈕切換:點台指期才出現三選一,選微台後標題換料", () => {
     renderPane();
-    expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
+    // TC-3:pill 已改 radio,查 `button` 恆為 null = 恆真斷言(「期貨商品列一直都在」
+    // 這個 bug 照樣全綠)。查的角色必須跟實作同一個。
+    expect(screen.queryByRole("radio", { name: "小台" })).toBeNull();
     fireEvent.click(pill("台指期"));
     expect(pill("大台").checked).toBe(true);
     fireEvent.click(pill("微台"));
