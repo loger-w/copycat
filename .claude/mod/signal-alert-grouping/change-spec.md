@@ -96,3 +96,6 @@ Discord 合併訊息(後端已做)、SignalRail、toast 顯示規則名、通知
 - C2:fire 時已回前景 → 丟棄,與 toast TTL 同長 → 極端情況兩邊皆無痕(接受:前景抵達路徑 = rail)。
 - C3:`SignalToast.groupKey` 移除(drop 反查不需要)。C4:expiresAt 牆鐘與 setTimeout 單調混用 → 註解記 NTP 取捨(同 lastNotifyRef)。C5:cleanup 刻意不清 queue(effect 僅掛一次)註解。
 - C7:SC-5 過目條件補「1 張三段合併 + 3 張單則 + 溢出列」多行觀感由 user 判斷是否比照 B3 加 line-clamp。
+
+## self_review_head
+e24b4a12
