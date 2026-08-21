@@ -226,6 +226,48 @@ describe("OrderPanel(群益)", () => {
     expectMarketLocked();
   });
 
+  // TC-2:買賣別 radiogroup 在 a11y 批之前**零測試** —— 它決定的是買還是賣(真錢方向),
+  // 而 pill 群改成 sr-only radio 之後,「選中態的紅綠框」與「兩組互不搶選」都只剩 DOM
+  // 屬性看得出來。text-center 是 grid-cols-2 下 `<label>` 沒有 UA 置中的補救(W-視覺零變)。
+  it("TC-2:買賣別 radiogroup —— 預設買進、選賣出換色、與委託類型 name 互異", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    const side = screen.getByRole("radiogroup", { name: "買賣別" });
+    const radios = within(side).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.length).toBe(2);
+    const buy = within(side).getByRole("radio", { name: "買進" }) as HTMLInputElement;
+    const sell = within(side).getByRole("radio", { name: "賣出" }) as HTMLInputElement;
+    expect(buy.checked).toBe(true);
+    expect(sell.checked).toBe(false);
+    expect(buy.closest("label")!.className).toContain("border-bull");
+
+    fireEvent.click(sell);
+    expect(sell.checked).toBe(true);
+    expect(buy.checked).toBe(false);
+    const sellCls = sell.closest("label")!.className;
+    expect(sellCls).toContain("border-bear");
+    expect(sellCls).not.toContain("border-bull");
+    // 未選中的那顆回到中性框(留著 border-bull 就等於兩顆同時看起來像選中)
+    expect(buy.closest("label")!.className).toContain("border-line");
+
+    // 同頁兩組 radiogroup 必須各自 `name`,否則原生 radio 會互相搶選(選了賣出就把
+    // 限價/市價的選取清掉)
+    const kind = screen.getByRole("radiogroup", { name: "委託類型" });
+    const kindRadios = within(kind).getAllByRole("radio") as HTMLInputElement[];
+    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+    expect(new Set(kindRadios.map((r) => r.name)).size).toBe(1);
+    expect(radios[0]!.name).not.toBe(kindRadios[0]!.name);
+
+    // grid-cols-2 的格子比文字寬:`<label>` 沒有 UA 置中,漏了就是可見的版面偏移
+    for (const r of [...radios, ...kindRadios]) {
+      expect(r.closest("label")!.className).toContain("text-center");
+    }
+  });
+
   // 🔴 A11Y-2:選了市價之後換到**無估價**的合約 —— 市價 radio 變 disabled,但 `kind`
   // 還停在 market 所以它仍是 checked。HTML 的 radio group 只有 checked 的那顆進 tab 序,
   // 而它 disabled → **整組零可聚焦**:鍵盤使用者再也切不回限價,而畫面上兩顆 pill 都在。
