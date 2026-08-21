@@ -7,7 +7,7 @@
 import { Fragment } from "react";
 
 import { errText, type SignalRule } from "@/hooks/useSignalRules";
-import { fmt } from "@/lib/format";
+import { fmt, monthDay } from "@/lib/format";
 import {
   groupKindLabels,
   groupRuleNames,
@@ -35,6 +35,24 @@ interface Props {
   onRequestNotif: () => void;
   soundOn: boolean;
   onToggleSound: (value: boolean) => void;
+  /** baseline 的資料日(後端 hub 的 engine 日別);payload 缺欄 / 未接線 = null。 */
+  tradeDate?: string | null;
+  /** 後端牆鐘日(同一支 payload 自帶)—— **不用瀏覽器時鐘**:看盤機的時區 / 時鐘
+   *  與後端日別是兩回事,拿本機今天去比會在跨日與時區偏移時各錯一種。 */
+  today?: string | null;
+}
+
+/** 標題文案:資料日 ≠ 後端今日(假日 / 盤前開站)時把日期寫進標題 ——
+ *  「今日訊號」四個字會讓人把上一交易日的鎖漲停當成剛剛發生的。
+ *
+ *  兩欄任一缺(舊後端 / 未接線)一律退「今日訊號」:單邊日期推不出「是不是今天」,
+ *  拿本機時鐘補那一半只會在時區 / 跨午夜時給出比沉默更糟的答案。
+ *
+ *  已知落差(D3'):hub `today_signals()` 是 {engine 日, 牆鐘日} 聯集,rollover
+ *  stage2 前標題 = engine 日(與列的內容一致),接受。 */
+function railTitle(tradeDate: string | null | undefined, today: string | null | undefined): string {
+  const stale = tradeDate != null && today != null && tradeDate !== today;
+  return stale ? `${monthDay(tradeDate)} 訊號` : "今日訊號";
 }
 
 /** `HH:MM:SS` → `HH:MM`。窄欄放不下秒,而秒對「幾點發生」的判讀沒有價值。 */
@@ -110,16 +128,20 @@ export function SignalRail({
   onRequestNotif,
   soundOn,
   onToggleSound,
+  tradeDate,
+  today,
 }: Props) {
+  // 標題與 aria-label 同一句(兩處各寫一份就會漂;讀螢幕器唸到的也該是資料日)
+  const title = railTitle(tradeDate, today);
   return (
     // border-r:與中間主區的視覺分隔(同 WatchlistSidebar 慣例)
     <aside
       data-testid="signal-rail"
-      aria-label="今日訊號"
+      aria-label={title}
       className="flex w-52 shrink-0 flex-col border-r border-line pr-2"
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        <h3 className="shrink-0 border-b border-line px-1 py-1 text-xs text-ink-dim">今日訊號</h3>
+        <h3 className="shrink-0 border-b border-line px-1 py-1 text-xs text-ink-dim">{title}</h3>
         {/* **關掉規則不再隱藏它今天已發過的列**(signal-rules R14a,🔴 行為改動):
             那些列帶規則名、來源可辨識,而原本的隱藏語意會讓「剛剛看到的訊號」
             在關掉規則的瞬間整批消失,看起來像資料掉了。 */}

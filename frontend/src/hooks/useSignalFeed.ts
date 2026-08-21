@@ -19,12 +19,31 @@ import { mergeSignals, type SignalMsg } from "@/lib/signal-model";
  *  而 ws-open 的 invalidate 也就必須逐一列舉。 */
 const TODAY_KEY = ["stock-signals-today"];
 
-/** 回傳已反轉為「新在前」的 baseline —— `mergeSignals` 兩份輸入都要求新在前。 */
-async function fetchToday(): Promise<SignalMsg[]> {
+/** 跨午夜 / stage2 rollover 後標題要跟上(AR4)。WS 重連的 invalidate 只在斷線時發生,
+ *  而長跑分頁可以整晚不斷線 —— 沒有這條週期,標題會停在昨天的日期直到有人重整。 */
+const BASELINE_REFETCH_MS = 5 * 60_000;
+
+interface TodayPayload {
+  /** 已反轉為「新在前」—— `mergeSignals` 兩份輸入都要求新在前。 */
+  signals: SignalMsg[];
+  /** 後端 hub 的資料日別 / 牆鐘日;舊後端沒這兩欄 → null(不由前端猜)。 */
+  tradeDate: string | null;
+  today: string | null;
+}
+
+async function fetchToday(): Promise<TodayPayload> {
   const res = await fetch("/api/stock/signals/today");
   if (!res.ok) throw new Error(`HTTP_${res.status}`);
-  const body = (await res.json()) as { signals?: SignalMsg[] };
-  return [...(body.signals ?? [])].reverse();
+  const body = (await res.json()) as {
+    signals?: SignalMsg[];
+    trade_date?: string;
+    today?: string;
+  };
+  return {
+    signals: [...(body.signals ?? [])].reverse(),
+    tradeDate: body.trade_date ?? null,
+    today: body.today ?? null,
+  };
 }
 
 export interface SignalFeed {
@@ -36,11 +55,21 @@ export interface SignalFeed {
    *  「服務沒起來」與「今天真的沒訊號」畫成同一句話,而使用者對這兩句的反應完全相反
    *  (去查 vs 繼續等)。 */
   baselineError: boolean;
+  /** baseline 是哪一天的訊號(後端 hub 的日別);缺欄 / 未取到 = null。 */
+  tradeDate: string | null;
+  /** 後端牆鐘日。與 `tradeDate` 成對才有意義 —— 消費端拿兩者比對決定標題文案,
+   *  單邊搭配瀏覽器時鐘會在時區偏移 / 跨午夜時給出錯的「今天」。 */
+  today: string | null;
 }
 
 export function useSignalFeed(): SignalFeed {
   const queryClient = useQueryClient();
-  const today = useQuery({ queryKey: TODAY_KEY, queryFn: fetchToday, retry: 1 });
+  const baselineQuery = useQuery({
+    queryKey: TODAY_KEY,
+    queryFn: fetchToday,
+    retry: 1,
+    refetchInterval: BASELINE_REFETCH_MS,
+  });
   const [live, setLive] = useState<SignalMsg[]>([]);
 
   // 外部事件源訂閱(不是從 props/state 推導的值)—— effect 是正解。
@@ -54,7 +83,12 @@ export function useSignalFeed(): SignalFeed {
   );
 
   // 抓失敗(hub 未就緒 503)= 沒有 baseline,不是壞掉:live 訊號照樣進得來
-  const baseline = today.data;
+  const baseline = baselineQuery.data?.signals;
   const signals = useMemo(() => mergeSignals(baseline ?? [], live), [baseline, live]);
-  return { signals, baselineError: today.isError };
+  return {
+    signals,
+    baselineError: baselineQuery.isError,
+    tradeDate: baselineQuery.data?.tradeDate ?? null,
+    today: baselineQuery.data?.today ?? null,
+  };
 }
