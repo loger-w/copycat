@@ -397,11 +397,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           data-testid={`wl-row-${code}`}
           style={{ height: ROW_H }}
           className={cn(
-            "group flex cursor-pointer items-center gap-1.5 border-b border-line px-1",
+            "group flex items-center gap-1.5 border-b border-line px-1",
             active === code && "bg-bg-deep",
             drag?.code === code && "opacity-50",
           )}
-          onClick={() => onSelect(code)}
         >
           {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
               的能力」→ 對 AT 隱藏(改前本來就不可鍵盤操作,非本次退化)。分組指派可走
@@ -415,110 +414,125 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           >
             ⋮⋮
           </span>
-          {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
-              放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
-              主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
-              漲幅刻意不跟著放大:四個元素同權重反而更難掃。
-              `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
-          <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
-            {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
-                flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
-                列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
-                `q?.trial && !q?.no_data`:窗內的 payload 對無資料檔照算 trial=true,
-                而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
-                講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
-                (現價線)—— 試撮不是方向性狀態。 */}
-            {/* `min-w-0`(code review P2-AGG(1)):這一層是外層 flex 的子項,少了它不會
-                縮 —— 極長的 instrument key(合約鍵 / 未來的長代號)會把整格推寬並溢出
-                到右側報價塊上。與外層 `min-w-0 flex-1` 同一個理由,鏈上任一環漏掉都失效。 */}
-            <span className="flex min-w-0 items-baseline gap-1">
-              <span className="font-mono text-base text-ink">{code}</span>
-              {q?.trial && !q?.no_data ? (
-                <span
-                  data-testid={`wl-trial-${code}`}
-                  className="shrink-0 whitespace-nowrap text-xs text-amber-400"
-                >
-                  (緩)
-                </span>
-              ) : null}
-            </span>
-            {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
-                (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
-                多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
-                範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
-                長名稱該截斷,張數與損益少一個字就變成另一個數字。
-                兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
-            {name !== undefined || hasPos ? (
+          {/* 🔴 SC-4'(D5' / D5''):代號 / 名稱 / 報價包進一顆真 button,`onSelect` 從
+              row div 搬到這裡 —— div onClick 沒有鍵盤路徑(Tab 到不了、Enter 沒反應),
+              而整列改 `<button>` 不行:握把 / 加入群組 / 移除三顆互動子元素會變成巢狀
+              interactive(無效 HTML + 焦點順序錯亂),所以它們留在 row 層與這顆並排。
+              `flex-1` 讓它吃滿三顆子元素以外的整段寬度,可點區域與改前幾乎相同
+              (只差列末的 gap)。 */}
+          <button
+            type="button"
+            data-testid={`wl-select-${code}`}
+            aria-label={name !== undefined ? `選取 ${code} ${name}` : `選取 ${code}`}
+            aria-current={active === code ? "true" : undefined}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+            onClick={() => onSelect(code)}
+          >
+            {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
+                放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
+                主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
+                漲幅刻意不跟著放大:四個元素同權重反而更難掃。
+                `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
+            <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
+              {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
+                  flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
+                  列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
+                  `q?.trial && !q?.no_data`:窗內的 payload 對無資料檔照算 trial=true,
+                  而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
+                  講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
+                  (現價線)—— 試撮不是方向性狀態。 */}
+              {/* `min-w-0`(code review P2-AGG(1)):這一層是外層 flex 的子項,少了它不會
+                  縮 —— 極長的 instrument key(合約鍵 / 未來的長代號)會把整格推寬並溢出
+                  到右側報價塊上。與外層 `min-w-0 flex-1` 同一個理由,鏈上任一環漏掉都失效。 */}
               <span className="flex min-w-0 items-baseline gap-1">
-                {name !== undefined ? (
-                  <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
-                ) : null}
-                {hasPos ? (
+                <span className="font-mono text-base text-ink">{code}</span>
+                {q?.trial && !q?.no_data ? (
                   <span
-                    data-testid={`wl-pos-${code}`}
-                    title={chipTitle(sec, fut)}
-                    className={cn(
-                      "shrink-0 whitespace-nowrap text-[0.625rem]",
-                      chipTone(sec, fut),
-                    )}
+                    data-testid={`wl-trial-${code}`}
+                    className="shrink-0 whitespace-nowrap text-xs text-amber-400"
                   >
-                    {chipText(sec, fut)}
+                    (緩)
                   </span>
                 ) : null}
               </span>
-            ) : null}
-          </div>
-          {q?.no_data ? (
-            <span className="shrink-0 text-xs text-ink-dim">無資料</span>
-          ) : (
-            <span
-              data-testid={`wl-quote-${code}`}
-              className={cn(
-                "flex shrink-0 flex-col items-end justify-center font-mono leading-tight",
-                // 亮燈時**整塊**吃底色(同主區慣例):盤中要用餘光捕捉,換文字色不夠。
-                limit === "upper" && "rounded bg-bull px-1.5 text-white",
-                limit === "lower" && "rounded bg-bear px-1.5 text-white",
-              )}
-            >
-              {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
-                  參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
-              {q?.p != null ? (
-                <>
-                  <span className={cn("text-base", limit === null ? "text-ink" : "text-white")}>
-                    {fmtPrice(q.p)}
-                  </span>
-                  <span
-                    className={cn(
-                      "text-xs",
-                      // 亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見(同 OrderBook)
-                      limit !== null
-                        ? "text-white"
-                        : (q.chg_pct ?? 0) > 0
-                          ? "text-bull"
-                          : (q.chg_pct ?? 0) < 0
-                            ? "text-bear"
-                            : // 平盤 = ink-muted(a11y 批 D4''):有成交的零漲跌是要讀的
-                              // 數字,dim 的 2.92:1 讀不出來;下面 `參考` / `-` 兩態才是
-                              // 「今天還沒開始」的弱化,維持 dim。
-                              "text-ink-muted",
-                    )}
-                  >
-                    {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
-                  </span>
-                </>
-              ) : q?.ref != null ? (
-                <>
-                  <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
-                  <span className="text-xs text-ink-dim">參考</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-base text-ink-dim">-</span>
-                  <span className="text-xs text-ink-dim">-</span>
-                </>
-              )}
-            </span>
-          )}
+              {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
+                  (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
+                  多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
+                  範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
+                  長名稱該截斷,張數與損益少一個字就變成另一個數字。
+                  兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
+              {name !== undefined || hasPos ? (
+                <span className="flex min-w-0 items-baseline gap-1">
+                  {name !== undefined ? (
+                    <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
+                  ) : null}
+                  {hasPos ? (
+                    <span
+                      data-testid={`wl-pos-${code}`}
+                      title={chipTitle(sec, fut)}
+                      className={cn(
+                        "shrink-0 whitespace-nowrap text-[0.625rem]",
+                        chipTone(sec, fut),
+                      )}
+                    >
+                      {chipText(sec, fut)}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+            </div>
+            {q?.no_data ? (
+              <span className="shrink-0 text-xs text-ink-dim">無資料</span>
+            ) : (
+              <span
+                data-testid={`wl-quote-${code}`}
+                className={cn(
+                  "flex shrink-0 flex-col items-end justify-center font-mono leading-tight",
+                  // 亮燈時**整塊**吃底色(同主區慣例):盤中要用餘光捕捉,換文字色不夠。
+                  limit === "upper" && "rounded bg-bull px-1.5 text-white",
+                  limit === "lower" && "rounded bg-bear px-1.5 text-white",
+                )}
+              >
+                {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
+                    參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
+                {q?.p != null ? (
+                  <>
+                    <span className={cn("text-base", limit === null ? "text-ink" : "text-white")}>
+                      {fmtPrice(q.p)}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-xs",
+                        // 亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見(同 OrderBook)
+                        limit !== null
+                          ? "text-white"
+                          : (q.chg_pct ?? 0) > 0
+                            ? "text-bull"
+                            : (q.chg_pct ?? 0) < 0
+                              ? "text-bear"
+                              : // 平盤 = ink-muted(a11y 批 D4''):有成交的零漲跌是要讀的
+                                // 數字,dim 的 2.92:1 讀不出來;下面 `參考` / `-` 兩態才是
+                                // 「今天還沒開始」的弱化,維持 dim。
+                                "text-ink-muted",
+                      )}
+                    >
+                      {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
+                    </span>
+                  </>
+                ) : q?.ref != null ? (
+                  <>
+                    <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
+                    <span className="text-xs text-ink-dim">參考</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-base text-ink-dim">-</span>
+                    <span className="text-xs text-ink-dim">-</span>
+                  </>
+                )}
+              </span>
+            )}
+          </button>
           {group === null ? (
             <button
               type="button"
