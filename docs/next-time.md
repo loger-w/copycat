@@ -262,7 +262,7 @@
   首單 = 低價股 1 張市價買/賣 → 群益 APP 核對成交型別 + 委託列表「市價」標籤 → 截圖回填
   `.claude/mod/ladder-market-buttons/verification.md` §4。個股期 / 期貨市價鈕(limit@貼漲跌停 + IOC,
   走 `/api/capital/order/future` 經 `_stkfut_gates`,**與平倉路由不同**)prod 首發同待。
-- [ ] **「貼漲跌停」snap 口徑兩份**:市價鈕(個股期 `stkfutMarketEdgeMilli` snapDown/snapUp、期貨
+- [x] **「貼漲跌停」snap 口徑兩份**〔2026-08-21 已出貨 PR #81 mod/drag-void-and-edge-snap:futCloseEstimate 注入 edgeOf,個股期走 stkfutMarketEdgeMilli、期貨走 futMarketEdgeMilli;FuturesPage.test 值斷言因 fixture 已對齊實際不紅〕:市價鈕(個股期 `stkfutMarketEdgeMilli` snapDown/snapUp、期貨
   `futMarketEdgeMilli` floor/ceil FUT tick)vs 個股期平倉 `RightRail.tsx:256` 用未 snap 的 `meta.upper/lower`
   (平倉路由無 tick 閘從未報錯)→ 同一標的兩個「邊價」可能差一檔;收斂時把平倉也改吃 snap 版(🔴,
   `FuturesPage.test.tsx:150-168` 值斷言該紅)。
@@ -271,7 +271,7 @@
   收斂候選:交易日口徑(`trading_calendar`)或 ±1 日窗(與前端 `ymdWindow` 同口徑)。
 - [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
   屆時 OrdersList 標籤對這兩梯才會出現(現在 wire 就是限價 IOC,不標)。
-- [ ] `futMarketEdgeMilli` 對 `upper/lower ≤ 0` 不回 null(只對 null;stkfut 版有 ≤0 守門)—— 後端
+- [x] `futMarketEdgeMilli` 對 `upper/lower ≤ 0` 不回 null〔2026-08-21 已出貨 PR #81:edgeMilli 哨符守門 + snap 後歸零守門 + futCloseEstimate 自守〕(只對 null;stkfut 版有 ≤0 守門)—— 後端
   `_bad_price` 會擋,前端不鎖鈕;統一口徑時順手。〔2026-08-20 vitest 探針證實:fut 版對 0 回 0、
   負值照 floor 放行;stkfut 版同輸入回 null〕
 
@@ -424,11 +424,15 @@
 
 ## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
 
-- [ ] **側欄 sticky 遮蔽帶的拖曳落點語意**(review A-3,既有語意的量變):游標在 sticky
+- [x] **側欄 sticky 遮蔽帶的拖曳落點語意**〔2026-08-21 已出貨 PR #81:dropTargetFromPointer 第 5 參數 voidBelowY,作廢帶 = (−∞, sticky.bottom);任何作廢落點 hover 高亮回來源組〕(review A-3,既有語意的量變):游標在 sticky
   搜尋區上放開時 `dropTargetFromPointer` 取最近 zone(落未分組 index 0)而非作廢;本輪
   全收/全展鈕使 sticky 高一列,遮蔽帶隨之加高。收斂方向 = 把 sticky 高度傳進 `zonesNow`,
   y 落帶內回 null(拖到搜尋列 = 作廢),不動 ROW_H / bounds。〔2026-08-20 vitest 探針證實:
   y 在所有 zone 上方 → 回最上 zone index 0,不作廢〕
+- [ ] **側欄下方空白區拖曳仍 append 最後一組**(2026-08-21 R4 review F3,作廢帶鏡像):zonesNow 回傳最後 section bottom,`y > lastBottom + ROW_H` → null。S 級。
+- [ ] **後端個股期平倉路徑不過 `_require_legal_tick`**(R4 review F4,後端 /mod):`/api/capital/position/close` 直送 close_position,只驗 price>0;
+  前端 edgeOf 是唯一檔位守門,漏接 = 券商退單零訊號。修法:close route 由 req.key 反查 product,tickable 個股期補 tick 閘。
+- [ ] **ETF 期貨 / 除權息調整腿的平倉估價用現股 tick 表**(R4 review F5):`isOrderBlocked` 只擋閃電梯,平倉鍵不擋;現為嚴格改善(0.01 倍數),可比照送單面讓 blocked 腿 closePriceOf 回 null。
 - [x] ~~conftest 自選隔離 fixture 的組合跑 flake~~ **2026-08-20 修畢**(與 08-18 signal-denoise
   節同一條):根因 = pytest 9.1.1 參數順序 bug,fixture 已上移 root conftest,細節見該節。
 
