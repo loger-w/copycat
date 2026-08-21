@@ -31,6 +31,27 @@ describe("ConnectionBadge", () => {
     expect(screen.getByText("回補中(第 2 次)")).toBeTruthy();
   });
 
+  // 🔒 lock(review T4):重試只改 **label**,tone 一律沿用該 status 的常態色。沒有這條
+  // 的話「retrying 順手套 WARN_TONE」(或反過來被 broken 分支的紅吃掉)零測試阻力 ——
+  // 而 badge 一變警示色,使用者會以為連線斷了,實際上只是回補在重試。
+  it("回補中第 2 次:tone 與第 1 次逐字相同,不冒充警示色", () => {
+    const { unmount } = render(<ConnectionBadge status="backfilling" wsStatus="open" />);
+    const plain = screen.getByText("回補中").className;
+    unmount();
+    render(
+      <ConnectionBadge
+        status="backfilling"
+        wsStatus="open"
+        handover={{ attempt: 2, attempts_max: 3, phase: "backfilling" }}
+      />,
+    );
+    const el = screen.getByText("回補中(第 2 次)");
+    expect(el.className).toBe(plain); // 與非重試態同一組 class(tone 不因次數分岔)
+    expect(el.className).toContain("text-profit"); // backfilling 的常態色(字面值鎖)
+    expect(el.className).not.toContain("text-bull"); // WARN_TONE = 斷線 / 降級才用
+    expect(el.className).not.toContain("border-bull/40");
+  });
+
   it("attempt 1 = 第一次回補 → 逐字「回補中」不變(W2)", () => {
     render(
       <ConnectionBadge

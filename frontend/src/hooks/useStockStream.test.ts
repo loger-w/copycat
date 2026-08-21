@@ -876,6 +876,35 @@ describe("useStockStream(tape 選項)", () => {
     expect(stateUrls().length).toBe(afterUp);
   });
 
+  // 🔒 lock(review T5):正式環境(main.tsx)整棵樹在 `<StrictMode>` 底下 —— dev 的
+  // mount→cleanup→mount 會讓 `tapeRef` 的**唯一寫入點**(那支 effect)跑兩輪。上面那條
+  // 跑的是非 StrictMode 樹,測不到「第二輪把 `wasOff` 讀成 false → 補打整份 tape 的那趟
+  // 被吃掉」:症狀是切回單檔後主圖明細整天空著,而畫面不講原因。
+  it("StrictMode 下 false→true 一樣**恰補一趟**全量(URL 不帶 tape=0)", async () => {
+    const hook = renderHook(({ t }: { t: boolean }) => useStockStream("2330", null, { tape: t }), {
+      initialProps: { t: false },
+      ...STRICT,
+    });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    // 掛載雙發自己會多打幾趟(單飛 + finally 補發),先等它靜下來再記基準 ——
+    // 要鎖的是**轉換**多打幾趟,不是掛載打幾趟
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const before = stateUrls().length;
+    await act(async () => {
+      hook.rerender({ t: true });
+    });
+    await waitFor(() => expect(stateUrls().length).toBe(before + 1));
+    expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
+    // 再排一輪,確認「恰一趟」不是「還有一趟在路上」(雙發把補打做成兩次也是壞的:
+    // 每次切回單檔就多拖一份 MB 級 payload)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(stateUrls().length).toBe(before + 1);
+  });
+
   it("WS 掛載期閉包用的是**當下**的 tape:切回單檔後的 seq-gap refetch 要全量", async () => {
     const { hook, ws } = await setupTape(false);
     await act(async () => {
