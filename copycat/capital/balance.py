@@ -212,9 +212,18 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
 
 class BalanceCollector:
     """收集一輪查詢的多筆事件,結束標記或 timeout 後一次 flush(全量替換語意)。
-    只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset=發查詢前),無鎖。
+    只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset/abandon=發查詢前),無鎖。
     parse 可換 — 損益試算報告(parse_profit_line)/期貨部位(parse_open_interest_line)
-    共用同一套節奏。"""
+    共用同一套節奏。
+
+    ⚠ 輪次識別:COM 回呼(OnRealBalanceReport / OnProfitLossGWReport / OnOpenInterest)
+    **不帶任何查詢識別欄**,遲到的 `##` 無法與發出的查詢配對。client 在「零事件死查詢
+    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記下「那一輪還欠一個終止符」
+    (`_stale_terminators`);之後第一個**零列**終止符即視為舊輪遲到、忽略不 flush。
+    有 row 抵達 = 活的回應(不論屬哪一輪,flush 它都是最新快照)→ 欠帳歸零。
+    代價(明示):真空帳戶在死查詢後的第一個空 `##` 會被當舊終止符忽略,最多晚一輪
+    (≤60s)才顯示「無部位」— 寧可晚 60s,不可誤把有庫存清空(平倉鍵依部位鎖解)。
+    """
 
     def __init__(
         self,
@@ -228,11 +237,26 @@ class BalanceCollector:
         self._staging: list[Any] = []
         self._last_feed: float | None = None
         self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
+        self._stale_terminators = 0  # 已放棄的輪各欠一個 `##`(見 class docstring)
+        self._fed_rows = 0  # 本輪已收的事件列數(含解析失敗列)— 判「零列終止符」用
 
-    def reset(self) -> None:
+    def reset(self, *, keep_abandoned: bool = False) -> None:
+        """發新查詢前清空本輪。預設把欠帳歸零(正常路徑 = 上一輪已正常收尾);
+        `keep_abandoned=True` 供 client 在「放棄輪的 `##` 還沒到」時保留欠帳 —
+        abandon() 已記過帳,這裡再記一次會多吞掉一輪合法的空回應。"""
         self._staging = []
         self._last_feed = None
         self._closed = False
+        self._fed_rows = 0
+        if not keep_abandoned:
+            self._stale_terminators = 0
+
+    def abandon(self) -> None:
+        """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 記一筆欠終止符。
+        必須在放棄的當下呼叫,不能延到下一次發查詢 —— 兩者之間(balance 段最長 60s)
+        遲到的 `##` 正是要擋的那一個。"""
+        self.reset(keep_abandoned=True)
+        self._stale_terminators += 1
 
     def feed(self, raw: str) -> None:
         # flush 後本輪即關閉:timeout 保險先 flush 的話,殘餘事件+遲到的 ## 不可
@@ -241,10 +265,17 @@ class BalanceCollector:
             logger.debug("collector 本輪已 flush,事件丟棄: %r", raw)
             return
         if raw and raw.startswith("#"):  # 結束標記
+            if self._stale_terminators > 0 and self._fed_rows == 0:
+                # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)
+                self._stale_terminators -= 1
+                logger.info("collector 忽略放棄輪遲到的終止符(尚欠 %d)", self._stale_terminators)
+                return
             self._flush()
             return
         p = self._parse(raw)
         self._last_feed = time.monotonic()
+        self._stale_terminators = 0  # 有回應=活的,不論屬哪一輪,flush 它都是最新快照
+        self._fed_rows += 1
         if p is not None:
             self._staging.append(p)
 

@@ -172,6 +172,11 @@ class CapitalClient:
         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
+        # 放棄輪旗標:collector.abandon() 已記欠帳,下一次發查詢的 reset 要保留它
+        # (COM 回呼無查詢識別 → 遲到的 `##` 只能靠欠帳擋;見 BalanceCollector docstring)
+        self._balance_abandoned = False
+        self._profit_abandoned = False
+        self._oi_abandoned = False
 
     # ------------------------------------------------------------------ 狀態
 
@@ -370,15 +375,20 @@ class CapitalClient:
             if now < self._balance_inflight_until:
                 return
             # 零事件的死查詢:collector.poll 在 _last_feed is None 時早退、永不 flush,
-            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)
-            self._balance_inflight_until = None
+            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)。
+            # 解卡 = 放棄那一輪,但它的 `##` 可能才遲到(COM 回呼無查詢識別)→ 當下就
+            # 記欠帳:此處到真正發下一次查詢之間可能隔到 60s(due 已清、stale 未到),
+            # 那段空窗抵達的零列 `##` 照 flush 會把有庫存的部位清成空集合。
+            self._balance.abandon()
+            self._balance_abandoned = True
         due = self._balance_due is not None and now >= self._balance_due
         stale = now - self._balance_last_ts >= 60.0
         if not due and not stale:
             return
         self._balance_due = None
         self._balance_last_ts = now  # 先記,失敗也不連發
-        self._balance.reset()
+        self._balance.reset(keep_abandoned=self._balance_abandoned)
+        self._balance_abandoned = False
         self._balance_inflight_until = now + _BALANCE_CHAIN_TIMEOUT_S
         rc = self._com.get_real_balance(self._user_id, self._full_account)
         if rc != 0:
@@ -396,7 +406,8 @@ class CapitalClient:
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()
-        self._profit.reset()
+        self._profit.reset(keep_abandoned=self._profit_abandoned)
+        self._profit_abandoned = False
         rc = self._com.get_profit_loss_gw(self._user_id, self._full_account)
         if rc != 0:
             logger.warning("GetProfitLossGWReport rc=%s: %s", rc, self._com.return_code_message(rc))
@@ -439,7 +450,8 @@ class CapitalClient:
         if self._futures_account is None:
             self._finalize_positions([])
             return
-        self._oi.reset()
+        self._oi.reset(keep_abandoned=self._oi_abandoned)
+        self._oi_abandoned = False
         rc = self._com.get_open_interest(self._user_id, self._futures_account)
         if rc != 0:
             logger.warning("GetOpenInterestGW rc=%s: %s", rc, self._com.return_code_message(rc))
@@ -476,6 +488,15 @@ class CapitalClient:
             return
         if time.monotonic() >= self._pending_deadline:
             logger.warning("部位合併逾時(損益/期貨查詢未完成)— 以已收證券部位寫入")
+            # 這一輪的損益/期貨段被放棄:兩者的 `##` 都可能才遲到(COM 回呼無查詢識別),
+            # 下一輪收到會 flush 空集合 —— profit 空集合 = 均價/損益基底整批消失,
+            # OI 空集合更會把期貨部位清光(A7 沿用邏輯繞不過 _on_oi_complete)。
+            # 已收尾的那一段被多記一筆欠帳是可接受代價:真實回應都帶列
+            # (profit 的 000 查詢結果列 / OI 的「無資料」訊息列)→ 一有列欠帳就歸零。
+            self._profit.abandon()
+            self._oi.abandon()
+            self._profit_abandoned = True
+            self._oi_abandoned = True
             self._finalize_positions(self._stale_fut_positions())  # fut 沿用上一輪(A7)
 
     # ------------------------------------------------------------------ 執行緒生命週期
