@@ -45,6 +45,19 @@ export interface Snapshot {
   spot_pnl?: number | null;
   contracts?: ContractRow[];
   totals?: SnapshotTotals;
+  /** 交接(回補)觀測欄;後端 `EngineRuntime._handover`。**全欄選填**:交接還沒跑過時
+   *  整份是 `null`,而 attempt 開頭那一則刻意不帶五個統計欄(後端 D1'':上一輪的
+   *  backfill_secs 掛在新一輪的進度上是假資料)。 */
+  handover?: {
+    attempt?: number;
+    attempts_max?: number;
+    phase?: string;
+    backfill_secs?: number;
+    buffer_used?: number;
+    buffer_cap?: number;
+    buffer_warned?: boolean;
+    overflows?: number;
+  } | null;
 }
 
 export interface SeriesItem {

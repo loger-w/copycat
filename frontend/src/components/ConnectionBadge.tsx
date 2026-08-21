@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { WsStatus } from "@/hooks/useTxoSnapshot";
+import type { Snapshot } from "@/types";
 
 const WARN_TONE = "bg-bull/15 text-bull border-bull/40";
 const DEFAULT_TONE = "bg-surface text-ink-muted border-line";
@@ -17,16 +18,26 @@ const STATUS: Record<string, { label: string; tone?: string }> = {
 export function ConnectionBadge({
   status,
   wsStatus,
+  handover = null,
 }: {
   status: string;
   wsStatus: WsStatus;
+  /** 後端交接進度(選填):`attempt` ≥ 2 時 badge 講到第幾次。 */
+  handover?: Snapshot["handover"];
 }) {
   const broken = wsStatus !== "open";
+  // 只在**回補中**才帶次數:attempt 是上一次交接留下的值,live / degraded 時掛著
+  // 「第 3 次」等於把已經結束的事講成正在發生。第 1 次不帶 —— 那是正常開盤路徑,
+  // 每次都印「(第 1 次)」只是噪音,而「第 2 次起」正是使用者該注意的異常。
+  const attempt = handover?.attempt;
+  const retrying = status === "backfilling" && attempt !== undefined && attempt > 1;
   const label = broken
     ? wsStatus === "connecting"
       ? "連線中"
       : "連線中斷,重試中"
-    : (STATUS[status]?.label ?? status);
+    : retrying
+      ? `回補中(第 ${attempt} 次)`
+      : (STATUS[status]?.label ?? status);
   const tone = broken ? WARN_TONE : (STATUS[status]?.tone ?? DEFAULT_TONE);
   return (
     <span

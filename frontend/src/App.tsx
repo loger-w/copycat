@@ -421,7 +421,11 @@ function TxoPage() {
         </div>
         <div className="flex items-center gap-3">
           <SeriesSelect activeId={snapshot?.series_id ?? null} />
-          <ConnectionBadge status={snapshot?.status ?? "connecting"} wsStatus={wsStatus} />
+          <ConnectionBadge
+            status={snapshot?.status ?? "connecting"}
+            wsStatus={wsStatus}
+            handover={snapshot?.handover ?? null}
+          />
         </div>
       </header>
 
