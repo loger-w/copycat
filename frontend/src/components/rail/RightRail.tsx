@@ -10,7 +10,7 @@ import { useFlashArm } from "@/hooks/useFlashArm";
 import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
-import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
+import { instrumentKeyOf, stkfutMarketEdgeMilli, type StkfutSelection } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
@@ -278,10 +278,14 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
           <CapitalPositionsList
             market="fut"
             closePriceOf={(pos) =>
-              futCloseEstimate(pos, futKey, {
-                upper: meta?.upper ?? null,
-                lower: meta?.lower ?? null,
-              })
+              futCloseEstimate(
+                pos,
+                futKey,
+                { upper: meta?.upper ?? null, lower: meta?.lower ?? null },
+                // 個股期走**股票 tick 表**(與同頁市價鈕 stkfutMarketEdgeMilli 同一支):
+                // FUT_TICK 的 1 點對股票是 1 元,拿它 snap 出來的檔位後端會 400 BAD_TICK
+                (side, upper, lower) => stkfutMarketEdgeMilli(side, { upper, lower }),
+              )
             }
           />
         );
