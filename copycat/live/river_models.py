@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SESSION_WINDOWS",
     "all_day_utc_window",
+    "close_clamp_rank",
     "minute_end_from_1k",
     "minute_end_from_taipei",
     "minute_end_from_utc_hhmmss",
@@ -51,20 +52,45 @@ def window_bounds(kind: str) -> tuple[int, int]:
     return SESSION_WINDOWS.get(kind, SESSION_WINDOWS["day"])
 
 
+def _expand(minute_end: int, kind: str) -> tuple[int, int, int]:
+    """跨午夜展開後的 `(m, start, end)` —— `offset_of` 與 `close_clamp_rank` 的同一把尺。
+
+    兩者若各自展開,clamp 判定與分桶會在夜盤跨午夜那一段悄悄錯開(00:30 這種分鐘一邊
+    是 30、一邊是 1470)。
+    """
+    start, end = window_bounds(kind)
+    m = minute_end + _DAY_MINUTES if minute_end < start else minute_end
+    return m, start, end
+
+
 def offset_of(minute_end: int, kind: str) -> int | None:
     """台北 minute-of-day(終點標記)→ 窗內 offset(1..N);窗外 None。
 
     跨午夜:小於窗首的分鐘先 +1440 展開(夜盤 00:30 排在 23:00 之後)。
     收盤補正:`end < m <= end + 5` 併入 `end`。
     """
-    start, end = window_bounds(kind)
-    m = minute_end + _DAY_MINUTES if minute_end < start else minute_end
+    m, start, end = _expand(minute_end, kind)
     if m > end:
         if m > end + _CLOSE_CLAMP:
             return None
         m = end
     offset = m - start
     return offset if offset >= 1 else None
+
+
+def close_clamp_rank(minute_end: int, kind: str) -> int | None:
+    """收盤補正的「第幾分鐘」:非 clamp 0、`end+1` → 1、…、`end+5` → 5;超出 clamp 窗 None。
+
+    `offset_of` 把 `end+1..end+5` 全部併進 `end` 格,少了名次就分不出「13:45:xx 的收盤
+    撮合」(桶 = end+1,必須寫得進來)與「13:46 之後的殘留取樣」(蓋掉真收盤)。
+    判定由 `RiverState.push` 使用;`offset_of` 的輸出不受影響。
+    """
+    m, _start, end = _expand(minute_end, kind)
+    if m <= end:
+        return 0
+    if m > end + _CLOSE_CLAMP:
+        return None
+    return m - end
 
 
 def _hh_mm(hh_raw: str, mm_raw: str) -> tuple[int, int] | None:
