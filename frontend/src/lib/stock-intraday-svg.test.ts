@@ -1108,7 +1108,9 @@ describe("edgePriceLabels(SC-1/SC-3)", () => {
 // 與 `edgePriceLabels` 的差別在 D6:走廊 A **不截斷、不丟棄**(帶內的 `價位*` 是
 // CDP 唯一的價位訊息,靜默消失等於改資訊),裝不下時寧可疊在界邊。
 describe("bandLabels(R1 SC-1)", () => {
-  /** 呼叫端(ChartStatic)實際傳的那組界:繪圖區上下各留 PAD_Y(D7,= 線 y 的值域) */
+  /** 界的**形狀**同呼叫端(ChartStatic):`{ PAD_Y, plotBottom − PAD_Y }`(D7,= 線 y 的值域)。
+   *  這裡取的是一組夠寬鬆的**具體值**,不綁任何特定 mainH —— 綁死的話,將來動 MAIN.height
+   *  或 X_LABEL_H 會讓這一整個 describe 無關地紅掉,而真正該被量的是幾何、不是版面常數。 */
   const BOUNDS = { top: 4, bottom: 246 };
 
   /** 2330 平靜日型:CDP 五值 + MA5/MA20 七條擠在 36px(相鄰 6px < 10px 必疊) */
@@ -1252,17 +1254,24 @@ describe("bandLabels(R1 SC-1)", () => {
     expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
   });
 
-  /** D6 純函式 lock:呼叫端餵的是 `useMemo` 的 `oLines`,而同一份物件的 y 還被
-   *  `<line y1>` 讀 —— 就地改寫會把**線體**一起推走,而且 memo 快取被汙染後
-   *  下一次 render 會再推一次(標籤逐幀往下漂)。兩種症狀都沒有別的 assertion 會紅。 */
-  it("純函式:輸入陣列與元素逐位元不變", () => {
+  /** D6 純函式的**呼叫端 smoke**(不是核心 lock —— 核心 lock 見下面那條
+   *  `layoutEdgeLabels 核心`)。這兩條只保證「從 `bandLabels` 這個入口進去,輸入不會被動到」;
+   *  由於 `bandLabels` 自己就先 `map(line => ({ ...line, _i }))` 複製過一層,核心裡的複製
+   *  就算退化成 `[...items]`,這兩條依然全綠(code review TC-2)。
+   *
+   *  在意的症狀:呼叫端餵的是 `useMemo` 的 `oLines`,而同一份物件的 y 還被 `<line y1>` 讀 ——
+   *  就地改寫會把**線體**一起推走,而且 memo 快取被汙染後下一次 render 會再推一次
+   *  (標籤逐幀往下漂)。 */
+  it("純函式(呼叫端 smoke):輸入陣列與元素逐位元不變", () => {
     const input: OverlayLine[] = CROWDED.map((l) => ({ ...l }));
     const snap = structuredClone(input);
     bandLabels(input, BOUNDS);
     expect(input).toEqual(snap);
   });
 
-  it("回傳新物件(不是輸入元素的參照)", () => {
+  /** 同上:呼叫端 smoke。`bandLabels` 最後一步 `map(l => ({ y, priceMilli, level }))` 本來就
+   *  一定回新物件,所以這一條也蓋不到核心的複製 —— 核心 lock 在下面那條。 */
+  it("回傳新物件(呼叫端 smoke:不是輸入元素的參照)", () => {
     const input: OverlayLine[] = CROWDED.map((l) => ({ ...l }));
     const out = bandLabels(input, BOUNDS);
     for (const lab of out) expect(input).not.toContain(lab);
