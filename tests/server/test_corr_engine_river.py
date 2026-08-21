@@ -362,9 +362,9 @@ class TestBackfillTimeoutRetry:
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            for _ in range(10):
-                await asyncio.sleep(0.01)
-                await _drain()
+            # 等**終態**(分鐘進來了)而不是等固定圈數:`fetched` 是在 fetch 進場時就
+            # 記的,等它到 2 只證明第二發開打,還沒證明它的結果被套用
+            await _wait_until(lambda: bool(_minutes(eng, "SXF")))
             # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
             assert _minutes(eng, "SXF") == {76: 12_000_000}
@@ -380,10 +380,10 @@ class TestBackfillTimeoutRetry:
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            for _ in range(20):
-                await asyncio.sleep(0.01)
-                await _drain()
             # 首輪 + 3 輪重試 = 4;沒有上界的話會一路重試到收盤
+            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+            await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 5 發(若有)現形
+            await _drain()
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4
         finally:
             await eng.close()
@@ -394,11 +394,37 @@ class TestBackfillTimeoutRetry:
         src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
-        await _drain()
-        assert eng._backfill_retry_tasks, "逾時腿必須留下一個待跑的重試 task"
+        await _wait_until(lambda: bool(eng._backfill_retry_tasks))
         tasks = list(eng._backfill_retry_tasks)
         await eng.close()
-        assert all(t.cancelled() or t.done() for t in tasks)
+        # `cancelled()` 而非 `cancelled() or done()`:退避是 5s,close 時它必定還睡在
+        # `asyncio.sleep` 上 —— `or done()` 會讓「close 根本沒去取消、task 自己跑完」
+        # 也算通過,那正是這條要擋的失效
+        assert all(t.cancelled() for t in tasks)
+
+    async def test_plain_connection_error_leg_is_not_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """純 `ConnectionError`(TC4 真的不通)照舊降級,**不排重試**。
+
+        重試網是給「TC4 好得很、只是首頁還沒備妥」用的;TC4 不通時整條 session 都在
+        重連,再排三輪回補只是對著斷掉的通道空打,而 `HistoryTimeoutError` 是
+        `ConnectionError` 的子類 —— 兩個 except 的先後順序寫反就會靜默地把兩者合併。
+        """
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
+        src = _FakeSource()
+        src.fail_1k.add("TC.F.TWF.SXF.HOT")  # 恆 ConnectionError(非逾時)
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 1)
+            await asyncio.sleep(0.05)
+            await _drain()
+            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 1
+            assert eng._backfill_retry_tasks == set()
+            assert eng._backfill_pending_legs == set()
+        finally:
+            await eng.close()
 
     async def test_giving_up_resets_the_round_for_the_next_episode(
         self, monkeypatch: pytest.MonkeyPatch
