@@ -160,9 +160,9 @@ describe("App(index-board T9)", () => {
     await waitFor(() => expect(screen.getByTestId("market-pane-left")).toBeTruthy());
     const left = within(screen.getByTestId("market-pane-left"));
     expect(left.getByText("加權指數")).toBeTruthy();
-    expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
-    expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
-    expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
+    expect(left.getByRole("radio", { name: "櫃買" })).toBeTruthy();
+    expect(left.getByRole("radio", { name: "台指期" })).toBeTruthy();
+    expect(left.getByRole("radio", { name: "日K" })).toBeTruthy();
   });
 });
 
@@ -392,7 +392,7 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
     expect(capitalCount()).toBe(1); // ladder 掛載不再各開一條
   });
 });
@@ -412,9 +412,9 @@ describe("App(期貨 tab T15)", () => {
   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
-    expect(screen.getByRole("button", { name: "小台" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "微台" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
+    expect(screen.getByRole("radio", { name: "小台" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "微台" })).toBeTruthy();
   });
 
   it("localStorage copycat-tab=futures 重載復原", async () => {
@@ -423,7 +423,7 @@ describe("App(期貨 tab T15)", () => {
     expect(screen.getByRole("tab", { name: "期貨" }).getAttribute("aria-selected")).toBe(
       "true",
     );
-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
   });
 });
 
@@ -454,7 +454,7 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
     expectRail();
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
     expectRail();
     fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
@@ -515,8 +515,8 @@ describe("App 資料流上提(D-3 / D-16)", () => {
   it("期貨商品選擇寫入 localStorage(自 FuturesPage.test 上移:state 已上提到 App)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "小台" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
+    await waitFor(() => expect(screen.getByRole("radio", { name: "小台" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
     expect(window.localStorage.getItem("copycat-fut-product")).toBe("MXF");
   });
 });
@@ -646,7 +646,7 @@ describe("App 訊號 toast(SC-10)", () => {
   it("切到期貨 tab 後照樣跳 toast(跨 tab 常駐)", async () => {
     renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
     act(() => emitSignal(sig("b", "2327")));
     const stack = await screen.findByTestId("toast-stack");
     expect(stack.textContent).toContain("鎖漲停");

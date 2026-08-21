@@ -179,12 +179,23 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
     expect(header.getByText("+200")).toBeTruthy(); // 漲跌(點)
     expect(header.getByText("+0.88%")).toBeTruthy();
     expect(header.getByText("TXF 2026/09")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "大台" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("radio", { name: "大台" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  // a11y 批 SC-1':商品列是單選 —— 原本三顆 `aria-pressed` button 讓 AT 聽成三個互不
+  // 相干的開關、鍵盤要按三次 Tab 才穿得過。改 radiogroup 後恰一顆 checked。
+  it("商品列是 radiogroup:三顆 radio、恰一顆 checked、同一個 name", () => {
+    wrap(<Harness />);
+    const group = within(screen.getByRole("radiogroup", { name: "商品切換" }));
+    const radios = group.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.parentElement!.textContent)).toEqual(["大台", "小台", "微台"]);
+    expect(radios.filter((r) => r.checked).length).toBe(1);
+    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
   });
 
   it("切小台:回呼上拋並顯示 MXF 行情與合約", () => {
     wrap(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
+    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
     const header = within(screen.getByRole("banner"));
     expect(header.getByText("MXF 2026/09")).toBeTruthy();
     expect(header.getByText("23010")).toBeTruthy();
@@ -192,7 +203,7 @@ describe("FuturesPage 商品切換與頂部資訊列(SC-8)", () => {
 
   it("初始微台;resolved null 顯示「合約解析中」", () => {
     wrap(<Harness initial="TMF" />);
-    expect(screen.getByRole("button", { name: "微台" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("radio", { name: "微台" }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText("合約解析中")).toBeTruthy();
   });
 });
@@ -295,13 +306,13 @@ describe("FuturesPage 掛載 FuturesChart(SC-1/SC-4)", () => {
   it("圖表跟隨商品切換 —— 換小台後改抓 MXF 的 bars", async () => {
     wrap(<Harness />);
     await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/TXF"))).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
+    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
     await waitFor(() => expect(barsUrls.some((u) => u.includes("/bars/MXF"))).toBe(true));
   });
 
   it("模式列與五檔同時在頁上(圖表掛在 DepthBar 下方)", () => {
     wrap(<Harness />);
-    expect(screen.getByRole("button", { name: "分時" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "分時" })).toBeTruthy();
     expect(screen.getByLabelText("買1 22999")).toBeTruthy();
   });
 });

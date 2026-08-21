@@ -119,10 +119,10 @@ describe("StockPage", () => {
 
   it("選檔後中間主區 = 圖表切換 + 五檔 + 明細(SC-6/SC-7)", () => {
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
-    expect(screen.getByRole("button", { name: "江波圖" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "1分K" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "5分K" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "日K" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "江波圖" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "1分K" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "5分K" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "日K" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "買1 2375" })).toBeTruthy(); // 五檔(W-16:aria-label 格式是定位鍵)
     expect(screen.getByText("時間")).toBeTruthy(); // 明細表頭
   });
@@ -877,8 +877,8 @@ describe("StockPage 合約下拉(SC-4)", () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId("stock-lower-row")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "日K" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("radio", { name: "日K" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("radio", { name: "江波圖" }).hasAttribute("disabled")).toBe(false);
   });
 });
 

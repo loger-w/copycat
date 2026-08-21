@@ -126,8 +126,15 @@ function renderPane(over: RenderOver = {}) {
   );
 }
 
+/** 真開關(只剩「重疊」)。標的 / 期貨商品 / 週期三組已改 radiogroup → 用 `pill()`。 */
 function btn(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
+}
+
+/** a11y 批:三組單選 pill 改 RadioPills(sr-only `<input type=radio>` + 帶原 class 的
+ *  `<label>`)。選中態 = `checked`;class / `aria-disabled` 掛在 label(= `parentElement`)。 */
+function pill(name: string): HTMLInputElement {
+  return screen.getByRole("radio", { name }) as HTMLInputElement;
 }
 
 // 🔴 SC-3:17 顆週期鈕在 ~350px 的 pane(1536 兩欄態)折成 3 行、吃掉 50px 圖高。
@@ -153,7 +160,8 @@ describe("MarketPane 窄容器週期列(SC-3)", () => {
 
   it("週期鈕:窄容器 px-1,寬容器仍是既有 px-2(W-6:兩個 token 都要在)", () => {
     renderPane();
-    const cls = btn("日K").className;
+    // W3:compact class 逐字保留 —— 只是從 `<button>` 搬到包住 radio 的 `<label>`
+    const cls = pill("日K").parentElement!.className;
     expect(cls).toContain("@max-[26.5rem]:px-1");
     // twMerge 不會把兩者判成衝突(不同 variant),被吃掉的話寬 pane 的 padding 也變了
     expect(cls).toContain("px-2");
@@ -161,17 +169,52 @@ describe("MarketPane 窄容器週期列(SC-3)", () => {
 
   it("週期列容器:窄容器 gap-0.5,寬容器仍是既有 gap-1", () => {
     renderPane();
-    const row = btn("日K").parentElement!;
+    // 週期列 = radiogroup 容器本身(label 的父層);容器 class 逐字沿用
+    const row = screen.getByRole("radiogroup", { name: "週期" });
+    expect(pill("日K").parentElement!.parentElement).toBe(row);
     expect(row.className).toContain("@max-[26.5rem]:gap-0.5");
     expect(row.className).toContain("gap-1");
+  });
+});
+
+// a11y 批 SC-1' / D2':三列 pill 各自是**單選**,改成三個 radiogroup。
+// 標的列拆兩群(標的 / 期貨商品)而不是一群:兩者語意不同,「恰一顆 checked」在合成的
+// 單一群裡不成立(台指期 + 大台會同時亮)。「重疊」是真開關,留在週期列 DOM 位置。
+describe("MarketPane radiogroup 語意(a11y SC-1')", () => {
+  it("標的列 = radiogroup「標的」三顆;期貨商品列僅期貨態出現且各自獨立 name", () => {
+    renderPane();
+    const keyGroup = within(screen.getByRole("radiogroup", { name: "標的" }));
+    const keyRadios = keyGroup.getAllByRole("radio") as HTMLInputElement[];
+    expect(keyRadios.map((r) => r.parentElement!.textContent)).toEqual(["加權", "櫃買", "台指期"]);
+    expect(keyRadios.filter((r) => r.checked).length).toBe(1);
+    expect(screen.queryByRole("radiogroup", { name: "期貨商品" })).toBeNull();
+
+    fireEvent.click(pill("台指期"));
+    const futGroup = screen.getByRole("radiogroup", { name: "期貨商品" });
+    const futRadios = [...futGroup.querySelectorAll("input")] as HTMLInputElement[];
+    expect(futRadios.map((r) => r.parentElement!.textContent)).toEqual(["大台", "小台", "微台"]);
+    expect(futRadios.filter((r) => r.checked).length).toBe(1);
+    // edge case 2:同頁多組必須各自 `name`,否則原生 radio 互相搶選
+    expect(new Set(futRadios.map((r) => r.name)).size).toBe(1);
+    expect(futRadios[0]!.name).not.toBe(pill("加權").name);
+  });
+
+  it("週期列 = radiogroup「週期」,「重疊」toggle 仍在同一列且保留 aria-pressed", () => {
+    renderPane();
+    const modeGroup = screen.getByRole("radiogroup", { name: "週期" });
+    expect((modeGroup.querySelectorAll("input") as NodeListOf<HTMLInputElement>).length).toBe(17);
+    // W2:重疊是真開關 —— 不進 radiogroup 的 radio 集合,但 DOM 位置不變(留在週期列內)
+    const overlay = btn("重疊");
+    expect(overlay.getAttribute("aria-pressed")).toBe("false");
+    expect(modeGroup.contains(overlay)).toBe(true);
   });
 });
 
 describe("MarketPane 參數化(SC-2)", () => {
   it("(a) 無 storage 時尊重 defaultKey:右 pane 預設櫃買", () => {
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("加權").getAttribute("aria-pressed")).toBe("false");
+    expect(pill("櫃買").checked).toBe(true);
+    expect(pill("加權").checked).toBe(false);
     expect(screen.getByText("櫃買指數")).toBeTruthy();
   });
 
@@ -185,8 +228,8 @@ describe("MarketPane 參數化(SC-2)", () => {
 
   it("(b) storage keys 注入生效:寫入指定 key,舊 key 不動", () => {
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
-    fireEvent.click(btn("台指期"));
-    fireEvent.click(btn("小台"));
+    fireEvent.click(pill("台指期"));
+    fireEvent.click(pill("小台"));
     expect(window.localStorage.getItem(MARKET2_KEY_STORE)).toBe("MXF");
     expect(window.localStorage.getItem(MARKET2_FUT_STORE)).toBe("MXF");
     expect(window.localStorage.getItem(MARKET2_MODE_STORE)).toBe("m1");
@@ -199,48 +242,47 @@ describe("MarketPane 參數化(SC-2)", () => {
     window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
     window.localStorage.setItem(MARKET_KEY_STORE, "TWSE");
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("櫃買").checked).toBe(true);
   });
 
   it("(c) OTC 時日/週/月 disabled,分 K 仍可點", () => {
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
     for (const label of ["日K", "週K", "月K"]) {
-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
-      expect(btn(label).disabled).toBe(true);
+      expect(pill(label).parentElement!.getAttribute("aria-disabled")).toBe("true");
+      expect(pill(label).disabled).toBe(true);
     }
-    expect(btn("30分").disabled).toBe(false);
+    expect(pill("30分").disabled).toBe(false);
   });
 
   it("(d) 殘值「日K + 櫃買」重載後經 coerce 落回分時", () => {
     window.localStorage.setItem(MARKET2_KEY_STORE, "OTC");
     window.localStorage.setItem(MARKET2_MODE_STORE, "day");
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "TWSE" });
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("櫃買").checked).toBe(true);
+    expect(pill("分時").checked).toBe(true);
   });
 
   it("(e) 期指子鈕切換:點台指期才出現三選一,選微台後標題換料", () => {
     renderPane();
     expect(screen.queryByRole("button", { name: "小台" })).toBeNull();
-    fireEvent.click(btn("台指期"));
-    expect(btn("大台").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(btn("微台"));
+    fireEvent.click(pill("台指期"));
+    expect(pill("大台").checked).toBe(true);
+    fireEvent.click(pill("微台"));
     expect(screen.getByText("台指期(微台)")).toBeTruthy();
-    expect(btn("微台").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("微台").checked).toBe(true);
   });
 
   it("(f) 只寫 mode=day 不寫 key → defaultKey=OTC 落分時,無 disabled 模式被選中", () => {
     window.localStorage.setItem(MARKET2_MODE_STORE, "day");
     renderPane({ paneId: "right", stores: RIGHT_STORES, defaultKey: "OTC" });
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("日K").getAttribute("aria-pressed")).toBe("false");
-    // 沒有任何 disabled 鈕處於選中狀態
-    const pressed = screen
-      .getAllByRole("button")
-      .filter((b) => b.getAttribute("aria-pressed") === "true");
-    expect(pressed.length).toBeGreaterThan(0);
-    for (const b of pressed) expect(b.getAttribute("aria-disabled")).toBeNull();
+    expect(pill("櫃買").checked).toBe(true);
+    expect(pill("分時").checked).toBe(true);
+    expect(pill("日K").checked).toBe(false);
+    // 沒有任何 disabled 鈕處於選中狀態(a11y 批:改數 checked 的 radio;`aria-disabled`
+    // 掛在 label 上)
+    const checked = (screen.getAllByRole("radio") as HTMLInputElement[]).filter((r) => r.checked);
+    expect(checked.length).toBeGreaterThan(0);
+    for (const r of checked) expect(r.parentElement!.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("(g) stores.overlay undefined → 無「重疊」鈕;有 overlay key 才有", () => {
@@ -263,10 +305,10 @@ describe("MarketPane review 修復", () => {
     window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
     window.localStorage.setItem(MARKET_MODE_STORE, "day");
     renderPane();
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("分時").checked).toBe(true);
     // 點加權 = 一次 no-op coerce(intraday 對 TWSE 合法)→ 舊寫法只寫 key 不寫 mode,
     // storage 變成 TWSE+day 這組「合法但使用者沒選過」的組合,下次重載就跳日K
-    fireEvent.click(btn("加權"));
+    fireEvent.click(pill("加權"));
     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("intraday");
   });
 
@@ -279,9 +321,9 @@ describe("MarketPane review 修復", () => {
 describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
   it("三顆標的鈕;預設選加權,現值/漲跌/高低昨收顯示於標題列", () => {
     renderPane();
-    expect(btn("加權").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("櫃買")).toBeTruthy();
-    expect(btn("台指期")).toBeTruthy();
+    expect(pill("加權").checked).toBe(true);
+    expect(pill("櫃買")).toBeTruthy();
+    expect(pill("台指期")).toBeTruthy();
     expect(screen.getByText("加權指數")).toBeTruthy();
     expect(screen.getByText(/-1594\.27/)).toBeTruthy();
     // 昨收改斷言在**同一個標題列元素**上:分時圖右緣現在也有一顆「昨收 <值>」標籤
@@ -301,14 +343,14 @@ describe("MarketPane 標的列(自 IndexPage 搬遷)", () => {
 
   it("Quote 漲跌整串:漲帶 + 前綴(characterization;台指期)", () => {
     renderPane();
-    fireEvent.click(btn("台指期"));
+    fireEvent.click(pill("台指期"));
     expect(screen.getByText("+142.00 (+0.34%)")).toBeTruthy();
   });
 
   it("期指商品用獨立 localStorage key,不碰期貨 tab 的 copycat-fut-product(W-13)", () => {
     renderPane();
-    fireEvent.click(btn("台指期"));
-    fireEvent.click(btn("小台"));
+    fireEvent.click(pill("台指期"));
+    fireEvent.click(pill("小台"));
     expect(window.localStorage.getItem(MARKET_KEY_STORE)).toBe("MXF");
     expect(window.localStorage.getItem(MARKET_FUT_STORE)).toBe("MXF");
     expect(window.localStorage.getItem("copycat-fut-product")).toBeNull();
@@ -327,7 +369,7 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
       "分時", "1分", "2分", "3分", "4分", "5分", "6分", "7分", "8分", "9分", "10分",
       "30分", "60分", "90分", "日K", "週K", "月K",
     ];
-    const nodes = labels.map((l) => btn(l));
+    const nodes = labels.map((l) => pill(l));
     for (let i = 1; i < nodes.length; i += 1) {
       // DOM 順序 = 畫面由左至右
       expect(nodes[i - 1]!.compareDocumentPosition(nodes[i]!) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -337,8 +379,8 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
 
   it("預設分時;切日K 後打 /api/market/bars 並持久化", async () => {
     renderPane();
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(btn("日K"));
+    expect(pill("分時").checked).toBe(true);
+    fireEvent.click(pill("日K"));
     expect(window.localStorage.getItem(MARKET_MODE_STORE)).toBe("day");
     await waitFor(() =>
       expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=D"))).toBe(true),
@@ -347,7 +389,7 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
 
   it("分 K 走 tf=1 共用原料(30/60/90 由前端聚合)", async () => {
     renderPane();
-    fireEvent.click(btn("90分"));
+    fireEvent.click(pill("90分"));
     await waitFor(() =>
       expect(lastUrls.some((u) => u.includes("/api/market/bars/TWSE?tf=1&days=30"))).toBe(true),
     );
@@ -357,19 +399,19 @@ describe("MarketPane 週期列(自 IndexPage 搬遷)", () => {
 describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
   it("日/週/月 K 鈕 disabled,分 K 仍可點", () => {
     renderPane();
-    fireEvent.click(btn("櫃買"));
+    fireEvent.click(pill("櫃買"));
     for (const label of ["日K", "週K", "月K"]) {
-      expect(btn(label).getAttribute("aria-disabled")).toBe("true");
-      expect(btn(label).disabled).toBe(true);
+      expect(pill(label).parentElement!.getAttribute("aria-disabled")).toBe("true");
+      expect(pill(label).disabled).toBe(true);
     }
-    expect(btn("30分").disabled).toBe(false);
+    expect(pill("30分").disabled).toBe(false);
   });
 
   it("從加權(日K)切到櫃買 → 自動落回分時,不停在 disabled 模式", () => {
     renderPane();
-    fireEvent.click(btn("日K"));
-    fireEvent.click(btn("櫃買"));
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pill("日K"));
+    fireEvent.click(pill("櫃買"));
+    expect(pill("分時").checked).toBe(true);
   });
 
   it("後端回 refusal → 圖區顯示明確理由,不畫假圖", async () => {
@@ -388,7 +430,7 @@ describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
       },
     });
     renderPane();
-    fireEvent.click(btn("日K"));
+    fireEvent.click(pill("日K"));
     await waitFor(() =>
       expect(screen.getByText("達錢 4 未提供櫃買指數,無歷史 K 線資料源")).toBeTruthy(),
     );
@@ -398,15 +440,15 @@ describe("MarketPane 櫃買降級(自 IndexPage 搬遷)", () => {
     window.localStorage.setItem(MARKET_KEY_STORE, "OTC");
     window.localStorage.setItem(MARKET_MODE_STORE, "day");
     renderPane();
-    expect(btn("櫃買").getAttribute("aria-pressed")).toBe("true");
-    expect(btn("分時").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("櫃買").checked).toBe(true);
+    expect(pill("分時").checked).toBe(true);
   });
 
   it("期指沒有分時 → 分時鈕 disabled,由加權切過去自動落到 1分", () => {
     renderPane();
-    fireEvent.click(btn("台指期"));
-    expect(btn("分時").disabled).toBe(true);
-    expect(btn("1分").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(pill("台指期"));
+    expect(pill("分時").disabled).toBe(true);
+    expect(pill("1分").checked).toBe(true);
   });
 });
 
@@ -428,7 +470,7 @@ describe("MarketPane 重疊(自 IndexPage 搬遷;左 pane 形態)", () => {
   it("切到 K 線週期後不再顯示重疊圖", () => {
     window.localStorage.setItem(INDEX_OVERLAY_STORE, "overlay");
     renderPane();
-    fireEvent.click(btn("日K"));
+    fireEvent.click(pill("日K"));
     expect(screen.queryByLabelText("指數重疊走勢")).toBeNull();
   });
 });
@@ -436,7 +478,7 @@ describe("MarketPane 重疊(自 IndexPage 搬遷;左 pane 形態)", () => {
 describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
   it("顯示資料源中文與涵蓋期間", async () => {
     renderPane();
-    fireEvent.click(btn("日K"));
+    fireEvent.click(pill("日K"));
     const meta = await screen.findByTestId("market-meta");
     expect(meta.textContent).toContain("達錢 4 日K");
     expect(meta.textContent).toContain("2026-07-27 ~ 2026-07-29");
@@ -448,7 +490,7 @@ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
       meta: { ...DK_BODY.meta, source: "tc4_dk_1k_agg", partial_last: true },
     });
     renderPane();
-    fireEvent.click(btn("週K"));
+    fireEvent.click(pill("週K"));
     const meta = await screen.findByTestId("market-meta");
     expect(meta.textContent).toContain("達錢 4 1分K 聚合(日K 無資料)");
     expect(meta.textContent).toContain("最後一根未收盤");
@@ -470,8 +512,8 @@ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
       },
     });
     renderPane();
-    fireEvent.click(btn("櫃買"));
-    fireEvent.click(btn("1分"));
+    fireEvent.click(pill("櫃買"));
+    fireEvent.click(pill("1分"));
     const meta = await screen.findByTestId("market-meta");
     expect(meta.textContent).toContain("本機合成(MIS 5秒取樣)");
     expect(meta.textContent).toContain("自 10:17 起");

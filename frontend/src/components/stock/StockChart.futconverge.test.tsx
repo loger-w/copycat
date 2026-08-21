@@ -90,7 +90,7 @@ function mount(strict = false) {
 describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
   it("回現貨還原日K:過程中不得掛上 stkfut=false 的分時圖", async () => {
     const { setContract } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
 
     setContract(CONTRACT);
@@ -112,7 +112,7 @@ describe("StockChart 回現貨的收斂時點(react-doctor P1)", () => {
   //  StrictMode(main.tsx)底下。上一條跑的是非 StrictMode 樹,測不到這個。
   it("StrictMode 下同一流程:一樣不掛 stkfut=false,且不觸發無限重繪", async () => {
     const { setContract } = mount(true);
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
 
     setContract(CONTRACT);

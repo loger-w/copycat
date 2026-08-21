@@ -100,43 +100,46 @@ describe("StockChart 模式切換(SC-7)", () => {
   it("模式鈕共 12 顆:江波圖 + 1分K…10分K + 日K", () => {
     chart();
     const labels = ["江波圖", ...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"];
-    for (const l of labels) expect(screen.getByRole("button", { name: l })).toBeTruthy();
-    // 只數模式鈕 —— 江波圖自己的 均價/CDP/MA toggle 也帶 aria-pressed,不能一起數
-    const modeButtons = screen
-      .getAllByRole("button")
-      .filter((b) => /^(江波圖|日K|\d+分K)$/.test(b.textContent ?? ""));
-    expect(modeButtons.length).toBe(12);
+    for (const l of labels) expect(screen.getByRole("radio", { name: l })).toBeTruthy();
+    // a11y 批:模式列改 radiogroup(單選),江波圖自己的 均價/CDP/MA 仍是 toggle button
+    // → 收斂到 radiogroup 內數,不再需要用 textContent regex 把 toggle 濾掉。
+    const group = screen.getByRole("radiogroup", { name: "圖表模式" });
+    const modeRadios = [...group.querySelectorAll("input")] as HTMLInputElement[];
+    expect(modeRadios.length).toBe(12);
+    expect(modeRadios.filter((r) => r.checked).length).toBe(1);
+    expect(new Set(modeRadios.map((r) => r.name)).size).toBe(1);
   });
 
   it("3分K / 7分K 等新模式可切換且寫入 localStorage", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "7分K" }));
     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m7");
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "7分K" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("radio", { name: "7分K" }) as HTMLInputElement).checked).toBe(true);
   });
 
-  it("預設江波圖:選中者 aria-pressed=true 且外框 border-accent", () => {
+  it("預設江波圖:選中者 checked 且外框 border-accent", () => {
     chart();
-    const btn = screen.getByRole("button", { name: "江波圖" });
-    expect(btn.getAttribute("aria-pressed")).toBe("true");
-    expect(btn.className).toContain("border-accent");
+    const btn = screen.getByRole("radio", { name: "江波圖" }) as HTMLInputElement;
+    expect(btn.checked).toBe(true);
+    // a11y 批:pill 的 class 搬到包住 sr-only radio 的 `<label>`(視覺零變的硬約束)
+    expect(btn.parentElement!.className).toContain("border-accent");
     expect(screen.getByLabelText("分時走勢圖")).toBeTruthy();
     expect(screen.queryByLabelText("K 線圖")).toBeNull();
   });
 
   it("切日K → 顯示 K 線圖,江波圖卸載", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
     expect(screen.queryByLabelText("分時走勢圖")).toBeNull();
   });
 
   it("切回江波圖 → 回到既有分時走勢圖(含 VWAP 切換與內外盤副圖)", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
+    fireEvent.click(screen.getByRole("radio", { name: "江波圖" }));
     expect(screen.getByLabelText("分時走勢圖")).toBeTruthy();
     expect(screen.getByLabelText("成交量")).toBeTruthy();
     expect(screen.getByRole("button", { name: "均價" })).toBeTruthy();
@@ -144,18 +147,18 @@ describe("StockChart 模式切換(SC-7)", () => {
 
   it("模式寫入 localStorage copycat-chart-mode 並在重載後復原", async () => {
     const { unmount } = chart();
-    fireEvent.click(screen.getByRole("button", { name: "5分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "5分K" }));
     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("m5");
     unmount();
     cleanup();
     chart();
-    expect(screen.getByRole("button", { name: "5分K" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("radio", { name: "5分K" }) as HTMLInputElement).checked).toBe(true);
   });
 
   // 🔴 SC-6.2:「往前」鈕與「近 N 日」文字移除,分 K 一次就載滿 30 日(縮放/平移取代分頁載入)
   it("分K 直接載 30 日,無「往前」鈕與「近 N 日」文字", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "1分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
     await waitFor(() => expect(barsUrls.some((u) => u.includes("days=30"))).toBe(true));
     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
     expect(screen.queryByText(/近 \d+ 日/)).toBeNull();
@@ -165,7 +168,7 @@ describe("StockChart 模式切換(SC-7)", () => {
 
   it("日K 走 tf=D 且 query 不帶 days(D-15)", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(barsUrls.some((u) => u.includes("tf=D"))).toBe(true));
     expect(barsUrls.find((u) => u.includes("tf=D"))).not.toContain("days=");
     expect(screen.queryByRole("button", { name: "往前" })).toBeNull();
@@ -173,10 +176,10 @@ describe("StockChart 模式切換(SC-7)", () => {
 
   it("2–10 分K 共用同一份 tf=1 資料(前端聚合,切模式不重打)", async () => {
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "1分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
     await waitFor(() => expect(barsUrls.length).toBeGreaterThan(0));
     const before = barsUrls.length;
-    fireEvent.click(screen.getByRole("button", { name: "3分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "3分K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
     expect(barsUrls.length).toBe(before);
   });
@@ -195,7 +198,7 @@ describe("StockChart 模式切換(SC-7)", () => {
       ),
     );
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
     expect(screen.getByText("NOT_READY")).toBeTruthy();
     expect(screen.queryByText("無 K 線資料")).toBeNull();
@@ -215,7 +218,7 @@ describe("StockChart 模式切換(SC-7)", () => {
       ),
     );
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByText("K 線載入失敗")).toBeTruthy(), { timeout: 5000 });
     expect(screen.getByText("HTTP_404")).toBeTruthy();
   });
@@ -246,7 +249,7 @@ describe("StockChart 模式切換(SC-7)", () => {
       ),
     );
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByText("無 K 線資料")).toBeTruthy(), { timeout: 5000 });
     expect(screen.queryByText("K 線載入失敗")).toBeNull();
   });
@@ -269,7 +272,7 @@ describe("StockChart 空態三分態文案(N-7)", () => {
   async function daily(body: unknown) {
     stubBars(body);
     chart();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
   }
 
   it("status=timeout + 空 bars → 灰字「等待 TC4 回應中…(自動重試)」", async () => {
@@ -358,12 +361,15 @@ describe("StockChart 期貨態(D10/R5)", () => {
 
   it("江波圖以外的模式鈕全部 disabled + tooltip", () => {
     futChart();
-    const intraday = screen.getByRole("button", { name: "江波圖" });
+    const intraday = screen.getByRole("radio", { name: "江波圖" });
     expect(intraday.hasAttribute("disabled")).toBe(false);
     for (const label of [...Array.from({ length: 10 }, (_, i) => `${i + 1}分K`), "日K"]) {
-      const btn = screen.getByRole("button", { name: label });
+      const btn = screen.getByRole("radio", { name: label });
       expect(btn.hasAttribute("disabled")).toBe(true);
-      expect(btn.getAttribute("title")).toBe("期貨合約本輪僅提供分時");
+      // a11y 批 W8:`title` 與 `aria-disabled` 掛在 label(sr-only input 上的 title
+      // 對滑鼠不可見)—— 文案與觸發條件不變
+      expect(btn.parentElement!.getAttribute("title")).toBe("期貨合約本輪僅提供分時");
+      expect(btn.parentElement!.getAttribute("aria-disabled")).toBe("true");
     }
   });
 
@@ -371,7 +377,7 @@ describe("StockChart 期貨態(D10/R5)", () => {
     window.localStorage.setItem("copycat-chart-mode", "day");
     futChart();
     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
-    expect(screen.getByRole("button", { name: "江波圖" }).getAttribute("aria-pressed")).toBe("true");
+    expect((screen.getByRole("radio", { name: "江波圖" }) as HTMLInputElement).checked).toBe(true);
     expect(screen.queryByLabelText("K 線圖")).toBeNull();
     // 存檔維持 day:切回現貨時使用者原本選的模式要回得來
     expect(window.localStorage.getItem("copycat-chart-mode")).toBe("day");
@@ -419,7 +425,7 @@ describe("StockChart 現貨模式還原(A6)", () => {
 
   it("現貨日K → 進合約(收斂江波圖)→ 切回現貨:回到日K", async () => {
     const { setContract } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
 
     setContract(CONTRACT);
@@ -427,39 +433,39 @@ describe("StockChart 現貨模式還原(A6)", () => {
 
     setContract(null);
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
-    expect(pressed("日K")).toBe("true");
+    expect(pressed("日K")).toBe(true);
   });
 
   it("分K 也還原(還原的是「進去前那一個」,不是寫死日K)", async () => {
     const { setContract } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "7分K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "7分K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
     setContract(CONTRACT);
     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
     setContract(null);
-    await waitFor(() => expect(pressed("7分K")).toBe("true"));
+    await waitFor(() => expect(pressed("7分K")).toBe(true));
   });
 
   it("本來就停在江波圖 → 切回現貨仍是江波圖(不憑空跳成 K 線)", async () => {
     const { setContract } = mount();
-    expect(pressed("江波圖")).toBe("true");
+    expect(pressed("江波圖")).toBe(true);
     setContract(CONTRACT);
     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
     setContract(null);
-    expect(pressed("江波圖")).toBe("true");
+    expect(pressed("江波圖")).toBe(true);
     expect(screen.queryByLabelText("K 線圖")).toBeNull();
   });
 
   it("還原只做一次:切回現貨後手動改模式,不會被舊值再蓋一次", async () => {
     const { setContract } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "日K" }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy(), { timeout: 5000 });
     setContract(CONTRACT);
     await waitFor(() => expect(screen.getByLabelText("分時走勢圖")).toBeTruthy());
     setContract(null);
-    await waitFor(() => expect(pressed("日K")).toBe("true"));
-    fireEvent.click(screen.getByRole("button", { name: "江波圖" }));
-    expect(pressed("江波圖")).toBe("true");
+    await waitFor(() => expect(pressed("日K")).toBe(true));
+    fireEvent.click(screen.getByRole("radio", { name: "江波圖" }));
+    expect(pressed("江波圖")).toBe(true);
   });
 });
 
