@@ -1,0 +1,234 @@
+diff --git a/copycat/capital/balance.py b/copycat/capital/balance.py
+index c8a3c4b3..b1296048 100644
+--- a/copycat/capital/balance.py
++++ b/copycat/capital/balance.py
+@@ -212,9 +212,18 @@ def parse_profit_line(raw: str) -> ProfitRow | None:
+ 
+ class BalanceCollector:
+     """收集一輪查詢的多筆事件,結束標記或 timeout 後一次 flush(全量替換語意)。
+-    只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset=發查詢前),無鎖。
++    只在 COM 執行緒上被呼叫(feed=事件、poll=幫浦圈、reset/abandon=發查詢前),無鎖。
+     parse 可換 — 損益試算報告(parse_profit_line)/期貨部位(parse_open_interest_line)
+-    共用同一套節奏。"""
++    共用同一套節奏。
++
++    ⚠ 輪次識別:COM 回呼(OnRealBalanceReport / OnProfitLossGWReport / OnOpenInterest)
++    **不帶任何查詢識別欄**,遲到的 `##` 無法與發出的查詢配對。client 在「零事件死查詢
++    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記下「那一輪還欠一個終止符」
++    (`_stale_terminators`);之後第一個**零列**終止符即視為舊輪遲到、忽略不 flush。
++    有 row 抵達 = 活的回應(不論屬哪一輪,flush 它都是最新快照)→ 欠帳歸零。
++    代價(明示):真空帳戶在死查詢後的第一個空 `##` 會被當舊終止符忽略,最多晚一輪
++    (≤60s)才顯示「無部位」— 寧可晚 60s,不可誤把有庫存清空(平倉鍵依部位鎖解)。
++    """
+ 
+     def __init__(
+         self,
+@@ -228,11 +237,26 @@ class BalanceCollector:
+         self._staging: list[Any] = []
+         self._last_feed: float | None = None
+         self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
++        self._stale_terminators = 0  # 已放棄的輪各欠一個 `##`(見 class docstring)
++        self._fed_rows = 0  # 本輪已收的事件列數(含解析失敗列)— 判「零列終止符」用
+ 
+-    def reset(self) -> None:
++    def reset(self, *, keep_abandoned: bool = False) -> None:
++        """發新查詢前清空本輪。預設把欠帳歸零(正常路徑 = 上一輪已正常收尾);
++        `keep_abandoned=True` 供 client 在「放棄輪的 `##` 還沒到」時保留欠帳 —
++        abandon() 已記過帳,這裡再記一次會多吞掉一輪合法的空回應。"""
+         self._staging = []
+         self._last_feed = None
+         self._closed = False
++        self._fed_rows = 0
++        if not keep_abandoned:
++            self._stale_terminators = 0
++
++    def abandon(self) -> None:
++        """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 記一筆欠終止符。
++        必須在放棄的當下呼叫,不能延到下一次發查詢 —— 兩者之間(balance 段最長 60s)
++        遲到的 `##` 正是要擋的那一個。"""
++        self.reset(keep_abandoned=True)
++        self._stale_terminators += 1
+ 
+     def feed(self, raw: str) -> None:
+         # flush 後本輪即關閉:timeout 保險先 flush 的話,殘餘事件+遲到的 ## 不可
+@@ -241,10 +265,17 @@ class BalanceCollector:
+             logger.debug("collector 本輪已 flush,事件丟棄: %r", raw)
+             return
+         if raw and raw.startswith("#"):  # 結束標記
++            if self._stale_terminators > 0 and self._fed_rows == 0:
++                # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)
++                self._stale_terminators -= 1
++                logger.info("collector 忽略放棄輪遲到的終止符(尚欠 %d)", self._stale_terminators)
++                return
+             self._flush()
+             return
+         p = self._parse(raw)
+         self._last_feed = time.monotonic()
++        self._stale_terminators = 0  # 有回應=活的,不論屬哪一輪,flush 它都是最新快照
++        self._fed_rows += 1
+         if p is not None:
+             self._staging.append(p)
+ 
+diff --git a/copycat/capital/client.py b/copycat/capital/client.py
+index ecb0893c..bfad2007 100644
+--- a/copycat/capital/client.py
++++ b/copycat/capital/client.py
+@@ -172,6 +172,11 @@ class CapitalClient:
+         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
+         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
+         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
++        # 放棄輪旗標:collector.abandon() 已記欠帳,下一次發查詢的 reset 要保留它
++        # (COM 回呼無查詢識別 → 遲到的 `##` 只能靠欠帳擋;見 BalanceCollector docstring)
++        self._balance_abandoned = False
++        self._profit_abandoned = False
++        self._oi_abandoned = False
+ 
+     # ------------------------------------------------------------------ 狀態
+ 
+@@ -370,15 +375,20 @@ class CapitalClient:
+             if now < self._balance_inflight_until:
+                 return
+             # 零事件的死查詢:collector.poll 在 _last_feed is None 時早退、永不 flush,
+-            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)
+-            self._balance_inflight_until = None
++            # deadline 逾期是唯一解卡通道(不放行 = 庫存永久停更)。
++            # 解卡 = 放棄那一輪,但它的 `##` 可能才遲到(COM 回呼無查詢識別)→ 當下就
++            # 記欠帳:此處到真正發下一次查詢之間可能隔到 60s(due 已清、stale 未到),
++            # 那段空窗抵達的零列 `##` 照 flush 會把有庫存的部位清成空集合。
++            self._balance.abandon()
++            self._balance_abandoned = True
+         due = self._balance_due is not None and now >= self._balance_due
+         stale = now - self._balance_last_ts >= 60.0
+         if not due and not stale:
+             return
+         self._balance_due = None
+         self._balance_last_ts = now  # 先記,失敗也不連發
+-        self._balance.reset()
++        self._balance.reset(keep_abandoned=self._balance_abandoned)
++        self._balance_abandoned = False
+         self._balance_inflight_until = now + _BALANCE_CHAIN_TIMEOUT_S
+         rc = self._com.get_real_balance(self._user_id, self._full_account)
+         if rc != 0:
+@@ -396,7 +406,8 @@ class CapitalClient:
+         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
+         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
+         self._balance_last_ts = time.monotonic()
+-        self._profit.reset()
++        self._profit.reset(keep_abandoned=self._profit_abandoned)
++        self._profit_abandoned = False
+         rc = self._com.get_profit_loss_gw(self._user_id, self._full_account)
+         if rc != 0:
+             logger.warning("GetProfitLossGWReport rc=%s: %s", rc, self._com.return_code_message(rc))
+@@ -439,7 +450,8 @@ class CapitalClient:
+         if self._futures_account is None:
+             self._finalize_positions([])
+             return
+-        self._oi.reset()
++        self._oi.reset(keep_abandoned=self._oi_abandoned)
++        self._oi_abandoned = False
+         rc = self._com.get_open_interest(self._user_id, self._futures_account)
+         if rc != 0:
+             logger.warning("GetOpenInterestGW rc=%s: %s", rc, self._com.return_code_message(rc))
+@@ -476,6 +488,15 @@ class CapitalClient:
+             return
+         if time.monotonic() >= self._pending_deadline:
+             logger.warning("部位合併逾時(損益/期貨查詢未完成)— 以已收證券部位寫入")
++            # 這一輪的損益/期貨段被放棄:兩者的 `##` 都可能才遲到(COM 回呼無查詢識別),
++            # 下一輪收到會 flush 空集合 —— profit 空集合 = 均價/損益基底整批消失,
++            # OI 空集合更會把期貨部位清光(A7 沿用邏輯繞不過 _on_oi_complete)。
++            # 已收尾的那一段被多記一筆欠帳是可接受代價:真實回應都帶列
++            # (profit 的 000 查詢結果列 / OI 的「無資料」訊息列)→ 一有列欠帳就歸零。
++            self._profit.abandon()
++            self._oi.abandon()
++            self._profit_abandoned = True
++            self._oi_abandoned = True
+             self._finalize_positions(self._stale_fut_positions())  # fut 沿用上一輪(A7)
+ 
+     # ------------------------------------------------------------------ 執行緒生命週期
+diff --git a/tests/capital/test_balance.py b/tests/capital/test_balance.py
+index 44a7155b..07e3c1a1 100644
+--- a/tests/capital/test_balance.py
++++ b/tests/capital/test_balance.py
+@@ -204,6 +204,42 @@ def test_collector_new_query_resets_staging() -> None:
+     assert got == [[]]  # staging 已清,flush 空集合(全部出清的合法狀態)
+ 
+ 
++def test_collector_abandoned_round_ignores_late_end_marker() -> None:
++    """零事件死查詢逾期解卡 = 放棄一輪,但那一輪還欠一個 `##`(COM 回呼不帶查詢識別,
++    遲到的終止符無法從內容分辨屬哪一輪)。放棄後的第一個「零列 ##」必須忽略 —
++    flush 空集合會以全量取代語意把庫存整批清空(平倉鍵跟著鎖住)。"""
++    got: list[list[object]] = []
++    c = BalanceCollector(on_complete=got.append)
++    c.abandon()
++    c.feed(RAW_END)  # 放棄輪遲到的終止符 → 吞掉,不 flush、不關閉本輪
++    assert got == []
++    c.feed(RAW_T_BOUGHT)  # 新一輪真回應照常收
++    c.feed(RAW_END)
++    assert len(got) == 1
++    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["2493"]
++
++
++def test_collector_reset_after_abandon_clears_stale_debt() -> None:
++    # 正常 reset(發查詢路徑)= 上一輪已正常收尾 → 欠帳歸零,真空帳戶的空 ## 照常 flush
++    got: list[list[object]] = []
++    c = BalanceCollector(on_complete=got.append)
++    c.abandon()
++    c.reset()
++    c.feed(RAW_END)
++    assert got == [[]]
++
++
++def test_collector_rows_clear_stale_debt() -> None:
++    # 有 row 抵達 = 活的回應(不論屬哪一輪),flush 它就是最新快照 → 欠帳歸零
++    got: list[list[object]] = []
++    c = BalanceCollector(on_complete=got.append)
++    c.abandon()
++    c.feed(RAW_C_MARGIN)
++    c.feed(RAW_END)
++    assert len(got) == 1
++    assert [p.stock_no for p in got[0] if isinstance(p, Position)] == ["3357"]
++
++
+ # 未實現-彙總(4-2-p)= 2026-06-11 正式環境真實回報(ID/帳號去敏)。
+ # 實際 30 欄(比文件 25 欄多尾端含費均價等);[1]=股票代號、[10]=平均買進(券賣)成本。
+ # 第一筆=查詢結果(000,訊息可空);總計列股號為空。
+diff --git a/tests/capital/test_client.py b/tests/capital/test_client.py
+index c5d2b1a2..970a428c 100644
+--- a/tests/capital/test_client.py
++++ b/tests/capital/test_client.py
+@@ -1405,6 +1405,35 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path)
+     assert _balance_queries(com) == 2
+ 
+ 
++def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) -> None:
++    """R7/A4:死查詢逾期解卡(SC-7(d))放棄了第一輪,但那一輪的 `##` 可能才遲到 —
++    COM 回呼不帶任何查詢識別,終止符無法與查詢配對。遲到的零列 `##` 若照 flush,
++    on_complete 的全量取代語意會把有庫存的部位清成空集合(平倉鍵鎖住,真錢面不可操作),
++    且 `_closed` 之後第二輪的 rows 全被丟棄 → 最壞 60s 才自癒。"""
++    com = FakeCom()
++    client = _client(com, tmp_path)
++    _mark_ready(client)
++    client.store.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
++    client._balance_due = time.monotonic() - 1.0
++    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
++    assert _balance_queries(com) == 1
++    client._balance_due = time.monotonic() - 1.0
++    client._balance_inflight_until = time.monotonic() - 1.0  # deadline 逾期 → 解卡放行
++    client._maybe_query_balance()
++    assert _balance_queries(com) == 2
++
++    client._handle_balance("##")  # 第一輪遲到的終止符
++    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
++    assert client._pending_sec is None  # 鏈不得被空集合啟動
++
++    bal = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
++    client._handle_balance(bal)  # 第二輪真回應
++    client._handle_balance("##")
++    client._handle_profit("##,,,,")
++    client._handle_open_interest("##")
++    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
++
++
+ def test_balance_query_rc_failure_rearms_due_with_backoff(tmp_path: Path) -> None:
+     """C1/T9:GetRealBalance rc≠0(1019「查詢處理中」)= 鏈根本沒啟動 →
+     (a) 守門旗標必須清掉,不可佔著擋下一輪;

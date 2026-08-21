@@ -59,3 +59,13 @@ attribute 'abandon'`;client 鏈測 `assert [] is None ... _pending_sec`(遲到 `
 
 Gate:`pytest -q` **2844 passed**(166s)/ `ruff check copycat tests` All checks passed /
 `pyright` 0 errors, 0 warnings。
+
+## Code review round 1 → 設計修正(`code-review-round-1.json`,14 條全 accepted)
+- **P0 F1/T1**:修復誤把 `self._balance_inflight_until = None` 換成 `abandon()` → 旗標不清,每 50ms 重入再 abandon;必須補回。
+- **P0 F2**:計數式欠帳對真空帳戶自我延續(每輪 abandon → 每輪零列 `##` 被吞)→ 幽靈部位永不清。改為**時間窗**:`abandon()` 記
+  `_stale_until = monotonic + STALE_WINDOW_S(20s)`,零列 `##` 只在窗內被吞(遲到終止符不可能晚過 20s);窗外 `##` 照 flush。
+  `[auto-default: 20s | reason: 鏈 timeout 10s 後 COM 遲到回應落在數秒內;真空帳戶最晚下一輪(≤60s)清空]`
+- `_awaiting` 旗標(reset 設、flush / 吞終止符清);`abandon()` 非 awaiting → no-op(F4 double-count)。刪 `_fed_rows`(T6,與欠帳冗餘):任何 row → `_stale_until = None`。
+- client:`*_abandoned` 旗標在 `rc == 0` 後才清(F3,三處);`_set_status("ok")` 清三旗標 + 三 collector `reset()`(F5)。
+- log:吞 → WARNING(部位更新被抑制);abandon → DEBUG。
+- 殘餘風險(F7,無 token 不可解):新輪已收 rows 時舊 `##` 會 flush 截斷快照並關閉本輪(機率 = 兩回應交錯在同一 ms 級窗),記 next-time。
