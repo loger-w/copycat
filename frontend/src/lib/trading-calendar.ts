@@ -35,6 +35,19 @@ export function isoLocalDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** 後端給的 `YYYY-MM-DD` 是不是週末。
+ *
+ *  **以 UTC 午夜解讀,不用本機 `getDay()`**(AR8):`new Date("2026-08-17")` 是 UTC
+ *  午夜,在 UTC−n 的機器上讀回本機日期會退成前一天 —— 週一會被算成週日。這裡比的是
+ *  「後端那個日期字串是星期幾」,與看盤機的時區無關。
+ *
+ *  形狀不合(空字串 / 亂字串)→ `NaN` → false:失效方向是「少擋一次」(照常顯示),
+ *  不是拿 NaN 去當星期幾。 */
+export function isWeekendIso(iso: string): boolean {
+  const day = new Date(`${iso}T00:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
+
 /** 非週末且不在假日集合。 */
 export function isTradingDay(d: Date): boolean {
   const day = d.getDay(); // 0 = 週日
