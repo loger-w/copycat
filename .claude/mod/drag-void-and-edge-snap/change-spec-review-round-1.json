@@ -1,0 +1,62 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P1",
+   "summary": "不該紅清單漏四處",
+   "disposition": "accepted",
+   "resolution": "補齊 + 對齊算式"
+  },
+  {
+   "id": "R2",
+   "severity": "P1",
+   "summary": "SC-3 個股期 lock 套套邏輯",
+   "disposition": "accepted",
+   "resolution": "元件層未對齊 fixture"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "stubRects 全域 mock 使新案假綠/舊案轉紅",
+   "disposition": "accepted",
+   "resolution": "wl-sticky testid + local override"
+  },
+  {
+   "id": "R4",
+   "severity": "P2",
+   "summary": "edgeMilli docstring/describe 標題過時",
+   "disposition": "accepted",
+   "resolution": "同批改 + 兩案"
+  },
+  {
+   "id": "R5",
+   "severity": "P2",
+   "summary": "平倉守門依賴注入者",
+   "disposition": "accepted",
+   "resolution": "futCloseEstimate 末端守門"
+  },
+  {
+   "id": "R6",
+   "severity": "P2",
+   "summary": "作廢帶語意未申明",
+   "disposition": "accepted",
+   "resolution": "界定 + edge"
+  },
+  {
+   "id": "R7",
+   "severity": "P2",
+   "summary": "move 命中作廢帶高亮殘留",
+   "disposition": "accepted",
+   "resolution": "to = from"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "漏 re-export caller",
+   "disposition": "accepted",
+   "resolution": "補列"
+  }
+ ]
+}
