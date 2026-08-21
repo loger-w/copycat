@@ -171,6 +171,9 @@ describe("useSignalFeed — 資料日兩欄(D3')", () => {
     const hook = renderHook(() => useSignalFeed(), { wrapper });
     await waitFor(() => expect(hook.result.current.signals.length).toBe(3));
     const query = client.getQueryCache().find({ queryKey: ["stock-signals-today"] });
-    expect(query?.options.refetchInterval).toBe(5 * 60_000);
+    // `Query.options` 的型別是 QueryOptions(不含 observer 級的 refetchInterval),
+    // 但 observer 建 query 時傳的是完整 options → 執行期有值。窄轉型只為讀這一欄。
+    const options = query?.options as { refetchInterval?: number } | undefined;
+    expect(options?.refetchInterval).toBe(5 * 60_000);
   });
 });
