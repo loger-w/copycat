@@ -481,6 +481,77 @@ class TestStateRoute:
         assert r.json()["detail"]["error"] == "NOT_READY"
 
 
+#: 餵一則成交進 engine(讓 tape 非空;欄位比照 TestStockWs 的真 TC4 payload)
+TICK_MSG: dict[str, str] = {
+    "Symbol": "TC.S.TWS.2330",
+    "Security": "2330",
+    "SecurityName": "台積電",
+    "TradingPrice": "2380",
+    "TradeQuantity": "1",
+    "TradeVolume": "1",
+    "TradeDate": "20260721",
+    "FilledTime": "25751",
+    "PreciseTime": "25751000000",
+    "Bid": "2375",
+    "Ask": "2380",
+    "BidVolume": "10",
+    "AskVolume": "10",
+    "ReferencePrice": "2320",
+    "UpperLimitPrice": "2550",
+    "LowerLimitPrice": "2090",
+    "YClosedPrice": "2320",
+    "YTradeVolume": "100",
+    "OpenTime": "90000",
+    "CloseTime": "133000",
+    "TradeStatus": "0",
+}
+
+
+class TestStateRouteTape:
+    """`?tape=0` 省略逐筆明細(B15)。
+
+    群組檢視點卡片的**唯一目的**是換右欄閃電梯的標的(檢視停在群組),而群組檢視裡
+    沒有主圖 / 明細 —— 那趟卻照樣拖回整份 tape(M0 盤中實測 0.5–1.5 MB/檔,50 檔輪點
+    20–70 MB)。`set_main` 仍要打(W-4:訂閱與回補靠它),省的只有 payload。
+    """
+
+    def test_tape_0_omits_ticks_and_leaves_every_other_key_intact(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        with client:
+            client.get("/api/stock/state/2330")  # set_main → engine 開始收本檔推播
+            assert fake.on_message is not None
+            fake.on_message(dict(TICK_MSG))
+            full = client.get("/api/stock/state/2330").json()
+            light = client.get("/api/stock/state/2330?tape=0").json()
+        assert full["ticks"], "基準 tape 是空的 → 兩邊都空,測不出東西"
+        assert light["ticks"] == []
+        assert light["tape_omitted"] is True
+        assert "tape_omitted" not in full, "全量路徑多一個鍵 = 契約漂移(W3 位元不變)"
+        assert {k: v for k, v in light.items() if k != "tape_omitted"} == full | {"ticks": []}
+
+    def test_tape_0_still_sets_main(self, tmp_path: Path) -> None:
+        """W-4:省 payload 不等於省 set_main —— 漏掉的話點卡片就換不了訂閱標的,
+        而畫面上只表現為右欄「沒有資料」,沒有任何錯誤。"""
+        client, fake = make_client(tmp_path)
+        with client:
+            r = client.get("/api/stock/state/2317?tape=0")
+        assert r.status_code == 200
+        assert "2317" in fake.subscribed
+
+    def test_unknown_tape_value_falls_back_to_full(self, tmp_path: Path) -> None:
+        """`tape` 收字串不收 int(D3'):`?tape=abc` 走全量,不產生 422 ——
+        422 的 detail 是 list 形,不符全站 `{"detail": {"error": code}}` 契約。"""
+        client, fake = make_client(tmp_path)
+        with client:
+            client.get("/api/stock/state/2330")
+            assert fake.on_message is not None
+            fake.on_message(dict(TICK_MSG))
+            r = client.get("/api/stock/state/2330?tape=abc")
+        assert r.status_code == 200
+        assert r.json()["ticks"], "非 0 一律全量"
+        assert "tape_omitted" not in r.json()
+
+
 STKFUT_CATALOG: dict[str, dict] = {
     "2330": {
         "name": "台積電",
