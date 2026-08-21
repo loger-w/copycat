@@ -47,7 +47,14 @@ function renderRail(
   o: Partial<
     Pick<
       Props,
-      "signals" | "rules" | "notifPermission" | "soundOn" | "rulesError" | "toggleError"
+      | "signals"
+      | "rules"
+      | "notifPermission"
+      | "soundOn"
+      | "rulesError"
+      | "toggleError"
+      | "tradeDate"
+      | "today"
     >
   > = {},
 ) {
@@ -413,5 +420,43 @@ describe("SignalRail 提示區", () => {
     cleanup();
     renderRail({ notifPermission: "denied" });
     expect(screen.queryByText(/允許通知/)).toBeNull();
+  });
+});
+
+// 🔴 SC-2(D3' / AR5):標題帶資料日。假日 / 盤前開站時 rail 掛的是**上一交易日**的
+// jsonl,而「今日訊號」四個字會讓人把昨天的鎖漲停當成剛剛發生的。日期一律由後端
+// 兩欄(hub 的 engine 日 vs 牆鐘日)決定 —— 瀏覽器時鐘與後端日別是兩回事。
+describe("SignalRail 標題資料日(SC-2)", () => {
+  function titleText(): string {
+    return screen.getByRole("heading", { name: /訊號$/ }).textContent ?? "";
+  }
+  function railLabel(): string | null {
+    return screen.getByTestId("signal-rail").getAttribute("aria-label");
+  }
+
+  it("兩欄皆不傳(既有呼叫端 / 舊後端)→ 今日訊號", () => {
+    renderRail();
+    expect(titleText()).toBe("今日訊號");
+    expect(railLabel()).toBe("今日訊號");
+  });
+
+  it("tradeDate = today(當日盤中)→ 今日訊號(W2 逐字不變)", () => {
+    renderRail({ tradeDate: "2026-08-21", today: "2026-08-21" });
+    expect(titleText()).toBe("今日訊號");
+    expect(railLabel()).toBe("今日訊號");
+  });
+
+  it("tradeDate ≠ today(假日 / 盤前)→ 「MM-DD 訊號」,aria-label 同步", () => {
+    renderRail({ tradeDate: "2026-08-20", today: "2026-08-21" });
+    expect(titleText()).toBe("08-20 訊號");
+    expect(railLabel()).toBe("08-20 訊號");
+  });
+
+  it("任一欄為 null(payload 缺欄)→ 今日訊號(不拿單邊猜)", () => {
+    renderRail({ tradeDate: "2026-08-20", today: null });
+    expect(titleText()).toBe("今日訊號");
+    cleanup();
+    renderRail({ tradeDate: null, today: "2026-08-21" });
+    expect(titleText()).toBe("今日訊號");
   });
 });
