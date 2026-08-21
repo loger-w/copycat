@@ -2,6 +2,10 @@
 
 P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod),以下為本次不動的 P2:
 
+- [ ] **VWAP 標籤寬度 index 態低估**(2026-08-22 mod/vwap-label-avoid review P2):`StockIntradayChart.tsx` VWAP 文字硬編 `fmt`
+  不吃 `priceText`,加權 `24283.54` 實寬 ≈45px > `VWAP_LABEL_W`=40 → clamp 字尾溢右緣帶(既有)+ 新 obstacle 判定多一道 ≈5px 誤判窄帶。
+  修法 = VWAP 文字走 priceText 或寬度依 mode 取值。
+- [ ] **VWAP 就地標籤 × 極值標記文字不互相避讓**(同上 review P2):兩者都「不可動」,日高/低落在盤末最後幾分鐘且價位≈VWAP 時疊印仍可達。
 - [ ] **R1 超容 clamp 全堆界邊**:`lib/stock-intraday-svg.ts:643-666` dropOverflow=false 時上緣標籤被
   clamp 成完全同 y(測試字面量 `[4,4,4,4,10,20,30]`),4×4 圖牆 capacity 6 / n=7 會踩到;改成界內等距壓縮。
 - [ ] **R2 MarketPane 週期 radiogroup 內混「重疊」toggle**(`MarketPane.tsx:493` trailing):新引入的

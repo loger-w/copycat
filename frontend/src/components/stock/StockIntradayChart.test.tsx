@@ -2078,7 +2078,9 @@ describe("VWAP 就地標籤進 MA 價位標的 obstacles(mod/vwap-label-avoid)",
 
   /** PR #78 SC-4 近拍實證:末點貼右界時 VWAP 標籤右緣 = w−R_AXIS_W,與 MA 價位標
    *  (anchor=end 在 w−R_AXIS_W−2、向左佔 EDGE_LABEL_W)x 區間完全重疊;y 相近即疊印。
-   *  VWAP 是就地標籤(位置 = 線末點在哪,是資訊)不動,MA 價位標是冗餘數值 → 讓位。 */
+   *  VWAP 是就地標籤(位置 = 線末點在哪,是資訊)不動,MA 價位標是冗餘數值 → 讓位。
+   *  註:fixture 的 `vwap: 2_390_000` 只決定標籤文字;標籤 y 取前端累計線末點(≈2_381_667),
+   *  碰撞依據是 y,所以修前中心距 4.31px(< 10)即重現症狀。 */
   it("末點貼右界且 MA5 價位≈VWAP → MA5 標籤讓位(中心距 ≥ EDGE_LABEL_H),VWAP 標籤不動", async () => {
     overlayResponse = { ...OVERLAY, ma5: 2_390_000, ma20: 2_310_000 };
     const late = fromSnapshot(lateSnap);
@@ -2097,7 +2099,10 @@ describe("VWAP 就地標籤進 MA 價位標的 obstacles(mod/vwap-label-avoid)",
   });
 
   it("末點在畫面中段(x 區間不碰 MA 走廊)且 MA5 價位≈VWAP → MA5 標籤不位移", async () => {
-    // ACCUM 只有 09:01 一分鐘,vwapLine 末點在繪圖區左側;VWAP=2_380_000
+    // ACCUM 只有 09:01–09:02 兩分鐘,vwapLine 末點在繪圖區左側(x 不碰 maLabelLeft)。
+    // 前置(敏感度所繫):累計 VWAP 末點 ≈2_381_667 與 ma5 2_380_000 的 y 差 ≈0.86px
+    // (< EDGE_LABEL_H),所以「無條件把 VWAP 當 obstacle」的回歸才會讓本案紅;
+    // 改 ACCUM 的 minutes 前先確認這個差距仍 < 10px,否則本案靜默失去鑑別力。
     overlayResponse = { ...OVERLAY, ma5: 2_380_000, ma20: 2_310_000 };
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
     fireEvent.click(screen.getByRole("button", { name: "MA" }));
