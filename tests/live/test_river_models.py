@@ -7,6 +7,7 @@ import time
 from copycat.live.river_models import (
     SESSION_WINDOWS,
     all_day_utc_window,
+    close_clamp_rank,
     minute_end_from_1k,
     minute_end_from_taipei,
     minute_end_from_utc_hhmmss,
@@ -63,6 +64,29 @@ class TestOffsetOfNight:
     def test_close_correction_and_beyond(self) -> None:
         assert offset_of(1745, "night") == 840
         assert offset_of(1746, "night") is None
+
+
+class TestCloseClampRank:
+    """clamp 名次(B8):`push` 靠它分辨「收盤撮合那一分鐘」與「收盤後的殘留取樣」。
+
+    只鎖 end / end+1 / end+2 / end+5 / end+6 五個邊界 —— 中間值由同一把尺(`_expand`)
+    保證,多鎖只是把實作抄一遍。
+    """
+
+    def test_end_minute_is_not_clamped(self) -> None:
+        assert close_clamp_rank(825, "day") == 0  # 13:45 bar 本身
+
+    def test_close_auction_minute_is_rank_one(self) -> None:
+        assert close_clamp_rank(826, "day") == 1  # 13:45:xx 的成交 → 仍要進得來
+
+    def test_first_stale_minute_is_rank_two(self) -> None:
+        assert close_clamp_rank(827, "day") == 2  # 13:46 起 = 收盤後殘留
+
+    def test_last_clamped_minute_is_rank_five(self) -> None:
+        assert close_clamp_rank(830, "day") == 5
+
+    def test_beyond_clamp_window_is_none(self) -> None:
+        assert close_clamp_rank(831, "day") is None  # 與 offset_of 同時失效
 
 
 class TestMinuteEndFromTaipei:

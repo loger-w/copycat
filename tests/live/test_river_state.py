@@ -48,6 +48,51 @@ class TestPush:
         assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"] == {75: 40_800_000}
 
 
+class TestCloseClampPush:
+    """SC-2:收盤 clamp 第 2 分鐘起不覆寫 end 格(13:46– 的殘留取樣蓋掉真收盤)。
+
+    end+1(13:45:xx 的成交,桶 = 13:46)仍**必須**寫得進來 —— base 腿每秒取樣在
+    13:44:xx 就先把 end 格填掉了,收盤價只能從這一分鐘進來。
+    """
+
+    def test_close_auction_minute_overwrites_end_slot(self) -> None:
+        s = _state()
+        s.push("TXF", 825, 40_646_000, DAY)  # 13:44:30 的取樣落 13:45 桶
+        s.push("TXF", 826, 40_650_000, DAY)  # 13:45:02 收盤撮合
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_650_000
+
+    def test_stale_minute_does_not_overwrite_end_slot(self) -> None:
+        s = _state()
+        s.push("TXF", 825, 40_646_000, DAY)
+        s.push("TXF", 826, 40_650_000, DAY)
+        s.push("TXF", 829, 40_700_000, DAY)  # 13:48 殘留取樣 → 丟棄
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_650_000
+
+    def test_discarded_push_does_not_become_a_delta_point(self) -> None:
+        s = _state()
+        s.push("TXF", 826, 40_650_000, DAY)
+        s.push("TXF", 829, 40_700_000, DAY)
+        assert s.delta(3)["legs"]["TXF"] == {"m": 300, "p": 40_650_000}
+
+    def test_stale_minute_writes_when_end_slot_empty(self) -> None:
+        # 13:45 真收盤可能因 tick 稀疏而沒落 end 格 → 13:46 的取樣仍是最佳近似
+        s = _state()
+        s.push("TXF", 827, 40_700_000, DAY)
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {300: 40_700_000}
+        s2 = _state()
+        s2.push("ES", 826, 7_400_000, DAY)
+        assert s2.snapshot(LABELS, 1)["legs"]["ES"]["minutes"] == {300: 7_400_000}
+
+    def test_non_clamp_minutes_keep_last_write_wins(self) -> None:
+        s = _state()
+        s.push("TXF", 824, 40_600_000, DAY)  # 13:44 bar,offset 299
+        s.push("TXF", 824, 40_610_000, DAY)
+        s.push("TXF", 825, 40_646_000, DAY)  # 13:45 bar,offset 300
+        s.push("TXF", 825, 40_648_000, DAY)
+        minutes = s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]
+        assert minutes == {299: 40_610_000, 300: 40_648_000}
+
+
 class TestSetSession:
     def test_window_follows_session_without_any_price(self) -> None:
         s = _state()
