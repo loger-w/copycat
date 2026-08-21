@@ -278,6 +278,24 @@ class SignalHub:
     def dropped(self) -> int:
         return self.dropped_jsonl + self.dropped_discord
 
+    @property
+    def trade_date(self) -> str:
+        """引擎日別(唯讀,AR6):`today_signals()` 讀的兩個日別之一,給 today 端點掛出去。
+
+        route 直接讀屬性而不是自己算日期 —— hub 內外算法一旦分家,端點回報的日別會跟
+        實際讀的那個檔悄悄不同(rollover 前後最容易發生),而畫面看起來完全正常。
+        """
+        return self._trade_date_fn()
+
+    @property
+    def today(self) -> str:
+        """牆鐘日(唯讀,AR7):與 `today_signals()` 取聯集用的**同一顆**時鐘(`_now_fn`)。
+
+        與 `trade_date` 兩次取樣中間可能夾著 rollover stage2(錯位一拍),差別只是
+        標題晚一拍更新,可接受;換成別的時鐘則會整天不一致。
+        """
+        return self._now_fn().date().isoformat()
+
     # ---- 規則(SC-2)----
 
     def _load_or_migrate_rules(self) -> None:
