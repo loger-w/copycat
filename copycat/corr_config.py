@@ -5,8 +5,12 @@
 只需在 `configs/correlation.json` 加一筆。
 
 `base` 腿的 `source` 必須是 `"futures_engine"`:台指 `TC.F.TWF.TXF.HOT` 已被既有
-`futures_engine` 訂閱,同 symbol 跨 session 只推一邊(CLAUDE.md §8,2026-07-28 實證),
-本引擎重複訂閱會讓其中一邊永久零推播且無錯誤訊號。
+`futures_engine` 訂閱,本引擎不重複訂閱同一個 symbol。**理由不是「跨 session 只推一邊」**
+(那是 07-28 的錯誤結論,08-18 已推翻):REALTIME 是單一 PUB port 廣播,人人收得到;真正的
+風險是 TC4 的 refcount 以 `symbol|DataType|窗` 為 key 計、上游 feed 卻以 **symbol** 為單位
+—— 多一把 key 就多一個「它歸零時把整個 symbol 的 feed 一起退掉」的引信(死掉沒 LOGOUT 的
+session 被 reap 時尤其明顯),而失效樣態是永久零推播且無錯誤訊號。詳見
+`.claude/skills/tc4-market-facts/SKILL.md`。
 """
 
 from __future__ import annotations

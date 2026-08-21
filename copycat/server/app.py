@@ -655,7 +655,7 @@ def create_app(
             app.state.stock = stock
             booted.stock = stock
             # 合約查詢與個股訂閱共用同一條 session:QUERYALLINSTRUMENT 是 REQ 不是訂閱,
-            # 不會有「同 symbol 跨 session 只推一邊」的問題,但多開一條 TC4 登入沒有理由
+            # 不會多掛 TC4 refcount key(那才是零推播的引信),但多開一條 TC4 登入沒有理由
             fetch = getattr(stkfut_source, "list_stock_futures", None)
             if stock is not None and callable(fetch):
                 app.state.stkfut_catalog = StkfutCatalog(cast(Callable[[], dict], fetch))
@@ -1553,7 +1553,8 @@ def create_app(
         五秒內答出來的問題。400/503 只留給「請求本身錯」與「引擎沒起來」。
 
         分派 = 每個 symbol 都向**持有它 REALTIME 訂閱的那條 session** 問歷史
-        (CLAUDE.md §8 同 symbol 跨 session 只推一邊):
+        (別條 session 問 = 對同一 symbol 多掛一把 TC4 refcount key,歸零時退訂整個 symbol;
+        見 `.claude/skills/tc4-market-facts/SKILL.md`):
         `TWSE` → index 引擎、`TXF/MXF/TMF` → futures 引擎、`OTC` → 本機合成(無 TC4 來源)。
 
         `session`(`day` 預設 / `allday` 近全,futures-allday SC-3)只對期指 tf=1 有意義:

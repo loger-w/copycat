@@ -1,8 +1,9 @@
 """期指 K 線歷史(index-board N-2)。
 
 **為什麼一定要從 futures session 發**:`TC.F.TWF.<prod>.HOT` 的 REALTIME 訂閱在這條
-session 手上,TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8)—— 從別的 session 問
-同一檔有把推播搶走的風險。`river_backfill` 檔頭記的是同一件事。
+session 手上 —— 從別的 session 問同一檔會多掛一把 TC4 refcount key,而上游 feed 以 symbol
+為單位,那把 key 歸零就退訂整個 symbol(見 `.claude/skills/tc4-market-facts/SKILL.md`)。
+`river_backfill` 檔頭記的是同一件事。
 """
 
 from __future__ import annotations

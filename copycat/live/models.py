@@ -18,8 +18,9 @@ SPOT_SYMBOL = "TC.F.TWF.TXF.HOT"  # 台指期在 TC4 symbol 樹的產品碼是 T
 #: 費半、小台微台。整棵樹前綴會讓它們輪流覆寫現價,右上角台指與 TXO 綜合損益的
 #: `spot_pnl` 一起亂跳(2026-07-29 盤中實測個股期 232.5 顯示成台指)。
 #:
-#: 留 leaf 而非只認 `SPOT_SYMBOL` 完全相等:`futures_engine` 在 HOT 推播被搶走時會補訂
-#: 月份 leaf(CLAUDE.md §8 同 symbol 跨 session 只推一邊),那是同一標的同一價位,
+#: 留 leaf 而非只認 `SPOT_SYMBOL` 完全相等:`futures_engine` 在 HOT 零推播時會補訂月份
+#: leaf(refcount 被別把 key 帶走後的復活路徑 —— leaf 是不同 symbol,天然是新 key;見
+#: `.claude/skills/tc4-market-facts/SKILL.md`),那是同一標的同一價位,
 #: 也是該情境下唯一的現價來源。
 SPOT_PREFIX = "TC.F.TWF.TXF."
 

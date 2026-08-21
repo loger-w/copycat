@@ -124,8 +124,9 @@ class FuturesEngine:
         self._flush_interval_secs = flush_interval_secs
         self._dirty: dict[str, None] = {}
         self._flush_timer: asyncio.TimerHandle | None = None
-        # leaf fallback:HOT 與 TXO runtime spot 同 symbol 跨 session 只推一邊
-        # (2026-07-28 盤中實證)→ resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約
+        # leaf fallback:HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol,
+        # 2026-08-18 實證)時 → resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約。
+        # leaf 是**不同 symbol**,天然是一把新 key,所以補得回來(重訂 HOT 補不回來)
         self._leaf_grace_secs = leaf_grace_secs
         self._leaf_done: set[tuple[str, str]] = set()
         self._leaf_inflight: set[tuple[str, str]] = set()
@@ -317,7 +318,8 @@ class FuturesEngine:
         (與同檔 `bars_range` 的「在 engine 內吃掉」相反)—— 江波圖那條路要靠它排重補,
         engine 這裡先降級成空就等於把訊號丟在半路(bug/history-timeout-propagation)。
         本引擎持有 `TC.F.TWF.<product>.HOT` 的 REALTIME 訂閱,所以這檔的歷史也只能從這裡問
-        (同 symbol 跨 session 只推一邊,CLAUDE.md §8)。
+        (別處問會多掛一把 refcount key,歸零時退訂整個 symbol;見
+        `.claude/skills/tc4-market-facts/SKILL.md`)。
         """
         source = self._source
         if source is None:

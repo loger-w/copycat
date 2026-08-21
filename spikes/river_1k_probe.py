@@ -1,9 +1,9 @@
 """六腿江波圖 Phase 0 probe:海外/台期交各段的 **1K 當日回補支援度**。
 
 為什麼不直接 probe 六腿本體:六腿(TXF/TWN/YM/ES/NQ/SXF)在 :8721 的 server 內已被
-`futures_engine` / `corr_engine` 訂閱 REALTIME,而 TC4 **同 symbol 跨 session 只推一邊**
-(CLAUDE.md §8)。從另一個 process 對同 symbol 發請求有把推播搶走的風險 → 會弄壞 user
-正在看的畫面。故改 probe **同段但沒被訂閱的兄弟商品**(存在性以 catalog_dump 確認):
+`futures_engine` / `corr_engine` 訂閱 REALTIME。從另一個 process 對同 symbol 發請求會
+**多掛一把 TC4 refcount key**,而上游 feed 以 symbol 為單位 —— probe 收工退訂時整個 symbol
+的推播一起斷(見 `.claude/skills/tc4-market-facts/SKILL.md`)→ 會弄壞 user 正在看的畫面。故改 probe **同段但沒被訂閱的兄弟商品**(存在性以 catalog_dump 確認):
 
 | 段 | probe symbol | 對應六腿 |
 |---|---|---|

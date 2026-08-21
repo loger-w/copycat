@@ -5,9 +5,10 @@
 碰別人的私有面。`stock_source._collect_history` 是同型邏輯的既有實作(那條服務 K 線 / overlay,
 語意與參數已被四個呼叫點綁住,不在本輪動它;共用化條件記 `docs/next-time.md`)。
 
-**為什麼回補要各走自己的 session**:TC4 同 symbol 跨 session 只推一邊(CLAUDE.md §8),
-台指 `TC.F.TWF.TXF.HOT` 的訂閱在 futures session 手上 → 台指的 1K 也必須從那條 session 問,
-不可從 corr session 發(疑似與既有 bug 1 同源)。
+**為什麼回補要各走自己的 session**:台指 `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在 futures
+session 手上 → 台指的 1K 也必須從那條 session 問,不可從 corr session 發。corr 那邊發等於
+對同一個 symbol 多掛一把 TC4 refcount key,而上游 feed 以 symbol 為單位 —— 那把 key 歸零就
+把整個 symbol 的推播帶走(2026-08-18 實證,見 `.claude/skills/tc4-market-facts/SKILL.md`)。
 """
 
 from __future__ import annotations

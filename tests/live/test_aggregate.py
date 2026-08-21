@@ -102,7 +102,7 @@ class TestRouting:
 
     def test_txf_month_leaf_also_updates_spot(self) -> None:
         """futures_engine 的 leaf fallback 訂 TC.F.TWF.TXF.<YYYYMM> —— 同一標的同一價位,
-        HOT 推播被搶走時它是唯一的現價來源(CLAUDE.md §8 同 symbol 跨 session 只推一邊)。"""
+        HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol)時它是唯一的現價來源。"""
         agg = make_agg()
         agg.route(tick("TC.F.TWF.TXF.202609", price=43_800_000, qty=1))
         snap = agg.snapshot(series=SERIES, status="live", accumulated_from="08:45:00")
