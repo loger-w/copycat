@@ -991,3 +991,36 @@ describe("App 日曆休市膠囊(SC-1)", () => {
     expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
   });
 });
+
+// 🔴 SC-2 整鏈:後端每 attempt 推一則快照(handover.attempt),前端要一路帶到 header 的
+// badge。少了任何一段(型別 / prop / 接線)畫面都只是固定「回補中」—— 零錯誤訊號。
+describe("App 回補重試次數上到 header(SC-2)", () => {
+  function pushTxoSnapshot(handover: Record<string, unknown> | null) {
+    const ws = FakeWS.instances.find((w) => w.url.endsWith("/ws/txo-pnl"))!;
+    act(() => {
+      ws.onopen?.();
+      ws.onmessage?.({
+        data: JSON.stringify({
+          series_id: "TX4.202607",
+          series_name: "TX4 202607",
+          status: "backfilling",
+          curve: [],
+          totals: null,
+          handover,
+        }),
+      });
+    });
+  }
+
+  it("handover.attempt = 3 → 「回補中(第 3 次)」", () => {
+    renderApp();
+    pushTxoSnapshot({ attempt: 3, attempts_max: 3, phase: "backfilling" });
+    expect(screen.getByText("回補中(第 3 次)")).toBeTruthy();
+  });
+
+  it("後端沒帶 handover(舊版 / 尚未交接)→ 逐字「回補中」", () => {
+    renderApp();
+    pushTxoSnapshot(null);
+    expect(screen.getByText("回補中")).toBeTruthy();
+  });
+});
