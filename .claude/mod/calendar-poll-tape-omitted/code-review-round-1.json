@@ -1,0 +1,8 @@
+{"round":1,"reviewer":"general-purpose (opus, read-only)","scope":"git diff master...HEAD -- frontend/src CLAUDE.md",
+ "findings":[
+  {"id":"P2-1","severity":"P2","file":"CalendarHolidayBadge.tsx:22 / useTradingCalendar.ts:8","title":"註解仍寫 6 小時 / 開站一次","disposition":"accepted → 🔵"},
+  {"id":"P2-2","severity":"P2","file":"stock-accum.ts:320","title":"applyTick 保留 tapeOmitted 無測;tapeOmitted 且 ticks 非空窄窗無提示","disposition":"accepted(lock)/ 窄窗次秒級不處理"},
+  {"id":"P2-3","severity":"P2","file":"StockPage.test.tsx:131","title":"SC-4 測試非紅先行([lock] 補入)","disposition":"acknowledged:流程瑕疵,mutation 已驗非空轉"}],
+ "p2_summary":{"count":3,"themes":["註解口徑","測試覆蓋","紅先行紀律"]},
+ "whitelist":"4/4 ok(TanStack v5 refetchInterval 不看 staleTime 已由原始碼確認;structuralSharing 無 churn)",
+ "self_review_head":"see git log mod/calendar-poll-tape-omitted"}
