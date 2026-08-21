@@ -24,6 +24,19 @@ function sig(id: string): SignalMsg {
   };
 }
 
+/** 同一 tick 的一則:code / time 固定(= 合併鍵 `(code, time)`),kind 與 id 互異。
+ *  `sig()` 的 code 帶 id 是為了節流測試分辨「發的是哪一則」,同 tick 案要的正好相反。 */
+function tick(id: string, over: Partial<SignalMsg>): SignalMsg {
+  return { ...sig(id), code: "2330", ...over };
+}
+
+/** SC-1 的三則同 tick 訊號(CDP 穿越 + 爆拉 + 爆量),到達序 a → b → c。 */
+const TICK_A = tick("a", { kind: "cdp_cross", levels: ["ah"], direction: "from_below", pct: null });
+const TICK_B = tick("b", { kind: "surge", pct: 1.5 });
+const TICK_C = tick("c", { kind: "vol_burst", pct: 3 });
+/** 三則合併後的字面文案(price 1_234_500 → "1234.5")。 */
+const TICK_TEXT = "2330 台積電 突破 CDP AH・爆拉 +1.50%・爆量 3.0 倍 1234.5";
+
 /** 這兩個計數器由 fake 類別在呼叫當下累加;`beforeEach` 歸零(不重新綁定,
  *  hook 內若快取了 AudioContext 單例,舊實例的方法照樣寫到現在這份計數)。 */
 let oscillators = 0;
@@ -134,15 +147,42 @@ describe("useSignalAlerts — toast 佇列", () => {
     expect(hook.result.current.toasts[0]?.key).not.toBe(target.key);
   });
 
-  it("同 id 重發(重啟後 cooldown 不持久)→ key 仍互異,不會撞 React key", () => {
+  // D1'':合併鍵 = (code, time)。同 id 重發必然同鍵 → 併入既有那張(key 不變,避免
+  // 卸載重掛閃爍);「key 互異」的原意由下面兩案(不同 code / 判為新張)保住。
+  it("同 (code,time) 重發 → 併入同一張 toast(key 不變,不重嗶)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("dup")));
+    const first = hook.result.current.toasts[0]!.key;
+    act(() => emitSignal(sig("dup")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.key).toBe(first);
+    expect(oscillators).toBe(1);
+  });
+
+  it("不同 code → 各自一張,key 互異(不會撞 React key)", () => {
     const hook = renderHook(() => useSignalAlerts());
     act(() => {
-      emitSignal(sig("dup"));
-      emitSignal(sig("dup"));
+      emitSignal(sig("a"));
+      emitSignal(sig("b"));
     });
     const keys = hook.result.current.toasts.map((t) => t.key);
     expect(keys.length).toBe(2);
     expect(new Set(keys).size).toBe(2);
+  });
+
+  // A2:同鍵但舊那張快消失了(TTL 剩餘 < 1500ms)→ 另開新張,否則後到者可能只看得到
+  // 一瞬間。兩張同鍵 toast 並存時 key 必須互異(React key 不撞)。
+  it("同 (code,time) 但 TTL 剩餘 < 1500ms → 另開新張(key 互異、再嗶一聲)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("dup")));
+    const first = hook.result.current.toasts[0]!.key;
+    act(() => {
+      vi.advanceTimersByTime(3_600); // 剩餘 1400ms
+      emitSignal(sig("dup"));
+    });
+    expect(hook.result.current.toasts.length).toBe(2);
+    expect(hook.result.current.toasts[0]?.key).not.toBe(first);
+    expect(oscillators).toBe(2);
   });
 
   it("toast 文字 = formatToastText(單一份文案來源)", () => {
@@ -153,29 +193,171 @@ describe("useSignalAlerts — toast 佇列", () => {
   });
 });
 
+describe("useSignalAlerts — 同 tick 合併(SC-1 / SC-2)", () => {
+  // SC-1:CDP 穿越 + 爆拉 + 爆量 同一 tick 打進來 —— 現況三張疊在右上角,合併後一張一行。
+  it("同 tick 三則 → 一張 toast,文案 = 到達序 kind 段,key 不變", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(TICK_A));
+    const key = hook.result.current.toasts[0]!.key;
+    act(() => {
+      emitSignal(TICK_B);
+      emitSignal(TICK_C);
+    });
+    const [toast] = hook.result.current.toasts;
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(toast?.items.length).toBe(3);
+    expect(toast?.text).toBe(TICK_TEXT);
+    expect(toast?.key).toBe(key);
+    expect(toast?.sig.id).toBe("a"); // 錨 = 最早到那則
+  });
+
+  it("同 code 不同 time / 同 time 不同 code → 各自一張", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => {
+      emitSignal(TICK_A);
+      emitSignal(tick("later", { time: "09:15:04" }));
+      emitSignal(tick("other", { code: "2317" }));
+    });
+    expect(hook.result.current.toasts.length).toBe(3);
+  });
+
+  it("SC-2 嗶每組一聲:同 tick 三則 → 1 聲", () => {
+    renderHook(() => useSignalAlerts());
+    act(() => {
+      emitSignal(TICK_A);
+      emitSignal(TICK_B);
+      emitSignal(TICK_C);
+    });
+    expect(oscillators).toBe(1);
+  });
+
+  it("SC-2 三個不同 tick → 3 聲", () => {
+    renderHook(() => useSignalAlerts());
+    act(() => {
+      emitSignal(sig("x"));
+      emitSignal(sig("y"));
+      emitSignal(sig("z"));
+    });
+    expect(oscillators).toBe(3);
+  });
+
+  // A2:被擠進 overflow 的那張若被併入,要浮回可見區 —— 否則新到的那則等於沒顯示。
+  it("併入 overflow 區的那張 → 移到佇列首(key / TTL 不變,總數不變)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(TICK_A));
+    const key = hook.result.current.toasts[0]!.key;
+    act(() => {
+      for (let i = 0; i < 5; i += 1) emitSignal(sig(`s${i}`));
+    });
+    expect(hook.result.current.toasts.some((t) => t.key === key)).toBe(false);
+    act(() => emitSignal(TICK_B));
+    expect(hook.result.current.toasts[0]?.key).toBe(key);
+    expect(hook.result.current.toasts[0]?.items.length).toBe(2);
+    expect(hook.result.current.overflow).toBe(2);
+  });
+
+  // A3:舊張的 TTL drop 不得刪掉「同鍵新張」的合併索引(stale drop),否則新張再也併不進去。
+  it("舊張 TTL 到期後,同鍵新訊號仍併入新張(stale drop 不刪新索引)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("dup")));
+    act(() => {
+      vi.advanceTimersByTime(3_600); // 剩 1400ms → 另開新張
+      emitSignal(sig("dup"));
+    });
+    const fresh = hook.result.current.toasts[0]!.key;
+    act(() => vi.advanceTimersByTime(1_400)); // 舊張 TTL 到期 → drop(舊 key)
+    expect(hook.result.current.toasts.length).toBe(1);
+    act(() => emitSignal(sig("dup")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.key).toBe(fresh);
+    expect(hook.result.current.toasts[0]?.items.length).toBe(2);
+  });
+
+  // R9:合併真值在 ref、setQueue updater 保持純函式 —— StrictMode 的 double-invoke
+  // 下若把 items 累加寫進 updater,這裡會變成 6 則 / 兩張。
+  it("StrictMode 下同 tick 三則仍是一張一聲(updater 純函式)", () => {
+    let renders = 0;
+    const hook = renderHook(
+      () => {
+        renders += 1;
+        return useSignalAlerts();
+      },
+      { reactStrictMode: true },
+    );
+    expect(renders).toBeGreaterThanOrEqual(2); // StrictMode 生效自檢(否則本案退化成一般案)
+    act(() => {
+      emitSignal(TICK_A);
+      emitSignal(TICK_B);
+      emitSignal(TICK_C);
+    });
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.items.length).toBe(3);
+    expect(hook.result.current.toasts[0]?.text).toBe(TICK_TEXT);
+    expect(oscillators).toBe(1);
+  });
+});
+
 describe("useSignalAlerts — Notification", () => {
-  it("分頁隱藏且權限 granted → 發桌面通知(文案同 toast)", () => {
+  it("分頁隱藏且權限 granted → 300ms 合併窗尾發桌面通知(文案同 toast)", () => {
     hidden = true;
     renderHook(() => useSignalAlerts());
     const s = sig("a");
     act(() => emitSignal(s));
+    act(() => vi.advanceTimersByTime(300));
     expect(notified).toEqual([formatToastText(s)]);
   });
 
+  // A4:推進量 < TTL,確保「沒通知」不是因為 toast 早就沒了(否則斷言 vacuous)
   it("分頁可見 → 不發通知(toast 已經看得到)", () => {
     hidden = false;
     const hook = renderHook(() => useSignalAlerts());
     act(() => emitSignal(sig("a")));
-    expect(notified).toEqual([]);
     expect(hook.result.current.toasts.length).toBe(1);
+    act(() => vi.advanceTimersByTime(400));
+    expect(notified).toEqual([]);
   });
 
-  it("權限非 granted → 不發通知", () => {
+  it("權限非 granted → 不發通知;轉 granted 後新訊號照發", () => {
     hidden = true;
     FakeNotification.permission = "default";
     renderHook(() => useSignalAlerts());
     act(() => emitSignal(sig("a")));
+    act(() => vi.advanceTimersByTime(300));
     expect(notified).toEqual([]);
+    FakeNotification.permission = "granted";
+    const s = sig("b");
+    act(() => emitSignal(s));
+    act(() => vi.advanceTimersByTime(300));
+    expect(notified).toEqual([formatToastText(s)]);
+  });
+
+  // Edge 4(a):排程時是背景,timer 到期時人已回到前景 → 丟棄(前景有 toast,
+  // 再跳一則 OS 通知是重複打擾)。
+  it("背景排程後轉前景 → 到期丟棄,不發通知", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("a")));
+    act(() => {
+      vi.advanceTimersByTime(100);
+      hidden = false;
+    });
+    act(() => vi.advanceTimersByTime(500));
+    expect(notified).toEqual([]);
+  });
+
+  // D5':pending 是**全域單槽**(固定 tag 本來就只有一格)—— 同一合併窗內不同標的
+  // 只有最後一則進 OS。相對舊版 leading(看到最舊那則)是明示的行為改動。
+  it("同一合併窗內不同標的 → 只有最後一則進 OS(latest-wins)", () => {
+    hidden = true;
+    renderHook(() => useSignalAlerts());
+    const b = sig("B");
+    act(() => {
+      emitSignal(sig("A"));
+      vi.advanceTimersByTime(100);
+      emitSignal(b);
+    });
+    act(() => vi.advanceTimersByTime(200));
+    expect(notified).toEqual([formatToastText(b)]);
   });
 
   // handoff R4:tag 用唯一 sig.id 會讓背景分頁每則各佔一格,爆量疊成一排 ——
@@ -184,31 +366,39 @@ describe("useSignalAlerts — Notification", () => {
     hidden = true;
     renderHook(() => useSignalAlerts());
     act(() => emitSignal(sig("a")));
+    act(() => vi.advanceTimersByTime(300));
     expect(notifiedTags).toEqual(["copycat-signal"]);
   });
 
-  // leading edge:窗內丟棄(b / b2 的文案從未出現),窗滿才放行下一則。
+  // trailing:窗內只留**最後一則**(A1 絕對時刻表),窗尾補發 —— 舊 leading 會把
+  // 未合併的首則推到 OS,固定 tag 又不能在 5s 內更新,人看到的永遠是最舊那則。
   // 文案互異(sig 的 code 帶 id)讓 toEqual 是真內容比對,不是長度檢查(review TC-1)。
-  it("連發訊號 5 秒窗內只發第一則(含 4999ms 邊界),窗滿放行(節流)", () => {
+  it("300ms 合併(發最後一則)+ lastSent+5s 窗尾補發(節流)", () => {
     hidden = true;
     renderHook(() => useSignalAlerts());
-    const first = sig("a");
+    const b = sig("b");
     act(() => {
-      emitSignal(first);
-      emitSignal(sig("b"));
+      emitSignal(sig("a"));
+      emitSignal(b);
     });
-    expect(notified).toEqual([formatToastText(first)]);
+    act(() => vi.advanceTimersByTime(299)); // t=299
+    expect(notified).toEqual([]);
+    act(() => vi.advanceTimersByTime(1)); // t=300:窗內最後一則
+    expect(notified).toEqual([formatToastText(b)]);
     act(() => {
-      vi.advanceTimersByTime(4_999);
+      vi.advanceTimersByTime(4_999); // t=5299
       emitSignal(sig("b2"));
     });
-    expect(notified).toEqual([formatToastText(first)]);
+    expect(notified).toEqual([formatToastText(b)]);
     const third = sig("c");
     act(() => {
-      vi.advanceTimersByTime(1);
+      vi.advanceTimersByTime(1); // t=5300:pending 覆寫為 c
       emitSignal(third);
     });
-    expect(notified).toEqual([formatToastText(first), formatToastText(third)]);
+    act(() => vi.advanceTimersByTime(298)); // t=5598
+    expect(notified).toEqual([formatToastText(b)]);
+    act(() => vi.advanceTimersByTime(1)); // t=5599 = max(5299+300, 300+5000)
+    expect(notified).toEqual([formatToastText(b), formatToastText(third)]);
   });
 
   // spec Edge case 3:本輪要解的使用者症狀規模(爆量疊成一排);同時鎖住
@@ -219,22 +409,41 @@ describe("useSignalAlerts — Notification", () => {
     act(() => {
       for (let i = 0; i < 20; i += 1) emitSignal(sig(`s${i}`));
     });
-    expect(notified).toEqual([formatToastText(sig("s0"))]);
-    expect(notifiedTags).toEqual(["copycat-signal"]);
+    // 20 則 code 互異 → 不同合併鍵,佇列照舊 4 + 16(節流閘不得往上吃 toast,review TC-2)
     expect(hook.result.current.toasts.length).toBe(4);
     expect(hook.result.current.overflow).toBe(16);
+    act(() => vi.advanceTimersByTime(300));
+    expect(notified).toEqual([formatToastText(sig("s19"))]); // trailing = 窗內最後一則
+    expect(notifiedTags).toEqual(["copycat-signal"]);
   });
 
-  it("窗內被 permission 擋掉的不消耗窗口:授權後首則照發", () => {
+  // A5 絕對時刻表:誤把「被擋掉」也記帳的話,第二則要等到 t=5300 才發 —— t=610 抓得到。
+  it("窗內被 permission 擋掉的不消耗窗口:授權後 310+300ms 照發", () => {
     hidden = true;
     FakeNotification.permission = "default";
     renderHook(() => useSignalAlerts());
-    act(() => emitSignal(sig("a")));
+    act(() => emitSignal(sig("a"))); // t=0
+    act(() => vi.advanceTimersByTime(300)); // t=300:timer 觸發但被擋
     expect(notified).toEqual([]);
     FakeNotification.permission = "granted";
     const s = sig("b");
-    act(() => emitSignal(s));
+    act(() => {
+      vi.advanceTimersByTime(10); // t=310
+      emitSignal(s);
+    });
+    act(() => vi.advanceTimersByTime(299)); // t=609
+    expect(notified).toEqual([]);
+    act(() => vi.advanceTimersByTime(1)); // t=610
     expect(notified).toEqual([formatToastText(s)]);
+  });
+
+  it("unmount 清掉待發的通知 timer(離開頁面後不再冒出來)", () => {
+    hidden = true;
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("a")));
+    hook.unmount();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(notified).toEqual([]);
   });
 });
 
@@ -256,8 +465,9 @@ describe("useSignalAlerts — 音效與靜音", () => {
     const s = sig("a");
     act(() => emitSignal(s));
     expect(oscillators).toBe(0);
-    expect(notified).toEqual([formatToastText(s)]);
     expect(hook.result.current.toasts.length).toBe(1);
+    act(() => vi.advanceTimersByTime(300));
+    expect(notified).toEqual([formatToastText(s)]);
   });
 
   it("靜音狀態落 localStorage,新 hook 讀得回來", () => {
