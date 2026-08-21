@@ -56,9 +56,11 @@ export type { TradeKind } from "@/lib/trade-kinds";
 function TradeKindPills({
   value,
   onChange,
+  onInteract,
 }: {
   value: TradeKind;
   onChange: (kind: TradeKind) => void;
+  onInteract: () => void;
 }) {
   return (
     <RadioPills<TradeKind>
@@ -66,6 +68,7 @@ function TradeKindPills({
       className="flex shrink-0 items-center gap-0.5"
       value={value}
       onChange={onChange}
+      onInteract={onInteract}
       items={TRADE_KINDS.map(([v, label]) => ({ value: v, label }))}
       pillClass={(item, checked) =>
         cn(
@@ -477,13 +480,10 @@ export function PriceLadder({
         </label>
       }
       armControls={
-        <TradeKindPills
-          value={tradeKind}
-          onChange={(v) => {
-            touchIdle();
-            setTradeKind(v);
-          }}
-        />
+        /* `touchIdle` 走 `onInteract` 不走 `onChange`(A11Y-6):原生 radio 點已選中的
+           那顆不發 change —— 掛在 onChange 時,一直挑交易別但每次都落在同一顆的使用者
+           等於完全沒操作,閒置計時跑滿就把武裝解掉(而畫面沒有任何訊號)。 */
+        <TradeKindPills value={tradeKind} onChange={setTradeKind} onInteract={touchIdle} />
       }
       footer={<PositionBar rows={posRows} />}
     />
