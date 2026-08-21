@@ -245,8 +245,8 @@ def test_collector_reset_after_abandon_clears_stale_debt() -> None:
 
 
 def test_collector_stale_window_expires_and_empty_round_flushes() -> None:
-    """T5:欠帳是**時間窗**不是計數 —— 窗外的零列 `##` = 帳戶這一輪真的空了,必須 flush。
-    (計數式的失效模式:連續死查詢每輪各記一筆,真空帳戶的空回應被無限期吞掉。)"""
+    """T5:欠帳計數有**時間窗**上限 —— 窗外的零列 `##` = 帳戶這一輪真的空了,欠帳作廢、必須 flush。
+    (純計數的失效模式:連續死查詢每輪各記一筆,真空帳戶的空回應被無限期吞掉。)"""
     got: list[list[object]] = []
     clock = _FakeClock()
     c = BalanceCollector(on_complete=got.append, clock=clock)
@@ -296,8 +296,8 @@ def test_collector_abandon_after_flush_is_noop() -> None:
     assert got == [[], []]  # 下一輪的空回應照常 flush
 
 
-def test_collector_rows_clear_stale_debt() -> None:
-    # 有 row 抵達 = 活的回應(不論屬哪一輪),flush 它就是最新快照 → 欠帳窗關掉
+def test_collector_rows_then_end_marker_flush_and_consume_debt() -> None:
+    # 帶列的 `##` 照 flush(那批列就是它的快照)並消耗一筆欠帳;rows 本身不動欠帳
     got: list[list[object]] = []
     c = BalanceCollector(on_complete=got.append)
     c.reset()
