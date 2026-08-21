@@ -835,3 +835,100 @@ describe("App 個股期合約選擇(SC-4)", () => {
     expect(rail.textContent).not.toContain("F:CDF");
   });
 });
+
+// 🟢 SC-1(D2' / AR2):日曆把真交易日標成假日時,後端 `_resolve_trade_date` 退到最近
+// 交易日、輪詢整天停擺,而畫面上零提示(只有 boot 一行 WARNING 沒人看得到)。
+// 前端判不出「錯標」,能判的只有「日曆說今天休市」—— 真假日也該讓人知道為何靜默。
+describe("App 日曆休市膠囊(SC-1)", () => {
+  function nav() {
+    return screen.getByRole("tablist", { name: "主要分頁" });
+  }
+
+  /** 只覆寫 `/api/calendar` 一條路由,其餘沿用共用 stub(逐字不變)。 */
+  function withCalendar(over: Record<string, unknown>) {
+    const base = appFetch();
+    return vi.fn(async (url: string) => {
+      if (String(url).includes("/api/calendar")) {
+        return new Response(
+          JSON.stringify({
+            today: "2026-10-09",
+            trade_date: "2026-10-08",
+            calendar_trade_date: "2026-10-08",
+            backfill_env: null,
+            holidays: ["2026-10-09"],
+            years_loaded: [2026],
+            calendar_loaded: true,
+            ...over,
+          }),
+        );
+      }
+      return base(url);
+    });
+  }
+
+  /** 負例的 settle 點:等 calendar 真的打過並把 promise chain 排乾,
+   *  否則「還沒回」與「判定不顯示」在 queryBy 下同形。 */
+  async function settleCalendar() {
+    await waitFor(() =>
+      expect(
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some((c) =>
+          String(c[0]).includes("/api/calendar"),
+        ),
+      ).toBe(true),
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("後端今日(平日)在假日清單內 → 膠囊出現,title 帶後端資料日", async () => {
+    vi.stubGlobal("fetch", withCalendar({}));
+    renderApp();
+    const badge = await within(nav()).findByTestId("calendar-holiday-badge");
+    expect(badge.textContent).toBe("日曆判今日休市");
+    expect(badge.getAttribute("title")).toBe(
+      "日曆判今日休市,後端資料日 = 2026-10-08;若今天實際有開盤,更新 configs/trading_holidays.json 並重啟",
+    );
+  });
+
+  it("今日不在假日清單 → 無膠囊(交易日不留常駐雜訊)", async () => {
+    vi.stubGlobal("fetch", withCalendar({ holidays: [] }));
+    renderApp();
+    await settleCalendar();
+    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
+  });
+
+  it("calendar_loaded=false(後端沒載日曆)→ 無膠囊(空集合不代表今天有開盤)", async () => {
+    vi.stubGlobal("fetch", withCalendar({ calendar_loaded: false, holidays: ["2026-10-09"] }));
+    renderApp();
+    await settleCalendar();
+    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
+  });
+
+  // AR8 週末守門:週末本來就休市,每個週末常駐一顆膠囊 = 雜訊,兩週後沒人看得見它。
+  it("今日是週末(即使在假日清單內)→ 無膠囊(週末守門)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withCalendar({ today: "2026-08-16", holidays: ["2026-08-16"], trade_date: "2026-08-14" }),
+    );
+    renderApp();
+    await settleCalendar();
+    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
+  });
+
+  it("calendar 取數失敗 → 無膠囊(降級成現況,不誤報)", async () => {
+    const base = appFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/calendar")) {
+          return new Response(JSON.stringify({ detail: { error: "BOOM" } }), { status: 500 });
+        }
+        return base(url);
+      }),
+    );
+    renderApp();
+    await settleCalendar();
+    expect(within(nav()).queryByTestId("calendar-holiday-badge")).toBeNull();
+  });
+});

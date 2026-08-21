@@ -4,7 +4,13 @@
  *  也是「日曆沒回來」時該有的行為)。 */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { clearHolidays, isTradingDay, isoLocalDate, setHolidays } from "@/lib/trading-calendar";
+import {
+  clearHolidays,
+  isTradingDay,
+  isWeekendIso,
+  isoLocalDate,
+  setHolidays,
+} from "@/lib/trading-calendar";
 
 /** 2026-10-08 四 / 10-09 五(國慶調整假)/ 10-10 六 / 10-11 日。 */
 const THU = new Date(2026, 9, 8, 10, 0);
@@ -60,5 +66,22 @@ describe("isTradingDay", () => {
   it("假日集合含週末日期時週末仍為假(不重複判定也不翻轉)", () => {
     setHolidays(["2026-10-10"]);
     expect(isTradingDay(SAT)).toBe(false);
+  });
+});
+
+// AR8:膠囊的週末守門子。**輸入是後端給的 ISO 字串**(不是 Date)—— 用本機
+// `getDay()` 解析會在時區偏移下把週一算成週日,所以固定以 UTC 午夜解讀。
+describe("isWeekendIso", () => {
+  it("週六 / 週日為 true,週一至週五為 false", () => {
+    expect(isWeekendIso("2026-08-15")).toBe(true); // 週六
+    expect(isWeekendIso("2026-08-16")).toBe(true); // 週日
+    expect(isWeekendIso("2026-08-14")).toBe(false); // 週五
+    expect(isWeekendIso("2026-08-17")).toBe(false); // 週一
+    expect(isWeekendIso("2026-10-09")).toBe(false); // 週五(國定假日仍非週末)
+  });
+
+  it("形狀不合(空字串 / 亂字串)→ false(寧可少擋也不要因 NaN 誤判)", () => {
+    expect(isWeekendIso("")).toBe(false);
+    expect(isWeekendIso("not-a-date")).toBe(false);
   });
 });
