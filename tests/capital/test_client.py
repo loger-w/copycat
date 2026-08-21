@@ -20,6 +20,7 @@ import pytest
 
 import copycat.capital.client as client_mod
 import copycat.stkfut_map as stkfut_map
+from copycat.capital.balance import BalanceCollector
 from copycat.capital.client import CapitalClient
 from copycat.capital.com import CapitalCom
 from copycat.capital.models import (
@@ -1432,6 +1433,132 @@ def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) ->
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
+
+
+_BAL_3357 = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+_BAL_2493 = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
+
+
+class _FakeClock:
+    """collector 專用可注入時鐘:欠帳時間窗要驗「窗內/窗外」兩態,
+    真時鐘會逼測試 sleep 20s(且 Windows time.monotonic 解析度 15.6ms,量不準)。"""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _seed_positions_via_round(client: CapitalClient, raw: str) -> None:
+    """真餵一輪把部位做出來(不用 store.set_positions)—— collector 因此不是處女態
+    (上一輪收過 rows / 已 flush),放棄輪守門的跨輪狀態才真的被考驗(review T2)。"""
+    client._handle_balance(raw)
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+
+
+def test_dead_query_unlock_clears_inflight_and_abandons_once(tmp_path: Path) -> None:
+    """F1/T1:逾期解卡分支必須**同時**清 `_balance_inflight_until`。旗標留著的話,
+    幫浦圈每 50ms 重入這條路徑:每圈再 abandon 一次 —— 欠帳窗被一路往後推、
+    staging 每圈被清空,真回應永遠拼不完整(比原 bug 更糟)。
+    abandon 一次即止,且不影響其後真回應走完鏈。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
+    assert _balance_queries(com) == 1
+
+    calls: list[float | None] = []
+    real_abandon = client._balance.abandon
+
+    def _spy(now_monotonic: float | None = None) -> None:
+        calls.append(now_monotonic)
+        real_abandon(now_monotonic)
+
+    client._balance.abandon = _spy  # type: ignore[method-assign]
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._balance_due = None  # 沒有待查 → 解卡後這一圈不會發新查詢
+    client._balance_last_ts = time.monotonic()  # stale 也不到
+    for _ in range(5):
+        client._maybe_query_balance()
+    assert len(calls) == 1  # 只放棄一次,不是每圈一次
+    assert client._balance_inflight_until is None
+    assert _balance_queries(com) == 1
+    assert client._balance._stale_until is not None  # 欠帳窗開著(擋遲到的零列 ##)
+
+    client._balance.abandon = real_abandon  # type: ignore[method-assign]
+    client._handle_balance(_BAL_2493)  # 之後的真回應照常走完鏈
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
+
+
+def test_empty_account_clears_positions_after_stale_window(tmp_path: Path) -> None:
+    """F2:欠帳若是「計數」就會對真空帳戶自我延續 —— 每輪死查詢記一筆欠帳、
+    每輪零列 `##` 被吞,幽靈部位永不清空(全出清的帳戶永遠顯示有庫存)。
+    改時間窗後:窗內(STALE_WINDOW_S)的零列終止符才當遲到吞掉,
+    窗外照 flush 空集合 → 最晚下一輪(≤60s)清空。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    clock = _FakeClock()
+    client._balance = BalanceCollector(on_complete=client._on_balance_complete, clock=clock)
+    _mark_ready(client)
+    _seed_positions_via_round(client, _BAL_3357)
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+
+    # 第 1 輪:零事件死查詢 → 逾期解卡放棄 → 遲到的零列 `##`(窗內)必須吞掉
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 2
+    client._handle_balance("##")
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    assert client._pending_sec is None  # 鏈不得被空集合啟動
+
+    # 第 2 輪:又一次死查詢 → 又放棄(計數式欠帳在這裡開始自我延續)
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    assert _balance_queries(com) == 3
+    # 窗過期後的零列 `##` = 帳戶真的空了 → 照 flush,部位清空
+    clock.now += 25.0
+    client._handle_balance("##")
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    assert client.store.positions() == []
+
+
+def test_requery_rc_failure_keeps_abandon_debt(tmp_path: Path) -> None:
+    """F3:`_balance_abandoned` 只有在查詢真的出手(rc==0)後才可以清。
+    rc≠0(1019 查詢處理中)= 鏈根本沒啟動,放棄輪的 `##` 還在路上;旗標先清掉的話,
+    下一次成功查詢的 reset 會把欠帳窗一併清掉 → 遲到的零列 `##` 照 flush 清空部位。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    _seed_positions_via_round(client, _BAL_3357)
+
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
+    com.balance_rc = 1019
+    client._balance_due = time.monotonic() - 1.0
+    client._balance_inflight_until = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 解卡放棄 + 重查被 1019 擋下(鏈沒啟動)
+    assert client._balance_abandoned is True
+
+    com.balance_rc = 0
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()  # 這次真的發出去
+    assert _balance_queries(com) == 3
+    assert client._balance_abandoned is False  # 出手後才交棒給 collector 的時間窗
+    client._handle_balance("##")  # 第一輪遲到的零列終止符(窗內)→ 吞掉
+    assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
+    assert client._pending_sec is None
 
 
 def test_balance_query_rc_failure_rearms_due_with_backoff(tmp_path: Path) -> None:
