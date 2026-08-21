@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 
 import { useBreadthRows } from "@/hooks/useBreadthRows";
 import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+import { monthDay } from "@/lib/format";
 import { isoLocalDate } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
 import type { BreadthRow } from "@/types";
@@ -258,12 +259,6 @@ function amountText(v: number | null): string {
 
 function decimalText(v: number | null): string {
   return v === null ? "—" : v.toFixed(2);
-}
-
-/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
- *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
-function monthDay(iso: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
 }
 
 // ---------------------------------------------------------------------------

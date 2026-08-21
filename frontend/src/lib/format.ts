@@ -36,6 +36,12 @@ export function fmt(milli: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, "");
 }
 
+/** `YYYY-MM-DD` → `MM-DD`(SC-10)。年份在盤面上是雜訊,而月日是「這是哪一天的收盤」
+ *  唯一需要的資訊;形狀不合就原樣印出來(寧可醜也不要靜默切錯字串)。 */
+export function monthDay(iso: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.slice(5) : iso;
+}
+
 /** 指數軸帶用的價位文字(index 態的 y 刻度 / CDP `價位*` / MA 價位標 / 掛牌 / hover 價標)。
  *
  *  `fmt` 口徑但**超過 6 字就收整數點**:左緣價位帶 `Y_AXIS_W` 36px / 右緣 40px 是為個股
