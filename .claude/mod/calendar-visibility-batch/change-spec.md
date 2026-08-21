@@ -94,3 +94,6 @@ R3b 交易日盤前冷啟動(待 user 拍板);後端 boot WARNING 文案;週末�
   (後端同源「今天非交易日」判定涵蓋補班日;最後一項為 stale 保險絲:payload 跨日未更新 → 寧可不亮)。
 - **route 取樣順序(C-1)**:`trade_date` / `today` 在 `await to_thread(today_signals)` **之前**取樣(錯位只錯向舊日)。
 - C-5 / C-4:docstring 註明窗的時鐘不吃 `now_fn`;useSignalFeed 註明 ≤5 分前提為分頁可見、與 daily_bars 同 executor。C-6:`stale = Boolean(tradeDate) && Boolean(today) && tradeDate !== today`。
+
+## self_review_head
+8341525e
