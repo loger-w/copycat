@@ -428,16 +428,25 @@ class TestSignalsTodayRoute:
         `trade_date` = hub 的引擎日別、`today` = hub 牆鐘日(與 `today_signals()` 取
         聯集的那顆時鐘同源,AR7)。缺欄的失效樣態是前端永遠印「今日訊號」:假日開站
         掛的是上一交易日的訊號,畫面上零提示 —— 所以在這裡把兩欄的來源釘死。
+
+        **日期取 2019 年**(review TQ-4):原本用的是撰寫當日附近的日期,而
+        `_now_fn` / `_trade_date_fn` 若哪天被繞過(route 改讀真牆鐘),期望值恰好等於
+        真牆鐘的那幾天測試會靜默假綠。2019-03-01(五)/ 03-04(一)永遠不會等於執行
+        當下的牆鐘。
+
+        **形狀全等**(review TQ-8):`set(body)` 而不是逐鍵 in —— 多一個欄位(例如把
+        內部狀態順手掛上去)在逐鍵斷言下是沉默的,而回傳體是跨檔契約。
         """
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
             hub = app.state.signal_hub
             assert hub is not None
-            hub._trade_date_fn = lambda: "2026-08-20"  # 引擎日別
-            hub._now_fn = lambda: _dt.datetime(2026, 8, 21, 9, 30, 0)  # 牆鐘
+            hub._trade_date_fn = lambda: "2019-03-01"  # 引擎日別
+            hub._now_fn = lambda: _dt.datetime(2019, 3, 4, 9, 30, 0)  # 牆鐘
             body = client.get("/api/stock/signals/today").json()
-        assert body["trade_date"] == "2026-08-20"
-        assert body["today"] == "2026-08-21"
+        assert body["trade_date"] == "2019-03-01"
+        assert body["today"] == "2019-03-04"
+        assert set(body) == {"signals", "trade_date", "today"}
 
     def test_dates_are_sampled_before_the_await(self, tmp_path: Path) -> None:
         """review C-1:兩個日期必須在 `await to_thread(today_signals)` **之前**取樣。
