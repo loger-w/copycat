@@ -326,7 +326,8 @@ class TestSnapshotTape:
             st.ingest(_tick(10 + i, price=2_380_000 + i * 1_000))
         full = st.snapshot()
         assert len(full["ticks"]) == 5  # 基準非空,否則兩邊都空是 vacuous
-        st.ticks.append(_ExplodingTick())  # type: ignore[arg-type]
+        # 用 appendleft:`last` 是 `ticks[-1]`,塞在尾端會連帶改掉基準值
+        st.ticks.appendleft(_ExplodingTick())  # type: ignore[arg-type]
         light = st.snapshot(tape=False)
         assert light["ticks"] == []
         # tape 以外一鍵不少、一值不改(route 的 `tape=0` 只省 tape)
