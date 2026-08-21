@@ -1,0 +1,84 @@
+{
+ "round": 2,
+ "scope": "narrow",
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "A1",
+   "severity": "P0",
+   "summary": "192 字面時刻與公式衝突",
+   "disposition": "accepted",
+   "resolution": "絕對時刻表"
+  },
+  {
+   "id": "A2",
+   "severity": "P1",
+   "summary": "VISIBLE 位置條件無真值來源",
+   "disposition": "accepted",
+   "resolution": "刪位置條件 + 合併時純 reorder 到首"
+  },
+  {
+   "id": "A3",
+   "severity": "P1",
+   "summary": "drop 以 toastKey 刪不到 groupKey;stale drop 抹新 entry",
+   "disposition": "accepted",
+   "resolution": "groupKey 欄 + 守衛刪除"
+  },
+  {
+   "id": "A4",
+   "severity": "P1",
+   "summary": "165 推進 5500 越過 TTL",
+   "disposition": "accepted",
+   "resolution": "推進 400"
+  },
+  {
+   "id": "A5",
+   "severity": "P1",
+   "summary": "228/173 在 trailing 下 vacuous",
+   "disposition": "accepted",
+   "resolution": "絕對時刻"
+  },
+  {
+   "id": "A6",
+   "severity": "P2",
+   "summary": "StrictMode 案鎖不到 updater 純度",
+   "disposition": "accepted",
+   "resolution": "items.length + text 字面"
+  },
+  {
+   "id": "A7",
+   "severity": "P2",
+   "summary": "key 兩義",
+   "disposition": "accepted",
+   "resolution": "明寫兩欄"
+  },
+  {
+   "id": "A8",
+   "severity": "P2",
+   "summary": "空 name filter 未寫",
+   "disposition": "accepted",
+   "resolution": "沿用 filter + 測試"
+  },
+  {
+   "id": "A9",
+   "severity": "P2",
+   "summary": "本體舊句未標",
+   "disposition": "accepted",
+   "resolution": "就地標記"
+  },
+  {
+   "id": "A10",
+   "severity": "P2",
+   "summary": "as any 擋 eslint",
+   "disposition": "accepted",
+   "resolution": "declare global"
+  },
+  {
+   "id": "A11",
+   "severity": "P2",
+   "summary": "500ms 可見窗太短",
+   "disposition": "accepted",
+   "resolution": "1500ms"
+  }
+ ]
+}

@@ -3,14 +3,14 @@
 分流判定:已成形方案(§R3 指名檔案與做法;預核准)。Scope:**M**(2 源檔 + 測試)。現況見 `current-state.md`。
 
 ## 拍板(auto-default)
-- **D1 toast 合併鍵 = (code, time)**,與 `groupSignals` 同口徑;合併對象 = 佇列中**仍存在**(未 TTL 到期、未被 dismiss)的同鍵 toast,
+- `[amendment → 見末節 R5 / A2 / A11]` **D1 toast 合併鍵 = (code, time)**,與 `groupSignals` 同口徑;合併對象 = 佇列中**仍存在**(未 TTL 到期、未被 dismiss)的同鍵 toast,
   搜整個佇列不限相鄰(佇列最多十幾張)。`[auto-default | reason: 同 tick 三則到達間隔 ms 級,TTL 5s 內必在;兩檔交錯時 rail 的相鄰規則是為了不吃掉中間列,toast 佇列無此顧慮]`
-- **D2 合併文案 `formatGroupToastText(group)`**(signal-model 新 export):`code name <kind 段以「・」串接(groupKindLabels 到達序去重)> price`,
+- `[amendment → 見末節 R3 / A7 / A8]` **D2 合併文案 `formatGroupToastText(group)`**(signal-model 新 export):`code name <kind 段以「・」串接(groupKindLabels 到達序去重)> price`,
   price = 組內最早到那則(同 groupSignals 錨)。**不含規則名**(toast 一行,現行 formatToastText 亦無)。單則組輸出 === `formatToastText(sig)`(lock)。
   `[auto-default | reason: 沿 SignalRail 合併列 kind 段語意;規則名在 rail 另起一行,toast 放不下]`
 - **D3 merge 不重設 TTL、key 不變**(key = 組內首張 toast 的 key)。`[auto-default | reason: ms 級合併,重設無意義;key 不變避免 React 卸載重掛閃爍]`
 - **D4 嗶 = 每新組一聲**(merge 進既有 toast 不嗶)。`[auto-default | reason: §R3 明寫「音效每 tick 一聲即可」]`
-- **D5 桌面通知 latest-wins**:背景分頁收到訊號 → `pending = 該 toast 的合併文案`(同組後到者覆寫);若無排程 timer → 排在
+- `[amendment → 見末節 R6 / R7 / A1 / A5]` **D5 桌面通知 latest-wins**:背景分頁收到訊號 → `pending = 該 toast 的合併文案`(同組後到者覆寫);若無排程 timer → 排在
   `max(now + COALESCE_MS(300), lastSent + NOTIFY_MIN_INTERVAL_MS(5000))` 發送;timer 到 → `notifyDesktop(pending)`,成功則 `lastSent = now`,
   pending 清空;permission 擋掉 → 不記帳(既有語意)、pending 清空。節流不變:任一 5s 窗至多 1 則;固定 tag 不變。
   `[auto-default: 300ms 合併 + trailing | reason: leading 會把未合併的首則推到 OS 且 5s 內無法更新;純 trailing 一個模型即涵蓋「窗內記最後一則、窗尾補發」]`
@@ -32,7 +32,7 @@
 - W4 `formatToastText` 簽名與輸出不變;SignalRail / groupSignals 不動。
 - W5 ToastStack 純展示不動。
 
-## 該紅 / 不該紅(useSignalAlerts.test.tsx)
+## 該紅 / 不該紅(useSignalAlerts.test.tsx)`[amendment → 本節整段由末節「該紅表重寫」取代,勿照此寫]`
 - 該紅(🔴 預告,通知模型改 trailing):`157 分頁隱藏…發桌面通知`(需推進 300ms)、`192 連發 5 秒窗內只發第一則…`(改:300ms 後首則、5s trailing 第二則文案 = 最後一則)、
   `216 背景爆量 20 則 → 恰 1 則`(改:≤ 同 tick 併一張 → toast 佇列 1 張 + 0 overflow;通知 300ms 後 1 則)、`228 窗內被 permission 擋掉…`(推進 300ms)、
   `252 靜音…Notification 照發`(推進 300ms)、`183 tag 固定`(推進 300ms)。**佇列案 103「連發 20 則 → 4 + 16」**:fixture 若同 code+time 會併成 1 張 →
@@ -46,7 +46,7 @@ Discord 合併訊息(後端已做)、SignalRail、toast 顯示規則名、通知
 1. 同 code 同 time 但跨 TTL(第一張已消失)→ 新張(不復活)。
 2. 兩檔交錯同秒(A,B,A')→ A 與 A' 併、B 獨立(D1 搜整佇列)。
 3. 同 kind 兩規則同 tick → kind 段去重 → 文案只一段(沿 groupKindLabels)。
-4. 背景通知 pending 期間分頁轉前景 → timer 照發(pending 是已判定背景時收的)`[auto-default]`。
+4. `[amendment → 末節 R4:fire 時重驗 hidden,可見則丟棄]` ~~背景通知 pending 期間分頁轉前景 → timer 照發~~(pending 是已判定背景時收的)`[auto-default]`。
 5. unmount 時 pending timer 清掉,不發。
 
 ## Diff 級
@@ -75,3 +75,17 @@ Discord 合併訊息(後端已做)、SignalRail、toast 顯示規則名、通知
 - **SC-5 注入手段(R11)**:臨時 `if (import.meta.env.DEV) (window as any).__emitSignal = emitSignal;`(signal-bus.ts,**截圖後同 PR 內移除**);payload 三則同 code 2330 / 同 time / kind cdp_cross、surge、vol_burst。
 - R12:current-state caller 結論 = 唯一掛載點 App.tsx:163(→ ToastStack App.tsx:400),StockPage 僅共用 useSignalSound;per-hook ref 即全域。
 - R13:同批改寫 useSignalAlerts.ts:76-80 / 132-139 註解為 trailing 模型。
+
+---
+## Spec review round 2 amendments(限縮輪,`change-spec-review-round-2.json`,11 條全 accepted;收斂)
+
+- **A1 192 絕對時刻表**:t=0 emit a、b → t=299 → 0 則、t=300 → 1 則(文案 = b,lastSent=300)→ t=5299 emit b2 → 仍 1 則 → t=5300 emit c(pending 覆寫為 c)→ t=5598 → 仍 1 則、t=5599 → 2 則(文案 = c,= max(5299+300, 300+5000))。測試標題改「300ms 合併 + lastSent+5s 窗尾補發」。
+- **A2 / A11 D1'' 合併條件**:刪「前 VISIBLE 張內」;改為「同鍵 entry 存在且 TTL 剩餘 ≥ 1500ms」才合併(真值 = `groupIndexRef` 的 `expiresAt`);**合併時在 `setQueue` updater 內把該張純粹地移到佇列首**(key / TTL 不變,純 reorder → overflow 區的張被併也會浮上來可見)。後到者最短可見 1500ms 為明示 auto-default。
+- **A3 drop 守衛**:`SignalToast` 內帶 `groupKey`(`"code|time"`);`drop(toastKey)` 取該 toast 的 groupKey 後 `const g = index.get(groupKey); if (g?.key === toastKey) index.delete(groupKey)`(stale drop 不得刪新 entry)。SC 補:舊張 TTL 到期後,同鍵新訊號仍併入新張。
+- **A4 165**:先斷言 toasts 1,`advanceTimersByTime(400)` 後斷言 notified 空(推進量 < TTL)。
+- **A5 228 / 173 絕對時刻**:t=0 emit a(permission default)→ t=300 timer 觸發、notifyDesktop false、lastSent 仍 −Infinity、pending 清空、notified 空 → t=310 轉 granted、emit b → t=610 恰 1 則(誤記帳會延到 5300,斷言抓得到)。SC-3 併入同組時刻。
+- **A6 StrictMode 案**:加字面斷言 `items.length === 3` 與 text === `2330 台積電 cdp_cross・surge・vol_burst <price>`(kindLabel 現回 kind 原字)。
+- **A7 兩種 key 明寫**:`SignalToast.key = id#seq`(React key,永不變);hook 內建構給 `formatGroupToastText` 的 `SignalGroup.key = items.at(-1).id`(不外露)。137 補充案改「同 (code,time) 被 D1'' 判為新張時兩張 toast key 互異」。
+- **A8**:`formatGroupToastText` 沿用 `.filter(x => x !== "")`;signal-model.test 補 name === "" 單則等價案。
+- **A10**:注入口寫 `declare global { interface Window { __emitSignal?: typeof emitSignal } }` + `if (import.meta.env.DEV) window.__emitSignal = emitSignal;`(截圖後移除)。
+- A9:本體五處已就地標 `[amendment → 末節]`。
