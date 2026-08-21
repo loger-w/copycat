@@ -24,8 +24,6 @@ export interface SignalToast {
   sig: SignalMsg;
   /** 組內全部訊號,**新在前**(沿 `SignalGroup.items` 慣例)。 */
   items: SignalMsg[];
-  /** 合併鍵 `code|time` —— 與 `groupSignals` 同口徑(同一 tick 同一檔)。 */
-  groupKey: string;
   text: string;
 }
 
@@ -99,7 +97,12 @@ export function playBeep(): void {
 const NOTIFY_TAG = "copycat-signal";
 /** 通知節流窗:固定 tag 已在 OS 層合併,節流只防通知系統 churn。 */
 const NOTIFY_MIN_INTERVAL_MS = 5_000;
-/** 合併窗:同一 tick 的數則(ms 級間隔)先併起來再發,OS 上只出現一則完整文案。 */
+/** 合併窗:同一 tick 的數則(ms 級間隔)先併起來再發,OS 上只出現一則完整文案。
+ *
+ *  **真實背景分頁量不到 300ms**(review C1):瀏覽器對隱藏分頁的 setTimeout 有最低
+ *  1s 的 clamp,而這個 timer 恰好只在 `document.hidden` 時才排 —— 實際合併窗 ≈1s。
+ *  對本用途是可接受的(甚至更能把同 tick 收齊);要縮短得換 Web Worker 或
+ *  `requestIdleCallback` 之類的載體,不成比例。首則通知的延遲觀感留 user 過目量測。 */
 const COALESCE_MS = 300;
 
 /** 分頁在背景時才發桌面通知 —— 前景有 toast,兩個一起跳是重複打擾。
@@ -128,7 +131,13 @@ export function useSignalAlerts() {
   const lastNotifyRef = useRef(-Infinity);
   /** 合併真值:`code|time` → 目前承接該組的 toast。**放 ref 不放 state** ——
    *  `setQueue` 的 updater 必須是純函式(StrictMode 會 double-invoke),累加 items
-   *  這種副作用得在 updater 之外先算完。 */
+   *  這種副作用得在 updater 之外先算完。
+   *
+   *  `expiresAt` 是**牆鐘**(`Date.now() + TTL_MS`),真正讓 toast 消失的卻是
+   *  `setTimeout`(單調時鐘)—— 兩把尺(review C4)。NTP 回跳時「TTL 剩餘」會被高估
+   *  幾秒,後果僅止於該組多併一則進去(舊那張仍照原時間消失,合併分支不重排 timer)。
+   *  取捨與 `lastNotifyRef` 同一套:改用 `performance.now()` 得把 fake timer 之外
+   *  再假造一支時鐘,測試成本不成比例。 */
   const groupIndexRef = useRef(
     new Map<string, { key: string; items: SignalMsg[]; expiresAt: number }>(),
   );
@@ -177,11 +186,13 @@ export function useSignalAlerts() {
       const index = groupIndexRef.current;
       const groupKey = `${sig.code}|${sig.time}`;
       const entry = index.get(groupKey);
-      // 合併條件(spec D1''):同鍵那張還在,且 TTL 剩餘夠久值得併進去。
-      const merge = entry !== undefined && entry.expiresAt - now >= MERGE_MIN_REMAIN_MS;
       let text: string;
 
-      if (entry !== undefined && merge) {
+      // 合併條件(spec D1''):同鍵那張還在,且 TTL 剩餘夠久值得併進去。
+      // 條件只寫一次 —— 拆成 `const merge = …` 再 `if (entry !== undefined && merge)`
+      // 時,兩處都得跟著改才不會漂,而後者的 `entry !== undefined` 只是為了讓
+      // TypeScript 收斂型別、讀起來像是又多一個條件(review C8)。
+      if (entry !== undefined && entry.expiresAt - now >= MERGE_MIN_REMAIN_MS) {
         const items = [sig, ...entry.items];
         const anchor = items.at(-1) ?? sig;
         const toastKey = entry.key;
@@ -200,7 +211,7 @@ export function useSignalAlerts() {
         const items = [sig];
         text = formatGroupToastText(toGroup(sig, items));
         index.set(groupKey, { key, items, expiresAt: now + TTL_MS });
-        setQueue((prev) => [{ key, sig, items, groupKey, text }, ...prev]);
+        setQueue((prev) => [{ key, sig, items, text }, ...prev]);
         timersRef.current.set(
           key,
           window.setTimeout(() => drop(key), TTL_MS),
@@ -226,6 +237,10 @@ export function useSignalAlerts() {
     });
     const timers = timersRef.current;
     const index = groupIndexRef.current;
+    // 清 timer / index / pending,**刻意不清 `queue`**(review C5):deps 恆定 →
+    // 這個 effect 一輩子只掛一次,cleanup 只在真的卸載(整個 App 收掉)或 StrictMode
+    // 的模擬重掛時跑。前者清了也沒人看,後者清掉反而會把重掛前那一瞬收到的 toast
+    // 洗掉。清 timer / index 是必要的(它們會外溢到重掛後的那條命)。
     return () => {
       off();
       for (const timer of timers.values()) window.clearTimeout(timer);

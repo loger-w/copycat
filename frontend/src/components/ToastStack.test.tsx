@@ -26,8 +26,8 @@ function sig(id: string): SignalMsg {
 
 function toast(i: number): SignalToast {
   const s = sig(`id${i}`);
-  // items / groupKey 是合併後的欄位(ToastStack 純展示 text,不讀這兩欄)
-  return { key: `k${i}`, sig: s, items: [s], groupKey: `${s.code}|${s.time}`, text: `訊號 ${i}` };
+  // items 是合併後的欄位(ToastStack 純展示 text,不讀它)
+  return { key: `k${i}`, sig: s, items: [s], text: `訊號 ${i}` };
 }
 
 describe("ToastStack", () => {
