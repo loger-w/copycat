@@ -1182,8 +1182,11 @@ describe("PriceLadder 交易別四顆 pill(batch2 R6 SC-1)", () => {
     expect(pillLabel(pills[2]!).className).toContain("border-warn");
     expect(pillLabel(pills[2]!).className).not.toContain("border-accent");
     expect(pillLabel(pills[0]!).className).toContain("border-line");
-    // 舊 select 已退場
+    // 舊 select 已退場;TC-7:群組內也不得殘留任何 `<button>`(舊 pill 實作)——
+    // 只查 select 的話,「radio 群旁邊還掛著一排舊 button」這個中間態全綠,而畫面上
+    // 會出現兩套交易別 UI(其中一套不改真正送單用的 state)。
     expect(group.querySelector("select")).toBeNull();
+    expect(within(group).queryAllByRole("button").length).toBe(0);
     // 與鎖定鈕同列,pill 群 shrink-0(288px 右欄由武裝鈕吸收壓縮)
     const lock = screen.getByRole("button", { name: "鎖定" });
     expect(group.parentElement).toBe(lock.parentElement);

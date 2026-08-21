@@ -228,6 +228,10 @@ describe("GroupGridView 群組切換 pill", () => {
     // 容器名稱契約 + select 真的走了(留著兩套切換 UI 才是最糟的中間態)
     const rail = screen.getByLabelText("選擇群組");
     expect(rail.getAttribute("role")).toBe("radiogroup");
+    // TC-9:「群組」這個前綴字走 `leading` slot 留在容器內、排在所有 pill 之前 ——
+    // 沒有斷言的話它掉了 / 跑到最後面都不會紅(而那一列就從「群組 半導體 金融」
+    // 變成「半導體 金融」,少了它使用者不知道這排 pill 在選什麼)。
+    expect(rail.firstElementChild?.textContent).toBe("群組");
     expect(screen.queryByRole("combobox")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
     expect(screen.getByTestId("group-card-2317")).toBeTruthy();
