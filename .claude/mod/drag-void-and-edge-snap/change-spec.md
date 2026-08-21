@@ -59,3 +59,6 @@
 - **R6 語意界定**:作廢帶 = (−∞, sticky.bottom),含建議清單展開時的延伸與側欄上方區域(皆遮蓋或不在側欄內,刻意);`<` 不改 `<=`。Edge case 補兩條。
 - **R7**:move 命中作廢帶 → `to` 設回 `from`(高亮回來源組);SC-1 加 hover 態斷言(drag.to === from)。
 - R8:caller 補 `FuturesPage.tsx:20` re-export(optional 參數相容,無需改)。
+
+## self_review_head
+4fdc81d6
