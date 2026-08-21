@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
+import { ArmRow } from "@/components/ladder/ArmRow";
 import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
 import {
   useCancelOrder,
@@ -351,47 +352,23 @@ export function FuturesLadder({
       ) : null}
       {/* 武裝列:武裝/解除 + 當沖 + 口數快捷 + 全撤/平倉 */}
       <div className="border-b border-line px-2 py-1.5">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-pressed={arm.state.armed}
-            /* disabled 只擋進入方向:已武裝時解除鈕恆可按(review R2) */
-            disabled={contract === null && !arm.state.armed}
-            title={contract === null ? "合約未解析" : undefined}
-            onClick={() => {
-              touchIdle();
-              dispatchArm({ type: "toggle" });
-            }}
-            className={cn(
-              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
-              arm.state.armed
-                ? "border-loss bg-loss text-bg"
-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
-              contract === null && !arm.state.armed && "opacity-40",
-            )}
-          >
-            {arm.state.armed ? "解除" : "武裝"}
-          </button>
-          {/* 鎖定鈕(LadderView 的第三份複本;三梯合一屬 out of scope,見 change-spec §8) */}
-          <button
-            type="button"
-            aria-pressed={arm.state.locked}
-            disabled={lockDisabled}
-            title={lockDisabled && arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
-            onClick={() => {
-              touchIdle();
-              dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
-            }}
-            className={cn(
-              "shrink-0 rounded border px-2 py-1 text-xs font-bold",
-              arm.state.locked
-                ? "border-accent bg-accent text-bg"
-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
-              lockDisabled && "opacity-40",
-            )}
-          >
-            {arm.state.locked ? "鎖定中" : "鎖定"}
-          </button>
+        <ArmRow
+          className="flex items-center gap-2"
+          armed={arm.state.armed}
+          armDisabled={contract === null}
+          armTitle={contract === null ? "合約未解析" : undefined}
+          onToggleArm={() => {
+            touchIdle();
+            dispatchArm({ type: "toggle" });
+          }}
+          locked={arm.state.locked}
+          lockDisabled={lockDisabled}
+          lockTitle={lockDisabled && arm.wsStatus !== "open" ? LOCK_WS_TITLE : LOCK_TITLE}
+          onToggleLock={() => {
+            touchIdle();
+            dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
+          }}
+        >
           <label className="flex items-center gap-1 text-xs text-ink-muted">
             <input
               type="checkbox"
@@ -405,7 +382,7 @@ export function FuturesLadder({
             />
             當沖
           </label>
-        </div>
+        </ArmRow>
         <div className="mt-1 flex items-center gap-1">
           {QTY_PRESETS.map((p) => (
             <button
