@@ -819,3 +819,71 @@ describe("useStockStream(主圖 trial 補寫)", () => {
     expect(hook.result.current.accum?.trial).toBe(false);
   });
 });
+
+// 🔴 SC-4:群組檢視沒有明細 / 主圖讀者,點卡片那趟不該把整份 tape(deque 上限兩萬筆,
+// 盤中實測 0.5–1.5 MB/檔)拖回來。`tape` 必須比照 code / contract 走 **ref**:WS callback
+// 是 `[]` deps 的閉包,由它捕獲的話「切回單檔之後由 seq-gap 觸發的那次 refetch」還會用
+// 掛載當時的舊值 → 主圖永遠拿不到 tape,而畫面只是「明細一直空著」。
+describe("useStockStream(tape 選項)", () => {
+  const C9 = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
+
+  function stateUrls(): string[] {
+    return fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.startsWith("/api/stock/state/"));
+  }
+
+  async function setupTape(tape: boolean, contract: StkfutSelection | null = null) {
+    const hook = renderHook(({ t }: { t: boolean }) => useStockStream("2330", contract, { tape: t }), {
+      initialProps: { t: tape },
+      wrapper,
+    });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    return { hook, ws: FakeWS.instances[0]! };
+  }
+
+  it("tape=false → URL 帶 tape=0(現貨態用 ?)", async () => {
+    await setupTape(false);
+    expect(stateUrls()).toEqual(["/api/stock/state/2330?tape=0"]);
+  });
+
+  it("tape=false + 合約態 → 兩個 query 用 & 接(順序固定)", async () => {
+    await setupTape(false, C9);
+    expect(stateUrls()).toEqual(["/api/stock/state/2330?contract=CDF:202609&tape=0"]);
+  });
+
+  it("tape=true(預設語意)→ URL 逐字不變", async () => {
+    await setupTape(true);
+    expect(stateUrls()).toEqual(["/api/stock/state/2330"]);
+  });
+
+  it("false→true 補打一次全量;true→false 不打(多出來的 ticks 無害)", async () => {
+    const { hook } = await setupTape(false);
+    const before = stateUrls().length;
+    await act(async () => {
+      hook.rerender({ t: true });
+    });
+    await waitFor(() => expect(stateUrls().length).toBe(before + 1));
+    expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
+    const afterUp = stateUrls().length;
+    await act(async () => {
+      hook.rerender({ t: false });
+    });
+    // 再排一輪 microtask/macrotask,確認「不打」不是還沒打
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stateUrls().length).toBe(afterUp);
+  });
+
+  it("WS 掛載期閉包用的是**當下**的 tape:切回單檔後的 seq-gap refetch 要全量", async () => {
+    const { hook, ws } = await setupTape(false);
+    await act(async () => {
+      hook.rerender({ t: true });
+    });
+    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(1));
+    act(() => ws.emit(T(9))); // 1→9 跳號 → WS handler 內的 refetch
+    await waitFor(() => expect(stateUrls().length).toBeGreaterThan(2));
+    expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
+  });
+});
