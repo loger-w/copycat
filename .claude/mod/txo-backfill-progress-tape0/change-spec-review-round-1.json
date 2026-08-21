@@ -1,0 +1,83 @@
+{
+ "round": 1,
+ "reviewer": "change-spec-reviewer(opus)",
+ "findings": [
+  {
+   "id": "R1",
+   "severity": "P0",
+   "summary": "tape 未 ref 化 → [] deps 閉包捕獲舊值",
+   "disposition": "accepted",
+   "resolution": "tapeRef"
+  },
+  {
+   "id": "R2",
+   "severity": "P1",
+   "summary": "tapeOmittedRef 競態 / 來源未定",
+   "disposition": "accepted",
+   "resolution": "無條件 transition refetch"
+  },
+  {
+   "id": "R3",
+   "severity": "P1",
+   "summary": "必填 prop 打紅 StockPage.test 全檔",
+   "disposition": "accepted",
+   "resolution": "optional onViewChange,view 留 StockPage"
+  },
+  {
+   "id": "R4",
+   "severity": "P1",
+   "summary": "SC-1 overflow 機制不存在、yield 序列 flaky",
+   "disposition": "accepted",
+   "resolution": "fake 設 overflowed + Event 交握"
+  },
+  {
+   "id": "R5",
+   "severity": "P2",
+   "summary": "_handover 寫入不 bump version",
+   "disposition": "accepted",
+   "resolution": "_mark_changed"
+  },
+  {
+   "id": "R6",
+   "severity": "P2",
+   "summary": "merge 舊欄配對錯位",
+   "disposition": "accepted",
+   "resolution": "不 merge"
+  },
+  {
+   "id": "R7",
+   "severity": "P2",
+   "summary": "tape:int 422 違契約",
+   "disposition": "accepted",
+   "resolution": "str"
+  },
+  {
+   "id": "R8",
+   "severity": "P2",
+   "summary": "route 層清 ticks 不省 CPU",
+   "disposition": "accepted",
+   "resolution": "snapshot(tape=False)"
+  },
+  {
+   "id": "R9",
+   "severity": "P2",
+   "summary": "SC-5 可當日自證;該紅漏檔",
+   "disposition": "accepted",
+   "resolution": "curl 對照 + 補檔"
+  },
+  {
+   "id": "R10",
+   "severity": "P2",
+   "summary": "group-state out of scope 無依據",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "R11",
+   "severity": "P2",
+   "summary": "推播節奏改動未標",
+   "disposition": "accepted",
+   "resolution": "commit 註明"
+  }
+ ]
+}
