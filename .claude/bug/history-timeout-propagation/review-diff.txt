@@ -1,0 +1,570 @@
+diff --git a/copycat/live/futures_source.py b/copycat/live/futures_source.py
+index cb58badb..3ba9433c 100644
+--- a/copycat/live/futures_source.py
++++ b/copycat/live/futures_source.py
+@@ -18,7 +18,12 @@ from copycat.live.futures_models import PRODUCTS
+ from copycat.live.river_backfill import collect_1k_minutes
+ from copycat.live.session import in_txo_session
+ from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
+-from copycat.live.tc4 import BARS_POLL_DEADLINE, TC4QuoteSource, always_active
++from copycat.live.tc4 import (
++    BARS_POLL_DEADLINE,
++    HistoryTimeoutError,
++    TC4QuoteSource,
++    always_active,
++)
+ from copycat.tc4common import TC4_DEFAULT_PORT
+ 
+ logger = logging.getLogger(__name__)
+@@ -173,6 +178,11 @@ class FuturesQuoteSource(TC4QuoteSource):
+           —— 這才是 filter 真正擋掉的那段(次日凌晨盤)。
+ 
+         所以 parse 後的台北日期 filter 是**單邊**防線(擋高端);低端不需要它。
++
++        **首頁逾時 → `HistoryTimeoutError`**(bug/history-timeout-propagation):回空的話
++        route 的 tag 是 `"unavailable"`、status 恆 `"ok"`,「TC4 現在忙」與「這個商品真沒
++        K 線」在畫面上長得一模一樣 —— 而前者本來只要重打一次就有。降級由
++        `futures_engine.bars_range` 在引擎內完成(payload 零變),不外洩到 route。
+         """
+         self._ensure_connected()
+         sym = futures_symbol(product)
+@@ -184,12 +194,17 @@ class FuturesQuoteSource(TC4QuoteSource):
+             start = f"{start_date.replace('-', '')}00"
+         end = f"{end_date.replace('-', '')}23"
+         if tf == "1":
+-            rows = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE).rows
++            rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
++            if timed_out:
++                raise HistoryTimeoutError(f"futures bars {sym}(1K):首頁未備妥")
+             if not allday:
+                 return parse_1k_bars(rows, FUTURES_MINUTE_DOMAIN)
+             bars = parse_1k_bars(rows, FUTURES_ALLDAY_DOMAIN)
+             return [b for b in bars if start_date <= b["t"][:10] <= end_date]
+-        return parse_dk_bars(self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE).rows)
++        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
++        if dk_timed_out:
++            raise HistoryTimeoutError(f"futures bars {sym}(DK):首頁未備妥")
++        return parse_dk_bars(dk_rows)
+ 
+     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑;同 stock_source)----
+ 
+diff --git a/copycat/live/river_backfill.py b/copycat/live/river_backfill.py
+index e8e9a45f..03025be0 100644
+--- a/copycat/live/river_backfill.py
++++ b/copycat/live/river_backfill.py
+@@ -17,6 +17,7 @@ import time
+ from typing import Any, Callable
+ 
+ from copycat.live.river_models import all_day_utc_window, parse_1k_minutes
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.tc4common import iter_qry_pages
+ 
+ logger = logging.getLogger(__name__)
+@@ -38,9 +39,13 @@ def collect_1k_minutes(
+ ) -> list[tuple[int, int]]:
+     """SubHistory(1K)→ 首頁退避輪詢 → QryIndex 收割 → `[(minute_end, close 毫點)]`。
+ 
+-    首頁在預算內未備妥 → 回 `[]`(呼叫端據此降級為「只從啟動後累積」)。
++    **首頁在預算內未備妥 → `HistoryTimeoutError`**(2026-08-23 08:23 事故:TXF/TWN/SXF
++    三腿同秒逾時回空 → 引擎讀成「這幾腿今天沒有 1K」,整天不再回補而江波圖缺前半段)。
++    回空是唯一把「暫時取不到」這個訊號丟掉的地方;**首頁備妥但收割 0 列仍回 `[]`**
++    —— TC4 答得出首頁就代表它不忙,空就是空,不該讓引擎排重試。
+     `poll_wait == 0` 是測試組態,語意 = 不等待(探測一次就回,不 busy loop)。
+-    TC4 通訊失敗由 `_req` 收斂成 `ConnectionError` 往外拋 —— 引擎層逐腿降級,不在這裡吞。
++    TC4 通訊失敗由 `_req` 收斂成 `ConnectionError` 往外拋 —— 引擎層逐腿降級,不在這裡吞
++    (`HistoryTimeoutError` 是它的子類,所以沒特別處置的呼叫端行為不變)。
+     """
+     start, end = all_day_utc_window()
+     sub_history(symbol, start, end, "1K")
+@@ -53,8 +58,8 @@ def collect_1k_minutes(
+             break
+         remaining = deadline - time.monotonic()
+         if wait <= 0 or remaining <= 0:
+-            logger.info("1K 回補 %s:%.1fs 內首頁未備妥,回空", symbol, budget)
+-            return []
++            logger.info("1K 回補 %s:%.1fs 內首頁未備妥(timeout,非無資料)", symbol, budget)
++            raise HistoryTimeoutError(f"1K 回補 {symbol}:{budget:.1f}s 內首頁未備妥")
+         time.sleep(min(wait, remaining))
+         wait = min(wait * 2, poll_wait)
+ 
+@@ -64,6 +69,12 @@ def collect_1k_minutes(
+     rows: list[dict] = []
+     for page in iter_qry_pages(_page):
+         rows.extend(page)
+-    minutes = parse_1k_minutes(rows)
++    # 窗口日比對交給 parse_1k_minutes(純 UTC,不做台北換算 —— 窗本身就是 UTC 全天窗)
++    minutes = parse_1k_minutes(rows, start[:8])
++    if rows and not minutes:
++        # 沿 `stock_source._taipei_minute_key` 那條的固定字串:rows 非空但一分鐘都留不下來
++        # = 毒化 / 凍結的 history 訂閱簽名。少了這行,呼叫端只看得到一個空 list,
++        # 與「TC4 真沒這天的資料」無從分辨且全鏈零 log。
++        logger.warning("1K 回補 %s:%d 列全數丟棄(疑似凍結 stub)", symbol, len(rows))
+     logger.info("1K 回補 %s:%d 列 → %d 分鐘", symbol, len(rows), len(minutes))
+     return minutes
+diff --git a/copycat/live/river_models.py b/copycat/live/river_models.py
+index 966f5237..137813c5 100644
+--- a/copycat/live/river_models.py
++++ b/copycat/live/river_models.py
+@@ -165,15 +165,29 @@ def minute_end_from_1k(row: dict) -> int | None:
+     return ((hh + 8) % 24) * 60 + mm
+ 
+ 
+-def parse_1k_minutes(rows: list[dict]) -> list[tuple[int, int]]:
++def parse_1k_minutes(rows: list[dict], utc_day: str | None = None) -> list[tuple[int, int]]:
+     """1K rows → [(minute_end, close 毫點)],保持原始列序。
+ 
+     壞列略過並計數 warning(沿用 `stock_source` 慣例:靜默丟列會讓回補缺口無從診斷)。
+     同一分鐘可能出現多列(收盤 clamp 區)→ 不在這裡去重,由 `RiverState` 的 dict 寫入收斂。
++
++    `utc_day`(`"YYYYMMDD"`,= 回補窗的起點日)給定時,`Date` 存在且不等於它的列一律丟棄。
++    **這裡的比對是純 UTC,刻意不做台北換算**:回補窗本身就是 `all_day_utc_window()` 產的
++    UTC 全天窗(兩個盤別各自完整落在單一 UTC 日),兩邊用同一把尺才不會在夜盤跨午夜那
++    一段自己跟自己錯開。丟的是**凍結 stub**:TC4 對「窗內當下無資料時建立的 history
++    訂閱」回的是別日的殘留列,而 `minute_end_from_1k` 只讀 `Time` → 那些列會變成今日分鐘
++    餵進江波圖,畫出一條來自別天的線且零錯誤訊號(`Date` 缺值的列照舊保留:真實 1K 恆有
++    此欄,缺值只可能是治具/新欄位,不該連帶丟資料)。
+     """
+     out: list[tuple[int, int]] = []
+     skipped = 0
++    dropped = 0
+     for row in rows:
++        if utc_day is not None:
++            raw_date = str(row.get("Date", "") or "")
++            if raw_date and raw_date != utc_day:
++                dropped += 1
++                continue
+         minute = minute_end_from_1k(row)
+         if minute is None:
+             skipped += 1
+@@ -186,6 +200,8 @@ def parse_1k_minutes(rows: list[dict]) -> list[tuple[int, int]]:
+         out.append((minute, close))
+     if skipped:
+         logger.warning("1K rows 解析略過 %d/%d 列(欄位缺漏/格式)", skipped, len(rows))
++    if dropped:
++        logger.warning("1K rows 丟棄 %d/%d 列(Date ≠ 窗口日 %s)", dropped, len(rows), utc_day)
+     return out
+ 
+ 
+diff --git a/copycat/live/stock_source.py b/copycat/live/stock_source.py
+index 63f10883..fa8f6c61 100644
+--- a/copycat/live/stock_source.py
++++ b/copycat/live/stock_source.py
+@@ -19,7 +19,12 @@ import time
+ from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
+ 
+ from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
+-from copycat.live.tc4 import BARS_POLL_DEADLINE, HEAL_VARIANT_AFTER, TC4QuoteSource
++from copycat.live.tc4 import (
++    BARS_POLL_DEADLINE,
++    HEAL_VARIANT_AFTER,
++    HistoryTimeoutError,
++    TC4QuoteSource,
++)
+ from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
+ 
+ logger = logging.getLogger(__name__)
+@@ -585,12 +590,19 @@ class StockQuoteSource(TC4QuoteSource):
+     # ---- 回補(收割分頁;跨 symbol 序列化由 engine worker queue 統籌)----
+ 
+     def backfill(self, code: str) -> list[StockTick]:
++        """當日 tick 回補;**首頁等滿預算仍未備妥 → `HistoryTimeoutError`**。
++
++        回空的話 worker 會把它當成功套用(`_backfilled` 進帳)→ 當日不再重排,
++        分時圖整天空著而零錯誤訊號。逾時與「今天真的沒有成交」在 TC4 協定上只有
++        「有沒有等滿」這一個區分訊號(同 `_collect_history` 的 `timed_out`)。
++        """
+         self._ensure_connected()
+         sym = stock_symbol(code)
+         start, end = stock_window(self._trade_date)
+         self._sub_history(sym, start, end)
+         rows: list[dict] = []
+-        deadline = time.monotonic() + max(self._poll_wait * 30, 1.0)
++        budget = max(self._poll_wait * 30, 1.0)
++        deadline = time.monotonic() + budget
+         while time.monotonic() < deadline:
+             first = self._get_history(sym, start, end, "0")
+             if first.get("HisData"):
+@@ -598,7 +610,7 @@ class StockQuoteSource(TC4QuoteSource):
+             if self._poll_wait:
+                 time.sleep(self._poll_wait)
+         else:
+-            return []
++            raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
+ 
+         def _page(qry_index: str) -> list[dict]:
+             return self._get_history(sym, start, end, qry_index).get("HisData", [])
+@@ -712,16 +724,31 @@ class StockQuoteSource(TC4QuoteSource):
+     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+         """近 n 根日 bar(DK 優先;DK 空/不支援 → 1K 聚合 fallback,股票 1K 一年已實證)。
+ 
+-        含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。"""
++        含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。
++
++        **DK 逾時仍走 fallback、兩段都逾時才 raise**(plan review P0-1):fallback 是
++        「DK 不支援這檔」與「DK 現在忙」共用的那條路,逾時就直接放棄等於把還可能有貨的
++        1K 也一起丟了;反過來,兩段都逾時卻回空,SignalHub 會讀成「無已完成日 K,
++        CDP 停用」而且**永不重試**(空清單 = 資料面沒有;例外 = 暫時性 → X-2b 有限重試)。
++
++        兩段都顯式帶 `BARS_POLL_DEADLINE`:預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞
++        60s,hub 的重試會把 executor 佔滿,而畫面只是疊線遲遲不來(P2-13)。
++        """
+         self._ensure_connected()
+         sym = stock_symbol(code)
+         end_d = _dt.date.today()
+         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
+         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
+-        bars = _parse_dk_rows(self._collect_history(sym, "DK", start, end).rows)
++        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
++        bars = _parse_dk_rows(dk_rows)
+         if not bars:
+             logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
+-            bars = _aggregate_1k_rows(self._collect_history(sym, "1K", start, end).rows)
++            fb_rows, fb_timed_out = self._collect_history(
++                sym, "1K", start, end, BARS_POLL_DEADLINE
++            )
++            if dk_timed_out and fb_timed_out:
++                raise HistoryTimeoutError(f"daily bars {sym}:DK 與 1K 兩段首頁皆未備妥")
++            bars = _aggregate_1k_rows(fb_rows)
+         return bars[-n:]
+ 
+     # ---- listener:原始分派(覆寫 TXO 的 Tick 解析路徑)----
+diff --git a/copycat/live/tc4.py b/copycat/live/tc4.py
+index 848b9383..36101e75 100644
+--- a/copycat/live/tc4.py
++++ b/copycat/live/tc4.py
+@@ -36,6 +36,7 @@ __all__ = [
+     "SPOT_SYMBOL",
+     "TC4_APPID",
+     "TC4_SKEY",
++    "HistoryTimeoutError",
+     "TC4QuoteSource",
+     "group_series",
+     "parse_stkfut_catalog",
+@@ -62,6 +63,20 @@ class HistoryResult(NamedTuple):
+     timed_out: bool
+ 
+ 
++class HistoryTimeoutError(ConnectionError):
++    """歷史首頁在預算內未備妥 —— 「現在取不到」,**不是**「沒有這些資料」。
++
++    **為什麼是 `ConnectionError` 子類**(bug/history-timeout-propagation):六處 caller
++    的上游都已經有 `except ConnectionError` 的降級/重試網(stock_engine 回補 worker、
++    index_engine `_schedule_retry`、futures_engine、corr 訂閱重試)。做成子類 = 那些
++    路徑一行不改就自動接手,只有真的需要分辨的地方才寫 `except HistoryTimeoutError`
++    **先於** `except ConnectionError`;做成獨立例外或三態回傳則要動五個簽名 + 全部 fake。
++
++    `timed_out` 是 TC4 協定側**唯一**能正面取得的「暫時性」訊號(空頁本身沒有原因)。
++    丟掉它 = 逾時被讀成資料面就是沒有 → 全鏈無從重試,而畫面只是一直空著。
++    """
++
++
+ _STALE_THRESHOLD_SECS = 30.0
+ _RECONNECT_BACKOFF_CAP = 60.0
+ #: 自癒重掛的退避上限(秒):同一 symbol 救不回時最慢每 5 分鐘再試一次
+@@ -711,7 +726,10 @@ class TC4QuoteSource:
+             remaining = deadline - time.monotonic()
+             if wait <= 0 or remaining <= 0:
+                 logger.info(
+-                    "history %s(%s): %.1fs 內首頁未備妥,回空", sym, data_type, budget
++                    "history %s(%s): %.1fs 內首頁未備妥,回空(timeout,非無資料)",
++                    sym,
++                    data_type,
++                    budget,
+                 )
+                 return HistoryResult([], True)
+             # 夾到 remaining:最後一輪不睡過頭,總等待恆不超過 budget
+diff --git a/copycat/server/app.py b/copycat/server/app.py
+index 80b21bed..9f41c3b0 100644
+--- a/copycat/server/app.py
++++ b/copycat/server/app.py
+@@ -43,6 +43,7 @@ from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
+ from copycat.server.futures_engine import FuturesEngine, FuturesSource
+ from copycat.server.index_engine import IndexEngine, IndexSource
+ from copycat.live.stock_source import Bar, DailyBar
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server.mis import OtcSnap, fetch_otc_snapshot
+ from copycat.server.bars import (
+     BarsCache,
+@@ -1264,7 +1265,11 @@ def create_app(
+                 bars = await asyncio.wait_for(
+                     stock.daily_bars(code), timeout=OVERLAY_FETCH_TIMEOUT_S
+                 )
+-            except TimeoutError:
++            except (TimeoutError, HistoryTimeoutError):
++                # 兩種逾時同一條路(plan review P0-2):`asyncio.wait_for` 的整體逾時、
++                # 與 TC4 歷史首頁未備妥(`daily_bars` 現在會往外拋)在使用者那一端是
++                # 同一件事 —— 「這一檔現在取不到」。少了後者這半,`ConnectionError`
++                # 的降級接不到它,疊線會變成 500。
+                 # 逾時 = 「這一檔現在取不到」,與 TC4 離線同一種降級:全 null + 200。
+                 # **不寫 cache**(沿 overlay.py 空結果不 cache):快取一則空值等於
+                 # 這檔今天再也拿不到疊線。放掉的是 semaphore 名額 —— `to_thread` 的
+diff --git a/copycat/server/corr_engine.py b/copycat/server/corr_engine.py
+index e79090b3..98f0af5f 100644
+--- a/copycat/server/corr_engine.py
++++ b/copycat/server/corr_engine.py
+@@ -27,9 +27,15 @@ from copycat.live.river_models import minute_end_from_taipei, minute_end_from_ut
+ from copycat.live.river_state import RiverState
+ from copycat.live.session import session_key
+ from copycat.live.stock_models import parse_stock_realtime
++from copycat.live.tc4 import HistoryTimeoutError
+ 
+ logger = logging.getLogger(__name__)
+ 
++#: 逾時腿的重補退避(秒)與輪數上限。真實事故是「三腿同秒逾時 → 整天不再回補」,
++#: 而 TC4 端的 1K 一直都在;沒有輪數上限則反過來變成整天重打必敗請求。
++_BACKFILL_RETRY_SECS = 30.0
++_BACKFILL_RETRY_MAX_ROUNDS = 3
++
+ 
+ def _taipei_hhmmss() -> str:
+     """本機時鐘的台北時刻(server 機器時區 = 台北,同 index_engine 的 txf 時刻處理)。"""
+@@ -105,6 +111,13 @@ class CorrelationEngine:
+         self._river_seq = 0
+         self._backfill_task: asyncio.Task[None] | None = None
+         self._backfill_inflight = False
++        # 逾時腿的重補記帳(bug/history-timeout-propagation):`_backfill_pending_legs`
++        # 由 `_fetch_leg_minutes` 在逾時分支寫入、每輪開頭重置;`_backfill_retry_round`
++        # 是**連續**失敗輪數(補齊一輪就歸零),`_backfill_retry_tasks` 讓 close() 有
++        # 唯一取消點(專用欄位存放會被下一次排程覆寫成孤兒 task)。
++        self._backfill_pending_legs: set[str] = set()
++        self._backfill_retry_round = 0
++        self._backfill_retry_tasks: set[asyncio.Task[None]] = set()
+         # 訂閱失敗腿的唯一重試路徑(照抄 futures_engine 形狀):`_on_reconnect` 只重跑
+         # 江波圖回補、不重訂閱 → 首輪 SUBQUOTE 失敗的腿整天零推播且無錯誤訊號
+         self._resub_interval_secs = resub_interval_secs
+@@ -199,9 +212,13 @@ class CorrelationEngine:
+         tick_task, self._task = self._task, None
+         backfill_task, self._backfill_task = self._backfill_task, None
+         resub_task, self._resub_task = self._resub_task, None
++        # 快照後清空:`add_done_callback` 會在 cancel 期間就地 discard,直接迭代本體
++        # 就是 RuntimeError(而 close 之後的每一步都不會跑)
++        retry_tasks = list(self._backfill_retry_tasks)
++        self._backfill_retry_tasks.clear()
+         # 重試迴圈**排最前**:留著會在 source close 後繼續 subscribe → 重連 TC4
+         # (同 futures_engine close 的理由)
+-        for task in (resub_task, tick_task, backfill_task):
++        for task in (resub_task, tick_task, backfill_task, *retry_tasks):
+             if task is None:
+                 continue
+             task.cancel()
+@@ -272,9 +289,7 @@ class CorrelationEngine:
+                         st.last_update = now
+             else:
+                 bids, asks = self._books.get(leg.key, ([], []))
+-            fresh = (
+-                st.last_update is not None and (now - st.last_update) <= self._config.stale_secs
+-            )
++            fresh = st.last_update is not None and (now - st.last_update) <= self._config.stale_secs
+             st.mid = mid_from_book(bids, asks) if fresh else None
+             mids[leg.key] = st.mid
+         session = self._session_fn()
+@@ -305,8 +320,11 @@ class CorrelationEngine:
+         if self._river_broadcast is not None:
+             self._river_broadcast(self._river.delta(self._river_seq))
+ 
+-    async def _backfill_river(self) -> None:
+-        """逐腿 1K 回補(single-flight);單腿失敗只降級該腿(SC-3)。"""
++    async def _backfill_river(self, legs: set[str] | None = None) -> None:
++        """逐腿 1K 回補(single-flight);單腿失敗只降級該腿(SC-3)。
++
++        `legs` = 只補這些腿(逾時重試輪用)。`None` = 全部腿,與修復前逐字相同。
++        """
+         if self._backfill_inflight:
+             return
+         self._backfill_inflight = True
+@@ -316,13 +334,44 @@ class CorrelationEngine:
+             # 換場邊界上晚到的回補會把狀態機拉回發起時那一場,清掉新場已累積的點並退回舊窗
+             # (Phase 4 自評 finding)。盤別由每秒的 _river_tick 單點驅動;
+             # apply_backfill 自己會用 session 比對丟棄過期回補。
++            self._backfill_pending_legs = set()  # 本輪重新收集(上一輪的名單已用完)
+             for leg in self._config.legs:
++                if legs is not None and leg.key not in legs:
++                    continue
+                 rows = await self._fetch_leg_minutes(leg.key, leg.symbol, leg.source)
+                 if rows:
+                     filled = self._river.apply_backfill(leg.key, rows, session)
+                     logger.info("river 回補 %s:%d 分鐘", leg.key, filled)
++            pending = set(self._backfill_pending_legs)
+         finally:
+             self._backfill_inflight = False
++        # 排程放在 inflight 旗標之外:重試 task 自己也要能通過 single-flight 的門
++        if not pending:
++            self._backfill_retry_round = 0  # 補齊一輪 → 連續失敗歸零
++            return
++        if self._backfill_retry_round >= _BACKFILL_RETRY_MAX_ROUNDS:
++            logger.warning(
++                "river 回補逾時腿 %s 已重試 %d 輪仍未補齊,放棄(只從啟動後累積)",
++                sorted(pending),
++                _BACKFILL_RETRY_MAX_ROUNDS,
++            )
++            return
++        self._backfill_retry_round += 1
++        self._schedule_backfill_retry(pending)
++
++    def _schedule_backfill_retry(self, legs: set[str]) -> None:
++        """`_BACKFILL_RETRY_SECS` 後只補 `legs`;task 進集合供 close() 統一取消。"""
++        loop = self._loop
++        if loop is None:  # close 中 / 尚未 start
++            return
++        task = loop.create_task(self._backfill_retry(legs))
++        self._backfill_retry_tasks.add(task)
++        task.add_done_callback(self._backfill_retry_tasks.discard)
++
++    async def _backfill_retry(self, legs: set[str]) -> None:
++        await asyncio.sleep(_BACKFILL_RETRY_SECS)
++        logger.info("river 回補重試(第 %d 輪):%s", self._backfill_retry_round, sorted(legs))
++        await self._backfill_river(legs=legs)
+ 
+     async def _fetch_leg_minutes(
+         self, key: str, symbol: str, source_kind: str
+@@ -343,6 +392,13 @@ class CorrelationEngine:
+             if source is None:
+                 return []
+             return await asyncio.to_thread(source.fetch_day_1k, symbol)
++        except HistoryTimeoutError:
++            # **先於** ConnectionError(它是子類):TC4 沒掛,只是這一檔的 history 首頁
++            # 還沒備妥 —— 這條路本來就會在幾十秒後成功。舊碼把它與斷線一起降級成
++            # 「只從啟動後累積」,08:23 三腿同秒逾時就讓江波圖整天缺前半段。
++            logger.warning("river 回補 %s(%s)逾時(非 TC4 down),排入重補", key, symbol)
++            self._backfill_pending_legs.add(key)
++            return []
+         except ConnectionError:
+             logger.warning("river 回補 %s(%s)失敗,該腿只從啟動後累積", key, symbol)
+             return []
+diff --git a/copycat/server/futures_engine.py b/copycat/server/futures_engine.py
+index f57a8691..d54130aa 100644
+--- a/copycat/server/futures_engine.py
++++ b/copycat/server/futures_engine.py
+@@ -22,6 +22,7 @@ import logging
+ from typing import Callable, Protocol
+ 
+ from copycat.live.stock_source import Bar
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.live.futures_models import (
+     PRODUCTS,
+     parse_futures_realtime,
+@@ -292,6 +293,12 @@ class FuturesEngine:
+             return await asyncio.to_thread(
+                 functools.partial(fetch, product, tf, start, end, session=session)
+             )
++        except HistoryTimeoutError as e:
++            # **先於** ConnectionError(它是子類):逾時在**引擎內**吃掉 —— payload 與
++            # 前端零變(期貨三態 status 通道記 next-time),但 3am 的判準要分得出來,
++            # 不然「TC4 忙一下」會被 proxy miss 那條字串讀成「TC4 掛了」。
++            logger.warning("市場:期貨 K 線 timeout(非 TC4 down)%s(%s)", product, e)
++            return []
+         except ConnectionError as e:
+             logger.warning("market: futures history proxy miss %s(%s)", product, e)
+             return []
+diff --git a/copycat/server/index_engine.py b/copycat/server/index_engine.py
+index d9e1f559..a062aeda 100644
+--- a/copycat/server/index_engine.py
++++ b/copycat/server/index_engine.py
+@@ -507,7 +507,9 @@ class IndexEngine:
+                 self._twse.stale = True
+                 self._dirty = True
+             # 分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級
+-            # 成空(_collect_history 不 raise → start 不排 retry)+ 當日推播整段靜默時,
++            # 成空(`fetch_day_minutes` **刻意**沿用「回空不 raise」——
++            # bug/history-timeout-propagation 覆核過:這條路改 raise 會把 `_retry_loop`
++            # 釘成無限退避、`_heal_variant` 永不遞增,比回空更糟)+ 當日推播整段靜默時,
+             # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
+             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
+             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
+diff --git a/copycat/server/stock_engine.py b/copycat/server/stock_engine.py
+index 380c7b64..385abeea 100644
+--- a/copycat/server/stock_engine.py
++++ b/copycat/server/stock_engine.py
+@@ -32,6 +32,7 @@ from copycat.live.stock_source import (
+     trial_windows_for,
+ )
+ from copycat.live.stock_state import StockDayState
++from copycat.live.tc4 import HistoryTimeoutError
+ from copycat.server.bars import BarsResult
+ from copycat.server.ws import WsBroadcaster
+ from copycat.stkfut_map import load_map
+@@ -42,6 +43,11 @@ _CLIENT_QUEUE_MAX = 1000
+ # 同一檔當日回補失敗幾次之後就不再入列(code review A2)。群組 batch 每 60s 一輪,
+ # 沒有這道冷卻的話一檔壞碼會對 TC4 發整天的必敗請求,還把單工 worker 排到滿。
+ _BACKFILL_MAX_FAILS = 3
++# 回補**逾時**(`HistoryTimeoutError`)的處置與斷線不同:TC4 好得很,只是這一檔的
++# history 首頁還沒備妥 → 隔一段時間重排即可。退避固定 15s(= server 層負向快取的同
++# 一個節奏),per-code 上限 2 次:沒有上限的話一檔冷門股會對 TC4 發整天的必敗請求。
++_BACKFILL_TIMEOUT_RETRY_SECS = 15.0
++_BACKFILL_TIMEOUT_MAX_RETRIES = 2
+ # 未知 / 未訂閱 code 的空 payload。由狀態機自己產一次(而不是手抄一份字面值):
+ # 鍵名只有 `light_snapshot()` 一份定義,抄第二份就是下一個會漂的地方。
+ # 建構一次是為了避開每格空卡都 new 一個 `deque(maxlen=20_000)` 的狀態機;
+@@ -275,6 +281,10 @@ class StockEngine:
+         self._backfill_pending: dict[str, int] = {}
+         self._backfilled: set[str] = set()
+         self._backfill_failed: dict[str, int] = {}
++        #   `_backfill_timeouts` = 當日**逾時**重排次數(與 `_backfill_failed` 分帳:
++        #     逾時不是失敗,不該吃掉「三次就冷卻」那個給真失敗用的額度)。日別語意,
++        #     與 `_backfill_failed` 同在 rollover 清空。
++        self._backfill_timeouts: dict[str, int] = {}
+         # 可注入(XR-3):app 層要把同一顆 broadcaster 同時給 engine 與 SignalHub,
+         # 讓 `/ws/stock` 這條匯流排的存在性不再綁 engine 的生命週期。不傳 = 自建,
+         # 既有 caller(直接建構的測試)行為逐字不變。
+@@ -652,9 +662,17 @@ class StockEngine:
+         return out
+ 
+     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
+-        """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。"""
++        """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。
++
++        **逾時例外照原樣往外拋**(bug/history-timeout-propagation):兩個消費端就是靠
++        「空清單 vs 例外」分辨資料面與暫時性 —— SignalHub 對空清單的處置是「無已完成
++        日 K,CDP 停用」且當日不再重試(app.py:369-375),對例外才走 X-2b 有限重試;
++        overlay route 則把它與既有 `OVERLAY_FETCH_TIMEOUT_S` 逾時歸同一條降級。
++        """
+         try:
+             return await asyncio.to_thread(self._source.fetch_daily_bars, code, n)
++        except HistoryTimeoutError:
++            raise
+         except ConnectionError as e:
+             logger.warning("daily_bars %s: TC4 不可用,overlay 降級空(%s)", code, e)
+             return []
+@@ -865,6 +883,7 @@ class StockEngine:
+         # (在途 job 自己會結清;跨日的 in-flight 另由 generation guard 作廢)
+         self._backfilled.clear()
+         self._backfill_failed.clear()
++        self._backfill_timeouts.clear()
+         # TradeStatus 前值同屬**日別**(D6/S4):跨日殘留會把隔日首則推播誤判成「恢復」
+         # 並帶昨日值記一則 WARNING —— 污染的正是蒐證樣本本身,而那一則讀起來像真事件。
+         self._trade_status.clear()
+@@ -1202,6 +1221,34 @@ class StockEngine:
+             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
+             try:
+                 ticks = await asyncio.to_thread(self._source.backfill, code)
++            except HistoryTimeoutError:
++                # **先於** ConnectionError(它是子類):逾時 ≠ TC4 掛了。打 `tc4_status`
++                # 會讓整個畫面掛上「達錢 4 連線中斷」而達錢 4 好得很;計進
++                # `_backfill_failed` 則會吃掉真失敗的冷卻額度。這條路唯一該做的是
++                # **隔一會兒再排一次** —— 而那正是舊碼(回空)整天都不會做的事。
++                self._backfilling = None
++                self._backfill_settled(code)
++                tries = self._backfill_timeouts.get(code, 0) + 1
++                if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
++                    self._backfill_timeouts[code] = tries
++                    logger.warning(
++                        "backfill %s timeout(非 TC4 down),%.0fs 後重排(第 %d/%d 次)",
++                        code,
++                        _BACKFILL_TIMEOUT_RETRY_SECS,
++                        tries,
++                        _BACKFILL_TIMEOUT_MAX_RETRIES,
++                    )
++                    loop = self._loop
++                    if loop is not None:
++                        loop.call_later(_BACKFILL_TIMEOUT_RETRY_SECS, self._enqueue_backfill, code)
++                else:
++                    logger.warning(
++                        "backfill %s timeout 重試 %d 次仍未備妥,放棄(當日不再重排)",
++                        code,
++                        _BACKFILL_TIMEOUT_MAX_RETRIES,
++                    )
++                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
++                continue
+             except ConnectionError:
+                 # 全域 `tc4_status` **只由主圖的失敗決定**(A2)。群組檢視把非主圖成員
+                 # 也送進這條單工 worker 之後,一檔成員的 SubHistory 失敗會把整個畫面
