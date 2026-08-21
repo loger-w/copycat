@@ -130,6 +130,11 @@ class FuturesQuoteSource(TC4QuoteSource):
         台指的回補**必須從這條 session 發** —— `TC.F.TWF.TXF.HOT` 的 REALTIME 訂閱在這裡,
         同 symbol 跨 session 只推一邊(CLAUDE.md §8),從別的 session 問同一檔有把推播
         搶走的風險。
+
+        **首頁在預算內未備妥 → `HistoryTimeoutError`**(bug/history-timeout-propagation;
+        舊契約是「回空」)。回空會被引擎讀成「這條腿今天沒有 1K」而整天不再回補;
+        **首頁備妥但收割 0 列仍回 `[]`**(TC4 答得出首頁 = 它不忙,空就是空)。
+        子類 `ConnectionError` → 只寫 `except ConnectionError` 的呼叫端行為不變。
         """
         self._ensure_connected()
         return collect_1k_minutes(

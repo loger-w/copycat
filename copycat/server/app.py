@@ -92,11 +92,18 @@ MARKET_KEYS = ("TWSE", "OTC") + FUTURES_MARKET_KEYS
 MARKET_SESSIONS = ("day", "allday")
 
 #: `/api/stock/overlay/{code}` 單檔取數的時間上界(group-grid review B2)。
-#: TC4 對「查無此檔」不是快速失敗 —— `fetch_daily_bars` 內部兩段 deadline 各 30s,
-#: 而空結果依 `overlay.py` 規則不進 cache,於是每次請求都重付一次 60s。配上 route 層
-#: `Semaphore(4)`,四檔這種股號就足以把整個端點凍住(head-of-line):進群組時 50 張卡
-#: 的 CDP/MA 全排在後面,而畫面上只是「疊線一直沒出來」,零錯誤訊號。
-#: 15s > 正常取數(實測 <1s)一個數量級,又遠短於 TC4 的 60s。
+#: TC4 對「查無此檔」不是快速失敗 —— `fetch_daily_bars` 內部兩段 deadline 各
+#: `BARS_POLL_DEADLINE` = **10s**(bug/history-timeout-propagation 起兩段皆顯式帶;
+#: 原本是預設的 `poll_wait*30` ≈ 30s × 2 = 最壞 60s)→ 現在最壞 **20s**。空結果依
+#: `overlay.py` 規則不進 cache,於是每次請求都重付一次。配上 route 層 `Semaphore(4)`,
+#: 四檔這種股號就足以把整個端點凍住(head-of-line):進群組時 50 張卡的 CDP/MA 全排在
+#: 後面,而畫面上只是「疊線一直沒出來」,零錯誤訊號。
+#: 15s > 正常取數(實測 <1s)一個數量級,又短於 source 的最壞 20s —— 也就是說
+#: `asyncio.wait_for` 幾乎恆先到期,route 那條 `except (TimeoutError,
+#: HistoryTimeoutError)` 的**後半是 defensive**:要兩段各自明顯快於 7.5s 卻雙雙逾時
+#: 才走得到(兩者的降級完全相同,所以合在同一條分支;少了它會變成 500)。
+#: 這個數字若日後被調到 > 20s,那條分支就從 defensive 變成主要路徑 —— 仍然是對的,
+#: 不必跟著改。
 OVERLAY_FETCH_TIMEOUT_S = 15.0
 
 #: `/api/stock/state/{code}?contract=` 的形檢:`<prod>:<YYYYMM>`(stkfut-contracts D7)。
