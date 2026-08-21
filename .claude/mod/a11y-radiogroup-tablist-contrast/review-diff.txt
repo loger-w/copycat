@@ -1,0 +1,1475 @@
+diff --git a/frontend/src/App.memo.test.tsx b/frontend/src/App.memo.test.tsx
+index 5e4b215d..f73e445b 100644
+--- a/frontend/src/App.memo.test.tsx
++++ b/frontend/src/App.memo.test.tsx
+@@ -474,7 +474,7 @@ describe("App railCtx memo 邊界(S1)", () => {
+     await settle();
+     expect(lastLadder()?.code).toBe("2330");
+ 
+-    fireEvent.click(await screen.findByTestId("wl-row-2454"));
++    fireEvent.click(await screen.findByTestId("wl-select-2454")); // a11y 批:選取改內層 button
+     await waitFor(() =>
+       expect(fetchUrls().some((u) => u.includes("/api/stock/state/2454"))).toBe(true),
+     );
+@@ -505,7 +505,7 @@ describe("App railCtx memo 邊界(S1)", () => {
+     expect(lastLadder()?.meta).toBeNull();
+     expect(lastLadder()?.code).toBe("9101");
+ 
+-    fireEvent.click(await screen.findByTestId("wl-row-9102"));
++    fireEvent.click(await screen.findByTestId("wl-select-9102")); // a11y 批:選取改內層 button
+     await settle();
+     await settle();
+ 
+diff --git a/frontend/src/App.test.tsx b/frontend/src/App.test.tsx
+index fd62c3e5..0c80f9d1 100644
+--- a/frontend/src/App.test.tsx
++++ b/frontend/src/App.test.tsx
+@@ -160,9 +160,9 @@ describe("App(index-board T9)", () => {
+     await waitFor(() => expect(screen.getByTestId("market-pane-left")).toBeTruthy());
+     const left = within(screen.getByTestId("market-pane-left"));
+     expect(left.getByText("加權指數")).toBeTruthy();
+-    expect(left.getByRole("button", { name: "櫃買" })).toBeTruthy();
+-    expect(left.getByRole("button", { name: "台指期" })).toBeTruthy();
+-    expect(left.getByRole("button", { name: "日K" })).toBeTruthy();
++    expect(left.getByRole("radio", { name: "櫃買" })).toBeTruthy();
++    expect(left.getByRole("radio", { name: "台指期" })).toBeTruthy();
++    expect(left.getByRole("radio", { name: "日K" })).toBeTruthy();
+   });
+ });
+ 
+@@ -199,6 +199,65 @@ describe("App 相關係數升回頂層 tab(R2 SC-1)", () => {
+   });
+ });
+ 
++// a11y 批 SC-2'' / D3':主分頁列原本只有 `role=tab` + `aria-selected`,panel 是五個
++// `hidden` div —— tab 與 panel 之間沒有任何 ARIA 連結,方向鍵也不通。
++// **manual activation**(與 RightRail 同款):方向鍵只移焦點,Enter / Space 才切。
++describe("App 主分頁 tablist 補全(a11y SC-2'')", () => {
++  const tab = (name: string) => screen.getByRole("tab", { name });
++
++  it("已 mount 的 panel 與 tab 互指;index / txo 恆掛(visited 不閘門)", () => {
++    renderApp();
++    // 未造訪的 stock / futures / corr 尚未 mount → `aria-controls` 允許 dangling
++    // (D-13 條件 render 的既定代價,spec 明記)。只鎖「掛出來的那些」互指。
++    const panels = screen.getAllByRole("tabpanel", { hidden: true });
++    const byId = new Map(panels.map((p) => [p.id, p]));
++    expect(byId.size).toBe(panels.length); // id 不重複
++    for (const t of screen.getAllByRole("tab")) {
++      const target = byId.get(t.getAttribute("aria-controls") ?? "");
++      if (target === undefined) continue;
++      expect(target.getAttribute("aria-labelledby")).toBe(t.id);
++    }
++    // index / txo 兩顆恆有 panel(App 的 visited.index 恆 true、TxoPage 不受 visited 管)
++    for (const name of ["台股綜合", "選擇權"]) {
++      const target = byId.get(tab(name).getAttribute("aria-controls") ?? "");
++      expect(target).toBeTruthy();
++      expect(target!.getAttribute("aria-labelledby")).toBe(tab(name).id);
++    }
++  });
++
++  it("roving tabindex:只有選中的 tab 是 0", () => {
++    renderApp();
++    // 收斂到主分頁 tablist —— 常駐右欄自己也有三顆 tab(它們的 roving 由 RightRail.test 鎖)
++    const mainTabs = () =>
++      within(screen.getByRole("tablist", { name: "主要分頁" })).getAllByRole("tab");
++    expect(mainTabs().map((el) => el.tabIndex)).toEqual([0, -1, -1, -1, -1]);
++    fireEvent.click(tab("選擇權"));
++    expect(mainTabs().map((el) => el.tabIndex)).toEqual([-1, -1, 0, -1, -1]);
++  });
++
++  it("ArrowRight 只移焦點不切換;Enter 才切(manual activation)", () => {
++    renderApp();
++    fireEvent.keyDown(tab("台股綜合"), { key: "ArrowRight" });
++    expect(document.activeElement).toBe(tab("個股(期)"));
++    expect(tab("台股綜合").getAttribute("aria-selected")).toBe("true");
++
++    fireEvent.keyDown(tab("個股(期)"), { key: "Enter" });
++    expect(tab("個股(期)").getAttribute("aria-selected")).toBe("true");
++    expect(window.localStorage.getItem("copycat-tab")).toBe("stock");
++  });
++
++  it("End / Home 到尾 / 首,ArrowLeft 在首顆繞回尾顆", () => {
++    renderApp();
++    fireEvent.keyDown(tab("台股綜合"), { key: "End" });
++    expect(document.activeElement).toBe(tab("相關係數"));
++    fireEvent.keyDown(tab("相關係數"), { key: "Home" });
++    expect(document.activeElement).toBe(tab("台股綜合"));
++    fireEvent.keyDown(tab("台股綜合"), { key: "ArrowLeft" });
++    expect(document.activeElement).toBe(tab("相關係數"));
++    expect(tab("台股綜合").getAttribute("aria-selected")).toBe("true");
++  });
++});
++
+ // 🟢 台股綜合 R3(SC-5):列表 → 個股(期)的一鍵銜接。走**整條真鏈**
+ // (App → IndexPage → LimitListSection → 列 onClick),不 mock 中間任何一層 ——
+ // 少接一根線(IndexPage 沒把 onOpenStock 往下傳、App 沒 setStockCode)在元件級測試
+@@ -392,7 +451,7 @@ describe("App(capital WS 唯一掛載 review B2)", () => {
+     fireEvent.click(screen.getByRole("tab", { name: "個股(期)" }));
+     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
++    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
+     expect(capitalCount()).toBe(1); // ladder 掛載不再各開一條
+   });
+ });
+@@ -412,9 +471,9 @@ describe("App(期貨 tab T15)", () => {
+   it("切到期貨 tab 顯示 FuturesPage(lazy 商品切換鈕)", async () => {
+     renderApp();
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
+-    expect(screen.getByRole("button", { name: "小台" })).toBeTruthy();
+-    expect(screen.getByRole("button", { name: "微台" })).toBeTruthy();
++    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
++    expect(screen.getByRole("radio", { name: "小台" })).toBeTruthy();
++    expect(screen.getByRole("radio", { name: "微台" })).toBeTruthy();
+   });
+ 
+   it("localStorage copycat-tab=futures 重載復原", async () => {
+@@ -423,7 +482,7 @@ describe("App(期貨 tab T15)", () => {
+     expect(screen.getByRole("tab", { name: "期貨" }).getAttribute("aria-selected")).toBe(
+       "true",
+     );
+-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
++    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
+   });
+ });
+ 
+@@ -454,7 +513,7 @@ describe("App 版面重構(SC-1 寬度 / SC-3 右欄常駐)", () => {
+     await waitFor(() => expect(screen.getByText("從自選清單選擇一檔開始看盤")).toBeTruthy());
+     expectRail();
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
++    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
+     expectRail();
+     fireEvent.click(screen.getByRole("tab", { name: "台股綜合" }));
+     await waitFor(() => expect(screen.getByText("加權指數")).toBeTruthy());
+@@ -515,8 +574,8 @@ describe("App 資料流上提(D-3 / D-16)", () => {
+   it("期貨商品選擇寫入 localStorage(自 FuturesPage.test 上移:state 已上提到 App)", async () => {
+     renderApp();
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+-    await waitFor(() => expect(screen.getByRole("button", { name: "小台" })).toBeTruthy());
+-    fireEvent.click(screen.getByRole("button", { name: "小台" }));
++    await waitFor(() => expect(screen.getByRole("radio", { name: "小台" })).toBeTruthy());
++    fireEvent.click(screen.getByRole("radio", { name: "小台" }));
+     expect(window.localStorage.getItem("copycat-fut-product")).toBe("MXF");
+   });
+ });
+@@ -646,7 +705,7 @@ describe("App 訊號 toast(SC-10)", () => {
+   it("切到期貨 tab 後照樣跳 toast(跨 tab 常駐)", async () => {
+     renderApp();
+     fireEvent.click(screen.getByRole("tab", { name: "期貨" }));
+-    await waitFor(() => expect(screen.getByRole("button", { name: "大台" })).toBeTruthy());
++    await waitFor(() => expect(screen.getByRole("radio", { name: "大台" })).toBeTruthy());
+     act(() => emitSignal(sig("b", "2327")));
+     const stack = await screen.findByTestId("toast-stack");
+     expect(stack.textContent).toContain("鎖漲停");
+@@ -737,7 +796,7 @@ describe("App 個股期合約選擇(SC-4)", () => {
+ 
+   it("換股重置合約:新股的 snapshot 不帶舊合約", async () => {
+     await openStockWithContract();
+-    fireEvent.click(screen.getByTestId("wl-row-2454"));
++    fireEvent.click(screen.getByTestId("wl-select-2454")); // a11y 批:選取路徑改列內層 button
+     await waitFor(() => expect(stateUrls().includes("/api/stock/state/2454")).toBe(true));
+     // 重置若走 effect 而非 render 期間,會先有一個 render 拿新股號配舊合約送出去
+     expect(stateUrls().some((u) => u.startsWith("/api/stock/state/2454?"))).toBe(false);
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index d76be08f..76e78a46 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -1,4 +1,4 @@
+-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
++import { lazy, Suspense, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+ 
+ import { ConnectionBadge } from "@/components/ConnectionBadge";
+ import { IndexBar } from "@/components/IndexBar";
+@@ -27,6 +27,7 @@ import {
+ } from "@/lib/constants";
+ import { futExchangeContract } from "@/lib/futures-ladder";
+ import type { StkfutSelection } from "@/lib/stkfut";
++import { tablistKeyAction } from "@/lib/tablist-keys";
+ import { cn } from "@/lib/utils";
+ 
+ const StockPage = lazy(() => import("@/components/stock/StockPage"));
+@@ -36,6 +37,20 @@ const CorrPage = lazy(() => import("@/components/corr/CorrPage"));
+ 
+ type Tab = "txo" | "stock" | "futures" | "index" | "corr";
+ 
++/** 主分頁列的內容(單一來源:tablist 與方向鍵導航都吃它)。原本是 JSX 內的行內字面量,
++ *  抽出來是因為鍵盤導航要知道「共幾顆、第幾顆」。 */
++const MAIN_TABS: readonly (readonly [Tab, string])[] = [
++  ["index", "台股綜合"],
++  ["stock", "個股(期)"],
++  ["txo", "選擇權"],
++  ["futures", "期貨"],
++  ["corr", "相關係數"],
++];
++
++/** tab ↔ tabpanel 的 id 對(a11y 批 SC-2'')。App 是單例,固定字串即可。 */
++const tabId = (id: Tab) => `app-tab-${id}`;
++const panelId = (id: Tab) => `app-panel-${id}`;
++
+ const FUT_PRODUCTS = [
+   ["TXF", "大台"],
+   ["MXF", "小台"],
+@@ -225,23 +240,37 @@ export default function App() {
+   const railCtx: RailContext =
+     tab === "stock" ? stockCtx : tab === "futures" ? futuresCtx : NONE_CTX;
+ 
++  /** manual activation(D3',與 RightRail 同一份判斷):方向鍵只移焦點,Enter / Space
++   *  才切分頁。自動切換會讓方向鍵掃過的每一頁都真的掛載(lazy chunk + WS gate 全開)。 */
++  function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: Tab): void {
++    const action = tablistKeyAction(e.key, MAIN_TABS.findIndex(([t]) => t === id), MAIN_TABS.length);
++    if (action === null) return;
++    e.preventDefault();
++    if (action === "select") {
++      setTab(id);
++      return;
++    }
++    // `[role="tab"]` 而非所有子元素:nav 尾端還有版本膠囊 / 指數列
++    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
++    tabs?.[action]?.focus();
++  }
++
+   return (
+     <div className="flex h-full w-full flex-col gap-3 px-4 py-4">
+       <nav className="flex items-baseline gap-1 border-b border-line" role="tablist" aria-label="主要分頁">
+-        {(
+-          [
+-            ["index", "台股綜合"],
+-            ["stock", "個股(期)"],
+-            ["txo", "選擇權"],
+-            ["futures", "期貨"],
+-            ["corr", "相關係數"],
+-          ] as [Tab, string][]
+-        ).map(([id, label]) => (
++        {MAIN_TABS.map(([id, label]) => (
+           <button
+             key={id}
+             type="button"
+             role="tab"
++            id={tabId(id)}
++            // ⚠ stock / futures / corr 的 panel 受 `visited` 閘門延後 mount → 未造訪時
++            // 這條 `aria-controls` 是 dangling(SC-2'' 明記的既定代價);index / txo 恆掛。
++            aria-controls={panelId(id)}
+             aria-selected={tab === id}
++            // roving tabindex:整列只佔一個 tab stop,列內用方向鍵走
++            tabIndex={tab === id ? 0 : -1}
++            onKeyDown={(e) => onTabKeyDown(e, id)}
+             onClick={() => setTab(id)}
+             className={cn(
+               "rounded-t px-3 py-1.5 text-sm",
+@@ -261,11 +290,23 @@ export default function App() {
+       {/* 主區 + 常駐右欄(SC-3:切 tab 時右欄位置 / 寬度 / 三顆 tab 都不變) */}
+       <div className="flex min-h-0 min-w-0 flex-1 gap-4">
+         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+-          <div hidden={tab !== "txo"} className={tab === "txo" ? "flex min-h-0 flex-1 flex-col gap-4" : ""}>
++          <div
++            role="tabpanel"
++            id={panelId("txo")}
++            aria-labelledby={tabId("txo")}
++            hidden={tab !== "txo"}
++            className={tab === "txo" ? "flex min-h-0 flex-1 flex-col gap-4" : ""}
++          >
+             <TxoPage />
+           </div>
+           {visited.stock ? (
+-            <div hidden={tab !== "stock"} className={tab === "stock" ? "flex min-h-0 flex-1 flex-col" : ""}>
++            <div
++              role="tabpanel"
++              id={panelId("stock")}
++              aria-labelledby={tabId("stock")}
++              hidden={tab !== "stock"}
++              className={tab === "stock" ? "flex min-h-0 flex-1 flex-col" : ""}
++            >
+               <Suspense
+                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+               >
+@@ -280,7 +321,13 @@ export default function App() {
+             </div>
+           ) : null}
+           {visited.futures ? (
+-            <div hidden={tab !== "futures"} className={tab === "futures" ? "flex min-h-0 flex-1 flex-col" : ""}>
++            <div
++              role="tabpanel"
++              id={panelId("futures")}
++              aria-labelledby={tabId("futures")}
++              hidden={tab !== "futures"}
++              className={tab === "futures" ? "flex min-h-0 flex-1 flex-col" : ""}
++            >
+               <Suspense
+                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+               >
+@@ -300,7 +347,13 @@ export default function App() {
+             </div>
+           ) : null}
+           {visited.index ? (
+-            <div hidden={tab !== "index"} className={tab === "index" ? "flex min-h-0 flex-1 flex-col" : ""}>
++            <div
++              role="tabpanel"
++              id={panelId("index")}
++              aria-labelledby={tabId("index")}
++              hidden={tab !== "index"}
++              className={tab === "index" ? "flex min-h-0 flex-1 flex-col" : ""}
++            >
+               <Suspense
+                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+               >
+@@ -326,7 +379,13 @@ export default function App() {
+             </div>
+           ) : null}
+           {visited.corr ? (
+-            <div hidden={tab !== "corr"} className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}>
++            <div
++              role="tabpanel"
++              id={panelId("corr")}
++              aria-labelledby={tabId("corr")}
++              hidden={tab !== "corr"}
++              className={tab === "corr" ? "flex min-h-0 flex-1 flex-col" : ""}
++            >
+               <Suspense
+                 fallback={<p className="py-10 text-center text-sm text-ink-muted">載入中…</p>}
+               >
+diff --git a/frontend/src/components/OrderPanel.tsx b/frontend/src/components/OrderPanel.tsx
+index be756806..8dd7c5ee 100644
+--- a/frontend/src/components/OrderPanel.tsx
++++ b/frontend/src/components/OrderPanel.tsx
+@@ -5,6 +5,7 @@ import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog"
+ import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
+ import { useCapitalStatus, useSubmitFuture } from "@/hooks/useCapital";
+ import { shortSymbol, tradeErrorText } from "@/lib/trade-text";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import { cn } from "@/lib/utils";
+ import type { ContractRow } from "@/types";
+ 
+@@ -167,66 +168,57 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
+             </select>
+           </label>
+ 
+-          <div className="grid grid-cols-2 gap-2" role="group" aria-label="買賣別">
+-            <button
+-              type="button"
+-              aria-pressed={side === "buy"}
+-              onClick={() => setSide("buy")}
+-              className={cn(
+-                "border px-3 py-1.5 text-sm transition-colors",
+-                side === "buy"
+-                  ? "border-bull bg-bull/15 font-bold text-bull"
+-                  : "border-line text-ink-dim hover:text-bull",
+-              )}
+-            >
+-              買進
+-            </button>
+-            <button
+-              type="button"
+-              aria-pressed={side === "sell"}
+-              onClick={() => setSide("sell")}
+-              className={cn(
+-                "border px-3 py-1.5 text-sm transition-colors",
+-                side === "sell"
+-                  ? "border-bear bg-bear/15 font-bold text-bear"
+-                  : "border-line text-ink-dim hover:text-bear",
+-              )}
+-            >
+-              賣出
+-            </button>
+-          </div>
++          {/* 買賣別 / 委託類型都是單選(a11y 批:原 `role="group"` + `aria-pressed` button
++              群 → radiogroup + sr-only radio)。pill 就在 `<form>` 裡,焦點掃到它按 Enter
++              會觸發 implicit submit 直接跳確認窗 —— `RadioPills` 已在 input 上擋掉。 */}
++          <RadioPills<"buy" | "sell">
++            ariaLabel="買賣別"
++            className="grid grid-cols-2 gap-2"
++            value={side}
++            onChange={setSide}
++            items={[
++              { value: "buy", label: "買進" },
++              { value: "sell", label: "賣出" },
++            ]}
++            pillClass={(item, checked) =>
++              cn(
++                // `text-center`:原 `<button>` 由 UA 樣式置中文字,換成 `<label>` 後
++                // 會靠左 —— 這兩組是 `grid-cols-2`(格子比文字寬),不補就是可見的版面
++                // 偏移。其餘 pill 群在 flex 容器內、盒寬貼著文字,不受影響。
++                "border px-3 py-1.5 text-center text-sm transition-colors",
++                item.value === "buy"
++                  ? checked
++                    ? "border-bull bg-bull/15 font-bold text-bull"
++                    : "border-line text-ink-dim hover:text-bull"
++                  : checked
++                    ? "border-bear bg-bear/15 font-bold text-bear"
++                    : "border-line text-ink-dim hover:text-bear",
++              )
++            }
++          />
+ 
+-          <div className="grid grid-cols-2 gap-2" role="group" aria-label="委託類型">
+-            <button
+-              type="button"
+-              aria-pressed={kind === "limit"}
+-              onClick={() => setKind("limit")}
+-              className={cn(
+-                "border px-3 py-1.5 text-sm transition-colors",
+-                kind === "limit"
+-                  ? "border-accent text-accent"
+-                  : "border-line text-ink-dim hover:text-ink",
+-              )}
+-            >
+-              限價
+-            </button>
+-            <button
+-              type="button"
+-              aria-pressed={kind === "market"}
+-              disabled={marketEstimate == null}
+-              title={marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined}
+-              onClick={() => setKind("market")}
+-              className={cn(
+-                "border px-3 py-1.5 text-sm transition-colors",
+-                kind === "market"
+-                  ? "border-accent text-accent"
+-                  : "border-line text-ink-dim hover:text-ink",
+-                marketEstimate == null && "cursor-not-allowed opacity-40",
+-              )}
+-            >
+-              市價
+-            </button>
+-          </div>
++          <RadioPills<"limit" | "market">
++            ariaLabel="委託類型"
++            className="grid grid-cols-2 gap-2"
++            value={kind}
++            onChange={setKind}
++            items={[
++              { value: "limit", label: "限價" },
++              {
++                value: "market",
++                label: "市價",
++                disabled: marketEstimate == null,
++                title: marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined,
++              },
++            ]}
++            pillClass={(item, checked) =>
++              cn(
++                "border px-3 py-1.5 text-center text-sm transition-colors",
++                checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++                item.disabled && "cursor-not-allowed opacity-40",
++              )
++            }
++          />
+ 
+           <div className="grid grid-cols-2 gap-2">
+             <label className="block text-xs text-ink-muted">
+diff --git a/frontend/src/components/futures/FuturesChart.tsx b/frontend/src/components/futures/FuturesChart.tsx
+index f2378594..fd01f6ea 100644
+--- a/frontend/src/components/futures/FuturesChart.tsx
++++ b/frontend/src/components/futures/FuturesChart.tsx
+@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
+ 
+ import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
+ import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import { useCapitalPositions } from "@/hooks/useCapital";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import { useContainerSize } from "@/hooks/useContainerSize";
+@@ -201,23 +202,22 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
+   const minutes = futMinutesOf(mode);
+   const candleBars = useMemo(() => aggregateBars(bars, minutes), [bars, minutes]);
+ 
++  // a11y 批:模式列是單選 —— 15 顆 `aria-pressed` button 讓 AT 聽成 15 個互不相干的開關、
++  // 鍵盤要按 15 次 Tab 才穿得過。改 RadioPills 後一個 tab stop + 方向鍵切換(class 逐字沿用)。
+   const modeRow = (
+-    <div className="mb-1 flex flex-wrap items-center gap-1">
+-      {FUT_CHART_MODES.map(([id, label]) => (
+-        <button
+-          key={id}
+-          type="button"
+-          aria-pressed={mode === id}
+-          onClick={() => selectMode(id)}
+-          className={cn(
+-            "rounded border px-2 py-0.5 text-xs",
+-            mode === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+-          )}
+-        >
+-          {label}
+-        </button>
+-      ))}
+-    </div>
++    <RadioPills<FutChartMode>
++      ariaLabel="圖表模式"
++      className="mb-1 flex flex-wrap items-center gap-1"
++      value={mode}
++      onChange={selectMode}
++      items={FUT_CHART_MODES.map(([id, label]) => ({ value: id, label }))}
++      pillClass={(_item, checked) =>
++        cn(
++          "rounded border px-2 py-0.5 text-xs",
++          checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++        )
++      }
++    />
+   );
+ 
+   function body(): ReactNode {
+diff --git a/frontend/src/components/futures/FuturesPage.tsx b/frontend/src/components/futures/FuturesPage.tsx
+index 431c9661..fbc92d3d 100644
+--- a/frontend/src/components/futures/FuturesPage.tsx
++++ b/frontend/src/components/futures/FuturesPage.tsx
+@@ -1,6 +1,7 @@
+ import { ConnectionBadge } from "@/components/ConnectionBadge";
+ import { FuturesChart } from "@/components/futures/FuturesChart";
+ import { DepthBar } from "@/components/quote/DepthBar";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import type { WsStatus } from "@/hooks/useFuturesStream";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+ import type { FuturesBarsKey } from "@/hooks/useFuturesBars";
+@@ -75,22 +76,23 @@ export function FuturesPage({
+   return (
+     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+       <header className="flex flex-wrap items-center gap-3 border-b border-line pb-3">
+-        <div className="flex overflow-hidden rounded border border-line" role="group" aria-label="商品切換">
+-          {products.map(([id, label]) => (
+-            <button
+-              key={id}
+-              type="button"
+-              aria-pressed={product === id}
+-              onClick={() => onProduct(id)}
+-              className={cn(
+-                "px-3 py-1 text-sm",
+-                product === id ? "bg-surface text-ink" : "text-ink-dim hover:text-ink",
+-              )}
+-            >
+-              {label}
+-            </button>
+-          ))}
+-        </div>
++        {/* a11y 批:商品列是單選 —— 原 `role="group"` + 三顆 `aria-pressed` button 讓 AT
++            聽成三個互不相干的開關、鍵盤要按三次 Tab 才穿得過。改 RadioPills 後一個 tab
++            stop + 方向鍵切換。容器 `overflow-hidden` 會裁掉外擴的 focus ring,`RadioPills`
++            內建的 `ring-inset` 正是為此。 */}
++        <RadioPills<string>
++          ariaLabel="商品切換"
++          className="flex overflow-hidden rounded border border-line"
++          value={product}
++          onChange={onProduct}
++          items={products.map(([id, label]) => ({ value: id, label }))}
++          pillClass={(_item, checked) =>
++            cn(
++              "px-3 py-1 text-sm",
++              checked ? "bg-surface text-ink" : "text-ink-dim hover:text-ink",
++            )
++          }
++        />
+         <h2 className="text-lg font-bold text-ink">
+           {state?.name ?? ""} <span className="font-mono text-sm text-ink-muted">{product}</span>
+         </h2>
+diff --git a/frontend/src/components/index/MarketPane.tsx b/frontend/src/components/index/MarketPane.tsx
+index f3a6bfa8..b3d9161d 100644
+--- a/frontend/src/components/index/MarketPane.tsx
++++ b/frontend/src/components/index/MarketPane.tsx
+@@ -1,6 +1,7 @@
+ import { useMemo, useState } from "react";
+ 
+ import { MarketChart } from "@/components/index/MarketChart";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import type { ChartToggles } from "@/hooks/useChartToggles";
+ import { useContainerSize } from "@/hooks/useContainerSize";
+ import type { IndexSeries } from "@/hooks/useIndexStream";
+@@ -73,6 +74,31 @@ function toX(minute: number): number {
+   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
+ }
+ 
++/** 三態 pill class(選中 / 停用 / 一般)。**單一來源**:標的列 / 期貨商品列 / 週期列
++ *  三組 radiogroup 的 label 與仍是 toggle 的「重疊」鈕共用同一份 —— 兩種元素的外觀必須
++ *  逐值相同,分兩份寫的失效樣態是只有其中一顆的 padding / 顏色漂掉,而畫面照畫。
++ *
++ *  `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成 3 行、
++ *  吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
++ *  門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,rem 門檻讓「塞不塞得下」這個
++ *  條件對 root font-size 不變。**本專案 root 目前恆 16px(無縮放 media query),
++ *  26.5rem = 424px / 41rem = 656px**;真環境量測(2026-08-21):1536 pane 350 → 降級
++ *  (右欄 473 亦降級);1920 pane 466 → 不 compact 但週期列仍 2 行(48px)、右欄 627 →
++ *  七欄;2560 pane 658、右欄 883 → 九欄。
++ *  標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。 */
++function pillClass(item: { disabled?: boolean }, checked: boolean): string {
++  return cn(
++    "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
++    item.disabled
++      ? "cursor-not-allowed border-line text-ink-muted opacity-40"
++      : checked
++        ? "border-accent text-accent"
++        : "border-line text-ink-dim hover:text-ink",
++  );
++}
++
++/** 真開關(「重疊」)。三組單選 pill 已改 `RadioPills`(a11y 批 D2'),此元件只剩
++ *  toggle 語意 —— `aria-pressed` 是對的(W2)。 */
+ function Btn({
+   label,
+   active,
+@@ -91,22 +117,7 @@ function Btn({
+       disabled={disabled}
+       aria-pressed={active}
+       aria-disabled={disabled ? "true" : undefined}
+-      className={cn(
+-        // `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成
+-        // 3 行、吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
+-        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,rem 門檻讓「塞不
+-        // 塞得下」這個條件對 root font-size 不變。**本專案 root 目前恆 16px(無縮放
+-        // media query),26.5rem = 424px / 41rem = 656px**;真環境量測(2026-08-21):
+-        // 1536 pane 350 → 降級(右欄 473 亦降級);1920 pane 466 → 不 compact 但週期列
+-        // 仍 2 行(48px)、右欄 627 → 七欄;2560 pane 658、右欄 883 → 九欄。
+-        // 標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。
+-        "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
+-        disabled
+-          ? "cursor-not-allowed border-line text-ink-muted opacity-40"
+-          : active
+-            ? "border-accent text-accent"
+-            : "border-line text-ink-dim hover:text-ink",
+-      )}
++      className={pillClass({ disabled }, active)}
+     >
+       {label}
+     </button>
+@@ -425,40 +436,58 @@ export function MarketPane({
+       // inline-size containment 不改軌算。
+       className="@container flex min-h-0 min-w-0 flex-col gap-3"
+     >
+-      {/* 標的列(SC-2) */}
++      {/* 標的列(SC-2)。a11y 批 D2':**拆兩個 radiogroup** —— 「標的」與「期貨商品」
++          語意不同(選了台指期才談大/小/微台),合成一群的話「恰一顆 checked」不成立
++          (台指期與大台會同時亮)。第三顆的 value 是 `futKey`:期貨態時 `marketKey`
++          恆等於它(`selectFut` 會同步兩者),所以 checked 判定與原本的 `active={isFut}` 等價。 */}
+       <div className="flex flex-wrap items-center gap-3">
+-        <div className="flex gap-1">
+-          <Btn label="加權" active={marketKey === "TWSE"} onClick={() => selectKey("TWSE")} />
+-          <Btn label="櫃買" active={marketKey === "OTC"} onClick={() => selectKey("OTC")} />
+-          <Btn label="台指期" active={isFut} onClick={() => selectKey(futKey)} />
+-        </div>
++        <RadioPills<MarketKey>
++          ariaLabel="標的"
++          className="flex gap-1"
++          value={marketKey}
++          onChange={selectKey}
++          items={[
++            { value: "TWSE", label: "加權" },
++            { value: "OTC", label: "櫃買" },
++            { value: futKey, label: "台指期" },
++          ]}
++          pillClass={pillClass}
++        />
+         {isFut ? (
+-          <div className="flex gap-1">
+-            {FUT_LABELS.map(([id, label]) => (
+-              <Btn key={id} label={label} active={marketKey === id} onClick={() => selectFut(id)} />
+-            ))}
+-          </div>
++          <RadioPills<FutKey>
++            ariaLabel="期貨商品"
++            className="flex gap-1"
++            value={futKey}
++            onChange={selectFut}
++            items={FUT_LABELS.map(([id, label]) => ({ value: id, label }))}
++            pillClass={pillClass}
++          />
+         ) : null}
+       </div>
+ 
+       {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6)。
+-          窄 pane 下與 Btn 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。 */}
+-      <div className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5">
+-        {MARKET_MODES.map(([id, label]) => (
+-          <Btn
+-            key={id}
+-            label={label}
+-            active={mode === id}
+-            disabled={!isModeAvailable(marketKey, id)}
+-            onClick={() => selectMode(id)}
+-          />
+-        ))}
+-        {stores.overlay !== undefined && mode === "intraday" && !isFut ? (
+-          <span className="ml-2">
+-            <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
+-          </span>
+-        ) : null}
+-      </div>
++          窄 pane 下與 pill 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。
++          「重疊」是**真開關**(W2 保留 aria-pressed),不進 radio 集合 —— 走 `trailing`
++          插槽掛回同一個容器內的原位置,DOM 順序與折行行為零變(D1'')。 */}
++      <RadioPills<MarketMode>
++        ariaLabel="週期"
++        className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5"
++        value={mode}
++        onChange={selectMode}
++        items={MARKET_MODES.map(([id, label]) => ({
++          value: id,
++          label,
++          disabled: !isModeAvailable(marketKey, id),
++        }))}
++        pillClass={pillClass}
++        trailing={
++          stores.overlay !== undefined && mode === "intraday" && !isFut ? (
++            <span className="ml-2">
++              <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
++            </span>
++          ) : null
++        }
++      />
+ 
+       {/* 2026-08-16 一頁總覽:圖高改吃**容器剩餘高**(`flex-1`),不再是「寬 × 220/640」
+           的固定比例 —— 改版前不 flex-1 是因為整頁可捲、撐滿會把家數帶擠出視窗;現在
+diff --git a/frontend/src/components/rail/RightRail.tsx b/frontend/src/components/rail/RightRail.tsx
+index 965a0c5d..2a0e8ce7 100644
+--- a/frontend/src/components/rail/RightRail.tsx
++++ b/frontend/src/components/rail/RightRail.tsx
+@@ -1,4 +1,4 @@
+-import { memo, useEffect, useState } from "react";
++import { memo, useEffect, useState, type KeyboardEvent } from "react";
+ 
+ import { CapitalOrdersList } from "@/components/capital/CapitalOrdersList";
+ import { CapitalPositionsList } from "@/components/capital/CapitalPositionsList";
+@@ -12,6 +12,7 @@ import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
+ import { initialQtyState, type QtyState } from "@/lib/qty-quick";
+ import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
+ import type { StockBook, StockMeta } from "@/lib/stock-accum";
++import { tablistKeyAction } from "@/lib/tablist-keys";
+ import { cn } from "@/lib/utils";
+ import type { FuturesProductState } from "@/types";
+ 
+@@ -39,6 +40,12 @@ function initialTab(): RailTab {
+   return saved === "orders" || saved === "positions" ? saved : "flash";
+ }
+ 
++/** tab ↔ tabpanel 的 id 對(a11y 批 SC-2')。RightRail 全站只有一個實例(App 常駐
++ *  單掛),所以用固定字串而不是 `useId` —— 固定 id 讓 `aria-controls` 在 panel 還沒
++ *  mount 時仍是可預期的命名,而不是每次 render 換一個值。 */
++const tabId = (id: RailTab) => `rail-tab-${id}`;
++const panelId = (id: RailTab) => `rail-panel-${id}`;
++
+ export type RailContext =
+   | {
+       kind: "stock";
+@@ -97,6 +104,20 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext })
+     if (next !== "flash") setCenterRequest(null);
+   }
+ 
++  /** manual activation(D3'):方向鍵只移焦點,Enter / Space 才 `selectTab`。
++   *  焦點目標從 tablist 現場查 —— 三顆 tab 恆掛,不必為此多存一組 ref。 */
++  function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: RailTab): void {
++    const action = tablistKeyAction(e.key, TABS.findIndex(([t]) => t === id), TABS.length);
++    if (action === null) return;
++    e.preventDefault();
++    if (action === "select") {
++      selectTab(id);
++      return;
++    }
++    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
++    tabs?.[action]?.focus();
++  }
++
+   // R4:選中個股期合約 → 右欄整組換到期貨市場。委託 / 部位若還停在 `sec`,使用者
+   // 看到的是現股庫存與現股委託,而閃電梯送出去的是期貨單 —— 兩邊對不起來。
+   const stockCode = ctx.kind === "stock" ? ctx.code : null;
+@@ -294,7 +315,15 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext })
+             key={id}
+             type="button"
+             role="tab"
++            id={tabId(id)}
++            // ⚠ 未選中的 tab 指向一個**還沒 mount** 的 panel(dangling):panel 是條件
++            // render(D-13,見檔頭),不可改 hidden。這是 spec 明記的既定代價 —— 選中
++            // 的那顆恆指得到,AT 的實際使用路徑不受影響。
++            aria-controls={panelId(id)}
+             aria-selected={tab === id}
++            // roving tabindex:整組 tablist 只佔一個 tab stop,組內用方向鍵走
++            tabIndex={tab === id ? 0 : -1}
++            onKeyDown={(e) => onTabKeyDown(e, id)}
+             onClick={() => selectTab(id)}
+             className={cn(
+               "flex-1 rounded px-2 py-1 text-sm",
+@@ -305,11 +334,38 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext })
+           </button>
+         ))}
+       </div>
+-      {/* 條件 render(非 hidden)—— 見檔頭 D-13 說明,改動前先讀 */}
+-      {tab === "flash" ? flashContent() : null}
+-      {tab === "orders" ? <div className="min-h-0 flex-1 overflow-y-auto">{ordersContent()}</div> : null}
++      {/* 條件 render(非 hidden)—— 見檔頭 D-13 說明,改動前先讀。
++          閃電分支要一層 wrapper 才掛得上 `role=tabpanel`(它回傳的是各家 ladder 本體);
++          委託 / 部位則把 role 掛在**既有**捲動層上,不新增節點。 */}
++      {tab === "flash" ? (
++        <div
++          role="tabpanel"
++          id={panelId("flash")}
++          aria-labelledby={tabId("flash")}
++          className="flex min-h-0 flex-1 flex-col"
++        >
++          {flashContent()}
++        </div>
++      ) : null}
++      {tab === "orders" ? (
++        <div
++          role="tabpanel"
++          id={panelId("orders")}
++          aria-labelledby={tabId("orders")}
++          className="min-h-0 flex-1 overflow-y-auto"
++        >
++          {ordersContent()}
++        </div>
++      ) : null}
+       {tab === "positions" ? (
+-        <div className="min-h-0 flex-1 overflow-y-auto">{positionsContent()}</div>
++        <div
++          role="tabpanel"
++          id={panelId("positions")}
++          aria-labelledby={tabId("positions")}
++          className="min-h-0 flex-1 overflow-y-auto"
++        >
++          {positionsContent()}
++        </div>
+       ) : null}
+     </aside>
+   );
+diff --git a/frontend/src/components/stock/GroupGridView.tsx b/frontend/src/components/stock/GroupGridView.tsx
+index fedf80c6..10fa108b 100644
+--- a/frontend/src/components/stock/GroupGridView.tsx
++++ b/frontend/src/components/stock/GroupGridView.tsx
+@@ -1,6 +1,7 @@
+ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+ 
+ import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
+ import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+ import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
+@@ -88,7 +89,9 @@ export function gridShape(n: number): string {
+ function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined }) {
+   const tone =
+     q?.p == null
+-      ? "text-ink-dim"
++      ? // 無成交(參考價 / `-` 兩態)= ink-muted(a11y 批 D4''):卡片格比側欄列更小,
++        // ink-dim 對 surface 的 2.92:1 在 mini 卡上實際讀不出來。
++        "text-ink-muted"
+       : (q.chg_pct ?? 0) > 0
+         ? "text-bull"
+         : (q.chg_pct ?? 0) < 0
+@@ -312,42 +315,35 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
+ 
+   return (
+     <div className="flex min-h-0 flex-1 flex-col gap-2">
+-      {/* `aria-label` 掛在 `role="group"` 容器而不是任何一顆 button:容器不是表單控制項,
++      {/* `aria-label` 掛在 `RadioPills` 的 radiogroup 容器而不是任何一顆 pill(a11y 批:
++          原本是 `role="group"` + `aria-pressed` button 群):容器不是表單控制項,
+           不觸 label-in-name(pill 自己的可及名稱就是印在上面的群組名,兩者不打架)。
+           這個名稱是**契約**:StockPage.test.tsx 671/713(`queryByLabelText` 鎖「單檔檢視
+           不渲染群組檢視」)與 746/750(鎖「重掛後還原群組檢視」)四處都靠它接住 ——
+           拿掉的失效樣態是那四條斷言靜默 vacuous(查不到元素與「沒渲染」在 queryBy 下
+           長得一模一樣),不是紅燈。 */}
+       <div className="flex shrink-0 flex-wrap items-center gap-2">
+-      <div
+-        role="group"
+-        aria-label="選擇群組"
++      <RadioPills<string>
++        ariaLabel="選擇群組"
+         className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
+-      >
+-        <span>群組</span>
+-        {groups.map((g) => (
+-          <button
+-            key={g.name}
+-            type="button"
+-            aria-pressed={selected?.name === g.name}
+-            onClick={() => {
+-              setPicked(g.name);
+-              persistGroupName(g.name);
+-            }}
+-            className={cn(
+-              "rounded border px-2 py-0.5 text-xs",
+-              selected?.name === g.name
+-                ? "border-accent text-accent"
+-                : "border-line text-ink-dim hover:text-ink",
+-            )}
+-          >
+-            {g.name}
+-          </button>
+-        ))}
+-      </div>
++        leading={<span>群組</span>}
++        value={selected?.name ?? ""}
++        onChange={(name) => {
++          setPicked(name);
++          persistGroupName(name);
++        }}
++        items={groups.map((g) => ({ value: g.name, label: g.name }))}
++        pillClass={(_item, checked) =>
++          cn(
++            "rounded border px-2 py-0.5 text-xs",
++            checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++          )
++        }
++      />
+         {/* toggle 列與群組 pill 同一行(SC-2):圖牆頂只有一列 chrome,兩列會吃掉
+-            卡片的高。**不放進 `role="group"` 容器內** —— 那個容器的可及名稱是
+-            「選擇群組」,圖層開關不屬於它。 */}
++            卡片的高。**不放進 radiogroup 容器內**(連 `trailing` 都不走)—— 那個容器的
++            可及名稱是「選擇群組」,而這三顆是**開關**不是單選項,混進去會讓 AT 把
++            「vp / 成交點 / 布林」讀成群組選項。 */}
+         <div className="ml-auto flex shrink-0 gap-1">
+           {GRID_TOGGLES.map(({ key, label }) => (
+             <button
+diff --git a/frontend/src/components/stock/PriceLadder.tsx b/frontend/src/components/stock/PriceLadder.tsx
+index 87690fe5..ae4d00b4 100644
+--- a/frontend/src/components/stock/PriceLadder.tsx
++++ b/frontend/src/components/stock/PriceLadder.tsx
+@@ -8,6 +8,7 @@ import {
+   type LadderLot,
+ } from "@/components/stock/LadderView";
+ import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import {
+   useCancelOrder,
+   useCapitalOrders,
+@@ -45,7 +46,8 @@ export type { TradeKind } from "@/lib/trade-kinds";
+ 
+ /** 交易別四顆 pill(batch2 R6):select 要點兩下才看得到選項、且選中值只剩一個詞,pill 讓
+  *  「現在是無券」在武裝列上一眼可辨(無券會鎖買側,是送單語意不是偏好)。`aria-label` 掛在
+- *  role=group 容器(同 GroupGridView),既有以「交易別」定位的測試 / a11y 關聯不變;`shrink-0`
++ *  `RadioPills` 的 radiogroup 容器(a11y 批:原 `role=group` + `aria-pressed` button 群 ——
++ *  AT 聽成四個互不相干的開關),既有以「交易別」定位的測試 / a11y 關聯不變;`shrink-0`
+  *  + 窄 padding:288px 右欄下由武裝鈕(flex-1 min-w-0)吸收壓縮,pill 群與鎖定鈕不換行
+  *  (R5 SC-1 同策略;px-0.5 = review C2 實測 解除+鎖定中+四顆 pill 貼齊零餘裕後收的 16px)。
+  *  選中色分兩檔(review C1):現股 = accent(預設態);融資 / 融券 / 無券 = warn 琥珀 ——
+@@ -59,26 +61,23 @@ function TradeKindPills({
+   onChange: (kind: TradeKind) => void;
+ }) {
+   return (
+-    <div role="group" aria-label="交易別" className="flex shrink-0 items-center gap-0.5">
+-      {TRADE_KINDS.map(([v, label]) => (
+-        <button
+-          key={v}
+-          type="button"
+-          aria-pressed={value === v}
+-          onClick={() => onChange(v)}
+-          className={cn(
+-            "rounded border px-0.5 py-0.5 text-xs",
+-            value === v
+-              ? v === "cash"
+-                ? "border-accent text-accent"
+-                : "border-warn text-warn"
+-              : "border-line text-ink-dim hover:text-ink",
+-          )}
+-        >
+-          {label}
+-        </button>
+-      ))}
+-    </div>
++    <RadioPills<TradeKind>
++      ariaLabel="交易別"
++      className="flex shrink-0 items-center gap-0.5"
++      value={value}
++      onChange={onChange}
++      items={TRADE_KINDS.map(([v, label]) => ({ value: v, label }))}
++      pillClass={(item, checked) =>
++        cn(
++          "rounded border px-0.5 py-0.5 text-xs",
++          checked
++            ? item.value === "cash"
++              ? "border-accent text-accent"
++              : "border-warn text-warn"
++            : "border-line text-ink-dim hover:text-ink",
++        )
++      }
++    />
+   );
+ }
+ 
+diff --git a/frontend/src/components/stock/StockChart.tsx b/frontend/src/components/stock/StockChart.tsx
+index 1ca15a0e..f5541252 100644
+--- a/frontend/src/components/stock/StockChart.tsx
++++ b/frontend/src/components/stock/StockChart.tsx
+@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
+ 
+ import { CandleChart } from "@/components/stock/CandleChart";
+ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import { useCapitalOrders } from "@/hooks/useCapital";
+ import { useChartToggles } from "@/hooks/useChartToggles";
+ import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
+@@ -147,28 +148,26 @@ export function StockChart({
+     // flex-1 min-h-0:圖表吃掉下半列以外的剩餘高度(SC-6)。原本是 shrink-0 的
+     // 「寬度決定高度」固定比例,不隨剩餘空間縮,那正是 <main> 會頂出捲軸的原因。
+     <div className="flex min-h-0 flex-1 flex-col">
+-      <div className="mb-1 flex flex-wrap items-center gap-1">
+-        {MODE_LABELS.map(([id, label]) => {
++      {/* a11y 批:模式列是單選 —— 12 顆 `aria-pressed` button 讓 AT 聽成 12 個互不相干的
++          開關、鍵盤要按 12 次 Tab 才穿得過。改 RadioPills 後一個 tab stop + 方向鍵切換。
++          期貨態的 `disabled` + tooltip 語意逐字保留(title 掛 label,W8)。 */}
++      <RadioPills<ChartMode>
++        ariaLabel="圖表模式"
++        className="mb-1 flex flex-wrap items-center gap-1"
++        value={mode}
++        onChange={selectMode}
++        items={MODE_LABELS.map(([id, label]) => {
+           const blocked = isFut && id !== "intraday";
+-          return (
+-            <button
+-              key={id}
+-              type="button"
+-              aria-pressed={mode === id}
+-              disabled={blocked}
+-              title={blocked ? FUT_MODE_HINT : undefined}
+-              onClick={() => selectMode(id)}
+-              className={cn(
+-                "rounded border px-2 py-0.5 text-xs",
+-                mode === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+-                blocked && "opacity-40",
+-              )}
+-            >
+-              {label}
+-            </button>
+-          );
++          return { value: id, label, disabled: blocked, title: blocked ? FUT_MODE_HINT : undefined };
+         })}
+-      </div>
++        pillClass={(item, checked) =>
++          cn(
++            "rounded border px-2 py-0.5 text-xs",
++            checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++            item.disabled && "opacity-40",
++          )
++        }
++      />
+       {/* 量測用的恆存 wrapper:loading / error / data 三態都掛在它底下(useContainerSize
+           的呼叫端契約 —— ref 只掛 data 分支的話,冷載入會量到 0×0 而 hook 不再重跑)。 */}
+       <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">
+diff --git a/frontend/src/components/stock/StockPage.tsx b/frontend/src/components/stock/StockPage.tsx
+index c56700c6..2e9d7e33 100644
+--- a/frontend/src/components/stock/StockPage.tsx
++++ b/frontend/src/components/stock/StockPage.tsx
+@@ -7,6 +7,7 @@ import { SignalRulesDialog } from "@/components/stock/SignalRulesDialog";
+ import { StockChart } from "@/components/stock/StockChart";
+ import { TickTape } from "@/components/stock/TickTape";
+ import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
++import { RadioPills } from "@/components/ui/RadioPills";
+ import { useCapitalPositions } from "@/hooks/useCapital";
+ import { useSignalFeed } from "@/hooks/useSignalFeed";
+ import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
+@@ -212,22 +213,19 @@ export function StockPage({ code, onSelect, stream, contract = null, onContract
+             `accum === null` 兩個條件分支**之外**(design R6)—— 掛進任一分支內,
+             未選股 / 主圖 snapshot 還沒回來時就永遠切不到群組檢視,而那兩個時機
+             恰恰是最想看「整組今天在幹嘛」的時候。 */}
+-        <div className="flex shrink-0 flex-wrap items-center gap-1">
+-          {VIEW_LABELS.map(([id, label]) => (
+-            <button
+-              key={id}
+-              type="button"
+-              aria-pressed={view === id}
+-              onClick={() => selectView(id)}
+-              className={cn(
+-                "rounded border px-2 py-0.5 text-xs",
+-                view === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+-              )}
+-            >
+-              {label}
+-            </button>
+-          ))}
+-        </div>
++        <RadioPills<StockView>
++          ariaLabel="檢視"
++          className="flex shrink-0 flex-wrap items-center gap-1"
++          value={view}
++          onChange={selectView}
++          items={VIEW_LABELS.map(([id, label]) => ({ value: id, label }))}
++          pillClass={(_item, checked) =>
++            cn(
++              "rounded border px-2 py-0.5 text-xs",
++              checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
++            )
++          }
++        />
+         {view === "group" ? (
+           // 群組檢視吃掉整個 main 主體(header / 圖表 / 下半列全部讓位),訊號欄與
+           // 自選欄在 main 之外不受影響。載入 / 失敗 / 零群組的分態由 GroupGridView
+diff --git a/frontend/src/components/stock/WatchlistSidebar.tsx b/frontend/src/components/stock/WatchlistSidebar.tsx
+index 96fa9501..ff1f563c 100644
+--- a/frontend/src/components/stock/WatchlistSidebar.tsx
++++ b/frontend/src/components/stock/WatchlistSidebar.tsx
+@@ -91,7 +91,9 @@ function avgBadge(a: GroupAvg): React.ReactElement {
+       title={`平均漲幅 ${text}(${a.n}/${a.total} 檔有成交${trialNote})`}
+       className={cn(
+         "shrink-0 font-mono text-[0.625rem]",
+-        shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-dim",
++        // 零 = `text-ink-muted` 不是 `text-ink-dim`(a11y 批 D4''):dim 對 surface 只有
++        // 2.92:1,而「這組今天平盤」是要讀的數字,不是弱化的佔位。
++        shown > 0 ? "text-bull" : shown < 0 ? "text-bear" : "text-ink-muted",
+       )}
+     >
+       {text}
+@@ -395,11 +397,10 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           data-testid={`wl-row-${code}`}
+           style={{ height: ROW_H }}
+           className={cn(
+-            "group flex cursor-pointer items-center gap-1.5 border-b border-line px-1",
++            "group flex items-center gap-1.5 border-b border-line px-1",
+             active === code && "bg-bg-deep",
+             drag?.code === code && "opacity-50",
+           )}
+-          onClick={() => onSelect(code)}
+         >
+           {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
+               的能力」→ 對 AT 隱藏(改前本來就不可鍵盤操作,非本次退化)。分組指派可走
+@@ -413,107 +414,125 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
+           >
+             ⋮⋮
+           </span>
+-          {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
+-              放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
+-              主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
+-              漲幅刻意不跟著放大:四個元素同權重反而更難掃。
+-              `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
+-          <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
+-            {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
+-                flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
+-                列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
+-                `q?.trial && !q?.no_data`:窗內的 payload 對無資料檔照算 trial=true,
+-                而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
+-                講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
+-                (現價線)—— 試撮不是方向性狀態。 */}
+-            {/* `min-w-0`(code review P2-AGG(1)):這一層是外層 flex 的子項,少了它不會
+-                縮 —— 極長的 instrument key(合約鍵 / 未來的長代號)會把整格推寬並溢出
+-                到右側報價塊上。與外層 `min-w-0 flex-1` 同一個理由,鏈上任一環漏掉都失效。 */}
+-            <span className="flex min-w-0 items-baseline gap-1">
+-              <span className="font-mono text-base text-ink">{code}</span>
+-              {q?.trial && !q?.no_data ? (
+-                <span
+-                  data-testid={`wl-trial-${code}`}
+-                  className="shrink-0 whitespace-nowrap text-xs text-amber-400"
+-                >
+-                  (緩)
+-                </span>
+-              ) : null}
+-            </span>
+-            {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
+-                (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
+-                多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
+-                範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
+-                長名稱該截斷,張數與損益少一個字就變成另一個數字。
+-                兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
+-            {name !== undefined || hasPos ? (
++          {/* 🔴 SC-4'(D5' / D5''):代號 / 名稱 / 報價包進一顆真 button,`onSelect` 從
++              row div 搬到這裡 —— div onClick 沒有鍵盤路徑(Tab 到不了、Enter 沒反應),
++              而整列改 `<button>` 不行:握把 / 加入群組 / 移除三顆互動子元素會變成巢狀
++              interactive(無效 HTML + 焦點順序錯亂),所以它們留在 row 層與這顆並排。
++              `flex-1` 讓它吃滿三顆子元素以外的整段寬度,可點區域與改前幾乎相同
++              (只差列末的 gap)。 */}
++          <button
++            type="button"
++            data-testid={`wl-select-${code}`}
++            aria-label={name !== undefined ? `選取 ${code} ${name}` : `選取 ${code}`}
++            aria-current={active === code ? "true" : undefined}
++            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
++            onClick={() => onSelect(code)}
++          >
++            {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
++                放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是
++                主資訊,左下名稱 ↔ 右下漲幅是輔助 —— 掃第一行找標的與價位,要細節才看第二行。
++                漲幅刻意不跟著放大:四個元素同權重反而更難掃。
++                `min-w-0` 不可省,少了它 flex 子項不會縮、`truncate` 失效。 */}
++            <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
++              {/* 代號 + 緩撮標示同一條 baseline(SC-1)。**外層必須是 flex row**:這一格是
++                  flex-col,直接把 badge 後綴在 `<span>{code}</span>` 之後會多佔一行 ——
++                  列高由 ROW_H 以 inline style 固定,多的那行等於把名稱擠出可視範圍。
++                  `q?.trial && !q?.no_data`:窗內的 payload 對無資料檔照算 trial=true,
++                  而那一列右側顯示的是「無資料」,再標「(緩)」等於對著沒有報價的檔
++                  講撮合狀態。amber = 中性警示,刻意不用 bull/bear(漲跌方向)或 accent
++                  (現價線)—— 試撮不是方向性狀態。 */}
++              {/* `min-w-0`(code review P2-AGG(1)):這一層是外層 flex 的子項,少了它不會
++                  縮 —— 極長的 instrument key(合約鍵 / 未來的長代號)會把整格推寬並溢出
++                  到右側報價塊上。與外層 `min-w-0 flex-1` 同一個理由,鏈上任一環漏掉都失效。 */}
+               <span className="flex min-w-0 items-baseline gap-1">
+-                {name !== undefined ? (
+-                  <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
+-                ) : null}
+-                {hasPos ? (
++                <span className="font-mono text-base text-ink">{code}</span>
++                {q?.trial && !q?.no_data ? (
+                   <span
+-                    data-testid={`wl-pos-${code}`}
+-                    title={chipTitle(sec, fut)}
+-                    className={cn(
+-                      "shrink-0 whitespace-nowrap text-[0.625rem]",
+-                      chipTone(sec, fut),
+-                    )}
++                    data-testid={`wl-trial-${code}`}
++                    className="shrink-0 whitespace-nowrap text-xs text-amber-400"
+                   >
+-                    {chipText(sec, fut)}
++                    (緩)
+                   </span>
+                 ) : null}
+               </span>
+-            ) : null}
+-          </div>
+-          {q?.no_data ? (
+-            <span className="shrink-0 text-xs text-ink-dim">無資料</span>
+-          ) : (
+-            <span
+-              data-testid={`wl-quote-${code}`}
+-              className={cn(
+-                "flex shrink-0 flex-col items-end justify-center font-mono leading-tight",
+-                // 亮燈時**整塊**吃底色(同主區慣例):盤中要用餘光捕捉,換文字色不夠。
+-                limit === "upper" && "rounded bg-bull px-1.5 text-white",
+-                limit === "lower" && "rounded bg-bear px-1.5 text-white",
+-              )}
+-            >
+-              {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
+-                  參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
+-              {q?.p != null ? (
+-                <>
+-                  <span className={cn("text-base", limit === null ? "text-ink" : "text-white")}>
+-                    {fmtPrice(q.p)}
+-                  </span>
+-                  <span
+-                    className={cn(
+-                      "text-xs",
+-                      // 亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見(同 OrderBook)
+-                      limit !== null
+-                        ? "text-white"
+-                        : (q.chg_pct ?? 0) > 0
+-                          ? "text-bull"
+-                          : (q.chg_pct ?? 0) < 0
+-                            ? "text-bear"
+-                            : "text-ink-dim",
+-                    )}
+-                  >
+-                    {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
+-                  </span>
+-                </>
+-              ) : q?.ref != null ? (
+-                <>
+-                  <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
+-                  <span className="text-xs text-ink-dim">參考</span>
+-                </>
+-              ) : (
+-                <>
+-                  <span className="text-base text-ink-dim">-</span>
+-                  <span className="text-xs text-ink-dim">-</span>
+-                </>
+-              )}
+-            </span>
+-          )}
++              {/* 第二行:名稱 + 倉位 chip 同一條 baseline(SC-2)。**外層必須是 flex row**
++                  (同上面代號那行的理由):這一格是 flex-col,把 chip 後綴在名稱之後會
++                  多佔一行,而列高由 ROW_H 以 inline style 固定 —— 多的那行會被擠出可視
++                  範圍。名稱 `min-w-0 truncate` 吸收壓縮、chip `shrink-0` 不被切掉:
++                  長名稱該截斷,張數與損益少一個字就變成另一個數字。
++                  兩者都沒有時整行不渲染(W-7:無倉的列 DOM 與改前逐字相同)。 */}
++              {name !== undefined || hasPos ? (
++                <span className="flex min-w-0 items-baseline gap-1">
++                  {name !== undefined ? (
++                    <span className="min-w-0 truncate text-xs text-ink-muted">{name}</span>
++                  ) : null}
++                  {hasPos ? (
++                    <span
++                      data-testid={`wl-pos-${code}`}
++                      title={chipTitle(sec, fut)}
++                      className={cn(
++                        "shrink-0 whitespace-nowrap text-[0.625rem]",
++                        chipTone(sec, fut),
++                      )}
++                    >
++                      {chipText(sec, fut)}
++                    </span>
++                  ) : null}
++                </span>
++              ) : null}
++            </div>
++            {q?.no_data ? (
++              <span className="shrink-0 text-xs text-ink-dim">無資料</span>
++            ) : (
++              <span
++                data-testid={`wl-quote-${code}`}
++                className={cn(
++                  "flex shrink-0 flex-col items-end justify-center font-mono leading-tight",
++                  // 亮燈時**整塊**吃底色(同主區慣例):盤中要用餘光捕捉,換文字色不夠。
++                  limit === "upper" && "rounded bg-bull px-1.5 text-white",
++                  limit === "lower" && "rounded bg-bear px-1.5 text-white",
++                )}
++              >
++                {/* 三態:今日成交價 → 尚無成交但有參考價(灰,標「參考」)→ `-`。
++                    參考價**不套漲跌色也不印 0.00%** —— 那會讓昨收看起來像今天的走勢。 */}
++                {q?.p != null ? (
++                  <>
++                    <span className={cn("text-base", limit === null ? "text-ink" : "text-white")}>
++                      {fmtPrice(q.p)}
++                    </span>
++                    <span
++                      className={cn(
++                        "text-xs",
++                        // 亮燈時一律白字,不再走漲跌色 —— 紅底紅字看不見(同 OrderBook)
++                        limit !== null
++                          ? "text-white"
++                          : (q.chg_pct ?? 0) > 0
++                            ? "text-bull"
++                            : (q.chg_pct ?? 0) < 0
++                              ? "text-bear"
++                              : // 平盤 = ink-muted(a11y 批 D4''):有成交的零漲跌是要讀的
++                                // 數字,dim 的 2.92:1 讀不出來;下面 `參考` / `-` 兩態才是
++                                // 「今天還沒開始」的弱化,維持 dim。
++                                "text-ink-muted",
++                      )}
++                    >
++                      {q.chg_pct != null ? fmtPct(q.chg_pct) : "-"}
++                    </span>
++                  </>
++                ) : q?.ref != null ? (
++                  <>
++                    <span className="text-base text-ink-dim">{fmtPrice(q.ref)}</span>
++                    <span className="text-xs text-ink-dim">參考</span>
++                  </>
++                ) : (
++                  <>
++                    <span className="text-base text-ink-dim">-</span>
++                    <span className="text-xs text-ink-dim">-</span>
++                  </>
++                )}
++              </span>
++            )}
++          </button>
+           {group === null ? (
+             <button
+               type="button"
+diff --git a/frontend/src/components/ui/RadioPills.tsx b/frontend/src/components/ui/RadioPills.tsx
+new file mode 100644
+index 00000000..8c644162
+--- /dev/null
++++ b/frontend/src/components/ui/RadioPills.tsx
+@@ -0,0 +1,98 @@
++import { useId, type ReactNode } from "react";
++
++import { cn } from "@/lib/utils";
++
++/** 單選 pill 群的共用元件(a11y 批 D1' / D1'')。
++ *
++ *  改前每處都是 N 顆 `<button aria-pressed>`:AT 聽成 N 個互不相干的開關、鍵盤要按 N 次 Tab
++ *  才穿得過一組 pill。改成**原生 radio**(視覺上藏起來的 `<input type="radio" class="sr-only">`
++ *  + 帶原 button class 的 `<label>`)後,單選語意 / 方向鍵切換 / roving tabindex 全部由瀏覽器
++ *  免費提供 —— 不自寫 key handler(自寫的版本永遠會漏 Home/End 或 RTL 方向)。
++ *
++ *  **視覺零變是硬約束**:label 的 class 由呼叫端 `pillClass(item, checked)` 逐字回傳原 button
++ *  的 class,容器 class 由 `className` 逐字沿用原容器 —— DOM 每項一個 label ↔ 原每項一個 button,
++ *  層數不變。唯一新增的外觀是 focus ring:sr-only 的 input 焦點框看不見,不補在 label 側的話
++ *  鍵盤使用者完全看不到焦點。`ring-inset` 讓 `overflow-hidden` 容器內的 pill 不被裁掉。
++ *
++ *  `leading` / `trailing` 是**容器內**的非 radio 插槽(GroupGridView 的「群組」字、MarketPane
++ *  週期列的「重疊」toggle):它們原本就在同一個容器裡,包一層 div 會改版面。 */
++export interface RadioPillItem<V extends string> {
++  value: V;
++  label: ReactNode;
++  disabled?: boolean;
++  title?: string;
++}
++
++interface Props<V extends string> {
++  ariaLabel: string;
++  value: V;
++  onChange: (value: V) => void;
++  items: readonly RadioPillItem<V>[];
++  /** 回傳該項在該狀態下的 class,**逐字沿用原 button**(含 disabled 態) */
++  pillClass: (item: RadioPillItem<V>, checked: boolean) => string;
++  /** 容器 class,逐字沿用原容器 */
++  className?: string;
++  leading?: ReactNode;
++  trailing?: ReactNode;
++}
++
++export function RadioPills<V extends string>({
++  ariaLabel,
++  value,
++  onChange,
++  items,
++  pillClass,
++  className,
++  leading,
++  trailing,
++}: Props<V>) {
++  /** 同頁多組 pill(OrderPanel 兩組 / 圖牆與週期列)必須各自獨立的 `name`,
++   *  否則原生 radio 會把它們當同一組互搶選取。 */
++  const uid = useId();
++  return (
++    <div role="radiogroup" aria-label={ariaLabel} className={className}>
++      {leading}
++      {items.map((item) => {
++        const checked = item.value === value;
++        return (
++          <label
++            key={item.value}
++            htmlFor={`${uid}-${item.value}`}
++            title={item.title}
++            aria-disabled={item.disabled ? "true" : undefined}
++            className={cn(
++              pillClass(item, checked),
++              item.disabled && "cursor-not-allowed",
++              "has-focus-visible:ring-1 has-focus-visible:ring-inset has-focus-visible:ring-accent",
++            )}
++          >
++            <input
++              type="radio"
++              className="sr-only"
++              name={uid}
++              id={`${uid}-${item.value}`}
++              value={item.value}
++              checked={checked}
++              disabled={item.disabled}
++              /** `disabled` 之外再擋一層:jsdom 的 `fireEvent.click` 會直接把 click 派到
++               *  disabled input 上(真瀏覽器根本不派),React 由 click 推導 change 時不吃
++               *  disabled 判別子 → 沒有這道 guard,測試環境與真環境對「停用項被點」的
++               *  語意會不一致(原 `<button disabled>` 是不會觸發的)。 */
++              onChange={() => {
++                if (item.disabled) return;
++                onChange(item.value);
++              }}
++              /** radio 的 Enter 沒有原生動作,但在 `<form>` 內會觸發 implicit submit ——
++               *  OrderPanel 的 pill 就在 form 裡,焦點掃到它按 Enter 會直接跳確認窗。 */
++              onKeyDown={(e) => {
++                if (e.key === "Enter") e.preventDefault();
++              }}
++            />
++            {item.label}
++          </label>
++        );
++      })}
++      {trailing}
++    </div>
++  );
++}
+diff --git a/frontend/src/lib/tablist-keys.ts b/frontend/src/lib/tablist-keys.ts
+new file mode 100644
+index 00000000..c918f134
+--- /dev/null
++++ b/frontend/src/lib/tablist-keys.ts
+@@ -0,0 +1,27 @@
++/** WAI-ARIA APG `tabs` 的鍵盤語意,**manual activation**:←/→/Home/End 只移焦點
++ *  (roving tabindex),Enter / Space 才切換分頁。
++ *
++ *  為什麼不是 automatic activation(focus 即 select):RightRail 切 tab 會 unmount
++ *  閃電梯 = 解除武裝(D-13),方向鍵掃過去就把使用者的武裝狀態洗掉,而畫面上只是
++ *  「梯子閃了一下」—— 零錯誤訊號的真錢風險。App 主分頁同款處理,兩處語意一致。
++ *
++ *  抽成單一來源是因為兩處都要這段判斷,而「其中一處漏了 Home/End」這種漂移不會有
++ *  任何畫面訊號,也不會有測試紅(各自的測試各自綠)。
++ *
++ *  回傳:`"select"` = 呼叫端該切換到當前這顆;數字 = 該把焦點移到第幾顆;
++ *  `null` = 不是本組按鍵,呼叫端不要 `preventDefault`。 */
++export function tablistKeyAction(
++  key: string,
++  index: number,
++  count: number,
++): number | "select" | null {
++  // Enter / Space 在 `<button>` 上本來就會觸發原生 click;呼叫端一律 `preventDefault`
++  // 後自己呼叫 select,兩條路徑合一(不 preventDefault 的話 Space 會既捲動又觸發)。
++  if (key === "Enter" || key === " ") return "select";
++  if (count <= 0) return null;
++  if (key === "ArrowRight") return (index + 1) % count;
++  if (key === "ArrowLeft") return (index - 1 + count) % count;
++  if (key === "Home") return 0;
++  if (key === "End") return count - 1;
++  return null;
++}
