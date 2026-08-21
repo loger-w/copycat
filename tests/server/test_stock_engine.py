@@ -927,6 +927,34 @@ class TestBackfillTimeoutRetry:
         assert "放棄" in caplog.text
         await engine.close()
 
+    async def test_release_cancels_pending_timeout_retry_and_clears_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-08-22 review R8 P2:退訂 / 主圖切走必須取消該 code 在途的逾時重排 timer、
+        清掉逾時記帳。留著的話 (a) 孤兒 timer 醒來對已 release 的 code 發 SubHistory、成功後
+        `_backfilled.add` 把剛清掉的記帳寫回(原註解「秒級殘留窗」變成 15s+ 且可發生兩次);
+        (b) 重新訂閱時重試預算已被吃掉,與「訂閱期為界」的記帳語意相反。"""
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
+        assert engine._backfill_timeouts.get("2330") == 1
+        handle = engine._backfill_timeout_handles["2330"]
+        await engine.set_main("2317")  # 2330 無其他 owner → 真退訂
+        assert "2330" not in engine._backfill_timeout_handles
+        assert handle.cancelled()
+        assert "2330" not in engine._backfill_timeouts
+        # 自選路徑同款:訂閱 → 逾時 → 移出自選
+        await engine.set_watchlist(["2330"])
+        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
+        handle = engine._backfill_timeout_handles["2330"]
+        await engine.set_watchlist([])
+        assert "2330" not in engine._backfill_timeout_handles
+        assert handle.cancelled()
+        assert "2330" not in engine._backfill_timeouts
+        await engine.close()
+
     async def test_give_up_stops_group_snapshot_from_reenqueueing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

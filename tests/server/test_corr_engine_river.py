@@ -388,6 +388,50 @@ class TestBackfillTimeoutRetry:
         # 也算通過,那正是這條要擋的失效
         assert all(t.cancelled() for t in tasks)
 
+    async def test_single_flight_full_round_merges_all_legs_into_pending(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """2026-08-22 review R8 P2:被 single-flight 擋下的**整輪**(legs=None,reconnect 觸發)
+        原本什麼都不併、函式直接 return,log 卻印「併回 pending(legs=全部)」。
+        併回全部腿,讓進行中那一輪的尾巴真的重排。"""
+        src = _FakeSource()
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            await _drain()
+            eng._backfill_inflight = True  # 模擬另一輪進行中
+            with caplog.at_level(logging.INFO):
+                await eng._backfill_river(legs=None)
+            assert eng._backfill_pending_legs == set(eng._legs)
+        finally:
+            eng._backfill_inflight = False
+            await eng.close()
+
+    async def test_retry_task_unexpected_error_resets_round_budget(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """2026-08-22 review R8 P2:`_backfill_retry` task 無兜底,非 ConnectionError 例外
+        會以「Task exception was never retrieved」收場,`_backfill_retry_round` 卡在非零 →
+        當天稍後的新 episode 拿到被削過的預算。例外要留痕(WARNING 含 traceback)且歸零。"""
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.0)
+        src = _FakeSource()
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            await _drain()
+            eng._backfill_retry_round = 2
+
+            async def boom(legs: set[str] | None = None) -> None:
+                raise RuntimeError("apply_backfill exploded")
+
+            monkeypatch.setattr(eng, "_backfill_river", boom)
+            with caplog.at_level(logging.WARNING):
+                await eng._backfill_retry({"SXF"})  # 不得把例外往外丟
+            assert eng._backfill_retry_round == 0
+            assert "apply_backfill exploded" in caplog.text
+        finally:
+            await eng.close()
+
     async def test_plain_connection_error_leg_is_not_retried(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
