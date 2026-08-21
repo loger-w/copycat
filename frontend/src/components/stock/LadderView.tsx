@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { ArmRow } from "@/components/ladder/ArmRow";
 import { LOCK_TITLE } from "@/lib/flash-arm";
 import { fmt } from "@/lib/format";
 import type { LadderLot } from "@/lib/ladder-lots";
@@ -189,47 +190,19 @@ export function LadderView({
       {banner}
       {/* 武裝列:武裝/解除 + 鎖定/鎖定中 + 商品別控制項 + 數量快捷 */}
       <div className="border-b border-line px-2 py-1.5">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-pressed={armed}
-            /* disabled 只擋**進入**方向:已武裝時解除鈕恆可按,否則 blocked 契約上
-               武裝態就沒有 UI 出口(change-spec review R2)。 */
-            disabled={armDisabled && !armed}
-            title={armTitle}
-            onClick={onToggleArm}
-            className={cn(
-              // min-w-0:288px 右欄下與鎖定鈕 + 商品別控制項同列,長出去會把列擠換行
-              "min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold",
-              armed
-                ? "border-loss bg-loss text-bg"
-                : "border-line text-ink-dim hover:border-accent hover:text-ink",
-              armDisabled && !armed && "opacity-40",
-            )}
-          >
-            {armed ? "解除" : "武裝"}
-          </button>
-          {onToggleLock !== undefined ? (
-            <button
-              type="button"
-              aria-pressed={locked}
-              disabled={lockDisabled}
-              title={lockTitle ?? LOCK_TITLE}
-              onClick={onToggleLock}
-              className={cn(
-                // shrink-0:武裝鈕才是可壓縮的那顆 —— 鎖定鈕被壓到看不出字就等於沒有訊號
-                "shrink-0 rounded border px-2 py-1 text-xs font-bold",
-                locked
-                  ? "border-accent bg-accent text-bg"
-                  : "border-line text-ink-dim hover:border-accent hover:text-ink",
-                lockDisabled && "opacity-40",
-              )}
-            >
-              {locked ? "鎖定中" : "鎖定"}
-            </button>
-          ) : null}
+        <ArmRow
+          className="flex items-center gap-1"
+          armed={armed}
+          armDisabled={armDisabled}
+          armTitle={armTitle}
+          onToggleArm={onToggleArm}
+          locked={locked}
+          lockDisabled={lockDisabled}
+          lockTitle={lockTitle ?? LOCK_TITLE}
+          onToggleLock={onToggleLock}
+        >
           {armControls}
-        </div>
+        </ArmRow>
         <div className="mt-1 flex items-center gap-1">
           {QTY_PRESETS.map((p) => (
             <button
