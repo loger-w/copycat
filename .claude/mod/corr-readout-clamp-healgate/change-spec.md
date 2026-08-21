@@ -64,3 +64,14 @@ ES/NQ/YM 以外的收盤 clamp 常數調整、corr 引擎取樣節奏、heal 退
   `river_state.py:6-7` 規則 1 補「clamp 第 2 分鐘起不覆寫」、`river_models.__all__` 加 helper。
 - **R7 `_session_date` docstring**:「= 夜盤那一場的**起始日**,不是 TAIFEX 交易日;`_resolve_trade_date` / `/api/calendar` / overlay 基準日(app.py L459/460、481、906、1083、1475)一律仍走 `_today()`,不得改用」。W3 逐條列此五處。
 - **R8 不變式測試**:不 monkeypatch clock 的組合案:注入 `_now` 為 05:05 / 05:06 / 06:00(週六)+ 真 `in_futures_session_now` / `in_txo_session`,斷言「hour<6 門檻 ⊇ 夜盤收盤 + 寬放」(05:05 週六 → session_date 週五 True 且 clock 寬放內;05:06 → clock False;06:00 → session_date 週六 False)。
+
+---
+## Spec review round 2 amendments(限縮輪,`change-spec-review-round-2.json`,7 條全 accepted;收斂)
+- **A1 / A3 / A4 R8 改寫**:clock 用真函式但**顯式傳入同一時刻**:`_heal_gate(_CAL, lambda: futures_mod.in_futures_session_now(time(5,5)))` 且 `app._now` monkeypatch 成同一 datetime。
+  兩張表:TXO 閘(pad 0)05:00:00 True / 05:00:30 False;期貨閘(pad 5m,含端點)05:05:00 True / 05:06 False。門檻對稱案直接斷言 `_session_date()`:05:59 → 週五、06:00 → 週六(不經 AND)。
+  spec 明寫 prod 有兩個獨立取樣點(`app._now` 與 `session.datetime.now()`),測試必須人工對齊。
+- **A2 SC-4 探針拆三量**:印 `app._session_date()`(2026-08-21 / 2026-08-23 / 2026-08-21)、`cal.is_trading_day(_session_date())`(True / False / True)、`session.in_txo_session(time(1,0))`(True);
+  合成值用 `_heal_gate(cal, lambda: in_txo_session(time(1,0)))()`。
+- **A5 W3 改以名稱列舉**:`_resolve_trade_date` 兩處、`/api/calendar.today`、breadth 今日、overlay 基準日兩 handler(行號為改動前)。
+- **A6 `_session_date` docstring 補近似誤差**:夜盤存在與否取決於**次一營業日**;起始日交易日而次一營業日休市(封關夜等)仍空 churn,方向安全;Edge case 補此條。
+- **A7 push predicate 字面**:`rank = close_clamp_rank(minute_end, kind); if rank is not None and rank >= 2 and offset in minutes: return`;rank 0 = 窗內非 clamp 或窗前(由 offset_of 先擋);helper 測試只鎖 end / end+1 / end+2 / end+5 / end+6 五個邊界。
