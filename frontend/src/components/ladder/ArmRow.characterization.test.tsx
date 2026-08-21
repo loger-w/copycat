@@ -49,16 +49,45 @@ const ARM_BUTTON =
 
 const LOCK_TITLE_TEXT = "鎖定:換標的 / 換梯 / 閒置不解除;斷線 / 連 3 敗 / Esc / 解除仍會解除";
 
-const LADDER_VIEW_ARM_ROW =
-  '<div class="flex items-center gap-1">' +
-  ARM_BUTTON +
+const LOCK_BUTTON =
   `<button type="button" aria-pressed="false" title="${LOCK_TITLE_TEXT}" class="shrink-0` +
   ' rounded border px-2 py-1 text-xs font-bold border-line text-ink-dim hover:border-accent' +
-  ' hover:text-ink">鎖定</button>' +
-  '<span data-testid="arm-controls">現沖</span></div>';
+  ' hover:text-ink">鎖定</button>';
+
+const ARM_CONTROLS = '<span data-testid="arm-controls">現沖</span>';
+
+const LADDER_VIEW_ARM_ROW =
+  '<div class="flex items-center gap-1">' + ARM_BUTTON + LOCK_BUTTON + ARM_CONTROLS + "</div>";
 
 const LADDER_VIEW_ARM_ROW_NO_LOCK =
   '<div class="flex items-center gap-1">' + ARM_BUTTON + "</div>";
+
+/** 武裝態 / 鎖定態的期望值**取自改後的 DOM**(改前沒有這兩態的 characterization);
+ *  reviewer 已逐字對照改前兩梯 JSX 的對應分支,確認 class 串與字樣完全相同。
+ *
+ *  補這兩態的理由:靜止態(未武裝 / 未鎖定)全綠不代表**武裝態配色**與**「鎖定中」字樣**
+ *  沒掉 —— 而那正是使用者判斷「現在點價會不會真的送出去」的唯一訊號。 */
+const ARM_BUTTON_ARMED =
+  '<button type="button" aria-pressed="true" class="min-w-0 flex-1 rounded border px-2 py-1' +
+  ' text-xs font-bold border-loss bg-loss text-bg">解除</button>';
+
+const LOCK_BUTTON_LOCKED =
+  `<button type="button" aria-pressed="true" title="${LOCK_TITLE_TEXT}" class="shrink-0` +
+  ' rounded border px-2 py-1 text-xs font-bold border-accent bg-accent text-bg">鎖定中</button>';
+
+const LADDER_VIEW_ARM_ROW_ARMED =
+  '<div class="flex items-center gap-1">' +
+  ARM_BUTTON_ARMED +
+  LOCK_BUTTON +
+  ARM_CONTROLS +
+  "</div>";
+
+const LADDER_VIEW_ARM_ROW_LOCKED =
+  '<div class="flex items-center gap-1">' +
+  ARM_BUTTON +
+  LOCK_BUTTON_LOCKED +
+  ARM_CONTROLS +
+  "</div>";
 
 const FUTURES_ARM_ROW =
   '<div class="flex items-center gap-2">' +
@@ -71,9 +100,10 @@ const FUTURES_ARM_ROW =
 
 let qc: QueryClient;
 
-/** 武裝列 = 武裝鈕的父層 flex 容器(鎖定鈕 / 商品別控制項與它同層)。 */
+/** 武裝列 = 武裝鈕的父層 flex 容器(鎖定鈕 / 商品別控制項與它同層)。
+ *  武裝態的鈕字會變「解除」,所以用 regex 認人;兩梯都沒有第二顆帶這兩個字的鈕。 */
 function armRowHtml(): string {
-  return screen.getByRole("button", { name: "武裝" }).parentElement!.outerHTML;
+  return screen.getByRole("button", { name: /武裝|解除/ }).parentElement!.outerHTML;
 }
 
 beforeEach(() => {
@@ -119,6 +149,52 @@ describe("武裝列 characterization(兩梯 outerHTML 逐字)", () => {
       />,
     );
     expect(armRowHtml()).toBe(LADDER_VIEW_ARM_ROW);
+  });
+
+  it("LadderView:armed → 解除鈕 + border-loss bg-loss text-bg", () => {
+    render(
+      <LadderView
+        code="2330"
+        rows={ROWS}
+        marketBidQty={0}
+        marketAskQty={0}
+        armed={true}
+        onToggleArm={() => {}}
+        locked={false}
+        onToggleLock={() => {}}
+        armControls={<span data-testid="arm-controls">現沖</span>}
+        qty={1}
+        qtyLabel="張數"
+        onQtyPreset={() => {}}
+        onQtyInput={() => {}}
+        onClickPrice={() => {}}
+        onCancelLot={() => {}}
+      />,
+    );
+    expect(armRowHtml()).toBe(LADDER_VIEW_ARM_ROW_ARMED);
+  });
+
+  it("LadderView:locked → 鎖定中鈕 + border-accent bg-accent text-bg", () => {
+    render(
+      <LadderView
+        code="2330"
+        rows={ROWS}
+        marketBidQty={0}
+        marketAskQty={0}
+        armed={false}
+        onToggleArm={() => {}}
+        locked={true}
+        onToggleLock={() => {}}
+        armControls={<span data-testid="arm-controls">現沖</span>}
+        qty={1}
+        qtyLabel="張數"
+        onQtyPreset={() => {}}
+        onQtyInput={() => {}}
+        onClickPrice={() => {}}
+        onCancelLot={() => {}}
+      />,
+    );
+    expect(armRowHtml()).toBe(LADDER_VIEW_ARM_ROW_LOCKED);
   });
 
   it("LadderView:未給 onToggleLock → 鎖定鈕整顆不渲染", () => {
