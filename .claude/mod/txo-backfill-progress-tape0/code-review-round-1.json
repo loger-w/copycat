@@ -1,0 +1,91 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness(opus)",
+  "test-quality mutation(opus)"
+ ],
+ "findings": [
+  {
+   "id": "C1",
+   "severity": "P2",
+   "summary": "ConnectionError 分支 phase 停 backfilling",
+   "disposition": "accepted",
+   "resolution": "寫 phase degraded"
+  },
+  {
+   "id": "C2",
+   "severity": "P2",
+   "summary": "attempt 推播 latest-wins 會跳號",
+   "disposition": "accepted",
+   "resolution": "註解"
+  },
+  {
+   "id": "F1",
+   "severity": "P2",
+   "summary": "view 雙份初值跨視窗 desync",
+   "disposition": "accepted",
+   "resolution": "StockPage mount 通知一次"
+  },
+  {
+   "id": "F2",
+   "severity": "P2",
+   "summary": "tapeRef 舊值窗靠 transition 補正",
+   "disposition": "accepted",
+   "resolution": "不變式註解"
+  },
+  {
+   "id": "F3",
+   "severity": "P2",
+   "summary": "五個 refetch 觸發漂成六",
+   "disposition": "accepted",
+   "resolution": "註解改"
+  },
+  {
+   "id": "F4",
+   "severity": "P2",
+   "summary": "ConnectionBadge 綁 TXO Snapshot 型別",
+   "disposition": "accepted",
+   "resolution": "HandoverProgress 型別反向"
+  },
+  {
+   "id": "T1",
+   "severity": "P1",
+   "summary": "attempt-1 not-merge 斷言同義反覆",
+   "disposition": "accepted",
+   "resolution": "移到 attempt 2"
+  },
+  {
+   "id": "T2",
+   "severity": "P1",
+   "summary": "重試期間推播斷言無鑑別 + sleep 賭時序",
+   "disposition": "accepted",
+   "resolution": "gate 卡住時輪詢 phase=backfilling"
+  },
+  {
+   "id": "T3",
+   "severity": "P2",
+   "summary": "_mark_changed 等價 mutant",
+   "disposition": "accepted",
+   "resolution": "由 T2 承接"
+  },
+  {
+   "id": "T4",
+   "severity": "P2",
+   "summary": "retrying tone 無斷言",
+   "disposition": "accepted",
+   "resolution": "補"
+  },
+  {
+   "id": "T5",
+   "severity": "P2",
+   "summary": "tape 轉換無 StrictMode 案",
+   "disposition": "accepted",
+   "resolution": "補 STRICT"
+  }
+ ],
+ "evidence": {
+  "pytest": "2894",
+  "vitest": "2523",
+  "mutants": "後端 12/12、前端 13/13 killed"
+ }
+}
