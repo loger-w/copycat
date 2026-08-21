@@ -467,6 +467,19 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
     expect(screen.getByText("90")).toBeTruthy();
   });
 
+  // 🔴 B11(SC-3):個股期平倉估價必須走**股票 tick 表**snap(與市價鈕同一支)——
+  // 未 snap 的 90.03 是不合法檔位,後端 `_require_legal_tick` 直接 400 BAD_TICK。
+  // fixture 的 lower 刻意用未對齊的 90_030(90_000 對齊 tick,snap 前後同值 = 測不出來)。
+  it("個股期部位估價 snap 到股票檔位(未對齊的界不得原樣送出)", async () => {
+    positions = [position({ market: "fut", stock_no: "CDFI6", name: "台積電期貨", qty: 2 })];
+    render(rail({ ...STKFUT_CTX, meta: { ...META, lower: 90_030 } }));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    fireEvent.click(await screen.findByRole("button", { name: "平倉" }));
+    expect(screen.getByText("確認平倉")).toBeTruthy();
+    // 多單平倉貼跌停,賣側往上收到 0.1 元檔:90.03 → 90.1(未接 edgeOf 會是 90.03)
+    expect(screen.getByText("90.1")).toBeTruthy();
+  });
+
   it("他契約的期貨部位估不出價 → 平倉鍵鎖住(不放行跨商品平倉)", async () => {
     positions = [position({ market: "fut", stock_no: "TXFH6", name: "台指期", qty: 1 })];
     render(rail(STKFUT_CTX));
