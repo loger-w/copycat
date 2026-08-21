@@ -195,7 +195,7 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
     expect(screen.queryByText("台指 +1.00%")).toBeNull();
   });
 
-  it("該分鐘沒有點的腿顯示「—」(全窗無值的道瓊不進讀值列)", () => {
+  it("全窗無值的腿也進讀值列印「—」", () => {
     mockRect();
     const svg = overlay();
 
@@ -203,8 +203,19 @@ describe("RiverOverlay hover 讀值列(S3 characterization)", () => {
 
     expect(screen.getByText("台指 —")).toBeTruthy();
     expect(screen.getByText("富台 —")).toBeTruthy();
-    // 道瓊全窗無值 → buildOverlayGeometry 不收它,讀值列沒有這一腿(勾選鈕上的字不算)
-    expect(screen.queryByText(/^道瓊 /)).toBeNull();
+    // 道瓊全窗無值 → `buildOverlayGeometry` 照舊不收它(不畫線,免得看成 0% 直線),但讀值列
+    // **要**列出來:讀值列由 `entries` 產生,使用者才看得到「這一腿沒資料」而非這一腿憑空消失。
+    expect(screen.getByText("道瓊 —")).toBeTruthy();
+    // 圖上仍只有兩條線,右緣腿名標籤也沒有道瓊(勾選鈕上的字不在 svg 內,不算)
+    expect(svg.querySelectorAll("polyline").length).toBe(2);
+    const svgTexts = Array.from(svg.querySelectorAll("text")).map((t) => t.textContent);
+    expect(svgTexts).not.toContain("道瓊");
+    // 讀值列順序 = entries 順序(legs 鍵序,與勾選列 / 顏色序位一致),不是幾何回傳的順序
+    const row = screen.getByText("台指 —").parentElement!;
+    const readout = Array.from(row.querySelectorAll("span"))
+      .map((s) => s.textContent ?? "")
+      .filter((t) => /^(台指|富台|道瓊) /.test(t));
+    expect(readout).toEqual(["台指 —", "富台 —", "道瓊 —"]);
   });
 
   it("游標移出 → 讀值列收回提示文案", () => {
