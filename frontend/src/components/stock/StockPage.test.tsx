@@ -128,6 +128,13 @@ describe("StockPage", () => {
     expect(screen.getByText("時間")).toBeTruthy(); // 明細表頭
   });
 
+  it("accum 是 tape=0 取回(tapeOmitted)→ 明細空態印「載入明細…」而非「尚無成交」(SC-4)", () => {
+    const accum = { ...ACCUM, ticks: [], tapeOmitted: true } as unknown as StockAccum;
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum })} />);
+    expect(screen.getByText("載入明細…")).toBeTruthy();
+    expect(screen.queryByText("尚無成交")).toBeNull();
+  });
+
   it("中間不再渲染閃電梯 / 委託 / 部位(已移到右欄)", () => {
     wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream()} />);
     expect(screen.queryByRole("button", { name: "武裝" })).toBeNull();
