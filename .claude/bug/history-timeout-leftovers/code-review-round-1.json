@@ -1,0 +1,8 @@
+{"round":1,"reviewer":"general-purpose (opus, read-only)","scope":"git diff master...HEAD -- copycat tests(round-1 三條)",
+ "findings":[
+  {"id":"P1-1","severity":"P1","file":"corr_engine.py:439","title":"single-flight 修在到不了的分支;reconnect 真丟棄點 = _schedule_backfill inflight 早退","disposition":"accepted → round-2 🔴(_merge_into_inflight_round 下沉 + 真入口紅測試)"},
+  {"id":"P2-1","severity":"P2","file":"corr_engine.py:336","title":"併回吃逾時預算 / round 上限時被放棄分支丟掉 / legs 空集合 truthiness","disposition":"accepted → 整輪併回歸零輪數;`legs is None` 判定"},
+  {"id":"P2-2","severity":"P2","file":"stock_engine.py:1304","title":"worker 逾時分支替已退訂 code 重新武裝 timer","disposition":"accepted → round-2 🔴(_refs 守門 + 紅測試)"},
+  {"id":"P2-3","severity":"P2","file":"test_corr_engine_river.py:391","title":"merge 測試白盒翻旗標,量不到行為","disposition":"accepted → 改走 _schedule_backfill + gate"}],
+ "p2_summary":{"count":3,"themes":["預算語意","退訂殘留窗","測試入口"]},
+ "self_review_head":"see git log fix/history-timeout-leftovers"}
