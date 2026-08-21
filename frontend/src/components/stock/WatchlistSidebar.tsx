@@ -321,6 +321,12 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       );
       // 落點作廢 → 高亮**回到來源組**(review R7):停在「放不進去的那一組」亮著的話,
       // 使用者只會再按一次;回來源組等於畫面說「放開就是原樣」。
+      //
+      // **適用於任何 null 落點,不只作廢帶**(review round-1 F2):側欄外(x 越界)、
+      // 作廢帶內、零 zone 三種 null 走同一條 —— 因為 `up` 對三者的處置也是同一個
+      // (整個作廢)。分態處理的話畫面會說「放開會掉到未分組」而實際是取消,
+      // 也就是高亮與落地行為講不同的話。鎖在測試「移入作廢帶 / 移到側欄外 →
+      // 高亮回來源組」兩條。
       setDrag((p) => (p === null ? p : { ...p, to: target === null ? p.from : target.group }));
     };
     const up = (ev: PointerEvent): void => {

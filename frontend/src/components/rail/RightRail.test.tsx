@@ -476,7 +476,10 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "部位" }));
     fireEvent.click(await screen.findByRole("button", { name: "平倉" }));
     expect(screen.getByText("確認平倉")).toBeTruthy();
-    // 多單平倉貼跌停,賣側往上收到 0.1 元檔:90.03 → 90.1(未接 edgeOf 會是 90.03)
+    // 多單平倉貼跌停,賣側往上收到 0.1 元檔:90.03 → 90.1。
+    // 拆解兩個對照值(review round-1 TQ-4 更正):**未接 edgeOf** 會退回預設的
+    // `futMarketEdgeMilli`(FUT_TICK = 1_000 毫)→ ceil(90_030/1_000)×1_000 = **91**;
+    // 90.03 是**改動前**(平倉估價吃 raw 界、完全不 snap)的值,不是本案的 mutant 觀測值。
     expect(screen.getByText("90.1")).toBeTruthy();
   });
 
