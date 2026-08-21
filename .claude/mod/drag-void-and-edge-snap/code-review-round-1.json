@@ -1,0 +1,82 @@
+{
+ "round": 1,
+ "lenses": [
+  "correctness/真錢邊價(opus)",
+  "test-quality(opus)"
+ ],
+ "findings": [
+  {
+   "id": "F1",
+   "severity": "P2",
+   "summary": "futMarketEdgeMilli snap 後歸零回 0 非 null",
+   "disposition": "accepted",
+   "resolution": "snap 後補守門"
+  },
+  {
+   "id": "F2",
+   "severity": "P2",
+   "summary": "to=from 套用到 x 越界(語意擴張未測)",
+   "disposition": "accepted",
+   "resolution": "註解 + lock"
+  },
+  {
+   "id": "F3",
+   "severity": "P2",
+   "summary": "側欄下方空白仍 append 最後組",
+   "disposition": "accepted",
+   "resolution": "next-time"
+  },
+  {
+   "id": "F4",
+   "severity": "P2",
+   "summary": "後端個股期平倉不過 tick 閘",
+   "disposition": "accepted",
+   "resolution": "next-time(後端)"
+  },
+  {
+   "id": "F5",
+   "severity": "P2",
+   "summary": "ETF 期貨腿平倉用現股表",
+   "disposition": "accepted",
+   "resolution": "next-time"
+  },
+  {
+   "id": "TQ-1",
+   "severity": "P1",
+   "summary": "sticky stub top=0 → .bottom/.height mutant 不可辨",
+   "disposition": "accepted",
+   "resolution": "fixture [40,60]"
+  },
+  {
+   "id": "TQ-2",
+   "severity": "P1",
+   "summary": "非零界下無正向 commit 對照",
+   "disposition": "accepted",
+   "resolution": "補案"
+  },
+  {
+   "id": "TQ-3",
+   "severity": "P2",
+   "summary": "FuturesLadder:110 無未對齊 fixture",
+   "disposition": "accepted",
+   "resolution": "補 20_520_600 案"
+  },
+  {
+   "id": "TQ-4",
+   "severity": "P2",
+   "summary": "註解 mutant 值錯(90.03 應 91)",
+   "disposition": "accepted",
+   "resolution": "改註解"
+  },
+  {
+   "id": "TQ-5",
+   "severity": "P2",
+   "summary": "lower:0 元件層鈕鎖無案",
+   "disposition": "accepted",
+   "resolution": "補案"
+  }
+ ],
+ "evidence": {
+  "full_suite": "2481 passed"
+ }
+}
