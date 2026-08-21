@@ -26,7 +26,7 @@ const ITEMS: RadioPillItem<Kind>[] = [
 const RING =
   "has-focus-visible:ring-1 has-focus-visible:ring-inset has-focus-visible:ring-accent";
 
-function pill(item: RadioPillItem<Kind>, checked: boolean): string {
+function pill(_item: RadioPillItem<Kind>, checked: boolean): string {
   return checked ? "border-accent text-accent" : "border-line text-ink-dim";
 }
 
