@@ -10,6 +10,7 @@ import pytest
 from copycat.live.stock_source import Bar
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.futures_engine import FuturesEngine
+from tests.helpers.wait import wait_until
 
 
 def _quote(product: str = "TXF", **over: object) -> dict:
@@ -619,15 +620,6 @@ class _AlwaysBadRetrySource(FakeSource):
         raise ValueError("wrapper 內部型別錯")
 
 
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件逾時未成立")
-
-
 class TestPendingResubscribe:
     """bug startup-names-futures-resub 症狀 3:訂閱失敗品**零重試路徑**。
 
@@ -641,10 +633,10 @@ class TestPendingResubscribe:
         await engine.start()
         assert src.subscribed == ["TMF"]  # 首輪只有 TMF 成功
         try:
-            await _wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
+            await wait_until(lambda: {"TXF", "MXF"} <= set(src.subscribed))
             # P2-3 收斂不變式:pending 清空後迴圈必須自然結束(while True mutant 下
             # task 常駐洩漏,原測試無任何斷言會紅)
-            await _wait_until(
+            await wait_until(
                 lambda: engine._resub_task is not None and engine._resub_task.done()
             )
             assert engine._pending_subs == set()
@@ -658,7 +650,7 @@ class TestPendingResubscribe:
         src = _FlakySource({"TXF": 1})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: "TXF" in src.subscribed)
+        await wait_until(lambda: "TXF" in src.subscribed)
         _push(src, _quote())
         await _drain()
         assert engine.state()["products"]["TXF"]["p"] == 23_500_000
@@ -679,7 +671,7 @@ class TestPendingResubscribe:
         src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
+        await wait_until(lambda: len(src.attempts) > 3)  # 重試迴圈確實在跑
         await engine.close()
         # T-9:in-flight worker(close 前已過 guard)脫鉤跑完 —— 用靜止條件取代
         # 固定 sleep(快照連續兩次相等),斷言不再吃 OS 排程時序
@@ -745,13 +737,13 @@ class TestPendingResubscribe:
         src = _FlakySource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: len(src.attempts) > 3)
+        await wait_until(lambda: len(src.attempts) > 3)
         loop = engine._loop
         task = engine._resub_task
         assert task is not None
         with caplog.at_level(logging.ERROR):
             engine._loop = None  # 模擬 close 第一步(worker guard 生效)
-            await _wait_until(lambda: task.done())
+            await wait_until(lambda: task.done())
         assert "訂閱重試輪失敗" not in caplog.text
         engine._loop = loop
         await engine.close()
@@ -767,7 +759,7 @@ class TestPendingResubscribe:
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
         try:
-            await _wait_until(lambda: "TXF" in src.subscribed)
+            await wait_until(lambda: "TXF" in src.subscribed)
             assert src.attempts.count("TXF") == 3  # 連線類 + 非連線類 + 成功
         finally:
             await engine.close()
@@ -782,7 +774,7 @@ class TestPendingResubscribe:
         src = _AlwaysBadRetrySource()
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
+        await wait_until(lambda: len(src.attempts) > 3)  # 至少一次 retry 已拋 ValueError
         await engine.close()  # 不得重拋 ValueError
         assert src.closed  # source.close() 必達(KeepAlive 不洩漏)
 
@@ -808,7 +800,7 @@ class TestRetrySuccessLeafBookkeeping:
         assert "TXF" in engine._leaf_fed
         src.fail_subscribe.discard("TXF")  # TC4 恢復 → 下一輪重試成功
         try:
-            await _wait_until(lambda: "TXF" in src.subscribed)
+            await wait_until(lambda: "TXF" in src.subscribed)
             await _drain()
             assert "TXF" in engine._leaf_fed  # SUB 成功 ≠ HOT 已回:記帳保留
             _push(src, _quote())  # TXF 的 HOT 成交推播 = 真判準
@@ -885,7 +877,7 @@ class TestReconnectReconciliation:
         # no running event loop → 全引擎斷流)必紅
         await asyncio.to_thread(src.on_reconnect)
         try:
-            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+            await wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
         finally:
             await engine.close()
 
@@ -895,13 +887,13 @@ class TestReconnectReconciliation:
         src = _FlakyReconnectSource({"TXF": 1})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: engine._resub_task is not None and engine._resub_task.done())
+        await wait_until(lambda: engine._resub_task is not None and engine._resub_task.done())
         old = engine._resub_task
         src.subscribed.clear()
         assert src.on_reconnect is not None
         await asyncio.to_thread(src.on_reconnect)
         try:
-            await _wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
+            await wait_until(lambda: {"TXF", "MXF", "TMF"} <= set(src.subscribed))
             assert engine._resub_task is not old
         finally:
             await engine.close()
@@ -912,7 +904,7 @@ class TestReconnectReconciliation:
         src = _FlakyReconnectSource({p: 10_000 for p in ("TXF", "MXF", "TMF")})
         engine = FuturesEngine(lambda: src, resub_interval_secs=0.01)
         await engine.start()
-        await _wait_until(lambda: len(src.attempts) > 3)
+        await wait_until(lambda: len(src.attempts) > 3)
         task = engine._resub_task
         assert task is not None and not task.done()
         assert src.on_reconnect is not None
@@ -961,7 +953,7 @@ class TestReconnectReconciliation:
         assert src.on_reconnect is not None
         await asyncio.to_thread(src.on_reconnect)
         try:
-            await _wait_until(lambda: src.subscribed.count("TXF") >= 2)  # 對帳重掛完成
+            await wait_until(lambda: src.subscribed.count("TXF") >= 2)  # 對帳重掛完成
             await _drain()
             assert "TXF" in engine._leaf_fed  # SUB OK ≠ HOT 已回:記帳不得清
         finally:
@@ -980,7 +972,7 @@ class TestReconnectReconciliation:
         src.gate.set()
         try:
             # 舊連線上的成功若被出列,MXF 永遠不會再被重掛(count 停在 1)
-            await _wait_until(lambda: src.subscribed.count("MXF") >= 2)
+            await wait_until(lambda: src.subscribed.count("MXF") >= 2)
         finally:
             await engine.close()
 

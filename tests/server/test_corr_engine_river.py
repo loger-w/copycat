@@ -13,6 +13,7 @@ from copycat.corr_config import CorrConfig, Leg
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import corr_engine as corr_engine_mod
 from copycat.server.corr_engine import CorrelationEngine
+from tests.helpers.wait import wait_until
 
 DAY = ("20260730", "day")
 
@@ -151,21 +152,6 @@ class _Clock:
 async def _drain() -> None:
     for _ in range(30):
         await asyncio.sleep(0.001)
-
-
-async def _wait_until(pred: Callable[[], bool], timeout: float = 2.0) -> None:
-    """等到 `pred()` 成立(沿 `test_corr_engine.py` / `test_breadth_engine.py` 的慣例)。
-
-    固定圈數的 `_drain()` 對「要等一個延遲重試醒來」的斷言是兩頭錯:CI 慢一點就假紅,
-    本機快的時候又白等滿全部圈數。條件式等待兩邊都對,失敗訊息也說得出等的是什麼。
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if pred():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError("條件逾時未成立")
 
 
 def _engine(
@@ -364,7 +350,7 @@ class TestBackfillTimeoutRetry:
         try:
             # 等**終態**(分鐘進來了)而不是等固定圈數:`fetched` 是在 fetch 進場時就
             # 記的,等它到 2 只證明第二發開打,還沒證明它的結果被套用
-            await _wait_until(lambda: bool(_minutes(eng, "SXF")))
+            await wait_until(lambda: bool(_minutes(eng, "SXF")))
             # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
             assert _minutes(eng, "SXF") == {76: 12_000_000}
@@ -381,7 +367,7 @@ class TestBackfillTimeoutRetry:
         await eng.start()
         try:
             # 首輪 + 3 輪重試 = 4;沒有上界的話會一路重試到收盤
-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
             await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 5 發(若有)現形
             await _drain()
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4
@@ -394,7 +380,7 @@ class TestBackfillTimeoutRetry:
         src.fail_1k_timeout.add("TC.F.TWF.SXF.HOT")
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
-        await _wait_until(lambda: bool(eng._backfill_retry_tasks))
+        await wait_until(lambda: bool(eng._backfill_retry_tasks))
         tasks = list(eng._backfill_retry_tasks)
         await eng.close()
         # `cancelled()` 而非 `cancelled() or done()`:退避是 5s,close 時它必定還睡在
@@ -417,7 +403,7 @@ class TestBackfillTimeoutRetry:
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 1)
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 1)
             await asyncio.sleep(0.05)
             await _drain()
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 1
@@ -442,12 +428,12 @@ class TestBackfillTimeoutRetry:
         await eng.start()
         try:
             # episode 1:首輪 + 3 輪重試 = 4,然後放棄
-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 4)
             await _drain()
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 4, "上界失效"
             # episode 2:reconnect 觸發全新一輪 —— 預算沒歸零的話這裡只會有 1 發
             eng._on_reconnect_threadsafe()
-            await _wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 8)
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 8)
         finally:
             await eng.close()
 
@@ -465,7 +451,7 @@ class TestBackfillTimeoutRetry:
         eng = _engine(src, futures_minutes_fetch=lambda p: [])
         await eng.start()
         try:
-            await _wait_until(lambda: eng._backfill_inflight)
+            await wait_until(lambda: eng._backfill_inflight)
             round_before = eng._backfill_retry_round
             with caplog.at_level(logging.INFO):
                 await eng._backfill_river(legs={"SXF"})  # 重試醒來,撞上進行中那一輪
