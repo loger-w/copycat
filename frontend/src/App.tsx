@@ -243,7 +243,7 @@ export default function App() {
   /** manual activation(D3',與 RightRail 同一份判斷):方向鍵只移焦點,Enter / Space
    *  才切分頁。自動切換會讓方向鍵掃過的每一頁都真的掛載(lazy chunk + WS gate 全開)。 */
   function onTabKeyDown(e: KeyboardEvent<HTMLButtonElement>, id: Tab): void {
-    const action = tablistKeyAction(e.key, MAIN_TABS.findIndex(([t]) => t === id), MAIN_TABS.length);
+    const action = tablistKeyAction(e, MAIN_TABS.findIndex(([t]) => t === id), MAIN_TABS.length);
     if (action === null) return;
     e.preventDefault();
     if (action === "select") {
