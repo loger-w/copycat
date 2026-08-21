@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
+import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalOrders } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
@@ -147,28 +148,26 @@ export function StockChart({
     // flex-1 min-h-0:圖表吃掉下半列以外的剩餘高度(SC-6)。原本是 shrink-0 的
     // 「寬度決定高度」固定比例,不隨剩餘空間縮,那正是 <main> 會頂出捲軸的原因。
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-1 flex flex-wrap items-center gap-1">
-        {MODE_LABELS.map(([id, label]) => {
+      {/* a11y 批:模式列是單選 —— 12 顆 `aria-pressed` button 讓 AT 聽成 12 個互不相干的
+          開關、鍵盤要按 12 次 Tab 才穿得過。改 RadioPills 後一個 tab stop + 方向鍵切換。
+          期貨態的 `disabled` + tooltip 語意逐字保留(title 掛 label,W8)。 */}
+      <RadioPills<ChartMode>
+        ariaLabel="圖表模式"
+        className="mb-1 flex flex-wrap items-center gap-1"
+        value={mode}
+        onChange={selectMode}
+        items={MODE_LABELS.map(([id, label]) => {
           const blocked = isFut && id !== "intraday";
-          return (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={mode === id}
-              disabled={blocked}
-              title={blocked ? FUT_MODE_HINT : undefined}
-              onClick={() => selectMode(id)}
-              className={cn(
-                "rounded border px-2 py-0.5 text-xs",
-                mode === id ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
-                blocked && "opacity-40",
-              )}
-            >
-              {label}
-            </button>
-          );
+          return { value: id, label, disabled: blocked, title: blocked ? FUT_MODE_HINT : undefined };
         })}
-      </div>
+        pillClass={(item, checked) =>
+          cn(
+            "rounded border px-2 py-0.5 text-xs",
+            checked ? "border-accent text-accent" : "border-line text-ink-dim hover:text-ink",
+            item.disabled && "opacity-40",
+          )
+        }
+      />
       {/* 量測用的恆存 wrapper:loading / error / data 三態都掛在它底下(useContainerSize
           的呼叫端契約 —— ref 只掛 data 分支的話,冷載入會量到 0×0 而 hook 不再重跑)。 */}
       <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">

@@ -420,8 +420,9 @@ describe("StockChart 現貨模式還原(A6)", () => {
     return { setContract: (c: typeof CONTRACT | null) => view.rerender(tree(c)) };
   }
 
+  // a11y 批:模式列改 RadioPills → 選中態由原生 `checked` 表達,不再是 aria-pressed
   const pressed = (name: string) =>
-    screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    (screen.getByRole("radio", { name }) as HTMLInputElement).checked;
 
   it("現貨日K → 進合約(收斂江波圖)→ 切回現貨:回到日K", async () => {
     const { setContract } = mount();

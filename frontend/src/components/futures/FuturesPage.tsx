@@ -1,6 +1,7 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { FuturesChart } from "@/components/futures/FuturesChart";
 import { DepthBar } from "@/components/quote/DepthBar";
+import { RadioPills } from "@/components/ui/RadioPills";
 import type { WsStatus } from "@/hooks/useFuturesStream";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import type { FuturesBarsKey } from "@/hooks/useFuturesBars";
@@ -75,22 +76,23 @@ export function FuturesPage({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
       <header className="flex flex-wrap items-center gap-3 border-b border-line pb-3">
-        <div className="flex overflow-hidden rounded border border-line" role="group" aria-label="商品切換">
-          {products.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={product === id}
-              onClick={() => onProduct(id)}
-              className={cn(
-                "px-3 py-1 text-sm",
-                product === id ? "bg-surface text-ink" : "text-ink-dim hover:text-ink",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* a11y 批:商品列是單選 —— 原 `role="group"` + 三顆 `aria-pressed` button 讓 AT
+            聽成三個互不相干的開關、鍵盤要按三次 Tab 才穿得過。改 RadioPills 後一個 tab
+            stop + 方向鍵切換。容器 `overflow-hidden` 會裁掉外擴的 focus ring,`RadioPills`
+            內建的 `ring-inset` 正是為此。 */}
+        <RadioPills<string>
+          ariaLabel="商品切換"
+          className="flex overflow-hidden rounded border border-line"
+          value={product}
+          onChange={onProduct}
+          items={products.map(([id, label]) => ({ value: id, label }))}
+          pillClass={(_item, checked) =>
+            cn(
+              "px-3 py-1 text-sm",
+              checked ? "bg-surface text-ink" : "text-ink-dim hover:text-ink",
+            )
+          }
+        />
         <h2 className="text-lg font-bold text-ink">
           {state?.name ?? ""} <span className="font-mono text-sm text-ink-muted">{product}</span>
         </h2>

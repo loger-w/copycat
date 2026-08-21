@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { MarketChart } from "@/components/index/MarketChart";
+import { RadioPills } from "@/components/ui/RadioPills";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
@@ -73,6 +74,31 @@ function toX(minute: number): number {
   return ((minute - X_START_MIN) / (X_END_MIN - X_START_MIN)) * SIZE.width;
 }
 
+/** 三態 pill class(選中 / 停用 / 一般)。**單一來源**:標的列 / 期貨商品列 / 週期列
+ *  三組 radiogroup 的 label 與仍是 toggle 的「重疊」鈕共用同一份 —— 兩種元素的外觀必須
+ *  逐值相同,分兩份寫的失效樣態是只有其中一顆的 padding / 顏色漂掉,而畫面照畫。
+ *
+ *  `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成 3 行、
+ *  吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
+ *  門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,rem 門檻讓「塞不塞得下」這個
+ *  條件對 root font-size 不變。**本專案 root 目前恆 16px(無縮放 media query),
+ *  26.5rem = 424px / 41rem = 656px**;真環境量測(2026-08-21):1536 pane 350 → 降級
+ *  (右欄 473 亦降級);1920 pane 466 → 不 compact 但週期列仍 2 行(48px)、右欄 627 →
+ *  七欄;2560 pane 658、右欄 883 → 九欄。
+ *  標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。 */
+function pillClass(item: { disabled?: boolean }, checked: boolean): string {
+  return cn(
+    "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
+    item.disabled
+      ? "cursor-not-allowed border-line text-ink-muted opacity-40"
+      : checked
+        ? "border-accent text-accent"
+        : "border-line text-ink-dim hover:text-ink",
+  );
+}
+
+/** 真開關(「重疊」)。三組單選 pill 已改 `RadioPills`(a11y 批 D2'),此元件只剩
+ *  toggle 語意 —— `aria-pressed` 是對的(W2)。 */
 function Btn({
   label,
   active,
@@ -91,22 +117,7 @@ function Btn({
       disabled={disabled}
       aria-pressed={active}
       aria-disabled={disabled ? "true" : undefined}
-      className={cn(
-        // `@max-[26.5rem]:px-1`:窄 pane(1536 兩欄態 ~346px)下 17 顆週期鈕會折成
-        // 3 行、吃掉 50px 圖高;收 padding 後估算 ≈ 561px / 346 = 1.6 行 → 2 行。
-        // 門檻用 **rem 不用 px** —— 鈕的文字與 padding 全是 rem,rem 門檻讓「塞不
-        // 塞得下」這個條件對 root font-size 不變。**本專案 root 目前恆 16px(無縮放
-        // media query),26.5rem = 424px / 41rem = 656px**;真環境量測(2026-08-21):
-        // 1536 pane 350 → 降級(右欄 473 亦降級);1920 pane 466 → 不 compact 但週期列
-        // 仍 2 行(48px)、右欄 627 → 七欄;2560 pane 658、右欄 883 → 九欄。
-        // 標的列的 3–6 顆鈕同縮:只省空間、不改行數,少一個 prop(D3)。
-        "rounded border px-2 py-0.5 text-xs @max-[26.5rem]:px-1",
-        disabled
-          ? "cursor-not-allowed border-line text-ink-muted opacity-40"
-          : active
-            ? "border-accent text-accent"
-            : "border-line text-ink-dim hover:text-ink",
-      )}
+      className={pillClass({ disabled }, active)}
     >
       {label}
     </button>
@@ -425,40 +436,58 @@ export function MarketPane({
       // inline-size containment 不改軌算。
       className="@container flex min-h-0 min-w-0 flex-col gap-3"
     >
-      {/* 標的列(SC-2) */}
+      {/* 標的列(SC-2)。a11y 批 D2':**拆兩個 radiogroup** —— 「標的」與「期貨商品」
+          語意不同(選了台指期才談大/小/微台),合成一群的話「恰一顆 checked」不成立
+          (台指期與大台會同時亮)。第三顆的 value 是 `futKey`:期貨態時 `marketKey`
+          恆等於它(`selectFut` 會同步兩者),所以 checked 判定與原本的 `active={isFut}` 等價。 */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex gap-1">
-          <Btn label="加權" active={marketKey === "TWSE"} onClick={() => selectKey("TWSE")} />
-          <Btn label="櫃買" active={marketKey === "OTC"} onClick={() => selectKey("OTC")} />
-          <Btn label="台指期" active={isFut} onClick={() => selectKey(futKey)} />
-        </div>
+        <RadioPills<MarketKey>
+          ariaLabel="標的"
+          className="flex gap-1"
+          value={marketKey}
+          onChange={selectKey}
+          items={[
+            { value: "TWSE", label: "加權" },
+            { value: "OTC", label: "櫃買" },
+            { value: futKey, label: "台指期" },
+          ]}
+          pillClass={pillClass}
+        />
         {isFut ? (
-          <div className="flex gap-1">
-            {FUT_LABELS.map(([id, label]) => (
-              <Btn key={id} label={label} active={marketKey === id} onClick={() => selectFut(id)} />
-            ))}
-          </div>
+          <RadioPills<FutKey>
+            ariaLabel="期貨商品"
+            className="flex gap-1"
+            value={futKey}
+            onChange={selectFut}
+            items={FUT_LABELS.map(([id, label]) => ({ value: id, label }))}
+            pillClass={pillClass}
+          />
         ) : null}
       </div>
 
       {/* 週期列(SC-3);櫃買的日/週/月 disabled(SC-6)。
-          窄 pane 下與 Btn 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。 */}
-      <div className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5">
-        {MARKET_MODES.map(([id, label]) => (
-          <Btn
-            key={id}
-            label={label}
-            active={mode === id}
-            disabled={!isModeAvailable(marketKey, id)}
-            onClick={() => selectMode(id)}
-          />
-        ))}
-        {stores.overlay !== undefined && mode === "intraday" && !isFut ? (
-          <span className="ml-2">
-            <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
-          </span>
-        ) : null}
-      </div>
+          窄 pane 下與 pill 的 px-1 一起收(gap 省 16×0.5 = 8px),同一個 26.5rem 門檻。
+          「重疊」是**真開關**(W2 保留 aria-pressed),不進 radio 集合 —— 走 `trailing`
+          插槽掛回同一個容器內的原位置,DOM 順序與折行行為零變(D1'')。 */}
+      <RadioPills<MarketMode>
+        ariaLabel="週期"
+        className="flex flex-wrap items-center gap-1 @max-[26.5rem]:gap-0.5"
+        value={mode}
+        onChange={selectMode}
+        items={MARKET_MODES.map(([id, label]) => ({
+          value: id,
+          label,
+          disabled: !isModeAvailable(marketKey, id),
+        }))}
+        pillClass={pillClass}
+        trailing={
+          stores.overlay !== undefined && mode === "intraday" && !isFut ? (
+            <span className="ml-2">
+              <Btn label="重疊" active={overlay} onClick={toggleOverlay} />
+            </span>
+          ) : null
+        }
+      />
 
       {/* 2026-08-16 一頁總覽:圖高改吃**容器剩餘高**(`flex-1`),不再是「寬 × 220/640」
           的固定比例 —— 改版前不 flex-1 是因為整頁可捲、撐滿會把家數帶擠出視窗;現在
