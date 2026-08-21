@@ -80,13 +80,16 @@ def _now_taipei_time() -> str:
     return f"{_dt.datetime.now():%H:%M:%S.%f}"[:-3]
 
 
-def _spot_trial_now() -> bool:
-    """現貨那把尺的「當下在試撮窗內」——`_flush_watchlist_loop` 的翻轉偵測用。
+def _spot_trial_window_now() -> bool:
+    """現貨那把尺的「當下在試撮**時間窗**內」——**純窗**,不看交易日曆。
 
     per-instrument 判定走 `StockEngine._trial_now`(期貨空窗恆 False);這裡要的是
     「現貨窗有沒有跨過邊界」這**單一**事件,拿某一檔的 key 去算會在自選全空 /
     只剩期貨主圖時失去判準。窗顯式傳 `TRIAL_WINDOWS` 不吃預設值(同
     `parse_stock_realtime` 的 keyword-only 理由:傳錯的失效是靜默的)。
+
+    對外的旗標請走 `StockEngine._spot_trial_now()`(= 本函式 AND 交易日曆,D4');
+    這一支只留給「要的就是窗本身」的地方(觀測分級、格式契約測試)。
     """
     return is_trial_window(_now_taipei_time(), TRIAL_WINDOWS)
 
@@ -119,7 +122,10 @@ _OBSERVE_WINDOWS: tuple[tuple[str, str], ...] = tuple(
 
 
 def _observe_window_now() -> bool:
-    """觀測分級的「當下在(放寬後的)試撮窗內」。
+    """觀測分級的「當下在(放寬後的)試撮窗內」——**純窗**,不看交易日曆(D4')。
+
+    因此它與 payload 的 `trial` 在休市日會不同值(這裡 True、那邊 False):蒐證要看
+    的是窗本身有沒有事件,把日曆 AND 進來等於在休市日把整段紀錄降級成「窗外」。
 
     寬限的理由:窗判準是**本機時鐘**而事件來自 **TC4 時戳**,兩者的秒級偏移會把
     13:25:00 進窗的 0→1 判成「窗外非 0」→ 每檔每日最多產出一對假 WARNING
@@ -322,7 +328,7 @@ class StockEngine:
         # 試撮窗基準**現算播種**(D3 amendment R3):窗內啟動(08:30–09:00 / 13:25–13:30)
         # 時若沿用 `__init__` 的 False,第一輪 flush 會判成「剛進窗」並替全自選各補推
         # 一則 —— 那是假翻轉,而它與真翻轉在 log 與線上都無從分辨。
-        self._trial_on = _spot_trial_now()
+        self._trial_on = self._spot_trial_now()
         self._source.set_trade_date(self._trade_date)  # 休市日回補模式與 source 日窗同步
         self._source.set_on_message(self._on_raw_threadsafe)
         self._source.set_on_no_data(self._on_no_data_threadsafe)
@@ -518,8 +524,17 @@ class StockEngine:
                 await self._acquire_stkfut(key)
             self._enqueue_backfill(key)
 
+    def _spot_trial_now(self) -> bool:
+        """現貨試撮旗標 = 交易日曆 AND 時間窗(D4')——`_flush_watchlist_loop` 的翻轉判準。
+
+        日曆來源是 engine 既有的 `is_trading_day` 注入(單一來源);少了它,休市日的
+        四個窗邊界各會替全自選補推一輪空 quote,畫面在沒有撮合的日子亮起「(緩)」。
+        時鐘走 `self._now_fn`(同 checkpoint 換日判定那顆),窗走模組級純窗函式。
+        """
+        return self._is_trading_day(self._now_fn().date()) and _spot_trial_window_now()
+
     def _trial_now(self, code: str) -> bool:
-        """該 instrument 當下是否在試撮/緩撮窗內(D1)。
+        """該 instrument 當下是否在試撮/緩撮窗內(D1)+ 今天是不是交易日(D4')。
 
         **每次組 payload 當下現算**,不落 `StockDayState`:試撮期 TC4 不推成交 tick
         (2026-07-21 實測),tick 路徑萃取不到「進窗」事件 —— 掛在狀態機上的旗標
@@ -528,6 +543,8 @@ class StockEngine:
         窗對映走 `trial_windows_for`(唯一定義):期貨鍵空窗 → 恆 False,前端因此
         不必自己判 instrument 種類。
         """
+        if not self._is_trading_day(self._now_fn().date()):
+            return False
         return is_trial_window(_now_taipei_time(), trial_windows_for(code))
 
     def snapshot(self, code: str) -> dict:
@@ -1300,7 +1317,7 @@ class StockEngine:
             await asyncio.sleep(self._throttle)
             # 掛既有 1s loop 而不加新 task:一天僅 4 次邊界事件(08:30 / 09:00 /
             # 13:25 / 13:30),直接 publish 不打穿節流。
-            trial_on = _spot_trial_now()
+            trial_on = self._spot_trial_now()
             if trial_on != self._trial_on:
                 self._trial_on = trial_on
                 for code in self._trial_flip_targets():
