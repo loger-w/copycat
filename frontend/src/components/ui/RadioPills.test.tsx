@@ -164,6 +164,90 @@ describe("RadioPills", () => {
     );
   });
 
+  // 🔴 A11Y-3:`<label>` 沒有 UA cursor —— 改前每顆 pill 都是 I-beam 游標且文字可被
+  // 反白選取(原 `<button>` 兩者皆無)。整排 pill 上拖一下就選出一片藍是可見的退化。
+  it("一般態 label 補 cursor-default select-none;disabled 仍是 cursor-not-allowed", () => {
+    render(
+      <Harness items={[ITEMS[0]!, { value: "margin", label: "融資", disabled: true }]} />,
+    );
+    const normal = screen.getByRole("radio", { name: "現股" }).closest("label")!;
+    expect(normal.className).toContain("cursor-default");
+    expect(normal.className).toContain("select-none");
+    expect(normal.className).not.toContain("cursor-not-allowed");
+    const off = screen.getByRole("radio", { name: "融資" }).closest("label")!;
+    expect(off.className).toContain("cursor-not-allowed");
+    expect(off.className).not.toContain("cursor-default");
+  });
+
+  // 🔴 A11Y-5:id 改前是 `useId() 原字 + 使用者可控的 value` —— React 19 的 useId 是
+  // «r0» 形態,而 value 可能帶空白(合約鍵 / 群組名)。兩者都讓 id 不是合法 token,
+  // 拼進 `querySelector("#…")` / CSS 選擇器就是語法錯誤,而畫面完全正常。
+  it("id 是合法 token:不含 useId 的 «»,也不含 value 的空白", () => {
+    render(
+      <RadioPills<string>
+        ariaLabel="標的"
+        value="TX 1"
+        onChange={() => {}}
+        items={[
+          { value: "TX 1", label: "台指 1" },
+          { value: "TX 2", label: "台指 2" },
+        ]}
+        pillClass={() => "border-line"}
+      />,
+    );
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    // 兩顆 id 必須互異(按 index 編號,不靠 value)
+    expect(new Set(radios.map((r) => r.id)).size).toBe(2);
+    for (const r of radios) {
+      expect(r.id).toMatch(/^[A-Za-z0-9_-]+$/);
+      // htmlFor 必須跟著同一份 token,否則 label ↔ input 的顯式關聯斷掉
+      expect(r.closest("label")?.getAttribute("for")).toBe(r.id);
+      expect(r.name).toMatch(/^[A-Za-z0-9_-]+$/);
+    }
+  });
+
+  // 🔴 A11Y-6:PriceLadder 用「點交易別」當作使用者還在的訊號(touchIdle),但點**已選中**
+  // 的那顆不發 change → 武裝閒置計時不重置,使用者明明在操作卻被解除武裝。
+  // 所以互動訊號要走 label 的 click(每次點都有),不是 change。
+  it("onInteract:點已選中的項也觸發(change 不發也算互動)", () => {
+    const onChange = vi.fn();
+    const onInteract = vi.fn();
+    render(
+      <RadioPills<Kind>
+        ariaLabel="交易別"
+        value="cash"
+        onChange={onChange}
+        onInteract={onInteract}
+        items={ITEMS}
+        pillClass={pill}
+      />,
+    );
+    const label = screen.getByRole("radio", { name: "現股" }).closest("label")!;
+    fireEvent.click(label);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onInteract).toHaveBeenCalled();
+  });
+
+  it("onInteract:點未選中的項也觸發;disabled 項不觸發", () => {
+    const onInteract = vi.fn();
+    render(
+      <RadioPills<Kind>
+        ariaLabel="交易別"
+        value="cash"
+        onChange={() => {}}
+        onInteract={onInteract}
+        items={[ITEMS[0]!, ITEMS[1]!, { value: "short", label: "無券", disabled: true }]}
+        pillClass={pill}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "融資" }).closest("label")!);
+    expect(onInteract).toHaveBeenCalled();
+    onInteract.mockClear();
+    // 停用項不是「使用者在操作」的訊號(原 `<button disabled>` 連 click 都不派)
+    fireEvent.click(screen.getByRole("radio", { name: "無券" }).closest("label")!);
+    expect(onInteract).not.toHaveBeenCalled();
+  });
+
   it("leading / trailing slot 渲染在容器內、radio 前後(不新增層)", () => {
     render(
       <RadioPills<Kind>
