@@ -243,6 +243,20 @@ class EngineRuntime:
         overflows = 0
         for attempt in range(1, _HANDOVER_RETRIES + 1):
             self._set_status("backfilling")
+            # 重試進度(B14):快照只在**內容有變**才推(08-19 R1),而重試期間狀態值
+            # 恆為 "backfilling"、五個觀測欄要到 attempt 結束才寫 —— 沒有這一則,整段
+            # 重試在 WS 上是零訊息(心跳已解保活),前端 badge 固定「回補中」不知第幾次。
+            # **不 merge 上一輪的舊欄**(D1''):上一次的 backfill_secs / buffer_used 掛在
+            # 新一輪的進度上就是假資料,而畫面看不出來。
+            self._handover = {
+                "attempt": attempt,
+                "attempts_max": _HANDOVER_RETRIES,
+                "phase": "backfilling",
+            }
+            # 緊接 `_mark_changed()`(冪等):現況上一行 `_set_status` 已經標過一次,
+            # 這裡不依賴那個巧合 —— 日後 `_set_status` 改成「值沒變就不標」時,漏的
+            # 就是重試期間唯一一則推播,而且零錯誤訊號。
+            self._mark_changed()
             self._buffer = HandoverBuffer()
             try:
                 if subscribe or attempt > 1:
@@ -268,14 +282,26 @@ class EngineRuntime:
             buffer = self._buffer
             self._buffer = None
             if buffer is not None:
-                # 回補逾時預警的觀測欄位(log 之外前端可診斷;next-time 2026-07-20 條 2)
+                # 回補逾時預警的觀測欄位(log 之外前端可診斷;next-time 2026-07-20 條 2)。
+                # `phase` 是**這一次 attempt 結束後的去向**,與下面的 status 同義:
+                # 沒溢出 → live;溢出且已是最後一次 → degraded;否則還要再試一次。
+                if not buffer.overflowed:
+                    phase = "live"
+                elif attempt >= _HANDOVER_RETRIES:
+                    phase = "degraded"
+                else:
+                    phase = "backfilling"
                 self._handover = {
                     "backfill_secs": round(backfill_secs, 1),
                     "buffer_used": len(buffer),
                     "buffer_cap": buffer.cap,
                     "buffer_warned": buffer.warned,
                     "overflows": overflows + (1 if buffer.overflowed else 0),
+                    "attempt": attempt,
+                    "attempts_max": _HANDOVER_RETRIES,
+                    "phase": phase,
                 }
+                self._mark_changed()  # 同上:不依賴稍後的 `_set_status` 順手標過
             if buffer is None or buffer.overflowed:
                 overflows += 1
                 logger.warning(
