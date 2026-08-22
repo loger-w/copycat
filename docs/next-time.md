@@ -1,6 +1,21 @@
 ## 2026-08-22(日間鏈 R1–R10 review 留尾;結論 `docs/superpowers/specs/2026-08-22-daytime-chain-review.md`)
 
-P0/P1 與四輪小批另開流程處理(R7 /bug、R1 /mod、R8 /bug、R6+R9 /mod),以下為本次不動的 P2:
+P0/P1 與四輪小批已全數出貨(PR #88 欠帳計數 / #89 VWAP 避讓 / #90 R8 留尾 / #91 calendar+tape_omitted;
+prod 8721 = 6adf20d9、dist 已重建)。
+
+**待 user 過目 / 盤中觀察(真環境無法刻意觸發,以測試代證的五項)**:
+- [ ] **#88 部位面板不再瞬清**:連續死查詢後部位不得被清成空、平倉鍵不得鎖住;log 出現
+  「collector 忽略放棄輪遲到的終止符(部位更新抑制一次,尚欠 n)」= 修復路徑命中。若其後仍見部位瞬清
+  → 20s `STALE_WINDOW_S` 太短,量實際遲到秒數再調。
+- [ ] **#89 個股分時圖右緣 VWAP × MA5 錯開**:2330 盤後開 MA+均價,白色 VWAP 數字與琥珀 MA5 數字上下錯開
+  (08-22 真資料兩者本就只差 0.7px 看不出,下一交易日差距大時再看;截圖 docs/specs/mod-vwap-label-avoid/screenshots/)。
+- [ ] **#90 log 兩句正常訊息**:「backfill … timeout 但已退訂,不重排」(移出自選後不再白打 TC4)/
+  「river 回補 single-flight … 併回 pending(legs=…)」(reconnect 撞上回補中那輪,接著補不是丟掉)。看到即正常。
+- [ ] **#91 群組 → 單檔首 paint**:右下成交明細先閃「載入明細…」再出資料(次秒級,可能看不到);不該再短暫顯示「尚無成交」。
+- [ ] **#91 休市膠囊 5 分鐘內亮**:日曆錯標真交易日為假日時,整天掛著的 preview 分頁跨午夜後 5 分鐘內出現
+  「日曆判今日休市」(平常交易日與週末不亮);真窗口 = 下一個錯標平日。
+
+以下為本次不動的 P2:
 
 - [ ] **VWAP 標籤寬度 index 態低估**(2026-08-22 mod/vwap-label-avoid review P2):`StockIntradayChart.tsx` VWAP 文字硬編 `fmt`
   不吃 `priceText`,加權 `24283.54` 實寬 ≈45px > `VWAP_LABEL_W`=40 → clamp 字尾溢右緣帶(既有)+ 新 obstacle 判定多一道 ≈5px 誤判窄帶。
