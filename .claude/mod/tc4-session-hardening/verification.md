@@ -14,7 +14,7 @@ fake source,未起任何連 TC4 的程序、未碰 prod 8721。
 | 3 | 🔴 | `fix(backend): 關機保證 LOGOUT、自選定序哨兵與鎖粒度、缺年提醒原子化` | N049 / N111 / N112 / N033(安全半) / N051(接線) |
 | 4 | chore | `chore(docs): R8 change-spec 與 verification` | artifacts |
 
-(實際 SHA 見 `git log origin/master..HEAD`;本 session **只 commit,不 push、不建 PR**。)
+SHA(依序):`334c9578` / `445bb849` / `247e1fad` / `ac258c21`(本 session **只 commit,不 push、不建 PR**)。
 
 ## 2. 紅態證據(TDD)
 
