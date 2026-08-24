@@ -1125,3 +1125,133 @@ class TestWebSockets:
                 else:
                     raise AssertionError("等不到 capital_order 事件")
                 assert msg["data"]["seq_no"] == "00000000001"
+
+
+# ---------------------------------------------------------------------------
+# N082:鎖定態送單的稽核 source(payload → 審計檔端到端)
+# ---------------------------------------------------------------------------
+
+
+def _audit_lines(client: CapitalClient) -> list[dict[str, Any]]:
+    import json
+
+    out: list[dict[str, Any]] = []
+    for f in sorted(client._audit_base.glob("*.jsonl")):
+        out.extend(json.loads(line) for line in f.read_text(encoding="utf-8").splitlines())
+    return out
+
+
+class TestFlashLockedAuditSource:
+    def test_flash_locked_source_reaches_audit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """鎖定態(換標的 / 換梯 / 閒置都不解除武裝)送出的單,審計檔要看得出來 ——
+        `source` 只有 panel / flash 兩值時,事後查「這張單是不是在鎖定態下誤送的」
+        沒有任何線索。值域可擴,舊值不變。"""
+        cap, _com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            body = dict(_STOCK_BODY, source="flash-locked")
+            assert client.post("/api/capital/order/stock", json=body).status_code == 200
+        sources = [ln["req"].get("source") for ln in _audit_lines(cap) if ln["action"] == "order"]
+        assert sources and all(s == "flash-locked" for s in sources)
+
+    def test_default_source_still_panel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap, _com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            assert client.post("/api/capital/order/stock", json=_STOCK_BODY).status_code == 200
+        sources = [ln["req"].get("source") for ln in _audit_lines(cap) if ln["action"] == "order"]
+        assert sources and all(s == "panel" for s in sources)
+
+
+# ---------------------------------------------------------------------------
+# N098:平倉路由的個股期檔位閘(R4 review F4)
+# ---------------------------------------------------------------------------
+
+
+class TestPositionCloseTickGate:
+    def test_stkfut_close_illegal_tick_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`/api/capital/position/close` 直送 close_position,只驗 price>0 ——
+        前端 `edgeOf` 是唯一的檔位守門,漏接就是券商退單而畫面零訊號。
+        送單面 / 改價面都有 `_require_legal_tick`,平倉面沒有 = 同一條規則三處只有兩處在。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="fut", stock_no="CDFI6", qty=1)])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "fut", "key": "CDFI6", "price": 1180.5},
+            )
+            assert res.status_code == 400
+            assert res.json()["detail"]["error"] == "BAD_TICK"
+            assert _sent(com, "future") == []
+
+    def test_stkfut_close_legal_tick_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="fut", stock_no="CDFI6", qty=1)])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "fut", "key": "CDFI6", "price": 1180.0},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_index_future_close_not_tick_gated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """白名單:指數期貨不適用現股 tick 表(TXF 是 1 點),既有平倉路徑逐字不變。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="fut", stock_no="TXFI6", qty=1)])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "fut", "key": "TXFI6", "price": 23000.0},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_etf_future_close_not_tick_gated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """白名單:ETF 期貨 / 除權息調整腿的現股 tick 表不適用(60.05 是它的合法檔位),
+        與 `_correct_price_tick_gate` 同一條逃生口 —— 這種部位真的存在,平不掉比擋掉更糟。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="fut", stock_no="NYFI6", qty=1)])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "fut", "key": "NYFI6", "price": 60.05},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "future")) == 1
+
+    def test_sec_close_not_tick_gated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """白名單:現股平倉不走個股期閘(整股 tick 由群益端驗),既有路徑不變。"""
+        _stkfut_map(tmp_path, monkeypatch)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions([Position(market="sec", stock_no="2330", qty=1, kind="cash")])
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "sec", "key": "2330", "price": 590.5},
+            )
+            assert res.status_code == 200
+            assert len(_sent(com, "stock")) == 1

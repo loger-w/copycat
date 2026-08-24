@@ -277,3 +277,33 @@ def test_resolve_trade_date_warns_on_missing_year(caplog: pytest.LogCaptureFixtu
         # 2027-01-02 = 週六 → 只擋週末回 01-01(週五);日曆缺 2027 故 WARNING
         assert resolve_trade_date(date(2027, 1, 2), cal) == date(2027, 1, 1)
     assert len(caplog.records) == 1
+
+
+# --- next_trading_day(N075:夜盤所屬交易日)---------------------------------
+
+
+def test_next_trading_day_returns_self_when_trading() -> None:
+    assert _cal().next_trading_day(date(2026, 8, 14)) == date(2026, 8, 14)
+
+
+def test_next_trading_day_saturday_walks_forward_to_monday() -> None:
+    """週五 15:00 開的夜盤屬於下週一那個交易日 —— 往前走,不是往回走。"""
+    assert _cal().next_trading_day(date(2026, 8, 15)) == date(2026, 8, 17)
+
+
+def test_next_trading_day_across_lunar_new_year() -> None:
+    cal = _cal(holidays=[f"2026-02-{d:02d}" for d in range(12, 21)])
+    assert cal.next_trading_day(date(2026, 2, 12)) == date(2026, 2, 23)
+
+
+def test_next_trading_day_honours_extra_trading_day() -> None:
+    """補班日優先於週末規則(與 `is_trading_day` 同一條)。"""
+    cal = _cal(extra=["2026-08-15"])
+    assert cal.next_trading_day(date(2026, 8, 15)) == date(2026, 8, 15)
+
+
+def test_next_trading_day_raises_when_calendar_is_broken() -> None:
+    """保險絲與 `last_trading_day` 同一條:資料錯掉要炸,不要無窮迴圈。"""
+    cal = _cal(holidays=[(date(2026, 8, 17) + timedelta(days=i)).isoformat() for i in range(90)])
+    with pytest.raises(RuntimeError):
+        cal.next_trading_day(date(2026, 8, 17))

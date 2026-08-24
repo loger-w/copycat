@@ -498,3 +498,50 @@ def test_price_type_survives_clear_and_replay() -> None:
     assert s.orders() == []
     s.apply_reply(_evt(seq=SEQ_A, date="20260610"))
     assert s.orders()[0].price_type == "market"
+
+
+# ---------------------------------------------------------------------------
+# N075:夜盤跨午夜的日界 —— 記本機日 + 交易日兩個候選,任一相符即帶出
+# ---------------------------------------------------------------------------
+
+
+def test_price_type_matches_trade_date_for_night_session() -> None:
+    """夜盤 23:50 送出的市價單:本機日是 20260824,但它屬於 20260825 那個交易日。
+    群益回報的委託建立日若是**交易日**,原本的「本機日必須相等」會讓標籤整段消失
+    (使用者在委託列表看到一張沒有「市價」標的市價單,零錯誤訊號)。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260824", trade_date="20260825")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260825"))
+    assert s.orders()[0].price_type == "market"
+
+
+def test_price_type_still_matches_local_day_for_night_session() -> None:
+    """同一筆夜盤單,群益回報若用的是**本機日曆日**(語意未實證,兩種都要接得住)——
+    加法設計的意義就在這裡:比對集合是舊行為的超集,永遠不會因為改動而失標。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260824", trade_date="20260825")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260824"))
+    assert s.orders()[0].price_type == "market"
+
+
+def test_price_type_still_rejects_unrelated_day() -> None:
+    """fail-safe 方向不得變鬆:兩個候選之外的任何一天照樣不帶(seq 重用誤標路徑不重開)。
+    尤其是**昨日**(20260823)—— 那正是 ±1 日窗會多接受、而交易日口徑不會的那一天。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260824", trade_date="20260825")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260823"))
+    assert s.orders()[0].price_type is None
+
+
+def test_note_price_type_prune_keeps_overlapping_candidates() -> None:
+    """prune 規則同步改成「候選集合不相交才刪」:夜盤那筆(0824/0825)與隔天日盤那筆
+    (0825/0825)屬同一個交易日,前者不可被順手清掉 —— 否則夜盤單在日盤第一張單送出的
+    瞬間失標。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260824", trade_date="20260825")
+    s.note_price_type(SEQ_B, "market", "20260825", trade_date="20260825")
+    s.apply_reply(_evt(seq=SEQ_A, date="20260825"))
+    s.apply_reply(_evt(seq=SEQ_B, date="20260825"))
+    by_seq = {o.seq_no: o for o in s.orders()}
+    assert by_seq[SEQ_A].price_type == "market"
+    assert by_seq[SEQ_B].price_type == "market"
