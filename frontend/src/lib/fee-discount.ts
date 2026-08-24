@@ -97,7 +97,7 @@ export function useFeeDiscountField(): {
   /** 輸入框 onChange:更新 raw,合法即 persist(並通知其他讀者) */
   onRawChange: (raw: string) => void;
 } {
-  const value = useSyncExternalStore(subscribe, readFeeDiscount, () => FEE_DISCOUNT_DEFAULT);
+  const value = useFeeDiscount();
   const [raw, setRaw] = useState<string>(() => String(value));
   const lastWrite = useRef<number>(value);
   const [prev, setPrev] = useState<number>(value);
