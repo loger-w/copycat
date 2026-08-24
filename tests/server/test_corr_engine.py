@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Callable
 
 from copycat.corr_config import CorrConfig, Leg
@@ -501,3 +502,82 @@ class TestNoHardcodedSymbols:
 
         _Visitor().visit(tree)
         assert offending == []
+class _ReconnectSource(_FakeSource):
+    """帶 `on_reconnect` 屬性的 source(對齊 TC4QuoteSource 介面;futures fake 同款)。"""
+
+    def __init__(self, *, fail_on: set[str] | None = None) -> None:
+        super().__init__(fail_on=fail_on)
+        self.on_reconnect: Callable[[], None] | None = None
+
+
+class _GatedReconnectSource(_ReconnectSource):
+    """重試輪的 subscribe 卡在 gate 上(製造 in-flight 窗;放行後成功)。"""
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__(fail_on={symbol})
+        self.gate = threading.Event()
+        self.retrying = threading.Event()
+        self._symbol = symbol
+        self._first_round = True
+
+    def subscribe_raw(self, symbol: str) -> None:
+        if symbol == self._symbol and self._first_round:
+            self._first_round = False
+            raise ConnectionError(f"SUBQUOTE fail {symbol}")
+        if symbol == self._symbol:
+            self.retrying.set()
+            assert self.gate.wait(timeout=2)
+        self.subscribed.append(symbol)
+
+
+class TestReconnectResubscribes:
+    """N261:corr 的 `_on_reconnect` 只重跑江波圖回補、**不重訂閱**(corr_engine.py:108
+    的註解自承)。TC4 `_check_stale` 的重掛迴圈對失敗品只留 warning、中途拋錯更會讓
+    尾段 symbol 靜默蒸發 —— stock 有 `_resubscribe_all`/`_failed_resubs` 對帳、futures
+    有 `_handle_reconnect` 全品回填 pending,corr 掉了的那條腿整場零推播且零錯誤訊號。
+    """
+
+    async def test_reconnect_requeues_every_tc4_leg(self) -> None:
+        src = _ReconnectSource()
+        eng = _engine(
+            src,
+            txf_state=lambda: _futures_state(1, 2),
+            clock=_Clock(),
+            resub_interval_secs=0.01,
+        )
+        await eng.start()
+        assert set(src.subscribed) == {"TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"}
+        src.subscribed.clear()
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await wait_until(
+                lambda: set(src.subscribed) == {"TC.F.CME.NQ.HOT", "TC.F.TWF.SXF.HOT"}
+            )
+            # base 腿(futures_engine 來源)結構上不得被重訂:重複訂 TXF.HOT 會讓其中
+            # 一邊永久零推播(`_resub_loop` 迭代 `tc4_legs()` 的同一條理由)
+            assert "TC.F.TWF.TXF.HOT" not in src.subscribed
+        finally:
+            await eng.close()
+
+    async def test_inflight_retry_success_during_reconnect_stays_pending(self) -> None:
+        """重試輪 `await` 期間發生重連 → 該筆成功掛在**舊連線**上(SUB 隨 dispose 蒸發),
+        不得出列(照 futures 的 `_resub_epoch`)—— 出列 = 兩邊都認為訂上了、實際零推播。
+        """
+        src = _GatedReconnectSource("TC.F.CME.NQ.HOT")
+        eng = _engine(
+            src,
+            txf_state=lambda: _futures_state(1, 2),
+            clock=_Clock(),
+            resub_interval_secs=0.01,
+        )
+        await eng.start()
+        try:
+            await asyncio.to_thread(src.retrying.wait, 2)  # retry in-flight(卡在 gate)
+            assert src.on_reconnect is not None
+            src.on_reconnect()  # 重連插入(已在 loop thread → 直接排 call_soon)
+            await asyncio.sleep(0)
+            src.gate.set()
+            await wait_until(lambda: src.subscribed.count("TC.F.CME.NQ.HOT") >= 2)
+        finally:
+            await eng.close()

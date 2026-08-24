@@ -124,6 +124,9 @@ class CorrelationEngine:
         self._resub_interval_secs = resub_interval_secs
         self._pending_subs: set[str] = set()
         self._resub_task: asyncio.Task[None] | None = None
+        # 重連世代(N261,照 futures `_resub_epoch`):重試輪 await 期間世代變了 =
+        # 該筆成功掛在**舊連線**上(SUB 隨 dispose 蒸發),不得出列
+        self._resub_epoch = 0
 
     # ---- 生命週期 ----
 
@@ -180,11 +183,16 @@ class CorrelationEngine:
         for leg in self._config.tc4_legs():
             if leg.symbol not in self._pending_subs:
                 continue
+            epoch = self._resub_epoch
             try:
                 await asyncio.to_thread(source.subscribe_raw, leg.symbol)
             except ConnectionError:
                 # 留在 pending,下輪再試(log 字串與首輪一致 = 單一 grep 判準)
                 logger.warning("corr subscribe %s(%s)失敗,進重試佇列", leg.key, leg.symbol)
+                continue
+            if epoch != self._resub_epoch:
+                # await 期間發生重連:這筆成功掛在舊連線上,留在 pending 下輪重掛
+                # (N261,照 futures review C-4)
                 continue
             self._pending_subs.discard(leg.symbol)
             logger.info("corr %s subscribe retry ok", leg.key)
@@ -444,7 +452,27 @@ class CorrelationEngine:
     def _on_reconnect_threadsafe(self) -> None:
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._schedule_backfill)
+            loop.call_soon_threadsafe(self._handle_reconnect)
+
+    def _handle_reconnect(self) -> None:
+        """重連對帳(N261):**先重訂閱、再補回補**。
+
+        舊碼只重跑江波圖回補 —— 而 `_check_stale` 的重掛迴圈對 SUBQUOTE 失敗品只留
+        warning、迴圈中途拋錯更會讓尾段 symbol 整批靜默蒸發。stock 有
+        `_resubscribe_all` / `_failed_resubs` 對帳、index 有分時自癒鏈接得住,corr 這條
+        腿掉了就整場零推播、零錯誤訊號(相關係數只是恆 `—`)。
+
+        對帳 = 全 tc4 腿回填 pending 交給既有的重試迴圈(`subscribe_raw` 走 UNSUB→SUB
+        冪等,重掛仍活著的腿無害)。**迭代 `tc4_legs()`**:base 腿(futures_engine 來源)
+        結構上不可能被塞進 pending —— 重複訂 `TXF.HOT` 會讓其中一邊永久零推播。
+        """
+        if self._loop is None:
+            return  # close 已開始:排入在途的回呼不得再建 task(照 futures review C-3)
+        self._resub_epoch += 1
+        self._pending_subs.update(leg.symbol for leg in self._config.tc4_legs())
+        if self._resub_task is None or self._resub_task.done():
+            self._resub_task = self._loop.create_task(self._resub_loop())
+        self._schedule_backfill()
 
     def _schedule_backfill(self) -> None:
         loop = self._loop

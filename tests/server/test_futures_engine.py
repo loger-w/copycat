@@ -1110,3 +1110,59 @@ class TestBarsRangeSession:
         finally:
             await engine.close()
         assert [c[4] for c in src.bars_calls] == ["allday", "day"]
+class TestReconnectLeafReconcile:
+    """N260:重連對帳只回填 HOT —— 重連若掉了 leaf 契約訂閱(`_check_stale` 的重掛
+    迴圈中途拋錯會讓尾段 symbol 靜默蒸發),`_leaf_done` 記帳仍在、`st.p` 還留著 leaf
+    推來的舊值,`_leaf_fallback` 的兩道判準都不武裝 → 要等跨日重武裝才補得回來。
+    """
+
+    async def test_reconnect_rearms_leaf_for_leaf_fed_products(self) -> None:
+        src = _ReconnectSource()
+        engine = FuturesEngine(
+            lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.01
+        )
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed  # TXF HOT 零推播 → leaf 接手
+        _push(src, _quote(Symbol="TC.F.TWF.TXF.202608"))  # leaf 推播回填 p
+        await _drain()
+        assert engine.state()["products"]["TXF"]["p"] is not None
+        src.leaf_subscribed.clear()
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await wait_until(
+                lambda: src.subscribed.count("TXF") >= 2
+            )  # HOT 對帳重掛完成
+            await _drain()
+            _push(
+                src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608")
+            )  # 同月:別品帶 ym 進來
+            await asyncio.sleep(0.05)
+            await _drain()
+            assert ("TXF", "202608") in src.leaf_subscribed, "重連掉了 leaf 卻不重武裝"
+        finally:
+            await engine.close()
+
+    async def test_reconnect_keeps_price_of_products_that_never_needed_leaf(
+        self,
+    ) -> None:
+        """只有 `_leaf_fed` 的品要清 p 重武裝 —— HOT 自己在推的品不得被清成 null
+        (那是「重連一下右上角期貨價就空一格」的新失效)。"""
+        src = _ReconnectSource()
+        engine = FuturesEngine(
+            lambda: src, leaf_grace_secs=999.0, resub_interval_secs=0.01
+        )
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await _drain()
+        assert engine.state()["products"]["MXF"]["p"] is not None
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await _drain()
+            assert engine.state()["products"]["MXF"]["p"] is not None
+        finally:
+            await engine.close()

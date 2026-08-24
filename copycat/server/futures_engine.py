@@ -412,11 +412,24 @@ class FuturesEngine:
         對帳 = 全品回填 pending 交給重試迴圈:subscribe 走 UNSUB→SUB 冪等,重掛仍
         活著的品無害。成本(review C-6,接受):健康品每次重連多吃一輪 UNSUB→SUB
         (數十 ms 真空窗 + 2 發 REQ),首輪重掛等一個 interval(prod 10s)——
-        換到的是「掉訂型態不用逐一枚舉」的無條件收回。leaf 訂閱的對帳不在此
-        (掉 leaf 需等跨日重武裝,記 next-time)。
+        換到的是「掉訂型態不用逐一枚舉」的無條件收回。
+
+        **leaf 訂閱一併對帳**(N260):`_check_stale` 的重掛迴圈只重掛 `_subscribed`,
+        失敗品僅留 warning、中途拋錯更會讓尾段整批蒸發 —— leaf 契約掉了的話,
+        `_leaf_done` 記帳仍在、`st.p` 還留著 leaf 推來的舊值,`_leaf_fallback` 的兩道
+        判準(`p is None`、`key not in _leaf_done`)一道都不成立 → 要等跨日重武裝才補
+        得回來,期間畫面凍結在舊價且零錯誤訊號。收法 = 對 `_leaf_fed` 的品清掉它們的
+        `_leaf_done` 鍵並把 `p` 歸 None,讓既有的 fallback 路徑重走一次(同「換月重武裝」
+        的手法)。健康品不動 —— 無條件清 p 會讓每次重連右上角期貨價空一格。
         """
         if self._loop is None:
             return  # close 已開始:排入在途的回呼不得再建 task(review C-3)
+        if self._leaf_fed:
+            self._leaf_done = {k for k in self._leaf_done if k[0] not in self._leaf_fed}
+            for product in self._leaf_fed:
+                st = self._states.get(product)
+                if st is not None:
+                    st.p = None
         self._pending_subs.update(self._products)
         self._resub_epoch += 1
         if self._resub_task is None or self._resub_task.done():

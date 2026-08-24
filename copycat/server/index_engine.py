@@ -232,7 +232,8 @@ class IndexEngine:
         if hasattr(self._source, "on_reconnect"):
             self._source.on_reconnect = self._on_reconnect_threadsafe  # type: ignore[attr-defined]
         try:
-            await asyncio.to_thread(self._subscribe_and_backfill)
+            # 合併在 loop 端做(N094):worker 只回傳
+            self._merge_backfill(await asyncio.to_thread(self._subscribe_and_backfill))
         except ConnectionError:
             logger.warning("index start:TC4 不可用,標 stale 並背景重試(design R5)")
             self._twse.stale = True
@@ -258,13 +259,28 @@ class IndexEngine:
                 pass
         await asyncio.to_thread(self._source.close)
 
-    def _subscribe_and_backfill(self, variant: int = 0) -> bool:
-        """訂閱 + 回補當日 1K;回傳「本次是否帶來**新分鐘鍵**」。
+    def _subscribe_and_backfill(self, variant: int = 0) -> dict[str, int]:
+        """**worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,不碰任何共享狀態。
+
+        N094:舊碼在這裡直接 in-place `.update()` 三顆 dict,而 event loop 端同時在
+        `_minutes_lag_exceeded` 走 `max(m)`、在 `_payload` / `state()` 走 `dict(...)`
+        —— 理論可撞 `RuntimeError: dictionary changed size during iteration`,而炸點在
+        `_broadcast_loop` 的 try/except **之外**(該發的自癒靜默消失)。更實際的一半:
+        被取消的 retry 其 orphan `to_thread` 工作項照樣跑完並寫入,cancel 攔不到。
+
+        收法 = 「worker 只回傳、合併在 loop 端做」(`_merge_backfill`)。cancel 之後
+        `await` 不再返回 → 合併那一步天然不會發生,不需要額外的世代旗標。
+        """
+        self._source.subscribe_symbol(_SYMBOL)
+        return self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
+
+    def _merge_backfill(self, minutes: dict[str, int]) -> bool:
+        """**event loop thread**:把回補的分鐘併進狀態;回「本次是否帶來新分鐘鍵」。
 
         判準是鍵集合差而非值(review L1-P1-2):毒化訂閱回的凍結 stub 只有一根,
         但它的 Close 隨現價漂 —— 以值比對會把同一根 stub 每發都算成進展,自癒又回到
         「宣告治好、重用死窗口」的原狀。回傳 False 只代表「零新鍵」,不代表 fetch 失敗
-        (失敗一律是 ConnectionError)。
+        (失敗一律是 ConnectionError,在 `_subscribe_and_backfill` 那一側拋)。
 
         **pending 期間寫 `_pending_backfill` 而不是 `_twse.minutes`**(N107):rollover
         偵測到新日之後,source 的日窗已經切到新日 → 這一趟抓回來的是**新日**的 1K,
@@ -272,13 +288,10 @@ class IndexEngine:
         仍會從 `state()` 拿到)。落點是**回補區**不是 live pending 區,兩者在 swap 的
         優先序不同(見 `_swap_day`)。
 
-        本函式跑在 worker thread,所以三顆 dict 一律 **in-place `.update()`**
-        (review SP2(a)):`d = {**new, **d}` 是「讀快照 → 換新 dict」,讀與寫之間
-        event loop 的 `_handle_quote` 若寫進舊 dict,那一筆就人間蒸發(畫面上只是少
-        一個分鐘點)。跨執行緒無鎖這件事本身是既有家族(N094),本輪不擴大。
+        三顆 dict 仍一律 **in-place `.update()`**(review SP2(a)):`d = {**new, **d}`
+        是「讀快照 → 換新 dict」,讀與寫之間排進來的 `_handle_quote` 若寫進舊 dict,
+        那一筆就人間蒸發(畫面上只是少一個分鐘點)。
         """
-        self._source.subscribe_symbol(_SYMBOL)
-        minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
         if self._pending_date is not None:
             # 進展判定要看**整個新日**已知的鍵(回補 ∪ live),否則 live 已經推過的
             # 分鐘會被算成「新鍵」,無進展的 stub 反而看起來有進展
@@ -302,7 +315,7 @@ class IndexEngine:
         while True:
             await asyncio.sleep(backoff)
             try:
-                progressed = await asyncio.to_thread(self._subscribe_and_backfill, variant)
+                fetched = await asyncio.to_thread(self._subscribe_and_backfill, variant)
             except ConnectionError:
                 backoff = min(backoff * 2, 60.0)
                 continue
@@ -310,6 +323,9 @@ class IndexEngine:
                 logger.exception("index retry 非預期失敗(續試)")
                 backoff = min(backoff * 2, 60.0)
                 continue
+            # 合併點在 cancel 之後(N094):被取消的 retry 走不到這裡,orphan 的
+            # executor 工作項就再也碰不到 `_twse.minutes` / `_pending_backfill`
+            progressed = self._merge_backfill(fetched)
             if not clear_stale and not progressed:
                 # heal 型的「成功」判準是**產出面的差量**:fetch 沒丟例外不等於 minutes
                 # 前進(TC4 對毒化訂閱回的是凍結 stub),而「有沒有追上牆鐘」也不是判準
