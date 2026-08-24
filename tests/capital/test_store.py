@@ -463,6 +463,37 @@ def test_price_type_not_applied_across_days() -> None:
     assert s2.orders()[0].price_type is None
 
 
+def test_price_type_binding_rejects_same_seq_different_order() -> None:
+    """review R6 ST1:夜盤市價單記 (0824, 0825),隔日日盤同 seq 的**另一張單**(他處下的
+    限價)不得被標成市價 —— 標的或方向任一不符就不帶出;完全相符才是同一張。"""
+    s = CapitalStore()
+    s.note_price_type(
+        SEQ_A, "market", "20260824", trade_date="20260825", stock_no="2330", buy_sell="B"
+    )
+    s.apply_reply(_evt(seq=SEQ_A, date="20260825", stock="2317", bs="B00R2"))  # 標的不同
+    assert s.orders()[0].price_type is None
+    s2 = CapitalStore()
+    s2.note_price_type(
+        SEQ_A, "market", "20260824", trade_date="20260825", stock_no="2330", buy_sell="B"
+    )
+    s2.apply_reply(_evt(seq=SEQ_A, date="20260825", stock="2330", bs="S00R2"))  # 方向不同
+    assert s2.orders()[0].price_type is None
+    s3 = CapitalStore()
+    s3.note_price_type(
+        SEQ_A, "market", "20260824", trade_date="20260825", stock_no="2330", buy_sell="B"
+    )
+    s3.apply_reply(_evt(seq=SEQ_A, date="20260825", stock="2330", bs="B00R2"))  # 同一張
+    assert s3.orders()[0].price_type == "market"
+
+
+def test_price_type_binding_none_means_unbound() -> None:
+    """綁定值 None(該路徑沒有可綁的值,如期貨單只綁方向)→ 該欄不參與比對,舊行為不變。"""
+    s = CapitalStore()
+    s.note_price_type(SEQ_A, "market", "20260610", buy_sell="B")  # 只綁方向
+    s.apply_reply(_evt(seq=SEQ_A, date="20260610", stock="9999", bs="B00R2"))
+    assert s.orders()[0].price_type == "market"
+
+
 def test_note_price_type_prunes_other_days() -> None:
     """review r1 IMPL-7:_price_types 只增不減,server 長跑數週就是一路長。
     寫入時同鎖 prune 掉其他日期的項 —— 它們早已因日期不符而不會帶出。"""

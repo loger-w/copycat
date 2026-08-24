@@ -78,7 +78,8 @@ class CapitalStore:
         # 因為它不是回報事件的產物 —— 送單結果與 N 回報的到達序不保證(COM 執行緒 vs
         # async),掛在 _Agg 上會在「結果先回」時無處可放。`clear()` 不清(見該方法註)。
         # 候選日 = 本機日曆日(+ 夜盤時的所屬交易日),見 `note_price_type`(N075)。
-        self._price_types: dict[str, tuple[str, tuple[str, ...]]] = {}
+        #: seq → (價格別, 候選日, 綁定的 stock_no, 綁定的 B/S);後兩者 None = 該路徑沒有可綁的值
+        self._price_types: dict[str, tuple[str, tuple[str, ...], str | None, str | None]] = {}
         # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
         self._positions: dict[tuple[str, str], Position] = {}
 
@@ -161,7 +162,14 @@ class CapitalStore:
                 self._set_status(a, "退單")
 
     def note_price_type(
-        self, seq_no: str, price_type: str, date: str, *, trade_date: str | None = None
+        self,
+        seq_no: str,
+        price_type: str,
+        date: str,
+        *,
+        trade_date: str | None = None,
+        stock_no: str | None = None,
+        buy_sell: str | None = None,
     ) -> None:
         """記下本 app 送出的價格別(送單成功且拿到 seq 時呼叫)。
         `date` = 送出當日 YYYYMMDD:server 長跑跨日、券商 seq 若重用,
@@ -179,15 +187,23 @@ class CapitalStore:
         同鎖內順手 prune 掉**候選集合與本次不相交**的舊項(review r1 IMPL-7 + N075):
         它們早已因日期不符而不會帶出,留著只是讓 dict 隨 server 長跑單調成長。
         判準從「日期不等」改成「集合不相交」是必要的 —— 否則夜盤那筆(0824/0825)會被
-        隔天日盤第一張單(0825/0825)順手清掉,標籤在同一個交易日內就沒了。"""
+        隔天日盤第一張單(0825/0825)順手清掉,標籤在同一個交易日內就沒了。
+
+        `stock_no` / `buy_sell`(review R6 ST1)= 這張單的標的與方向("B"/"S"),帶出時
+        回報的同名欄位要**等值**才算同一張單。多開的那個交易日候選正是 seq 重用的誤標窗
+        (群益 seq 是日曆日重置還是交易日重置**未實證**):夜盤 0824 23:50 的市價單記
+        (0824, 0825),隔日 0825 日盤若他處(群益 APP)下了同 seq 的限價單,只比日期會把它
+        標成市價。綁標的 + 方向後,同 seq 撞到不同單就不帶出 —— 回到「只缺標籤、不誤標」。
+        `None` = 該路徑沒有可綁的值(期貨單的 `tc4_symbol` 與回報契約碼不同域 → 只綁方向;
+        平倉沒有方向 → 只綁 key),不參與比對。"""
         days = (date,) if trade_date is None or trade_date == date else (date, trade_date)
         with self._lock:
             stale = [
-                s for s, (_pt, d) in self._price_types.items() if not set(d) & set(days)
+                s for s, (_pt, d, _sn, _bs) in self._price_types.items() if not set(d) & set(days)
             ]
             for s in stale:
                 del self._price_types[s]
-            self._price_types[seq_no] = (price_type, days)
+            self._price_types[seq_no] = (price_type, days, stock_no, buy_sell)
 
     def forget_price_type(self, seq_no: str) -> None:
         """作廢某筆的價格別記憶(改價成功時呼叫)。
@@ -202,7 +218,15 @@ class CapitalStore:
         noted = self._price_types.get(a.seq_no)
         if noted is None or a.date is None:
             return None
-        return noted[0] if a.date in noted[1] else None
+        price_type, days, stock_no, buy_sell = noted
+        if a.date not in days:
+            return None
+        # 綁定欄位有值就必須等值(review R6 ST1):同 seq 撞到不同標的 / 方向的單 → 不帶出
+        if stock_no is not None and a.stock_no is not None and a.stock_no != stock_no:
+            return None
+        if buy_sell is not None and a.buy_sell is not None and a.buy_sell != buy_sell:
+            return None
+        return price_type
 
     def _to_record(self, a: _Agg) -> OrderRecord:
         if a.market in _SEC_LOT_MARKETS or a.market is None:

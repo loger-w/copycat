@@ -128,6 +128,11 @@ def _calendar() -> TradingCalendar:
     return _CALENDAR
 
 
+def _side_code(buy_sell: object) -> str | None:
+    """請求端 `BuySell`("buy"/"sell")→ 回報端 idx6 首碼("B"/"S");其餘(含 None)→ None。"""
+    return {"buy": "B", "sell": "S"}.get(buy_sell) if isinstance(buy_sell, str) else None
+
+
 def _trade_ymd(when: datetime | None = None) -> str:
     """該時刻**所屬的交易日** YYYYMMDD(N075:價格別標籤的第二個比對候選)。
 
@@ -362,7 +367,13 @@ class CapitalClient:
         # 市價單在委託列表永久失標。刪/改/減量的 req 沒有 price_type → 不記。
         price_type = getattr(req, "price_type", None)
         if isinstance(price_type, str):
-            self._note_price_type(result, price_type)
+            stock_no = getattr(req, "stock_no", None)
+            self._note_price_type(
+                result,
+                price_type,
+                stock_no=stock_no if isinstance(stock_no, str) else None,
+                buy_sell=_side_code(getattr(req, "buy_sell", None)),
+            )
         record = self._record(action, req, result=result)
         record["late"] = True
         try:
@@ -796,7 +807,14 @@ class CapitalClient:
 
     # ------------------------------------------------------------------ 送單
 
-    def _note_price_type(self, result: OrderResult, price_type: str | None) -> None:
+    def _note_price_type(
+        self,
+        result: OrderResult,
+        price_type: str | None,
+        *,
+        stock_no: str | None = None,
+        buy_sell: str | None = None,
+    ) -> None:
         """送單成功且拿到委託序號 → 把價格別記進 store(SC-10)。
         群益回報無價格別欄,委託列表要標「市價」只能靠這一手。
 
@@ -809,10 +827,17 @@ class CapitalClient:
         日期記**兩個候選**:本機日曆日 + 該時刻所屬的交易日(N075)。夜盤跨午夜時兩者
         不同,而群益回報的委託建立日是哪一種語意未實證 —— 記兩個是舊行為的超集,
         不會讓現在標得出來的單失標,理由與 prune 規則見 `store.note_price_type`。
-        平倉路徑也經過送單函式 → 一併標。"""
+        平倉路徑也經過送單函式 → 一併標。
+        `stock_no` / `buy_sell`(回報口徑 "B"/"S")綁進 note:多開的交易日候選正是 seq 重用
+        的誤標窗,綁標的 + 方向後撞到不同單就不帶出(review R6 ST1;規則在 `store`)。"""
         if price_type and result.ok and result.seq_no:
             self.store.note_price_type(
-                result.seq_no, price_type, _today_ymd(), trade_date=_trade_ymd()
+                result.seq_no,
+                price_type,
+                _today_ymd(),
+                trade_date=_trade_ymd(),
+                stock_no=stock_no,
+                buy_sell=buy_sell,
             )
 
     async def submit_stock_order(
@@ -824,7 +849,9 @@ class CapitalClient:
         result = await self._execute_write(
             action=action, req=req, gate=check_stock_order(req, self._safety), com_call=_do
         )
-        self._note_price_type(result, req.price_type)
+        self._note_price_type(
+            result, req.price_type, stock_no=req.stock_no, buy_sell=_side_code(req.buy_sell)
+        )
         return result
 
     async def submit_future_order(
@@ -861,7 +888,8 @@ class CapitalClient:
         result = await self._execute_write(
             action=action, req=req, gate=gate, com_call=_do, message_prefix=prefix
         )
-        self._note_price_type(result, req.price_type)
+        # 期貨單的 `tc4_symbol` 與回報契約碼不同域 → 只綁方向
+        self._note_price_type(result, req.price_type, buy_sell=_side_code(req.buy_sell))
         return result
 
     # ------------------------------------------------------------------ 刪/改/減(雙帳號路由)
