@@ -130,3 +130,50 @@ describe("useFlashArm 回傳契約(change-spec review R4 / SC-10)", () => {
     expect(b.result.current.state).toEqual({ armed: false, locked: false, failStreak: 0 });
   });
 });
+
+// 🔴 N080:`CapitalConfirmDialog` 在 keydown 上 `stopPropagation()`(窗開著時 Esc 只作用
+// 於窗)。React 19 把合成事件掛在 root container 上,冒泡到那裡就被截斷 → window 的
+// **冒泡**監聽收不到 → 鎖定中 + 平倉確認窗開著時按 Esc 只關窗、武裝與鎖定原封不動,
+// 而 `LOCK_TITLE` 白紙黑字寫著「Esc 仍會解除」。改 capture 相位:事件下行時 window 先收
+// 一次,窗自己的處理一個字都沒被剝奪(兩邊各做各的)。
+describe("useFlashArm 的 Esc 相位(N080)", () => {
+  function withDialogLikeChild(): { root: HTMLDivElement; target: HTMLButtonElement } {
+    const root = document.createElement("div");
+    const target = document.createElement("button");
+    root.appendChild(target);
+    document.body.appendChild(root);
+    return { root, target };
+  }
+
+  it("子樹在 keydown 上 stopPropagation 時,Esc 仍解除武裝", () => {
+    const { root, target } = withDialogLikeChild();
+    root.addEventListener("keydown", (e) => e.stopPropagation());
+    const { result } = renderHook(() => useFlashArm());
+    act(() => result.current.dispatch({ type: "toggle" }));
+    expect(result.current.state.armed).toBe(true);
+    fireEvent.keyDown(target, { key: "Escape" });
+    expect(result.current.state.armed).toBe(false);
+    root.remove();
+  });
+
+  it("鎖定態同理:Esc 連 locked 一起清(LOCK_TITLE 的承諾)", () => {
+    const { root, target } = withDialogLikeChild();
+    root.addEventListener("keydown", (e) => e.stopPropagation());
+    const { result } = renderHook(() => useFlashArm());
+    act(() => result.current.dispatch({ type: "lock" }));
+    expect(result.current.state).toEqual({ armed: true, locked: true, failStreak: 0 });
+    fireEvent.keyDown(target, { key: "Escape" });
+    expect(result.current.state).toEqual({ armed: false, locked: false, failStreak: 0 });
+    root.remove();
+  });
+
+  it("Esc 以外的鍵不受影響(capture 監聽不是把所有鍵都吃掉)", () => {
+    const { root, target } = withDialogLikeChild();
+    root.addEventListener("keydown", (e) => e.stopPropagation());
+    const { result } = renderHook(() => useFlashArm());
+    act(() => result.current.dispatch({ type: "toggle" }));
+    fireEvent.keyDown(target, { key: "Enter" });
+    expect(result.current.state.armed).toBe(true);
+    root.remove();
+  });
+});

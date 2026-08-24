@@ -1025,3 +1025,50 @@ describe("FuturesLadder 梯頂市價鈕", () => {
     expect(screen.getByLabelText("買 22999")).toBeTruthy();
   });
 });
+
+// 🔴 N081 + 🔴 N082(期貨梯)。
+describe("FuturesLadder 武裝閘與稽核 source(N081 / N082)", () => {
+  it("N081:WS 非 open 時武裝鈕 disabled + 文案(與鎖定鈕同一個答案)", () => {
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    setCapitalWsStatus("connecting");
+    render(ladder());
+    const arm = screen.getByRole("button", { name: "武裝" });
+    expect(arm.hasAttribute("disabled")).toBe(true);
+    expect(arm.getAttribute("title")).toBe("連線未就緒,無法武裝");
+    act(() => setCapitalWsStatus("open"));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("N081:已武裝後 WS 轉 connecting → 解除鈕恆可按(disabled 只擋進入方向)", () => {
+    mockFetch({ "/api/capital/orders": () => json({ orders: [] }) });
+    setCapitalWsStatus("open");
+    render(ladder());
+    armUp();
+    act(() => setCapitalWsStatus("connecting")); // connecting 不清武裝(只有 closed 才 conn_lost)
+    const off = screen.getByRole("button", { name: "解除" });
+    expect(off.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("N082:鎖定態點價 → source=flash-locked;未鎖定 → flash", async () => {
+    const bodies: { source?: string }[] = [];
+    mockFetch({
+      "/api/capital/order/future": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+      "/api/capital/orders": () => json({ orders: [] }),
+      "/api/capital/positions": () => json({ positions: [] }),
+    });
+    setCapitalWsStatus("open");
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 22999"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]?.source).toBe("flash");
+
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    fireEvent.click(screen.getByLabelText("賣 23001"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies[1]?.source).toBe("flash-locked");
+  });
+});

@@ -1540,3 +1540,47 @@ describe("PriceLadder 梯頂市價鈕", () => {
     expect(bodies.length).toBe(3);
   });
 });
+
+// 🔴 N081 + 🔴 N082(現股梯)。
+describe("PriceLadder 武裝閘與稽核 source(N081 / N082)", () => {
+  it("N081:WS 非 open 時武裝鈕 disabled + 文案(與鎖定鈕同一個答案)", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("connecting");
+    render(ladder());
+    const arm = screen.getByRole("button", { name: "武裝" });
+    expect(arm.hasAttribute("disabled")).toBe(true);
+    expect(arm.getAttribute("title")).toBe("連線未就緒,無法武裝");
+    act(() => setCapitalWsStatus("open"));
+    expect(screen.getByRole("button", { name: "武裝" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("N081:已武裝後 WS 轉 connecting → 解除鈕恆可按(disabled 只擋進入方向)", () => {
+    mockCapitalFetch();
+    setCapitalWsStatus("open");
+    render(ladder());
+    armUp();
+    act(() => setCapitalWsStatus("connecting"));
+    expect(screen.getByRole("button", { name: "解除" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("N082:鎖定態點價 → source=flash-locked;未鎖定 → flash", async () => {
+    const bodies: { source?: string }[] = [];
+    mockCapitalFetch({
+      "/api/capital/order/stock": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json(OK_RESULT);
+      },
+    });
+    setCapitalWsStatus("open");
+    render(ladder());
+    armUp();
+    fireEvent.click(screen.getByLabelText("買 100"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]?.source).toBe("flash");
+
+    fireEvent.click(screen.getByRole("button", { name: "鎖定" }));
+    fireEvent.click(screen.getByLabelText("賣 100.5"));
+    await waitFor(() => expect(bodies.length).toBe(2));
+    expect(bodies[1]?.source).toBe("flash-locked");
+  });
+});

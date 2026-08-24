@@ -327,3 +327,36 @@ describe("futCloseEstimate 平倉估價吃 snap 後邊價(edgeOf 注入)", () =>
     ).toBe(90);
   });
 });
+
+// 🟢 N014-3:「市價鈕送的價」與「平倉鍵估的價」必須同值 —— 現況靠註解維持,
+// 任一側改口徑都不會有測試紅。兩座梯各釘一條顯式等值。
+describe("N014:邊價等值 lock(市價鈕 × 平倉估價)", () => {
+  const OFF = { upper: 25_080_400, lower: 20_520_600 };
+
+  it("期貨:futCloseEstimate 的元 === futMarketEdgeMilli 的毫元 / 1000", () => {
+    for (const [qty, side] of [
+      [-1, "buy"],
+      [2, "sell"],
+    ] as const) {
+      const edge = futMarketEdgeMilli(side, OFF.upper, OFF.lower);
+      expect(edge).not.toBeNull();
+      expect(futCloseEstimate({ stock_no: "TXFI6", qty }, "TXFI6", OFF)).toBe(edge! / 1000);
+    }
+  });
+
+  it("個股期:同一份界下 stkfutMarketEdgeMilli 與注入它的平倉估價同值", () => {
+    const meta = { upper: 90_030, lower: 74_070 };
+    const edgeOf = (side: "buy" | "sell", u: number | null, l: number | null) =>
+      stkfutMarketEdgeMilli(side, { upper: u, lower: l });
+    for (const [qty, side] of [
+      [-1, "buy"],
+      [3, "sell"],
+    ] as const) {
+      const edge = stkfutMarketEdgeMilli(side, meta);
+      expect(edge).not.toBeNull();
+      expect(futCloseEstimate({ stock_no: "CDFI6", qty }, "CDFI6", meta, edgeOf)).toBe(
+        edge! / 1000,
+      );
+    }
+  });
+});
