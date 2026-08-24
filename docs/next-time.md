@@ -216,11 +216,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
-- [ ] **D4 現股市價安全首單 — 1068 已修(PR #94),待 prod 重啟 + 安全首單兩筆**:user 盤中 5608 市價賣 ×5、
-  6770 市價買 ×1 全被群益拒:`SK_ERROR_SPECIAL_TRADE_TYPE_IS_MARKETPRICE_AND_ORDERPRICE_SHOULD_BE_ZERO`。
-  根因(已修,PR #94):市價映射 `bstrPrice` 歸 "0"(字面 "0" 為推定,仍 1068 → 改試 "0.00")。
-  驗收兩筆:低價股 1 張市價 + **一鍵平倉一筆**(該路徑 audit 全史零成功,本修首次成立)→
-  群益 APP 核對 → 截圖回填 `.claude/mod/ladder-market-buttons/verification.md` §4。
 - [ ] **委託列表「市價」標籤的日界語意**(KL-4):`store.note_price_type` 記本機日曆日,`_price_type_of`
   要求與回報 `_Agg.date`(委託建立日)相等;夜盤跨午夜 / 盤後預約單未實證 → 不符只缺標籤不誤標。
   收斂候選:交易日口徑(`trading_calendar`)或 ±1 日窗(與前端 `ymdWindow` 同口徑)。
@@ -229,8 +224,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   (2026-08-24 註:user 之後找機會下單再驗;現股側 1068 修時一併盤點期貨端 `"M"` 路徑。)
 ## 2026-08-17(mod/flash-arm-lock 留尾)
 
-- [ ] **鎖定態全域指示器**(spec R-3):停在 TXO / 指數頁或右欄委託 / 部位 tab 時畫面上沒有任何
-  「鎖定中」訊號,回到梯上才看得到。候選:RightRail tablist 旁小徽章(UI 拍板)。
 - [ ] **CapitalConfirmDialog 開著時 Esc 不解除鎖定**(spec R-6;next-time:190 既有語意的鎖定版):
   窗內 stopPropagation → 鎖定中 + 平倉確認窗開著時 Esc 只關窗。改 capture 監聽屬 🔴,另案。
 - [ ] **未鎖定時「WS closed 期間仍可武裝」的既有邊沿語意**(spec review R1 衍生):鎖定鈕已在非 open
