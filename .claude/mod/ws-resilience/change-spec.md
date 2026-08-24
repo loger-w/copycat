@@ -36,8 +36,12 @@ accept 點(`app.py` 6 + `capital_api.py` 2)全走 `ws.py::relay`。`WsStatus` �
 Chrome intensive throttling(隱藏 > 5 min)把 5 s tick 拉成 1/min → 每個 tick 都撞 Edge 13 守門(`sinceTick > 2×tick`)
 → 恆重置基準、恆不判定;回前景後第一個 tick 仍被吞,最壞再等 35 s。
 處置:武裝期間監聽 `document.visibilitychange`,轉 `visible` 時把 **tick 基準(`lastTickAt`)重設為 now**,
-讓緊接的下一個 tick(≤ 5 s)以真實 `lastMsgAt` 判定。**不同步立判**:凍結期間積壓的 frame 要留派發窗口,
-否則健康連線會被誤殺(false positive 比 false negative 貴:8 條齊重連 + refetch)。偵測延遲從「≤ 35 s」收成「≤ 5 s」。
+並開一個 tick 的 **grace(`graceUntil = now + tick`)**:距回前景不足一個 tick 的 tick 不判定。
+理由(review SP3 修正前的版本只重設基準,沒有機制):解凍後逾期的 interval 會在 ~0 ms 補跑,
+`sinceTick ≈ 0` 過得了凍結守門 → 直接拿凍結期間的舊 `lastMsgAt` 判定,積壓 frame 若晚於
+visibilitychange 派發就誤殺健康連線(false positive 比 false negative 貴:8 條齊重連 + refetch)。
+grace 過後第一個 tick 以真實 `lastMsgAt` 判定 → 偵測延遲從「≤ 35 s」收成「≤ 5 s + ε」。
+與 rounds 檔「重置 + 立判」的差異已申報:立判 = 下一個合格 tick,不是同步。
 listener 隨 `arm()` 掛、隨 `clearWatchdog()` 拆(watchdog 放棄 / onclose / `handle.close()` 三路都經過它);
 `typeof document === "undefined"` 時跳過(非瀏覽器環境)。
 
@@ -55,16 +59,18 @@ listener 隨 `arm()` 掛、隨 `clearWatchdog()` 拆(watchdog 放棄 / onclose /
 ### N036 — 8 處 accept-then-close 改 reject-before-accept(🔴 後端)
 engine 缺席分支移到 `accept()` **之前**:starlette 在 CONNECTING 態送 `websocket.close` = uvicorn 回 HTTP 403 拒握手
 (`websockets_impl.py:288`),browser 端 `onopen` 不觸發、直接 onerror/onclose。
-- `/ws/breadth`:載入中分支**不再送「載入中 scalar」**(send 需先 accept;REST `/api/breadth/state` 已回同語意 loading 態,
-  前端 `useBreadth` 對該 frame 的處理與 REST 同形,無獨立讀者)。兩分支(未 boot / 未設定)皆 reject。
+- `/ws/breadth`:載入中分支**不再送「載入中 scalar」**(send 需先 accept;REST `/api/market/breadth` 已回同語意 loading 態
+  (`loading → enabled/stale`),前端 `useBreadth` 對該 frame 的處理與 REST 同形,無獨立讀者)。兩分支(未 boot / 未設定)皆 reject。
 - `/ws/stock`:三旗標(stock / boot_done / signal_hub)改在 accept **之前**同一同步區塊讀 —— 原本「accept 之後讀」是為了
   避免跨 await 的兩時點快照;搬到 accept 之前同樣是單一時點。殘餘 race = 讀到 `stock=None & boot_done=False` 後 boot 恰好
   完成 → 這一代被 reject,client 退避後重連即拿到 seed(與現況同款自癒)。`stock=None & boot_done=True` 是終態
-  (XR-3:TC4 從未起 → 要重啟 server),不會被 accept 後的變化推翻。
+  (XR-3:TC4 從未起 → 要重啟 server),不會被 accept 後的變化推翻。非 None 分支「先讀 `stock` 再 await accept」
+  的窗口(review SP5)不成立:engine 只在 boot 建一次、不熱抽換(rollover 在 engine 內部)。
 - `/ws/corr` `/ws/river` `/ws/index` `/ws/capital` `/ws/futures`:`None` 分支前移。
 - **已知取捨(向 user 申報)**:前端對「握手失敗」走「從未 open」分支(cap 30 s),對 accept-then-close 走短命 cap 5 s。
-  改 reject 後 **boot 期間**的重連節奏由 1,2,4,5,5,… 變 1,2,4,8,16,30,…:server 重啟 → boot ≈ 12.6 s 的常態下
-  復原時點兩者同為 ≈ 31 s(短命 cap 要到再下一輪才生效);**boot > 30 s 時最壞多等 ≤ 25 s**。
+  改 reject 後 **boot 期間**的重連節奏由 1,2,4,5,5,… 變 1,2,4,8,16,30,…。兩種節奏在「第一次撞到 accept-then-close」
+  之前完全相同(短命 cap 要到再下一輪才生效):自 server 消失起的重試點皆為 1 / 3 / 7 / 15 / 31 s,boot ≈ 12.6 s 的常態
+  下兩者都在 15 s 那一擊接上;差異只在 boot 落在 15–31 s 之後的情況,**最壞多等 ≤ 25 s**(review SP4 重算)。
   收益 = 握手期零 accept/close 往返、uvicorn access log 由每 5 s 一行降到每 ≤ 30 s 一行、
   `wsStatus` 不再閃 `open`。可逆 = revert 8 處(各 3–5 行)。
 事前標記「該變」:`test_breadth_routes`「test_engine_absent_closes」「test_before_boot_sends_loading_frame_then_closes」、

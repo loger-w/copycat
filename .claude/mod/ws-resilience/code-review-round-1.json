@@ -1,0 +1,24 @@
+{
+  "fixed_point": "master (5f9d02b0)",
+  "reviewed_head": "03165faf",
+  "standards": [
+    {"id": "ST1", "severity": "P3(判斷)", "summary": "_CLOSE_SENT_MARKERS 首個 marker「Unexpected ASGI message 」比 spec 宣稱的兩句寬,邊界靠外部字串", "location": "copycat/server/ws.py:98", "disposition": "accepted → marker 收成 uvicorn 三實作共同子字串 \"after sending 'websocket.close'\";HTTP 側「…after response already completed」從此認不到"},
+    {"id": "ST2", "severity": "P3(判斷)", "summary": "Speculative Generality:watchdogJitterMs option 零 caller", "location": "frontend/src/lib/ws-reconnect.ts:66,94", "disposition": "rejected — WsOptions 既有 silenceTimeoutMs / watchdogTickMs / minUptimeMs / shortLivedCapMs 同樣零外部 caller,是「每個常數皆可覆寫」的既定 pattern;只拔一顆讓 option 面不對稱"},
+    {"id": "ST3", "severity": "P3(判斷)", "summary": "extraJitterMs > 0 ? … : 0 冗餘分支(random×0 本就是 0)", "location": "frontend/src/lib/ws-reconnect.ts:110", "disposition": "accepted → 簡化為 Math.floor(Math.random() * extraJitterMs)"},
+    {"id": "ST4", "severity": "P3(判斷)", "summary": "Duplicated Code:5 處 route 的 await websocket.close() 一行 + 6 條測試三行樣板;/ws/stock 兩處 accept", "location": "app.py:1739/1762/1776, capital_api.py:328/351, tests/server/*", "disposition": "rejected — 單行 close 抽 helper 是 Middle Man;三行 pytest 慣用式散在六個不同 fixture 的檔,抽共用反而藏語意;/ws/stock 兩處 accept 是分支結構(XR-3 空流 vs 正常流)各自 accept,合併需改流程結構"},
+    {"id": "ST5", "severity": "P3(判斷)", "summary": "randomSpy 在兩個 describe 重複宣告且型別 ReturnType<typeof vi.spyOn> 退化近 any", "location": "frontend/src/lib/ws-reconnect.test.ts:348,590", "disposition": "accepted → 提到模組層一份,型別 MockInstance<() => number>"},
+    {"id": "ST6", "severity": "P3(判斷)", "summary": "測試檔頭仍宣稱「本檔鎖抽出當下的現行語意」,已含 R4 翻轉案", "location": "frontend/src/lib/ws-reconnect.test.ts:2-6", "disposition": "accepted → 檔頭改寫為「起源 characterization,之後逐輪以事前標該變 → 翻轉疊上」"}
+  ],
+  "spec": [
+    {"id": "SP1", "severity": "P2", "summary": "N037 rounds 原文「回前景重置+立判」,實作只重設 lastTickAt、無立判(已申報為取捨)", "location": "frontend/src/lib/ws-reconnect.ts:128-131", "disposition": "accepted(與 SP3 合併處理)→ 立判 = 回前景後滿一個 tick 的第一個 tick;change-spec §1 N037 改寫申報差異"},
+    {"id": "SP2", "severity": "P2", "summary": "N037 真環境未驗到觸發條件(hidden 分頁僅 75–92 s,未達 5 min throttling)", "location": "verification.md §4", "disposition": "accepted 為限制 → verification §6 如實記「僅 fake-timer 證據」+ 原因(唯一分頁在 user 視窗、headless 無法模擬 throttling)+ user 端可觀察差異"},
+    {"id": "SP3", "severity": "P2", "summary": "「不同步立判 = 留派發窗口」程式裡無對應機制:解凍後逾期 interval ~0 ms 補跑,sinceTick≈0 過凍結守門 → 拿舊 lastMsgAt 判定,積壓 frame 晚於 visibilitychange 派發就誤殺健康連線", "location": "frontend/src/lib/ws-reconnect.ts:144-152", "disposition": "accepted → 紅先行兩條(逾期 tick 立刻補跑不判定 / grace 內積壓 ping 到達不誤殺;grace 過後真半死仍判定)→ onVisibilityChange 開 graceUntil = now + tick,tick 內 now < graceUntil 不判定"},
+    {"id": "SP4", "severity": "P3", "summary": "app.py 註解與 change-spec 寫 /api/breadth/state,實際端點 /api/market/breadth;「兩者同 ≈31 s」比實算(重試點 1/3/7/15/31)樂觀", "location": "copycat/server/app.py:1714, change-spec §1 N036", "disposition": "accepted → 路徑改正;取捨段改寫為「第一次撞到 accept-then-close 前兩節奏相同,boot ≈ 12.6 s 兩者都在 15 s 那擊接上,差異只在 boot 落在 15–31 s 之後」"},
+    {"id": "SP5", "severity": "P3", "summary": "/ws/stock 非 None 分支先讀 stock 再 await accept,accept 期間 engine 被換掉會 relay 舊 stream", "location": "copycat/server/app.py:1819", "disposition": "rejected — engine 只在 boot 建一次、不熱抽換(rollover 在 engine 內部),窗口實務不存在;change-spec 補一句"},
+    {"id": "SP6", "severity": "無", "summary": "N039 覆蓋三個 uvicorn ws 實作 + starlette,前綴命中;反向風險僅「比原文寬」", "location": "copycat/server/ws.py", "disposition": "no change(寬度問題由 ST1 收窄)"},
+    {"id": "SP7", "severity": "無", "summary": "N038 jitter 不污染下一輪 backoff(以未加 jitter 的 delay 倍增,測試釘住)", "location": "frontend/src/lib/ws-reconnect.ts:112-113", "disposition": "no change"},
+    {"id": "SP8", "severity": "無", "summary": "N035 resetWsPingMemory / pingingUrls 在 src 零殘留", "location": "frontend/src", "disposition": "no change"}
+  ],
+  "whitelist": "W1–W10 兩軸皆核為全數守住;被改而未事前標「該變」的既有 assertion:無",
+  "disposition": "Standards 6 條(全 P3 判斷型):接受 ST1 / ST3 / ST5 / ST6,反駁 ST2 / ST4。Spec 8 條:SP1+SP3(P2)接受並以紅先行補 grace 機制,SP2 接受為文件化限制,SP4 接受修正文件,SP5 反駁,SP6–SP8 無需改動。收修後 gate:pytest 43(ws/breadth 目標檔)+ ruff + pyright 全綠;vitest 141 files / 2674 tests 全綠;tsc / eslint 全綠;react-doctor 仍只有存量 CorrPanel:6。"
+}

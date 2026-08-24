@@ -41,6 +41,16 @@
 | `npx eslint src`(frontend/) | PASS(exit 0) |
 | `npx react-doctor@latest --scope changed --no-telemetry` | 1 warning `CorrPanel.tsx:6 only-export-components` = **存量**(`out/doctor-baseline.txt:34` 同檔同條,原 line 7,本輪刪一行 import 位移到 6),無新增 → PASS |
 
+### 3b. review 收修波後重跑(SP3 grace / ST1 marker / ST3 / ST5 / ST6 / SP4)
+
+| 指令 | 結果 |
+|---|---|
+| `pytest -q tests/server/test_ws_disconnect.py tests/server/test_breadth_routes.py` | 43 passed |
+| `ruff check copycat tests` / `pyright` | All checks passed / 0 errors |
+| `npx tsc -b` / `npx eslint src/lib/ws-reconnect*.ts` | PASS |
+| `npx vitest run`(全套) | **141 files / 2674 tests passed**(+2:SP3 兩條紅測試翻綠) |
+| `npx react-doctor@latest --scope changed --no-telemetry` | 仍只有存量 `CorrPanel.tsx:6` → PASS |
+
 ## 4. 真實環境(2026-08-25 01:11–01:23,零 TC4 / 零 ZMQ / 零群益)
 
 兩台:`--verify` 8722(fake TXO,其餘引擎不起)+ 側車 8899(`evidence/sidecar_server.py`:fake 六源 + `/_fake/stall`,
@@ -76,5 +86,9 @@
 ## 6. 未做 / 留尾(交還 user)
 
 - N036 取捨:boot > 30 s 時 client 復原最壞多等 ≤ 25 s(change-spec §1 N036 已算);常態 boot ≈ 12.6 s 兩者同 ≈ 31 s。
-- N037 的「立判」實作為「回前景後下一個 tick(≤ 5 s)」而非同步判定(避免誤殺凍結期間積壓 frame 的健康連線)。
+- N037 的「立判」實作為「回前景後滿一個 tick 的第一個 tick(≤ 5 s + ε)」而非同步判定(review SP3 補上 grace 機制,
+  兩條紅測試釘住:逾期 tick 立刻補跑不判定 / grace 內積壓 ping 到達不誤殺)。
+- **N037 真環境未驗到觸發條件**(review SP2):需隱藏 ≥ 5 min(intensive throttling)再回前景;本輪唯一可用的 Chrome 分頁
+  在 user 視窗內,拉到前景會搶掉盤點頁,headless 分頁又無法模擬 throttling → 只有 fake-timer 證據。
+  User 端可觀察的差異:離開分頁 > 5 min 期間若 server 半死,回來後 ≤ 5 s 重連(舊版最壞 35 s)。
 - N039 只認 uvicorn / starlette 兩句原文;升版若改字串 → 退回 re-raise(噪音回來,不是靜默失效)。
