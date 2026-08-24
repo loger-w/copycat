@@ -104,6 +104,11 @@ removeLocal(key: string): boolean
 readLocalJson(key: string): unknown             // 未設 / 空字串 / 壞 JSON / 存取即拋 → null
 ```
 
+**警告旗標四個**(review ST3 後由三個增為四個):`warnedRead` / `warnedWrite` /
+`warnedRemove`(boolean,module 級)+ `warnedParseKeys`(`Set<string>`,**per-key**)。
+四種故障各自獨立:政策鎖 / 配額滿 / 殘值清不掉 / 舊值格式壞 —— 共用旗標會讓先發生的
+那個把其餘的永久靜音;壞 JSON 那支再細到 per-key,因為四個 JSON 呼叫點是各自獨立的資料。
+
 判定型決定(逐條寫明理由,交 review):
 
 1. **`writeLocal` / `removeLocal` 回布林而不是 `void`** —— 有兩個呼叫端要分辨成敗(W2 / W3)。
@@ -115,9 +120,9 @@ readLocalJson(key: string): unknown             // 未設 / 空字串 / 壞 JSON
    已經一行,包一層只是多一個名字。API 面越小越好。
 4. **`readLocalJson` 回 `unknown` 不回泛型 `T`** —— 存進去的是使用者瀏覽器裡的舊資料,
    `as T` 會讓「schema 變了」這件事在型別上消失。四個呼叫點本來就各自驗形狀,原樣保留。
-5. **警告 module 級只發一次,讀 / 寫 / 壞 JSON 三個旗標各自獨立** —— 完全靜默違反鐵則 E;
-   每次都印會把 console 洗掉(讀取端住在 render 路徑上)。三個旗標分開是因為它們是不同故障
-   (政策鎖 vs 配額滿 vs 資料壞),共用一個會讓先發生的把另一個永久靜音。
+5. **警告只發一次,四個旗標各自獨立(壞 JSON 那支再細到 per-key)** —— 完全靜默違反鐵則 E;
+   每次都印會把 console 洗掉(讀取端住在 render 路徑上)。旗標分開的理由見上方段落
+   (review ST3 / ST1 收修後由三個增為四個)。
 6. **不做 in-memory fallback** —— 寫不進去就是這次不記住。假裝成功會讓「同分頁看起來記住了、
    重開就沒了」比乾脆不記住更難解釋,而且多一份與 storage 不同步的真相。
 7. **本檔不 import `lib/constants.ts`** —— 出口不該知道有哪些鍵;方向是 `constants.ts` →
@@ -177,3 +182,19 @@ finding 立刻消失 → 規則把「字面上的 localStorage 成員呼叫」�
   之前,拋掉的話畫面停在一顆 **disabled 的週期鈕**上(P1-5 那個空白畫面組合)。
   App 那一條走 `useEffect`,拋在 commit 階段 RTL 的 `act` 會真的往外拋 → `not.toThrow` 在那裡是真鎖。
 - **既有 assertion 零改動**(沒有任何一條事前標「該變」)。
+
+---
+
+## 4. two-axis review round 1 收修(逐條處置)
+
+| 項 | 判定 | 處置 |
+|---|---|---|
+| **SP1**(中)存取即拋的鎖全走 `Storage.prototype` spy,量不到「`window.localStorage` getter 本身拋」 | 接受 —— **鑑別力缺口非行為缺陷**(`storage.ts` 三支本來就把整句放 try 內) | 補 lib 層 + MarketPane 元件層各一條 `Object.defineProperty(window,"localStorage",{get(){throw SecurityError}})`;afterEach 裝回原 descriptor(jsdom 實測那是 window 的**自有 configurable accessor**,不能只 `delete`)。lib 層另附「還原後照常讀寫」自檢防 vacuous。mutation 驗紅見 verification §7.2 |
+| **ST1(1)** 空字串走 `JSON.parse("")` 拋 → 被算成壞資料 | 接受 | `readLocalJson` 改 `raw === null \|\| raw === ""` 早退,與舊碼 `if (!raw) return DEFAULT` 的靜默正常路徑一致 |
+| **ST1(2)** `warnedParse` 跨 key 單一旗標 | 接受 | 改 `Set<string>` per-key |
+| **ST3**(P3 硬)`removeLocal` 借用 `warnWrite` 的文案與旗標 | 接受 | 新增 `warnRemove` + 自己的旗標與文案(「殘值留著,下次啟動再清」);§1.1 旗標清單同步改為四個 |
+| **ST4**(P3)`loadFilter` 6/4 混排、三檔 import 破字母序 | 接受 | 縮排收成 4;`@/lib/storage` 歸位(format→storage→trading-calendar / stock-intraday-svg→storage→utils / stock-tick→storage→utils)。**StockPage 既有的 `stock-view` 排在 constants 之後不動** —— master 就是如此,順手改是本輪不該碰的東西 |
+| **ST5**(P3)App (a)(b) 缺 mutation 證據 | 接受 | 兩條各跑一次 mutation,見 verification §7.2 |
+| **ST2** 🔵 commit 夾了兩處可觀察面極小的行為改動 | 接受(只改文件) | commit message 已申報;verification 補「三類偏離記錄」,**不重寫歷史** |
+
+Spec 軸其餘四項(收斂判準 / 真元件 seam / 判定型決定 / 白名單)review 全過,無處置。

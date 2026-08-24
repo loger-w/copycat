@@ -9,6 +9,9 @@
 | `d8c3924e` | 🔵 refactor | **21 處已包 try/catch** 的呼叫點搬家(逐字同行為) |
 | `7a57925a` | chore | react-doctor `no-event-handler` 誤報逐行 triage(inline disable + 理由落 `lib/storage.ts` 檔頭) |
 | `296bd7fd` | 🟢 test | 舊 key 遷移順序契約的 lock(mutation 驗紅) |
+| `7657d4d1` | 🟢 test | review 收修:真私密視窗形狀(SP1)+ JSON / 刪除警告語意(ST1 / ST3)的鎖 [red] |
+| `6f2a59ee` | 🔴 mod | review 收修:`warnRemove` 自己的文案與旗標、壞 JSON 旗標 per-key、空字串不算壞資料 |
+| `9245c21d` | 🔵 refactor | review 收修:`loadFilter` 縮排 + `@/lib/storage` import 歸位(ST4) |
 
 三類不混:🟢 只動 `*.test.*`;🔴 只動實作且只碰裸奔處;🔵 只動實作且只碰已包 try/catch 處。
 分支內 `36e8d78e` 與 `fa0003d9` 之間為**刻意的紅態**(TDD 紅先行),分支尾端全綠。
@@ -155,3 +158,66 @@ $ grep -rn "localStorage\.\(get\|set\|remove\)Item" frontend/src --include=*.ts 
   已存的 22 支 key 全部沒有格式改動,重開站時 tab / 主圖標的 / 期貨商品 / 左右圖標的與
   週期 / 右欄 tab / 圖表模式 / 疊線開關 / 自選折疊 / 群組檢視 / 漲跌停篩選 / 折數 /
   提示音 / 江波圖腿位,應與這次改動前**逐項相同**;console 應**零** `storage:` 警告。
+
+---
+
+## 8. two-axis review round 1 收修
+
+### 8.1 逐條處置
+
+| 項 | 處置 | commit |
+|---|---|---|
+| **SP1** 存取即拋的鎖量不到「`window.localStorage` getter 本身拋」 | 補 lib 層 + MarketPane 元件層各一條 getter-throw 案(+ lib 層一條「還原後照常讀寫」自檢防 vacuous) | `7657d4d1` 🟢 |
+| **ST1(1)** 空字串被 `JSON.parse("")` 算成壞資料 | `readLocalJson` 改 `raw === null \|\| raw === ""` 早退(與舊碼 `if (!raw)` 的靜默正常路徑一致) | `7657d4d1` 🟢 / `6f2a59ee` 🔴 |
+| **ST1(2)** `warnedParse` 跨 key 單一旗標 | 改 `Set<string>` per-key | 同上 |
+| **ST3** `removeLocal` 借用 `warnWrite` 的文案與旗標 | 新增 `warnRemove` + 自己的旗標與文案(「殘值留著,下次啟動再清」);旗標 3 → 4,change-spec §1.1 已同步 | 同上 |
+| **ST4** `loadFilter` 6/4 混排 + 三檔 import 破字母序 | 縮排收成 4;`@/lib/storage` 歸位對齊其餘五檔。StockPage 既有的 `stock-view` 位置不動(master 就是如此,順手改違反 Scope 紀律) | `9245c21d` 🔵 |
+| **ST5** App (a)(b) 缺 mutation 證據 | 兩條各跑一次,見 §8.2 | 證據(無 code 改動) |
+| **ST2** 🔵 `d8c3924e` 夾了兩處極小行為改動 | 只改文件,見 §7.4「三類偏離記錄」;**不重寫歷史** | 本節 |
+
+### 8.2 本輪 mutation 證據
+
+| # | mutation | 對應鎖 | 結果 |
+|---|---|---|---|
+| M3(SP1) | `storage.ts` 三支各把 `window.localStorage` 提到 try 外(`const ls = window.localStorage;`) | 新增的兩條 getter-throw 案 | **RED** ×2(`expected [Function] to not throw an error but DOMException{ stack: 'SecurityError:…' }`);**同檔既有六條 `Storage.prototype` 鎖全綠** —— 這個對照就是 SP1 說的鑑別力缺口本身 |
+| M4(ST5-a) | `App::initialTab` 改回裸 `window.localStorage.getItem(TAB_KEY)` | App (a) 存取即拋 | **RED**(`… but DOMException{ stack: 'SecurityError:…' } was thrown`) |
+| M5(ST5-b) | App 的 tab effect 改回裸 `window.localStorage.setItem(TAB_KEY, tab)` | App (b) 寫入拋 | **RED**(`… but DOMException{ stack: 'QuotaExceededE…' } was thrown`) |
+
+ST1 ×2 / ST3 ×1 走**直接紅**(先寫測試跑給自己看再改實作):
+`expected "warn" to not be called at all, but actually been called 1 times`(空字串)、
+`expected "warn" to be called 2 times, but got 1 times`(per-key)、
+`expected "warn" to be called 2 times, but got 1 times`(remove 旗標)。
+
+每次 mutation 後還原並確認 `grep -rn "MUTANT" frontend/src` = **0 行**。
+
+### 8.3 收修後 gate(無管線,輸出重導後再讀,exit code 直讀)
+
+| 指令 | 工作目錄 | 結果 | exit |
+|---|---|---|---|
+| `npx tsc -b` | frontend/ | 0 error | 0 |
+| `npx vitest run` | frontend/ | **147 files / 2782 tests passed**(收修前 2776 → **+6 案**;master 145 / 2759) | 0 |
+| `npx eslint src` | frontend/ | 0 問題(輸出 0 bytes) | 0 |
+| `npx react-doctor@latest --scope changed --no-telemetry` | frontend/ | 掃 19 檔,**1 finding 且為存量**(`only-export-components` @ `GroupGridView.tsx:72`,master 既有) | 0 |
+| 收斂判準 grep | repo root | **0 行** | — |
+
+### 8.4 三類偏離記錄(ST2 申報)
+
+🔵 `d8c3924e`「已包 try/catch 的 21 處搬家」**不是位元級的純重構**,夾了兩處可觀察面極小
+的行為改動,commit message 當時已申報,這裡補正式記錄:
+
+1. 那 21 處由**完全靜默**變成失敗時 `console.warn`(每種故障一次)。警告是
+   `lib/storage.ts` 的契約,定義在前一個 🔴 `fa0003d9`;21 處只是「繼承」它,
+   沒有各自的行為決策 —— 這是當時判定仍算 🔵 的理由。
+2. `purgeOrphanKeys` 由「整迴圈一個 try」改為逐鍵各自吞(舊版第一鍵拋就跳過其餘六鍵)。
+   storage 壞掉時七鍵一樣都清不掉,差別只在多試六次會拋的 no-op。
+
+**不重寫歷史**(review 亦同意):分支已有五個 commit 疊在其上,為了把兩行 warn 從 🔵 挪到
+🔴 而 rebase,付出的可追溯性遠大於收益。日後判準:**只要 commit 會產生任何新的可觀察輸出
+(含 console),就不算 🔵** —— 這條寫進本記錄,下輪照辦。
+
+### 8.5 §5 申報第 1 條的補正
+
+§5.1 說「失敗時多一則 dev console 警告(讀 / 寫 / 壞 JSON 各一次)」—— 收修後為
+**讀 / 寫 / 刪各一次 + 壞 JSON 每把鍵各一次**,且空字串 / 未設不再算壞資料(零警告)。
+§7(需要 user 過目)的真環境清單不變:私密視窗下 console 仍應只有一則
+`storage: localStorage 讀取失敗…`。
