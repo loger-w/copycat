@@ -98,7 +98,9 @@ class WsConnection(Protocol):
 #: (R4 N039)。前者三個 ws 實作(websockets / websockets-sansio / wsproto)共用同一前綴,
 #: 後者是 starlette `WebSocket.send` 的 DISCONNECTED 分支。只認這兩句,其餘 RuntimeError 照舊 re-raise。
 _CLOSE_SENT_MARKERS: tuple[str, ...] = (
-    "Unexpected ASGI message ",  # uvicorn:`... after sending 'websocket.close' ...`
+    # uvicorn 三個 ws 實作的共同子字串;HTTP 側的「Unexpected ASGI message … after response
+    # already completed」不含 'websocket.close',刻意認不到(review ST1)
+    "after sending 'websocket.close'",
     "once a close message has been sent",  # starlette websockets.py
 )
 

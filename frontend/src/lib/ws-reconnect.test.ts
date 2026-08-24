@@ -1,11 +1,11 @@
 /** @vitest-environment jsdom */
-/** `connectWithRetry` 的 characterization 測試(mod/ws-app-heartbeat FE-1)。
+/** `connectWithRetry` 的行為測試。
  *
- * 本檔鎖的是**抽出當下的現行語意**(8 hook 逐字複刻),用途是證明重構零行為改動。
- * 其中兩條是**事前標記為「該變」**的現況鎖(`[該變]` 註記),下一個 🔴 commit 會翻轉它們
- * ——這是鐵則 E 允許改既有 assertion 的唯一通道(事前標明)。
+ * 起源是 mod/ws-app-heartbeat FE-1 的 characterization(抽出當下 8 hook 逐字複刻的現行語意),
+ * 之後每一輪行為改動都以「事前標記該變 → 翻轉」的方式疊上(SC-4 / SC-5 / R4 N035 / N037 / N038),
+ * 翻轉案的註解都寫明「由哪條翻轉而來」—— 這是鐵則 E 允許改既有 assertion 的唯一通道。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import {
   connectWithRetry,
@@ -343,12 +343,13 @@ describe("connectWithRetry", () => {
 });
 
 /** SC-2:半死連線(TCP 活著但零 frame)靠「太久沒收到任何訊息」自己分辨並重連。 */
+/** N038:watchdog 放棄路徑帶 jitter;各 describe 預設釘 0,讓既有時序案逐毫秒不動。 */
+let randomSpy: MockInstance<() => number>;
+
 describe("connectWithRetry 靜默 watchdog", () => {
   const URL_A = "ws://host/ws/wd-a";
-  let randomSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    // N038:watchdog 放棄路徑帶 jitter;本 describe 預設釘 0,讓既有時序案逐毫秒不動
     randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
   });
 
@@ -604,7 +605,6 @@ describe("connectWithRetry 靜默 watchdog", () => {
 describe("connectWithRetry visibilitychange 回前景", () => {
   const URL_V = "ws://host/ws/vis";
   let visibility: DocumentVisibilityState = "visible";
-  let randomSpy: ReturnType<typeof vi.spyOn>;
 
   const setVisibility = (next: DocumentVisibilityState): void => {
     visibility = next;
@@ -664,6 +664,49 @@ describe("connectWithRetry visibilitychange 回前景", () => {
     expect(gen1.closed).toBe(false);
     expect(onClose).not.toHaveBeenCalled();
     expect(FakeWS.instances.length).toBe(1);
+    handle.close();
+  });
+
+  // review SP3:解凍後逾期的那顆 interval 會在 ~0 ms 補跑,`sinceTick ≈ 0` 過得了凍結守門 →
+  // 若直接判定,就是拿凍結期間的舊 lastMsgAt 殺掉一條「積壓 frame 還沒派發」的健康連線。
+  // 回前景後要留一個 tick 的不判定窗給積壓 frame。
+  it("回前景後立刻補跑的逾期 tick 不判定;grace 內積壓 ping 到達 → 下個 tick 不誤殺(SP3)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_V, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS - 1); // 下一個 tick 再 1 ms 就到期
+
+    hideFor(6 * 60_000); // 凍結期間 tick 沒跑、訊息也沒派發
+    setVisibility("visible");
+    vi.advanceTimersByTime(1); // 逾期 tick 立刻補跑:距回前景 1 ms
+    expect(gen1.closed).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+
+    gen1.emit({ type: "ping" }); // 積壓的心跳這時才派發
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS * 2);
+    expect(gen1.closed).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+    handle.close();
+  });
+
+  it("回前景後 grace 內零訊息(真半死)→ grace 過後第一個 tick 判定", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_V, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS - 1);
+
+    hideFor(6 * 60_000);
+    setVisibility("visible");
+    vi.advanceTimersByTime(1); // 逾期 tick:grace 內不判定
+    expect(onClose).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS); // 距回前景 5 001 ms 的 tick:grace 已過
+    expect(gen1.closed).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
     handle.close();
   });
 
