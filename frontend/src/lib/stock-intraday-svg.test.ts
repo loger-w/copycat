@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { fmt, fmtIndexPts } from "@/lib/format";
 import type { MinuteAgg } from "@/lib/stock-accum";
 import {
   bandLabels,
   buildEnergyBars,
   buildIntradayGeometry,
+  buildVwapLabel,
   EDGE_LABEL_H,
   edgePriceLabels,
   hasWindowedMinutes,
@@ -1471,5 +1473,46 @@ describe("vwapLabelBox(VWAP 就地標籤的定位與寬度;N006)", () => {
 
   it("期指 8 字(23006.15)同款:寬吃實測字寬不吃常數", () => {
     expect(vwapLabelBox(plotRight, "23006.15", W).width).toBeCloseTo(45.6, 6);
+  });
+});
+
+describe("buildVwapLabel(VWAP 就地標籤:文字 / 位置 / x 區間一處算完;N006/N045)", () => {
+  const W = 800;
+  const plotRight = W - R_AXIS_W; // 760
+
+  it("線空(盤前尚無成交)/ VWAP 不可得 → null(不畫,不退回近似值)", () => {
+    expect(buildVwapLabel(null, 2_380_000, W, fmt)).toBeNull();
+    // milli null = toggle 關 或 後端 VWAP 不可得(與說明列的「-」同步)
+    expect(buildVwapLabel({ x: 400, y: 120 }, null, W, fmt)).toBeNull();
+  });
+
+  it("盤中末點在中段:x = 末點 + 4、y = 末點 y、span = [x, x + 寬]", () => {
+    const label = buildVwapLabel({ x: 400, y: 123.5 }, 2_380_000, W, fmt)!;
+    expect(label.x).toBe(404);
+    // y 逐值等於線末點:它是「線畫到哪」= 資訊本身,這張圖上唯一不可動的文字
+    expect(label.y).toBe(123.5);
+    expect(label.span).toEqual([404, 444]);
+  });
+
+  it("文字口徑由呼叫端注入:同一個毫元在 stock 態印兩位小數、index/期指態印整數點", () => {
+    expect(buildVwapLabel({ x: 400, y: 120 }, 23_006_154, W, fmt)!.text).toBe("23006.15");
+    expect(buildVwapLabel({ x: 400, y: 120 }, 23_006_154, W, fmtIndexPts)!.text).toBe("23006");
+  });
+
+  it("盤末末點貼右界 + 8 字(index/期指)→ 整塊右緣恰在繪圖區界上,不出畫布", () => {
+    const label = buildVwapLabel({ x: plotRight, y: 20 }, 24_283_540, W, fmt)!;
+    expect(label.text).toBe("24283.54");
+    // 寬吃實寬 45.6(不是下限 40)→ x 內縮到 760 − 45.6
+    expect(label.x).toBeCloseTo(714.4, 6);
+    expect(label.span[1]).toBeCloseTo(plotRight, 6);
+  });
+
+  it("span 與 x 同源(渲染與避讓判定共用):span 恰是 vwapLabelBox 的 [x, x + width]", () => {
+    const end = { x: 700, y: 60 };
+    const label = buildVwapLabel(end, 2_380_000, W, fmt)!;
+    const box = vwapLabelBox(end.x, label.text, W);
+    // 兩處各算一次就會出現「判定說不撞、畫出來撞」——這一條把它們釘在同一份上
+    expect(label.x).toBe(box.x);
+    expect(label.span).toEqual([box.x, box.x + box.width]);
   });
 });
