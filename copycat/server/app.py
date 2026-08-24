@@ -1711,23 +1711,13 @@ def create_app(
     @app.websocket("/ws/breadth")
     async def ws_breadth(websocket: WebSocket) -> None:
         breadth = _breadth(websocket)
-        await websocket.accept()
         if breadth is None:
-            if not _breadth_booted(websocket):
-                # 載入中:先送一則載入中 scalar 再關,client 退避重連時 boot 已完成
-                # → 屆時拿到的是真狀態或「未設定」,不會與後者同形(review P2-1)
-                await websocket.send_json(
-                    {
-                        "type": "breadth",
-                        "trade_date": None,
-                        "as_of": None,
-                        "stale": True,
-                        "counts": None,
-                        "last_minute": None,
-                    }
-                )
+            # 載入中 / 未設定都在 accept **之前**拒握手(R4 N036;starlette 在 CONNECTING 態送
+            # close = uvicorn 回 403):browser 端 onopen 不觸發、走「從未 open」退避。
+            # 載入中語意由 REST `/api/breadth/state` 承擔,不再送「載入中 scalar」再關。
             await websocket.close()
             return
+        await websocket.accept()
         try:
             # 首則 seed(當前 scalar 快照)已封在 `engine.stream()` 內 —— 不在這裡另送,
             # 否則盤中連線會收到兩則相同的全量(前端 upsert 看不出差別,更難查)
@@ -1745,10 +1735,10 @@ def create_app(
     @app.websocket("/ws/corr")
     async def ws_corr(websocket: WebSocket) -> None:
         corr: CorrelationEngine | None = websocket.app.state.corr
-        await websocket.accept()
         if corr is None:
-            await websocket.close()
+            await websocket.close()  # reject-before-accept(R4 N036)
             return
+        await websocket.accept()
         try:
             # 先送當前快照:client 不必等到下一個 tick 才有畫面
             await websocket.send_json(corr.state())
@@ -1768,10 +1758,10 @@ def create_app(
     @app.websocket("/ws/river")
     async def ws_river(websocket: WebSocket) -> None:
         corr: CorrelationEngine | None = websocket.app.state.corr
-        await websocket.accept()
         if corr is None:
-            await websocket.close()
+            await websocket.close()  # reject-before-accept(R4 N036)
             return
+        await websocket.accept()
         try:
             # 首則送全量 snapshot;之後每秒只送當前分鐘的 delta(全量每秒推 = 每分鐘數 MB)
             await websocket.send_json(corr.river_snapshot())
@@ -1782,10 +1772,10 @@ def create_app(
     @app.websocket("/ws/index")
     async def ws_index(websocket: WebSocket) -> None:
         index: IndexEngine | None = websocket.app.state.index
-        await websocket.accept()
         if index is None:
-            await websocket.close()
+            await websocket.close()  # reject-before-accept(R4 N036)
             return
+        await websocket.accept()
         try:
             await relay(websocket, index.stream())
         except WebSocketDisconnect:
@@ -1796,22 +1786,24 @@ def create_app(
         """個股 WS。engine 缺席時**不再立即 close**(XR-3):同一條通道也載 hub 的
         訊號,而 hub 的匯流排住在 app 層,與達錢 4 在否無關。
 
-        兩種 stock 缺席仍照舊 close:
-        - boot 未完成 —— 早連的 client 會錯過 engine 起來後的自選 seed,現況
-          「close → 前端重連 → 拿 seed」的自癒比掛著一條空流好;
+        兩種 stock 缺席改在 accept **之前**拒握手(R4 N036 reject-before-accept):
+        - boot 未完成 —— 早連的 client 會錯過 engine 起來後的自選 seed,
+          「拒 → 前端重連 → 拿 seed」的自癒比掛著一條空流好;
         - hub 亦 None(壞規則檔 / hub start 炸)—— 這條通道確實沒有任何生產者,
           留著就是永遠無流量的殭屍連線,而前端的提示靠 `wsStatus === "closed"`。
         """
-        await websocket.accept()
-        # 三個旗標(stock / boot_done / signal_hub)在 accept **之後**同一個同步區塊讀:
-        # accept 是 await,跨它讀取會拿到分屬兩個時點的快照(boot 正好在這段完成 →
-        # 讀到 stock=None 但 boot_done=True,走空流分支而永遠不送 quote seed)。
+        # 三個旗標(stock / boot_done / signal_hub)在 accept **之前**同一個同步區塊讀:
+        # accept 是 await,跨它讀取會拿到分屬兩個時點的快照。搬到 accept 前仍是單一時點;
+        # 殘餘 race = 讀到 stock=None & boot_done=False 後 boot 恰好完成 → 這代被拒,client
+        # 退避重連即拿到 seed。stock=None & boot_done=True 是終態(XR-3:TC4 從未起要重啟
+        # server),不會被 accept 之後的變化推翻。
         state = websocket.app.state
         stock: StockEngine | None = state.stock
         if stock is None:
             if not state.boot_done or state.signal_hub is None:
                 await websocket.close()
                 return
+            await websocket.accept()
             try:
                 # 首則 status seed:前端的「連線異常」提示靠 `status.tc4 === "down"`,
                 # 而 `status` 初值是 `{tc4: "up"}` —— 沒有這則,掛著的空流會讓 TC4-off
@@ -1824,6 +1816,7 @@ def create_app(
             except WebSocketDisconnect:
                 return
             return
+        await websocket.accept()
         try:
             await relay(websocket, stock.stream())
         except WebSocketDisconnect:

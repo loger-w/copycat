@@ -46,6 +46,8 @@ listener 隨 `arm()` 掛、隨 `clearWatchdog()` 拆(watchdog 放棄 / onclose /
 處置:`scheduleReconnect(jitterMs)` 只在 **watchdog 放棄路徑**傳 `WS_WATCHDOG_JITTER_MS = 1_000`
 (`delay + floor(random() × jitter)`);onclose 路徑 jitter 0(W1)。下一輪 backoff 以**未加 jitter 的 delay** 倍增。
 測試:watchdog describe 固定 `Math.random` → 0(既有案時序不動),另一案 0.5 → 1 000 + 500 ms。
+事前標記「該變」(綠燈時補登記):`useTxoSnapshot.test.ts`「收過 ping 後 35 s 全靜默 → 重連(SC-2)」的
+「放棄後 1 s 重連」推進量改為 `1 s + jitter 上限`(斷言語意不變:放棄後會重連)。
 
 ### N034 — `WsStatus` 收斂 `types.ts`(🔵 前端)
 `src/types.ts` 新增 `export type WsStatus`;7 支 hook 刪本地宣告改 import;3 個外部讀者改自 `@/types` import。零行為。

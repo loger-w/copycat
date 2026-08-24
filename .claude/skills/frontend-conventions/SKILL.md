@@ -35,10 +35,13 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 
 - **新 WS hook 一律走 `lib/ws-reconnect.ts::connectWithRetry(url, {onConnecting,onOpen,onMessage,onClose}, opts)`**,
   不自寫 `new WebSocket + onclose 重連` 骨架:helper 統一承載 backoff 三分支(存活 ≥5 s 歸零 / 短命 cap 5 s /
-  從未 open cap 30 s)、靜默 watchdog(收到首則 `{type:"ping"}` 武裝、sticky per-URL、30 s + 5 s tick、
-  凍結防誤判)、ping 過濾(hook 的 onMessage 永遠看不到 ping)、onerror 關自身、close() 卸 handler。
-  後端契約 = `copycat/server/ws.py::WS_HEARTBEAT_SECS`(CLAUDE.md §4)。測試用 `resetWsPingMemory()` 清 sticky。
-  Trigger:新增 / 改任何 WS hook;想調 WS 重連節奏。
+  從未 open cap 30 s;後端 reject-before-accept 走第三支)、靜默 watchdog(**onopen 即武裝**、30 s + 5 s tick、
+  凍結防誤判、`visibilitychange` 回前景重設 tick 基準、放棄路徑重連加 [0,1 s) jitter;2026-08-25 R4 起,
+  舊版「收到首則 ping 才武裝 + sticky per-URL + `resetWsPingMemory`」已退役)、ping 過濾(hook 的 onMessage
+  永遠看不到 ping)、onerror 關自身、close() 卸 handler + 拆 listener。後端契約 = `copycat/server/ws.py::
+  WS_HEARTBEAT_SECS`(CLAUDE.md §4)。**hook 測試若在 onopen 後推進 ≥ 35 s 而不餵訊息,連線會被判半死重連**
+  (寫測試時餵 `{type:"ping"}` 或把推進量拆段);測放棄後的重連要多推 `WS_WATCHDOG_JITTER_MS`(或 stub `Math.random`)。
+  Trigger:新增 / 改任何 WS hook;想調 WS 重連節奏;hook 測試用 fake timers 長推進。
 
 # 前端版面 / 響應式慣例
 

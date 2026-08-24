@@ -94,14 +94,45 @@ class WsConnection(Protocol):
     async def receive(self) -> Mapping[str, Any]: ...
 
 
+#: uvicorn / starlette 在「close 已送出(或對端已斷)之後」對 ASGI send 拋的 `RuntimeError` 原文
+#: (R4 N039)。前者三個 ws 實作(websockets / websockets-sansio / wsproto)共用同一前綴,
+#: 後者是 starlette `WebSocket.send` 的 DISCONNECTED 分支。只認這兩句,其餘 RuntimeError 照舊 re-raise。
+_CLOSE_SENT_MARKERS: tuple[str, ...] = (
+    "Unexpected ASGI message ",  # uvicorn:`... after sending 'websocket.close' ...`
+    "once a close message has been sent",  # starlette websockets.py
+)
+
+
+def _is_close_sent_error(exc: BaseException) -> bool:
+    """client 已斷、`_send` / `_beat` 在被 cancel 前已排入的那一次 send 撞到的 `RuntimeError`。
+
+    窗口:uvicorn `asgi_receive` 收到 `ConnectionClosed` 先 `closed_event.set()` → `_recv`
+    拿到 disconnect;`FIRST_COMPLETED` 取消另兩個 task 之前,它們若已在 `send_json` 上,
+    uvicorn `asgi_send` 走到 `closed_event` 已設的 else 分支 → `RuntimeError`(不是 OSError,
+    starlette 不會轉成 `WebSocketDisconnect`)。連線本來就已斷,視同斷線收尾。
+    """
+    if not isinstance(exc, RuntimeError):
+        return False
+    text = str(exc)
+    return any(marker in text for marker in _CLOSE_SENT_MARKERS)
+
+
+def _is_disconnect(exc: BaseException) -> bool:
+    return isinstance(exc, WebSocketDisconnect) or _is_close_sent_error(exc)
+
+
 def _consume_ws_task(task: asyncio.Task[None]) -> None:
     """被取消的 send/recv 任務收尾:消費例外避免 unretrieved warning;
     task 取消同時會關閉 stream() generator → 該 client queue 除名。"""
     if task.cancelled():
         return
     exc = task.exception()
-    if exc is not None and not isinstance(exc, WebSocketDisconnect):
-        logger.warning("ws 任務收尾例外(已忽略): %r", exc)
+    if exc is None:
+        return
+    if _is_disconnect(exc):
+        logger.debug("ws 任務收尾:對端已斷(%r)", exc)
+        return
+    logger.warning("ws 任務收尾例外(已忽略): %r", exc)
 
 
 async def relay(
@@ -135,7 +166,8 @@ async def relay(
 
     `_beat` 也進 `asyncio.wait(FIRST_COMPLETED)` 集合,例外分流與 `_send` 完全相同:
     死 transport 的 OSError 已由 starlette 轉成 `WebSocketDisconnect` → 吞掉收尾;
-    其餘(如 uvicorn `close_sent` 後 ASGI send 的 `RuntimeError`)一律 re-raise。
+    uvicorn / starlette `close_sent` 後 ASGI send 的 `RuntimeError` 以原文辨識
+    (`_is_close_sent_error`)同樣視同斷線(R4 N039);其餘例外一律 re-raise。
     """
     secs = WS_HEARTBEAT_SECS if heartbeat_secs is None else heartbeat_secs
     send_lock = asyncio.Lock()
@@ -175,7 +207,13 @@ async def relay(
                 t.cancel()
                 t.add_done_callback(_consume_ws_task)
     for t in done:
-        if not t.cancelled():
-            exc = t.exception()
-            if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                raise exc
+        if t.cancelled():
+            continue
+        exc = t.exception()
+        if exc is None:
+            continue
+        if _is_disconnect(exc):
+            if not isinstance(exc, WebSocketDisconnect):
+                logger.debug("relay 收尾:close_sent 後的遲到 send(%r)", exc)
+            continue
+        raise exc
