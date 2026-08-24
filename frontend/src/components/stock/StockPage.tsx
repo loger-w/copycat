@@ -17,7 +17,6 @@ import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
-import { writeLocal } from "@/lib/storage";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
@@ -25,6 +24,7 @@ import { pnlTone } from "@/lib/pnl-format";
 import { futSummary, headerSegments, positionsByCode, secSummary } from "@/lib/position-summary";
 import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/lib/stkfut";
 import { limitState } from "@/lib/stock-tick";
+import { writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { addCode, assignToGroup } from "@/lib/watchlist-model";
 

@@ -7,7 +7,6 @@ import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
-import { readLocal, writeLocal } from "@/lib/storage";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
@@ -22,6 +21,7 @@ import {
   secSummary,
 } from "@/lib/position-summary";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
+import { readLocal, writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
 import type { CapitalPosition } from "@/types";
