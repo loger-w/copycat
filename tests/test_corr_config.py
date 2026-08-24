@@ -9,8 +9,22 @@ from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
 
 
 class TestDefaultConfig:
-    def test_has_six_legs(self) -> None:
-        assert len(DEFAULT_CONFIG.legs) == 6
+    def test_has_seven_legs_matching_the_repo_config(self) -> None:
+        """N021:預設腿必須與 `configs/correlation.json` 同一組。
+
+        缺一腿的失效樣態不是「少一條線」而已 —— 設定檔壞掉時 `load_config` 降級回
+        DEFAULT_CONFIG,江波圖 / 相關係數會**真的少一腿**,而畫面上沒有任何錯誤訊號。
+        """
+        assert len(DEFAULT_CONFIG.legs) == 7
+        assert [leg.key for leg in DEFAULT_CONFIG.legs] == [
+            "TXF",
+            "TWN",
+            "YM",
+            "ES",
+            "NQ",
+            "SXF",
+            "NK225M",
+        ]
 
     def test_base_is_txf_and_present_in_legs(self) -> None:
         assert DEFAULT_CONFIG.base == "TXF"
@@ -24,7 +38,7 @@ class TestDefaultConfig:
     def test_non_base_legs_are_tc4_subscriptions(self) -> None:
         others = [leg for leg in DEFAULT_CONFIG.legs if leg.key != DEFAULT_CONFIG.base]
         assert all(leg.source == "tc4" for leg in others)
-        assert len(others) == 5
+        assert len(others) == 6
 
     def test_windows_and_per_window_min_samples(self) -> None:
         assert DEFAULT_CONFIG.windows == (60, 300, 1800)
@@ -54,7 +68,8 @@ class TestLoadConfig:
 
         cfg = load_config(path)
 
-        assert len(cfg.legs) == 7
+        # 相對長度(不寫死 7):這條測的是「加一腿不必改引擎」,不是預設有幾腿
+        assert len(cfg.legs) == len(DEFAULT_CONFIG.legs) + 1
         assert cfg.legs[-1].key == "TSM"
         assert cfg.legs[-1].symbol == "TC.F.CME.TSM.HOT"
 
@@ -100,13 +115,14 @@ class TestRepoConfigFile:
     """repo 真檔 `configs/correlation.json`(不是 tmp 假檔)的腿契約。
 
     2026-08-17 R5:第七腿小日經 `TC.F.OSE.NK225M.HOT`(D13 拍板;OSE 夜盤實測 175 則/60s,
-    高於 NK225 102 / SGX NK 78)。DEFAULT_CONFIG 仍六腿(設定檔壞掉的降級路徑不變)。
+    高於 NK225 102 / SGX NK 78)。**2026-08-25 N021 起 DEFAULT_CONFIG 同步補到七腿** ——
+    降級路徑不得比真檔少一腿。
     """
 
     def test_repo_config_has_seven_legs_with_nk225m(self) -> None:
         cfg = load_config(CONFIG_PATH)
 
-        assert cfg is not DEFAULT_CONFIG, "真檔應成功載入,不得落回預設六腿"
+        assert cfg is not DEFAULT_CONFIG, "真檔應成功載入,不得落回預設腿"
         assert len(cfg.legs) == 7
         nk = cfg.legs[-1]
         assert (nk.key, nk.label, nk.symbol, nk.source) == (
@@ -116,9 +132,12 @@ class TestRepoConfigFile:
             "tc4",
         )
 
-    def test_repo_config_first_six_legs_match_default(self) -> None:
-        """白名單 W1:六腿現有 key/label/symbol/source 與順序不動,base 仍 TXF。"""
+    def test_repo_config_matches_default_leg_for_leg(self) -> None:
+        """白名單 W1:現有腿的 key/label/symbol/source 與順序不動,base 仍 TXF。
+
+        N021 起兩邊**全等**(不再只比前六腿)—— 真檔與降級預設分岔正是那條 bug。
+        """
         cfg = load_config(CONFIG_PATH)
 
-        assert cfg.legs[:6] == DEFAULT_CONFIG.legs
+        assert cfg.legs == DEFAULT_CONFIG.legs
         assert cfg.base == "TXF"

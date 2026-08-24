@@ -13,6 +13,7 @@ from typing import Callable
 
 from fastapi.testclient import TestClient
 
+from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
 from tests.helpers.boot import BootedClient
@@ -333,6 +334,43 @@ class TestMinutePath:
         assert r.status_code == 200
         assert r.json()["meta"]["source"] == "unavailable"
 
+    def test_futures_minute_timeout_reaches_meta_status(self) -> None:
+        """N104:`futures_source` 首頁未備妥 → `HistoryTimeoutError` → `meta.status="timeout"`。
+
+        改動前 engine 把它吞成空、route 把 `build_minute` 的第二元素丟掉、payload 沒有這一格
+        —— 「TC4 現在忙」與「這個商品真沒 K 線」在畫面上長得一模一樣,而前者重打一次就有。
+        """
+
+        class Busy(FakeFuturesSource):
+            def fetch_bars_range(
+                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+            ) -> list[dict]:
+                raise HistoryTimeoutError("first page not ready")
+
+        with make_client(index_source=FakeIndexSource(), futures_source=Busy()) as c:
+            r = c.get("/api/market/bars/TXF?tf=1&days=1")
+        body = r.json()
+        assert r.status_code == 200
+        assert body["meta"]["status"] == "timeout"
+        assert body["meta"]["source"] == "unavailable"
+
+    def test_futures_minute_disconnected_reaches_meta_status(self) -> None:
+        """TC4 斷線(非逾時)必須與逾時分得開 —— 兩者的處置不同(等重試 vs 查連線)。"""
+
+        class Down(FakeFuturesSource):
+            def fetch_bars_range(
+                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+            ) -> list[dict]:
+                raise ConnectionError("TC4 down")
+
+        with make_client(index_source=FakeIndexSource(), futures_source=Down()) as c:
+            r = c.get("/api/market/bars/MXF?tf=1&days=1")
+        assert r.json()["meta"]["status"] == "disconnected"
+
+    def test_healthy_futures_minute_is_ok(self) -> None:
+        with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
+            assert c.get("/api/market/bars/TMF?tf=1").json()["meta"]["status"] == "ok"
+
     def test_minute_cache_key_isolated_from_stock_session(self) -> None:
         """裸 "IX0001" 會與 /api/stock/bars/IX0001(走 **stock** session)共用同一格,
         讓 W-12「歷史從持有其 REALTIME 訂閱的 session 問」在快取層被繞過(review P1-6)。"""
@@ -387,12 +425,17 @@ class TestMarketPayloadUnaffectedByBarsStatus:
     畫面上就是「來源:ok」這種沒人會第一眼認出是 bug 的字(R5 的誤接守門)。
     """
 
-    def test_market_payload_has_no_status_field(self) -> None:
+    def test_status_lives_in_meta_only_and_never_at_top_level(self) -> None:
+        """N104 起 `meta.status` 存在(三態通道),但**只在 meta 裡** —— 頂層仍不得有。
+
+        頂層多一個 `status` 會與 `bars` / `meta` 這兩個既有鍵同層,消費端很容易把它讀成
+        「這個回應本身的狀態」;它答的是「這一趟回補的結果」,語意屬 meta。
+        """
         with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
             for path in ("/api/market/bars/TWSE?tf=D", "/api/market/bars/TWSE?tf=1&days=1"):
                 body = c.get(path).json()
                 assert "status" not in body
-                assert "status" not in body["meta"]
+                assert body["meta"]["status"] in ("ok", "timeout", "disconnected")
 
     def test_meta_source_is_never_a_status_word(self) -> None:
         with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:

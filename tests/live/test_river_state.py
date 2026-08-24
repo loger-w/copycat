@@ -114,6 +114,27 @@ class TestCloseClampPush:
         s2.push("ES", 830, 7_400_000, DAY)
         assert s2.snapshot(LABELS, 1)["legs"]["ES"]["minutes"] == {300: 7_400_000}
 
+    def test_smaller_rank_wins_over_a_farther_stale_sample(self) -> None:
+        """N015:守門改「名次小者贏」—— 先到的 13:48 不得把更接近收盤的 13:46 擋在外面。
+
+        改動前的判準只有「這格有沒有值」:tick 稀疏時 13:48 先落地,之後 13:46 那筆
+        (離真收盤近兩分鐘)就永遠進不來,而畫面上只是收盤那一格價差了幾檔。
+        """
+        s = _state()
+        s.push("TXF", 829, 40_700_000, DAY)  # 13:48 = rank 4(end 格空著 → 進得來)
+        s.push("TXF", 827, 40_660_000, DAY)  # 13:46 = rank 2,名次更小 → 應覆寫
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_660_000
+        # 反向:名次更大的再來一次仍不得覆寫(單調性)
+        s.push("TXF", 830, 40_900_000, DAY)  # 13:49 = rank 5
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"][300] == 40_660_000
+
+    def test_equal_rank_does_not_overwrite(self) -> None:
+        """同名次不覆寫 —— 「小者贏」是嚴格小於,不是「後到就贏」(那等於沒有守門)。"""
+        s = _state()
+        s.push("TXF", 827, 40_700_000, DAY)
+        s.push("TXF", 827, 40_900_000, DAY)  # 同為 rank 2
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_700_000
+
     def test_non_clamp_minutes_keep_last_write_wins(self) -> None:
         s = _state()
         s.push("TXF", 824, 40_600_000, DAY)  # 13:44 bar,offset 299
@@ -161,19 +182,43 @@ class TestApplyBackfill:
         s = _state()
         assert s.apply_backfill("NOPE", [(600, 1_000)], DAY) == 0
 
-    def test_clamp_approximation_blocks_the_real_close_bar(self) -> None:
-        """characterization —— **已知留尾(R5)**:end 格一旦被 clamp 近似值佔住,1K 回補
-        的真 end bar 就補不進來。`apply_backfill` 只看「這格有沒有值」,分不出裡面是
-        13:46 的殘留近似還是 13:45 的真收盤。
+    def test_backfill_overwrites_a_clamp_approximation_in_the_end_slot(self) -> None:
+        """N058(取代舊 characterization `..._blocks_the_real_close_bar`,條文已標該變)。
 
-        影響有限(差一個殘留分鐘的價),故本輪不改。日後若替 end 格加上 per-leg
-        「這是 clamp 近似」旗標讓回補得以覆寫,**本案就該紅** —— 屆時改的是期望值,
-        不是把測試刪掉。
+        end 格被 rank≥2 的殘留近似佔住時,1K 回補的**真 end bar** 要覆寫得進去 ——
+        改動前 `apply_backfill` 只看「這格有沒有值」,分不出裡面是 13:46 的殘留
+        還是 13:45 的真收盤。
         """
         s = _state()
         s.push("TXF", 827, 40_700_000, DAY)  # 13:46 殘留取樣;end 格還空著 → 進得來
+        assert s.apply_backfill("TXF", [(825, 40_646_000)], DAY) == 1
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_646_000
+
+    def test_backfill_overwrites_the_end_slot_only_once(self) -> None:
+        """「覆寫一次」:寫進去的就是真值,第二趟回補回到既有的「只補空缺」。"""
+        s = _state()
+        s.push("TXF", 827, 40_700_000, DAY)
+        s.apply_backfill("TXF", [(825, 40_646_000)], DAY)
+        assert s.apply_backfill("TXF", [(825, 40_000_000)], DAY) == 0
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_646_000
+
+    def test_backfill_does_not_overwrite_the_close_auction_minute(self) -> None:
+        """rank 1(13:45:xx 收盤撮合)是**真成交**不是近似 —— 回補不得覆寫它。
+
+        少了這條界,「覆寫近似」就會順手把收盤撮合那一筆也蓋掉,而那正是 `push`
+        當初特地讓它寫得進來的那一筆。
+        """
+        s = _state()
+        s.push("TXF", 826, 40_650_000, DAY)  # rank 1
         assert s.apply_backfill("TXF", [(825, 40_646_000)], DAY) == 0
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_700_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_650_000
+
+    def test_backfill_does_not_overwrite_a_plain_live_minute(self) -> None:
+        """白名單:非 end 格(rank 0)的「回補只補空缺」逐字不變。"""
+        s = _state()
+        s.push("TXF", 600, 40_646_000, DAY)
+        assert s.apply_backfill("TXF", [(600, 40_000_000)], DAY) == 0
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][75] == 40_646_000
 
 
 class TestSnapshot:

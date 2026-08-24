@@ -296,6 +296,74 @@ async def test_heal_active_in_closing_tail_window() -> None:
         await eng.close()
 
 
+async def test_heal_runs_after_hours_on_a_trading_day() -> None:
+    """N105:盤後 / 晚間啟動踩 1K timeout,當晚就要自癒 —— 不是等到次日 09:06。
+
+    改動前 heal 窗上界是 13:40(`_HEAL_TAIL_END`),20:00 起的 server 整晚不重抓,
+    而 `_minutes_lag_exceeded` 的 `min(now, 13:30)` 封頂本來就已經表達了「窗外以
+    13:30 為期望覆蓋終點」—— 缺的只是讓 gate 開著。
+    """
+    fake = FakeIndexSource()  # day_minutes 空 = 回補 timeout 靜默降級成空
+    eng = make_engine(fake, in_watch_window=lambda: False, now_fn=lambda: _dt.time(20, 0))
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "1330": 2_000}  # TC4 端其實整天都取得到
+        await asyncio.sleep(0.3)
+        assert eng.state()["twse"]["minutes"] == {"0901": 1_000, "1330": 2_000}
+    finally:
+        await eng.close()
+
+
+async def test_heal_never_runs_on_a_non_trading_day() -> None:
+    """N105 條文明寫的另一半:休市日 minutes 恆空 → 舊碼在 09:04 之後整窗空打
+    (60s → 900s 退避),噪音一整天。交易日曆閘讓它一發都不打。"""
+    fake = FakeIndexSource()
+    eng = make_engine(
+        fake,
+        in_watch_window=lambda: True,
+        now_fn=lambda: _dt.time(10, 0),
+        is_trading_day=lambda _d: False,
+    )
+    eng._heal_secs = 0.01  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "0959": 2_000}
+        await asyncio.sleep(0.3)
+        # boot 那一發回補仍照打(start 不受 heal 閘管);之後零 heal
+        assert fake.fetch_minutes_calls == 1
+        assert eng.state()["twse"]["minutes"] == {}
+    finally:
+        await eng.close()
+
+
+async def test_pending_retry_keeps_new_day_minutes_out_of_state() -> None:
+    """N107:pending 期間的連線類 retry 抓的是**新日**窗,不得 merge 進舊日 dict。
+
+    T-1 已擋住廣播面;`state()` 這一面沒擋 —— swap 前(≤60s)重整頁面就會拿到混日
+    minutes(舊日 trade_date + 新舊混在一起的分鐘),畫面上是一條短暫的混日線。
+    修法要對齊 `_swap_day` 的合併語意:retry 抓到的當回補(`{**backfill, **pending}`),
+    live pending 勝過它。
+    """
+    fake = FakeIndexSource()
+    fake.subscribe_error = ConnectionError("down")
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        eng._twse.minutes = {"0901": 1}  # type: ignore[attr-defined]  # 舊日既有分鐘
+        eng._pending_date = "2026-07-29"  # type: ignore[attr-defined]
+        eng._pending_minutes = {"0902": 22}  # type: ignore[attr-defined]  # 新日 live pending
+        fake.subscribe_error = None
+        fake.day_minutes = {"0901": 9, "0902": 99}  # retry 抓回的是「新日」1K
+        await asyncio.sleep(0.15)
+        # 舊日 dict 一格都不許被新日資料蓋掉 / 加料
+        assert eng.state()["twse"]["minutes"] == {"0901": 1}
+        # 新日回補落在 pending 區,且 live pending 勝過回補(與 `_swap_day` 同方向)
+        assert eng._pending_minutes == {"0901": 9, "0902": 22}  # type: ignore[attr-defined]
+    finally:
+        await eng.close()
+
+
 async def test_heal_backs_off_when_no_progress() -> None:
     """review T-5:1K 持續回空(假日 / 該日資料不可得)→ heal 間隔須倍增退避,
     不得以固定節流整窗空轉(UNSUB→SUB churn + log 噪音)。無退避時 0.8s 內

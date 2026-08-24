@@ -543,6 +543,42 @@ async def test_handover_degraded_reports_last_attempt_and_phase() -> None:
         await rt.close()
 
 
+class _BufferEatenSource(FakeQuoteSource):
+    """回補期間 buffer 被抽掉(`_run_handover_locked` 的 `buffer is None` 防禦分支)。
+
+    生產上 `_buffer` 只在兩條 except 裡被清成 None,而那兩條都 raise —— 這條分支因此
+    在真實流程上不可達,只能用私寫注入。它值得測是因為它是**唯一**一條走到迴圈盡頭
+    卻沒寫過 `phase` 的路:`phase` 會停在 `"backfilling"`,而 `status` 已經 `degraded`
+    (SC-1「phase 與 status 同義」在此不成立)。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(backfill={"TX4.202607": [tick(C44000.symbol, price=100_000, qty=3, t=1)]})
+        self.rt: EngineRuntime | None = None
+
+    def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
+        rt = self.rt
+        assert rt is not None
+        rt._buffer = None
+        return super().fetch_backfill(series)
+
+
+async def test_handover_buffer_vanished_still_reports_phase_degraded() -> None:
+    """N020:`buffer is None` 走到迴圈盡頭時,`phase` 必須與 `status` 一起降 degraded。"""
+    fake = _BufferEatenSource()
+    rt = EngineRuntime(fake, throttle_secs=0.01)
+    fake.rt = rt
+    await rt.start()
+    try:
+        assert rt.status == "degraded"
+        h = rt.latest_snapshot()["handover"]
+        assert h["attempt"] == 3
+        assert h["attempts_max"] == 3
+        assert h["phase"] == "degraded"
+    finally:
+        await rt.close()
+
+
 async def test_handover_source_error_marks_phase_degraded() -> None:
     """review C1:來源 REQ 失敗時 `status` 降 degraded,`phase` 不可停在 "backfilling"。
 

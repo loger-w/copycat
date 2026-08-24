@@ -7,8 +7,8 @@ from typing import Callable
 
 import pytest
 
-from copycat.live.stock_source import Bar
 from copycat.live.tc4 import HistoryTimeoutError
+from copycat.server.bars import BarsResult
 from copycat.server.futures_engine import FuturesEngine
 from tests.helpers.wait import wait_until
 
@@ -1006,7 +1006,7 @@ class TestBarsRangeProxy:
     那條字串是「TC4 掛了 vs 真沒資料」的唯一五秒判準,沒有測試等於沒人驗過它真的會印。
     """
 
-    async def _run(self, engine: FuturesEngine, caplog) -> list[Bar]:
+    async def _run(self, engine: FuturesEngine, caplog) -> BarsResult:
         with caplog.at_level(logging.WARNING):
             return await engine.bars_range("TXF", "D", "2026-07-01", "2026-07-30")
 
@@ -1014,15 +1014,17 @@ class TestBarsRangeProxy:
     async def test_source_absent_returns_empty_with_fixed_log(self, caplog) -> None:
         engine = FuturesEngine(lambda: FakeSource())  # 未 start → _source is None
         got = await self._run(engine, caplog)
-        assert got == []
+        # N104:回傳形狀 = (bars, status);source 未建 = 連不上,不是「TC4 忙」
+        assert got == ([], "disconnected")
         assert "market: futures history proxy miss" in caplog.text
 
     @pytest.mark.asyncio
     async def test_history_timeout_degrades_here_with_its_own_log(self, caplog) -> None:
-        """逾時在 **engine 內**吃掉:payload / 前端零變,但 log 分得出「TC4 掛了」。
+        """逾時在 **engine 內**降級成空 bars,但**帶著 `timeout` 出去**(N104)。
 
         `HistoryTimeoutError` 是 `ConnectionError` 子類 → 沒有專屬分支的話會被下面那條
-        接走並印成 proxy miss,3am 判準就把「忙一下」讀成「TC4 掛了」。
+        接走並印成 proxy miss,3am 判準就把「忙一下」讀成「TC4 掛了」;而少了 status
+        這一格,前端的空態文案也分不出「TC4 忙」與「這個商品真沒 K 線」。
         """
 
         class Slow(FakeSource):
@@ -1037,7 +1039,7 @@ class TestBarsRangeProxy:
             got = await self._run(engine, caplog)
         finally:
             await engine.close()
-        assert got == []
+        assert got == ([], "timeout")
         assert "期貨 K 線 timeout(非 TC4 down)" in caplog.text
         assert "market: futures history proxy miss" not in caplog.text
 
@@ -1055,8 +1057,27 @@ class TestBarsRangeProxy:
             got = await self._run(engine, caplog)
         finally:
             await engine.close()
-        assert got == []
+        assert got == ([], "disconnected")
         assert "market: futures history proxy miss" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_healthy_path_reports_ok(self, caplog) -> None:
+        """有貨的那條要明確是 `ok` —— 少了這條,把 status 寫死成常數也全綠。"""
+
+        class Fine(FakeSource):
+            def fetch_bars_range(
+                self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+            ) -> list[dict]:
+                return [{"t": "2026-07-29", "o": 1, "h": 2, "l": 0, "c": 1, "v": 3}]
+
+        engine = FuturesEngine(lambda: Fine())
+        await engine.start()
+        try:
+            got = await self._run(engine, caplog)
+        finally:
+            await engine.close()
+        assert got.status == "ok"
+        assert len(got.bars) == 1
 
 
 class TestBarsRangeSession:

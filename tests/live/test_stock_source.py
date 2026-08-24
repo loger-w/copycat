@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import threading
@@ -300,12 +301,12 @@ class TestFetchDailyBars:
         with pytest.raises(HistoryTimeoutError):
             src.fetch_daily_bars("2330")
 
-    def test_dk_ready_but_empty_plus_1k_timeout_returns_empty(self) -> None:
-        """判準是 `dk_timed_out **and** fb_timed_out` —— 半邊逾時不算。
+    def test_dk_ready_but_empty_plus_1k_timeout_raises(self) -> None:
+        """判準只看 `fb_timed_out`(N019;取代舊的 `dk_timed_out and fb_timed_out`)。
 
-        DK 首頁**備妥**(TC4 不忙)卻 0 根 = 資料面的答案;此時 1K fallback 再逾時,
-        往外拋會讓 SignalHub 對一檔「本來就沒有日 K」的股票整天有限重試 + 每輪一則
-        WARNING。把 `and` 換成 `or` 兩條紅測試都還是綠的,只有這條擋得住。
+        AND 的另一半只在「DK 首頁非空、但整批解析不出 bar」時為 False —— 那是**解析面**
+        的失敗,不是「資料面就是沒有」。回空會被 SignalHub 讀成「無已完成日 K,CDP 停用」
+        且整天不重試;而 1K 首頁未備妥是 TC4 協定側唯一的暫時性訊號,它為真就該往外拋。
         """
 
         def handler(obj: dict) -> bytes:
@@ -325,7 +326,51 @@ class TestFetchDailyBars:
         src = StockQuoteSource(
             api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
         )
-        assert src.fetch_daily_bars("2330") == []
+        with pytest.raises(HistoryTimeoutError):
+            src.fetch_daily_bars("2330")
+
+    def test_window_shrinks_with_small_n_but_is_verbatim_at_25(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N024:視窗隨 `n` 縮 —— `n=5`(CDP basis sweep)不必付 `n=25`(overlay)的窗。
+
+        兩段(DK / 1K fallback)共用同一個窗,所以只驗其中一段的 start 就等於驗了兩段
+        (下面順帶斷言兩段同窗)。`n=25` 那條**逐字 40 日**不得動:`build_overlay` 的
+        ma20 要 20 根已完成日 bar,40 日窗遇春節只剩 ~23 根,再縮的失效樣態是 ma20
+        靜默變 null(畫面上只是少一條線)。
+        """
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                dtype = obj["Param"]["SubDataType"]
+                return (f"{dtype}:" + json.dumps({"Success": "OK", "HisData": []}) + "\0").encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-28", poll_wait_secs=0.0
+        )
+        seen: list[tuple[str, str]] = []
+        original = src._collect_history
+
+        def spy(sym: str, data_type: str, start: str, end: str, deadline_secs: float | None = None):
+            seen.append((data_type, start))
+            return original(sym, data_type, start, end, deadline_secs)
+
+        monkeypatch.setattr(src, "_collect_history", spy)
+        today = _dt.date.today()
+
+        def _run(n: int) -> None:
+            seen.clear()
+            with pytest.raises(HistoryTimeoutError):
+                src.fetch_daily_bars("2330", n=n)
+
+        _run(25)
+        wide = f"{today - _dt.timedelta(days=40):%Y%m%d}00"
+        assert [s for _t, s in seen] == [wide, wide], "n=25 兩段同窗且逐字 40 日"
+
+        _run(5)
+        narrow = f"{today - _dt.timedelta(days=20):%Y%m%d}00"
+        assert [s for _t, s in seen] == [narrow, narrow], "n=5 兩段同窗且縮到 20 日地板"
 
     def test_both_segments_get_the_short_bars_deadline(
         self, monkeypatch: pytest.MonkeyPatch
