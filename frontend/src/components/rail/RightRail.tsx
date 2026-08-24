@@ -17,6 +17,7 @@ import {
   type StkfutSelection,
 } from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
+import { readLocal, writeLocal } from "@/lib/storage";
 import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
 import type { FuturesProductState } from "@/types";
@@ -74,7 +75,7 @@ const TABS = [
 type RailTab = (typeof TABS)[number][0];
 
 function initialTab(): RailTab {
-  const saved = window.localStorage.getItem(RAIL_TAB_KEY);
+  const saved = readLocal(RAIL_TAB_KEY);
   return saved === "orders" || saved === "positions" ? saved : "flash";
 }
 
@@ -134,7 +135,7 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
 
   function selectTab(next: RailTab): void {
     setTab(next);
-    window.localStorage.setItem(RAIL_TAB_KEY, next);
+    writeLocal(RAIL_TAB_KEY, next);
     // 離開閃電 tab 就清掉置中請求:ladder 會 unmount,留著的話下次掛載時 effect 會拿
     // 舊 centerRequest 再捲一次到過期價位並關掉跟隨(review phase5 P2-2)。
     // 註:ladder 的 `follow` 也隨 unmount 回到預設 true(重新掛載即置中於現價)—— 這是
@@ -200,7 +201,7 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
       // 股號指認標的(D5)—— 換成 instrumentKey 會讓期貨態的點價全部落空。
       if (!detail || detail.code !== stockCode || typeof detail.priceMilli !== "number") return;
       setTab("flash");
-      window.localStorage.setItem(RAIL_TAB_KEY, "flash");
+      writeLocal(RAIL_TAB_KEY, "flash");
       setCenterRequest((prev) => ({
         priceMilli: detail.priceMilli as number,
         nonce: (prev?.nonce ?? 0) + 1,

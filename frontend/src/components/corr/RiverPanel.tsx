@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 
 import { RIVER_MODE_KEY, RIVER_OFF_KEY } from "@/lib/constants";
 import type { OverlayEntry } from "@/lib/river-chart-svg";
+import { readLocal, readLocalJson, writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import type { RiverState } from "@/types";
 
@@ -17,19 +18,15 @@ import { RiverOverlay } from "./RiverOverlay";
 type Mode = "side" | "overlay";
 
 function initialMode(): Mode {
-  return window.localStorage.getItem(RIVER_MODE_KEY) === "overlay" ? "overlay" : "side";
+  return readLocal(RIVER_MODE_KEY) === "overlay" ? "overlay" : "side";
 }
 
 /** 存「**關掉**哪些腿」而非「開哪些」:設定檔日後加第七腿時,舊值不會讓新腿默默隱形。 */
 function initialOff(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RIVER_OFF_KEY);
-    if (raw === null) return [];
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
-  } catch {
-    return []; // 壞值降回預設(never-raise)
-  }
+  // 壞值 / 讀不到一律降回預設(`readLocalJson` 已把「未設 / 存取即拋 / 壞 JSON」
+  // 收斂成同一個 `null`,never-raise)
+  const parsed = readLocalJson(RIVER_OFF_KEY);
+  return Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : [];
 }
 
 interface Props {
@@ -58,13 +55,13 @@ export function RiverPanel({ state }: Props) {
 
   function switchMode(next: Mode): void {
     setMode(next);
-    window.localStorage.setItem(RIVER_MODE_KEY, next);
+    writeLocal(RIVER_MODE_KEY, next);
   }
 
   function toggleLeg(key: string): void {
     const next = off.includes(key) ? off.filter((k) => k !== key) : [...off, key];
     setOff(next);
-    window.localStorage.setItem(RIVER_OFF_KEY, JSON.stringify(next));
+    writeLocal(RIVER_OFF_KEY, JSON.stringify(next));
   }
 
   if (state === null) {

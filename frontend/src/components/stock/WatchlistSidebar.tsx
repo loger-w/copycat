@@ -21,6 +21,7 @@ import {
 } from "@/lib/position-summary";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
+import { writeLocal } from "@/lib/storage";
 import { cn, safeIdToken } from "@/lib/utils";
 import { type GroupAvg, groupAvgPct } from "@/lib/watchlist-avg";
 import {
@@ -88,7 +89,7 @@ function loadCollapsed(): Set<string> {
 }
 
 function persistCollapsed(names: Set<string>): void {
-  window.localStorage.setItem(WL_COLLAPSED_KEY, JSON.stringify([...names]));
+  writeLocal(WL_COLLAPSED_KEY, JSON.stringify([...names]));
 }
 
 function loadUngroupedCollapsed(): boolean {
@@ -230,7 +231,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
    *  的理由,只是這邊是 boolean 所以沒有 ref 影子)。持久化留在這裡而不是 updater 內 ——
    *  updater 契約是純函式,StrictMode 下 double-invoke 會寫兩次 localStorage。 */
   function applyUngroupedCollapsed(next: boolean): void {
-    window.localStorage.setItem(WL_UNGROUPED_KEY, next ? "1" : "0");
+    writeLocal(WL_UNGROUPED_KEY, next ? "1" : "0");
     setUngroupedCollapsed(next);
   }
 

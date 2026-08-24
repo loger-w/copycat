@@ -29,6 +29,7 @@ import {
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import type { StkfutSelection } from "@/lib/stkfut";
+import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
 import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
 
@@ -73,14 +74,14 @@ const NONE_CTX: RailContext = { kind: "none" };
  *  停在該值的瀏覽器重新還原到相關係數頁(D7 預期,零遷移碼)。其餘舊值仍各自還原到
  *  對應 tab;「無值」時的 fallback 是 `index` —— 該頁自 index-board SC-1 起排第一顆。 */
 function initialTab(): Tab {
-  const saved = window.localStorage.getItem(TAB_KEY);
+  const saved = readLocal(TAB_KEY);
   return saved === "stock" || saved === "futures" || saved === "txo" || saved === "corr"
     ? saved
     : "index";
 }
 
 function initialProduct(): FutProduct {
-  const saved = window.localStorage.getItem(PRODUCT_KEY);
+  const saved = readLocal(PRODUCT_KEY);
   return saved === "MXF" || saved === "TMF" ? saved : "TXF";
 }
 
@@ -89,30 +90,24 @@ function initialProduct(): FutProduct {
  *  新舊都有值時取**新**的:新 key 只可能由改版後的 code 寫入,必定較新。
  *  搬完就刪舊 key,所以整段對同一個瀏覽器只會實際搬一次(之後恆走第一條 return)。
  *
- *  寫入一律包 try/catch(同 `hooks/useChartToggles.ts` 的 `persist()` 慣例):本函式是
- *  `useState` 的 initializer,setItem 在 Safari 私密視窗 / storage 被政策鎖時會拋
- *  `QuotaExceededError`,拋出去就是首次 render 白畫面。這次沒落檔照樣回傳值,
- *  記憶體內的主圖標的正常;順序維持「setItem 成功後才 removeItem」不變。 */
+ *  讀寫全走 `lib/storage`(N022):本函式是 `useState` 的 initializer,getItem 在
+ *  Safari 私密視窗光是存取就拋、setItem 在配額滿時拋 `QuotaExceededError`,拋出去
+ *  就是首次 render 白畫面。這次沒落檔照樣回傳值,記憶體內的主圖標的正常;
+ *  **順序維持「setItem 成功後才 removeItem」不變** —— 這正是 `writeLocal` 要回傳
+ *  布林的原因,寫失敗還把舊 key 刪掉就是把使用者的主圖標的弄丟。 */
 function initialStockCode(): string | null {
-  const current = window.localStorage.getItem(MAIN_CODE_KEY);
+  const current = readLocal(MAIN_CODE_KEY);
   if (current) {
     // 新舊同時有值也要清舊 key:雙分頁升版時舊 bundle 會把舊 key 寫回,
     // 新 bundle 每次啟動清一次才收斂(否則殘值永久留著)。
-    try {
-      window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
-    } catch {
-      // 清不掉就算了 —— 新 key 已優先,舊值不影響行為
-    }
+    // 清不掉就算了 —— 新 key 已優先,舊值不影響行為。
+    removeLocal(LEGACY_MAIN_CODE_KEY);
     return current;
   }
-  const legacy = window.localStorage.getItem(LEGACY_MAIN_CODE_KEY);
+  const legacy = readLocal(LEGACY_MAIN_CODE_KEY);
   if (!legacy) return null;
-  try {
-    window.localStorage.setItem(MAIN_CODE_KEY, legacy);
-    window.localStorage.removeItem(LEGACY_MAIN_CODE_KEY);
-  } catch {
-    // 搬不動就下次再搬 —— 不落檔遠好於白畫面
-  }
+  // 搬不動就下次再搬 —— 不落檔遠好於白畫面
+  if (writeLocal(MAIN_CODE_KEY, legacy)) removeLocal(LEGACY_MAIN_CODE_KEY);
   return legacy;
 }
 
@@ -185,16 +180,16 @@ export default function App() {
   const futuresStream = useFuturesStream();
 
   useEffect(() => {
-    window.localStorage.setItem(TAB_KEY, tab);
+    writeLocal(TAB_KEY, tab);
     setVisited((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
   }, [tab]);
 
   useEffect(() => {
-    if (stockCode) window.localStorage.setItem(MAIN_CODE_KEY, stockCode);
+    if (stockCode) writeLocal(MAIN_CODE_KEY, stockCode);
   }, [stockCode]);
 
   useEffect(() => {
-    window.localStorage.setItem(PRODUCT_KEY, product);
+    writeLocal(PRODUCT_KEY, product);
   }, [product]);
 
   const accum = stockStream.accum;
