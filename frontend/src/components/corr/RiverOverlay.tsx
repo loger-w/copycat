@@ -44,7 +44,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
   // polyline 的 `points` 字串原本留在 render body,等於每則 mousemove 重組一次
   // 840 分鐘 × 七腿的座標字串,而 cursor 只影響讀值列與十字線那一條。
   // 兩者都只依賴 `entries` / `win`(與幾何同一組 deps),沒有留在外面的理由。
-  const { g, lateStarts, ticks, lines } = useMemo(() => {
+  const { g, lateStarts, ticks, lines, xOf } = useMemo(() => {
     const geo = buildOverlayGeometry(entries, win, SIZE);
     const span = Math.max(1, win.end_min - win.start_min);
     const xOf = (offset: number): number => (offset / span) * SIZE.width;
@@ -61,6 +61,7 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
     return {
       g: geo,
+      xOf,
       lateStarts: geo.lines.flatMap((l) =>
         l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
           ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
@@ -79,9 +80,8 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
       })),
     };
   }, [entries, win]);
-  const span = Math.max(1, win.end_min - win.start_min);
-  // 十字線專用(唯一依賴 cursor 的座標換算,不能進 memo)
-  const toX = (offset: number): number => (offset / span) * SIZE.width;
+  // 十字線是唯一依賴 cursor 的座標換算(不能進 memo),但換算式本身與 memo 內同一份(review ST6)
+  const toX = xOf;
 
   // 座標換算假設 svg 為 w-full 等比渲染(viewBox 比例 = 渲染盒比例;同 PnlChart 手法)
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>): void {
