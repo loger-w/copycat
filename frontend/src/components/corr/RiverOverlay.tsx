@@ -39,8 +39,15 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
   // 幾何與純 derive 自幾何的量一起包:游標在圖上滑一下是數十則 mousemove,每則都
   // setCursor → re-render,而滿窗夜盤是 840 分鐘 × 七腿。`readout` 依賴 cursor,
   // **不能**進來(進來就會被凍在 cursor === null,讀值列永遠是「—」而線照畫)。
-  const { g, labelYs, lateStarts } = useMemo(() => {
+  //
+  // N030:**畫面元素的字串化也一起包進來** —— `timeTicks(win)` 的全窗刻度與七條
+  // polyline 的 `points` 字串原本留在 render body,等於每則 mousemove 重組一次
+  // 840 分鐘 × 七腿的座標字串,而 cursor 只影響讀值列與十字線那一條。
+  // 兩者都只依賴 `entries` / `win`(與幾何同一組 deps),沒有留在外面的理由。
+  const { g, lateStarts, ticks, lines } = useMemo(() => {
     const geo = buildOverlayGeometry(entries, win, SIZE);
+    const span = Math.max(1, win.end_min - win.start_min);
+    const xOf = (offset: number): number => (offset / span) * SIZE.width;
     // 右緣腿名防疊(real-env 截圖:各腿價位接近時標籤互相蓋住)
     const ys = spreadLabelYs(
       geo.lines.map((l) => (l.pts.length > 0 ? l.pts[l.pts.length - 1]!.y + 3 : 0)),
@@ -54,15 +61,26 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     const earliest = firstOffsets.length ? Math.min(...firstOffsets) : 0;
     return {
       g: geo,
-      labelYs: ys,
       lateStarts: geo.lines.flatMap((l) =>
         l.pts.length > 0 && l.pts[0]!.offset - earliest > LATE_START_MIN
           ? [{ key: l.key, label: l.label, colorIndex: l.colorIndex, at: l.pts[0]!.offset }]
           : [],
       ),
+      ticks: timeTicks(win).map((t) => ({ ...t, x: xOf(t.offset) })),
+      lines: geo.lines.map((l, i) => ({
+        key: l.key,
+        label: l.label,
+        colorIndex: l.colorIndex,
+        points: pts(l.pts),
+        // 末點缺(空腿)→ 不畫腿名;`labelX` 為 null 是「這一腿沒有標籤」的唯一判別子
+        labelX:
+          l.pts.length > 0 ? Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 30) : null,
+        labelY: ys[i],
+      })),
     };
   }, [entries, win]);
   const span = Math.max(1, win.end_min - win.start_min);
+  // 十字線專用(唯一依賴 cursor 的座標換算,不能進 memo)
   const toX = (offset: number): number => (offset / span) * SIZE.width;
 
   // 座標換算假設 svg 為 w-full 等比渲染(viewBox 比例 = 渲染盒比例;同 PnlChart 手法)
@@ -116,22 +134,10 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setCursor(null)}
       >
-        {timeTicks(win).map(({ offset, label }) => (
+        {ticks.map(({ offset, label, x }) => (
           <g key={offset}>
-            <line
-              x1={toX(offset)}
-              x2={toX(offset)}
-              y1={0}
-              y2={SIZE.height - 12}
-              className="stroke-line"
-              strokeWidth={0.4}
-            />
-            <text
-              x={toX(offset) + 2}
-              y={SIZE.height - 2}
-              className="fill-ink-dim"
-              fontSize="0.625rem"
-            >
+            <line x1={x} x2={x} y1={0} y2={SIZE.height - 12} className="stroke-line" strokeWidth={0.4} />
+            <text x={x + 2} y={SIZE.height - 2} className="fill-ink-dim" fontSize="0.625rem">
               {label}
             </text>
           </g>
@@ -155,18 +161,20 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
         <text x={2} y={SIZE.height - 16} className="fill-ink-dim" fontSize="0.625rem">
           {fmtPct(g.pctDomain[0])}
         </text>
-        {g.lines.map((line, i) => (
+        {/* `strokeWidth` 刻意留在這裡而不進 memo:它依賴 `baseKey`(prop),進去就得多一個
+            dep,而換 base 腿本來就該重畫線寬 —— 一次字串比對遠比多算一輪幾何便宜。 */}
+        {lines.map((line) => (
           <g key={line.key}>
             <polyline
-              points={pts(line.pts)}
+              points={line.points}
               fill="none"
               className={RIVER_STROKES[line.colorIndex % RIVER_STROKES.length]}
               strokeWidth={line.key === baseKey ? BASE_STROKE_W : LEG_STROKE_W}
             />
-            {line.pts.length > 0 ? (
+            {line.labelX !== null ? (
               <text
-                x={Math.min(line.pts[line.pts.length - 1]!.x + 4, SIZE.width - 30)}
-                y={labelYs[i]}
+                x={line.labelX}
+                y={line.labelY}
                 className={RIVER_FILLS[line.colorIndex % RIVER_FILLS.length]}
                 fontSize="0.625rem"
               >
