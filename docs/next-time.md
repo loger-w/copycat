@@ -180,15 +180,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   堆積時全池排隊。若 prod 觀察到 today / daily_bars 變慢,考慮給「純本機檔案 IO」一個
   獨立有界 executor;`_warned_years` check-then-add 跨執行緒(review C-3)屆時一併看。
 
-## 2026-08-19(mod/ws-app-heartbeat 8 條 WS 應用層心跳 + 前端靜默 watchdog 留尾)
-
-- [ ] **7 份 `WsStatus` 同值型別宣告 + `types.ts` 一份**(spec review R13):本輪刻意不收斂;下次動 hook 時統一從一處 import。
-- [ ] **分頁第一代連線在首則 ping 前就半死 → 永久不偵測**(spec §4.2 殘餘盲區,同現況;sticky 只涵蓋後代):要封得掉要「open 即武裝」對舊後端就會誤重連,等 prod 穩定跑心跳一陣子後可考慮翻成一律 open 即武裝。
-- [ ] **後端 accept-then-close 8 處未改 reject-before-accept**(handoff R3 原建議):前端 short-lived cap 5 s 已把空轉降到 0.2 Hz;uvicorn access log 仍每 5 s 一行,嫌吵再改。
-- [ ] **隱藏分頁 > 5 min 的 Chrome intensive throttling 下 watchdog 恆不判定**(review A3;凍結守門每 tick 成立):false negative、回前景 ≤ 35 s 自癒;若要封,候選 = `visibilitychange` 回前景時重置基準並立即評估,或以「tick 間有無收到任何訊息」取代純時間守門。
-- [ ] **watchdog 同步觸發的 thundering herd**(review A7):8 條 WS 同 tick 觸發、1 s 後齊重連 + refetch;真環境未見問題,若 prod 觀察到復原卡頓再對 watchdog 路徑加 jitter。
-- [ ] **uvicorn `close_sent` 後 ASGI send 的 `RuntimeError` 窗口**(spec Edge 5):`_beat` 與 `_send` 同款曝險 → ASGI traceback log 噪音;prod 觀察到再決定是否在 relay 辨識該 RuntimeError 訊息收斂。
-
 ## 2026-08-19(mod/futures-broadcast-coalesce-leaf-unsub 期貨廣播 coalesce 留尾)
 
 - [ ] **leaf 備胎訂閱退訂(user 2026-08-19 拍板本輪不退)**:handoff R2 原要求 HOT 回魂後退 leaf;spec review 指出退訂後 HOT 再被
