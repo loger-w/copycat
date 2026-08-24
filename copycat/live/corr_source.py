@@ -20,12 +20,37 @@ import time
 from typing import Any, Callable
 
 from copycat.live.river_backfill import collect_1k_minutes
-from copycat.live.tc4 import TC4QuoteSource
+from copycat.live.tc4 import TC4QuoteSource, always_symbol_active
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CorrQuoteSource", "all_day_window"]
+__all__ = ["TAIFEX_PREFIX", "CorrQuoteSource", "all_day_window", "taifex_leg_gate"]
+
+#: 台期交段前綴。同段的國外指數期貨(SXF 費半 / UDF 道瓊 / SPF 標普 / UNF 那斯達克)
+#: 與台指**同時段同結算**(tc4-market-facts「海外商品」節)—— 它們的休市段就是台指的
+#: 休市段,可以直接沿用期貨盤別閘。SGX / CME / CBOT / OSE 段各有自己的時段(且在台灣
+#: 連假照開),沒有實測事實之前一律不閘。
+TAIFEX_PREFIX = "TC.F.TWF."
+
+
+def taifex_leg_gate(clock_gate: Callable[[], bool]) -> Callable[[str], bool]:
+    """逐腿自癒閘(N051):台期交段的腿吃 `clock_gate`,其餘段恆 True。
+
+    corr 是唯一一條 session 上掛著**時段各不相同**的腿的:session 級的 `heal_active`
+    只有「全開」或「全關」兩種答案 —— 全開時台期交國外指數腿在自己的休市段整晚落進
+    R2「從未推播」母體(2026-08-21 M0:SXF 3 小時 8 發 UNSUB+SUB),全關則等於把在
+    自己盤中的海外腿一起關掉(台灣連假時 SGX / CME 照開)。
+
+    **不做「猜海外時段」**:CME/SGX/OSE 的時段本專案沒有實測事實(OSE 只有 skill 記的
+    OpenTime/CloseTime 一組),猜錯的失效樣態是「該救的腿整場不救」—— 比多幾發 churn
+    嚴重得多。要收那半邊的前提是先拿 `QUERYINSTRUMENTINFO` 的 OpenCloseTime 落成事實。
+    """
+
+    def _gate(symbol: str) -> bool:
+        return clock_gate() if symbol.startswith(TAIFEX_PREFIX) else True
+
+    return _gate
 
 
 def all_day_window() -> tuple[str, str]:
@@ -44,9 +69,12 @@ class CorrQuoteSource(TC4QuoteSource):
         poll_wait_secs: float = 1.0,
         heal_silence_secs: float | None = 120.0,
         heal_symbol_silence_secs: float | None = 240.0,
+        heal_symbol_active: Callable[[str], bool] = always_symbol_active,
     ) -> None:
         # 門檻放寬一倍:海外腿(SGX/CBOT/CME)時段錯開、成交稀疏,台指門檻會把
-        # 「這條腿現在本來就沒人交易」誤判成零推播。不設盤別閘 —— 全天窗本就跨時段。
+        # 「這條腿現在本來就沒人交易」誤判成零推播。不設 **session 級**盤別閘 ——
+        # 全天窗本就跨時段,而各腿的時段各不相同(閘一開一關都會錯一半)。逐腿的閘
+        # 由 `heal_symbol_active` 帶(prod 走 `taifex_leg_gate`,見 `app._default_corr_source`)。
         super().__init__(
             port,
             api=api,
@@ -54,6 +82,7 @@ class CorrQuoteSource(TC4QuoteSource):
             poll_wait_secs=poll_wait_secs,
             heal_silence_secs=heal_silence_secs,
             heal_symbol_silence_secs=heal_symbol_silence_secs,
+            heal_symbol_active=heal_symbol_active,
         )
         self._on_message: Callable[[dict], None] | None = None
 

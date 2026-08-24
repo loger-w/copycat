@@ -1103,3 +1103,122 @@ class TestHealthCheckKeyedBySymbol:
         src.subscribe_symbol("F:CDF")
         threading.Event().wait(0.1)
         assert flagged == []
+# ---- R8 TC4 連線/訂閱深水區 ----
+
+
+def _recording_api(reqs: list[dict]) -> FakeApi:
+    def handler(obj: dict) -> bytes:
+        reqs.append(obj)
+        return ok()
+
+    return FakeApi(handler)
+
+
+def _rt_keys(reqs: list[dict]) -> list[tuple[str, str, str, str]]:
+    """(Request, Symbol, StartTime, EndTime) —— TC4 refcount 的鍵就是後三者。"""
+    return [
+        (
+            r["Request"],
+            r["Param"]["Symbol"],
+            r["Param"]["StartTime"],
+            r["Param"]["EndTime"],
+        )
+        for r in reqs
+        if r.get("Param", {}).get("SubDataType") == "REALTIME"
+    ]
+
+
+class TestRolloverUnsubscribesStaleWindow:
+    """N052:stage 2 的 `_resub` 用**新日期窗**發 UNSUBQUOTE —— 前一交易日那把 key
+    的 count 永遠停在 >0,留在 session 上直到 session 死。死的時候(taskkill / crash
+    後 ~60s 被 TC4 reap)它歸零,而上游 feed 以 symbol 為單位:歸零就把整個 symbol
+    的推播帶走,連新 server 剛掛好的活 key 一起殺(tc4-market-facts「重啟後零推播」)。
+    """
+
+    def test_old_window_is_unsubscribed_before_the_date_switches(self) -> None:
+        reqs: list[dict] = []
+        src = StockQuoteSource(
+            api=_recording_api(reqs), session="s1", trade_date="2026-07-21"
+        )
+        sym = stock_symbol("2330")
+        src._subscribed = {sym}
+        old_start, old_end = stock_window("2026-07-21")
+        reqs.clear()
+        src.set_trade_date("2026-07-22")
+        assert _rt_keys(reqs) == [("UNSUBQUOTE", sym, old_start, old_end)]
+
+    def test_stale_unsub_uses_the_current_window_variant(self) -> None:
+        """舊窗的那把 key 是「當下 variant 算出來的窗」,不是原窗 —— 自癒爬過階梯的
+        symbol 用原窗發 UNSUB 等於對一把不存在的 key 動手,真正在的那把仍留著。"""
+        reqs: list[dict] = []
+        src = StockQuoteSource(
+            api=_recording_api(reqs), session="s1", trade_date="2026-07-21"
+        )
+        sym = stock_symbol("2330")
+        src._subscribed = {sym}
+        src._window_variant[sym] = 2
+        expected = src._apply_variant(sym, stock_window("2026-07-21"))
+        reqs.clear()
+        src.set_trade_date("2026-07-22")
+        assert _rt_keys(reqs) == [("UNSUBQUOTE", sym, *expected)]
+
+    def test_same_date_sends_nothing(self) -> None:
+        reqs: list[dict] = []
+        src = StockQuoteSource(
+            api=_recording_api(reqs), session="s1", trade_date="2026-07-21"
+        )
+        src._subscribed = {stock_symbol("2330")}
+        reqs.clear()
+        src.set_trade_date("2026-07-21")
+        assert reqs == []
+
+    def test_subscribed_set_is_kept_for_stage_two(self) -> None:
+        """只退舊窗的 key,不動 `_subscribed` —— stage 2 的全量重掛靠它當名單。"""
+        reqs: list[dict] = []
+        src = StockQuoteSource(
+            api=_recording_api(reqs), session="s1", trade_date="2026-07-21"
+        )
+        sym = stock_symbol("2330")
+        src._subscribed = {sym}
+        src.set_trade_date("2026-07-22")
+        assert src._subscribed == {sym}
+
+    def test_disconnected_source_does_not_raise(self) -> None:
+        """`index_engine.start()` 在**連線之前**就呼叫 set_trade_date;收工路徑同理。
+        best-effort 清窗不得把 rollover / 啟動炸掉。"""
+        src = StockQuoteSource(port="0", trade_date="2026-07-21")
+        src._subscribed = {stock_symbol("2330")}
+        src.set_trade_date("2026-07-22")
+        assert src._trade_date == "2026-07-22"
+
+
+class TestBackfillStubSignature:
+    """N092:`backfill` 的 ready-check 也是「首頁非空即 break」—— 凍結 stub 會讓它
+    break 出來卻一筆 tick 都解不出,呼叫端看到的是「當日無成交」。
+    """
+
+    def test_rows_all_dropped_logs_the_stub_signature(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pages = {"0": [{"QryIndex": "1", "FilledTime": "bad"}], "1": []}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "GETHISDATA":
+                qi = obj["Param"]["QryIndex"]
+                return (
+                    "TICKS:"
+                    + json.dumps({"Success": "OK", "HisData": pages.get(qi, [])})
+                    + "\0"
+                ).encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler),
+            session="s1",
+            trade_date="2026-07-21",
+            poll_wait_secs=0.0,
+        )
+        with caplog.at_level(logging.WARNING):
+            ticks = src.backfill("2330")
+        assert ticks == []
+        assert "疑似凍結 stub" in caplog.text

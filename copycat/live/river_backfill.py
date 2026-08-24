@@ -75,11 +75,18 @@ def collect_1k_minutes(
     minutes = parsed.minutes
     if rows and not minutes and not parsed.skipped:
         # 沿 `stock_source._taipei_minute_key` 那條的固定字串:rows 非空但一分鐘都留不下來
-        # = 毒化 / 凍結的 history 訂閱簽名。少了這行,呼叫端只看得到一個空 list,
-        # 與「TC4 真沒這天的資料」無從分辨且全鏈零 log。
+        # = 毒化 / 凍結的 history 訂閱簽名。
         # **`not parsed.skipped` 是判準的一半**:欄位缺漏 / 格式壞掉也會讓 minutes 全空,
         # 但那要查的是 TC4 換沒換欄名,不是換窗口逃逸。誤報會讓這句固定字串(這條路上
         # 唯一的 grep 判準)失去診斷力,而 `parse_1k_minutes` 對 skipped 另有自己的 warning。
+        #
+        # **回空 → 拋 `HistoryTimeoutError`**(N092:ready-check 三態化):「首頁非空即
+        # break」擋不住凍結 stub —— break 出來的是一列假資料,`timed_out` 為 False,
+        # 呼叫端拿到空 list 讀成「這條腿今天沒有 1K」而整天不再回補(與 08-23 三腿同秒
+        # 逾時同一個失效)。凍結 stub 的語意恰恰是「**現在**取不到,不是沒有」= 這個
+        # 例外的語意;它是 `ConnectionError` 子類,只寫 `except ConnectionError` 的呼叫端
+        # 行為不變,而 `corr_engine` 的逾時重補階梯(3 輪、每 30 s)就此接得到手。
         logger.warning("1K 回補 %s:%d 列全數丟棄(疑似凍結 stub)", symbol, len(rows))
+        raise HistoryTimeoutError(f"1K 回補 {symbol}:{len(rows)} 列全數丟棄(疑似凍結 stub)")
     logger.info("1K 回補 %s:%d 列 → %d 分鐘", symbol, len(rows), len(minutes))
     return minutes

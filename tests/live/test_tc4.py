@@ -1077,3 +1077,243 @@ class TestSpotSymbol:
         → 訂了永遠沒推播,spot 恆 None。證據:驗證報告 item 2 四步診斷鏈。
         """
         assert SPOT_SYMBOL == "TC.F.TWF.TXF.HOT"
+# ---- R8 TC4 連線/訂閱深水區 ----
+
+
+class _FakeCtx:
+    """QuoteAPI.context 替身:只需要吃得下 setsockopt。"""
+
+    def __init__(self) -> None:
+        self.opts: list[tuple[int, int]] = []
+
+    def setsockopt(self, opt: int, value: int) -> None:
+        self.opts.append((opt, value))
+
+
+class _SlowQuoteAPI:
+    """Connect 帶延遲的 QuoteAPI 替身 —— 把 check-then-act 的競賽窗放大到可觀測。"""
+
+    created: list[Any] = []
+
+    def __init__(self, appid: str, skey: str, delay: float = 0.2) -> None:
+        self.context = _FakeCtx()
+        self.socket = _JsonSocket(lambda _req: b'{"Success": "OK"}\x00')
+        self.lock = threading.Lock()
+        self.disconnected = False
+        self._delay = delay
+        _SlowQuoteAPI.created.append(self)
+
+    def Connect(self, port: str) -> dict:  # noqa: N802 - wrapper 介面
+        time.sleep(self._delay)
+        return {"Success": "OK", "SessionKey": "sess-race", "SubPort": "54322"}
+
+    def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+        self.disconnected = True
+
+
+def _install_slow_quote_api(monkeypatch: pytest.MonkeyPatch) -> type[_SlowQuoteAPI]:
+    """把 `tcoreapi_mq.QuoteAPI` 換成延遲替身。
+
+    `_ensure_connected` 是 function 內 import,先塞 `sys.modules` 即可攔截 —— 不需要
+    真的有 TCPY wrapper(所以本組測試不掛 `requires_tcpy`)。
+    """
+    import sys
+    import types
+
+    _SlowQuoteAPI.created = []
+    module = types.ModuleType("tcoreapi_mq")
+    module.QuoteAPI = _SlowQuoteAPI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tcoreapi_mq", module)
+    return _SlowQuoteAPI
+
+
+def _source_classes() -> dict[str, Any]:
+    """四個吃同一份 `_ensure_connected` 的 source(blast radius = 這四條 session)。"""
+    from copycat.live.corr_source import CorrQuoteSource
+    from copycat.live.futures_source import FuturesQuoteSource
+    from copycat.live.stock_source import StockQuoteSource
+
+    return {
+        "txo": TC4QuoteSource,
+        "stock": StockQuoteSource,
+        "futures": FuturesQuoteSource,
+        "corr": CorrQuoteSource,
+    }
+
+
+class TestEnsureConnectedAtomic:
+    """N259:`_ensure_connected` 的 check(指標為 None)與建立/發布不是原子的 ——
+    `_check_stale` 重連與任何 REQ 生產者同時進來時會建出**兩個** QuoteAPI,落敗的
+    那一個永遠不會被 `Disconnect()`(KeepAlive 執行緒續跑 → process 不退,§0a),
+    而兩邊都「連線成功」,零錯誤訊號。
+    """
+
+    @pytest.mark.parametrize("name", list(_source_classes()))
+    def test_concurrent_ensure_connected_creates_one_api(
+        self, name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api_cls = _install_slow_quote_api(monkeypatch)
+        src = _source_classes()[name](port="0")
+        errors: list[BaseException] = []
+
+        def _worker() -> None:
+            try:
+                src._ensure_connected()
+            except BaseException as exc:  # noqa: BLE001 - 測試觀測點
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+        assert errors == []
+        assert len(api_cls.created) == 1, (
+            "重連 race 建出兩條 TC4 連線(落敗者永不 Disconnect)"
+        )
+        assert src._api is api_cls.created[0]
+
+    def test_stopped_source_refuses_to_reconnect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """收工後(`close()` 已 set `_stop`)在途的 executor 工作項不得重建連線 ——
+        重建 = 新的 KeepAlive 執行緒,process 不退(futures `_retry_subscribe` 的縮窗
+        註解點名的殘餘 race)。"""
+        api_cls = _install_slow_quote_api(monkeypatch)
+        src = TC4QuoteSource(port="0")
+        src._stop.set()
+        with pytest.raises(ConnectionError):
+            src._ensure_connected()
+        assert api_cls.created == []
+
+
+class TestSpotWindowOffset:
+    """N050:TXO session 與 futures session 雙持 `TXF.HOT` **同一把** refcount key ——
+    單 session 的 UNSUB→SUB 永遠到不了 SumSubCount 0,上游不會 `ReqSubQuote`,
+    要靠第 3 次自癒的 window variant 才救得回(多一輪 backoff)。
+    """
+
+    @staticmethod
+    def _series() -> Any:
+        from copycat.live.models import OptionContract, SeriesInfo
+
+        return SeriesInfo(
+            series_id="TXO.202608",
+            name="TXO 202608",
+            expiry="202608",
+            contracts=(
+                OptionContract(
+                    symbol="TC.O.TWF.TXO.202608.C.44550",
+                    cp="C",
+                    strike_millipts=44_550_000,
+                ),
+            ),
+        )
+
+    def test_txo_spot_window_differs_from_the_session_window(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        src._start_listener = lambda: None  # type: ignore[method-assign]
+        src.subscribe(self._series(), lambda _t: None)
+        windows = {
+            r["Param"]["Symbol"]: (r["Param"]["StartTime"], r["Param"]["EndTime"])
+            for r in api.rt_requests
+        }
+        assert windows[SPOT_SYMBOL] != windows["TC.O.TWF.TXO.202608.C.44550"], (
+            "TXO 的 TXF.HOT 訂閱窗與盤別窗相同 = 與 futures session 同一把 key"
+        )
+
+    def test_spot_offset_survives_the_heal_variant_ladder(self) -> None:
+        """自癒換窗時位移必須疊在 variant 之上,四把窗(variant 0/1/2/3)兩兩互異 ——
+        塌回同一把的失效樣態是「自癒照跑但上游永不重掛」。"""
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        src._start_listener = lambda: None  # type: ignore[method-assign]
+        src.subscribe(self._series(), lambda _t: None)
+        seen = set()
+        for k in (0, 1, 2, 3):
+            src._window_variant[SPOT_SYMBOL] = k
+            api.rt_requests.clear()
+            src._rt_request("SUBQUOTE", SPOT_SYMBOL)
+            param = api.rt_requests[-1]["Param"]
+            key = (param["StartTime"], param["EndTime"])
+            assert key not in seen, f"variant {k} 撞既有鍵:{key}"
+            seen.add(key)
+
+    def test_futures_session_keeps_the_base_window_for_the_same_symbol(self) -> None:
+        """位移只加在 TXO 那一邊 —— futures session 的 `TXF.HOT` 窗必須逐字不變,
+        否則兩邊一起位移還是同一把 key(而期貨面的既有訂閱行為被改掉)。"""
+        from copycat.live.futures_source import FuturesQuoteSource
+
+        api = FakeApi({})
+        fut = FuturesQuoteSource(port="0", api=api, session="sess-1")
+        fut.subscribe_symbol("TXF")
+        last = api.rt_requests[-1]["Param"]
+        base = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        assert (last["StartTime"], last["EndTime"]) == base._rt_window(SPOT_SYMBOL)
+
+
+class TestHealSymbolGate:
+    """N051:R2「從未推播」母體對**自身休市段**的腿一樣每 300s 一發 UNSUB+SUB。
+    海外 / 台期交國外指數腿的時段各不相同,session 級的 `heal_active` 表達不了。
+    """
+
+    def test_symbol_gate_suppresses_heal_for_a_closed_leg(self) -> None:
+        api = FakeApi({})
+        closed = {HEAL_B}
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_symbol_silence_secs=60.0,
+            heal_symbol_active=lambda sym: sym not in closed,
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._last_push = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._heal_tick(1000.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+    def test_r1_population_excludes_gated_symbols(self) -> None:
+        """R1(整條 session 靜默)的母體同樣要扣掉閘掉的腿:留在母體裡的話,
+        休市腿的靜默會把還在流動的腿一起拖進「全場靜默」的整批重掛。"""
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_symbol_active=lambda sym: sym != HEAL_B,
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 990.0, HEAL_B: 0.0}
+        src._last_push = {HEAL_A: 990.0, HEAL_B: 0.0}
+        src._heal_tick(1000.0)
+        assert api.rt_requests == [], "活著的腿 10s 前才推過,不該因休市腿而整批重掛"
+
+    def test_default_gate_keeps_every_symbol_active(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0
+        )
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        src._last_push = {HEAL_A: 0.0}
+        src._heal_tick(1000.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+
+class TestFetchSymbolTicksStubSignature:
+    """N092:ready-check「首頁非空即 break」被凍結 stub 騙 —— rows 非空但一筆都解不出來
+    時,呼叫端只看得到空 list,與「這檔今天真沒成交」無從分辨且全鏈零 log。
+    """
+
+    def test_rows_all_dropped_logs_the_stub_signature(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        api = FakeApi({"S": [[{"QryIndex": "1", "FilledTime": "bad"}]]})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        with caplog.at_level(logging.WARNING):
+            ticks = src._fetch_symbol_ticks("S", "2026081800", "2026081806")
+        assert ticks == []
+        assert "疑似凍結 stub" in caplog.text

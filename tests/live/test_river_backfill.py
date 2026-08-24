@@ -141,8 +141,16 @@ class TestCorrSourceFetchDay1k:
         src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
         assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == [(527, 51_680_000)]
 
-    def test_all_rows_dropped_warns_frozen_stub(self, caplog: pytest.LogCaptureFixture) -> None:
-        """rows 非空但 minutes 全空 = 毒化訂閱簽名 —— 沿 `stock_source` 的固定字串。"""
+    def test_all_rows_dropped_raises_history_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """rows 非空但 minutes 全空 = 毒化訂閱簽名 —— 沿 `stock_source` 的固定字串。
+
+        **該變**(N092,舊契約是「warning + 回空」):「首頁非空即 break」的 ready-check
+        擋不住凍結 stub,break 出來的是一列假資料而 `timed_out` 為 False → 呼叫端讀成
+        「這條腿今天沒有 1K」整天不再回補。凍結 stub 的語意是「現在取不到,不是沒有」
+        = `HistoryTimeoutError`,corr 的逾時重補階梯因此接得到手。
+        """
 
         def handler(obj: dict) -> bytes:
             if obj["Request"] != "GETHISDATA":
@@ -151,8 +159,8 @@ class TestCorrSourceFetchDay1k:
             return _his([_row(1, "004600", "51666", date="20200101")] if qi == "0" else [])
 
         src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
-        with caplog.at_level(logging.WARNING):
-            assert src.fetch_day_1k("TC.F.SGX.TWN.HOT") == []
+        with caplog.at_level(logging.WARNING), pytest.raises(HistoryTimeoutError):
+            src.fetch_day_1k("TC.F.SGX.TWN.HOT")
         assert "疑似凍結 stub" in caplog.text
 
     def test_unparsable_rows_do_not_claim_frozen_stub(

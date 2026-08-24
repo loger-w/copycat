@@ -511,13 +511,43 @@ class StockQuoteSource(TC4QuoteSource):
 
         自癒的 variant / attempts / 退避一併清掉:那些是「**昨天**那把 key 救不回來」
         的事實,帶進新的一天等於一開盤就訂到一把沒人知道的窗、第一次靜默就換窗。
+
+        **換窗前先對舊窗逐 symbol UNSUBQUOTE**(N052):stage 2 的 `_resub` 送的
+        UNSUB 已經是**新日期窗**,前一交易日那把 key 的 count 就永遠停在 >0 —— 它
+        留在 session 上直到 session 死,而死的那一刻(taskkill / crash 後 ~60s 被 TC4
+        `ExecuteCheckPingTime` reap)歸零,上游 feed 以 symbol 為單位:歸零就把整個
+        symbol 的推播帶走,連別條 session 剛掛好的活 key 一起殺(tc4-market-facts
+        「重啟後 ~60s 訂閱成功但零推播」的素材)。
         """
+        if trade_date != self._trade_date:
+            self._unsub_stale_window()
         self._trade_date = trade_date
         self._window_variant.clear()
         self._heal_attempts.clear()
         self._heal_next.clear()
         self._no_data_attempts.clear()
         self._no_data_next.clear()
+
+    def _unsub_stale_window(self) -> None:
+        """對**當下**的窗(含 variant)逐 symbol 發 UNSUBQUOTE;`_subscribed` 不動。
+
+        `_subscribed` 是 stage 2 全量重掛的名單,清掉就沒人重訂了。舊窗 key 歸零會讓
+        上游退訂該 symbol —— 這正是要的:stage 2 的新窗 SUB 走 0→1 觸發 `ReqSubQuote`
+        把 feed 重新掛上(同 `_heal_resub(bump_variant=True)` 已在跑的「先退舊窗再換窗」
+        形狀)。
+
+        **不得拋**:呼叫端是 rollover stage1 與 `index_engine.start()`(後者在連線
+        **之前**就呼叫),best-effort 清窗把它們炸掉是新的失效。第一發失敗即停 ——
+        失敗多半是連線已死,其餘 symbol 也會失敗(同 `close()` 的收斂)。
+        """
+        for sym in sorted(self._subscribed):
+            try:
+                self._rt_request("UNSUBQUOTE", sym)
+            # OSError 涵蓋 ConnectionError(`_req` 的收斂型別)與 zmq.ZMQError;
+            # ValueError 涵蓋壞電文的 json.JSONDecodeError
+            except (OSError, ValueError) as exc:
+                logger.warning("換日清舊窗 UNSUBQUOTE 失敗(略過其餘):%s: %s", sym, exc)
+                return
 
     # ---- 覆寫:REALTIME 窗 = 個股當日日盤窗 ----
 
@@ -649,6 +679,16 @@ class StockQuoteSource(TC4QuoteSource):
         ticks = [
             t for r in rows if (t := parse_hist_tick(code, r, trial_windows=windows)) is not None
         ]
+        if rows and not ticks:
+            # N092:這條 ready-check 同樣是「首頁非空即 break」,凍結 stub(窗內無資料時
+            # 建立的 history 訂閱回一列 Time = 訂閱建立時刻的假列)會讓它 break 出來卻
+            # 一筆都解不出 —— 呼叫端看到的與「當日真無成交」一模一樣,全鏈零 log。
+            #
+            # **只記 log、不升成例外**:`parse_hist_tick` 的試撮窗過濾會製造同一個形狀的
+            # **合法**空(08:30–09:00 盤前回補、13:25–13:30 試撮段),升成
+            # `HistoryTimeoutError` 會讓那條路被 worker 無限重排。要真三態化得先把
+            # 「試撮濾掉」與「解析不出」分流(見 verification.md 留尾)。
+            logger.warning("stock backfill %s:%d 列全數解析失敗(疑似凍結 stub)", code, len(rows))
         logger.info("stock backfill %s: %d ticks", code, len(ticks))
         return ticks
 
