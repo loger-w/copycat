@@ -90,13 +90,12 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     }
   }
 
-  /** 撞名 / 保留名的**權威判定在 transform 裡**(N115):`addGroup` / `renameGroup` 對
-   *  撞名回原物件,而「原物件」只有拿**套用當下的基底**去比才作數。
-   *
-   *  下面兩個 submit 仍各留一份 eager 檢查,但它已降級成**純 UX**(常見情形下即時回饋、
-   *  不必等一次 round-trip);佇列視窗內交錯時它會偽陰性(驗證放行 → 套用時才撞名),
-   *  那條路徑現在由 transform 回 `null` 接住 → BAD_GROUP 文案照樣出得來。
-   *  舊行為是零 PUT 且**無文案**,而輸入框已清空 —— 看起來完全成功。 */
+  /** 撞名的**權威判定只在 transform 裡**(N115):`addGroup` / `renameGroup` 對撞名回
+   *  原物件,而「原物件」只有拿**套用當下的基底**去比才作數。submit 這裡**不再**拿 render
+   *  閉包的 `wl` 做撞名早退(review SP1):佇列視窗內那份 `wl` 可能已過時 —— 偽陽性是
+   *  「前一動作剛刪掉同名組,使用者卻被擋住送不出去」,偽陰性是「放行後套用才撞」。
+   *  兩種都交給 transform:撞名 → `rejectIfUnchanged` 回 `null` → 零 PUT + BAD_GROUP 文案。
+   *  留下的前置只有**與基底無關**的兩條(保留名 / 空白),它們不會隨佇列漂。 */
   function submitAddGroup(): void {
     const name = groupInput.trim();
     if (name === "") return;
@@ -104,21 +103,14 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分(與基底無關)
       return;
     }
-    if (addGroup(wl, name) === wl) {
-      setLocalError("BAD_GROUP"); // eager UX:撞既有名 → 零 PUT + 文案
-      return;
-    }
     setGroupInput("");
     commit((base) => rejectIfUnchanged(addGroup(base, name), base));
   }
 
   function submitRename(from: string): void {
-    if (renameInput.trim() === UNGROUPED_LABEL) {
-      setLocalError("BAD_GROUP");
-      return;
-    }
-    if (renameGroup(wl, from, renameInput) === wl) {
-      setLocalError("BAD_GROUP"); // eager UX:撞既有名 / 空白 → 保留輸入框讓使用者改
+    const to = renameInput.trim();
+    if (to === UNGROUPED_LABEL || to === "") {
+      setLocalError("BAD_GROUP"); // 保留名 / 空白(與基底無關)→ 保留輸入框讓使用者改
       return;
     }
     setRenaming(null);
@@ -184,8 +176,6 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
         : moveToGroup(base, code, target, target, slot);
     });
   }
-
-  const errorMessage = localError;
 
   /** 搜尋框的可及名稱與 placeholder **同一份字串**:accname 計算 aria-label 優先於
    *  placeholder,兩者分開寫的話 aria-label 會把「加到哪一組」的脈絡蓋掉(review P1);
@@ -328,9 +318,9 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
             </button>
           </div>
 
-          {errorMessage !== null ? (
+          {localError !== null ? (
             <p className="shrink-0 border-b border-line px-3 py-1 text-xs text-bear">
-              {errText(errorMessage)}
+              {errText(localError)}
             </p>
           ) : null}
 
