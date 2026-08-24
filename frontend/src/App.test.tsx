@@ -196,6 +196,23 @@ describe("App:localStorage 失效不得白屏(N022)", () => {
     expect(() => fireEvent.click(screen.getByRole("tab", { name: "選擇權" }))).not.toThrow();
     expect(screen.getByRole("tab", { name: "選擇權" }).getAttribute("aria-selected")).toBe("true");
   });
+
+  // 🔴 舊 key 一次性遷移的**順序**契約:`setItem` 成功才 `removeItem`。
+  // 收斂前這條靠「兩行同在一個 try 裡」成立(第一行拋 → 第二行不執行);收斂後每次呼叫
+  // 各自吞例外,順序要改由 `writeLocal` 的布林回傳表達 —— 漏掉那個 if 就是**私密視窗 /
+  // 配額滿的使用者一開站就永久弄丟主圖標的**(新 key 沒寫成、舊 key 已刪),零錯誤訊號。
+  it("(c) 遷移時寫入拋 → 舊 key 不得被刪(下次還搬得動)", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    window.localStorage.setItem("stock-main-code", "2330");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+
+    renderApp();
+
+    expect(window.localStorage.getItem("copycat-stock-main-code")).toBeNull();
+    expect(window.localStorage.getItem("stock-main-code")).toBe("2330");
+  });
 });
 
 // 🟢 交易日曆(SC-9 / S2):App 有沒有真的掛 `useTradingCalendar`。
