@@ -17,8 +17,8 @@ import {
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { useFeeDiscountField } from "@/lib/fee-discount";
-import { LOCK_WS_TITLE } from "@/lib/flash-arm";
-import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
+import { ARM_WS_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
+import { flashSource, marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { aggregateLots, ymdWindow } from "@/lib/ladder-lots";
 import {
@@ -291,7 +291,7 @@ export function PriceLadder({
         price_type: "limit",
         time_in_force: "ROD",
         trade_kind: tradeKind,
-        source: "flash",
+        source: flashSource(arm.state.locked),
       }),
       {
         alive: () => aliveRef.current,
@@ -342,7 +342,7 @@ export function PriceLadder({
         price_type: "market",
         time_in_force: "ROD",
         trade_kind: tradeKind,
-        source: "flash",
+        source: flashSource(arm.state.locked),
       }),
       {
         alive: () => aliveRef.current,
@@ -393,6 +393,9 @@ export function PriceLadder({
   // 鎖定,但已鎖定時解鎖鈕恆可按 —— connecting 閃一下就把唯一的解鎖出口鎖死,使用者
   // 會停在「還在鎖定態、卻按不掉」的位置(connecting 本身不清鎖定,只有 closed 才清)。
   const lockDisabled = arm.wsStatus !== "open" && !arm.state.locked;
+  // N081:武裝鈕跟上鎖定鈕的連線判準 —— 同一列上兩顆鈕對「連線未就緒」給兩個答案,
+  // 使用者只會以為自己按錯顆。`ArmRow` 的 `armDisabled && !armed` 保證只擋**進入**方向。
+  const armWsBlocked = arm.wsStatus !== "open";
 
   return (
     <LadderView
@@ -406,6 +409,8 @@ export function PriceLadder({
       buyLots={lots.buy}
       sellLots={lots.sell}
       armed={arm.state.armed}
+      armDisabled={armWsBlocked}
+      armTitle={armWsBlocked ? ARM_WS_TITLE : undefined}
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });

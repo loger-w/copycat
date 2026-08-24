@@ -10,7 +10,12 @@ import { useFlashArm } from "@/hooks/useFlashArm";
 import { RAIL_TAB_KEY } from "@/lib/constants";
 import { futCloseEstimate, futExchangeContract } from "@/lib/futures-ladder";
 import { initialQtyState, type QtyState } from "@/lib/qty-quick";
-import { instrumentKeyOf, stkfutMarketEdgeMilli, type StkfutSelection } from "@/lib/stkfut";
+import {
+  instrumentKeyOf,
+  isOrderBlocked,
+  stkfutMarketEdgeMilli,
+  type StkfutSelection,
+} from "@/lib/stkfut";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { tablistKeyAction } from "@/lib/tablist-keys";
 import { cn } from "@/lib/utils";
@@ -274,16 +279,30 @@ export const RightRail = memo(function RightRail({ ctx }: { ctx: RailContext }) 
         } catch {
           futKey = null;
         }
+        // N099:ETF 期貨(單位 10,000)與除權息調整腿(2,157 之類)在**送單面**一律
+        // `PRODUCT_NOT_ALLOWED`(前端 `isOrderBlocked` 前置擋、後端 `_stkfut_gates` 權威),
+        // 平倉鍵卻照樣放行 —— 而它拿的是**現股 tick 表**去 snap 一個對這些契約不適用的檔位
+        // (後端的平倉檔位閘對這一群也是放行分支,所以這裡是唯一守門)。
+        // 同一個標的兩處給出不同答案、且平倉那側是猜的 → 比照送單面回 null = 鍵鎖住。
+        // `code ?? ""`:`unit` 有值時判準完全吃 unit(股號不參與);unit 也不可得時
+        // 空字串落回 `isEtfUnderlying("") === false` = 不擋 —— 與改動前逐字同行為,
+        // 不因為「股號恰好也不可得」多擋一檔。
+        const orderBlocked = isOrderBlocked(code ?? "", ctx.contract.unit);
         return (
           <CapitalPositionsList
             market="fut"
             closePriceOf={(pos) =>
-              futCloseEstimate(
+              orderBlocked
+                ? null
+                : futCloseEstimate(
                 pos,
                 futKey,
                 { upper: meta?.upper ?? null, lower: meta?.lower ?? null },
                 // 個股期走**股票 tick 表**(與同頁市價鈕 stkfutMarketEdgeMilli 同一支):
-                // FUT_TICK 的 1 點對股票是 1 元,拿它 snap 出來的檔位後端會 400 BAD_TICK
+                // FUT_TICK 的 1 點對股票是 1 元,拿它 snap 出來的檔位在期交所是非法檔位。
+                // 後端自 N098 起對**可用現股 tick 表的個股期**(標準 / 小型腿)在
+                // `/api/capital/position/close` 也驗一次檔位 → 未對齊會 400 BAD_TICK;
+                // 這裡仍是第一道守門(上面 `orderBlocked` 那一群後端是放行分支)。
                 (side, upper, lower) => stkfutMarketEdgeMilli(side, { upper, lower }),
               )
             }

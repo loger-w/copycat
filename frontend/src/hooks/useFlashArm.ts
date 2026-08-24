@@ -51,14 +51,21 @@ export function useFlashArm(active = true): FlashArmControl {
     if (wsStatus === "closed") dispatch({ type: "conn_lost" });
   }, [active, wsStatus, state.locked]);
 
-  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)
+  // Esc = 鍵盤解除(只在武裝期間掛 window 監聽)。
+  //
+  // **capture 相位**(N080):`CapitalConfirmDialog` 在自己的 keydown 上 `stopPropagation()`
+  // (窗開著時 Esc 只作用於窗),而 React 19 把合成事件掛在 root container 上 —— 冒泡到
+  // 那裡就被截斷,window 的冒泡監聽永遠收不到。症狀 = 鎖定中 + 平倉確認窗開著時按 Esc
+  // 只關窗,武裝與鎖定原封不動,而 `LOCK_TITLE` 白紙黑字寫著「Esc 仍會解除」。
+  // capture 在事件**下行**時先跑,窗自己的處理一個字都沒被剝奪(兩邊各做各的);
+  // 清除路徑一律寬於進入路徑(flash-arm.ts 檔頭的刻意不對稱)。
   useEffect(() => {
     if (!active || !state.armed) return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") dispatch({ type: "disarm" });
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [active, state.armed]);
 
   // unmount 清閒置計時器

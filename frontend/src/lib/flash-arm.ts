@@ -14,6 +14,10 @@ export const LOCK_TITLE =
   "鎖定:換標的 / 換梯 / 閒置不解除;斷線 / 連 3 敗 / Esc / 解除仍會解除";
 /** capital WS 非 `open` 時鎖定鈕 disabled 的說明(SC-13)。 */
 export const LOCK_WS_TITLE = "連線未就緒,無法鎖定";
+/** capital WS 非 `open` 時**武裝**鈕 disabled 的說明(N081)。
+ *  與 `LOCK_WS_TITLE` 分開兩句:同一列上兩顆鈕、兩種動作,共用一句話會讓使用者
+ *  以為自己按錯了哪一顆。 */
+export const ARM_WS_TITLE = "連線未就緒,無法武裝";
 
 export interface ArmState {
   armed: boolean;

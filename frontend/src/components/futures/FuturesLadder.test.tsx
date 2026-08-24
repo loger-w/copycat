@@ -120,7 +120,9 @@ function armUp(): void {
 
 beforeEach(() => {
   window.localStorage.clear();
-  setCapitalWsStatus("connecting"); // wsStatus module store 跨測試重置
+  // N081 起武裝鈕也吃 wsStatus(非 open 不得**進入**武裝)→ 預設改 "open",
+  // 否則整批「武裝後…」的既有案會被閘擋在門外。要驗連線閘的案自己設 "connecting"。
+  setCapitalWsStatus("open"); // wsStatus module store 跨測試重置
   Element.prototype.scrollIntoView = vi.fn();
   qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

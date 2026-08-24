@@ -127,7 +127,9 @@ function armUp(): void {
 
 beforeEach(() => {
   window.localStorage.clear();
-  setCapitalWsStatus("connecting"); // wsStatus module store 跨測試重置
+  // N081 起武裝鈕也吃 wsStatus(非 open 不得**進入**武裝)→ 預設改 "open",
+  // 否則整批「武裝後…」的既有案會被閘擋在門外。要驗連線閘的案自己設 "connecting"。
+  setCapitalWsStatus("open"); // wsStatus module store 跨測試重置
   // jsdom 無 scrollIntoView(跟隨置中 / 置中事件 spy stub)
   Element.prototype.scrollIntoView = vi.fn();
   qc = new QueryClient({
@@ -1145,7 +1147,8 @@ describe("PriceLadder 鎖定武裝(SC-1 / SC-2 / SC-8 / SC-9 / SC-13)", () => {
 
   it("SC-13:capital WS 非 open 時鎖定鈕 disabled + 文案;轉 open 才可按", () => {
     mockCapitalFetch();
-    render(ladder()); // beforeEach = connecting
+    setCapitalWsStatus("connecting"); // beforeEach 預設已改 open(N081),本案自己設
+    render(ladder());
     const lock = screen.getByRole("button", { name: "鎖定" });
     expect(lock.hasAttribute("disabled")).toBe(true);
     expect(lock.getAttribute("title")).toBe("連線未就緒,無法鎖定");

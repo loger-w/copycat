@@ -100,6 +100,25 @@ export function positionsByCode(
   return map;
 }
 
+/** 反查不到股號的個股期部位筆數(N065)。
+ *
+ *  `positionsByCode` 跳過這些列是對的 —— 猜一個股號會把部位掛到別檔頭上。但三處顯示
+ *  (自選 chip / 單檔 header / 群組卡)於是**完全靜默**:使用者手上壓著一筆部位,
+ *  畫面上一個字都沒有。這支只回計數,讓側欄底掛一行「n 筆個股期倉位無法對映」。
+ *
+ *  **不加後端欄位**:`code: string | null` 已經在 wire 上(`GET /api/capital/positions`
+ *  的衍生欄),再回一個 `code_missing` 聚合數就是同一事實兩個來源、多一條會漂的跨檔契約。
+ *  篩選條件與 `positionsByCode` 逐條對齊(`qty === 0` 不是部位;sec 列的 `code` 恆為股號,
+ *  語意不同、不計)。 */
+export function unmappedFutCount(positions: CapitalPosition[] | undefined): number {
+  let n = 0;
+  for (const p of positions ?? []) {
+    if (p.market !== "fut" || p.qty === 0) continue;
+    if (p.code === null || p.code === "") n += 1;
+  }
+  return n;
+}
+
 /**
  * 同股號的證券部位聚合;沒有 sec 列 → `null`(呼叫端據此決定整段渲不渲染)。
  *
