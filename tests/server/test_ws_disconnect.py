@@ -967,3 +967,36 @@ class TestRelay:
             await asyncio.wait_for(
                 relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
             )
+
+    # R4 N039:client 斷線 → uvicorn `asgi_receive` 先 `closed_event.set()`,`_send` / `_beat`
+    # 在被 cancel 前已排入的 `send_json` 落到 close_sent 後的 ASGI send → `RuntimeError`
+    # (非 OSError,starlette 不會轉 WebSocketDisconnect)→ 舊行為 re-raise = uvicorn 印整段
+    # ASGI traceback。連線本來就已斷,這兩句**逐字可辨識**的訊息視同斷線;其餘 RuntimeError
+    # 照舊 re-raise(上面那條不動)。
+    async def test_uvicorn_close_sent_runtime_error_on_ping_is_swallowed(self) -> None:
+        websocket = _PingRaisingWebSocket(
+            RuntimeError(
+                "Unexpected ASGI message 'websocket.send', after sending 'websocket.close' "
+                "or response already completed."
+            )
+        )
+        await asyncio.wait_for(relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2)
+
+    async def test_starlette_close_sent_runtime_error_on_send_is_swallowed(self) -> None:
+        websocket = _RaisingWebSocket(
+            RuntimeError('Cannot call "send" once a close message has been sent.')
+        )
+        await asyncio.wait_for(relay(websocket, _one_message()), timeout=2)
+
+    async def test_close_sent_runtime_error_is_not_logged_as_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """被 cancel 的 task 收尾(`_consume_ws_task`)同樣不把 close_sent 當「收尾例外」warning。"""
+        websocket = _PingRaisingWebSocket(
+            RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'.")
+        )
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            await asyncio.wait_for(
+                relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
+            )
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], caplog.text

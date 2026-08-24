@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as _dt
 from pathlib import Path
 
+import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
@@ -57,6 +59,14 @@ class TestIndexState:
             r = client.get("/api/index/state")
             assert r.status_code == 503
             assert r.json()["detail"]["error"] == "NOT_READY"
+
+    def test_ws_rejects_handshake_when_engine_absent(self) -> None:
+        # R4 N036:引擎缺席 → 握手前就拒(進場即拋);原本 accept 後才 close 且無測試
+        client, _ = make_client(None)
+        with client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/index"):
+                    raise AssertionError("index 引擎缺席時握手不該成功")
 
     def test_ws_streams_index_payload(self) -> None:
         client, fake = make_client(FakeIndexSource(day_minutes=_DAY_MINUTES))

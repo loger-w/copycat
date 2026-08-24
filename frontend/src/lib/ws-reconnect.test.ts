@@ -9,12 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   connectWithRetry,
-  resetWsPingMemory,
   WS_BACKOFF_CAP_MS,
   WS_BACKOFF_START_MS,
   WS_MIN_UPTIME_MS,
   WS_SHORT_LIVED_CAP_MS,
   WS_SILENCE_TIMEOUT_MS,
+  WS_WATCHDOG_JITTER_MS,
   WS_WATCHDOG_TICK_MS,
 } from "@/lib/ws-reconnect";
 
@@ -345,9 +345,15 @@ describe("connectWithRetry", () => {
 /** SC-2:半死連線(TCP 活著但零 frame)靠「太久沒收到任何訊息」自己分辨並重連。 */
 describe("connectWithRetry 靜默 watchdog", () => {
   const URL_A = "ws://host/ws/wd-a";
+  let randomSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    resetWsPingMemory();
+    // N038:watchdog 放棄路徑帶 jitter;本 describe 預設釘 0,讓既有時序案逐毫秒不動
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    randomSpy.mockRestore();
   });
 
   it("收到首則 ping 後武裝;35 s 全靜默 → 卸 handler + close + onClose + 重連", () => {
@@ -411,15 +417,33 @@ describe("connectWithRetry 靜默 watchdog", () => {
     handle.close();
   });
 
-  it("從未收過 ping → 永不武裝:60 s 全靜默也不重連(舊後端行為 = 現況)", () => {
+  // 由「從未收過 ping → 永不武裝(舊後端行為 = 現況)」翻轉而來(R4 N035,事前標記該變):
+  // 分頁第一代連線在首則 ping 前就半死 → 舊語意永久不偵測;open 即武裝封掉這個盲區。
+  it("open 即武裝:從未收過 ping 的連線 30 s + tick 全靜默 → 重連(N035)", () => {
     const onClose = vi.fn();
     const handle = connectWithRetry("ws://host/ws/wd-never", { onMessage: () => {}, onClose });
-    latest().onopen?.();
+    const gen1 = latest();
+    gen1.onopen?.();
+    expect(vi.getTimerCount()).toBe(1); // onopen 當下就有 interval
+
+    vi.advanceTimersByTime(WS_SILENCE_TIMEOUT_MS);
+    expect(onClose).not.toHaveBeenCalled(); // 30 s 整:尚未「超過」
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS);
+    expect(gen1.closed).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(2);
+    handle.close();
+  });
+
+  it("尚未 onopen(握手中)不武裝:60 s 也不判定,連 interval 都沒建", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry("ws://host/ws/wd-handshake", { onMessage: () => {}, onClose });
 
     vi.advanceTimersByTime(60_000);
     expect(onClose).not.toHaveBeenCalled();
     expect(FakeWS.instances.length).toBe(1);
-    expect(vi.getTimerCount()).toBe(0); // 連 interval 都沒建
+    expect(vi.getTimerCount()).toBe(0);
     handle.close();
   });
 
@@ -474,12 +498,7 @@ describe("connectWithRetry 靜默 watchdog", () => {
   // review A2:close() 的文件宣稱「之後所有回呼不再觸發」,但只關 socket 沒卸 handler ——
   // onclose 有 stopped 守門,onmessage / onopen / onerror 沒有。
   it("close() 卸掉舊 socket 的 handler:遲到的 message / open 都不再回呼也不武裝(A2)", () => {
-    // 先讓 URL_A 進 sticky 記憶,之後任何一代 onopen 都會武裝 watchdog
-    const warm = connectWithRetry(URL_A, { onMessage: () => {} });
-    latest().onopen?.();
-    latest().emit({ type: "ping" });
-    warm.close();
-
+    // open 即武裝(N035):遲到的 onopen 若沒被卸掉,會在 close() 之後武裝出殘留 interval
     const onMessage = vi.fn();
     const onOpen = vi.fn();
     const handle = connectWithRetry(URL_A, { onMessage, onOpen });
@@ -497,18 +516,18 @@ describe("connectWithRetry 靜默 watchdog", () => {
     expect(vi.getTimerCount()).toBe(0); // 沒被 sticky 武裝出殘留 interval
   });
 
-  it("sticky:同 URL 的後續世代 onopen 即武裝(即使自己沒收過 ping)", () => {
+  // 由「sticky:同 URL 的後續世代 onopen 即武裝」改寫(N035):不再需要任何一代先收過 ping。
+  it("後續世代 onopen 即武裝(無需任何一代先收過 ping)", () => {
     const handle = connectWithRetry(URL_A, { onMessage: () => {} });
     const gen1 = latest();
-    gen1.onopen?.();
-    gen1.emit({ type: "ping" }); // 記住「這個 server 會送 ping」
+    gen1.onopen?.(); // gen1 全程沒收過 ping
     vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
     gen1.onclose?.();
     vi.advanceTimersByTime(WS_BACKOFF_START_MS);
     expect(FakeWS.instances.length).toBe(2);
 
     const gen2 = latest();
-    gen2.onopen?.(); // gen2 全程收不到任何訊息(含 ping)
+    gen2.onopen?.(); // gen2 同樣收不到任何訊息(含 ping)
     vi.advanceTimersByTime(35_000);
     expect(gen2.closed).toBe(true);
     expect(FakeWS.instances.length).toBe(2);
@@ -516,23 +535,6 @@ describe("connectWithRetry 靜默 watchdog", () => {
     vi.advanceTimersByTime(WS_BACKOFF_START_MS);
     expect(FakeWS.instances.length).toBe(3);
     handle.close();
-  });
-
-  it("不同 URL 不互相 sticky", () => {
-    const a = connectWithRetry(URL_A, { onMessage: () => {} });
-    latest().onopen?.();
-    latest().emit({ type: "ping" });
-    a.close();
-
-    FakeWS.instances = [];
-    const onClose = vi.fn();
-    const b = connectWithRetry("ws://host/ws/wd-b", { onMessage: () => {}, onClose });
-    latest().onopen?.(); // 另一個 URL:沒人證明它會送 ping
-
-    vi.advanceTimersByTime(60_000);
-    expect(onClose).not.toHaveBeenCalled();
-    expect(FakeWS.instances.length).toBe(1);
-    b.close();
   });
 
   it("主執行緒凍結 / 睡眠喚醒:tick 間隔 > 2×tick 只重置基準不判定(Edge 13)", () => {
@@ -554,5 +556,157 @@ describe("connectWithRetry 靜默 watchdog", () => {
     vi.advanceTimersByTime(35_000); // 重置後才是真靜默
     expect(onClose).toHaveBeenCalledTimes(1);
     handle.close();
+  });
+
+  // N038:8 條 WS 對同一顆半死 server 會在同一個 5 s 窗齊判定 → 放棄路徑加 [0, jitter) 抖動,
+  // onclose 路徑不加(上方 backoff 三分支的逐毫秒案不動)。
+  it("watchdog 放棄後的重連延遲 = backoff + floor(random × jitter)(N038)", () => {
+    randomSpy.mockReturnValue(0.5);
+    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
+    const gen1 = latest();
+    gen1.onopen?.();
+    vi.advanceTimersByTime(35_000); // 放棄 gen1(存活遠超 minUptime → 基礎延遲 1 s)
+    expect(gen1.closed).toBe(true);
+
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS + WS_WATCHDOG_JITTER_MS / 2 - 1);
+    expect(FakeWS.instances.length).toBe(1); // 1 499 ms:還差 1 ms
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.instances.length).toBe(2); // 1 000 + 500
+
+    // 下一輪 backoff 以「未加 jitter 的 delay」倍增:gen2 短命 → 2 000 ms 整,不是 3 000
+    const gen2 = latest();
+    gen2.onopen?.();
+    gen2.onclose?.();
+    vi.advanceTimersByTime(1_999);
+    expect(FakeWS.instances.length).toBe(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.instances.length).toBe(3);
+    handle.close();
+  });
+
+  it("onclose 路徑不加 jitter(random 非 0 時自然斷線仍 1 s 整;W1)", () => {
+    randomSpy.mockReturnValue(0.9);
+    const handle = connectWithRetry(URL_A, { onMessage: () => {} });
+    latest().onopen?.();
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    latest().onclose?.();
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS - 1);
+    expect(FakeWS.instances.length).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWS.instances.length).toBe(2);
+    handle.close();
+  });
+});
+
+/** N037:隱藏分頁 > 5 min 的 Chrome intensive throttling 把 5 s tick 拉成 1/min → 每個 tick 都撞
+ *  凍結守門(Edge 13)恆不判定;回前景後第一個 tick 一樣被吞,最壞再等 35 s。
+ *  回前景時重設 tick 基準,讓緊接的下一個 tick(≤ 5 s)以真實 lastMsgAt 判定。 */
+describe("connectWithRetry visibilitychange 回前景", () => {
+  const URL_V = "ws://host/ws/vis";
+  let visibility: DocumentVisibilityState = "visible";
+  let randomSpy: ReturnType<typeof vi.spyOn>;
+
+  const setVisibility = (next: DocumentVisibilityState): void => {
+    visibility = next;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+
+  beforeEach(() => {
+    visibility = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    delete (document as unknown as { visibilityState?: unknown }).visibilityState;
+    randomSpy.mockRestore();
+  });
+
+  /** 模擬「隱藏 6 分鐘、tick 被節流到沒跑」:牆鐘走、timer 不走(與 Edge 13 同手法)。 */
+  const hideFor = (ms: number): void => {
+    setVisibility("hidden");
+    vi.setSystemTime(Date.now() + ms);
+  };
+
+  it("節流期間半死 → 回前景後下一個 tick(≤ 5 s)就判定重連,不再多等 35 s", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_V, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+
+    hideFor(6 * 60_000); // 期間零訊息(server 半死)
+    setVisibility("visible");
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS);
+
+    expect(gen1.closed).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(FakeWS.instances.length).toBe(2);
+    handle.close();
+  });
+
+  it("節流期間訊息照常(健康)→ 回前景不重連(W4 對照組)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_V, { onMessage: () => {}, onClose });
+    const gen1 = latest();
+    gen1.onopen?.();
+    gen1.emit({ type: "ping" });
+
+    hideFor(6 * 60_000);
+    gen1.emit({ type: "ping" }); // 節流不影響 onmessage:回前景前最後一則心跳仍到
+    setVisibility("visible");
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS * 2);
+
+    expect(gen1.closed).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWS.instances.length).toBe(1);
+    handle.close();
+  });
+
+  it("轉 hidden 不觸發判定(仍由 Edge 13 守門)", () => {
+    const onClose = vi.fn();
+    const handle = connectWithRetry(URL_V, { onMessage: () => {}, onClose });
+    latest().onopen?.();
+    latest().emit({ type: "ping" });
+
+    vi.setSystemTime(Date.now() + 40_000);
+    setVisibility("hidden"); // 只是隱藏:不重設基準
+    vi.advanceTimersByTime(WS_WATCHDOG_TICK_MS);
+    expect(onClose).not.toHaveBeenCalled(); // 這個 tick 走凍結守門,只重置不判定
+    handle.close();
+  });
+
+  it("close() / 放棄 / 自然斷線都拆掉 visibilitychange listener(零殘留)", () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const visAdds = (): number => add.mock.calls.filter((c) => c[0] === "visibilitychange").length;
+    const visRemoves = (): number =>
+      remove.mock.calls.filter((c) => c[0] === "visibilitychange").length;
+
+    const handle = connectWithRetry(URL_V, { onMessage: () => {} });
+    latest().onopen?.(); // 武裝 → 掛 listener
+    expect(visAdds()).toBe(1);
+
+    vi.advanceTimersByTime(WS_MIN_UPTIME_MS);
+    latest().onclose?.(); // 自然斷線 → 拆
+    expect(visRemoves()).toBe(1);
+
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    latest().onopen?.(); // gen2 武裝 → 再掛
+    expect(visAdds()).toBe(2);
+    vi.advanceTimersByTime(35_000); // watchdog 放棄 → 拆
+    expect(visRemoves()).toBe(2);
+
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    latest().onopen?.(); // gen3 武裝
+    expect(visAdds()).toBe(3);
+    handle.close(); // close() → 拆
+    expect(visRemoves()).toBe(3);
+    add.mockRestore();
+    remove.mockRestore();
   });
 });

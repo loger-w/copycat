@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 import copycat.capital.factory as factory_mod
@@ -1079,6 +1079,23 @@ class TestWebSockets:
             engine = cast("FastAPI", client.app).state.futures
             assert engine is not None
             assert engine._flush_interval_secs == 0.1
+
+    # R4 N036:engine 缺席 → 握手前就拒(進場即拋),不再 accept 後才 close(原本無測試)。
+    def test_ws_futures_rejects_handshake_when_engine_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with make_client(monkeypatch) as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/futures"):
+                    raise AssertionError("futures 引擎缺席時握手不該成功")
+
+    def test_ws_capital_rejects_handshake_when_client_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with make_client(monkeypatch) as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/capital"):
+                    raise AssertionError("群益 client 缺席時握手不該成功")
 
     def test_ws_futures_streams_quote(self, monkeypatch: pytest.MonkeyPatch) -> None:
         src = FakeFuturesSource()
