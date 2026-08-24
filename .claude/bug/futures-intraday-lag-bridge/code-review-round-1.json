@@ -1,0 +1,79 @@
+{
+ "fixed_point": "master (a26b0410)",
+ "reviewed_head": "1903eae2",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P1(判斷)",
+   "summary": "FUT_LIVE_LAG_MAX 零鑑別力:3→2 突變 40/40 全綠",
+   "location": "FuturesChart.tsx:63 / test:481-527",
+   "disposition": "accepted → 差 6 擋 / 差 5 放行邊界案(門檻改 5 後)"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2(硬)",
+   "summary": "docs/next-time.md H3 留尾未 commit",
+   "location": "working tree",
+   "disposition": "accepted → 隨 artifacts commit 進分支"
+  },
+  {
+   "id": "ST3",
+   "severity": "P3(判斷)",
+   "summary": "Duplicated Code:tradeSlotOf 與 liveSlotOf 重複「+1 分 → pad2 → alldayIndexOf」",
+   "location": "FuturesChart.tsx:67-72 vs 86-94",
+   "disposition": "accepted → 🔵 db804b87 hhmmOf 共用"
+  },
+  {
+   "id": "ST4",
+   "severity": "P3(判斷)",
+   "summary": "提示 <p> 是量測 wrapper 的 sibling,出現/消失抽掉圖高 → 回補期間圖表跳動",
+   "location": "FuturesChart.tsx:345-348",
+   "disposition": "accepted → 提示併入模式列同一 flex 行"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "「落後 N 分」的 N 是近全軸格數,跨死區不等於牆鐘分鐘",
+   "location": "FuturesChart.tsx:347",
+   "disposition": "accepted(文案)→ 改「N 根」= 缺的 1K 根數;不算牆鐘分鐘(要講的量就是缺幾根)"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "中",
+   "summary": "同症狀另一條路徑未列假說:adapter 丟 0 價 bar → 中段挖洞架橋;gate 5 不涵蓋",
+   "location": "futures-accum-adapter.ts",
+   "disposition": "accepted → diagnosis H4 + verification 留尾;不擴 scope(中段缺格需 core 幾何改動)"
+  },
+  {
+   "id": "SP2",
+   "severity": "中",
+   "summary": "state.t 來自前一場次(盤前未成交 / WS 零推播,t 停在 04:59)→ gate 5 誤觸,印「落後 1133」",
+   "location": "FuturesChart.tsx gate 5",
+   "disposition": "accepted → tradeSlotOf 回 anchor,與末根不同錨定日不參與;新案釘住"
+  },
+  {
+   "id": "SP3",
+   "severity": "低",
+   "summary": "lagBehind 是軸索引差非分鐘差",
+   "location": "FuturesChart.tsx",
+   "disposition": "accepted(文案)→ 同 ST5"
+  },
+  {
+   "id": "SP4",
+   "severity": "低",
+   "summary": "整分成交 HH:MM:00.000 屬 HH:MM 那根卻 +1;門檻 3 與常態 2–3 格貼邊會閃動",
+   "location": "tradeSlotOf",
+   "disposition": "accepted → 整分不 +1;門檻 5"
+  },
+  {
+   "id": "SP-c",
+   "severity": "備註",
+   "summary": "H2 推論正確;H1–H3 全未證實即出貨,資料側根因只入 next-time",
+   "location": "diagnosis.md",
+   "disposition": "accepted → diagnosis / verification 明寫「資料側根因未證實,畫面層機制已修」;背景輪詢守夜"
+  }
+ ],
+ "disposition": "Standards 5 條全接受(ST1 P1 邊界案 / ST2 commit / ST3 🔵 / ST4 併列 / ST5 文案);Spec 5 條全接受(SP1 記假說與留尾、SP2 守門、SP3 文案、SP4 邊界 + 門檻、SP-c 敘述修正)。收修後 vitest 42/42(檔)→ 141 files / 2679 全綠、tsc / eslint / react-doctor 綠。"
+}
