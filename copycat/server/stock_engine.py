@@ -472,9 +472,17 @@ class StockEngine:
                     )
                     return
                 self._wl_seq_applied = seq
-            # added 以 refs 實況為準(非 _watchlist 名單):真訂失敗回滾後重送同名單要能重試
+            # added / removed **都**以 `_refs` 實況為準(不是 `self._watchlist` 名單):
+            # - added:真訂失敗回滾後重送同名單要能重試。
+            # - removed:名單那份會被**較舊**那一發覆寫(review ST1/SP3)—— 舊發若在
+            #   added 迴圈被 `_superseded` 中斷,它還沒退的檔既不在本發以名單算出的
+            #   `removed`(算的時候名單已經是舊發那份),也不在任何人的待辦裡 →
+            #   `"watchlist"` ref 永久佔著訂閱位,而畫面上那一檔早就不見了,零訊號。
+            #   「持有 watchlist ref 卻不在最新名單」是唯一不會被名單覆寫誤導的判準。
             added = [c for c in codes if "watchlist" not in self._refs.get(c, set())]
-            removed = [c for c in self._watchlist if c not in codes]
+            removed = sorted(
+                c for c, owners in self._refs.items() if "watchlist" in owners and c not in codes
+            )
             # **名單先指派再訂閱**(round4 項 4):每個 `await to_thread` 都讓出 loop,而 TC4
             # 在 SUB 回來後幾乎立刻推第一則 REALTIME。名單留到最後才指派的話,那一則會在
             # `code not in self._watchlist` 的窗內進 `_handle_quote` → meta 轉態補推被擋掉;
@@ -484,7 +492,10 @@ class StockEngine:
         for code in added:
             async with self._pool_lock:
                 if self._superseded(seq):
-                    return
+                    # **break 不是 return**(review ST1/SP3):過期的是「還要訂什麼」,
+                    # 不是「還要退什麼」—— 退訂在任何名單下都仍然正確(逐項另有
+                    # `code in self._watchlist` 重驗),跳過它就是洩漏訂閱位。
+                    break
                 if code not in self._watchlist:
                     continue  # 這一檔在等鎖期間已被更新的名單移除
                 try:
@@ -493,8 +504,6 @@ class StockEngine:
                     logger.warning("watchlist subscribe %s failed", code)
         for code in removed:
             async with self._pool_lock:
-                if self._superseded(seq):
-                    return
                 if code in self._watchlist:
                     continue  # 更新的名單又把它加回來了,不退
                 await asyncio.to_thread(self._release, code, "watchlist")
@@ -775,10 +784,21 @@ class StockEngine:
 
     def rollover_stage1(self, new_date: str) -> None:
         """階段一:換日窗(同步、即返)+ 全量重掛(背景 to_thread,CR3);不清狀態;
-        generation bump 作廢 in-flight 回補。"""
+        generation bump 作廢 in-flight 回補。
+
+        **`set_trade_date` 隨重掛一起下沉到背景 to_thread**(review SP1):N052 之後它
+        含一批同步 UNSUBQUOTE(舊窗歸零),而本方法跑在 event loop 上 —— TC4 半死時
+        50 檔各等 `_REQ_TIMEOUT_MS`(10 s)= 整條 loop 停擺幾分鐘(WS 心跳、廣播、
+        route 全卡)。同檔 `_resubscribe_all` 的「ZMQ REQ 全程 to_thread」是同一個
+        不變式,這裡只是把漏網那一支收進去,順序(換窗 → 重掛)也因此仍在同一條
+        worker thread 上依序執行。
+        代價(接受):stage1 返回到 worker 真的跑到 `set_trade_date` 之間有一個
+        **次毫秒級**的窗,期間 source 的日窗還是舊的 —— 那個窗內若有人發回補會抓到
+        昨日窗。`_generation` 已在本方法同步 bump,那些結果套用時會被 worker 的
+        generation guard 丟掉。
+        """
         self._generation += 1
         self._pending_date = new_date
-        self._source.set_trade_date(new_date)
         # TradeStatus 觀測記帳是**日內**語意,清在 stage1(code review IC-5)。只掛 stage2
         # 的話 08:00(checkpoint 武裝)~ 新日首筆之間整段沿用昨日前值與 episode 旗標 →
         # 今天第一則帶 "0" 的推播被判成「恢復」,記出一則帶**今日時戳**卻對照**昨日起點**
@@ -787,18 +807,28 @@ class StockEngine:
         self._trade_status.clear()
         # 進 `_tasks` 而非專用欄位:持有參照防 GC(asyncio 不強引用 task)之外,
         # 關機時一併被 close() 取消,且連跑兩次 rollover 不會互相覆寫掉參照
-        self._tasks.append(asyncio.get_running_loop().create_task(self._resubscribe_all()))
+        self._tasks.append(
+            asyncio.get_running_loop().create_task(self._resubscribe_all(new_date=new_date))
+        )
         logger.info("rollover stage1 → %s (gen=%d)", new_date, self._generation)
         if self._signal_hub is not None:
             # 盤前預抓次日 CDP 基準進暫存區(stage2 只做 swap,開盤第一筆即可用)
             self._signal_hub.on_rollover_pending(new_date)
 
-    async def _resubscribe_all(self) -> None:
-        """全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。"""
+    async def _resubscribe_all(self, *, new_date: str | None = None) -> None:
+        """全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。
+
+        `new_date` 非 None(rollover stage1)時,**先**在同一條 worker thread 上換窗
+        (含 N052 的舊窗歸零),**再**逐檔重掛 —— 順序是這條修法的整個重點:舊窗 key
+        歸零 → 新窗 SUB 走 0→1 才會觸發上游 `ReqSubQuote`。反過來的話舊窗那把 key
+        仍 >0,新窗只是多一把,feed 沒被重掛(review SP1)。
+        """
         async with self._pool_lock:
             codes = list(self._refs)
 
         def _do() -> list[str]:
+            if new_date is not None:
+                self._source.set_trade_date(new_date)
             failed: list[str] = []
             for code in codes:
                 try:

@@ -962,6 +962,7 @@ class TestBackfillMergesOnEventLoop:
         fake = FakeIndexSource()
         fake.day_minutes = {"0901": 43_000_000}
         eng = make_engine(fake)
+        eng._loop = asyncio.get_running_loop()  # SP5 的副作用閘看它;直呼要自己備妥
         got = eng._subscribe_and_backfill()
         assert got == {"0901": 43_000_000}
         assert eng._twse.minutes == {}, "worker thread 直接寫共享 dict(N094)"
@@ -997,3 +998,77 @@ class TestBackfillMergesOnEventLoop:
         await asyncio.sleep(0.05)
         assert eng._twse.minutes == {}, "取消的 retry 仍把結果寫進 minutes"
         assert orig is not None
+class TestRetrySupersededSideEffects:
+    """review SP5:合併點搬到 loop 端之後,orphan 的 executor 工作項仍會執行
+    `subscribe_symbol`(**帶著已作廢那一發的 window variant**)—— 訂閱是副作用不是
+    回傳值,cancel 攔不到。副作用前要先看世代。
+    """
+
+    async def test_superseded_worker_skips_the_subscribe_side_effect(self) -> None:
+        fake = FakeIndexSource()
+        eng = make_engine(fake)
+        eng._loop = asyncio.get_running_loop()
+        eng._schedule_retry()  # 取號
+        stale_epoch = eng._retry_epoch
+        eng._schedule_retry()  # 再取一次 → 上一發作廢
+        assert eng._retry_task is not None
+        eng._retry_task.cancel()
+        fake.subscribed.clear()
+        assert eng._subscribe_and_backfill(0, epoch=stale_epoch) == {}
+        assert fake.subscribed == [], "作廢的 retry 仍對 TC4 送了 SUBQUOTE"
+
+    async def test_current_epoch_worker_still_subscribes(self) -> None:
+        fake = FakeIndexSource()
+        fake.day_minutes = {"0901": 43_000_000}
+        eng = make_engine(fake)
+        eng._loop = asyncio.get_running_loop()
+        eng._schedule_retry()
+        epoch = eng._retry_epoch
+        assert eng._retry_task is not None
+        eng._retry_task.cancel()
+        fake.subscribed.clear()
+        assert eng._subscribe_and_backfill(0, epoch=epoch) == {"0901": 43_000_000}
+        assert fake.subscribed == ["IX0001"]
+
+    async def test_closing_engine_skips_the_subscribe_side_effect(self) -> None:
+        """`close()` 先把 `_loop` 斷掉(既有不變式)—— 之後起跑的 orphan 也不得再碰 source。"""
+        fake = FakeIndexSource()
+        eng = make_engine(fake)
+        eng._loop = None
+        assert eng._subscribe_and_backfill() == {}
+        assert fake.subscribed == []
+
+
+class _IdentIndexSource(FakeIndexSource):
+    """記錄 `set_trade_date` 在哪一條執行緒被呼叫(SP1 的 index 側)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.trade_date_idents: list[int] = []
+
+    def set_trade_date(self, trade_date: str) -> None:
+        self.trade_date_idents.append(threading.get_ident())
+        super().set_trade_date(trade_date)
+
+
+async def test_index_rollover_switches_the_source_date_off_the_loop() -> None:
+    """review SP1(index 側):`_rollover_loop` 直呼 `set_trade_date`,而它現在含一批
+    同步 UNSUBQUOTE —— TC4 半死時整條 loop 停擺(廣播 / watchdog / MIS 全卡)。"""
+    fake = _IdentIndexSource()
+    eng = make_engine(
+        fake,
+        trade_date="2026-07-28",
+        rollover=True,
+        today_fn=lambda: _dt.date(2026, 7, 29),
+    )
+    eng._rollover_check_secs = 0.01
+    loop_ident = threading.get_ident()
+    await eng.start()
+    try:
+        await wait_until(lambda: "2026-07-29" in fake.trade_dates)
+        idx = fake.trade_dates.index("2026-07-29")
+        assert fake.trade_date_idents[idx] != loop_ident, (
+            "換日的 ZMQ REQ 跑在 event loop 上"
+        )
+    finally:
+        await eng.close()

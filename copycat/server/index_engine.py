@@ -195,6 +195,9 @@ class IndexEngine:
         # 訂閱)。重用同一個訂閱逃不出 stub 態,重送 SubHistory 也不行(2026-08-14 實證)。
         # 唯一的歸零點是 `_swap_day`(新交易日窗口字串天然全新);lag 恢復**不**歸零。
         self._heal_variant = 0
+        #: retry 的世代(review SP5):`_schedule_retry` 每次 +1,worker 在**副作用之前**
+        #: 比對 —— cancel 只攔得到還沒返回的 `await`,攔不到已排進 executor 的工作項。
+        self._retry_epoch = 0
         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
         self._push_minutes_once = False
@@ -259,8 +262,13 @@ class IndexEngine:
                 pass
         await asyncio.to_thread(self._source.close)
 
-    def _subscribe_and_backfill(self, variant: int = 0) -> dict[str, int]:
+    def _subscribe_and_backfill(self, variant: int = 0, epoch: int | None = None) -> dict[str, int]:
         """**worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,不碰任何共享狀態。
+
+        **副作用前先看世代**(review SP5):合併雖然搬到了 loop 端,`subscribe_symbol`
+        仍是**副作用**(而且帶著這一發的 window variant)—— cancel 攔不到已排入 executor
+        但還沒起跑的工作項,它醒來時會用一個已作廢的 variant 對 TC4 重掛,把窗口階梯
+        推到別的地方去。`epoch` 對不上(或 `_loop` 已斷 = close 中)就整支早退回空。
 
         N094:舊碼在這裡直接 in-place `.update()` 三顆 dict,而 event loop 端同時在
         `_minutes_lag_exceeded` 走 `max(m)`、在 `_payload` / `state()` 走 `dict(...)`
@@ -269,8 +277,11 @@ class IndexEngine:
         被取消的 retry 其 orphan `to_thread` 工作項照樣跑完並寫入,cancel 攔不到。
 
         收法 = 「worker 只回傳、合併在 loop 端做」(`_merge_backfill`)。cancel 之後
-        `await` 不再返回 → 合併那一步天然不會發生,不需要額外的世代旗標。
+        `await` 不再返回 → 合併那一步天然不會發生。
         """
+        if self._loop is None or (epoch is not None and epoch != self._retry_epoch):
+            logger.info("index 回補工作項已作廢(epoch=%s),不發 SUBQUOTE", epoch)
+            return {}
         self._source.subscribe_symbol(_SYMBOL)
         return self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
 
@@ -308,14 +319,18 @@ class IndexEngine:
     def _schedule_retry(self, *, clear_stale: bool = True, variant: int = 0) -> None:
         if self._retry_task is not None and not self._retry_task.done():
             self._retry_task.cancel()
-        self._retry_task = asyncio.create_task(self._retry_loop(clear_stale, variant))
+        # 世代 +1 = 上一發(含它排在 executor 裡還沒起跑的工作項)整組作廢(review SP5)
+        self._retry_epoch += 1
+        self._retry_task = asyncio.create_task(
+            self._retry_loop(clear_stale, variant, self._retry_epoch)
+        )
 
-    async def _retry_loop(self, clear_stale: bool, variant: int = 0) -> None:
+    async def _retry_loop(self, clear_stale: bool, variant: int = 0, epoch: int | None = None) -> None:
         backoff = self._retry_secs
         while True:
             await asyncio.sleep(backoff)
             try:
-                fetched = await asyncio.to_thread(self._subscribe_and_backfill, variant)
+                fetched = await asyncio.to_thread(self._subscribe_and_backfill, variant, epoch)
             except ConnectionError:
                 backoff = min(backoff * 2, 60.0)
                 continue
@@ -497,8 +512,12 @@ class IndexEngine:
                     self._pending_date = new_date
                     self._pending_minutes = {}
                     self._pending_backfill.clear()  # in-place:worker 可能正握著它
-                    self._source.set_trade_date(new_date)
+                    # **to_thread**(review SP1):N052 之後 `set_trade_date` 含一批同步
+                    # UNSUBQUOTE(舊窗歸零),留在 loop 上跑等於 TC4 半死時整條 loop
+                    # 停擺(廣播 / watchdog / MIS 全卡)。換窗與重掛必須維持這個順序:
+                    # 舊窗歸零 → 新窗 0→1 才觸發上游 `ReqSubQuote`。
                     try:
+                        await asyncio.to_thread(self._source.set_trade_date, new_date)
                         await asyncio.to_thread(
                             self._source.subscribe_symbol, _SYMBOL
                         )  # 重掛新日窗
