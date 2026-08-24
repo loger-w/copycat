@@ -131,6 +131,11 @@ class FuturesEngine:
         self._leaf_done: set[tuple[str, str]] = set()
         self._leaf_inflight: set[tuple[str, str]] = set()
         self._leaf_fed: set[str] = set()  # 曾成功補訂 leaf 的商品(換月重武裝判準)
+        #: 重連對帳判定「這個商品的 leaf 可能掉了,要重走一次 fallback」的商品集
+        #: (N260 / review SP4)。**不借 `st.p` 當旗標** —— 那是使用者看得到的價位欄,
+        #: 清成 None 就是期貨面空一格;重武裝是引擎的判定狀態,用自己的集合表達。
+        #: 補訂成功(`_leaf_finish`)或 HOT 自己回魂(`_handle_quote`)即消耗掉。
+        self._leaf_rearm: set[str] = set()
         self._leaf_tasks: set[asyncio.Task[None]] = set()
         self._leaf_timer: asyncio.TimerHandle | None = None
         # 訂閱失敗品的重試路徑(bug startup-names-futures-resub 症狀 3):
@@ -348,7 +353,7 @@ class FuturesEngine:
         """
         if self._loop is None or self._leaf_timer is not None:
             return
-        pending = [p for p, st in self._states.items() if st.p is None]
+        pending = [p for p, st in self._states.items() if st.p is None or p in self._leaf_rearm]
         if not pending or all((p, ym) in self._leaf_done for p in pending):
             return
         self._leaf_timer = self._loop.call_later(self._leaf_grace_secs, self._leaf_fallback, ym)
@@ -360,7 +365,10 @@ class FuturesEngine:
             return
         for product, st in self._states.items():
             key = (product, ym)
-            if st.p is not None or key in self._leaf_done or key in self._leaf_inflight:
+            rearm = product in self._leaf_rearm
+            if (st.p is not None and not rearm) or key in self._leaf_done:
+                continue
+            if key in self._leaf_inflight:
                 continue
             # 成功才入 _leaf_done(_leaf_finish);失敗 discard in-flight,
             # 下輪推播的 _schedule_leaf_fallback 自然重排重試(review I3)
@@ -393,6 +401,9 @@ class FuturesEngine:
         if ok:
             self._leaf_done.add((product, ym))
             self._leaf_fed.add(product)
+            # 重武裝已完成 → 消耗旗標(review SP4):留著的話每一則別品推播都會再排一次
+            # fallback,變成對 TC4 的持續 churn,而 log 只是照設計在跑
+            self._leaf_rearm.discard(product)
 
     def _on_quote_threadsafe(self, quote: dict) -> None:
         loop = self._loop
@@ -419,17 +430,18 @@ class FuturesEngine:
         `_leaf_done` 記帳仍在、`st.p` 還留著 leaf 推來的舊值,`_leaf_fallback` 的兩道
         判準(`p is None`、`key not in _leaf_done`)一道都不成立 → 要等跨日重武裝才補
         得回來,期間畫面凍結在舊價且零錯誤訊號。收法 = 對 `_leaf_fed` 的品清掉它們的
-        `_leaf_done` 鍵並把 `p` 歸 None,讓既有的 fallback 路徑重走一次(同「換月重武裝」
-        的手法)。健康品不動 —— 無條件清 p 會讓每次重連右上角期貨價空一格。
+        `_leaf_done` 鍵、並把它們放進 `_leaf_rearm`,讓既有的 fallback 路徑重走一次。
+        健康品(HOT 自己在推)不動。
+
+        **不清 `st.p`**(review SP4):那是使用者看得到的價位欄,清成 None 就是期貨面
+        每次重連都空一格,而 leaf 其實多半還活著。重武裝是**引擎的判定狀態**,用
+        `_leaf_rearm` 表達,不借畫面欄位當旗標。
         """
         if self._loop is None:
             return  # close 已開始:排入在途的回呼不得再建 task(review C-3)
         if self._leaf_fed:
             self._leaf_done = {k for k in self._leaf_done if k[0] not in self._leaf_fed}
-            for product in self._leaf_fed:
-                st = self._states.get(product)
-                if st is not None:
-                    st.p = None
+            self._leaf_rearm |= self._leaf_fed
         self._pending_subs.update(self._products)
         self._resub_epoch += 1
         if self._resub_task is None or self._resub_task.done():
@@ -461,6 +473,7 @@ class FuturesEngine:
                 # SUB 恆 OK 但零推播)。撤銷 leaf 記帳後跨日不再複製新月 leaf;
                 # 記帳保留期間的 HOT+leaf 雙訂閱接受(兩邊值相同;review C-2/P2-1)
                 self._leaf_fed.discard(product)
+                self._leaf_rearm.discard(product)  # HOT 自己回來了,不必補 leaf
             if st.date is not None and tick.trade_date != st.date:
                 st.resolved_ym = None  # 跨日失效:先清,同筆有月份訊號再重解
                 # 換月重武裝(review I2):leaf-fed 商品的舊月 leaf 到期後零推播,

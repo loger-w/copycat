@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -674,3 +675,21 @@ class TestReservedGroupGate:
         assert path.read_text(encoding="utf-8") == before  # 檔未變
         assert engine.set_calls == []
         assert engine.published == []
+class TestSettleMissingSeq:
+    """review ST3:`_settle` 的 `or seq is None` 是**型別收窄**,但它同時把
+    「落檔了(changed=True)卻沒帶號」變成靜默丟棄使用者的變更 —— 檔已經改了、
+    訂閱池與畫面沒跟上,而且一行 log 都沒有。這條不該發生,發生就要有訊號。
+    """
+
+    async def test_changed_without_seq_is_logged_as_error(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    ) -> None:
+        svc, engine, _path = _service(tmp_path)
+        wl = {"codes": ["2330"], "groups": []}
+        with caplog.at_level(logging.ERROR, logger="copycat.server.watchlist_service"):
+            saved, changed = await svc._settle((wl, True, None))  # type: ignore[arg-type]
+        assert (saved, changed) == (wl, False)
+        assert engine.set_calls == []  # 不訂閱不廣播(既有語意逐字不變)
+        assert engine.published == []
+        assert len(caplog.records) == 1
+        assert "定序號" in caplog.text

@@ -86,7 +86,9 @@ def collect_1k_minutes(
         # 逾時同一個失效)。凍結 stub 的語意恰恰是「**現在**取不到,不是沒有」= 這個
         # 例外的語意;它是 `ConnectionError` 子類,只寫 `except ConnectionError` 的呼叫端
         # 行為不變,而 `corr_engine` 的逾時重補階梯(3 輪、每 30 s)就此接得到手。
-        logger.warning("1K 回補 %s:%d 列全數丟棄(疑似凍結 stub)", symbol, len(rows))
+        # 只留例外、不再多印一行 warning(review ST6):兩者字面幾乎相同,而例外一路
+        # 傳到 `corr_engine._fetch_leg_minutes` 自己會記一行帶處置的 warning
+        # (「排入重補」)。同一件事印兩次會讓 `疑似凍結 stub` 的計數變成兩倍。
         raise HistoryTimeoutError(f"1K 回補 {symbol}:{len(rows)} 列全數丟棄(疑似凍結 stub)")
     logger.info("1K 回補 %s:%d 列 → %d 分鐘", symbol, len(rows), len(minutes))
     return minutes

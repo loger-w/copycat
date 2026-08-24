@@ -57,7 +57,10 @@ function Wait-GracefulExit {
     # ~60s 的 ExecuteCheckPingTime 才被 reap,而 reap 會把它獨持的 refcount key 歸零、
     # 連帶把 symbol 的上游 feed 帶走 —— 下一台 server 開頭 ~60s 零推播(2026-08-18 實證,
     # 見 .claude/skills/tc4-market-facts/SKILL.md)。這裡先等它自己收乾淨,超時才硬殺。
-    param([System.Diagnostics.Process]$Proc, [int]$TimeoutSecs = 10)
+    # 上限 15s 不是 10s:`_ensure_connected` 持 api 鎖跨 Connect()(最壞 _REQ_TIMEOUT_MS
+    # = 10s),close() 開頭要拿同一把鎖 → 關機最壞先被那一發吃掉整整 10 秒,10s 的窗會
+    # 剛好在 TC4 還沒退訂完時到期(review ST2)。
+    param([System.Diagnostics.Process]$Proc, [int]$TimeoutSecs = 15)
     if ($null -eq $Proc -or $Proc.HasExited) { return }
     Write-Host "[run] 等 backend 自行收尾(TC4 退訂 + Disconnect,最多 ${TimeoutSecs}s) ..." -ForegroundColor DarkGray
     if ($Proc.WaitForExit($TimeoutSecs * 1000)) {
@@ -111,6 +114,13 @@ if ($BackfillDate) {
 
 $backend  = $null
 $frontend = $null
+# backend 有沒有收到 Ctrl+C(= 值不值得等它 graceful)。Ctrl+C 走的是「while 迴圈被
+# 中斷、直接跳 finally」那條路,旗標維持 $true;而「frontend 自己先死」是我們主動
+# break 出來的,那條路沒有人送 CTRL_C_EVENT 給 backend —— 等它只是白等一輪 timeout
+# 再硬殺(review SP6)。PowerShell 5.1 沒有安全的「對別的 process 送 Ctrl+C」——
+# AttachConsole + GenerateConsoleCtrlEvent 會連本 shell 自己的 handler 一起打到,
+# 而 backend 沒有 HTTP 關機端點(不發明一個)→ 那條路維持直接硬殺,記留尾。
+$backendGotCtrlC = $true
 
 try {
     Write-Host "[run] backend  -> http://127.0.0.1:$port" -ForegroundColor Green
@@ -138,13 +148,20 @@ try {
         }
         if ($frontend.HasExited) {
             Write-Host "[run] frontend 結束(exit $($frontend.ExitCode)),一併收掉 backend" -ForegroundColor Red
+            $backendGotCtrlC = $false
             break
         }
         Start-Sleep -Milliseconds 500
     }
 } finally {
     Stop-Tree -Proc $frontend -Label 'frontend'
-    # backend 先給 graceful 窗再硬殺(理由見 Wait-GracefulExit)
-    Wait-GracefulExit -Proc $backend
+    # backend 先給 graceful 窗再硬殺(理由見 Wait-GracefulExit);沒收到 Ctrl+C 的那條
+    # 路不等 —— 等了也不會有人叫它收尾(review SP6)
+    if ($backendGotCtrlC) {
+        Wait-GracefulExit -Proc $backend
+    }
+    else {
+        Write-Host '[run] backend 未收到 Ctrl+C(frontend 先退),直接強制收掉;TC4 session 會留到 reap' -ForegroundColor Yellow
+    }
     Stop-Tree -Proc $backend -Label 'backend'
 }

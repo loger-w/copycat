@@ -1166,3 +1166,64 @@ class TestReconnectLeafReconcile:
             assert engine.state()["products"]["MXF"]["p"] is not None
         finally:
             await engine.close()
+class TestReconnectLeafRearmKeepsPrice:
+    """review SP4:重連重武裝**不得**把 `st.p` 清成 None —— 那是使用者看得到的空一格
+    (期貨面三檔的價位),而 leaf 真的還活著時它根本不該消失。重武裝是**引擎的判定
+    狀態**,用自己的集合表達,不要借畫面欄位當旗標。
+    """
+
+    async def test_reconnect_keeps_the_leaf_fed_price_visible(self) -> None:
+        src = _ReconnectSource()
+        engine = FuturesEngine(
+            lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.01
+        )
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        assert ("TXF", "202608") in src.leaf_subscribed
+        _push(src, _quote(Symbol="TC.F.TWF.TXF.202608"))  # leaf 推播回填 p
+        await _drain()
+        before = engine.state()["products"]["TXF"]["p"]
+        assert before is not None
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await wait_until(lambda: src.subscribed.count("TXF") >= 2)
+            await _drain()
+            assert engine.state()["products"]["TXF"]["p"] == before, (
+                "重連把使用者看的價清空了"
+            )
+        finally:
+            await engine.close()
+
+    async def test_rearm_is_consumed_once_the_leaf_is_back(self) -> None:
+        """重武裝旗標必須在補訂成功後消掉 —— 留著的話每一則別品推播都會重排一次
+        fallback,變成對 TC4 的持續 churn(而 log 只是照設計在跑)。"""
+        src = _ReconnectSource()
+        engine = FuturesEngine(
+            lambda: src, leaf_grace_secs=0.01, resub_interval_secs=0.01
+        )
+        await engine.start()
+        _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+        await asyncio.sleep(0.05)
+        await _drain()
+        _push(src, _quote(Symbol="TC.F.TWF.TXF.202608"))
+        await _drain()
+        assert src.on_reconnect is not None
+        await asyncio.to_thread(src.on_reconnect)
+        try:
+            await wait_until(lambda: src.subscribed.count("TXF") >= 2)
+            await _drain()
+            _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+            await asyncio.sleep(0.05)
+            await _drain()
+            assert src.leaf_subscribed.count(("TXF", "202608")) == 2  # 重武裝那一次
+            _push(src, _quote("MXF", Symbol="TC.F.TWF.MXF.202608"))
+            await asyncio.sleep(0.05)
+            await _drain()
+            assert src.leaf_subscribed.count(("TXF", "202608")) == 2, (
+                "重武裝旗標沒消掉 → churn"
+            )
+        finally:
+            await engine.close()
