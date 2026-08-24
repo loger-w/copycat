@@ -166,6 +166,38 @@ describe("App(index-board T9)", () => {
   });
 });
 
+// 🔴 N022:localStorage 的兩個失效面在 App 這一層就是**整站白屏** ——
+//   (a) Safari 私密視窗 / 企業政策鎖 storage:光是存取就拋,而 `initialTab` /
+//       `initialProduct` / `initialStockCode`(+ RightRail 的 `initialTab`)全在
+//       `useState` 的 lazy initializer 裡 = render 路徑上,全 frontend 零 ErrorBoundary;
+//   (b) 配額滿:`setItem` 拋 `QuotaExceededError`,而寫入點在 tab 切換的 `useEffect` 裡
+//       —— 拋在 commit 階段一樣打穿整棵樹。
+// 這兩條是「散落 45 處各抄一份 try/catch」升成 /mod 的理由:漏抄的那一份零訊號。
+describe("App:localStorage 失效不得白屏(N022)", () => {
+  it("(a) 存取即拋 → App 仍掛得起來,tab 退回預設「台股綜合」", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+
+    expect(() => renderApp()).not.toThrow();
+    expect(screen.getByRole("tab", { name: "台股綜合" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  it("(b) 寫入拋 QuotaExceededError → 切 tab 不炸,畫面照樣換頁", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderApp();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+
+    expect(() => fireEvent.click(screen.getByRole("tab", { name: "選擇權" }))).not.toThrow();
+    expect(screen.getByRole("tab", { name: "選擇權" }).getAttribute("aria-selected")).toBe("true");
+  });
+});
+
 // 🟢 交易日曆(SC-9 / S2):App 有沒有真的掛 `useTradingCalendar`。
 // 這條線斷掉時 hook 自己的測試、`lib/trading-calendar` 的測試全綠 —— 只是假日集合
 // 永遠是空的,三支時段函式退回只擋週末:國定假日整天照輪詢,零可見訊號。
