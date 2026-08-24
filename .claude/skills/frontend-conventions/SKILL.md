@@ -18,6 +18,10 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
 - **TypeScript**:`strict: true` + **`noUncheckedIndexedAccess: true`**(從第一天就開)。
 - **Tailwind 用 semantic token**:`text-ink` / `text-ink-muted` / `text-ink-dim` / `text-accent` / `border-line` / `bg-bg` / `bg-bg-deep`。token 在 `src/index.css` 的 `@theme`。**Bull = 紅 / Bear = 綠**(台股慣例,不套美股 green-up)。
 - **重元件 lazy**:跨 tab 切換的大元件走 `React.lazy()` + `<Suspense fallback={...}>`。
+- **無障礙(a11y)不做**(2026-08-24 user 拍板「目前不考慮任何無障礙」):純 a11y 項
+  (aria 角色修正 / 鍵盤路徑 / screen-reader 專屬)不排工、review 的 a11y-only finding
+  一律 rejected 不記 next-time;鍵盤操作要素只在 user 明講手感需求時做(如 RadioPills
+  的鍵盤手感是 user 過目項,不算純 a11y)。既有 a11y code 不主動拆。
 - **純渲染抽到 `lib/*-svg.tsx`**:SVG 計算函式無 React 依賴,獨立單元測試。元件只負責掛 DOM。
 - **`cn(...classes)`** 走 `lib/utils.ts`(`clsx` + `tailwind-merge`),不直接拼字串。
 - **UI 文字一律繁體中文**(`重新整理` / `載入中` / `無交易日` …)。錯誤訊息、aria-label 也用繁中。
