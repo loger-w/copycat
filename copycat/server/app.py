@@ -1311,8 +1311,15 @@ def create_app(
                 days_n = int(days)
             except ValueError:
                 raise HTTPException(status_code=400, detail={"error": "BAD_DAYS"}) from None
+            # calendar:歷史段的 missing 濾掉不可能有資料的日子(bug/futures-bars-gap)。
+            # 這條沒帶 session → build_minute 預設 "day",個股本來就只有日盤,規則相符。
             bars, status = await build_minute(
-                stock.bars_range, bars_cache, code, clamp_days(days_n), today
+                stock.bars_range,
+                bars_cache,
+                code,
+                clamp_days(days_n),
+                today,
+                calendar=trading_calendar,
             )
         # status:空的三種來源(逾時 / 真無資料 / 斷線)原本在前端收斂成同一句
         # 「無 K 線資料」。加欄位 = 向後相容(舊前端忽略,新前端對缺欄位 default "ok")
@@ -1622,7 +1629,13 @@ def create_app(
         code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
         if tf == "1":
             bars, _ = await build_minute(
-                plain_with_status, bars_cache, code, days_n, today, session=eff_session
+                plain_with_status,
+                bars_cache,
+                code,
+                days_n,
+                today,
+                session=eff_session,
+                calendar=trading_calendar,
             )
             return _market_payload(
                 key,

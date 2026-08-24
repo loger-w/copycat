@@ -35,6 +35,7 @@ import time
 from typing import Awaitable, Callable, NamedTuple, cast
 
 from copycat.live.stock_source import Bar, BarsStatus
+from copycat.trading_calendar import TradingCalendar
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,38 @@ def _iter_days(start: _dt.date, end: _dt.date):
     while d <= end:
         yield d
         d += _dt.timedelta(days=1)
+
+
+def _possible_data_days(
+    days: list[_dt.date], session: str, calendar: TradingCalendar | None
+) -> list[_dt.date]:
+    """把「不可能有資料的日子」從 missing 清單濾掉(bug/futures-bars-gap)。
+
+    為什麼需要:`put_hist_range` 的負向快取**只寫到有證據掃過的最後一天**(防 TC4
+    分頁截斷把後面的日子永久釘成空,review P1-2 —— 那條取捨不動)。代價是窗尾的
+    非交易日永遠不入 memo:週一的 days=5 窗尾是週日,allday 序列裡週六因為有週五
+    夜盤尾而有資料、週日真的沒有 → 週日**永久 missing**,每次 build_minute 都對
+    TC4 重發一次「週日單日」1K 查詢。TC4 對無資料日不回首頁,每次白付 10s deadline
+    (2026-08-24 全日 log:28 次歷史段 timeout,範圍全部是 08-23(日)),而且那個
+    timeout 還會經 `worst_status` 汙染整體 status。前端切商品時的表現就是圖空白 10s。
+
+    盤別規則不同:
+    - `day`:只有交易日當天有 08:45-13:45 的日盤。
+    - `allday`:再加上「前一日是交易日」—— 夜盤跨午夜到 05:00,週五夜盤的尾巴落在
+      週六。所以 allday 下的週六可以有資料,週日不行。
+
+    `calendar is None` → 不過濾(逐字舊行為)。日曆缺年時 `is_trading_day` 退化成
+    只擋週末,永不多擋 —— 最壞是回到本修之前的行為。
+    """
+    if calendar is None:
+        return days
+    if session == "allday":
+        return [
+            d
+            for d in days
+            if calendar.is_trading_day(d) or calendar.is_trading_day(d - _dt.timedelta(days=1))
+        ]
+    return [d for d in days if calendar.is_trading_day(d)]
 
 
 class BarsCache:
@@ -427,6 +460,7 @@ async def build_minute(
     today: _dt.date,
     *,
     session: str = "day",
+    calendar: TradingCalendar | None = None,
 ) -> BarsResult:
     """近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。
 
@@ -446,6 +480,9 @@ async def build_minute(
     `tf="D"` 的兩條(`build_daily` / `build_period`)不帶 session:日 K 無盤別維度,
     忽略的參數不進 cache 鍵(D-15)。
 
+    `calendar`(選配):歷史段的 missing 先過濾掉「不可能有資料的日子」(見
+    `_possible_data_days`)。`None` = 不過濾 = 逐字舊行為。
+
     **午夜緩衝**(`MIDNIGHT_BUFFER_END`,TZ-2):台北 00:00–00:10 內不把 `yesterday`
     寫進永久 memo —— 見下方註解。回應內容不受影響,只有「要不要記住」被延後。
     """
@@ -461,7 +498,9 @@ async def build_minute(
     out: list[Bar] = []
     deferred: list[Bar] = []
     if start <= yesterday:
-        missing = cache.hist_missing(ck, start, yesterday)
+        # 過濾「不可能有資料的日子」(見 `_possible_data_days`):過濾後為空 → 這一段
+        # 一發 fetch 都不出去,statuses 也不收它 —— 沒發請求就沒有壞消息可報。
+        missing = _possible_data_days(cache.hist_missing(ck, start, yesterday), session, calendar)
         if missing:
             # 只補缺口區間(端點取 min/max;中間已 memo 的日子重抓無害,省下逐日 REQ)
             lo, hi = missing[0], missing[-1]

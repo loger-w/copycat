@@ -1,0 +1,55 @@
+{
+  "round": 1,
+  "lenses": ["correctness(opus)"],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "P2",
+      "summary": "當日段(today)未套同一條過濾 —— 非交易日(週日 / 國定假日)每次 /api/market/bars 與 /api/stock/bars 仍對 TC4 發一發『當日單日』空查詢,白付 10s deadline,與被修掉的歷史段是同一個 root cause 的另一半。app.py:1302 / :1584 的 today 都是牆鐘 _date.today()(非 resolve_trade_date),所以 today 可以是週日 / 假日;此時 allday 的 `is_trading(d) or is_trading(d-1)` 對 today 同樣成立為 False(週六不會 —— 週五夜盤尾落在週六,今日段有資料、快速回)。上界只有 today_put 的 15s 空 TTL(EMPTY_TTL_SECS),前端 60s 輪詢 → 每輪仍付 10s;切商品換 query key → 立即 10s 空白,正是 repro §4 記的使用者可見症狀。",
+      "disposition": "accepted",
+      "resolution": "本輪不擴大 scope(鐵則 B)—— 把過濾延伸到當日段的風險明顯高於歷史段:日曆若錯標一個真交易日為假日,當日段從此永不取數 = 盤中主圖永久空白且零訊號,而歷史段最壞只是少幾天舊 bar。建議動作僅限文件:repro.md §已知取捨 與 next-time 明列『當日段刻意不過濾 + 為什麼』,否則下次有人在週日看到 10s 空白會當成新 bug 重查一遍。"
+    },
+    {
+      "id": "C2",
+      "severity": "P2",
+      "summary": "連假首日(is_trading(d-1)=True 但該晚 TAIFEX 未開盤後交易時段,例如春節前最後交易日)若剛好是窗尾唯一的『可能有資料日』,仍是永久重探測。實例:today=2026-02-13(春節休市中),窗尾 filtered missing=[02-12](靠 is_trading(02-11)=True 保留),fetch 02-12..02-12 全空 → last_seen=None → 不入 memo → 整個春節連假期間每次請求重付一次 10s。config 內 2026-02-12..02-20 正是這個形狀。",
+      "disposition": "accepted",
+      "resolution": "不修:過濾規則往 permissive 方向錯(多探測一天)是刻意的安全方向,要收掉這條就得動 put_hist_range 的 last_seen 防護(review P1-2 的分頁截斷取捨),代價遠大於效益。且相對本修之前(整個連假 9 天全部重探測)已是嚴格改善。記 next-time 一行即可。註:`is_trading(d) or is_trading(d-1)` 對台指夜盤(T 15:00 → T+1 05:00)在**假陰性方向是完備的** —— d 的資料只可能來自 d 的日盤 / d 15:00 起的夜盤(需 is_trading(d))或 d-1 15:00 起的夜盤尾(需 is_trading(d-1)),沒有第三個來源;拿 config 真實假日對過:2026-09-25(五休)靠 09-24(四)夜盤尾保留 = 正確、09-26(六)與 09-28(一休)剔除 = 正確。"
+    },
+    {
+      "id": "C3",
+      "severity": "P2",
+      "summary": "5 條新測試的日曆 fixture 是 holidays=frozenset()(等於只驗週末規則),沒有一條用真實國定假日驗 allday 的 d-1 規則與 day/allday 的差異。d-1 規則是 load-bearing:誤把它簡化掉會靜默丟掉真資料(2026-09-25 的 bar 全來自 09-24 夜盤尾)。",
+      "disposition": "accepted",
+      "resolution": "非必須,加分。已確認不是 vacuous 綠:把規則簡化成 `is_trading(d)` 會讓 test_real_trading_day_gap_still_fetched_with_filtered_endpoints 由 ('1','2026-08-21','2026-08-22') 變成 ('1','2026-08-21','2026-08-21') 而紅 —— 週六在 is_trading 上與國定假日等價,d-1 規則確實被鎖住了。建議順手補一條 holidays={2026-09-25} 的 case(斷言 09-25 保留、09-26 剔除),把『假日也吃同一條規則』寫成合約;另兩條端點測試(C3/C4 對照組)沒斷言回傳 bars 內容,補一句 out 不變會更穩。"
+    },
+    {
+      "id": "C6",
+      "severity": "P2",
+      "summary": "configs/trading_holidays.json 目前只有 2026 一年(years_loaded={2026})。2027-01-01 起 is_trading_day 退化成只擋週末 → 本修對國定假日的效益靜默消失(週末仍過濾,假日回到永久重探測 10s)。方向安全(永不多擋),但『修好的東西會在跨年當天半失效』沒有主動告警接到這條路徑上 —— warn_if_year_missing 只在 _resolve_trade_date 觸發,bars 這條不呼叫它。",
+      "disposition": "accepted",
+      "resolution": "不改 code(CLAUDE.md §1 已寫 /api/calendar 的 years_loaded 不含當年 = 日曆過期要更新,且 _resolve_trade_date 在同一個 app 內每次請求都會跑到 → WARNING 仍會出現)。記 next-time:年底前更新 2027 假日表,否則 2027 一月的假日又會出現 28/天等級的 10s 空查。"
+    },
+    {
+      "id": "C4",
+      "severity": "P2",
+      "summary": "【已排除】端點重算(lo/hi 取過濾後 min/max)與 put_hist_range 負向快取的互動 —— 過濾後的 fetch 範圍是否會把『還沒收完的截斷』誤釘成空?",
+      "disposition": "rejected_with_reason",
+      "resolution": "無問題。filtered ⊆ raw missing → [min,max] 只會**收縮不會擴張**,所以 put_hist_range 的 (start,end) 只會更窄:被釘成空的日子嚴格變少,last_seen 防護的行為逐字不變。範圍中段被過濾掉的非交易日(d 與 d-1 皆非交易日,只出現在連假深處)反而會因為 hi 仍延伸到其後的真交易日而被 setdefault([]) 正向收進 memo —— 是淨賺(少一次未來探測),無害。相對地,窗尾被過濾掉的日子永遠不入 memo,但也永遠被過濾,不會再發 REQ,兩者自洽。"
+    },
+    {
+      "id": "C5",
+      "severity": "P2",
+      "summary": "【已排除】台股交易日曆會不會誤過濾掉『台股休市但仍有資料』的標的(個股期夜盤 / 海外腿 NQ・YM・NK225M)?",
+      "disposition": "rejected_with_reason",
+      "resolution": "無風險,兩個 caller 的標的域都是純台股日盤 / 台指近全。(a) 個股期不走 /api/stock/bars —— StockChart 期貨態 useStockBars enabled:false,且有測試鎖(StockChart.test.tsx『期貨態一發 /api/stock/bars 都不打』+ 現貨對照組);stock_engine.py:57 另有『夜盤 tick 一律不進當日』,個股路徑 session 恆 day,規則相符。(b) /api/market/bars 的 key 白名單 = MARKET_KEYS = TWSE/OTC/TXF/MXF/TMF,全部吃台股日曆;海外腿只存在於 corr_engine / river,不經 build_minute(grep 確認 build_minute 全 repo 僅 app.py:1316 與 :1631 兩個 caller)。(c) session 值域由 MARKET_SESSIONS 在 route 層擋成 day/allday 兩值,_possible_data_days 的 else 分支收不到第三種字串。"
+    },
+    {
+      "id": "C7",
+      "severity": "P2",
+      "summary": "【已排除】hi 收縮後 `hold = hi == yesterday and _now_time() < MIDNIGHT_BUFFER_END`(午夜緩衝 TZ-2)會不會失效,把 yesterday 的夜盤尾根提早永久化 / 漏掉 deferred?",
+      "disposition": "rejected_with_reason",
+      "resolution": "無問題。hold 只在 yesterday 被過濾掉時由 True 轉 False,而 yesterday 被過濾 ⇔ yesterday 不可能有資料(day 盤別的週末、allday 的週日/連假深處)⇔ 沒有任何 yesterday 的尾根需要保護,deferred 本來就會是空 list。yesterday 是真交易日或 allday 的『前一日交易』時,它一定留在 filtered 裡且是最大值 → hi == yesterday 成立,午夜緩衝逐字不變。另 days=1(start > yesterday)整段歷史不進入,過濾不參與,行為不變。"
+    }
+  ]
+}
