@@ -146,14 +146,6 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     return out;
   }, [positions, contract, oiStrikes, oiDate, spotMilli]);
 
-  /** CDP / MA(N042)。**日 K 尚未回 → null**(core 的「未回視為可用」不預先反灰);
-   *  回了但無已完成 bar → 全 null 的 overlay → 兩鈕反灰。兩者不可混為一談。
-   *  `partial_last` 由後端判(末根日期 = 今天),前端不自己造一套「今天是幾號」。 */
-  const overlay = useMemo(
-    () => (dayQ.data === undefined ? null : buildFuturesOverlay(dayQ.data.bars, dayQ.data.meta.partial_last)),
-    [dayQ.data],
-  );
-
   // ---- 分時序列(近全軸)-------------------------------------------------
   const slice = useMemo(() => sliceCurrentAllday(bars), [bars]);
   /** 這張圖的交易日(= 最後一根 bar 的錨定日)。成交點的日期界吃它 —— 近全軸橫跨兩個
@@ -162,6 +154,19 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     const last = slice[slice.length - 1];
     return last === undefined ? null : anchorDateOf(last.t);
   }, [slice]);
+  /** CDP / MA(N042)。**日 K 尚未回 / 錨定日還推不出來 → null**(core 的「未回視為可用」
+   *  不預先反灰);回了但無已完成 bar → 全 null 的 overlay → 兩鈕反灰。兩者不可混為一談。
+   *
+   *  基準日的界吃**這張圖的錨定日**,與 slice / live gate / 成交點同一支 `anchorDateOf`
+   *  —— 不吃 `meta.partial_last`(日曆日口徑,夜盤兩頭破窗且缺欄時失效在不安全側;
+   *  理由全文見 `lib/futures-overlay.ts` 檔頭)。 */
+  const overlay = useMemo(
+    () =>
+      dayQ.data === undefined || anchorDate === null
+        ? null
+        : buildFuturesOverlay(dayQ.data.bars, anchorDate),
+    [dayQ.data, anchorDate],
+  );
   /** 當日成交點(N043/N070)。比對鍵 = 期交所契約碼(群益回報的期貨單 `stock_no` 放的
    *  就是它,與 `hlines` 的持倉比對同一把尺);ym 解不出 → `contract` null → 零標記。 */
   const fills = useMemo(

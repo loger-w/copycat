@@ -700,6 +700,21 @@ describe("FuturesChart 疊線 CDP/MA(N042)", () => {
     );
   });
 
+  it("TC4 日 K 末根標成次一交易日(夜盤成形)→ 基準仍是圖上錨定日的前一交易日", async () => {
+    // 圖的錨定日 = 08-21(`INTRA_BARS` 末根 22:00)。日 K 末根被 TC4 標成 08-22 且
+    // 後端 `partial_last`(末根日期 == 日曆今日)= false —— 舊判準(信 meta)一根都不剔,
+    // 基準會跳到 08-22 這個**尚未發生的交易日**。基準日判準吃的必須是圖上錨定日。
+    barsDayBody = {
+      bars: [...DAY_BARS, { t: "2026-08-22", o: 1, h: 99_000_000, l: 1, c: 50_000_000, v: 1 }],
+      meta: { ...META, partial_last: false },
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() =>
+      expect(container.querySelector("figcaption")!.textContent).toContain("疊線基準 2026-08-20"),
+    );
+  });
+
   it("已完成日 K 不足 5 根 → CDP 可按、MA 反灰(兩鈕各自看自己那份資料)", async () => {
     barsDayBody = { bars: DAY_BARS.slice(-3), meta: { ...META, partial_last: true } };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
