@@ -287,3 +287,53 @@ describe("W-1:mode 預設 = stock,個股路徑零變化", () => {
     expect(fmt(snapDown(raw))).not.toBe(fmt(raw));
   });
 });
+
+// 🔴 N006 / N045(mod/chart-label-batch):VWAP 就地標籤的口徑與寬度。
+//
+// index 態全圖走 `fmtIndexPts`(左緣刻度 / CDP `價位*` / MA 價位標 / 掛牌 / hover 價標),
+// 只有 VWAP 這一顆硬編 `fmt` → 加權印「24283.54」而同一張圖的刻度印「24284」;
+// 而且 8 字實寬 ≈45.6px > 硬編的 `VWAP_LABEL_W`(40),盤末 clamp 內縮不足,字尾溢進
+// 右緣疊線標籤帶(N006)。兩者是同一顆標籤的一體兩面,一起修。
+describe("IntradayChartCore mode=\"index\" 的 VWAP 標籤口徑(N006/N045)", () => {
+  /** 加權型 fixture:分鐘收盤平均 = (24_283_000 + 24_284_080) / 2 = 24_283_540
+   *  → `fmt` 印「24283.54」(8 字)、`fmtIndexPts` 收整數點印「24284」。
+   *  末點刻意放 13:30(繪圖區右界)才量得到寬度低估造成的溢出。 */
+  const HEAVY: IndexSeries = {
+    p: 24_284_080,
+    ref: 24_200_000,
+    high: 24_284_080,
+    low: 24_283_000,
+    stale: false,
+    minutes: { "0900": 24_283_000, "1330": 24_284_080 },
+  };
+  const HEAVY_ACCUM = indexSeriesToAccum(HEAVY, "IX:TWSE", "加權指數");
+
+  it("VWAP 文字走 index 口徑(fmtIndexPts),與左緣刻度同一把尺", () => {
+    const { container } = renderIndex({ accum: HEAVY_ACCUM });
+    // 前置(敏感度所繫):兩個口徑對這個值真的不同,否則本案恆綠
+    expect(fmt(24_283_540)).toBe("24283.54");
+    expect(fmtIndexPts(24_283_540)).toBe("24284");
+    expect(HEAVY_ACCUM.vwap).toBe(24_283_540);
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')!.textContent).toBe("24284");
+  });
+
+  it("末點貼右界 → 標籤整塊不出繪圖區(x = 760 − 寬;8 字實寬案見 vwapLabelBox 單元測試)", () => {
+    const { container } = renderIndex({ accum: HEAVY_ACCUM });
+    const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
+    const x = Number(label.getAttribute("x"));
+    const g = buildIntradayGeometry(
+      { minutes: HEAVY_ACCUM.minutes, meta: HEAVY_ACCUM.meta, high: HEAVY_ACCUM.high, low: HEAVY_ACCUM.low },
+      VB,
+      SPOT_WINDOW,
+    );
+    // 前置:末點真的貼在繪圖區右界上(否則 clamp 不啟動,本案恆綠)
+    expect(g.vwapLine.at(-1)!.x).toBeCloseTo(800 - R_AXIS_W, 6);
+    // index 態的文字走 `fmtIndexPts` → 「24284」5 個半形字、實寬 28.5px < 下限 40,
+    // 所以本案的寬度是**下限 40**:貼右界時 x = 760 − 40 = 720,右緣恰在繪圖區界上。
+    // 字面值不回算 `labelWidth(textContent)`(那正是本案要驗的東西):回算的版本量的是
+    // 「28.5px 裝不裝得下」—— 恆真,連硬編 40 的舊版都會綠,等於沒有斷言。
+    // 真正會溢出的 8 字(45.6px)案在 `vwapLabelBox` 的單元測試裡逐值鎖住。
+    expect(x).toBe(720);
+    expect(label.textContent).toBe("24284");
+  });
+});

@@ -88,8 +88,10 @@ export function AdvanceDeclineChart({ series }: { series: BreadthPoint[] }) {
           `shrink-0` 的舊值,`h-24` 生效 = 改動前的 96px 逐值不變(SC-6 1366×768)。
           **兩欄態** IndexPage 左欄把 `--idx-adl-wrap-flex` 設成 `1 1 0%`,basis 0% 蓋掉
           `h-24`,實際高改由外層 flex 指派(= section 扣掉家數帶後的剩餘);地板改由
-          `--idx-adl-min` 的 10rem 給 —— 它是 min-height 地板,不是指定高,分配權仍在
-          外層 flex(useContainerSize 呼叫端契約 2:量測型 svg 的高必須由容器決定)。
+          `--idx-adl-min` 的 6rem 給(N062 由 10rem 降下來:1536×700 兩欄態下 10rem 讓
+          家數帶 section 需求 316 > 分到的 262,主 grid 出捲軸)—— 它是 min-height 地板,
+          不是指定高,分配權仍在外層 flex(useContainerSize 呼叫端契約 2:量測型 svg 的
+          高必須由容器決定)。
           變數為何掛在左欄而不是這裡:最近的 `@container` 祖先是左欄,`@[1050px]:`
           寫在這一層量到的是左欄寬(630–930px)永不成立。 */}
       <div

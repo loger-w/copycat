@@ -1,3 +1,24 @@
+## 2026-08-24(mod/chart-label-batch two-axis 留尾)
+
+review 收修已出貨(N007 讓位方向 / 界單位 / N044 補完 / 三處斷言字面量 / helper 抽取);
+以下為刻意不做的:
+
+- [ ] **LabelSpan 型別統一**:同一個「一段文字的水平佔位」在本批有三種表示法 ——
+  `{ x, width }`(`vwapLabelBox`)、`span: [a, b]`(`buildVwapLabel` / `spansOverlap`)、
+  `x + half`(極值文字 `maObstacles`)。三者互轉散在呼叫端,轉錯不會紅(只是避讓帶偏)。
+  候選 = 一個 `LabelSpan` 型別 + 兩個建構子,轉換只留一處。
+- [ ] **`maLabelLeft` 的 MA 標籤寬仍硬編 `EDGE_LABEL_W`(34)**:那是個股 `fmtTickPrice`
+  口徑的上界,index / 期指態的 MA 是 8 字(≈45.6px)—— 與 N006 同一種病(N006 只修了
+  VWAP 標籤與極值文字的寬)。症狀:走廊左緣算窄了,MA 標籤與極值文字「判定說不撞、
+  畫出來撞」的窄帶約 11px。**下輪動 MA 標籤時帶走**。
+- [ ] **index 態極值標記文字仍走 `fmt`**(`24283.54`),與同圖 `fmtIndexPts` 兩套口徑
+  (R1 verification §5 已記)。它畫在繪圖區內、不參與右緣寬度 clamp,故 N006 沒收它。
+- [ ] **N062 修後 1536×678 以下仍會溢出**:6rem 地板讓 1536×700 的家數帶 section 需求
+  252 ≤ 262,餘裕只有 **10px** —— 視窗再矮 22px 就回到出捲軸。候選 = 家數帶 section 的
+  `flex` 由 `0 0 auto` 改 `5 1 auto`(讓它跟著壓縮而不是硬撐),**本輪未評估**。
+- [ ] **`CandleChart.test.tsx` 含歷史 NUL 位元組**,git 判整檔 binary(diff / grep 全瞎;
+  N026 的 class 鎖因此只能落在新檔 `CandleChart.caption.test.tsx`)。獨立 chore 清掉。
+
 ## 2026-08-24(fix/futures-bars-gap 收尾留尾)
 
 - [ ] **非交易日「當日段」查詢仍白付 10s**(review C1,刻意不對稱):週日/假日開站時

@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { fmt, fmtIndexPts } from "@/lib/format";
 import type { MinuteAgg } from "@/lib/stock-accum";
 import {
   bandLabels,
   buildEnergyBars,
   buildIntradayGeometry,
+  buildVwapLabel,
   EDGE_LABEL_H,
   edgePriceLabels,
   hasWindowedMinutes,
+  labelWidth,
   layoutEdgeLabels,
   minuteToX,
   overlayLines,
@@ -15,13 +18,17 @@ import {
   plotWidth,
   R_AXIS_W,
   sideSummary,
+  spansOverlap,
   SPOT_WINDOW,
   STKFUT_WINDOW,
   SUB_TOP_PAD,
+  VWAP_LABEL_W,
+  vwapLabelBox,
   X_END_MIN,
   X_LABEL_H,
   X_START_MIN,
   Y_AXIS_W,
+  yieldToObstacles,
   type OverlayLevel,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
@@ -1228,17 +1235,37 @@ describe("bandLabels(R1 SC-1)", () => {
     expect(out.map((l) => l.level)).toEqual(CROWDED.map((l) => l.level));
   });
 
-  /** D6:圖牆最小卡(mainH ≈ 80 → 可用高 58px,capacity 6 < 7)。寧可疊在界邊也不丟。 */
-  it("容量不足(7 顆 > capacity)→ 仍全印 7 顆,y 單調不減、貼齊界邊", () => {
+  /** D6:圖牆最小卡(mainH ≈ 80 → 可用高 58px,capacity 6 < 7)。寧可疊在界邊也不丟。
+   *
+   *  🔴 N009(2026-08-24,事前標為該變):舊字面量是 `[4, 4, 4, 4, 10, 20, 30]` ——
+   *  上緣四顆被 clamp 成**完全同一個 y**,畫面上只看得到最後畫的那一顆,與 D6
+   *  「不丟資訊」的立場矛盾。改為界內等距壓縮:間距 (30 − 4) / 6 ≈ 4.33px 雖小於
+   *  `EDGE_LABEL_H`,但每顆都還讀得出上下次序與對應的線。 */
+  it("容量不足(7 顆 > capacity)→ 仍全印 7 顆,界內等距壓縮(不再堆成同一個 y)", () => {
     const out = bandLabels(CROWDED, { top: 4, bottom: 30 });
     expect(out.length).toBe(7);
-    expect(out.map((l) => l.y)).toEqual([4, 4, 4, 4, 10, 20, 30]);
+    expect(out.map((l) => Math.round(l.y * 100) / 100)).toEqual([
+      4, 8.33, 12.67, 17, 21.33, 25.67, 30,
+    ]);
+    // 等距:相鄰間距全等(取未捨入的原值比,6 位小數容差),且兩兩相異(無一對疊成同 y)
+    const raw = out.map((l) => l.y);
+    for (const [i, y] of raw.slice(1).entries()) expect(y - raw[i]!).toBeCloseTo((30 - 4) / 6, 6);
+    expect(new Set(raw).size).toBe(7);
     for (const l of out) {
       expect(l.y).toBeGreaterThanOrEqual(4);
       expect(l.y).toBeLessThanOrEqual(30);
     }
     // 文字來源(level / priceMilli)一顆都沒少
     expect(out.map((l) => l.level)).toEqual(["ah", "nh", "cdp", "nl", "al", "ma5", "ma20"]);
+  });
+
+  /** 等距壓縮只在**真的裝不下**時接手:capacity 夠時仍走既有「下推 + 回推」佈局
+   *  (不相疊就不動)。少了這條,把壓縮寫成無條件執行也會全綠。 */
+  it("容量足夠(7 顆 ≤ capacity)→ 不走等距壓縮,仍是既有下推佈局", () => {
+    // 界 [4, 246] → capacity = floor(242/10) + 1 = 25 ≥ 7
+    expect(bandLabels(CROWDED, BOUNDS).map((l) => l.y)).toEqual([
+      100, 110, 120, 130, 140, 150, 160,
+    ]);
   });
 
   /** 🟢 code review TC-3 / Edge case 1:CDP 五值相等(平靜到 AH=NH=CDP=NL=AL)+ MA 同價 →
@@ -1343,5 +1370,149 @@ describe("hasWindowedMinutes", () => {
     const minutes = new Map<number, MinuteAgg>([[STKFUT_WINDOW.start, agg()]]);
     expect(hasWindowedMinutes(minutes, SPOT_WINDOW)).toBe(false);
     expect(hasWindowedMinutes(minutes, STKFUT_WINDOW)).toBe(true);
+  });
+});
+
+// 🟢 N006 / N045 / N007 / N044(mod/chart-label-batch):右緣走廊避讓的共用設施。
+//
+// 這四條的共同根因是「同一段文字在不同地方有不同的寬度 / 口徑」與「不可動的鄰居
+// 沒有人去避」。純幾何在元件層只看得出「有幾個 text 節點」,座標對不對零訊號。
+describe("labelWidth(0.5625rem 字寬估值)", () => {
+  /** 係數不是憑空取的:它必須複現既有兩顆常數的推導,否則 EDGE_LABEL_W / VWAP_LABEL_W
+   *  與新估值會變成兩把尺(而漂掉的樣態是「判定說不撞、畫出來撞」)。 */
+  it("複現既有常數的推導:「1005.0」≈ EDGE_LABEL_W(34)、「1405.67」≈ VWAP_LABEL_W(40)", () => {
+    expect(labelWidth("1005.0")).toBeCloseTo(34.2, 6);
+    expect(labelWidth("1405.67")).toBeCloseTo(39.9, 6);
+  });
+
+  it("index / 期指的 8 字數字 ≈ 45.6px > VWAP_LABEL_W —— 硬編 40 低估的就是這一段", () => {
+    expect(labelWidth("24283.54")).toBeCloseTo(45.6, 6);
+    expect(labelWidth("23006.15")).toBeCloseTo(45.6, 6);
+    expect(labelWidth("24283.54")).toBeGreaterThan(VWAP_LABEL_W);
+  });
+
+  it("全形(hline 的中文 label)算 1em = 9px,不與半形同寬", () => {
+    // 「均 23100 多2口」= 全形 4(均/多/口 + 一個全形空白?否)→ 逐字算:
+    // 均(9) + 空白(5.7) + 23100(5×5.7) + 空白(5.7) + 多(9) + 2(5.7) + 口(9)
+    expect(labelWidth("均 23100 多2口")).toBeCloseTo(9 + 5.7 + 28.5 + 5.7 + 9 + 5.7 + 9, 6);
+    expect(labelWidth("均")).toBeGreaterThan(labelWidth("1"));
+  });
+
+  it("空字串 → 0", () => {
+    expect(labelWidth("")).toBe(0);
+  });
+});
+
+describe("spansOverlap(走廊避讓的水平判準)", () => {
+  it("相交 → true;端點相接 / 分離 → false", () => {
+    expect(spansOverlap([10, 20], [19, 30])).toBe(true);
+    expect(spansOverlap([19, 30], [10, 20])).toBe(true);
+    expect(spansOverlap([10, 20], [20, 30])).toBe(false); // 相接不算
+    expect(spansOverlap([10, 20], [21, 30])).toBe(false);
+  });
+
+  it("完全包含 → true(窄的落在寬的裡面)", () => {
+    expect(spansOverlap([10, 40], [20, 25])).toBe(true);
+    expect(spansOverlap([20, 25], [10, 40])).toBe(true);
+  });
+});
+
+describe("yieldToObstacles(可動標籤讓開不可動鄰居;N007 / N044 同一套機制)", () => {
+  const BOUNDS = { top: 4, bottom: 246 };
+
+  it("無鄰居 / 距離已夠 → 逐值不動(不無故位移)", () => {
+    expect(yieldToObstacles(100, [], EDGE_LABEL_H, BOUNDS)).toBe(100);
+    expect(yieldToObstacles(100, [110], EDGE_LABEL_H, BOUNDS)).toBe(100); // 恰 10,不算相撞
+    expect(yieldToObstacles(100, [200], EDGE_LABEL_H, BOUNDS)).toBe(100);
+  });
+
+  it("在鄰居上方 → 往上推到剛好 gap;在下方 → 往下推", () => {
+    expect(yieldToObstacles(97, [100], EDGE_LABEL_H, BOUNDS)).toBe(90);
+    expect(yieldToObstacles(103, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
+  });
+
+  it("恰好同 y(最壞情形)→ 往下讓(方向固定才決定性)", () => {
+    expect(yieldToObstacles(100, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
+  });
+
+  it("讓開第一個後撞上第二個 → 繼續讓到不再相撞", () => {
+    expect(yieldToObstacles(100, [100, 108], EDGE_LABEL_H, BOUNDS)).toBe(118);
+  });
+
+  it("讓位後才 clamp 進界;沒讓位的一律不 clamp(界外輸入原樣帶出)", () => {
+    // 讓位:往下推到 250 超界 → clamp 回 246
+    expect(yieldToObstacles(244, [242], EDGE_LABEL_H, { top: 4, bottom: 246 })).toBe(246);
+    // 未讓位:界外輸入不動(hline label 的 y 由線位決定,不該被這道機制無故拉回)
+    expect(yieldToObstacles(300, [], EDGE_LABEL_H, BOUNDS)).toBe(300);
+  });
+
+  it("界退化(top > bottom)→ 不動(同 bandLabels 的紀律:寧可疊也不亂放)", () => {
+    expect(yieldToObstacles(100, [100], EDGE_LABEL_H, { top: 9, bottom: 6 })).toBe(100);
+  });
+});
+
+describe("vwapLabelBox(VWAP 就地標籤的定位與寬度;N006)", () => {
+  const W = 800;
+  const plotRight = W - R_AXIS_W;
+
+  it("盤中末點在中段 → x = 末點 + 4,寬取下限 40(stock 態短字逐值不變)", () => {
+    const box = vwapLabelBox(400, "2380", W);
+    expect(box.x).toBe(404);
+    // 字面 40 不回算 `VWAP_LABEL_W`:下限常數是本案要釘的值本身,
+    // 回算的話改常數 = 改行為,而測試會跟著一起漂成綠的。
+    expect(box.width).toBe(40);
+  });
+
+  it("盤末末點貼右界 + 8 字長數字 → 整塊仍在繪圖區內(硬編 40 會溢出 5.6px)", () => {
+    const box = vwapLabelBox(plotRight, "24283.54", W);
+    expect(box.width).toBeCloseTo(45.6, 6);
+    expect(box.x + box.width).toBeLessThanOrEqual(plotRight);
+    // 自檢:舊的硬編 40 真的裝不下(否則本案恆綠)
+    expect(plotRight - VWAP_LABEL_W + labelWidth("24283.54")).toBeGreaterThan(plotRight);
+  });
+
+  it("期指 8 字(23006.15)同款:寬吃實測字寬不吃常數", () => {
+    expect(vwapLabelBox(plotRight, "23006.15", W).width).toBeCloseTo(45.6, 6);
+  });
+});
+
+describe("buildVwapLabel(VWAP 就地標籤:文字 / 位置 / x 區間一處算完;N006/N045)", () => {
+  const W = 800;
+  const plotRight = W - R_AXIS_W; // 760
+
+  it("線空(盤前尚無成交)/ VWAP 不可得 → null(不畫,不退回近似值)", () => {
+    expect(buildVwapLabel(null, 2_380_000, W, fmt)).toBeNull();
+    // milli null = toggle 關 或 後端 VWAP 不可得(與說明列的「-」同步)
+    expect(buildVwapLabel({ x: 400, y: 120 }, null, W, fmt)).toBeNull();
+  });
+
+  it("盤中末點在中段:x = 末點 + 4、y = 末點 y、span = [x, x + 寬]", () => {
+    const label = buildVwapLabel({ x: 400, y: 123.5 }, 2_380_000, W, fmt)!;
+    expect(label.x).toBe(404);
+    // y 逐值等於線末點:它是「線畫到哪」= 資訊本身,這張圖上唯一不可動的文字
+    expect(label.y).toBe(123.5);
+    expect(label.span).toEqual([404, 444]);
+  });
+
+  it("文字口徑由呼叫端注入:同一個毫元在 stock 態印兩位小數、index/期指態印整數點", () => {
+    expect(buildVwapLabel({ x: 400, y: 120 }, 23_006_154, W, fmt)!.text).toBe("23006.15");
+    expect(buildVwapLabel({ x: 400, y: 120 }, 23_006_154, W, fmtIndexPts)!.text).toBe("23006");
+  });
+
+  it("盤末末點貼右界 + 8 字(index/期指)→ 整塊右緣恰在繪圖區界上,不出畫布", () => {
+    const label = buildVwapLabel({ x: plotRight, y: 20 }, 24_283_540, W, fmt)!;
+    expect(label.text).toBe("24283.54");
+    // 寬吃實寬 45.6(不是下限 40)→ x 內縮到 760 − 45.6
+    expect(label.x).toBeCloseTo(714.4, 6);
+    expect(label.span[1]).toBeCloseTo(plotRight, 6);
+  });
+
+  it("span 與 x 同源(渲染與避讓判定共用):span 恰是 vwapLabelBox 的 [x, x + width]", () => {
+    const end = { x: 700, y: 60 };
+    const label = buildVwapLabel(end, 2_380_000, W, fmt)!;
+    const box = vwapLabelBox(end.x, label.text, W);
+    // 兩處各算一次就會出現「判定說不撞、畫出來撞」——這一條把它們釘在同一份上
+    expect(label.x).toBe(box.x);
+    expect(label.span).toEqual([box.x, box.x + box.width]);
   });
 });

@@ -676,13 +676,18 @@ export function CandleChart({
         </svg>
       )}
       {/* 底列:視窗摘要。與江波圖底部 figcaption 同結構同高度 —— 兩個 figure 的框外
-          chrome 逐項對稱,SC-6.7 的「切模式不跳高」才成立。 */}
-      <figcaption className="mt-1 flex h-4 items-center gap-x-3 font-mono text-xs text-ink-dim">
-        <span>{shown.length} 根</span>
-        <span>高 {highText}</span>
-        <span>低 {lowText}</span>
+          chrome 逐項對稱,SC-6.7 的「切模式不跳高」才成立。
+          `h-4`(16px)是固定高**且不可動**,所以內容一律不得折行(N026):< ~320px 寬時
+          四段會折成兩行,第二行直接溢出壓到下方元素。取「截字」不取「放行高」——
+          `whitespace-nowrap` + `overflow-hidden` 保住單行,四段各自 `min-w-0 truncate`
+          讓窄容器逐段出省略號(而不是某一段被整個擠掉、看起來像沒這項資訊)。 */}
+      <figcaption className="mt-1 flex h-4 items-center gap-x-3 overflow-hidden font-mono text-xs whitespace-nowrap text-ink-dim">
+        <span className="min-w-0 truncate">{shown.length} 根</span>
+        <span className="min-w-0 truncate">高 {highText}</span>
+        <span className="min-w-0 truncate">低 {lowText}</span>
         <span
           className={cn(
+            "min-w-0 truncate",
             windowPct === null ? "" : windowPct > 0 ? "text-bull" : windowPct < 0 ? "text-bear" : "",
           )}
         >

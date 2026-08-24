@@ -34,7 +34,11 @@ import {
   bandLabels,
   buildEnergyBars,
   buildIntradayGeometry,
+  buildVwapLabel,
+  EDGE_LABEL_H,
   edgePriceLabels,
+  labelCenter,
+  labelWidth,
   lastPoint,
   LEVEL_FILL,
   LEVEL_STROKE,
@@ -46,11 +50,13 @@ import {
   plotWidth,
   R_AXIS_W,
   sideSummary,
+  spansOverlap,
   SPOT_WINDOW,
   STKFUT_WINDOW,
   X_LABEL_H,
   SUB_TOP_PAD,
   Y_AXIS_W,
+  yieldToObstaclesBaseline,
   type EnergyBar,
   type IntradayGeometry,
   type OverlayLevel,
@@ -130,16 +136,6 @@ const MARK_LABEL_TOP = 9;
  *  同 `R_AXIS_W` 的推導)。MA 標籤與極值文字都是這個口徑;避讓判準的水平相交也由它
  *  組合(半寬 = `EDGE_LABEL_W / 2`,見 `maObstacles`),不另設孤立常數(review A-2/A-3)。 */
 const EDGE_LABEL_W = 34;
-/** VWAP 標籤的寬度估值。**與 `EDGE_LABEL_W` 分開**(review B-4):VWAP 走 `fmt` 口徑,
- *  統計量幾乎必帶兩位小數,千元帶最長 7 字(「1405.67」)≈ 40px;拿 fmtTickPrice 的 34
- *  當上界,盤末 clamp 後字尾仍會溢進右緣帶。 */
-const VWAP_LABEL_W = 40;
-/** SVG `<text>` 無 `dy` 時 y 是 baseline;視覺中心 ≈ baseline − 0.35em(9px 字 ≈ 3px)。
- *  避讓幾何一律以**中心**為單位(`EDGE_LABEL_H` 是中心距),極值文字的 baseline 進
- *  obstacle 集前要先扣掉這一段(review B-1)—— 不扣的話向上讓位那側的實際字框間距
- *  只剩半 px,兩層 halo 直接相疊,而數字上「距離夠」。 */
-const BASELINE_TO_CENTER = 3;
-
 /** 漲跌停亮燈色塊的高度(項 5)。
  *
  *  **必須 ≤ 2 × PAD_Y(8)**(Phase 5 review P2):最上格的 `t.y = PAD_Y = 4`,色塊置中後
@@ -166,6 +162,7 @@ const ChartStatic = memo(function ChartStatic({
   fillMarks,
   priceText,
   tickText = fmt,
+  vwapText = fmt,
   pegs = EMPTY_PEGS,
   hlines = EMPTY_HLINES,
 }: {
@@ -203,6 +200,12 @@ const ChartStatic = memo(function ChartStatic({
    *  裝得下);index 態 `fmtIndexPts`(見該常數的 why)。與 `priceText` 分開:stock 態的
    *  刻度本來就不是 `fmtTickPrice` 口徑,合成一個 prop 會改到個股頁(W-1)。 */
   tickText?: (milli: number) => string;
+  /** VWAP 就地標籤的文字口徑(N045)。**第三份口徑,不併進上面兩個**:
+   *  stock 態必須是 `fmt`(VWAP 是統計量不是可掛單價,不得走 `priceText` 的 `fmtTickPrice`
+   *  snap;review F3 不推翻),index / futures 態則要與同圖其他文字一樣走 `fmtIndexPts`
+   *  —— 否則加權印「24283.54」而左緣刻度印「24284」,同一張圖兩套口徑。
+   *  **必經模組層函式**(identity 穩定),同 `priceText`。 */
+  vwapText?: (milli: number) => string;
   /** 域外疊線掛牌(index 態限定;stock 態恆為 `EMPTY_PEGS` → 零渲染、obstacles 不變)。
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   pegs?: readonly PegInput[];
@@ -210,70 +213,115 @@ const ChartStatic = memo(function ChartStatic({
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   hlines?: readonly ChartHLine[];
 }) {
-  // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
-  // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
-  // 兩段文字疊在一起,沒有任何測試會紅。
-  const markLabels = ([
-    ["day-high", g.highMark, "up"],
-    ["day-low", g.lowMark, "down"],
-  ] as const).flatMap(([id, mark, dir]) =>
-    mark === null
-      ? []
-      : [{
-          id,
-          mark,
-          y: markLabelY(mark.y, dir, INTRADAY_MARK, { top: MARK_LABEL_TOP, bottom: plotBottom }),
-        }],
-  );
-  // MA 價位標籤的固定 obstacle = **與 MA 標籤水平相交的**極值標記(D3/review F2)。
-  // 判準是顯式的區間相交(review A-2):極值文字右緣(clamp 後的 x + 半寬)伸過 MA
-  // 標籤左緣(anchor=end 在 w − R_AXIS_W − 2,向左佔 EDGE_LABEL_W)才算 —— 只比
-  // mark.x 一個點會留下一條「疊了卻不進避讓集」的窄帶。x 用 clamp 後的值與實際畫的
-  // 同源;左半場的極值納入避讓只會讓標籤無故位移。
-  // 命中的每個極值給**兩個** obstacle(review B-1/B-3):文字(baseline 正規化成中心)
-  // 與標記圓(圓心即中心)—— 只避文字的話,「讓開文字」的動作恰好把標籤推到圓上
-  // (日高側文字在圓上方 7px,往下讓 EDGE_LABEL_H 後正落在圓心 +3)。
-  const maLabelLeft = w - R_AXIS_W - 2 - EDGE_LABEL_W;
+  // 走廊 B 的右錨點:MA 價位標 / 掛牌 / hline label 三者同 x、同 anchor=end。
+  const edgeLabelRight = w - R_AXIS_W - 2;
+  // MA 價位標籤走廊(anchor=end 在 edgeLabelRight,向左佔 EDGE_LABEL_W)的左緣。
+  const maLabelLeft = edgeLabelRight - EDGE_LABEL_W;
   // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
   // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
   const edgeBounds = { top: MARK_LABEL_TOP, bottom: plotBottom - 5 };
+  // 走廊 B 上兩種標籤的 y 單位天生不同:MA 價位標 / 掛牌帶 `dy=0.35em`(y = 中心),
+  // 極值文字 / hline label 沒有 dy(y = baseline)。界只有一組數字,所以**每條路徑
+  // 只能挑一種單位、從頭到尾用同一種**:baseline 那兩條一律走
+  // `yieldToObstaclesBaseline`(界一起換單位,見該函式),中心那兩條直接吃 `edgeBounds`。
   // 走廊 A(右緣帶內)的界(D7):`[PAD_Y, plotBottom − PAD_Y]` 就是線 y 的值域
   // (`toY` 的映射範圍),所以任何不相疊的標籤都不會被 clamp 無故位移。
   // **在 ChartStatic 內算、不從外面傳**(W6):新增 prop 會打穿本元件的 memo,
   // 而症狀只是 hover 掉幀,沒有任何 assertion 會紅。
   const bandBounds = { top: PAD_Y, bottom: plotBottom - PAD_Y };
-  // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
-  // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
-  const pegList = pegLabels(pegs, edgeBounds);
   // VWAP 就地標示在末點右側(D2/review F1):VWAP 不是橫貫全寬的水平線,盤中末點在
   // 畫面中段,右緣釘標籤會與線脫節 600 多 px。toggle 關 / 尚無成交 / 後端 VWAP
   // 不可得(vwapMilli null,與說明列的「-」同步)→ 不畫。**不退回前端近似值**:
   // 那正是 review A-1 要消滅的第二來源。
-  // x 的上界留 `VWAP_LABEL_W`:盤末末點恰在繪圖區右界上,`+4` 會把整塊字推進右緣
-  // 疊線標籤帶甚至出畫布,而那是「畫了但看不到」的靜默失敗。在此算好,渲染與 obstacle
-  // 判定共用同一個 x(兩處各算各的話會出現「判定說不撞、畫出來撞」)。
+  // 位置與寬度由 `vwapLabelBox` 一處算好(N006):渲染、極值避讓、hline 避讓、MA
+  // obstacle 判定四處共用同一個 x 與同一份寬度估值 —— 各算各的話會出現「判定說不撞、
+  // 畫出來撞」,而 8 字的長數字(index / 期指)正是被舊硬編寬低估的那一段。
+  // **它是這張圖上唯一「不可動」的文字**:y = 走勢線末點在哪 = 資訊本身。
   const vwapEnd = g.vwapLine[g.vwapLine.length - 1] ?? null;
-  const vwapLabel =
-    showVwap && vwapMilli !== null && vwapEnd !== null
-      ? {
-          x: Math.min(vwapEnd.x + 4, w - R_AXIS_W - VWAP_LABEL_W),
-          y: vwapEnd.y,
-          text: fmt(vwapMilli),
-        }
-      : null;
+  const vwapLabel = buildVwapLabel(vwapEnd, showVwap ? vwapMilli : null, w, vwapText);
+  // 與 VWAP 標籤水平相交才把它當障礙(N007/N044 共用):x 區間不交的話,盤中末點在
+  // 畫面中段時所有標籤都會無故位移。
+  const avoidVwap = (span: [number, number]): readonly number[] =>
+    vwapLabel !== null && spansOverlap(span, vwapLabel.span) ? [vwapLabel.y] : [];
+  // 極值標記的兩份幾何在下面的渲染分支與這裡各要用一次 —— 就地各算一次的話,
+  // 「MA 標籤該讓開哪條 y」與「極值文字實際畫在哪」會各自漂,而漂掉的樣態是
+  // 兩段文字疊在一起,沒有任何測試會紅。x / 文字 / 半寬也一起在這裡定案。
+  //
+  // N007:預設側(日高文字在標記上方 7px)與 VWAP 末點的中心距恰好 = EDGE_LABEL_H,
+  // 但**翻面態**(極值貼圖框上緣 → 文字翻到標記下方 14px)會把文字翻到 VWAP 那一側,
+  // 兩層 halo 直接疊印(盤末摸到近漲停的日高 + VWAP 略低於它)。讓位的是**文字**:
+  // 標記圓照樣釘在那一分鐘 / 那個價位上(它承載的是資訊,推開它等於改資訊)。
+  const markLabels = ([
+    ["day-high", g.highMark, "up"],
+    ["day-low", g.lowMark, "down"],
+  ] as const).flatMap(([id, mark, dir]) => {
+    if (mark === null) return [];
+    const x = clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16);
+    const text = fmt(mark.priceMilli);
+    const half = labelWidth(text) / 2;
+    const base = markLabelY(mark.y, dir, INTRADAY_MARK, {
+      top: MARK_LABEL_TOP,
+      bottom: plotBottom,
+    });
+    // 極值文字無 dy → base 是 baseline(進出都是,單位換算在 helper 內)。
+    // 讓位方向 = **文字原本站在標記圓的哪一側**(2026-08-24 review N007-1):
+    // 圓與文字的中心距恰好一個 `EDGE_LABEL_H`,所以「遠離 VWAP」在 VWAP 落於文字外側時
+    // 剛好把文字推到圓上(實測 5.52px)—— 讓開一層 halo 換來壓住那顆不可動的資訊。
+    // 沿原方向推則永遠是「再往外一點」。
+    const y = yieldToObstaclesBaseline(
+      base,
+      avoidVwap([x - half, x + half]),
+      EDGE_LABEL_H,
+      edgeBounds,
+      { prefer: labelCenter(base) < mark.y ? "up" : "down" },
+    );
+    return [{ id, mark, x, text, half, y }];
+  });
+  // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
+  // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
+  const pegList = pegLabels(pegs, edgeBounds);
+  // 域內 hline 的 label **先定位**(N044):它與 VWAP 就地標籤同一條走廊(盤末末點貼
+  // 右界時 x 區間完全重疊),兩層 halo 互蓋。讓位的是 hline label —— 它是「這條線在哪」
+  // 的冗餘訊息(線體照畫),與 MA 價位標同級;VWAP 標籤不可動。**同 N007 一套機制**
+  // (`yieldToObstaclesBaseline`),不另做第二套。label 無 dy → 進出都是 baseline。
+  //
+  // **算在渲染之前**(2026-08-24 review N044-3):MA 價位標要避開這裡的結果(見下面的
+  // `maObstacles`),而下面那份渲染直接吃這一份 —— 兩處各算一次的話,「MA 讓開的位置」
+  // 與「label 實際畫在哪」會各自漂,漂掉的樣態就是兩段文字疊在一起。
+  // 域外的線不畫(clamp 到邊緣 = 把「圖外的價位」講成「圖緣的價位」,靜默假陳述),
+  // 所以域外的在這裡就濾掉,不進 obstacles 也不進渲染。
+  const hlineLabels = hlines.flatMap((ln, i) => {
+    const [yBottom, yTop] = g.yDomain;
+    if (ln.priceMilli < yBottom || ln.priceMilli > yTop) return [];
+    const y = g.toY(ln.priceMilli);
+    const labelY = yieldToObstaclesBaseline(
+      y - 3,
+      avoidVwap([edgeLabelRight - labelWidth(ln.label), edgeLabelRight]),
+      EDGE_LABEL_H,
+      edgeBounds,
+    );
+    return [{ key: `hl-${i}-${ln.priceMilli}`, line: ln, y, labelY }];
+  });
+  // MA 價位標籤的固定 obstacle = **與 MA 標籤水平相交的**極值標記(D3/review F2)。
+  // 判準是顯式的區間相交(review A-2):極值文字右緣(clamp 後的 x + 半寬)伸過 MA
+  // 標籤左緣才算 —— 只比 mark.x 一個點會留下一條「疊了卻不進避讓集」的窄帶。
+  // 半寬走 `labelWidth`(N006:同一段文字只能有一個寬度)—— 舊的 `EDGE_LABEL_W / 2`
+  // 是個股口徑的固定上界,index 態的 8 字極值(45.6px)會被低估。
+  // 命中的每個極值給**兩個** obstacle(review B-1/B-3):文字(baseline 正規化成中心)
+  // 與標記圓(圓心即中心)—— 只避文字的話,「讓開文字」的動作恰好把標籤推到圓上
+  // (日高側文字在圓上方 7px,往下讓 EDGE_LABEL_H 後正落在圓心 +3)。
   const maObstacles = markLabels
-    .flatMap((m) =>
-      clampLabelX(m.mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16) + EDGE_LABEL_W / 2 > maLabelLeft
-        ? [m.y - BASELINE_TO_CENTER, m.mark.y]
-        : [],
-    )
+    .flatMap((m) => (m.x + m.half > maLabelLeft ? [labelCenter(m.y), m.mark.y] : []))
     // 掛牌的 y 併入 obstacles → MA 讓位。stock 態 pegList 恆空,這一段是 no-op。
     .concat(pegList.map((p) => p.y))
-    // VWAP 就地標籤(2026-08-22 review R1 P1):它的位置 = 「線末點在哪」是資訊,不可動;
-    // 末點貼右界時它的右緣 = w − R_AXIS_W,與 MA 價位標的 x 區間完全重疊(PR #78 SC-4
-    // 近拍實證白 2387.74 壓琥珀 2380)。與極值標記同一套判準:x 區間碰到走廊才算 obstacle,
-    // 盤中末點在畫面中段時 MA 標籤不無故位移。
-    .concat(vwapLabel !== null && vwapLabel.x + VWAP_LABEL_W > maLabelLeft ? [vwapLabel.y] : []);
+    // VWAP 就地標籤(2026-08-22 review R1 P1):末點貼右界時它的右緣 = w − R_AXIS_W,
+    // 與 MA 價位標的 x 區間完全重疊(PR #78 SC-4 近拍實證白 2387.74 壓琥珀 2380)。
+    .concat(vwapLabel !== null && vwapLabel.span[1] > maLabelLeft ? [vwapLabel.y] : [])
+    // 域內 hline 的 label(2026-08-24 review N044-3)。**不必判 x 相交**:兩者同一個
+    // 右錨點 `edgeLabelRight`、同 anchor=end,x 區間必然相交(不像極值文字釘在那一分鐘
+    // 的 x 上、可能整段在左半場)。持倉均價恰好落在 MA5 上是常態(均價就是這幾天的
+    // 成本區),誰也不避誰的話就是兩層 halo 直接疊印。
+    .concat(hlineLabels.map((l) => labelCenter(l.labelY)));
   const maLabels = edgePriceLabels(oLines, maObstacles, edgeBounds);
   // POC(域內量最大的價位);vp toggle 關 → vpBars 空 → 自然沒有
   const pocBar = vpBars.find((b) => b.poc) ?? null;
@@ -479,36 +527,31 @@ const ChartStatic = memo(function ChartStatic({
           填色與雙色價線);排在極值標記之後則會把那兩顆環的文字蓋掉。
           label 畫在**繪圖區右緣內側**(不是 viewBox 右緣):右緣 `R_AXIS_W` 帶是 CDP/MA
           價位標的走廊,壓進去兩種標籤會互疊。 */}
-      {hlines.map((ln, i) => {
-        const [yBottom, yTop] = g.yDomain;
-        if (ln.priceMilli < yBottom || ln.priceMilli > yTop) return null;
-        const y = g.toY(ln.priceMilli);
-        return (
-          <g key={`hl-${i}-${ln.priceMilli}`} data-testid="chart-hline">
-            {ln.title === undefined ? null : <title>{ln.title}</title>}
-            <line
-              x1={Y_AXIS_W}
-              x2={w - R_AXIS_W}
-              y1={y}
-              y2={y}
-              className={ln.className}
-              strokeWidth={1}
-              strokeDasharray="5 3"
-            />
-            <text
-              x={w - R_AXIS_W - 2}
-              y={y - 3}
-              textAnchor="end"
-              className="fill-ink stroke-surface"
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.5625rem"
-            >
-              {ln.label}
-            </text>
-          </g>
-        );
-      })}
+      {hlineLabels.map(({ key, line: ln, y, labelY }) => (
+        <g key={key} data-testid="chart-hline">
+          {ln.title === undefined ? null : <title>{ln.title}</title>}
+          <line
+            x1={Y_AXIS_W}
+            x2={w - R_AXIS_W}
+            y1={y}
+            y2={y}
+            className={ln.className}
+            strokeWidth={1}
+            strokeDasharray="5 3"
+          />
+          <text
+            x={edgeLabelRight}
+            y={labelY}
+            textAnchor="end"
+            className="fill-ink stroke-surface"
+            strokeWidth={2}
+            paintOrder="stroke"
+            fontSize="0.5625rem"
+          >
+            {ln.label}
+          </text>
+        </g>
+      ))}
       {/* 當日高低(round4 項 1;round6 項 1 改圓環並上移圖層)。
           橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」這個語意,而使用者要的
           只是「最高點在哪、多少錢」。標在**摸到極值的那一分鐘**上 + 就地價位文字。
@@ -522,7 +565,7 @@ const ChartStatic = memo(function ChartStatic({
           移到價線之上後,實心會把線在極值那一點截斷,空心則是套在線上。
           顏色取中性 ink-muted 不取紅綠:紅綠在本圖已被「相對昨收」佔用,整天下跌的股票
           其日高仍低於昨收,塗紅等於假陳述。 */}
-      {markLabels.map(({ id, mark, y }) => {
+      {markLabels.map(({ id, mark, x, text, y }) => {
         // 夾制界取 **viewBox** 不是繪圖區:這條夾制是為了防止圓被裁,不是把它趕出價位帶
         // —— 取繪圖區的話 09:00 附近的極值會被推開,而標記的 x 承載的是「哪一分鐘」
         // 的語意(SC-1.2),位移比稍微壓到帶緣嚴重。
@@ -542,9 +585,11 @@ const ChartStatic = memo(function ChartStatic({
               strokeWidth={INTRADAY_MARK.dot!.halo}
               paintOrder="stroke"
             />
+            {/* x / 文字都在 `markLabels` 內定案(避讓判定吃的是同一份):就地再算一次
+                的話,「判定用的區間」與「畫出來的位置」會各自漂。 */}
             <text
               data-testid={`${id}-label`}
-              x={clampLabelX(mark.x, Y_AXIS_W + 16, w - R_AXIS_W - 16)}
+              x={x}
               y={y}
               textAnchor="middle"
               className={cn(tone, "stroke-surface")}
@@ -552,7 +597,7 @@ const ChartStatic = memo(function ChartStatic({
               paintOrder="stroke"
               fontSize="0.5625rem"
             >
-              {fmt(mark.priceMilli)}
+              {text}
             </text>
           </g>
         );
@@ -565,7 +610,7 @@ const ChartStatic = memo(function ChartStatic({
         <text
           key={`ep-${l.level}`}
           data-testid={`edge-price-${l.level}`}
-          x={w - R_AXIS_W - 2}
+          x={edgeLabelRight}
           y={l.y}
           dy="0.35em"
           textAnchor="end"
@@ -586,7 +631,7 @@ const ChartStatic = memo(function ChartStatic({
         <text
           key={`peg-${p.level}`}
           data-testid={`overlay-peg-${p.level}`}
-          x={w - R_AXIS_W - 2}
+          x={edgeLabelRight}
           y={p.y}
           dy="0.35em"
           textAnchor="end"
@@ -599,8 +644,10 @@ const ChartStatic = memo(function ChartStatic({
         </text>
       ))}
       {/* VWAP 即時數值(SC-2)。就地畫在末點右側;值 = `vwapMilli`(後端逐筆,與說明列
-          同源同值,review A-1),`fmt` 不 snap tick —— VWAP 是統計量不是可掛單價
-          (review F3)。x 已在 `vwapLabel` 內含 `+4` 與右界內縮(與 obstacle 判定同源)。 */}
+          同源同值,review A-1),口徑由 `vwapText` 注入 —— stock 態 `fmt` 不 snap tick
+          (VWAP 是統計量不是可掛單價,review F3)、index / futures 態 `fmtIndexPts`
+          與同圖其他文字同一把尺(N045)。x 已在 `vwapLabel` 內含 `+4` 與右界內縮
+          (與三處避讓判定同源)。 */}
       {vwapLabel !== null ? (
         <text
           data-testid="edge-price-vwap"
@@ -1253,6 +1300,9 @@ export function IntradayChartCore({
           // 模組層函式 → identity 穩定,不打穿 memo(行內箭頭函式會)
           priceText={ptsPrice ? fmtIndexPts : fmtTickPrice}
           tickText={ptsPrice ? fmtIndexPts : undefined}
+          // N045:VWAP 只在 index / futures 態換口徑 —— stock 態維持 `fmt`(預設值),
+          // 換成 `priceText` 會把統計量 snap 成可掛單檔位(review F3 不推翻)。
+          vwapText={ptsPrice ? fmtIndexPts : undefined}
           pegs={pegs}
           hlines={hlines}
         />

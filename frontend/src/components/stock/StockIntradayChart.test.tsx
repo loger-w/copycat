@@ -2115,3 +2115,132 @@ describe("VWAP 就地標籤進 MA 價位標的 obstacles(mod/vwap-label-avoid)",
     ).toBeCloseTo(g.toY(2_380_000), 6);
   });
 });
+
+// 🔴 N007(mod/chart-label-batch):VWAP 就地標籤 × 當日極值文字互相避讓。
+//
+// 兩者至今誰也不避誰。預設側(日高的文字在標記上方 7px)與 VWAP 末點的中心距恰好
+// = EDGE_LABEL_H,所以平時看不出問題;**翻面態**(極值貼圖框上緣 → markLabelY 把文字
+// 翻到標記下方 14px)會把文字翻到 VWAP 那一側,盤末摸到接近漲停的日高 + VWAP 略低於它
+// 就是兩層 halo 疊印。VWAP 標籤不可動(y = 線末點在哪 = 資訊),讓位的是極值**文字**
+// —— 標記圓照樣釘在那一分鐘 / 那個價位上。
+describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
+  /** 域 [2_090_000, 2_550_000](upper/lower 給定)、plotH 238 → toY(p) = 4 + (2550−p)/460 × 238。
+   *
+   *  日高 2_540_000 → 標記 y ≈ 9.17:`y − 7 = 2.17 < MARK_LABEL_TOP(9)` → 文字翻到下方
+   *  (baseline 23.17 / 中心 20.17)。累計 VWAP 末點 = (2_500_000×10 + 2_538_000×10) / 20
+   *  = 2_519_000 → y ≈ 20.04。兩者中心距 **0.13px**(修前)。
+   *  極值在 13:25(x ≈ 746.6)、VWAP 末點同分鐘 → x 區間相交,避讓才該啟動。 */
+  const LATE_TOP_HIGH = fromSnapshot({
+    code: "2330", seq: 2,
+    last: { p: 2_538_000, t: "13:25:10.000", cum_vol: 20 },
+    vwap: 2_519_000,
+    minutes: {
+      "541": { c: 2_500_000, v: 10, i: 0, o: 10, u: 0, h: 2_500_000, l: 2_500_000 },
+      "805": { c: 2_538_000, v: 10, i: 0, o: 10, u: 0, h: 2_540_000, l: 2_530_000 },
+    },
+    ticks: [], book: null,
+    high: 2_540_000, low: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  /** 對照組:同一組價位,只把「摸到日高的那一分鐘」搬回 09:01(x ≈ 38.7,左半場)
+   *  → x 區間不相交,文字不得無故位移。 */
+  const EARLY_TOP_HIGH = fromSnapshot({
+    code: "2330", seq: 2,
+    last: { p: 2_538_000, t: "13:25:10.000", cum_vol: 20 },
+    vwap: 2_519_000,
+    minutes: {
+      "541": { c: 2_500_000, v: 10, i: 0, o: 10, u: 0, h: 2_540_000, l: 2_500_000 },
+      "805": { c: 2_538_000, v: 10, i: 0, o: 10, u: 0, h: 2_538_000, l: 2_530_000 },
+    },
+    ticks: [], book: null,
+    high: 2_540_000, low: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  function geom(accum: typeof ACCUM) {
+    return buildIntradayGeometry(
+      { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
+      { width: 800, height: 260 },
+    );
+  }
+
+  it("日高文字翻面後落在 VWAP 標籤上 → 文字讓位(中心距 ≥ EDGE_LABEL_H),圓不動", () => {
+    const { container } = wrap(<StockIntradayChart accum={LATE_TOP_HIGH} />);
+    const g = geom(LATE_TOP_HIGH);
+    const vwapY = Number(
+      container.querySelector('[data-testid="edge-price-vwap"]')!.getAttribute("y"),
+    );
+    // 前置(敏感度所繫):兩者本來就在同一條走廊上、y 幾乎重合
+    expect(vwapY).toBeCloseTo(g.vwapLine.at(-1)!.y, 6);
+    const label = container.querySelector('[data-testid="day-high-label"]')!;
+    // 極值文字無 dy → y 是 baseline,中心 = baseline − 0.35em(≈3px)
+    const center = Number(label.getAttribute("y")) - 3;
+    // 推到**剛好**一個 EDGE_LABEL_H = 字面 10(不多推:讓位是為了不疊,不是為了離得遠)。
+    // 用 closeTo 不用 ≥:浮點下 toY 算出來的差是 9.999999999999996。
+    // 字面值不回算常數:回算的話 EDGE_LABEL_H 改了、實際間距跟著改,本案照樣綠
+    // —— 那正是「同義反覆」量不到的那一格。
+    expect(center - vwapY).toBeCloseTo(10, 6);
+    // 標記圓承載「哪一分鐘 / 什麼價位」→ 一律不動
+    const circle = container.querySelector('[data-testid="day-high"]')!;
+    expect(Number(circle.getAttribute("cy"))).toBeCloseTo(g.toY(2_540_000), 6);
+    // 水平位置不變(讓位只動 y)
+    expect(Number(label.getAttribute("x"))).toBe(800 - R_AXIS_W - 16);
+  });
+
+  it("對照組:日高在左半場(x 區間不相交)→ 文字 y 逐值不變(不無故位移)", () => {
+    const { container } = wrap(<StockIntradayChart accum={EARLY_TOP_HIGH} />);
+    const g = geom(EARLY_TOP_HIGH);
+    const label = container.querySelector('[data-testid="day-high-label"]')!;
+    // 翻面後的 baseline = 標記 y + labelUp.flip(14)
+    expect(Number(label.getAttribute("y"))).toBeCloseTo(g.toY(2_540_000) + 14, 6);
+  });
+
+  /** 🔴 讓位**方向**(2026-08-24 two-axis review N007-1)。
+   *
+   *  同樣是翻面態日高,只把 VWAP 末點換到文字的**外側**(下方)。
+   *  域 [2_090_000, 2_550_000]、plotH 238 → toY(p) = 4 + (2_550_000 − p)/460_000 × 238。
+   *  日高 2_540_000 → 標記 y ≈ 9.17;`9.17 − 7 < MARK_LABEL_TOP(9)` → 文字翻到標記下方
+   *  (baseline 23.17 / 中心 20.17)。累計 VWAP = (2_500_000×10 + 2_530_000×5) / 15
+   *  = 2_510_000 → y ≈ 24.70,中心距 4.52px(< EDGE_LABEL_H)→ 避讓啟動。
+   *
+   *  「遠離該鄰居」的推法在這一側**正好把文字推向標記圓**:24.70 − 10 = 14.70,距圓心
+   *  9.17 只剩 5.52px —— 讓開一層 halo 換來壓在圓上,而圓正是那顆不可動的資訊。
+   *  正解是**沿文字原本相對標記的那一側**推開(這裡是往下)。 */
+  const LATE_TOP_HIGH_VWAP_OUTSIDE = fromSnapshot({
+    code: "2330", seq: 2,
+    last: { p: 2_530_000, t: "13:25:10.000", cum_vol: 15 },
+    vwap: 2_510_000,
+    minutes: {
+      "541": { c: 2_500_000, v: 10, i: 0, o: 10, u: 0, h: 2_500_000, l: 2_500_000 },
+      "805": { c: 2_530_000, v: 5, i: 0, o: 5, u: 0, h: 2_540_000, l: 2_530_000 },
+    },
+    ticks: [], book: null,
+    high: 2_540_000, low: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  it("VWAP 在翻面文字的外側 → 文字沿原方向讓開(不被推回標記圓上)", () => {
+    const { container } = wrap(<StockIntradayChart accum={LATE_TOP_HIGH_VWAP_OUTSIDE} />);
+    const g = geom(LATE_TOP_HIGH_VWAP_OUTSIDE);
+    const markY = g.toY(2_540_000);
+    const vwapY = Number(
+      container.querySelector('[data-testid="edge-price-vwap"]')!.getAttribute("y"),
+    );
+    // 前置(敏感度所繫):VWAP 就地標籤真的在文字外側,且中心距 < EDGE_LABEL_H
+    expect(vwapY).toBeCloseTo(g.vwapLine.at(-1)!.y, 6);
+    const flippedCenter = markY + 14 - 3;
+    expect(vwapY).toBeGreaterThan(flippedCenter);
+    expect(vwapY - flippedCenter).toBeLessThan(10);
+    const label = container.querySelector('[data-testid="day-high-label"]')!;
+    const center = Number(label.getAttribute("y")) - 3;
+    // 主張一:標記圓不可壓(修前 5.52px = 文字直接落在圓上)。字面 10 = EDGE_LABEL_H
+    // 當下的值,不回算常數(理由同上一案)。
+    expect(Math.abs(center - markY)).toBeGreaterThanOrEqual(10);
+    // 主張二:VWAP 仍讓開剛好一個 10,且是**往原方向**(文字本來就在圓下方)
+    expect(center - vwapY).toBeCloseTo(10, 6);
+    // 標記圓照樣釘在那一分鐘 / 那個價位上
+    const circle = container.querySelector('[data-testid="day-high"]')!;
+    expect(Number(circle.getAttribute("cy"))).toBeCloseTo(markY, 6);
+  });
+});
