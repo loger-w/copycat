@@ -93,3 +93,41 @@ npx react-doctor@latest --scope changed --no-telemetry → Scanned 11 files,No i
 3. **hover 命中**:夜盤薄量段游標掃過去,十字垂直線是否貼著游標命中最近的一分鐘
    (不該出現「指著這裡、報 10 分鐘前」)。
 4. 期貨 POC 標籤字面 `23002.5`(桶心)是否可接受,或要改印檔位價。
+
+## two-axis review 收修(2026-08-24)
+
+### P1 紅→綠(基準日判準)
+
+紅測試先行,`meta.partial_last` 判準下實際失效的輸出:
+
+```
+FAIL src/lib/futures-overlay.test.ts        (新 describe「基準日以圖上錨定日為界」3 條)
+FAIL src/components/futures/FuturesChart.test.tsx
+     Expected: "疊線基準 2026-08-20"
+     Received: "…疊線基準 2026-08-22 · VWAP 23000"      ← 基準落在尚未發生的交易日
+→ Tests 7 failed | 42 passed (49)
+```
+
+改判準(`t < anchorDate`)後同兩檔 `Tests 49 passed (49)`。
+
+### parity oracle 咬得住(不是空談)
+
+`build_overlay` 對同一份 fixture 移動界:
+
+```
+界正確(2026-07-23) → == expected     True
+界 +2 日(2026-07-25)→ == expected    False(date 2026-07-24,野值 bar 入計算)
+界 −1 日(2026-07-22)→ == expected    False(date 2026-07-21)
+```
+
+### 全套 gate(收修後)
+
+```
+frontend/  npx vitest run  → Test Files 140 passed (140) / Tests 2631 passed (2631)
+frontend/  npx tsc -b      → 無輸出(PASS)
+frontend/  npx eslint src  → 無輸出(PASS)
+frontend/  npx react-doctor@latest --scope changed --no-telemetry → Scanned 13 files,No issues found
+root/      pytest -q tests/server/test_overlay.py → 12 passed
+root/      ruff check copycat tests → All checks passed!
+root/      pyright → 0 errors, 0 warnings, 0 informations
+```

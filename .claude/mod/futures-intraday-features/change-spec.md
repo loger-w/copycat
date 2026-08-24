@@ -4,6 +4,22 @@
 級別 M(跨 lib + 兩元件 + 測試)。拍板前置已在盤點頁完成(CDP/MA 用前一交易日 H/L/C;
 夜盤成交屬錨定日)→ 本輪不再開 brainstorm。
 
+## 拍板記錄
+
+- **「昨日 H/L/C」的口徑 = TC4 DK(日 K,日盤語意)**:user 拍板原文只說「前一交易日資料」、
+  **未指定盤別**(日盤 / 全時段);DK 是本專案既定慣例(後端 `overlay.py` 的現股 overlay
+  一路吃 DK,個股頁的 CDP 就是這個口徑),期貨疊線沿用同一份不另立。若日後要改成
+  全時段口徑,那是**兩頁一起改**的決定,不是期貨頁單邊調整。
+- **基準日的判準 = 圖上錨定日**(2026-08-24 two-axis review P1 收修):初版走後端
+  `meta.partial_last`,那是**日曆日**口徑,近全軸跨兩個日曆日時兩頭破窗(22:00 TC4 已把
+  夜盤成形 bar 標成次一交易日 → 基準跳到未來日;00:00–05:00 日曆日翻頁 → 基準變成當前
+  這一節自己的未完成 bar),且 meta 缺欄位時 falsy = 不剔末根,**失效落在不安全側**。
+  改以 caller 的 `anchorDate` 過濾 `t < anchorDate`,逐字對齊後端 `build_overlay` 的
+  `date < today`;`meta.partial_last` 讀取路徑移除。
+- **前後端同式升格為跨檔契約**(CLAUDE.md §4):共用 golden fixture
+  `tests/fixtures/overlay_parity.json`,後端 / 前端各一條測試對照;差異白名單 = 前端多一道
+  `usable()` 0 價閘。
+
 ## 現狀盤點(讀 code 得到,與 spec 記載有兩處出入)
 
 | 條 | spec 記載 | 現行 code | 處置 |
@@ -18,7 +34,8 @@
 ## SC
 
 - **SC-1(N042)**:期貨分時 CDP / MA 兩鈕可按,按下畫出五條 CDP + MA5/MA20(域內者),
-  右緣價位標走 `fmtIndexPts`;基準日 = 日 K 最後一根**已完成** bar(`meta.partial_last` 為真時剔除末根)。
+  右緣價位標走 `fmtIndexPts`;基準日 = 日 K 最後一根**已完成** bar(界 = 圖上錨定日,
+  只收 `t < anchorDate`;review P1 後不再吃 `meta.partial_last`)。
   日 K 尚未回 → 不預先反灰(同既有「未回視為可用」紀律);回了但無已完成 bar → 兩鈕反灰。
 - **SC-2(N043/N070)**:期貨分時「成交點」鈕不再反灰;近全軸上買 ▲ / 賣 ▼ 落在
   `alldayIndexOf(成交 HHMM)`,且**只畫錨定日相同**的成交(夜盤 00:00–05:00 的成交屬前一日錨定日)。
@@ -38,8 +55,10 @@
 
 ## Diff
 
-- 🟢 `lib/futures-overlay.ts`(新):`buildFuturesOverlay(bars, partialLast)` → `StockOverlay`;
-  公式與 `copycat/server/overlay.py::compute_cdp / compute_ma` **逐式相同**(整數毫元、floor)。
+- 🟢 `lib/futures-overlay.ts`(新):`buildFuturesOverlay(bars, anchorDate)` → `StockOverlay`;
+  公式與 `copycat/server/overlay.py::compute_cdp / compute_ma` **同式**(整數毫元、floor),
+  差異白名單 = 前端多一道 `usable()` 0 價閘。parity 由 `tests/fixtures/overlay_parity.json`
+  兩邊各一條測試釘住(CLAUDE.md §4)。
 - 🟢 `lib/fill-marks.ts`:抽出共用的 `baseFill`,新增 `alldayFillPoints(orders, key, anchorDate)`
   —— 錨定日相等 + `alldayIndexOf` 當軸 key;聚合沿用同一支 `aggregate`。
 - 🟢 `components/futures/FuturesChart.tsx`:掛 `useFuturesBars(product,"day")`(與日 K 模式同 queryKey,
