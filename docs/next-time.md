@@ -49,8 +49,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
   鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
 - [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
   路徑 phase≠status 無測。〔`handover.attempt` 與 `tape=0` 契約已於 2026-08-22 mod/calendar-poll-tape-omitted 登記 CLAUDE.md §4〕
-- [ ] **R10 `corr_config.py:97/100/104/108` 四條 logger 仍印「預設六腿」**(現 7 腿;08-21 C2 條已 `[x]` 但此處未追蹤)
-  → 🔴 微幅,下次動 corr_config 帶走。
+- [ ] **R10 `corr_config.py` 預設仍是六腿,不只 logger 文案**(2026-08-24 盤點更正):`DEFAULT_CONFIG`
+  (`corr_config.py:59-68`)legs 只有 TXF/TWN/YM/ES/NQ/SXF、缺 NK225M,而 `configs/correlation.json`
+  已 7 腿 → 設定檔壞掉退回預設時江波圖/相關係數會**真的少一腿**;`:97/100/104/108` 四條 logger
+  「改用預設六腿」文案同批。→ 🔴 微幅,下次動 corr_config 帶走(DEFAULT_CONFIG 補 NK225M + 文案改「預設腿」)。
 
 ## 2026-08-21(refactor/housekeeping-batch-2026-08-21 R10 留尾)
 
@@ -58,9 +60,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
   先例已有、但只做在單一模組:`lib/fut-chart-mode.ts::initialFutChartMode` / `persistFutChartMode`
   兩支都包 try/catch,註解也寫明理由(「在 `useState` 初始器裡跑,拋出去就是整頁白屏」)——
   問題是同一套 try/catch 每個呼叫端各抄一次,漏抄的那份零訊號。
-  **散落規模(2026-08-21 grep,不含測試)= 22 處 `getItem` + 23 處 `setItem`,分佈 13 個檔**:
+  **散落規模(2026-08-24 重 grep,不含測試)= 45 處,分佈 14 個檔(08-21 記 13 檔,新增 `StockPage.tsx`)**:
   `App.tsx` / `RightRail.tsx`(`initialTab()`)/ `MarketPane.tsx` / `RiverPanel.tsx` /
-  `LimitListSection.tsx` / `GroupGridView.tsx` / `StockChart.tsx` / `WatchlistSidebar.tsx` /
+  `LimitListSection.tsx` / `GroupGridView.tsx` / `StockChart.tsx` / `StockPage.tsx` / `WatchlistSidebar.tsx` /
   `useChartToggles.ts` / `useSignalSound.ts` / `fee-discount.ts` / `fut-chart-mode.ts` /
   `stock-view.ts`(判準 `grep -rn "localStorage\.\(get\|set\)Item" frontend/src`,不寫死行號)。
   失效面:Safari 私密視窗 / 企業政策鎖儲存時,光是**存取** localStorage 就拋 → 讀取端在 render
@@ -242,7 +244,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
   近似版已知失真:分批成交壓成一點(最新事件時間 × 均價)、尾段事件是刪單時點落在刪單時刻、
   **昨日部分成交今日刪單的單會以(今日刪單分鐘 × 昨日均價)畫上今日圖**(`date` 是最新事件日,
   日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。
-- [ ] **期貨 tab `FuturesChart` 成交點**:另一套幾何,本輪未做;資料源同 `fillPoints`(契約碼 key)。
+- [ ] **期貨分時成交點 ▲/▼ 仍關閉**(2026-08-24 盤點更正:期貨分時已換 `IntradayChartCore`,「另一套幾何」
+  前提不再成立;現況是 `StockIntradayChart.tsx` ~1187 `{ key: "fills", available: !futures }` 在 futures 態
+  寫死不可用,理由 = 近全軸(夜盤跨日)的日期界未處理)。資料源同 `fillPoints`(契約碼 key);
+  做法 = fills 的 x 映射走 `allday.ts` 三段軸,再解開 `available`。
 - [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。
 - [ ] **▲/▼ 可見度**待 user 過目:尺寸沿 `INTRADAY_MARK`(外緣 3px 級),fake 鋸齒價線下 ▼ 綠疊
   綠線不易辨識;真盤若仍不顯眼,調 `lib/fill-marks.ts::FILL_MARK` 或 halo 色(一行)。
@@ -324,9 +329,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 - [ ] **TC4 凍結 stub 的姊妹 ready-check 未收緊**(review L2-P2-4):`river_backfill.
   collect_1k_minutes:52`、`stock_source.backfill:499`、`tc4._fetch_symbol_ticks` 仍是
-  「首頁非空即 break」;空窗毒化訂閱回凍結 stub 時同樣被騙,且 river 的
-  `minute_end_from_1k` 只讀 Time 不讀 Date — 凍結 stub 會變成今日分鐘寫進 RiverState
-  (江波圖憑空一點)。index 側已用「差量進展 + 窗口 variant」繞開;姊妹路徑要收就沿
+  「首頁非空即 break」(2026-08-24 盤點:三處仍在 `river_backfill.py:58`、`stock_source.py:608`、
+  `tc4.py:751`);空窗毒化訂閱回凍結 stub 時同樣被騙。~~river 的 `minute_end_from_1k` 只讀 Time
+  不讀 Date~~ 這半邊已由 `river_models.py::parse_1k_minutes(rows, utc_day)` 丟棄異日列解掉,
+  剩 ready-check 本體。index 側已用「差量進展 + 窗口 variant」繞開;姊妹路徑要收就沿
   `_collect_history 靜默回空家族`(2026-08-13 節)一起做三態化 + stub 簽名判定,獨立輪。
 - [ ] **heal 每個 variant 新發一個 history 訂閱、無釋放路徑**(review L1-P2-4):壞日子
   單 session 最多累積 ~18 個 IX0001 1K 訂閱(`_unsub` 只管 REALTIME)。TC4 per-session
@@ -392,7 +398,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
   (18:17 啟動無 timeout),風險低;若要覆蓋,detector 改「窗外以 min(now, 13:30) 為
   期望覆蓋終點」,但要處理休市日恆空的輪詢噪音。
 - [ ] **heal 帶 minutes 的廣播對飽和 client 是 at-most-once**(review T-4/C-2,known-risk):
-  per-client queue(32 深)飽和期間 heal 那一則被丟 → 該分頁線仍空且無二次機會(引擎
+  per-client queue(`ws.py::CLIENT_QUEUE_MAX`,2026-08-24 現為 500;原記 32 已過時)飽和期間
+  `QueueFull: pass` 靜默丟掉 heal 那一則 → 該分頁線仍空且無二次機會(引擎
   state 與 log 都顯示已自癒)。觸發窗極窄;系統性解法(per-client 補送 / 低頻週期全量)
   會動 scalar-only 頻寬慣例,獨立輪評估。
 - [ ] **pending 期間連線類 retry 把新日 1K merge 進舊日 minutes dict**(review T-1 附帶,
@@ -641,7 +648,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-07-15(fade-round-3 自評 review P2 彙總,8 條聚類)
 
-- [ ] evaluate_cells_from_universe 頂層 round gate 分岔:再加一輪會變 if-elif chain,屆時抽 evaluator factory
+- [ ] evaluate_cells_from_universe 頂層 round gate 分岔 → **觸發條件已到**(2026-08-24 盤點:`fade_cells.py:263-286`
+  已是 round5 → round4 → round3 → round2 四段 if-elif chain),下次動 fade 回測時抽 evaluator factory
 - [ ] 底倉格 grid 對 in_w 掃 6 次(單次分桶可 O(n),n 小暫無感)
 - [ ] run_cells 三次 build_fade_universe(cellb 可由 main 超集記憶體過濾,現況重讀 1K JSON)
 - [ ] validate_disaster_fields 在 _simulate_core 每 call 驗一次(GA 熱迴圈微耗;可改 config frozen 後驗一次的快取)
@@ -665,7 +673,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] 個股 stream 韌性候選:hook pending 重放只驗 seq>S 不驗連續性(回補期 WS 掉訊成永久缺筆);fromSnapshot 以 vwap×cum_vol 還原 VWAP 分子與後端 Σq 分母有近似差;apply_backfill 對回補列不去重(TC4 重送列會雙算);tc4_status 只靠 on_reconnect 復位(純 REQ 失敗 banner 永久誤掛)
 - [ ] 個股 UI 盤後體驗:reset() 保留 book 與 design 字面不符(rollover 後非觸發檔殘留昨日五檔)。〔2026-07-31 盤點:**後半「盤後重載側欄顯示 `-`」已做掉**,可刪 —— `stock_engine` 連線種子逐檔送 `_quote_payload`,`ref` 欄在尚無成交時給參考價,`WatchlistSidebar` 已渲染「參考」態〕
 - [ ] 個股效能/清潔候選:snapshot 每次全量序列化 20k tick deque(切檔/跳號 refetch 都全量 JSON);_states 永不清除;F:xxx 建立永不使用的 StockDayState;backfill TICKS 訂閱事後不退訂
-- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時;backfill 首頁 30s 逾時靜默回空無 log;watchlist 啟動時 TC4 離線可被 50 檔 × 10s(≈500s)拖慢 lifespan〔2026-08-13 上限 30→50 同步;**退出準則**:若實測 TC4 離線啟動致 index/breadth 就緒 >10 分鐘 → 做 per-code timeout 縮短 / 並行訂閱〕
+- [ ] 個股雜項:健檢 in_trading_hours 在 subscribe 時判定而非 timer 觸發時(`stock_source.py:518-520`);watchlist 啟動時 TC4 離線可被 50 檔 × 10s(≈500s)拖慢 lifespan(`app.py::_boot_engines` 序列化,stock 段在 index/breadth 之前)。~~backfill 首頁 30s 逾時靜默回空無 log~~ 已由 08-21 R8 `raise HistoryTimeoutError` 解掉(2026-08-24 盤點縮寫)〔2026-08-13 上限 30→50 同步;**退出準則**:若實測 TC4 離線啟動致 index/breadth 就緒 >10 分鐘 → 做 per-code timeout 縮短 / 並行訂閱〕
 
 ## 2026-07-20(backfill 雙修 review P2)
 
@@ -692,8 +700,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
 ## 2026-07-29(stock-ui-round2 批一 順手清單)
 
 - [ ] **批二(user 已拍板拆兩批)剩一項**:項 9 閃電梯跟隨置中(判定為描述現況,
-  待 user 確認是否有症狀;定位:`PriceLadder.tsx` 的 `follow` state 與 `centerPrice` 的
-  scrollIntoView effect,行為未動)
+  待 user 確認是否有症狀;定位(2026-08-24 更新):`LadderView.tsx:140-165` 的 `follow` state 與
+  `centerPrice` 的 scrollIntoView effect(已從 `PriceLadder.tsx` 搬出,行為未動)
   - [x] ~~項 13 閃電梯部位 + 未實現損益 + 含成本打平價(需新增手續費折數設定,user 拍板
     預設 6 折)~~ **2026-08-05 已出貨**(feat/ladder-position-pnl):部位條(卡片底部,
     誤送風險考量不放梯上方)+ 梯內打平/均價標記 + 折數設定(標題列,localStorage
@@ -713,13 +721,13 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] 布林通道填色用 `fill-ink-muted` 0.07,在 20 期低波動段會蓋成一大片灰塊;
   若嫌干擾可改只畫上下軌不填色,或降到 0.04
 - [ ] `MINUTE_INIT_BARS = 240` / `DAILY_INIT_BARS = 120` / `MAX_VISIBLE = 700` /
-  `ZOOM_STEP = 1.15` 四個常數分散(**2026-07-31 盤點:已從兩檔擴散到三檔** ——
-  `StockChart.tsx:20-21` / `candle-viewport.ts:14` / `CandleChart.tsx:32`);
+  `ZOOM_STEP = 1.15` 四個常數分散(**2026-08-24 盤點:已擴散到四檔** ——
+  `StockChart.tsx:24-25` / `FuturesChart.tsx:50-51`(同兩支 INIT_BARS 複本)/ `lib/candle-viewport.ts:14` /
+  `hooks/useCandleViewport.ts:13`);
   若之後要做「可設定的圖表偏好」再收斂到單一 config
 
 ## 2026-07-29(stock-ui-fixes 順手清單)
 
-- [ ] 盤後重啟 server 後五檔 / 閃電梯恆空(TC4 REALTIME 五檔盤後無推播;tick 明細與江波圖走 TICKS 回補所以有資料)。CLAUDE.md §8 記載「盤後 fresh subscribe 會回當日收盤 snapshot(延遲分鐘級)」—— 本次實測 1.5 小時後 `book.bids`/`book.asks` 仍為空,該記載可能只適用成交 tick 不含五檔,值得再確認後修正文件。
 
 ## 2026-07-30(realtime-correlation 收尾沉澱)
 
@@ -901,7 +909,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] `frontend/src/lib/trade-text.ts` 瘦身候選(review F3):`TRADE_ERROR_TEXT` 有 6 個無 producer 的 dead key(TOUCHANCE_DOWN / TRADE_NOT_READY / LIVE_DISABLED / CONFIRM_REQUIRED / PREVIEW_EXPIRED / SYMBOL_NOT_ALLOWED,一對一對應已刪的 _TRADE_ERROR_MAP)+ `orderStatusText` / `orderSideText` 已 test-only(唯一 production consumer 是被刪的 OrdersList/OrderConfirm)。**⚠ `INVALID_ORDER` 必留**(capital_api 仍回它);`tradeErrorText` / `shortSymbol` 是 useCapital 等現行 consumer 在用,不可整檔刪。`trade-text.test.ts:7-8` 對 dead key 的斷言一併清。
 ## 2026-08-04(ws-test-consolidation 收尾沉澱)
 
-- [ ] `test_no_write_to_dead_transport` 其實有**兩個**獨立 flake 源(本輪實測):(a) 既知的 0.5s 固定收 frame 窗(全套負載下漏窗);(b) 新發現 — `_ws_handshake` 讀到 `\r\n\r\n` 即停,101 回應與 server 第一則 frame 落同一 TCP segment 時該 frame 被握手緩衝吞掉 → `sock.recv` 等到 5s timeout,實測 6 跑掛 1(≈17%)。新測試已用 `_ws_handshake_keep_rest`(回傳殘留位元組)免疫;修既有測試需動 `assert sock.recv(4096)` 斷言,依紀律留待專輪 — 修時兩個源一起收(窗改 deadline 迴圈 + 換 keep_rest)。
+- [ ] `test_no_write_to_dead_transport` 其實有**兩個**獨立 flake 源(本輪實測):(a) 既知的 0.5s 固定收 frame 窗(全套負載下漏窗);(b) 新發現 — `_ws_handshake` 讀到 `\r\n\r\n` 即停,101 回應與 server 第一則 frame 落同一 TCP segment 時該 frame 被握手緩衝吞掉 → `sock.recv` 等到 5s timeout,實測 6 跑掛 1(≈17%)。**2026-08-24 盤點:源 (b) 已由 55d6f6af 收(既有測試改 `_ws_handshake_keep_rest` + `assert rest or sock.recv(4096)`);源 (a) 仍是 `test_ws_disconnect.py:179-186` 字面 0.5s 固定窗 + TimeoutError 即 break** — 改用同檔已有的 deadline 迴圈 helper `_recv_batches`(:298-311)即可。
 - [ ] corr/river 兩路突斷測試讀 `engine._loop` private(engine 無公開 loop 取用面;repo 已有 `broadcaster._clients` 先例):若日後 `create_app` 透出 `corr_tick_secs`(現寫死 1.0 不經參數),兩路可改回純 source-driven 端到端 pump,一併移除 private 讀取。
 
 ## 2026-08-04(subscribe-retry-recovery 收尾沉澱)
@@ -927,8 +935,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **平倉確認彈窗補 danger 紅底**(review T6 偏離 1):prod 送單面,CapitalPositionsList
   有、ladder 沒有;引入 useCapitalStatus 需補既有測試的 status mock。
 - [ ] `todayOf` 私有函式在 FuturesPage/FuturesLadder 各一份(4 行),收斂進 settlement.ts。
-- [ ] **MarketChart 無資料時 y-tick 全 0 → React duplicate key console error**(Phase 6
-  fixture 實測 3.5 次/秒;prod 有真資料不觸發):`key={t.priceMilli}` 改帶 index 即根除。
+- [ ] **分時圖無資料時 y-tick 全 0 → React duplicate key console error**(Phase 6 fixture 實測
+  3.5 次/秒;prod 有真資料不觸發)。**2026-08-24 盤點:K 線路徑已安全**(`candle.ts` `seen` 去重 + 空 bars
+  回 `[]`,MarketChart 已委派 CandleChart);**剩分時 fallback** `stock-intraday-svg.ts:412-416`
+  無條件 push `[yTop, ref, yBottom]` 無去重,三者皆 0 時 `StockIntradayChart.tsx:319`
+  `key={`yt-${t.priceMilli}`}` 仍撞 → fallback 分支加 `seen` 或 key 帶 index 即根除。
 - [ ] days=5 下 30/60 分 K 無歷史回看(初始視窗即全部;design Known Risk):要支援回看
   可對 n≥30 另發長窗 query。
 
@@ -1011,7 +1022,9 @@ XR-7、FE-4 隨之作廢;HR-6 / HR-3 / HR-5 是 hub 通用議題仍成立,但「
 
 - [ ] P2(共用層,獨立 /mod):tc4 `_ensure_connected` 無鎖 check-then-act ×
   `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
-  系統性放大。修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
+  系統性放大。**2026-08-24 盤點:`_api_lock` 已存在(`tc4.py:295-299`)但只護 `_dispose` 的
+  check-then-clear 與指標發布(:337-339);`_ensure_connected` 的 check(:319)與 QuoteAPI 建立(:324-336)
+  仍在鎖外、無 `_stop` 早退 → 本條未解。**修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
   stock/corr/index 四 source 一起回歸。
 
 ## 2026-08-12(fix/futures-resub-recovery 收尾留尾巴)

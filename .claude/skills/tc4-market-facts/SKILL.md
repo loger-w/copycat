@@ -56,7 +56,9 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
   成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**盤後
-  fresh subscribe 會回當日收盤 snapshot**(延遲分鐘級)。(Trigger:個股訂閱 / 試撮處理 / 盤外顯示)
+  fresh subscribe 會回當日收盤 snapshot**(延遲分鐘級)—— **但 snapshot 只含成交 tick,不含五檔**
+  (2026-07-29 實測盤後 1.5h `book.bids`/`book.asks` 恆空;五檔 / 閃電梯盤後恆空是常態,tick 明細與
+  江波圖走 TICKS 回補所以有資料)。(Trigger:個股訂閱 / 試撮處理 / 盤外顯示)
 
 ## 鎖漲跌停:市價單佇列價格欄 = 0(2026-07-31 實證)
 
