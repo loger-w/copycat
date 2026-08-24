@@ -3,7 +3,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
 import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
-import { useCapitalPositions } from "@/hooks/useCapital";
+import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { useFuturesBars, type FuturesBarsKey } from "@/hooks/useFuturesBars";
@@ -18,6 +18,7 @@ import {
   sliceCurrentAllday,
 } from "@/lib/allday";
 import { aggregateBars, type Bar } from "@/lib/candle";
+import { alldayFillPoints, EMPTY_FILLS } from "@/lib/fill-marks";
 import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fmt } from "@/lib/format";
 import {
@@ -28,6 +29,7 @@ import {
   type FutChartMode,
 } from "@/lib/fut-chart-mode";
 import { futuresBarsToAccum } from "@/lib/futures-accum-adapter";
+import { buildFuturesOverlay } from "@/lib/futures-overlay";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { pickOiLines } from "@/lib/oi-levels";
 import { cn } from "@/lib/utils";
@@ -86,8 +88,14 @@ interface Props {
 export function FuturesChart({ product, state, resolvedYm, active = true }: Props) {
   const [mode, setMode] = useState<FutChartMode>(initialFutChartMode);
   const { data, isPending, isError, error } = useFuturesBars(product, mode, active);
+  // 疊線(CDP/MA)的資料源 = **期貨日 K**(N042)。與日 K 模式**同一個 queryKey** →
+  // TQ 自然去重(兩個 observer 一份 cache、一發請求),`staleTime: Infinity` 讓它一天只打一次。
+  // 不掛 `enabled: toggles.cdp || toggles.ma`:那會讓「按下 CDP 才開始抓」多一次空窗閃動,
+  // 而這支的成本是每商品每日一發(日 K 模式本來就要抓)。
+  const dayQ = useFuturesBars(product, "day", active);
   const { data: oi } = useOiLevels();
   const { data: positionsData } = useCapitalPositions();
+  const orders = useCapitalOrders().data?.orders;
   // 全站單一份 toggle 存檔(與個股頁 / 群組圖牆 / 台股綜合共用同一把 localStorage 鍵)
   const { toggles, set } = useChartToggles();
 
@@ -140,6 +148,31 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
 
   // ---- 分時序列(近全軸)-------------------------------------------------
   const slice = useMemo(() => sliceCurrentAllday(bars), [bars]);
+  /** 這張圖的交易日(= 最後一根 bar 的錨定日)。成交點的日期界吃它 —— 近全軸橫跨兩個
+   *  日曆日,拿本機「今天」當界的話夜盤 00:00–05:00 的成交會被判成別天(N043)。 */
+  const anchorDate = useMemo<string | null>(() => {
+    const last = slice[slice.length - 1];
+    return last === undefined ? null : anchorDateOf(last.t);
+  }, [slice]);
+  /** CDP / MA(N042)。**日 K 尚未回 / 錨定日還推不出來 → null**(core 的「未回視為可用」
+   *  不預先反灰);回了但無已完成 bar → 全 null 的 overlay → 兩鈕反灰。兩者不可混為一談。
+   *
+   *  基準日的界吃**這張圖的錨定日**,與 slice / live gate / 成交點同一支 `anchorDateOf`
+   *  —— 不吃 `meta.partial_last`(日曆日口徑,夜盤兩頭破窗且缺欄時失效在不安全側;
+   *  理由全文見 `lib/futures-overlay.ts` 檔頭)。 */
+  const overlay = useMemo(
+    () =>
+      dayQ.data === undefined || anchorDate === null
+        ? null
+        : buildFuturesOverlay(dayQ.data.bars, anchorDate),
+    [dayQ.data, anchorDate],
+  );
+  /** 當日成交點(N043/N070)。比對鍵 = 期交所契約碼(群益回報的期貨單 `stock_no` 放的
+   *  就是它,與 `hlines` 的持倉比對同一把尺);ym 解不出 → `contract` null → 零標記。 */
+  const fills = useMemo(
+    () => (anchorDate === null ? EMPTY_FILLS : alldayFillPoints(orders, contract, anchorDate)),
+    [orders, contract, anchorDate],
+  );
   /** slice 尾往前**第一個索引可解**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
    *
    *  不是「最後一根 bar」:尾巴若是死區分鐘 / 日 K 時戳,那根本來就不進圖,拿它當
@@ -257,8 +290,12 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
           hourTicks={ALLDAY_HOUR_TICKS}
           timeText={alldayHhmmOf}
           hlines={hlines}
-          overlaySupported={false}
-          overlayOffTitle="期貨分時本輪不提供 CDP/MA/成交點"
+          fills={fills}
+          // 疊線走**注入**管道(同 index 態):core 不打 `/api/stock/overlay`(那支吃股號)。
+          // `overlaySupported` 用預設 true —— 期貨有日 K 資料源,「這一天算不出來」由
+          // 全 null 的 overlay 表達(反灰 + 預設 tooltip「無日線資料」),兩件事不合成一個旗標。
+          overlay={overlay}
+          overlayError={dayQ.isError}
           ariaLabel="期貨近全時段分時走勢"
         />
       );

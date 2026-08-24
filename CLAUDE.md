@@ -177,6 +177,15 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   省略 ticks 並回 `tape_omitted: true`;讀者 `frontend/src/hooks/useStockStream.ts::stateUrl`(送 `tape=0`)與
   `lib/stock-accum.ts::fromSnapshot`(讀 `tape_omitted` → `accum.tapeOmitted`,TickTape 空態分流)。漂掉的症狀:
   群組檢視省不到流量 / 切回單檔空態永遠印「尚無成交」。
+- **期貨 CDP/MA 前後端同式**(2026-08-24 起):產生點 `copycat/server/overlay.py::compute_cdp/compute_ma`
+  (+ `build_overlay` 的 `date < today` 界),前端鏡像 `frontend/src/lib/futures-overlay.ts`
+  (期貨分時不打 `/api/stock/overlay` —— 那支吃股號,拿現股 CDP 疊期貨價是假陳述)。
+  **差異白名單 = 前端多一道 `usable()` 0 價閘**(TC4 期貨會送 0 價 bar),連帶 MA 母體在壞 bar
+  時可能與後端不同(視窗前挪)。漂掉的症狀:同一組日 K 的 CDP 在個股頁與期貨頁長不一樣 ——
+  兩張圖都畫得出來、兩組數字都看起來對,零錯誤訊號。因此以**共用 golden fixture**
+  `tests/fixtures/overlay_parity.json`(expected 手算寫死)釘住:後端
+  `tests/server/test_overlay.py::test_overlay_parity_with_frontend` + 前端
+  `frontend/src/lib/overlay-parity.test.ts` 各一條,改壞任一邊只有那一邊紅。
 
 ## 5. 資料源
 

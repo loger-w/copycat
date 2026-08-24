@@ -91,6 +91,16 @@ export interface StockAccum {
    *  「尚無成交」。**必填**(同 noData/trial):選填會讓漏帶靜默成 false = 空態永遠印終態文案。
    *  群組 → 單檔切換時 useStockStream 會補打全量,重建後回到 false。 */
   tapeOmitted: boolean;
+  /** 這份 accum 的 VP 折自**被截斷**的 tick 序列(N087)。後端 `StockDayState.ticks` 是
+   *  `deque(maxlen=20_000)`,>20k tick 的日子(2026-08-21 M0 實測:2609 陽明 29772 筆)
+   *  snapshot 只回最近 20000 筆 → **開盤那一段的量沒進 VP**,單檔頁 POC 與後端增量 VP
+   *  (卡片 / 群組)可能不同檔。
+   *
+   *  **選填**(與 `trial` / `tapeOmitted` 的「必填」紀律刻意不同):唯一產生點是
+   *  `fromSnapshot`,而漏帶的後果是「少一個 tooltip」而不是「印出錯的終態文案」——
+   *  false 是安全側。其餘 accum 來源(期貨 / 指數 adapter、群組 snapshot)本來就不折
+   *  tick,沒有這件事可講。 */
+  vpTruncated?: boolean;
   /** 當日最高 / 最低成交價(毫元,後端 running max/min)。**top-level 不掛 meta** ——
    *  meta 是 TC4 來的靜態盤別資料,把「由成交推導的當日狀態」塞進去語意錯位,
    *  而且只跑過回補、未收 REALTIME 時 meta 為 null,高低照樣要有值 */
@@ -102,6 +112,13 @@ export interface StockAccum {
 }
 
 const TAPE_MAX = 200;
+
+/** 後端 tick deque 的上限(`copycat/live/stock_state.py::_TICKS_MAXLEN`)。snapshot 的
+ *  `ticks` 筆數觸到它 = 更早的成交已被丟掉 → VP 偏小(見 `StockAccum.vpTruncated`)。
+ *
+ *  **不是 §4 那種必須同步改的跨檔契約**:後端若把上限調大,這裡只是不再標示(旗標恆
+ *  false),不會生出錯的陳述 —— 失效方向是「少講一句」而不是「講錯」。 */
+export const VP_TICK_CAP = 20_000;
 
 export function minuteKey(t: string): number {
   return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
@@ -209,6 +226,8 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     noData: snap.no_data ?? false,
     trial: snap.trial ?? false,
     tapeOmitted: snap.tape_omitted ?? false,
+    // 觸頂 = 後端 deque 已丟掉更早的成交(N087)。`tape=0` 的空 ticks 不會命中這條。
+    vpTruncated: srcTicks.length >= VP_TICK_CAP,
     amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
     volume,
   };

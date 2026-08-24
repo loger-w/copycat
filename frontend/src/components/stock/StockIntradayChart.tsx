@@ -43,6 +43,7 @@ import {
   LEVEL_FILL,
   LEVEL_STROKE,
   LOW_DECIDED_PCT,
+  MINUTE_SNAP_RADIUS,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -751,9 +752,17 @@ function XAxisLabels({
  *  「判不出方向」。修完後端判定的根因、又改成紋理之後 user 仍覺得多餘 ——
  *  拍板「不要分顏色,單純顯示量」。內外盤統計沒有消失,只是移出圖形語彙由說明列承載。
  *
- *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 個 `<rect>`,
- *  不可每次重建(對齊 ChartStatic 的慣例)。
- *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
+ *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 個 `<rect>`
+ *  (近全軸 1140 個),不可每次重建(對齊 ChartStatic 的慣例)。
+ *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。
+ *
+ *  **N047(2026-08-24 量測後留原樣)**:memo 擋得住 hover,但擋不住報價 —— 每則 tick 讓
+ *  `accum.minutes` 換 identity → `subEnergy` 重算 → 本層 1140 個 rect 全部重建。
+ *  jsdom 量到滿窗一輪 ~15 ms(隔離的純 rect 層 ~17 ms,即成本幾乎全在這一層;真瀏覽器
+ *  的 diff 快一個量級,且期貨 WS 已 coalesce 到 ≤10 則/s 的量級)—— 與原記載「真環境
+ *  hover 目視未見掉幀」一致,不值得為它換寫法。**要收的話別用「總量當資料版本」**:
+ *  1K 回補可以在總量不變下改寫某一分鐘的量,那種 memo key 會讓副圖靜默停在舊值;
+ *  真正安全的是 EnergySub 改單一 `<path>`(節點數 1140 → 1),留 next-time。 */
 const EnergySub = memo(function EnergySub({
   bars,
   maxTotal,
@@ -872,7 +881,8 @@ interface CoreProps extends Props {
    *
    *  `"futures"` = 期貨近全時段分時:語彙**同 stock**(副圖 / 說明列 / readout 六欄 / VP),
    *  但價位口徑同 index(`fmtIndexPts` —— 期指沒有個股 tick 表)、不打 `/api/stock/overlay`
-   *  (CDP/MA/成交點反灰)、x 軸由 caller 注入(近全三段軸的**索引**當 key)。 */
+   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全三段軸的**索引**當 key),
+   *  且 hover 反演開就近 snap(`MINUTE_SNAP_RADIUS`;1139 個 key 壓一張圖)。 */
   mode?: "stock" | "index" | "futures";
   /** x 軸窗覆寫(key 值域;預設 `stkfut ? STKFUT_WINDOW : SPOT_WINDOW`)。
    *  **必經模組層常數**(identity 穩定)—— 它會一路傳進 `ChartStatic` / `EnergySub` 的 props,
@@ -953,7 +963,8 @@ export function IntradayChartCore({
   // —— 疊線由 caller(`MarketChart`)從 `/api/index/overlay` 注入。
   //
   // 第四道閘 `futures`:期貨的 code 是契約鍵(`TXF.HOT`),同樣既不是股號也不該套現股
-  // 的 CDP/MA —— 本輪期貨分時不提供疊線(caller 傳 `overlaySupported={false}` 讓鈕反灰)。
+  // 的 CDP/MA —— 疊線改由 caller 以**期貨日 K** 算好注入(`lib/futures-overlay.ts`,
+  // 算式與 `server/overlay.py` 逐式相同),與 index 態同一條管道。
   const overlayQ = useStockOverlay(
     index || futures ? null : accum.code || null,
     !index && !futures && !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
@@ -966,17 +977,22 @@ export function IntradayChartCore({
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
 
+  // 近全軸(1139 個 key 壓 ~724px)才開 hover 命中的就近 snap(N046);現貨 / 個股期 /
+  // index 窗的 key 密度本來就一格一格分得開,開了只會讓「這一分鐘沒成交」變得看不出來。
+  // **模組層常數 × 三元式**,不寫魔數也不每 render 造物件(下面 useMemo 的 deps 吃它)。
+  const snapRadius = futures ? MINUTE_SNAP_RADIUS : 0;
   const g = useMemo(
     () =>
       buildIntradayGeometry(
         { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
         { width: w, height: mainH },
         xw,
+        { snapRadius },
       ),
     // w / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
     // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
-    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw],
+    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw, snapRadius],
   );
 
   // 成交點 → SVG 座標(SC-3)。**必經 useMemo**,理由同 `vpBars`:hover 每個 mousemove
@@ -1204,7 +1220,11 @@ export function IntradayChartCore({
     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
   }
 
-  // 期貨態三顆一律反灰(D10):CDP/MA 是現股日線衍生、VP 的折入窗仍是現貨窗。
+  // 期貨(近全軸)態自 R2 起五顆全開:CDP/MA 由 caller 以**期貨日 K** 前端算好注入
+  // (`lib/futures-overlay.ts`;不打 `/api/stock/overlay`,那支吃股號)、成交點的近全軸
+  // 日期界由 `alldayFillPoints` 收(夜盤成交屬前一錨定日)、VP 由 `futuresBarsToAccum`
+  // 自折(不經 `foldVp`,所以現貨窗硬編與期貨態無關)。反灰只剩「資料源真的沒有」那條路。
+  // 個股期(`stkfut`)態維持三顆反灰:它的 accum 走 `foldVp`,分鐘窗仍是現貨窗。
   // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
   //
   // index 態只三顆:量分佈 / 成交點都需要逐筆量或委託,指數兩者皆無。
@@ -1225,13 +1245,21 @@ export function IntradayChartCore({
         { key: "vwap", label: "均價", available: true },
         { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
         { key: "ma", label: "MA", available: !stkfut && maAvailable },
-        // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
-        { key: "vp", label: "量分佈", available: !stkfut },
+        // 價位別成交量沒有外部資料依賴(全由手上的 tick / 1K 折出來),現貨與期貨態恆可用。
+        // `hint`(N087):snapshot 的 tick 已被後端 deque(20k)截斷時,VP 折不到開盤那一段
+        // —— 卡片 / 群組的後端增量 VP 是全日,兩處 POC 可能不同檔。這是**只在那種日子**
+        // 才出現的一句話,不是常態文案(正常日 hint 為 undefined = 無 tooltip)。
+        {
+          key: "vp",
+          label: "量分佈",
+          available: !stkfut,
+          hint: accum.vpTruncated ? "量分佈僅含最近 20000 筆成交(更早的已被截斷)" : undefined,
+        },
         // 成交點同樣零外部資料依賴(orders 已在手上),**個股期態也不反灰**(AD-5):
         // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
-        // futures(近全軸)態反灰:`fillPoints` 現為「今日 ∨ 昨日活單」,近全軸的日期界
-        // (夜盤成交屬前一錨定日)要另做 —— 本輪不提供,反灰 + tooltip 才講得出為什麼。
-        { key: "fills", label: "成交點", available: !futures },
+        // futures(近全軸)態自 R2 起同樣不反灰:日期界改由 `alldayFillPoints` 以錨定日
+        // 相等判定(夜盤 00:00–05:00 的成交屬前一交易日),caller 折好後由 `fills` 傳入。
+        { key: "fills", label: "成交點", available: true },
       ];
 
   const body = (
@@ -1317,7 +1345,9 @@ export function IntradayChartCore({
         ) : null}
         {/* hover 十字 + 軸標籤(SC-7)。
             分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
-            垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
+            垂直線與資料點需要資料,缺就不畫(白名單 2:現貨 / index 窗 `minuteOf` 不 snap
+            最近;近全軸例外,見 `snapRadius` —— 那裡 1px ≈ 1.6 個 key,不 snap 等於整片
+            退化,而 snap 的位移小於一顆游標熱點)。 */}
         {hover !== null ? (
           <g pointerEvents="none">
             {hoverMin !== null && hoverAgg ? (

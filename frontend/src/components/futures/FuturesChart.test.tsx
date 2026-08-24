@@ -64,6 +64,10 @@ const EMPTY_OI: OiLevelsResponse = { date: null, contract: null, strikes: [] };
 
 let barsUrls: string[] = [];
 let barsBody: unknown;
+/** `tf=D` 的回應(疊線 N042 的資料源;日 K 模式與分時模式共用同一支 query)。
+ *  與 `barsBody` 分兩份:分時態下兩支 query 同時在跑,共用一份就分不出誰吃到什麼。 */
+let barsDayBody: unknown;
+let ordersBody: unknown;
 let oiBody: unknown;
 let oiStatus: number;
 let positionsBody: unknown;
@@ -124,6 +128,8 @@ beforeEach(() => {
   window.localStorage.clear();
   barsUrls = [];
   barsBody = { bars: [], meta: META };
+  barsDayBody = { bars: [], meta: META };
+  ordersBody = { orders: [] };
   oiBody = EMPTY_OI;
   oiStatus = 200;
   positionsBody = { positions: [] };
@@ -133,7 +139,10 @@ beforeEach(() => {
       const u = String(url);
       if (u.includes("/api/market/bars")) {
         barsUrls.push(u);
-        return new Response(JSON.stringify(barsBody));
+        return new Response(JSON.stringify(u.includes("tf=D") ? barsDayBody : barsBody));
+      }
+      if (u.includes("/api/capital/orders")) {
+        return new Response(JSON.stringify(ordersBody));
       }
       if (u.includes("/api/futures/oi-levels")) {
         return new Response(JSON.stringify(oiBody), { status: oiStatus });
@@ -289,24 +298,24 @@ describe("FuturesChart 分時圖 core 語彙", () => {
     expect(screen.getAllByTestId("y-tick-price").length).toBe(3);
   });
 
-  it("SC-4 成交量副圖 + 說明列 + toggle 五顆(CDP / MA / 成交點 反灰)+ VP", async () => {
+  it("SC-4 成交量副圖 + 說明列 + toggle 五顆(無日 K 時只有 CDP / MA 反灰)+ VP", async () => {
     const { container } = renderCore();
     await findIntraday();
     expect(container.querySelector('svg[aria-label="成交量"]')).toBeTruthy();
     expect(container.querySelector("figcaption")).toBeTruthy();
+    // R2 起 CDP/MA 由**期貨日 K** 注入、成交點吃近全軸日期界 —— 本案的 `barsDayBody`
+    // 是空日 K(預設),所以只有 CDP/MA 反灰,成交點與量分佈可按。
     const defs: readonly (readonly [string, boolean])[] = [
       ["均價", false],
       ["CDP", true],
       ["MA", true],
       ["量分佈", false],
-      ["成交點", true],
+      ["成交點", false],
     ];
     for (const [name, off] of defs) {
       const btn = screen.getByRole("button", { name });
-      expect(btn.hasAttribute("disabled")).toBe(off);
-      if (off) {
-        expect(btn.getAttribute("title")).toBe("期貨分時本輪不提供 CDP/MA/成交點");
-      }
+      await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(off));
+      if (off) expect(btn.getAttribute("title")).toBe("無日線資料");
     }
     expect(container.querySelectorAll('[data-testid="vp-bar"]').length).toBeGreaterThanOrEqual(1);
   });
@@ -368,7 +377,8 @@ describe("FuturesChart 背景輪詢 gate(LF-2)", () => {
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" active={false} />);
     await vi.advanceTimersByTimeAsync(0);
     const before = barsUrls.length;
-    expect(before).toBe(1);
+    // 2 = 分時 `tf=1` + 疊線 `tf=D`(日 K 那支 staleTime Infinity,不進輪詢)
+    expect(before).toBe(2);
     await vi.advanceTimersByTimeAsync(180_000);
     expect(barsUrls.length).toBe(before);
   });
@@ -605,5 +615,161 @@ describe("FuturesChart 分時模式的 overlays(SC-7 / SC-11;與 K 線同一套�
     expect(screen.queryByText("壓 21000")).toBeNull();
     expect(screen.queryByText("撐 21000")).toBeNull();
     expect(screen.getAllByTestId("chart-hline").length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2:CDP/MA 疊線(N042)與近全軸成交點(N043/N070)的接線
+// ---------------------------------------------------------------------------
+
+/** 日 K fixture:末根為當日 partial(`partial_last: true`)→ 基準退到 08-20 那根。
+ *  H 23100 / L 22900 / C 23000 → cdp 23000、nh 23100、nl 22900(ah/al ±200 在域外)。
+ *  **已完成的根數 = 5**(ma5 算得出來;ma20 恆 null,MA 鈕只要一邊有值就可按)。 */
+const DAY_BARS: Bar[] = [
+  { t: "2026-08-15", o: 22_990_000, h: 23_000_000, l: 22_980_000, c: 22_990_000, v: 1 },
+  { t: "2026-08-16", o: 22_990_000, h: 23_000_000, l: 22_980_000, c: 22_990_000, v: 1 },
+  { t: "2026-08-17", o: 22_990_000, h: 23_000_000, l: 22_980_000, c: 22_990_000, v: 1 },
+  { t: "2026-08-19", o: 22_800_000, h: 22_900_000, l: 22_700_000, c: 22_800_000, v: 1 },
+  { t: "2026-08-20", o: 23_000_000, h: 23_100_000, l: 22_900_000, c: 23_000_000, v: 1 },
+  { t: "2026-08-21", o: 23_000_000, h: 23_500_000, l: 22_000_000, c: 23_400_000, v: 1 },
+];
+
+/** 分時 fixture:錨定日 2026-08-21、日盤兩根 + 夜盤一根。 */
+const INTRA_BARS: Bar[] = [
+  bar("2026-08-21 09:00", 23_000_000),
+  bar("2026-08-21 09:01", 23_010_000),
+  bar("2026-08-21 22:00", 22_990_000),
+];
+
+function futFill(over: Record<string, unknown> = {}) {
+  return {
+    seq_no: "F1",
+    stock_no: "TXFH6", // futExchangeContract("TXF", "202608")
+    name: "臺股期貨",
+    market: "TF",
+    buy_sell: "B",
+    flag_label: null,
+    book_no: null,
+    status_raw: "0",
+    status_label: "完全成交",
+    price: 23_000,
+    avg_fill_price: 23_000,
+    order_qty: 1,
+    filled_qty: 1,
+    unit: "口",
+    date: "20260821",
+    time: "09:00:30",
+    pre_order: false,
+    error_msg: null,
+    actionable: false,
+    price_type: null,
+    raw: "",
+    ...over,
+  };
+}
+
+describe("FuturesChart 疊線 CDP/MA(N042)", () => {
+  beforeEach(() => {
+    barsBody = { bars: INTRA_BARS, meta: META };
+    barsDayBody = { bars: DAY_BARS, meta: { ...META, partial_last: true } };
+  });
+
+  it("分時模式也打 tf=D(疊線資料源;日 K 模式共用同一份 query)", async () => {
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() => expect(barsUrls).toContain("/api/market/bars/TXF?tf=D"));
+  });
+
+  it("CDP / MA 兩鈕可按,畫出域內疊線(基準 = 前一交易日,partial 末根剔除)", async () => {
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    // `useChartToggles` 的 cdp 預設**開** → 不點按鈕(點下去是關掉)
+    const cdpBtn = await screen.findByRole("button", { name: "CDP" });
+    await waitFor(() => expect(cdpBtn.hasAttribute("disabled")).toBe(false));
+    expect(screen.getByRole("button", { name: "MA" }).hasAttribute("disabled")).toBe(false);
+    // 疊線基準日 = 08-20(08-21 那根是 partial_last)
+    await waitFor(() =>
+      expect(container.querySelector("figcaption")!.textContent).toContain("疊線基準 2026-08-20"),
+    );
+    // cdp 23000 / nh 23100 / nl 22900 在 y 域內 → 至少一條疊線虛線
+    expect(container.querySelectorAll("line[stroke-dasharray='3 2']").length).toBeGreaterThan(0);
+    // 關掉 CDP → 線與基準日字樣一起消失(證明畫的是這一份注入的 overlay)
+    fireEvent.click(cdpBtn);
+    await waitFor(() =>
+      expect(container.querySelectorAll("line[stroke-dasharray='3 2']").length).toBe(0),
+    );
+  });
+
+  it("TC4 日 K 末根標成次一交易日(夜盤成形)→ 基準仍是圖上錨定日的前一交易日", async () => {
+    // 圖的錨定日 = 08-21(`INTRA_BARS` 末根 22:00)。日 K 末根被 TC4 標成 08-22 且
+    // 後端 `partial_last`(末根日期 == 日曆今日)= false —— 舊判準(信 meta)一根都不剔,
+    // 基準會跳到 08-22 這個**尚未發生的交易日**。基準日判準吃的必須是圖上錨定日。
+    barsDayBody = {
+      bars: [...DAY_BARS, { t: "2026-08-22", o: 1, h: 99_000_000, l: 1, c: 50_000_000, v: 1 }],
+      meta: { ...META, partial_last: false },
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() =>
+      expect(container.querySelector("figcaption")!.textContent).toContain("疊線基準 2026-08-20"),
+    );
+  });
+
+  it("已完成日 K 不足 5 根 → CDP 可按、MA 反灰(兩鈕各自看自己那份資料)", async () => {
+    barsDayBody = { bars: DAY_BARS.slice(-3), meta: { ...META, partial_last: true } };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    const maBtn = await screen.findByRole("button", { name: "MA" });
+    await waitFor(() => expect(maBtn.hasAttribute("disabled")).toBe(true));
+    expect(screen.getByRole("button", { name: "CDP" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("日 K 空(TC4 未回)→ CDP / MA 反灰,不硬畫", async () => {
+    barsDayBody = { bars: [], meta: { ...META, source: "unavailable", partial_last: false } };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    const cdpBtn = await screen.findByRole("button", { name: "CDP" });
+    await waitFor(() => expect(cdpBtn.hasAttribute("disabled")).toBe(true));
+    expect(cdpBtn.getAttribute("title")).toBe("無日線資料");
+  });
+});
+
+describe("FuturesChart 近全軸成交點(N043/N070)", () => {
+  beforeEach(() => {
+    barsBody = { bars: INTRA_BARS, meta: META };
+    barsDayBody = { bars: DAY_BARS, meta: { ...META, partial_last: true } };
+  });
+
+  it("成交點鈕不再反灰;當日成交畫在對應的軸索引上", async () => {
+    ordersBody = { orders: [futFill()] };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    const btn = await screen.findByRole("button", { name: "成交點" });
+    expect(btn.hasAttribute("disabled")).toBe(false);
+    // 09:00 → 軸索引 14(日盤段 0846 起)
+    await waitFor(() => expect(screen.getByTestId(`fill-B-${alldayIndexOf("0900")!}`)).toBeTruthy());
+  });
+
+  it("**次一日曆日凌晨的成交**(01:00)仍畫在本錨定日的夜盤段", async () => {
+    ordersBody = { orders: [futFill({ date: "20260822", time: "01:00:30", buy_sell: "S" })] };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() => expect(screen.getByTestId(`fill-S-${alldayIndexOf("0100")!}`)).toBeTruthy());
+  });
+
+  it("別的錨定日(次日日盤)的成交不畫", async () => {
+    ordersBody = { orders: [futFill({ date: "20260822", time: "09:00:30" })] };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() => expect(screen.getByRole("button", { name: "成交點" })).toBeTruthy());
+    expect(container.querySelectorAll('[data-testid^="fill-"]').length).toBe(0);
+  });
+
+  it("合約未解析(resolvedYm null)→ 零標記(不拿 null 去比對 stock_no)", async () => {
+    ordersBody = { orders: [futFill()] };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm={null} />);
+    await findIntraday();
+    await waitFor(() => expect(screen.getByRole("button", { name: "成交點" })).toBeTruthy());
+    expect(container.querySelectorAll('[data-testid^="fill-"]').length).toBe(0);
   });
 });

@@ -94,7 +94,8 @@ afterEach(() => {
 
 type CoreProps = Parameters<typeof IntradayChartCore>[0];
 
-/** 與 `FuturesChart` 的實際用法同一組 props(overlaySupported=false → CDP/MA 恆反灰)。 */
+/** 與 `FuturesChart` 的實際用法同一組 props。
+ *  `overlaySupported={false}` = 日 K 回了但無已完成 bar(N042 後 CDP/MA 的反灰路徑)。 */
 function renderFut(over: Partial<CoreProps> = {}) {
   return wrap(
     <IntradayChartCore
@@ -108,7 +109,6 @@ function renderFut(over: Partial<CoreProps> = {}) {
       timeText={alldayHhmmOf}
       hlines={HLINES}
       overlaySupported={false}
-      overlayOffTitle="期貨分時本輪不提供 CDP/MA/成交點"
       ariaLabel="期貨近全時段分時走勢"
       {...over}
     />,
@@ -148,15 +148,14 @@ describe("IntradayChartCore mode=\"futures\"", () => {
     expect(container.querySelector("figure")).toBeTruthy();
   });
 
-  it("toggle 五顆:均價 / 量分佈 可按,CDP / MA / 成交點 反灰 + overlayOffTitle", () => {
+  it("toggle 五顆:均價 / 量分佈 / **成交點** 可按;無日 K 時只有 CDP / MA 反灰(N043/N070)", () => {
     const { container } = renderFut();
     const btns = [...container.querySelectorAll("button")];
     expect(btns.map((b) => b.textContent)).toEqual(["均價", "CDP", "MA", "量分佈", "成交點"]);
-    expect(btns[0]!.hasAttribute("disabled")).toBe(false);
-    expect(btns[3]!.hasAttribute("disabled")).toBe(false);
-    for (const i of [1, 2, 4]) {
+    for (const i of [0, 3, 4]) expect(btns[i]!.hasAttribute("disabled")).toBe(false);
+    for (const i of [1, 2]) {
       expect(btns[i]!.hasAttribute("disabled")).toBe(true);
-      expect(btns[i]!.getAttribute("title")).toBe("期貨分時本輪不提供 CDP/MA/成交點");
+      expect(btns[i]!.getAttribute("title")).toBe("無日線資料");
     }
   });
 
@@ -249,7 +248,7 @@ describe("IntradayChartCore mode=\"futures\"", () => {
     expect(screen.getByText("無分時資料")).toBeTruthy();
   });
 
-  it("不打 /api/stock/overlay(TXF.HOT 不是股號;CDP/MA 本輪不提供)", async () => {
+  it("不打 /api/stock/overlay(TXF.HOT 不是股號;疊線一律由 caller 注入)", async () => {
     renderFut();
     await waitFor(() => expect(screen.getByTestId("chart-readout")).toBeTruthy());
     expect(fetchMock).not.toHaveBeenCalled();
@@ -493,5 +492,166 @@ describe("IntradayChartCore mode=\"futures\" 的 VWAP 標籤與 hline label(N045
     const text = screen.getAllByTestId("chart-hline")[0]!.querySelector("text")!;
     expect(Number(text.getAttribute("y"))).toBeCloseTo(g.toY(23_100_000) - 3, 6);
     expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R2:期貨態疊線注入(N042)/ 成交點(N043+N070)/ hover 命中(N046)/ VP·POC(N096)
+// ---------------------------------------------------------------------------
+
+/** 域 [22747, 23253](見 BARS 上方推導):ah 23300 域外、nh 23100 與 cdp 23000 域內。 */
+const OVERLAY = {
+  cdp: { cdp: 23_000_000, ah: 23_300_000, nh: 23_100_000, nl: 22_900_000, al: 22_700_000 },
+  ma5: 23_050_000,
+  ma20: null,
+  date: "2026-08-21",
+};
+
+/** 模組層常數(identity 穩定,同 hlines) */
+const FILLS = [
+  { minute: IDX_0900, priceMilli: 23_050_000, side: "B" as const, qty: 2 },
+  { minute: IDX_1501, priceMilli: 22_960_000, side: "S" as const, qty: 1 },
+];
+
+describe("mode=\"futures\" 的疊線注入(N042)", () => {
+  it("overlay 注入 + supported → CDP/MA 可按,域內的線畫得出來(域外的 ah 不畫)", () => {
+    const { container } = renderFut({ overlay: OVERLAY, overlaySupported: true });
+    const btns = [...container.querySelectorAll("button")];
+    expect(btns[1]!.hasAttribute("disabled")).toBe(false); // CDP
+    expect(btns[2]!.hasAttribute("disabled")).toBe(false); // MA
+    // 五條 CDP 中 nh / cdp / nl 在域內,ah / al 域外;ma5 在域內 → 共 4 條
+    const dashed = [...container.querySelectorAll("line[stroke-dasharray='3 2']")];
+    expect(dashed.length).toBe(4);
+  });
+
+  it("右緣 CDP 價位標走整數點口徑 + `*`,MA 價位標走同一把尺(不是個股 tick snap)", () => {
+    renderFut({ overlay: OVERLAY, overlaySupported: true });
+    expect(screen.getByTestId("edge-price-ma5").textContent).toBe(fmtIndexPts(23_050_000));
+    const band = screen.getAllByText(/\*$/).map((t) => t.textContent);
+    expect(band).toContain(`${fmtIndexPts(23_100_000)}*`);
+  });
+
+  it("overlay = null(日 K 尚未回)→ 不預先反灰、也不畫線", () => {
+    const { container } = renderFut({ overlay: null, overlaySupported: true });
+    const btns = [...container.querySelectorAll("button")];
+    expect(btns[1]!.hasAttribute("disabled")).toBe(false);
+    expect(container.querySelectorAll("line[stroke-dasharray='3 2']").length).toBe(0);
+  });
+
+  it("overlayError(日 K 查詢失敗)→ CDP/MA 反灰", () => {
+    const { container } = renderFut({ overlay: OVERLAY, overlaySupported: true, overlayError: true });
+    const btns = [...container.querySelectorAll("button")];
+    expect(btns[1]!.hasAttribute("disabled")).toBe(true);
+    expect(btns[2]!.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("疊線基準日印在說明列(與個股頁同一句)", () => {
+    const { container } = renderFut({ overlay: OVERLAY, overlaySupported: true });
+    expect(container.querySelector("figcaption")!.textContent).toContain("疊線基準 2026-08-21");
+  });
+});
+
+describe("mode=\"futures\" 的成交點(N043/N070)", () => {
+  it("fills 注入 → 買 ▲ / 賣 ▼ 落在近全軸索引上", () => {
+    const { container } = renderFut({ fills: FILLS });
+    expect(container.querySelectorAll('[data-testid^="fill-"]').length).toBe(2);
+    const buy = screen.getByTestId(`fill-B-${IDX_0900}`);
+    // 三角尖端 x = minuteToX(軸索引)(常態寬度下 clampFillX 是 no-op)
+    expect(buy.getAttribute("points")!.split(",")[0]).toBe(
+      String(minuteToX(IDX_0900, VB.width, ALLDAY_WINDOW)),
+    );
+    expect(screen.getByTestId(`fill-S-${IDX_1501}`)).toBeTruthy();
+  });
+
+  it("toggle 關 → 整層零標記(層本身仍在)", () => {
+    const { container } = renderFut({ fills: FILLS, toggles: { ...TOGGLES, fills: false } });
+    expect(container.querySelectorAll('[data-testid^="fill-"]').length).toBe(0);
+    expect(screen.getByTestId("fills-layer")).toBeTruthy();
+  });
+
+  it("readout 追加「成交」欄(hover 到有成交的那一格)", () => {
+    const { container } = renderFut({ fills: FILLS });
+    const svg = container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(IDX_0900, VB.width, ALLDAY_WINDOW), clientY: 100 });
+    const readout = screen.getByTestId("chart-readout");
+    expect(readout.children[6]!.textContent).toContain("買 2@");
+  });
+});
+
+describe("mode=\"futures\" 的 hover 命中(N046)", () => {
+  /** 09:01(索引 15)沒有 bar —— 現貨態的規則是整段退化(十字垂直線不畫)。 */
+  const IDX_0901 = IDX_0900 + 1;
+
+  it("落在無 bar 的相鄰索引 → 命中最近有 bar 的那一分鐘(垂直線 x = 該分鐘)", () => {
+    const { container } = renderFut();
+    const svg = container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(IDX_0901, VB.width, ALLDAY_WINDOW), clientY: 100 });
+    expect(screen.getByTestId("crosshair-v").getAttribute("x1")).toBe(
+      String(minuteToX(IDX_0900, VB.width, ALLDAY_WINDOW)),
+    );
+    expect(screen.getByTestId("time-tag-text").textContent).toBe("09:00");
+  });
+
+  it("離最近的 bar 超過閾值 → 維持既有退化(水平量尺在、垂直線不畫)", () => {
+    const { container } = renderFut();
+    const svg = container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')!;
+    fireEvent.mouseMove(svg, {
+      clientX: minuteToX(IDX_0900 + 20, VB.width, ALLDAY_WINDOW),
+      clientY: 100,
+    });
+    expect(screen.queryByTestId("crosshair-v")).toBeNull();
+    expect(screen.getByTestId("crosshair-h")).toBeTruthy();
+  });
+
+  it("stock 態不 snap(W-1:同一個相鄰空分鐘仍退化)", () => {
+    const acc = fromSnapshot({
+      code: "2330",
+      seq: 1,
+      last: { p: 2_380_000, t: "09:00:30.000", cum_vol: 10 },
+      vwap: 2_380_000,
+      minutes: { "540": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+      ticks: [],
+      book: null,
+      meta: { name: "台積電", ref: 2_380_000, upper: 2_550_000, lower: 2_090_000, y_vol: 1 },
+    });
+    const { container } = wrap(
+      <IntradayChartCore accum={acc} toggles={TOGGLES} onToggle={() => {}} variant="page" />,
+    );
+    const svg = container.querySelector('svg[aria-label="分時走勢圖"]')!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(541, VB.width, SPOT_WINDOW), clientY: 100 });
+    expect(screen.queryByTestId("crosshair-v")).toBeNull();
+  });
+});
+
+describe("mode=\"futures\" 的 VP / POC(N096 characterization)", () => {
+  it("POC = 域內量最大的價位帶,highlight + 價位標(語彙同現貨)", () => {
+    const { container } = renderFut();
+    const bars = [...container.querySelectorAll('[data-testid="vp-bar"]')];
+    const poc = bars.filter((b) => b.getAttribute("class") === "fill-accent");
+    expect(poc.length).toBe(1);
+    // BARS 的量:08:46 120 / 09:00 80 / 15:01 60 → POC = 23000 那一桶。
+    // 標籤字面是**桶心**「23002.5」不是檔位價「23000」:期貨 vp 的 key 由
+    // `futuresBarsToAccum` 取 `snapDown(c) + tickOf(c)/2`(帶界才與桶區間一致)。
+    // 這是既有行為,本輪只釘住不改(要改屬另案:期貨 POC 標籤印檔位價)。
+    expect(screen.getByTestId("vp-poc-label").textContent).toBe("23002.5");
+  });
+
+  it("量分佈 toggle 關 → 整組長條與 POC 標都消失", () => {
+    const { container } = renderFut({ toggles: { ...TOGGLES, vp: false } });
+    expect(container.querySelectorAll('[data-testid="vp-bar"]').length).toBe(0);
+    expect(screen.queryByTestId("vp-poc-label")).toBeNull();
+  });
+});
+
+describe("VP 折入來源被截斷的標示(N087)", () => {
+  it("accum.vpTruncated → 量分佈鈕 tooltip 講明只含最近 20000 筆", () => {
+    const { container } = renderFut({ accum: { ...FUT, vpTruncated: true } });
+    const vpBtn = [...container.querySelectorAll("button")][3]!;
+    expect(vpBtn.getAttribute("title")).toContain("20000");
+  });
+
+  it("未截斷 → 無 tooltip(不對正常日多講一句)", () => {
+    const { container } = renderFut();
+    expect([...container.querySelectorAll("button")][3]!.getAttribute("title")).toBeNull();
   });
 });

@@ -1,3 +1,36 @@
+## 2026-08-24(mod/futures-intraday-features two-axis 留尾)
+
+review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture / `splitCapitalStamp` /
+全形括號);以下為刻意不做的:
+
+- [ ] **J1:`IntradayChartCore` 的 mode 四態(stock / index / futures / stkfut)分歧散在五處**
+  —— x 窗 `xw`、`snapRadius`、`vpEnabled` + 副圖能量、疊線三元組
+  (`overlay` / `overlayFailed` / `supported`)、五顆 toggle 的 `available` / `hint` + 空態文案。
+  每加一個 mode 就要記得五處都改,漏改的樣態是「新 mode 沿用了現貨窗的預設」——
+  圖照畫、只是對位或可用性靜默錯掉,零測試會紅。候選 = **per-mode capability 表**
+  (一個 `Record<Mode, Capability>`,五處各自查表),分歧收在一個地方讀得完。
+- [ ] **J2:`MINUTE_SNAP_RADIUS` 與 `XWindow` 常數不同源**:snap 半徑是「幾個 key」,
+  而 key 的語意由當前 `XWindow` 決定(現貨窗 = 分鐘、近全軸 = 軸索引)。兩者分開放的話,
+  換窗時半徑的實際涵蓋範圍跟著變而沒有任何提示。候選 = 併進 `XWindow`(每個窗自帶
+  預設 snap 半徑),`buildIntradayGeometry` 的 `opts.snapRadius` 退成覆寫。
+- [ ] **期貨日 K `staleTime: Infinity` 跨日不重抓 → 基準日停在昨天**
+  (`hooks/useFuturesBars.ts:61`):疊線資料源與日 K 模式共用同一份 query,`Infinity` 讓它
+  「一天只打一次」—— 但 preview 整天掛著(看盤日常,CLAUDE.md §1)跨過午夜後那份 cache
+  不會失效,新交易日的圖會拿**前一天的**基準日畫疊線。本輪的錨定日判準只保證「不畫到
+  未來 / 當前這一節」,對「停在更早的一天」無感(那正是它刻意的安全側)。候選 = staleTime
+  改吃「到下一個交易日切換點」的毫秒數,或 queryKey 帶交易日。**現象輕微但整天掛著必中**。
+- [ ] **`o.date` 的夜盤跨午夜組合假設未證**(`lib/fill-marks.ts::alldayFillPoints`):
+  群益回報的 `date` 是**最新事件日**,而近全軸把 `date + time` 組成時戳後丟給 `anchorDateOf`
+  —— 這假設了「夜盤 01:00 的成交,`date` 已是次一日曆日」。若群益實際回的是委託所屬交易日
+  (即 01:00 成交仍記前一日),`anchorDateOf` 會再退一天 → 該筆成交**靜默不畫**。
+  失效在安全側(不畫 < 畫錯分鐘),故本輪不猜。待**真夜盤成交一筆**取證後決定是否改判準。
+- [ ] **`EnergySub` 改單一 `<path>`**(N047 量測後的真正收法,verification §N047):
+  1140 個 `<rect>` → 1 個 path,節點數降三個量級。**不走「資料版本 memo key」**——
+  1K 回補可以在總量不變下改寫某一分鐘的量,以總量當版本會讓副圖靜默停在舊值(用錯誤換效能)。
+- [ ] **期貨 POC 標籤印桶心 `23002.5` 而非檔位價 `23000`**:`futuresBarsToAccum` 以近全軸
+  自折 VP(不經 `foldVp`),桶心落在兩檔之間。待 user 表態(verification 待驗項 4)後再定
+  —— 改印檔位價要先決定「桶跨多檔時算哪一檔」,不是純顯示改動。
+
 ## 2026-08-24(mod/chart-label-batch two-axis 留尾)
 
 review 收修已出貨(N007 讓位方向 / 界單位 / N044 補完 / 三處斷言字面量 / helper 抽取);
