@@ -1,0 +1,65 @@
+{
+ "round": 1,
+ "lenses": [
+  "two-axis standards(opus)",
+  "two-axis spec(opus)"
+ ],
+ "findings": [
+  {
+   "id": "SP1",
+   "severity": "P1",
+   "summary": "N042 基準日信 meta.partial_last(日曆日判準)夜盤兩頭破窗;meta 缺欄位 fallback 落不安全側",
+   "disposition": "accepted",
+   "resolution": "改圖上 anchorDate 過濾(對齊後端 date<today);紅 7→綠 49"
+  },
+  {
+   "id": "ST1",
+   "severity": "P2",
+   "summary": "前後端 CDP/MA 同式屬跨檔契約未登記 §4、無 parity fixture",
+   "disposition": "accepted",
+   "resolution": "CLAUDE.md §4 新條 + tests/fixtures/overlay_parity.json 兩邊各一測(oracle 咬合已證)"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2",
+   "summary": "「逐式相同」註解假陳述(前端多 usable() 0 價閘)",
+   "disposition": "accepted",
+   "resolution": "檔頭註解更正,MA 母體差異寫明"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "N042 日盤/近全口徑拍板未落檔",
+   "disposition": "accepted",
+   "resolution": "change-spec 拍板記錄:DK 日盤慣例"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2",
+   "summary": "J3 fill-marks 六次字串切割",
+   "disposition": "accepted",
+   "resolution": "抽 splitCapitalStamp(🔵)"
+  },
+  {
+   "id": "ST4",
+   "severity": "P2",
+   "summary": "J1 mode 四態分歧五處 / J2 snapRadius 歸屬",
+   "disposition": "accepted",
+   "resolution": "入 next-time 留尾"
+  },
+  {
+   "id": "SP3",
+   "severity": "P2",
+   "summary": "期貨日 K staleTime Infinity 跨日基準日停昨;o.date 夜盤組合假設未證",
+   "disposition": "accepted",
+   "resolution": "入 next-time 留尾(staleTime 建議下輪)"
+  },
+  {
+   "id": "ST5",
+   "severity": "P2",
+   "summary": "全形括號 nit",
+   "disposition": "accepted",
+   "resolution": "改半形"
+  }
+ ]
+}
