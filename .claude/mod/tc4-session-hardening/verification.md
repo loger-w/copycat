@@ -192,3 +192,99 @@ TC4 端 `grep "<symbol>|REALTIME|" QuoteZMQService-*.log` 在換日前後應看�
   回報。
 - **自選**:PUT / Discord `/watch` 的回應在 TC4 半死時應比以前快(N111);連續快速改
   兩次自選,最終畫面必須是**後改的那一份**(N111 的 `_superseded` 守的就是這條)。
+
+---
+
+## §7 review round 1 收修
+
+逐條處置(接受 / 變形 / 申報)寫在 change-spec §4;本節只放證據與偏離記錄。
+
+### 7.1 commits
+
+| # | 類 | 主旨 | 涵蓋 |
+|---|---|---|---|
+| 5 (`4dcd894c`) | 🔴 | `fix(backend): review R1 P1 —— 自選退訂洩漏與換日 ZMQ 佔 loop` | ST1 / SP3 / SP1 |
+| 6 (`a10fecd6`) | 🔴 | `fix(dq4): review R1 P2 —— 窗位移避開自癒階梯、收工不發布在途連線、重武裝不清價、作廢回補不送 SUBQUOTE` | SP2 / ST7 / ST2 / SP4 / SP5 / ST3 / ST6 / SP6 |
+| 7 | chore | `chore(docs): R8 review round 1 逐條處置與證據` | change-spec §4 / verification §7 |
+
+### 7.2 紅態證據
+
+一次跑齊(實作前):
+
+```
+pytest tests/server/test_stock_engine.py tests/live/test_tc4.py \
+       tests/server/test_index_engine.py tests/server/test_futures_engine.py \
+       tests/server/test_watchlist_service.py \
+       -k "WatchlistSupersededRelease or RolloverStageOneOffLoop or
+           SpotOffsetOutsideTheVariantLadder or EnsureConnectedShutdownRace or
+           RetrySupersededSideEffects or index_rollover_switches or
+           ReconnectLeafRearmKeepsPrice or SettleMissingSeq"
+→ 14 failed, 7 passed
+```
+
+| review 條 | 紅態訊息 |
+|---|---|
+| ST1 / SP3 | `test_superseded_call_leaves_no_orphan_watchlist_ref` → `退訂洩漏:5483`(舊發被 superseded 後 `"watchlist"` ref 真的留著) |
+| SP1(stock) | `test_source_date_switch_does_not_run_on_the_loop_thread` → `換日的 ZMQ REQ 跑在 event loop 上` |
+| SP1(index) | `test_index_rollover_switches_the_source_date_off_the_loop` → 同上 |
+| SP2 / ST7 | `test_futures_and_txo_ladders_never_collide` 四把 base 窗**全部**紅(`兩條階梯撞窗`)+ `test_offset_clears_the_variant_cycle` 紅 |
+| ST2 | `test_connect_finishing_after_stop_is_disposed_not_published` → 在途連線被發布出去、替身 `disconnected` 仍為 False |
+| SP4 | `test_reconnect_keeps_the_leaf_fed_price_visible` → `重連把使用者看的價清空了` |
+| SP5 | `TestRetrySupersededSideEffects` 三條紅(`_retry_epoch` / epoch 參數不存在) |
+| ST3 | `test_changed_without_seq_is_logged_as_error` → `assert 0 == 1`(零 log) |
+
+綠態:同一組 `-k` 全綠(見 7.3 的全量數字)。
+
+### 7.3 gate 重跑
+
+| gate | 結果 |
+|---|---|
+| `-m pytest -q` | **3031 passed, 1 warning in 177.05s(round 0 為 3010 → +21)** |
+| `-m ruff check copycat tests` | **All checks passed!** |
+| `-m pyright` | **0 errors, 0 warnings, 0 informations** |
+| `-m copycat validate` | **42/42 PASS** |
+| `run.ps1` PowerShell Parser | **parse OK, no errors** |
+| frontend | 未動 → 不適用 |
+
+### 7.4 偏離記錄(ST4)
+
+round 0 的 `334c9578` 把兩處自標 🔵 的 log-only 改動(`stock_source.backfill` /
+`tc4._fetch_symbol_ticks` 的 stub 簽名)與 run.ps1 尾行空白,併進了 🔴 commit。
+**不重寫歷史**(review 明示),在此記錄偏離:兩處與同檔的 🔴 hunk 相鄰、拆出來要動
+同一個函式的相鄰行。下不為例 —— 之後 log-only / 純註解的改動即使相鄰也先落一顆 🔵。
+
+本輪(round 1)的兩顆 🔴 內**沒有**純 🔵 改動:river 的刪 warning(ST6)是行為改動
+(那一行不再印),`_settle` 的 `logger.error`(ST3)是新增訊號,均屬 🔴。
+
+### 7.5 該變清單(round 1 新增)
+
+| 測試 | 改動 | 事前理由 |
+|---|---|---|
+| `test_rollover_stage1_does_not_block_event_loop` | `assert "2026-07-22" in src.trade_dates`(同步段)→ `not in` + 背景段跑完後才 `in` | SP1:換窗下沉到 worker,同步段就**不該**再碰 source;順序另由新測試釘住 |
+| `test_all_rows_dropped_raises_history_timeout` | `assert "疑似凍結 stub" in caplog.text` → 斷言例外訊息 + `not in caplog.text` | ST6:同一件事不印兩次,判準搬到例外訊息 |
+| `test_worker_does_not_write_shared_dicts` | 直呼前補 `eng._loop = get_running_loop()` | SP5 的副作用閘看 `_loop`;直呼要自己備妥 |
+| `test_trading_day_arms_stage1` | `wait_until(_pending_date)` → `wait_until(src.trade_dates)` | SP1:`_pending_date` 仍同步、換窗已下沉 —— 等前者再讀後者是真競賽(**全量跑時真的踩到一次紅**,單檔跑僥倖綠) |
+
+### 7.6 沒做成的(申報)
+
+**SP6 的一半**:PowerShell 5.1 沒有安全的「對別的 process 送 Ctrl+C」——
+`AttachConsole` + `GenerateConsoleCtrlEvent` 會連本 shell 自己的 handler 一起打到
+(整支腳本會被自己送出的 Ctrl+C 中斷);backend 也沒有 HTTP 關機端點,而 review 明講
+「不存在就別發明」。**做了的那半**:區分兩條退出路徑,「frontend 先退」不再白等一輪
+timeout(直接硬殺 + 黃字說明 TC4 session 會留到 reap)。留尾方向見 change-spec §4 SP6。
+
+### 7.7 §6.6 畫面過目更新(取代 round 0 的說法)
+
+**期貨面重連時價格不會再空一格**(SP4:重武裝改用 `_leaf_rearm` 集合,`st.p` 不動)。
+若仍觀察到重連後期貨價短暫空白,那**不是**本輪的預期行為,請回報。
+其餘 §6 各條不變。
+
+### 7.8 新增留尾
+
+- **ST5**:`corr_engine._handle_reconnect` 與 `futures_engine._handle_reconnect` 逐字同形
+  (bump epoch → 回填 pending → 沒有活 task 就建一個)。本輪**不抽**共用基底:兩者的
+  「對帳單位」不同(futures = product、corr = leg.symbol),參數化後會比兩份各 10 行更難
+  讀,而 /refactor 的 Why gate 沒過。第三個引擎要接同款對帳時再抽。
+- **SP1 的次毫秒窗**:stage1 返回到 worker 跑到 `set_trade_date` 之間,source 日窗仍是
+  舊的。`_generation` 已同步 bump,那個窗內的回補結果套用時會被 guard 丟掉 —— 但那是
+  「靠別人擋住」不是「結構上不可能」,真要收得把日窗語意也納入 generation。
