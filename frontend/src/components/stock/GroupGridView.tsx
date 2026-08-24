@@ -7,6 +7,7 @@ import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { readLocal, writeLocal } from "@/lib/storage";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
@@ -48,19 +49,12 @@ interface Props {
 }
 
 function loadGroupName(): string | null {
-  try {
-    return window.localStorage.getItem(STOCK_GROUP_KEY);
-  } catch {
-    return null;
-  }
+  return readLocal(STOCK_GROUP_KEY);
 }
 
+/** 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉(`writeLocal` 不拋)。 */
 function persistGroupName(name: string): void {
-  try {
-    window.localStorage.setItem(STOCK_GROUP_KEY, name);
-  } catch {
-    // 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉
-  }
+  writeLocal(STOCK_GROUP_KEY, name);
 }
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:

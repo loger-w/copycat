@@ -5,15 +5,12 @@
  *  時 App 以為在單檔、畫面卻停在群組(於是照樣拖回整份 tape),而畫面上零訊號。 */
 
 import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { readLocal } from "@/lib/storage";
 
 export type StockView = "single" | "group";
 
 /** 只認得 `"group"`,其餘(未設 / 被人手動改壞 / 舊版遺留值)一律回單檔 ——
  *  預設檢視必須是「有主圖」的那個,壞值把使用者丟進群組檢視會像整頁不見了。 */
 export function readStockView(): StockView {
-  try {
-    return window.localStorage.getItem(STOCK_VIEW_KEY) === "group" ? "group" : "single";
-  } catch {
-    return "single";
-  }
+  return readLocal(STOCK_VIEW_KEY) === "group" ? "group" : "single";
 }

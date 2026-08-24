@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { CHART_TOGGLES_KEY } from "@/lib/constants";
+import { readLocalJson, writeLocal } from "@/lib/storage";
 
 export interface ChartToggles {
   vwap: boolean;
@@ -48,35 +49,21 @@ interface Stored extends Partial<ChartToggles> {
   v?: number;
 }
 
-/** 寫入失敗**不可以往外拋**:一次性升級是在 `load()` 裡寫的,而 `load()` 是
- *  `useState` 的 initializer —— setItem 在 Safari 私密視窗 / storage 被政策鎖時會拋
- *  `QuotaExceededError`,拋出去就是圖表元件首次 render 直接掛掉(白畫面)。
- *  記憶體內的 toggles 照常生效,只是這次沒落檔。 */
+/** 寫入失敗**不可以往外拋**(由 `lib/storage.ts::writeLocal` 承擔):一次性升級是在
+ *  `load()` 裡寫的,而 `load()` 是 `useState` 的 initializer —— setItem 在 Safari 私密
+ *  視窗 / storage 被政策鎖時會拋 `QuotaExceededError`,拋出去就是圖表元件首次 render
+ *  直接掛掉(白畫面)。記憶體內的 toggles 照常生效,只是這次沒落檔。 */
 function persist(toggles: ChartToggles): void {
-  try {
-    window.localStorage.setItem(
-      CHART_TOGGLES_KEY,
-      JSON.stringify({ ...toggles, v: TOGGLES_VERSION }),
-    );
-  } catch {
-    // 存不進去就算了 —— 偏好設定不落檔遠好於整個看盤畫面崩掉
-  }
+  writeLocal(CHART_TOGGLES_KEY, JSON.stringify({ ...toggles, v: TOGGLES_VERSION }));
 }
 
 function load(): ChartToggles {
-  let saved: Stored;
-  try {
-    const raw = window.localStorage.getItem(CHART_TOGGLES_KEY);
-    if (!raw) return DEFAULTS;
-    const parsed: unknown = JSON.parse(raw);
-    // `JSON.parse("null")` 成功且回 null;陣列 / 字串同樣是合法 JSON。
-    // 解構那行若在 try 之外,對 null 解構是 TypeError,一樣炸掉 initializer。
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return DEFAULTS;
-    saved = parsed as Stored;
-  } catch {
-    return DEFAULTS;
-  }
-  const { v, ...flags } = saved;
+  // `readLocalJson` 已把「未設 / 空字串 / 存取即拋 / 壞 JSON」收成同一個 null;
+  // 這裡只剩形狀檢查 —— `JSON.parse("null")` 成功且回 null,陣列 / 字串同樣是合法
+  // JSON,少了這一行對 null 解構就是 TypeError,一樣炸掉 initializer。
+  const parsed = readLocalJson(CHART_TOGGLES_KEY);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return DEFAULTS;
+  const { v, ...flags } = parsed as Stored;
   const merged: ChartToggles = { ...DEFAULTS, ...flags };
   if ((v ?? 1) < TOGGLES_VERSION) {
     // 一次性升級。**必須立刻落檔**:只回傳不寫回的話,使用者升級後把 BB 關掉,

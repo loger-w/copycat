@@ -17,6 +17,7 @@ import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { writeLocal } from "@/lib/storage";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
@@ -185,16 +186,12 @@ export function StockPage({
     saveRule.mutate({ ...rule, enabled: !rule.enabled });
   }
 
-  /** 檢視切換 + 記憶。localStorage 寫失敗(隱私模式 / 配額)不讓整頁掛掉:
-   *  切換本身已生效,代價僅是下次重開回到單檔。 */
+  /** 檢視切換 + 記憶。localStorage 寫失敗(隱私模式 / 配額)不讓整頁掛掉(`writeLocal`
+   *  不拋):切換本身已生效,代價僅是下次重開回到單檔。 */
   function selectView(next: StockView): void {
     setView(next);
     onViewChange?.(next);
-    try {
-      window.localStorage.setItem(STOCK_VIEW_KEY, next);
-    } catch {
-      // 記不住就算了 —— 為了記憶檢視而讓看盤頁白掉是本末倒置
-    }
+    writeLocal(STOCK_VIEW_KEY, next);
   }
 
   /** 權限狀態不是 React state 的衍生值,要主動回寫 —— 使用者按完瀏覽器提示後,

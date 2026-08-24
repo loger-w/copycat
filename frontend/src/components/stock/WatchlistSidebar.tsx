@@ -21,7 +21,7 @@ import {
 } from "@/lib/position-summary";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
-import { writeLocal } from "@/lib/storage";
+import { readLocal, readLocalJson, writeLocal } from "@/lib/storage";
 import { cn, safeIdToken } from "@/lib/utils";
 import { type GroupAvg, groupAvgPct } from "@/lib/watchlist-avg";
 import {
@@ -78,14 +78,10 @@ function fmtPrice(milli: number | null): string {
 }
 
 function loadCollapsed(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(WL_COLLAPSED_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    return new Set(Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === "string") : []);
-  } catch {
-    return new Set();
-  }
+  const parsed = readLocalJson(WL_COLLAPSED_KEY);
+  return new Set(
+    Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === "string") : [],
+  );
 }
 
 function persistCollapsed(names: Set<string>): void {
@@ -93,11 +89,7 @@ function persistCollapsed(names: Set<string>): void {
 }
 
 function loadUngroupedCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(WL_UNGROUPED_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readLocal(WL_UNGROUPED_KEY) === "1";
 }
 
 interface Props {

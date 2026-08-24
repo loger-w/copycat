@@ -7,6 +7,7 @@ import { useRef, useState, useSyncExternalStore } from "react";
 
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { clampDiscount, FEE_DISCOUNT_DEFAULT } from "@/lib/ladder-position";
+import { readLocal, writeLocal } from "@/lib/storage";
 
 export interface DiscountState {
   /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
@@ -15,16 +16,10 @@ export interface DiscountState {
   value: number;
 }
 
-/** 讀存檔折數。**整段包 try/catch**:localStorage 在私密視窗 / storage 被政策鎖時
- *  光是存取就會拋,而這是 useState initializer —— 拋出去就是閃電梯首次 render 掛掉
- *  (同 `hooks/useChartToggles.ts::load`)。 */
+/** 讀存檔折數。讀不到(私密視窗 / storage 被政策鎖時光是存取就拋)→ 走預設,記憶體內
+ *  照常運作:這是 useState initializer,拋出去就是閃電梯首次 render 掛掉。 */
 export function loadDiscount(): DiscountState {
-  let raw: string | null = null;
-  try {
-    raw = window.localStorage.getItem(FEE_DISCOUNT_KEY);
-  } catch {
-    raw = null; // 讀不到 → 走預設,記憶體內照常運作
-  }
+  const raw = readLocal(FEE_DISCOUNT_KEY);
   const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
   return { raw: String(value), value };
 }
@@ -35,13 +30,9 @@ export function loadDiscount(): DiscountState {
 const listeners = new Set<() => void>();
 
 export function persistDiscount(value: number): void {
-  try {
-    window.localStorage.setItem(FEE_DISCOUNT_KEY, String(value));
-  } catch {
-    // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉(同 useChartToggles::persist)。
-    // 寫失敗就沒有新值可通知:通知了只會讓訂閱者再讀一次舊值,白跑一輪。
-    return;
-  }
+  // 存不進去就算了 —— 折數不落檔遠好於看盤畫面崩掉。但**寫失敗就沒有新值可通知**:
+  // 通知了只會讓訂閱者再讀一次舊值,白跑一輪 —— 這是 `writeLocal` 要回傳布林的原因。
+  if (!writeLocal(FEE_DISCOUNT_KEY, String(value))) return;
   // 快照複本:訂閱者在通知中退訂(元件卸載)會邊迭代邊改集合
   for (const notify of [...listeners]) notify();
 }
