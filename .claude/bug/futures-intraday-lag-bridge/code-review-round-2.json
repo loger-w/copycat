@@ -1,0 +1,24 @@
+{
+ "fixed_point": "master (5595bf11)",
+ "reviewed_head": "89ff0040",
+ "mode": "main-agent 機械快篩(增量 = 常數 5→3 + 邊界案 + artifact 文件;依 branch-lifecycle §3 對增量補審)",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "—",
+   "summary": "常數改值附證據與邊界案(差 4 擋 / 差 3 放行),鑑別力保留;三類 commit 分開(🔴 + chore)",
+   "location": "FuturesChart.tsx:63 / test",
+   "disposition": "no change"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "—",
+   "summary": "門檻 3 與 review SP4 的顧慮(常態 2–3 格貼邊閃動)對照:輪詢實測常態 lag 0.2–2.8 分 → 終點標記換算 ≤ 3 格,`> 3` 不誤觸;真事件峰值 5 格則自第 4 格起擋",
+   "location": "verification §4b",
+   "disposition": "accepted;若 prod 觀察到常態閃動再回 4"
+  }
+ ],
+ "disposition": "gate:FuturesChart.test 42/42、tsc、eslint 綠。"
+}
