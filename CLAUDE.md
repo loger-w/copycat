@@ -169,6 +169,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   per-client queue);讀者 = 前端 `frontend/src/lib/ws-reconnect.ts::WS_SILENCE_TIMEOUT_MS`
   (30 s 靜默 watchdog,**必須 > 心跳間隔**,否則健康連線會被誤判半死而狂重連)。
   改值 = 改契約要同時改兩邊;前端 hook 的 `onMessage` 看不到 ping(helper 已過濾)。
+  2026-08-25 起前端 **onopen 即武裝**(不再等首則 ping):後端若停送 ping,所有 WS 每 ~35 s 重連一次,
+  症狀是 uvicorn access log 每半分鐘一輪 8 條握手 —— 這是契約被單邊改掉的訊號,不是前端 bug。
 
 - **TXO 回補進度欄 `handover.attempt`**(2026-08-21 起):產生點 `copycat/server/engine.py::_run_handover_locked`
   寫 `_handover={attempt,attempts_max,phase}`;唯一讀者 `frontend/src/components/ConnectionBadge.tsx`(只讀 `attempt`,

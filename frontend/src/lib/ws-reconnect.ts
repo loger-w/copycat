@@ -6,16 +6,25 @@
  *    (含首次與每次重連);
  *  - backoff 三分支(SC-4;`onopen` **不歸零**,歸零由 onclose 的「存活 ≥ minUptime」分支達成):
  *    存活 ≥ 5 s 斷線 → 回初值 1 s;有 open 但短命(accept-then-close)→ 倍增 cap 5 s;
- *    從未 open(握手失敗)→ 倍增 cap 30 s;
- *  - `{type:"ping"}` 後端心跳在本層過濾(SC-3),不進 `onMessage`,但會武裝 / 餵 watchdog;
- *  - 靜默 watchdog(SC-2):**收到第一則 ping 才武裝**,之後 `silenceTimeout` 內零訊息就
+ *    從未 open(握手失敗 / 後端 reject-before-accept)→ 倍增 cap 30 s;
+ *  - `{type:"ping"}` 後端心跳在本層過濾(SC-3),不進 `onMessage`,但會餵 watchdog;
+ *  - 靜默 watchdog(SC-2):**`onopen` 即武裝**(R4 N035;舊版要收到首則 ping 才武裝,
+ *    分頁第一代連線在首則 ping 前就半死會永久不偵測),之後 `silenceTimeout` 內零訊息就
  *    卸掉舊 socket 的 handler、`close()`、走與 onclose 相同的重連路徑(不等 onclose —
- *    Chromium closing handshake 逾時 60 s)。不送 ping 的舊後端永不武裝 = 行為同現況;
+ *    Chromium closing handshake 逾時 60 s)。代價:對不送 ping 的後端,零流量 30–35 s 會被
+ *    判半死重連(重連是安全方向;prod 後端自 2026-08-20 起恆送 ping);
+ *  - watchdog 放棄路徑的重連延遲加 `[0, watchdogJitter)` 抖動(R4 N038):8 條 WS 對同一顆
+ *    半死 server 會在同一個 tick 窗齊判定,不抖就是齊重連 + 齊 refetch;onclose 路徑不抖;
+ *  - `visibilitychange` 回前景時重設 tick 基準(R4 N037):Chrome 對隱藏 > 5 min 的分頁把
+ *    timer 節流到 1/min,每個 tick 都撞下方凍結守門而恆不判定;回前景後第一個 tick 也會
+ *    被吞,最壞再等 35 s。重設基準後下一個 tick(≤ 5 s)就以真實 `lastMsgAt` 判定。
+ *    **不同步立判**:凍結期間積壓的 frame 要留派發窗口,否則健康連線會被誤殺;
  *  - `onerror` 關**自身** socket(SC-5);`onclose` 只由 `stopped` 守門,不做世代比對
  *    (被 watchdog 放棄的那代已經卸掉 handler,遲到事件進不來);
- *  - `close()` 停止重連、清 watchdog、卸掉當下 socket 的 onmessage/onopen/onerror 再關它
- *    (onclose 留著,本來就由 `stopped` 守門);`connect()` 入口另有 `stopped` 守門,
- *    擋掉「onClose 內同步 close()」這種排程後才停掉的路徑。之後所有回呼不再觸發。
+ *  - `close()` 停止重連、清 watchdog(含 visibility listener)、卸掉當下 socket 的
+ *    onmessage/onopen/onerror 再關它(onclose 留著,本來就由 `stopped` 守門);`connect()`
+ *    入口另有 `stopped` 守門,擋掉「onClose 內同步 close()」這種排程後才停掉的路徑。
+ *    之後所有回呼不再觸發。
  *
  * 心跳間隔的產生點在後端 `copycat/server/ws.py::WS_HEARTBEAT_SECS`(10 s),
  * `WS_SILENCE_TIMEOUT_MS` 必須遠大於它(CLAUDE.md §4「WS 心跳契約」)。
@@ -31,15 +40,8 @@ export const WS_SHORT_LIVED_CAP_MS = 5_000;
 export const WS_SILENCE_TIMEOUT_MS = 30_000;
 /** watchdog 巡檢間隔;偵測延遲 = timeout ~ timeout + tick。 */
 export const WS_WATCHDOG_TICK_MS = 5_000;
-
-/** 記住「這個 URL 的 server 會送 ping」:某一代收過之後,同 URL 的後續世代 onopen 即武裝
- *  (封住「新連線在首則 ping 抵達前就半死」的盲區;spec §4.2 sticky)。 */
-const pingingUrls = new Set<string>();
-
-/** 測試用:清掉 sticky 記憶,讓各測試互不影響。 */
-export function resetWsPingMemory(): void {
-  pingingUrls.clear();
-}
+/** watchdog 放棄後重連延遲的抖動上限(不含);只加在放棄路徑,onclose 路徑為 0(N038)。 */
+export const WS_WATCHDOG_JITTER_MS = 1_000;
 
 export interface WsHandlers {
   /** 每次建 socket 前呼叫(含首次與每次重連)。 */
@@ -60,6 +62,7 @@ export interface WsOptions {
   shortLivedCapMs?: number;
   silenceTimeoutMs?: number;
   watchdogTickMs?: number;
+  watchdogJitterMs?: number;
 }
 
 /** 後端 `relay()` 的應用層心跳(`copycat/server/ws.py::PING`)。 */
@@ -87,6 +90,7 @@ export function connectWithRetry(
   const shortLivedCapMs = opts.shortLivedCapMs ?? WS_SHORT_LIVED_CAP_MS;
   const silenceTimeoutMs = opts.silenceTimeoutMs ?? WS_SILENCE_TIMEOUT_MS;
   const tickMs = opts.watchdogTickMs ?? WS_WATCHDOG_TICK_MS;
+  const jitterMs = opts.watchdogJitterMs ?? WS_WATCHDOG_JITTER_MS;
 
   let current: WebSocket | null = null;
   let timer: number | undefined;
@@ -97,12 +101,14 @@ export function connectWithRetry(
   /** 停掉「當下這代」的 watchdog(每次 `connect()` 換新的;`handle.close()` 用)。 */
   let stopWatchdog = (): void => {};
 
-  /** 斷線後排程重連並依「這代活多久」決定退避(SC-4 三分支)。 */
-  const scheduleReconnect = (): void => {
+  /** 斷線後排程重連並依「這代活多久」決定退避(SC-4 三分支)。
+   *  `extraJitterMs` 只有 watchdog 放棄路徑傳(N038);下一輪 backoff 以未加抖動的 delay 倍增。 */
+  const scheduleReconnect = (extraJitterMs = 0): void => {
     handlers.onClose?.();
     const lived = openedAt !== null ? Date.now() - openedAt : null;
     const delay = lived !== null && lived >= minUptimeMs ? startMs : backoff;
-    timer = window.setTimeout(connect, delay);
+    const jitter = extraJitterMs > 0 ? Math.floor(Math.random() * extraJitterMs) : 0;
+    timer = window.setTimeout(connect, delay + jitter);
     backoff = Math.min(delay * 2, lived !== null ? shortLivedCapMs : capMs);
   };
 
@@ -121,10 +127,19 @@ export function connectWithRetry(
     let lastMsgAt = 0;
     let lastTickAt = 0;
 
+    /** N037:回前景只重設 tick 基準,讓下一個 tick 不再被凍結守門吞掉;判定仍交給 tick。 */
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== "visible") return;
+      lastTickAt = Date.now();
+    };
+
     const clearWatchdog = (): void => {
       if (watchdog === undefined) return;
       window.clearInterval(watchdog);
       watchdog = undefined;
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
     };
 
     /** 半死判定:自最後一則訊息起靜默超過 timeout 就放棄這條連線。 */
@@ -133,7 +148,8 @@ export function connectWithRetry(
       const sinceTick = now - lastTickAt;
       lastTickAt = now;
       if (sinceTick > tickMs * 2) {
-        // 主執行緒長阻塞 / 機器睡醒:server 的 ping 不是沒送,是沒被處理 → 只重置基準。
+        // 主執行緒長阻塞 / 機器睡醒 / 隱藏分頁被節流:server 的 ping 不是沒送,是沒被處理
+        // → 只重置基準。回前景的那一次由 onVisibilityChange 先重設 lastTickAt,不會走到這裡。
         lastMsgAt = now;
         return;
       }
@@ -146,7 +162,7 @@ export function connectWithRetry(
       clearWatchdog();
       sock.close(); // 不等 onclose(Chromium closing handshake 逾時 60 s)
       if (stopped) return;
-      scheduleReconnect();
+      scheduleReconnect(jitterMs);
     };
 
     /** 武裝:單一 setInterval 巡檢(onmessage 只寫時間戳,個股 tick 洪流下零 timer churn)。 */
@@ -155,12 +171,15 @@ export function connectWithRetry(
       lastMsgAt = Date.now();
       lastTickAt = lastMsgAt;
       watchdog = window.setInterval(tick, tickMs);
+      if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", onVisibilityChange);
+      }
     };
     stopWatchdog = clearWatchdog;
 
     sock.onopen = () => {
       openedAt = Date.now();
-      if (pingingUrls.has(target)) arm(); // sticky:寬限 = 完整 silenceTimeout
+      arm(); // N035:open 即武裝,寬限 = 完整 silenceTimeout
       handlers.onOpen?.();
     };
     sock.onmessage = (ev: MessageEvent<string>) => {
@@ -172,11 +191,7 @@ export function connectWithRetry(
         console.warn(`${label}: 無法解析訊息`, err);
         return;
       }
-      if (isPing(value)) {
-        pingingUrls.add(target);
-        arm();
-        return; // SC-3:心跳不進 hook,免得覆蓋 state
-      }
+      if (isPing(value)) return; // SC-3:心跳不進 hook,免得覆蓋 state(已在上方餵狗)
       try {
         handlers.onMessage(value);
       } catch (err) {

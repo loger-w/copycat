@@ -324,10 +324,10 @@ async def capital_position_close(request: Request, body: PositionCloseBody) -> d
 @router.websocket("/ws/capital")
 async def ws_capital(websocket: WebSocket) -> None:
     client: CapitalClient | None = websocket.app.state.capital
-    await websocket.accept()
     if client is None:
-        await websocket.close()
+        await websocket.close()  # reject-before-accept(R4 N036)
         return
+    await websocket.accept()
     broadcaster: WsBroadcaster = websocket.app.state.capital_ws
     await relay(websocket, broadcaster.stream())
 
@@ -346,10 +346,10 @@ async def futures_state(request: Request) -> dict:
 @router.websocket("/ws/futures")
 async def ws_futures(websocket: WebSocket) -> None:
     futures: FuturesEngine | None = websocket.app.state.futures
-    await websocket.accept()
     if futures is None:
-        await websocket.close()
+        await websocket.close()  # reject-before-accept(R4 N036)
         return
+    await websocket.accept()
     broadcaster: WsBroadcaster = websocket.app.state.futures_ws
     await relay(websocket, broadcaster.stream())
 

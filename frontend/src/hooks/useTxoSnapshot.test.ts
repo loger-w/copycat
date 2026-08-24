@@ -3,6 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useTxoSnapshot } from "@/hooks/useTxoSnapshot";
+import { WS_BACKOFF_START_MS, WS_WATCHDOG_JITTER_MS } from "@/lib/ws-reconnect";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -101,7 +102,8 @@ describe("useTxoSnapshot", () => {
     expect(result.current.wsStatus).toBe("closed");
 
     act(() => {
-      vi.advanceTimersByTime(1_000);
+      // watchdog 放棄路徑 = 1 s backoff + [0, WS_WATCHDOG_JITTER_MS) 抖動(R4 N038)
+      vi.advanceTimersByTime(WS_BACKOFF_START_MS + WS_WATCHDOG_JITTER_MS);
     });
     expect(FakeWebSocket.instances.length).toBe(2);
     expect(result.current.wsStatus).toBe("connecting");
