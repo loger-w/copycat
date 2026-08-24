@@ -738,9 +738,14 @@ class TestReviewFixes:
         t0 = asyncio.get_running_loop().time()
         engine.rollover_stage1("2026-07-22")  # 同步重掛會在此吃掉 subscribe 阻塞時間
         assert asyncio.get_running_loop().time() - t0 < 0.5  # 必須立即返回
-        assert "2026-07-22" in src.trade_dates  # 同步部分已生效
+        # **該變**(review SP1):換窗(`set_trade_date`)從 stage1 的同步段下沉到重掛
+        # 的背景 to_thread —— N052 之後它含一批同步 UNSUBQUOTE,留在 loop 上就是
+        # 「立即返回」這條不變式自己被打破。這裡改驗「背景段跑完之後才生效」,
+        # 而順序(換窗 → 重掛)另由 `TestRolloverStageOneOffLoop` 釘住。
+        assert "2026-07-22" not in src.trade_dates  # 同步段不再碰 source
         src.subscribe_gate.set()
         await _drain(engine)
+        assert "2026-07-22" in src.trade_dates  # 背景段已換窗
         assert src.subscribed.count("2330") >= 2  # 背景重掛完成
 
     async def test_close_cancels_pending_resubscribe_task(self) -> None:
@@ -3282,8 +3287,12 @@ class TestCheckpointTradingDay:
             _dt.datetime(2026, 8, 13, 9, 0), is_trading_day=lambda _d: True
         )
         try:
-            await wait_until(lambda: engine._pending_date == "2026-08-13")
-            assert src.trade_dates == ["2026-08-12", "2026-08-13"]
+            # **該變**(review SP1):`_pending_date` 仍在 stage1 的同步段設定,但換窗
+            # (`set_trade_date`,N052 之後含一批同步 UNSUBQUOTE)已下沉到重掛的背景
+            # to_thread —— 等前者再讀後者是一條真的會偶發紅的競賽(全量跑時真的踩到)。
+            # 等待條件改成直接等那個副作用本身。
+            await wait_until(lambda: src.trade_dates == ["2026-08-12", "2026-08-13"])
+            assert engine._pending_date == "2026-08-13"
         finally:
             await engine.close()
 
@@ -3407,3 +3416,101 @@ class TestWatchlistBootSentinel:
     def test_boot_sentinel_is_the_oldest_possible_seq(self) -> None:
         """service 取號自 1 起(`WatchlistService`)—— sentinel 必須嚴格小於它。"""
         assert stock_engine_mod.WATCHLIST_BOOT_SEQ < 1
+class _IdentSource(FakeSource):
+    """記錄 `set_trade_date` 是在**哪一條執行緒**上被呼叫的(SP1 的唯一判準)。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.trade_date_idents: list[int] = []
+
+    def set_trade_date(self, trade_date: str) -> None:
+        self.trade_date_idents.append(threading.get_ident())
+        super().set_trade_date(trade_date)
+
+
+class TestWatchlistSupersededRelease:
+    """review ST1 / SP3:`removed` 由 `self._watchlist` 算,但**較舊**那一發已經把它
+    覆寫過 —— 舊發在 added 迴圈被 `_superseded` 提前 return 時整段跳過 removed 迴圈,
+    它還沒退的檔既不在新發的 `removed`(新發算的時候名單已經是舊發那份)、也不在任何
+    名單裡 → `"watchlist"` ref 永久佔著訂閱位,而畫面上那一檔早就不見了,零訊號。
+    """
+
+    async def test_superseded_call_leaves_no_orphan_watchlist_ref(self) -> None:
+        src = _PerCodeGateSource()
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False
+        )
+        await engine.start()
+        for code in ("2330", "5483", "6669"):
+            src._gate(code).set()
+        await engine.set_watchlist(["2330", "5483", "6669"], seq=1)
+        older = asyncio.create_task(engine.set_watchlist(["2330", "9999"], seq=2))
+        try:
+            await asyncio.to_thread(
+                src._entered("9999").wait, 5
+            )  # 舊發卡在新增檔的 SUB
+            newer = asyncio.create_task(engine.set_watchlist(["2330"], seq=3))
+            await asyncio.sleep(0)
+            src._gate("9999").set()  # 放行 → 舊發釋鎖 → 新發進場並整份套完
+            await asyncio.wait_for(newer, timeout=5.0)
+            await asyncio.wait_for(older, timeout=5.0)
+            assert "watchlist" not in engine._refs.get("5483", set()), "退訂洩漏:5483"
+            assert "watchlist" not in engine._refs.get("6669", set()), "退訂洩漏:6669"
+            assert engine._watchlist == ["2330"]
+        finally:
+            await engine.close()
+
+    async def test_removed_is_computed_from_refs_not_from_the_list(self) -> None:
+        """直接鎖判準本身:`_refs` 裡持著 `"watchlist"` ref 卻不在最新名單的檔一律要退,
+        不管 `self._watchlist` 當下長什麼樣(它可能已被別發覆寫)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "5483"], seq=1)
+        engine._watchlist = ["2330", "5483", "6669"]  # 模擬被別發覆寫過的名單
+        await engine.set_watchlist(["2330"], seq=2)
+        assert "watchlist" not in engine._refs.get("5483", set())
+        assert "5483" in src.unsubscribed
+        await engine.close()
+
+
+class TestRolloverStageOneOffLoop:
+    """review SP1:換日的舊窗批次 UNSUB 是同步 ZMQ REQ,而 `rollover_stage1` 跑在
+    event loop 上 —— TC4 半死時 50 檔各等 `_REQ_TIMEOUT_MS`(10 s)= 整條 loop 停擺
+    幾分鐘(WS 心跳、廣播、route 全卡)。同檔 `_resubscribe_all` 的 docstring 早就寫了
+    「ZMQ REQ 全程 to_thread,不佔 event loop」,這條是同一個不變式的漏網。
+    """
+
+    async def test_source_date_switch_does_not_run_on_the_loop_thread(self) -> None:
+        src = _IdentSource()
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False
+        )
+        await engine.start()
+        loop_ident = threading.get_ident()
+        src.trade_date_idents.clear()
+        try:
+            engine.rollover_stage1("2026-07-22")
+            await wait_until(lambda: src.trade_dates[-1:] == ["2026-07-22"])
+            assert src.trade_date_idents[-1] != loop_ident, (
+                "換日的 ZMQ REQ 跑在 event loop 上"
+            )
+        finally:
+            await engine.close()
+
+    async def test_stale_window_unsub_happens_before_the_new_window_resub(self) -> None:
+        """順序是這條修法的整個重點:舊窗歸零 → 新窗 SUB 走 0→1 才會觸發上游
+        `ReqSubQuote`。反過來的話舊窗那把 key 仍 >0,新窗只是多一把,feed 沒被重掛。"""
+        src = _IdentSource()
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False
+        )
+        await engine.start()
+        await engine.set_watchlist(["2330"], seq=1)
+        order: list[str] = []
+        src.set_trade_date = lambda d: order.append("set_trade_date")  # type: ignore[method-assign]
+        src.on_subscribe = lambda code: order.append(f"subscribe:{code}")
+        try:
+            engine.rollover_stage1("2026-07-22")
+            await wait_until(lambda: order[-1:] == ["subscribe:2330"])
+            assert order == ["set_trade_date", "subscribe:2330"]
+        finally:
+            await engine.close()
