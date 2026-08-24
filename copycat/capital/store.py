@@ -74,10 +74,11 @@ class CapitalStore:
         self._lock = threading.Lock()
         self._orders: dict[str, _Agg] = {}
         self._order_seq: list[str] = []  # 到達順序
-        # 本 app 送出的價格別:seq → (price_type, 送出日 YYYYMMDD)。與 _Agg 分開放,
+        # 本 app 送出的價格別:seq → (price_type, 候選日 YYYYMMDD 們)。與 _Agg 分開放,
         # 因為它不是回報事件的產物 —— 送單結果與 N 回報的到達序不保證(COM 執行緒 vs
         # async),掛在 _Agg 上會在「結果先回」時無處可放。`clear()` 不清(見該方法註)。
-        self._price_types: dict[str, tuple[str, str]] = {}
+        # 候選日 = 本機日曆日(+ 夜盤時的所屬交易日),見 `note_price_type`(N075)。
+        self._price_types: dict[str, tuple[str, tuple[str, ...]]] = {}
         # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
         self._positions: dict[tuple[str, str], Position] = {}
 
@@ -159,22 +160,34 @@ class CapitalStore:
             elif t == "S":
                 self._set_status(a, "退單")
 
-    def note_price_type(self, seq_no: str, price_type: str, date: str) -> None:
+    def note_price_type(
+        self, seq_no: str, price_type: str, date: str, *, trade_date: str | None = None
+    ) -> None:
         """記下本 app 送出的價格別(送單成功且拿到 seq 時呼叫)。
         `date` = 送出當日 YYYYMMDD:server 長跑跨日、券商 seq 若重用,
         沒有日期界就會把今日的限價單標成昨日那張的「市價」(review R7)。
 
-        ⚠ 這個 `date` 與回報的**委託建立日**(`_Agg.date`)是否恆等,夜盤(跨午夜的個股期
-        / 期貨)與預約單兩種情形**未實證**(review r1 IMPL-5)。不符時 `_price_type_of`
-        帶不出標籤 —— fail-safe 方向:只會缺「市價」標籤,不會把限價單誤標成市價。
+        `trade_date`(N075)= 送出時刻**所屬的交易日**(`client._trade_ymd`)。夜盤 23:50
+        送出的單,本機日曆日是今天、交易日是明天,而群益回報的 `_Agg.date` 到底是哪一種
+        語意**未實證**(review r1 IMPL-5)—— 所以兩個都記,任一相符即帶出:
 
-        同鎖內順手 prune 掉**其他日期**的舊項(review r1 IMPL-7):它們早已因日期不符而
-        不會帶出,留著只是讓 dict 隨 server 長跑單調成長。"""
+        - 這是舊行為(只比 `date`)的**超集**,不會因為改動而讓現在還標得出來的單失標;
+        - 新增的候選是**唯一**一個有語意根據的日子(該筆委託所屬的交易日),不是
+          「±1 天」那種任意放寬 —— 往回多接受一天正是 seq 重用誤標的方向,
+          而 fail-safe 方向(只會缺標籤、不會誤標)不可變鬆。
+
+        同鎖內順手 prune 掉**候選集合與本次不相交**的舊項(review r1 IMPL-7 + N075):
+        它們早已因日期不符而不會帶出,留著只是讓 dict 隨 server 長跑單調成長。
+        判準從「日期不等」改成「集合不相交」是必要的 —— 否則夜盤那筆(0824/0825)會被
+        隔天日盤第一張單(0825/0825)順手清掉,標籤在同一個交易日內就沒了。"""
+        days = (date,) if trade_date is None or trade_date == date else (date, trade_date)
         with self._lock:
-            stale = [s for s, (_pt, d) in self._price_types.items() if d != date]
+            stale = [
+                s for s, (_pt, d) in self._price_types.items() if not set(d) & set(days)
+            ]
             for s in stale:
                 del self._price_types[s]
-            self._price_types[seq_no] = (price_type, date)
+            self._price_types[seq_no] = (price_type, days)
 
     def forget_price_type(self, seq_no: str) -> None:
         """作廢某筆的價格別記憶(改價成功時呼叫)。
@@ -183,12 +196,13 @@ class CapitalStore:
             self._price_types.pop(seq_no, None)
 
     def _price_type_of(self, a: _Agg) -> str | None:
-        """委託日與記錄日相符才帶出;委託日缺(None)無從比對 → 不帶,不猜。
-        兩者的日界語意(夜盤 / 預約單)未實證 — 見 `note_price_type` 的 ⚠。"""
+        """委託日落在記錄的候選日(本機日 / 交易日)之一才帶出;委託日缺(None)
+        無從比對 → 不帶,不猜。回報的日界語意(夜盤 / 預約單)未實證 —
+        見 `note_price_type`。"""
         noted = self._price_types.get(a.seq_no)
         if noted is None or a.date is None:
             return None
-        return noted[0] if noted[1] == a.date else None
+        return noted[0] if a.date in noted[1] else None
 
     def _to_record(self, a: _Agg) -> OrderRecord:
         if a.market in _SEC_LOT_MARKETS or a.market is None:

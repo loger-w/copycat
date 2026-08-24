@@ -63,6 +63,21 @@ class TradingCalendar:
             cur -= timedelta(days=1)
         raise RuntimeError(f"往回 {_LOOKBACK_LIMIT_DAYS} 天仍找不到交易日(起點 {d}),交易日曆資料有誤")
 
+    def next_trading_day(self, d: date) -> date:
+        """含 d 本身**往後**找最近交易日;超過保險絲仍找不到 = 日曆資料錯,raise。
+
+        `last_trading_day` 的鏡像。用途 = 夜盤所屬交易日(N075):週五 15:00 之後開的
+        夜盤屬於下週一那個交易日,往回找會給出「上一個」交易日 —— 差一整個週末。
+        """
+        cur = d
+        for _ in range(_LOOKBACK_LIMIT_DAYS):
+            if self.is_trading_day(cur):
+                return cur
+            cur += timedelta(days=1)
+        raise RuntimeError(
+            f"往後 {_LOOKBACK_LIMIT_DAYS} 天仍找不到交易日(起點 {d}),交易日曆資料有誤"
+        )
+
     def has_year(self, y: int) -> bool:
         """該年有沒有載到假日資料 —— 沒有代表此後只擋週末。"""
         return y in self.years_loaded

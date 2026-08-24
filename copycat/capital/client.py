@@ -24,7 +24,7 @@ import queue
 import threading
 import time
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from copycat.capital.balance import (
@@ -73,6 +73,7 @@ from copycat.capital.safety import (
 from copycat.capital.store import CapitalStore
 from copycat.live.trade_models import BrokerRejectedError
 from copycat.server.audit import AuditWriteError, append_audit
+from copycat.trading_calendar import WEEKEND_ONLY, TradingCalendar, load_trading_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,49 @@ def _today_ymd() -> str:
     抽成 module 函式讓測試注入固定值 —— 測試自己也算 `time.strftime` 的話,
     等於拿被測程式的實作驗它自己(review r1 IMPL-5)。"""
     return time.strftime("%Y%m%d")
+
+
+#: 交易日曆單例(lazy):價格別標籤是唯一讀者,啟動時不必為它做 IO。
+#: `None` = 尚未載入;載入失敗降級 `WEEKEND_ONLY` 後就不再重試(每次送單重讀壞檔沒有意義)。
+_CALENDAR: TradingCalendar | None = None
+
+#: 夜盤時段界(台灣期交所盤後 15:00–翌 05:00)。用時段而不是精確的商品交易時間表:
+#: 這裡只是「標籤該拿哪一天去比對」,多算或少算一小時的後果是標籤缺一個字。
+_NIGHT_OPEN_HOUR = 15
+_NIGHT_CLOSE_HOUR = 5
+
+
+def _calendar() -> TradingCalendar:
+    """交易日曆(lazy 單例)。載入失敗 → 只擋週末 + WARNING:這條路徑跑在 COM 執行緒的
+    送單結果處理上,為了一個顯示標籤炸掉它會讓「單送出去了但結果沒進 store」。
+    catch 的是 `load_trading_calendar` 明列會拋的兩類(壞檔 ValueError / 讀檔 OSError),
+    不是裸 except —— 其他例外照樣往上。"""
+    global _CALENDAR
+    if _CALENDAR is None:
+        try:
+            _CALENDAR = load_trading_calendar()
+        except (OSError, ValueError):
+            logger.warning("交易日曆載入失敗,價格別標籤的日界降級為只擋週末", exc_info=True)
+            _CALENDAR = WEEKEND_ONLY
+    return _CALENDAR
+
+
+def _trade_ymd(when: datetime | None = None) -> str:
+    """該時刻**所屬的交易日** YYYYMMDD(N075:價格別標籤的第二個比對候選)。
+
+    夜盤 23:50 送出的單,本機日曆日是今天、交易日是明天;群益回報的委託建立日是
+    哪一種語意未實證,所以兩個都記(見 `store.note_price_type`)。
+    - ≥15:00 → 次日起算的下一個交易日(週五夜盤 → 下週一);
+    - <05:00 → 含今日的下一個交易日(週六凌晨 = 週五夜盤的延續 → 下週一);
+    - 其餘(日盤時段)→ 含今日往回的最近交易日 = 今天。
+    """
+    now = datetime.now() if when is None else when
+    cal = _calendar()
+    if now.hour >= _NIGHT_OPEN_HOUR:
+        return cal.next_trading_day(now.date() + timedelta(days=1)).strftime("%Y%m%d")
+    if now.hour < _NIGHT_CLOSE_HOUR:
+        return cal.next_trading_day(now.date()).strftime("%Y%m%d")
+    return cal.last_trading_day(now.date()).strftime("%Y%m%d")
 
 
 _WriteReq = (
@@ -163,9 +207,13 @@ class CapitalClient:
         self._futures_account: str | None = None  # _init_com 自動發現(TF 市場)
         self.store = CapitalStore()  # 委託/部位快取:回報事件寫入、REST 讀
         self._broadcast: Callable[[dict[str, object]], None] | None = None
-        self._balance = BalanceCollector(on_complete=self._on_balance_complete)
-        self._profit = BalanceCollector(on_complete=self._on_profit_complete, parse=parse_profit_line)
-        self._oi = BalanceCollector(on_complete=self._on_oi_complete, parse=parse_open_interest_line)
+        self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
+        self._profit = BalanceCollector(
+            on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
+        )
+        self._oi = BalanceCollector(
+            on_complete=self._on_oi_complete, parse=parse_open_interest_line, name="oi"
+        )
         self._balance_due: float | None = None  # monotonic;成交後 debounce 重查
         self._balance_inflight_until: float | None = None  # balance 段守門 deadline(None=不在段內)
         self._balance_last_ts: float = 0.0  # 定時重查用(0=啟動後第一圈就查)
@@ -237,9 +285,13 @@ class CapitalClient:
             self._balance_abandoned = False
             self._profit_abandoned = False
             self._oi_abandoned = False
-            self._balance.reset()
-            self._profit.reset()
-            self._oi.reset()
+            # 走 `clear()` 不走 `reset()`(N018):reset 的語意是「發新查詢」,會把
+            # collector 標成 `_awaiting = True` —— 但重連落地這一刻**沒有任何在途查詢**,
+            # 標了之後下一次 pending watchdog 的 abandon() 就記帳成功,白吞一輪
+            # 合法的空回應(帳戶真的沒部位時多掛一輪幽靈)。
+            self._balance.clear()
+            self._profit.clear()
+            self._oi.clear()
         self._emit(
             {"event": "capital_status", "data": {"status": new, "last_error": self._last_error}}
         )
@@ -465,6 +517,12 @@ class CapitalClient:
         """期貨部位查詢(串行末段);無期貨帳號 → fut 恆空;查詢失敗 → 沿用上一輪
         fut 部位收尾(review A7:閃斷不可把面板期貨部位清空)。"""
         if self._futures_account is None:
+            # 這條路徑**永遠不會發 OI 查詢** → 放棄輪旗標與 collector 欠帳留著只是殘留
+            # 狀態(N018):日後 GetUserAccount 補到期貨帳號時,第一次
+            # `reset(keep_abandoned=True)` 會把這個跨了不知多久的舊窗帶進新一輪,
+            # 白吞一次合法的零列 OI 回應 = 期貨部位多掛一輪幽靈。
+            self._oi_abandoned = False
+            self._oi.clear()
             self._finalize_positions([])
             return
         self._oi.reset(keep_abandoned=self._oi_abandoned)
@@ -748,10 +806,14 @@ class CapitalClient:
           但 COM 晚到結果若帶 seq 就補記(`_on_late_result`),否則本 app 送出的市價單
           會因為一次 timeout 就永久失標。
         `price_type` 為 None = 該請求沒有價格別(刪單 / 改價 / 減量)→ 不記。
-        日期用本機日,與回報的委託建立日同時區(日界語意的已知限制見 store.note_price_type)。
+        日期記**兩個候選**:本機日曆日 + 該時刻所屬的交易日(N075)。夜盤跨午夜時兩者
+        不同,而群益回報的委託建立日是哪一種語意未實證 —— 記兩個是舊行為的超集,
+        不會讓現在標得出來的單失標,理由與 prune 規則見 `store.note_price_type`。
         平倉路徑也經過送單函式 → 一併標。"""
         if price_type and result.ok and result.seq_no:
-            self.store.note_price_type(result.seq_no, price_type, _today_ymd())
+            self.store.note_price_type(
+                result.seq_no, price_type, _today_ymd(), trade_date=_trade_ymd()
+            )
 
     async def submit_stock_order(
         self, req: StockOrderRequest, *, action: str = "order"

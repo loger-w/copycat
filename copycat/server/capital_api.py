@@ -202,6 +202,31 @@ def _correct_price_tick_gate(client: CapitalClient, seq_no: str, price: float) -
     _require_legal_tick(price, context=f"correct-price {product}")
 
 
+def _close_tick_gate(key: str, price: float) -> None:
+    """平倉的個股期檔位閘(N098;R4 review F4)。
+
+    `POST /api/capital/position/close` 原本直送 `close_position`,只驗 `price > 0` ——
+    而 fut 平倉走的是**限價貼漲跌停 + IOC**(`build_future_close_order`),價格未對齊
+    檔位就是券商退單,回到畫面上只有一句「委託失敗」。送單面(`_stkfut_gates`)與改價面
+    (`_correct_price_tick_gate`)都有這道閘,平倉面沒有 = 同一條規則三處只有兩處在,
+    而前端 `edgeOf` 是唯一守門(漏接零訊號)。
+
+    scope 與改價面**逐條相同**(共用 `_is_tickable_stkfut` / `_require_legal_tick`,
+    不新寫規則):契約碼推不出產品 / 非個股期(指數期權沒有現股 tick 表)/
+    ETF 期貨與除權息調整腿(60.05 是它的合法檔位)一律**放行** —— 那種部位真的存在
+    (可由群益 APP 建立),平不掉比擋掉更糟。
+    """
+    try:
+        product = exchange_product_of(key)
+    except ValueError:
+        logger.info("position/close 契約碼推不出產品(key=%r)→ 不驗檔位", key)
+        return
+    stkfut = lookup_product(product)
+    if stkfut is None or not _is_tickable_stkfut(stkfut):
+        return
+    _require_legal_tick(price, context=f"position/close {product}")
+
+
 @router.get("/api/capital/status")
 async def capital_status(request: Request) -> dict:
     client: CapitalClient | None = request.app.state.capital
@@ -309,6 +334,8 @@ async def capital_order_decrease(request: Request, body: DecreaseBody) -> dict:
 @router.post("/api/capital/position/close")
 async def capital_position_close(request: Request, body: PositionCloseBody) -> dict:
     client = _capital(request)
+    if body.market == "fut":
+        _close_tick_gate(body.key, body.price)
     req = PositionCloseRequest(
         market=body.market,
         key=body.key,
