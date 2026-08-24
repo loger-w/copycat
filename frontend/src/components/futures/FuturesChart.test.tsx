@@ -486,7 +486,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
       meta: META,
     };
     vi.setSystemTime(new Date(2026, 7, 5, 11, 30, 0));
-    const live: FuturesProductState = { ...STATE, t: "11:29:30.000" };
+    const live: FuturesProductState = { ...STATE, date: "2026-08-05", t: "11:29:30.000" };
     const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
     await findIntraday();
     // 前置條件寫死:錨定日相同、非死區、live(11:31)在末根(10:00)之後 → 前四道 gate 全不成立;
@@ -495,7 +495,46 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(alldayIndexOf("1130")! - alldayIndexOf("1000")!).toBe(90);
     expect(mainLineXs(container).length).toBe(2); // 不架橋:主線止於末根 bar
     expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1000")!));
-    expect(screen.getByText("分時資料落後 90 分(TC4 回補中)")).toBeTruthy();
+    expect(screen.getByText("分時資料落後 90 根(TC4 回補中)")).toBeTruthy();
+  });
+
+  // review ST1:門檻常數要有鑑別力 —— 兩案夾住 FUT_LIVE_LAG_MAX(5):差 6 擋、差 5 放行
+  it("gate 5 邊界:最後成交終點標記與末根差 6 格 → 擋;差 5 格 → 放行", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 6, 30));
+    // 10:05:30 → 終點標記 10:06,與末根 10:00 差 6
+    const six: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:05:30.000" };
+    const a = wrap(<FuturesChart product="TXF" state={six} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(a.container).length).toBe(2);
+    expect(screen.getByText("分時資料落後 6 根(TC4 回補中)")).toBeTruthy();
+    cleanup();
+
+    // 10:05:00.000 整分成交屬 10:05 那根(終點標記不 +1),與末根差 5 → 放行
+    const five: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:05:00.000" };
+    const b = wrap(<FuturesChart product="TXF" state={five} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(b.container).length).toBe(3);
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
+  // review SP2:盤前未成交 / WS 零推播時 state.t 還停在昨夜 04:59(前一場次)→ 那是 WS 沒新成交,
+  // 不是資料落後;拿它的索引(軸尾)減日盤頭的末根會誤印「落後 1133 根」。
+  it("gate 5 不吃前一場次的成交時戳:t = 04:59(昨夜)、bars 至 D 08:50、時鐘 08:51 → 照追加 live 點", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 08:46", 22_960_000), bar("2026-08-05 08:50", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 51, 0));
+    const stale: FuturesProductState = { ...STATE, date: "2026-08-05", t: "04:59:20.000" };
+    const { container } = wrap(<FuturesChart product="TXF" state={stale} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(3);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0852")!));
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
   });
 
   it("牆鐘落後但無成交(TMF 夜盤空檔):bars 至 D 10:00、最後成交 10:00:10、時鐘 11:30 → 照追加 live 點", async () => {
@@ -505,7 +544,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     };
     vi.setSystemTime(new Date(2026, 7, 5, 11, 30, 0));
     // 最後成交 10:00:10 → 終點標記 10:01,與末根只差 1 格:bars 沒有落後於成交,空檔是真的沒人交易
-    const idle: FuturesProductState = { ...STATE, t: "10:00:10.000" };
+    const idle: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:00:10.000" };
     const { container } = wrap(<FuturesChart product="TXF" state={idle} resolvedYm="202608" />);
     await findIntraday();
     expect(mainLineXs(container).length).toBe(3);
@@ -519,7 +558,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
       meta: META,
     };
     vi.setSystemTime(new Date(2026, 7, 5, 9, 31, 30));
-    const live: FuturesProductState = { ...STATE, t: "09:31:20.000" };
+    const live: FuturesProductState = { ...STATE, date: "2026-08-05", t: "09:31:20.000" };
     const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
     await findIntraday();
     expect(mainLineXs(container).length).toBe(3);
