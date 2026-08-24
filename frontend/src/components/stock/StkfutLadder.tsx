@@ -354,8 +354,14 @@ export function StkfutLadder({
                 className="flex items-baseline justify-between gap-2"
               >
                 <span className="text-ink">
+                  {/* 均價字面走 `fmt`(N064):header / 自選 chip 用的是
+                      `fmt(Math.round(avg*1000))`,這裡原本是 `toFixed(2)` —— 同一筆部位的
+                      同一個均價在同一畫面上長成 `1185` 與 `1185.00` 兩個樣子。
+                      `avg_price` 是**元**(types.ts CapitalPosition),fmt 吃毫元 → 先 ×1000。 */}
                   {`${p.qty > 0 ? "多" : "空"} ${Math.abs(p.qty)} 口 @${
-                    p.avg_price !== null && p.avg_price > 0 ? p.avg_price.toFixed(2) : DASH
+                    p.avg_price !== null && p.avg_price > 0
+                      ? fmt(Math.round(p.avg_price * 1000))
+                      : DASH
                   }`}
                 </span>
                 <span className={pnlTone(p.pnl_base)}>{pnlText(p.pnl_base)}</span>

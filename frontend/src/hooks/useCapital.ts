@@ -163,13 +163,26 @@ export function useCapitalOrders() {
   });
 }
 
-export function useCapitalPositions() {
-  return useQuery({
+const POSITIONS_POLL_MS = 15_000;
+
+function positionsQueryOptions(refetchInterval: number | false) {
+  return {
     queryKey: ["capital-positions"],
     queryFn: () => fetchJson<{ positions: CapitalPosition[] }>("/api/capital/positions"),
-    refetchInterval: 15_000,
+    refetchInterval,
     retry: 1,
-  });
+  } as const;
+}
+
+/** 部位讀取端(側欄 / header / 圖牆 / 三座梯,現有 ≥ 4 處)。
+ *
+ *  **不帶 `refetchInterval`**(N068):每個 observer 各帶一份輪詢節奏時,相位由「掛載時點」
+ *  決定 —— 同 tick 掛載的那幾個看起來像 15 s 一發,而 lazy 頁面 / 條件渲染的梯在別的時點
+ *  掛上來就自帶一組相位,同一支 API 在 15 s 窗內被打好幾次,畫面上零訊號。
+ *  節奏收斂到單一 provider(`useCapitalStream`,App 層掛一次)。
+ *  代價(明示):**provider 不在場時本 hook 不輪詢**,只有掛載那一發 + WS 事件 invalidate。 */
+export function useCapitalPositions() {
+  return useQuery(positionsQueryOptions(false));
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +230,10 @@ export function useClosePosition() {
 
 export function useCapitalStream(): void {
   const queryClient = useQueryClient();
+
+  // 部位輪詢的**唯一擁有者**(N068):本 hook 已是「App 層掛一次」的既有約定,節奏掛在
+  // 這裡就與掛載時點無關。讀取端(useCapitalPositions)一律 refetchInterval: false。
+  useQuery(positionsQueryOptions(POSITIONS_POLL_MS));
 
   useEffect(() => {
     // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)

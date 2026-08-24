@@ -16,6 +16,7 @@ import {
   type RuleKind,
   type SignalRule,
 } from "@/hooks/useSignalRules";
+import { PARAM_FIELDS } from "@/lib/signal-params";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleKind, string> = {
@@ -32,36 +33,6 @@ const LEVEL_LABEL: Record<string, string> = {
   cdp: "中軸",
   nl: "NL",
   al: "AL",
-};
-
-interface ParamField {
-  key: string;
-  label: string;
-  step: string;
-}
-
-/** 逐 kind 的參數欄位 —— 鍵集必須與後端 `PARAM_SPECS` **完全相同**(多鍵 / 缺鍵
- *  同樣是 INVALID_RULE)。`vol_burst.window_secs` 對到後端的 `surge_window_secs`,
- *  那是 detector 的共用欄,per-rule detector 讓兩者得以各自獨立。 */
-const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
-  cdp_cross: [
-    { key: "rearm_ticks", label: "重新武裝 tick 數", step: "1" },
-    // 距離門檻(tick)與時間門檻(秒)是同一個 rearm 的兩半 —— 擺在一起才看得出
-    // 「離線 N tick 且撐滿 M 秒才解除」是一句話,不是兩條獨立設定
-    { key: "rearm_dwell_secs", label: "線外駐留秒數", step: "1" },
-  ],
-  surge_crash: [
-    { key: "pct", label: "漲跌幅 %", step: "0.1" },
-    { key: "window_secs", label: "時間窗(秒)", step: "1" },
-  ],
-  vol_burst: [
-    { key: "ratio", label: "量能倍率", step: "0.1" },
-    { key: "window_secs", label: "時間窗(秒)", step: "1" },
-    { key: "min_elapsed_min", label: "開盤後最少分鐘", step: "1" },
-    { key: "min_window_lots", label: "窗內最少張數", step: "1" },
-    { key: "min_day_lots", label: "當日最少張數", step: "1" },
-  ],
-  limit_lock: [],
 };
 
 const PARAM_DEFAULTS: Record<RuleKind, Record<string, string>> = {
@@ -149,11 +120,15 @@ function NumberField({
   label,
   value,
   step,
+  min,
+  max,
   onChange,
 }: {
   label: string;
   value: string;
   step: string;
+  min: number;
+  max: number;
   onChange: (v: string) => void;
 }) {
   return (
@@ -162,6 +137,8 @@ function NumberField({
       <input
         type="number"
         step={step}
+        min={min}
+        max={max}
         aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -256,10 +233,12 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
     );
   }
 
-  /** 送出前在本地擋掉「空欄 / 非數字」:那些送出去只會拿到一句 INVALID_RULE,
-   *  使用者不知道是哪一格。各參數的值域仍以後端為準(前端不重抄一份會漂的表),
-   *  唯獨冷卻秒數的界另外擋:它是每張表都有的欄位,且 `COOLDOWN_MIN/MAX` 已經為了
-   *  input 的 min/max 抄在這裡了 —— 抄了卻不擋等於把 60/86400 當裝飾。 */
+  /** 送出前在本地擋掉「空欄 / 非數字 / 出界」:那些送出去只會拿到一句 INVALID_RULE,
+   *  使用者不知道是哪一格、也不知道界在哪。
+   *
+   *  **N055 起參數值域也在前端擋**(原本只有冷卻秒數擋):值域表 `PARAM_FIELDS[].min/max`
+   *  與後端 `PARAM_SPECS` 同源、由 parity fixture 釘住,不是「重抄一份會漂的表」。
+   *  界仍是**閉區間**(與後端 `lo <= n <= hi` 同),邊界值照樣送得出去。 */
   function submit(): void {
     if (form === null) return;
     const name = form.name.trim();
@@ -277,7 +256,11 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
       const raw = form.params[field.key] ?? "";
       const value = Number(raw);
       if (raw.trim() === "" || !Number.isFinite(value)) bad = true;
-      else params[field.key] = value;
+      else if (value < field.min || value > field.max) {
+        // 出界先於「哪一格空著」回報:值域訊息更精確,而 `bad` 只給得出泛用文案
+        setLocalError(`${field.label}須在 ${field.min}–${field.max} 之間`);
+        return;
+      } else params[field.key] = value;
     }
     // cdp_cross 一條線都沒勾 = 這條規則永遠不會發 —— 後端也拒
     if (form.kind === "cdp_cross" && form.levels.length === 0) bad = true;
@@ -489,6 +472,8 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                       label={field.label}
                       value={form.params[field.key] ?? ""}
                       step={field.step}
+                      min={field.min}
+                      max={field.max}
                       onChange={(v) => patchParam(field.key, v)}
                     />
                   ))}

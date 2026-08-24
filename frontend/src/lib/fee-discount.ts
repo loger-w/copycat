@@ -3,7 +3,7 @@
  *  折數原本是閃電梯的元件內私有 loader;自選列 / 單檔 header / 群組卡要算出「與梯上
  *  同一個含費稅損益」就得讀同一個來源 —— localStorage key 仍是唯一真相,只是讀者變多。
  */
-import { useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { clampDiscount, FEE_DISCOUNT_DEFAULT } from "@/lib/ladder-position";
@@ -75,4 +75,48 @@ function subscribe(onStoreChange: () => void): () => void {
  */
 export function useFeeDiscount(): number {
   return useSyncExternalStore(subscribe, readFeeDiscount, () => FEE_DISCOUNT_DEFAULT);
+}
+
+/**
+ * 折數輸入框(受控)+ 計算值,兩者的同步規則收在這裡(N067)。
+ *
+ * **計算值走 store**:輸入框原本是元件內 `useState(loadDiscount)`,只在掛載時讀一次 ——
+ * 另一分頁改折數時,同頁的自選列 / header / 群組卡(都吃 `useFeeDiscount`)會跟著換,
+ * 唯獨閃電梯的框與計算停在舊值,同一畫面上兩個折數並存而看不出哪個才對。
+ *
+ * **`raw` 仍是本地 state**:store 只存得下合法的 number,把 raw 也交出去會吃掉使用者
+ * 打到一半的按鍵(打「2.50」→ clamp 成 2.5 → 框在游標底下被改成 `2.5`)。
+ * 兩者的同步**只走一個方向**:外部值變了(≠ 自己剛寫進去的那個)才覆寫 raw。
+ * `lastWrite` 就是「這一輪是不是自己寫的」的判別子。
+ */
+export function useFeeDiscountField(): {
+  /** 受控輸入的原始字串(可暫時非法) */
+  raw: string;
+  /** 計算用折數(恆合法) */
+  value: number;
+  /** 輸入框 onChange:更新 raw,合法即 persist(並通知其他讀者) */
+  onRawChange: (raw: string) => void;
+} {
+  const value = useSyncExternalStore(subscribe, readFeeDiscount, () => FEE_DISCOUNT_DEFAULT);
+  const [raw, setRaw] = useState<string>(() => String(value));
+  const lastWrite = useRef<number>(value);
+  const [prev, setPrev] = useState<number>(value);
+  if (prev !== value) {
+    // render 期間調整 state 的官方 pattern(專案有 react-you-might-not-need-an-effect lint)
+    setPrev(value);
+    if (value !== lastWrite.current) setRaw(String(value));
+  }
+  return {
+    raw,
+    value,
+    onRawChange: (next: string) => {
+      setRaw(next);
+      const v = clampDiscount(next);
+      if (v === null) return; // 非法值只更新 raw(不吃掉按鍵),計算沿用 store 內上一個合法值
+      // 先記再寫:persistDiscount 會同步通知本元件,旗標晚一步的話這一輪會被當成
+      // 「外部改動」把 raw 覆寫掉
+      lastWrite.current = v;
+      persistDiscount(v);
+    },
+  };
 }

@@ -92,7 +92,18 @@ export function FuturesLadder({
   const { data: positionsData } = useCapitalPositions();
 
   const resolvedYm = state?.resolved_contract ?? null;
-  const contract = resolvedYm !== null ? futExchangeContract(product, resolvedYm) : null;
+  // `futExchangeContract` 對非 YYYYMM 會 throw,而這裡在 render body 上 —— 未捕捉 =
+  // 壞掉的 resolved_contract 白屏整個期貨頁(App.tsx / FuturesChart / StkfutLadder 三處
+  // 早已各自 try/catch,只有這裡漏了)。null 是既有安全態:活單 / 平倉對象自然落空,
+  // 武裝與點價由下游的 `contract === null` 分支照舊擋住。
+  let contract: string | null = null;
+  if (resolvedYm !== null) {
+    try {
+      contract = futExchangeContract(product, resolvedYm);
+    } catch {
+      contract = null;
+    }
+  }
   // 已成交量的日期界 = ±1 日窗(夜盤跨午夜時 `date` 是交易日還是日曆日尚未實證,
   // 兩種假設都涵蓋);每 render 重算,純算術。
   const myLots =

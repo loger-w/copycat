@@ -2,8 +2,9 @@ import { useId, useMemo, useRef, useState } from "react";
 
 import { WatchlistManagerDialog } from "@/components/stock/WatchlistManagerDialog";
 import { useCapitalPositions } from "@/hooks/useCapital";
-import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
+import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { WL_COLLAPSED_KEY, WL_UNGROUPED_KEY } from "@/lib/constants";
 import { useFeeDiscount } from "@/lib/fee-discount";
@@ -24,7 +25,6 @@ import { type GroupAvg, groupAvgPct } from "@/lib/watchlist-avg";
 import {
   assignToGroup,
   detachFromGroups,
-  isSameWatchlist,
   moveToGroup,
   removeCode,
   removeFromGroup,
@@ -41,6 +41,26 @@ import {
  *  class 寫的高度沒有任何測試看得到。 */
 export const ROW_H = 52;
 const EMPTY_WL: Watchlist = { codes: [], groups: [] };
+
+/** 四條落點路徑(SC-12)。拖進未分組 = 從**所有**群組移除:只移除來源組的話,
+ *  一檔多組的股票會從來源組消失卻不出現在未分組(它仍屬別組)= 畫面上像資料被吃掉。
+ *
+ *  **基底是參數而不是 render 閉包的 `wl`**(N117):套用當下才由佇列餵進最新已知內容 ——
+ *  因此它與元件實例無關,住在模組層(react-doctor `prefer-module-scope-pure-function`)。 */
+function applyDrop(
+  base: Watchlist,
+  code: string,
+  from: string | null,
+  to: string | null,
+  slot: number,
+): Watchlist {
+  if (to === null) {
+    return from === null ? reorderUngrouped(base, code, slot) : detachFromGroups(base, code, slot);
+  }
+  return from === null
+    ? assignToGroup(base, code, to, slot)
+    : moveToGroup(base, code, from, to, slot);
+}
 
 function fmtPrice(milli: number | null): string {
   if (milli === null) return "-";
@@ -112,7 +132,11 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const groups = wl.groups;
   const ungrouped = ungroupedCodes(wl);
   const { data: names = [] } = useStockNames();
-  const save = useSaveWatchlist();
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // 寫入走跨元件共用佇列(N117):管理 Dialog 與本欄的動作序列化在**同一條** chain 上,
+  // 基底也是同一份。舊寫法是「以 render 閉包的 `wl` 算 next 後 `save.mutate(next)`」——
+  // Dialog 佇列殘餘的 sub-second 窗內,兩個寫者可互相覆寫(靜默改資料,零訊號)。
+  const { commit } = useWatchlistCommit({ onError: setSaveError });
   const [input, setInput] = useState("");
   /** 哪一檔未分組股票展開了「加入群組」清單 */
   const [assigning, setAssigning] = useState<string | null>(null);
@@ -167,13 +191,6 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const positions = useCapitalPositions().data?.positions;
   const posMap = useMemo(() => positionsByCode(positions), [positions]);
   const discount = useFeeDiscount();
-
-  /** 純函數算出的 next 與現況相同 → **零 PUT**。內容相同的 PUT 會讓後端重設整個訂閱池
-   *  (TC4 全量 UNSUB/SUB),而且無錯誤訊號、畫面也看不出來(W-22)。 */
-  function commit(next: Watchlist): void {
-    if (isSameWatchlist(next, wl)) return;
-    save.mutate(next);
-  }
 
   /** `collapsed` 的**單一寫入點**:同步 ref → persist → setState 三步一律成對(review TC-4)。
    *  算 next 的邏輯留在各 handler(語意各不相同),這裡只保證三步不漏 —— 三步散在各處手抄
@@ -257,6 +274,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     zones: DropZone[];
     bounds: { left: number; right: number };
     voidBelowY: number | undefined;
+    voidAboveY: number | undefined;
   } {
     const zones: DropZone[] = [];
     const push = (key: string | null, count: number): void => {
@@ -281,20 +299,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
     // ref 沒掛上 → undefined = 不作廢(不猜一個假的界);與 zones 一樣每次 move 重算,
     // 側欄捲動 / 建議清單長出來讓 sticky 區變高時界跟著走。
     const voidBelowY = stickyRef.current?.getBoundingClientRect().bottom;
-    return { zones, bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 }, voidBelowY };
-  }
-
-  /** 四條落點路徑(SC-12)。拖進未分組 = 從**所有**群組移除:只移除來源組的話,
-   *  一檔多組的股票會從來源組消失卻不出現在未分組(它仍屬別組)= 畫面上像資料被吃掉。 */
-  function applyDrop(code: string, from: string | null, to: string | null, slot: number): Watchlist {
-    if (to === null) {
-      return from === null
-        ? reorderUngrouped(wl, code, slot)
-        : detachFromGroups(wl, code, slot);
-    }
-    return from === null
-      ? assignToGroup(wl, code, to, slot)
-      : moveToGroup(wl, code, from, to, slot);
+    // 下緣作廢帶(F3,作廢帶鏡像):最後一個 section 的 bottom + 一列容差以下都是空白區,
+    // 在那裡放開舊行為會 append 到最後一組。零 zone 時不猜界(上面已 return null)。
+    const lastBottom = zones.length === 0 ? undefined : Math.max(...zones.map((z) => z.bottom));
+    const voidAboveY = lastBottom === undefined ? undefined : lastBottom + ROW_H;
+    return {
+      zones,
+      bounds: { left: aside?.left ?? 0, right: aside?.right ?? 0 },
+      voidBelowY,
+      voidAboveY,
+    };
   }
 
   function onHandleDown(from: string | null, code: string, e: React.PointerEvent): void {
@@ -311,13 +325,14 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       setDrag(null);
     };
     const move = (ev: PointerEvent): void => {
-      const { zones, bounds, voidBelowY } = zonesNow();
+      const { zones, bounds, voidBelowY, voidAboveY } = zonesNow();
       const target = dropTargetFromPointer(
         { x: ev.clientX, y: ev.clientY },
         zones,
         ROW_H,
         bounds,
         voidBelowY,
+        voidAboveY,
       );
       // 落點作廢 → 高亮**回到來源組**(review R7):停在「放不進去的那一組」亮著的話,
       // 使用者只會再按一次;回來源組等於畫面說「放開就是原樣」。
@@ -330,17 +345,18 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       setDrag((p) => (p === null ? p : { ...p, to: target === null ? p.from : target.group }));
     };
     const up = (ev: PointerEvent): void => {
-      const { zones, bounds, voidBelowY } = zonesNow();
+      const { zones, bounds, voidBelowY, voidAboveY } = zonesNow();
       const target = dropTargetFromPointer(
         { x: ev.clientX, y: ev.clientY },
         zones,
         ROW_H,
         bounds,
         voidBelowY,
+        voidAboveY,
       );
       teardown();
       if (target === null) return; // 側欄外 / sticky 搜尋區放開 → 整個作廢(移動語意不可逆)
-      commit(applyDrop(code, from, target.group, target.index));
+      commit((base) => applyDrop(base, code, from, target.group, target.index));
     };
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key !== "Escape") return;
@@ -590,7 +606,9 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
             onClick={(e) => {
               e.stopPropagation();
               // 群組列 = 只離開該組(該檔掉回未分組);未分組列 = 從自選整個移除
-              commit(group === null ? removeCode(wl, code) : removeFromGroup(wl, code, group));
+              commit((base) =>
+                group === null ? removeCode(base, code) : removeFromGroup(base, code, group),
+              );
             }}
           >
             ×
@@ -609,7 +627,13 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                   onClick={(e) => {
                     e.stopPropagation();
                     setAssigning(null);
-                    commit(assignToGroup(wl, code, g.name, g.codes.length));
+                    // 插入位置以**套用當下**的組員數為準(佇列前段可能剛加了一檔進去)
+                    commit((base) => {
+                      const target = base.groups.find((x) => x.name === g.name);
+                      return target === undefined
+                        ? base // 佇列前段把這組刪了 → 零 PUT 靜默早退
+                        : assignToGroup(base, code, g.name, target.codes.length);
+                    });
                   }}
                   className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent"
                 >
@@ -687,7 +711,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
         ) : null}
       </div>
 
-      {save.error ? <p className="text-xs text-bear">{errText(save.error.message)}</p> : null}
+      {saveError !== null ? <p className="text-xs text-bear">{errText(saveError)}</p> : null}
       {error ? <p className="text-xs text-bear">自選清單載入失敗</p> : null}
 
       <section

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { errText, useSaveWatchlist } from "@/hooks/useStockWatchlist";
+import { errText } from "@/hooks/useStockWatchlist";
 import { useStockNames } from "@/hooks/useStockNames";
+import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { cn } from "@/lib/utils";
 import {
@@ -9,10 +10,11 @@ import {
   addGroup,
   assignToGroup,
   deleteGroup,
-  isSameWatchlist,
+  moveToGroup,
   removeCode,
   removeFromGroup,
   renameGroup,
+  reorderUngrouped,
   ungroupedCodes,
   type Group,
   type Watchlist,
@@ -21,6 +23,13 @@ import {
 /** 「未分組」是左欄第一列的**偽群組**,不是真的可以建的群組名 —— 兩者同名的話畫面上
  *  無法區分(`selected === null` vs 一個真的叫「未分組」的群組)。 */
 const UNGROUPED_LABEL = "未分組";
+
+/** 純函數回原物件 = 撞名 / 空白名(`addGroup` / `renameGroup` 的契約)→ 佇列的拒絕訊號。
+ *  模組層:與元件實例無關,每 render 重建只是白費(react-doctor
+ *  `prefer-module-scope-pure-function`)。 */
+function rejectIfUnchanged(next: Watchlist, base: Watchlist): Watchlist | null {
+  return next === base ? null : next;
+}
 
 interface Props {
   open: boolean;
@@ -31,14 +40,18 @@ interface Props {
 }
 
 export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Props) {
-  const save = useSaveWatchlist();
+  /** 錯誤文案的**單一槽位**:前端 eager 擋下來的(撞名 → 零 PUT)與佇列回報的共用它 ——
+   *  兩份 state 併存時,eager 錯誤在下一發成功後不會被清掉(文案留在畫面上,而使用者
+   *  剛剛才成功做完一件事)。 */
+  const [localError, setLocalError] = useState<string | null>(null);
+  // 寫入一律走跨元件共用佇列(N117):側欄拖曳與本窗的動作序列化在**同一條** chain 上,
+  // 基底也是同一份 —— 兩個寫者各持一顆 observer 時可以互相覆寫(見 hook 檔頭)。
+  const { commit, isPending } = useWatchlistCommit({ seed: wl, onError: setLocalError });
   const { data: names = [] } = useStockNames();
   const dlgRef = useRef<HTMLDialogElement | null>(null);
   const [groupInput, setGroupInput] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState("");
-  /** 前端就擋下來的錯誤(撞名 → 零 PUT),與 mutation 錯誤共用同一份文案 */
-  const [localError, setLocalError] = useState<string | null>(null);
   /** 左欄選中的群組名;`null` = 未分組偽群組。**只當意圖**,渲染一律走下面的 derived 值 */
   const [selected, setSelected] = useState<string | null>(null);
   const [stockInput, setStockInput] = useState("");
@@ -77,81 +90,26 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     }
   }
 
-  /** 連續操作的串行佇列(next-time 2026-08-11 第一條)。
+  /** 撞名 / 保留名的**權威判定在 transform 裡**(N115):`addGroup` / `renameGroup` 對
+   *  撞名回原物件,而「原物件」只有拿**套用當下的基底**去比才作數。
    *
-   *  單顆 mutation observer 的 per-call callbacks(`mutate(next, { onSuccess })`)只對
-   *  **最新一次** mutate 執行 —— 連刪兩組時第一發的 `onGroupDeleted` 會被第二發覆蓋吞掉
-   *  (W-20 復發);且以 render 閉包的 `wl` 算 next,在途 PUT 未回時是 stale 基底,
-   *  第二發會把第一發的結果原樣還原。
-   *
-   *  所以動作改傳 `(base) => next` transform,排進 promise chain:輪到時以「最新已知
-   *  內容」(上一發 PUT 回應)重算;`mutateAsync` 的 per-call promise 不受後續呼叫影響,
-   *  `onDone` 逐發執行(dialog 常駐掛載;佇列殘餘的 onDone 在關窗後執行也無害 ——
-   *  onGroupDeleted 是冪等的折疊孤兒清理,不漏清正是 W-20 要的)。 */
-  const baseRef = useRef(wl);
-  const pendingRef = useRef(0);
-  // lazy init(null 起始):useRef(Promise.resolve()) 會在每次 render 白白配置一顆 promise
-  const chainRef = useRef<Promise<void> | null>(null);
-  /** 失敗世代:佇列中某發失敗 → 世代 +1,其後**已排隊**的動作全部作廢(它們排隊時
-   *  假設前面會成功;靜默跳過失敗那步繼續套用會產生使用者未預期的複合狀態)。
-   *  失敗後的**新**動作是新意圖,拿到新世代照常執行。 */
-  const genRef = useRef(0);
-
-  /** `baseRef` 只在 React 真的 render 出新 `wl` 時同步(`pendingRef` 守門),**不在事件
-   *  路徑同步**(review C-2):`pendingRef` 歸零早於 cache 更新引發的 re-render,空窗內
-   *  的下一個動作若在 commit 內用 render 閉包的 `wl` 覆寫基底,會把剛拿到的 PUT 回應
-   *  倒回舊值 —— 本次要修的「還原」bug 在更窄的窗口復發。useLayoutEffect ref 同步是
-   *  專案既有 pattern(useBreadth / useIndexStream 同款)。 */
-  useLayoutEffect(() => {
-    if (pendingRef.current === 0) baseRef.current = wl;
-  }, [wl]);
-
-  /** 純函數回原物件 = 無變化 → 零 PUT。**這裡不報錯** —— 群組名撞名那條由呼叫端
-   *  自己顯示 BAD_GROUP,勾選 / 移除路徑的無變化不該冒出「群組名稱不合法」。 */
-  function commit(make: (base: Watchlist) => Watchlist, onDone?: () => void): void {
-    const gen = genRef.current;
-    pendingRef.current += 1;
-    chainRef.current = (chainRef.current ?? Promise.resolve())
-      .then(async () => {
-        if (gen !== genRef.current) return; // 排隊期間前面有失敗 → 本動作作廢
-        const base = baseRef.current;
-        const next = make(base);
-        // 深度比對不可省(W-9 三處之一,review F1):`assignToGroup` / `removeFromGroup` 等
-        // 恆回新陣列,內容相同也會送出,而內容相同的 PUT 會讓後端重設整個訂閱池
-        // (TC4 全量 UNSUB/SUB),且無錯誤訊號、畫面也看不出來。
-        if (isSameWatchlist(next, base)) return;
-        baseRef.current = await save.mutateAsync(next);
-        setLocalError(null); // 清除點在成功後,不在送出前 —— 送出前清會洗掉前一發的失敗文案
-        onDone?.();
-      })
-      .catch((e: unknown) => {
-        // 唯一收斂點,chain 保證回到 fulfilled(review C-1:任何一步 throw 若留在
-        // rejected,之後所有 commit 的 .then 一律被跳過 = Dialog 靜默失去全部寫入能力)。
-        // 失敗文案落 localError 而非依賴 save.error —— 佇列下一發 mutateAsync 會立刻
-        // 重設 observer 的 error,文案一幀未渲染就被洗掉(review C-3/W-1)。
-        // 基底不推進;已排隊的後續動作由世代檢查作廢。
-        genRef.current += 1;
-        setLocalError(e instanceof Error ? e.message : "SAVE_FAILED");
-      })
-      .finally(() => {
-        pendingRef.current -= 1;
-      });
-  }
-
+   *  下面兩個 submit 仍各留一份 eager 檢查,但它已降級成**純 UX**(常見情形下即時回饋、
+   *  不必等一次 round-trip);佇列視窗內交錯時它會偽陰性(驗證放行 → 套用時才撞名),
+   *  那條路徑現在由 transform 回 `null` 接住 → BAD_GROUP 文案照樣出得來。
+   *  舊行為是零 PUT 且**無文案**,而輸入框已清空 —— 看起來完全成功。 */
   function submitAddGroup(): void {
     const name = groupInput.trim();
     if (name === "") return;
     if (name === UNGROUPED_LABEL) {
-      setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分
+      setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分(與基底無關)
       return;
     }
-    const next = addGroup(wl, name);
-    if (next === wl) {
-      setLocalError("BAD_GROUP"); // 撞既有名 → 零 PUT + 文案
+    if (addGroup(wl, name) === wl) {
+      setLocalError("BAD_GROUP"); // eager UX:撞既有名 → 零 PUT + 文案
       return;
     }
     setGroupInput("");
-    commit((base) => addGroup(base, name));
+    commit((base) => rejectIfUnchanged(addGroup(base, name), base));
   }
 
   function submitRename(from: string): void {
@@ -159,15 +117,14 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setLocalError("BAD_GROUP");
       return;
     }
-    const next = renameGroup(wl, from, renameInput);
-    if (next === wl) {
-      setLocalError("BAD_GROUP"); // 撞既有名 / 空白 → 保留輸入框讓使用者改
+    if (renameGroup(wl, from, renameInput) === wl) {
+      setLocalError("BAD_GROUP"); // eager UX:撞既有名 / 空白 → 保留輸入框讓使用者改
       return;
     }
     setRenaming(null);
     // 改名成功前不要動 selected —— 樂觀更新在 PUT 失敗時會留下懸空的選取
     commit(
-      (base) => renameGroup(base, from, renameInput),
+      (base) => rejectIfUnchanged(renameGroup(base, from, renameInput), base),
       () => setSelected(renameInput.trim()),
     );
   }
@@ -201,7 +158,34 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     });
   }
 
-  const errorMessage = localError ?? (save.error ? save.error.message : null);
+  /** 組內 / 未分組內的鍵盤排序(N266)。拖拉握把是 pointer-only 且已 `aria-hidden`,
+   *  管理窗以前只有移組與移除 —— **組內順序完全沒有非 pointer 的路徑**。
+   *
+   *  `slot` 是**移除前**的渲染索引(`insertAt` 的契約:`slot > at` 時內部補 −1):
+   *  往上 = `i − 1`(不大於 at,就是目標位置);往下 = `i + 2`(補償後落在 `i + 1`)。
+   *  差一格的症狀是「按了下移沒動」或「一路跳到底」,兩者都是靜默錯位 —— 鎖在
+   *  `WatchlistManagerDialog.test.tsx` N266 節的逐位斷言。 */
+  function moveRow(code: string, dir: "up" | "down"): void {
+    const target = activeGroup?.name ?? null;
+    commit((base) => {
+      const list =
+        target === null
+          ? ungroupedCodes(base)
+          : base.groups.find((g) => g.name === target)?.codes;
+      // 三種「無事可做」一律回 base(= 零 PUT 靜默早退),**不是 `null`** ——
+      // null 是「撞名」的拒絕訊號,會噴出「群組名稱不合法」,而排序按到界上並不是撞名。
+      if (list === undefined) return base; // 佇列前段把這一組刪掉了
+      const i = list.indexOf(code);
+      if (i < 0) return base; // 佇列前段把這一檔移走了
+      if (dir === "up" ? i === 0 : i === list.length - 1) return base; // 已在界上
+      const slot = dir === "up" ? i - 1 : i + 2;
+      return target === null
+        ? reorderUngrouped(base, code, slot)
+        : moveToGroup(base, code, target, target, slot);
+    });
+  }
+
+  const errorMessage = localError;
 
   /** 搜尋框的可及名稱與 placeholder **同一份字串**:accname 計算 aria-label 優先於
    *  placeholder,兩者分開寫的話 aria-label 會把「加到哪一組」的脈絡蓋掉(review P1);
@@ -419,7 +403,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                             // 舊值,commit() 的零 PUT 早退**擋不住**這條 —— 算出來的 next
                             // 與舊 wl 內容確實不同,兩次點擊就是兩筆真 PUT,而每筆都會讓
                             // 後端重設整個訂閱池(TC4 全量 UNSUB/SUB)。
-                            disabled={already || save.isPending}
+                            disabled={already || isPending}
                             aria-label={`加入 ${s.code} 到 ${activeGroup?.name ?? UNGROUPED_LABEL}`}
                             onClick={() => addStock(s.code)}
                             className="flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs hover:bg-surface disabled:opacity-50 disabled:hover:bg-transparent"
@@ -439,12 +423,36 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                 ) : null}
               </div>
               <ul className="min-h-0 flex-1 overflow-y-auto px-1">
-                {rows.map((code) => (
+                {rows.map((code, i) => (
                   <li
                     key={code}
                     data-testid={`mgr-row-${code}`}
                     className="flex h-9 items-center gap-2 border-b border-line px-2 text-xs"
                   >
+                    {/* 上移 / 下移(N266):組內排序的**唯一非 pointer 路徑** —— 側欄的
+                        拖拉握把是 pointer-only(且已 aria-hidden),管理窗原本只有移組與
+                        移除。界上的那一顆停用而不是「按了沒反應」;`aria-label` 帶組名,
+                        因為左欄切組後同一批 label 會重複出現在不同語境。 */}
+                    <span className="flex shrink-0 flex-col leading-none">
+                      <button
+                        type="button"
+                        aria-label={`上移 ${code}`}
+                        disabled={i === 0}
+                        onClick={() => moveRow(code, "up")}
+                        className="px-0.5 text-[0.625rem] text-ink-dim hover:text-ink disabled:text-ink-dim/30 disabled:hover:text-ink-dim/30"
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`下移 ${code}`}
+                        disabled={i === rows.length - 1}
+                        onClick={() => moveRow(code, "down")}
+                        className="px-0.5 text-[0.625rem] text-ink-dim hover:text-ink disabled:text-ink-dim/30 disabled:hover:text-ink-dim/30"
+                      >
+                        ▼
+                      </button>
+                    </span>
                     <span className="w-14 shrink-0 font-mono text-ink">{code}</span>
                     <span className="min-w-0 flex-1 truncate text-ink-muted">{nameOf(code)}</span>
                     {/* 一檔多組是既有能力;矩陣拆掉後不標的話使用者會以為只能屬一組。

@@ -38,6 +38,12 @@ export function CapitalConfirmDialog({
    *  堵「點確認送單後、caller 卸載前按 Esc → UI 誤導成已取消但單已送出」。一次性不重置
    *  (前提:4 個 caller 的 onConfirm/onCancel 路徑皆卸載本元件)。 */
   const closedRef = useRef(false);
+  /** N114 的機械防護:契約「onConfirm / onCancel 必須卸載本元件」原本只在 JSDoc。
+   *  settled 後排一個 macrotask —— 正確的 caller 在同一個 task 內就卸載完,cleanup 順手
+   *  清掉這顆計時器;沒卸載的話它會在 dev console 指名契約。
+   *  **不 throw、不重置 closedRef**:前者把 UI 契約瑕疵升級成真錢流程中斷,後者直接違反
+   *  「settled 之後不再補發」的安全語意(那正是 closedRef 存在的理由)。 */
+  const contractTimer = useRef<number | undefined>(undefined);
 
   // 開窗只走這一條路徑(掛載 = 開):showModal 不進 render(commit 的 open 屬性會讓
   // showModal 拋 InvalidStateError);`!el.open` 前置不可省 — StrictMode double-invoke
@@ -62,6 +68,7 @@ export function CapitalConfirmDialog({
     // 噴 close 事件、誤呼 onCancel。preventScroll:FuturesLadder 的平倉鈕在自動跟隨
     // 置中的階梯內,關窗瞬間 scroll-into-view 會拉走使用者盯的價位帶。
     return () => {
+      window.clearTimeout(contractTimer.current); // 有卸載 = 守約,契約檢查不必再跑
       const opener = openerRef.current;
       if (opener instanceof HTMLElement && opener.isConnected && opener !== document.body) {
         opener.focus({ preventScroll: true });
@@ -69,10 +76,24 @@ export function CapitalConfirmDialog({
     };
   }, []);
 
+  /** settled 標記 + 契約檢查(見 `contractTimer`)。**旗標一定在 callback 之後設**
+   *  (呼叫次數與順序跟舊版逐 click 直呼完全一致,旗標只擋「之後」的 Esc/close 補發)。 */
+  function markSettled(): void {
+    closedRef.current = true;
+    if (!import.meta.env.DEV) return;
+    window.clearTimeout(contractTimer.current);
+    contractTimer.current = window.setTimeout(() => {
+      console.error(
+        "CapitalConfirmDialog:onConfirm / onCancel 必須卸載本元件(caller 硬性契約)。" +
+          "未卸載時 settled 旗標會讓第二次 Esc 失效,只剩取消鈕可關 —— 而這是真錢確認窗。",
+      );
+    }, 0);
+  }
+
   function requestCancel(): void {
     if (closedRef.current) return;
-    closedRef.current = true;
     onCancel();
+    markSettled();
   }
 
   return (
@@ -131,7 +152,7 @@ export function CapitalConfirmDialog({
               // 直呼在前、旗標在後:呼叫次數與順序跟舊版逐 click 直呼完全一致,
               // 旗標只擋「之後」的 Esc/close 補發。
               onCancel();
-              closedRef.current = true;
+              markSettled();
             }}
             className="flex-1 border border-line px-3 py-2 text-sm text-ink-muted transition-colors hover:border-ink-dim hover:text-ink"
           >
@@ -141,7 +162,7 @@ export function CapitalConfirmDialog({
             type="button"
             onClick={() => {
               onConfirm();
-              closedRef.current = true;
+              markSettled();
             }}
             className={cn(
               "flex-1 border px-3 py-2 text-sm font-bold transition-colors",
