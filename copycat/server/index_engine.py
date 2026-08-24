@@ -51,10 +51,13 @@ _WATCH_END = _dt.time(13, 25)
 #: 分時自癒門檻:heal 窗內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
 #: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
 _LAG_HEAL_MIN = 3
-#: 期望覆蓋終點(分鐘數):1330 = 13*60+30。
-#: watchdog 窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K」不成立,1K 域到 1330 ——
-#: 尾段 13:25–13:30 正是要補的那截(review T-3)。N105 起 heal 窗自 13:25 一路開到午夜
-#: (交易日限定),而 lag 的期望覆蓋終點仍封頂在這裡:minutes 覆蓋到 1330 就是完整。
+#: heal 尾窗終點:watchdog 窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K」不成立,
+#: 1K 域到 1330 —— 尾段 13:25–13:30 正是要補的那截,收盤後留 10 分鐘做最後回補
+#: (review T-3)。N105 起這個上界**只在沒有交易日曆時**適用(有日曆則盤外開到午夜,
+#: 見 `_broadcast_loop` 的三段註解);兩條路的下界都是 `_WATCH_END`。
+_HEAL_TAIL_END = _dt.time(13, 40)
+#: 期望覆蓋終點(分鐘數):1330 = 13*60+30。lag 的封頂 —— minutes 覆蓋到 1330 就是完整,
+#: 收盤後(不論走哪條尾窗)都不得再因為牆鐘往前走而觸發。
 _HEAL_TARGET_MIN = 13 * 60 + 30
 #: 無進展退避封頂:1K 持續回空(假日 / 該日資料不可得)時 heal 間隔倍增至此為止,
 #: 不以固定 60s 整窗空轉(UNSUB→SUB churn + log 噪音;review T-5)。
@@ -171,6 +174,10 @@ class IndexEngine:
         # 純日曆日語意逐字**(W9):本引擎現行完全不看星期,直接建構的既有 caller
         # 行為不得有一絲變化;真日曆只由 app 層在 prod 顯式傳。
         self._is_trading_day = is_trading_day if is_trading_day is not None else (lambda _d: True)
+        #: **有沒有日曆**(≠ `_is_trading_day` 的答案)。無日曆時上面那個預設恆回 True,
+        #: 拿它當「今天有開盤」的證據等於閘恆開 —— 盤外自癒的放寬只有在真的問得到
+        #: 日曆時才成立,否則退回舊窗(review SP1(a))。
+        self._has_calendar = is_trading_day is not None
         self._in_watch_window = in_watch_window
         self._in_futures_session = in_futures_session
         self._now_fn = now_fn
@@ -195,6 +202,12 @@ class IndexEngine:
         # 換日 pending(IR2):偵測新日後 realtime 分鐘先進 pending,swap 才入 minutes
         self._pending_date: str | None = None
         self._pending_minutes: dict[str, int] = {}
+        #: pending 期間 **retry 抓到的新日 1K**(N107 / review SP2(b))。與
+        #: `_pending_minutes`(live 推播)分開存,因為它們在 swap 時的優先序不同:
+        #: 早輪 retry 回補 < rollover 當下的最終回補 < live pending。混在同一顆 dict
+        #: 裡的話,早輪回補會贏過最終回補 —— 兩份都是合法分鐘,畫面上零錯誤訊號。
+        #: **只 in-place 改**(`.update()` / `.clear()`):worker thread 也寫它。
+        self._pending_backfill: dict[str, int] = {}
 
         self._twse = _Series()
         self._otc = _Series()
@@ -253,17 +266,25 @@ class IndexEngine:
         「宣告治好、重用死窗口」的原狀。回傳 False 只代表「零新鍵」,不代表 fetch 失敗
         (失敗一律是 ConnectionError)。
 
-        **pending 期間寫 `_pending_minutes` 而不是 `_twse.minutes`**(N107):rollover
+        **pending 期間寫 `_pending_backfill` 而不是 `_twse.minutes`**(N107):rollover
         偵測到新日之後,source 的日窗已經切到新日 → 這一趟抓回來的是**新日**的 1K,
         merge 進舊日 dict 就是混日線(廣播面已由 T-1 擋住,但 swap 前 ≤60 s 內重整頁面
-        仍會從 `state()` 拿到)。合併方向對齊 `_swap_day` 的 `{**backfill, **pending}`
-        —— 回補是底稿,live pending 蓋在它上面。
+        仍會從 `state()` 拿到)。落點是**回補區**不是 live pending 區,兩者在 swap 的
+        優先序不同(見 `_swap_day`)。
+
+        本函式跑在 worker thread,所以三顆 dict 一律 **in-place `.update()`**
+        (review SP2(a)):`d = {**new, **d}` 是「讀快照 → 換新 dict」,讀與寫之間
+        event loop 的 `_handle_quote` 若寫進舊 dict,那一筆就人間蒸發(畫面上只是少
+        一個分鐘點)。跨執行緒無鎖這件事本身是既有家族(N094),本輪不擴大。
         """
         self._source.subscribe_symbol(_SYMBOL)
         minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
         if self._pending_date is not None:
-            new_keys = minutes.keys() - self._pending_minutes.keys()
-            self._pending_minutes = {**minutes, **self._pending_minutes}
+            # 進展判定要看**整個新日**已知的鍵(回補 ∪ live),否則 live 已經推過的
+            # 分鐘會被算成「新鍵」,無進展的 stub 反而看起來有進展
+            known = self._pending_backfill.keys() | self._pending_minutes.keys()
+            new_keys = minutes.keys() - known
+            self._pending_backfill.update(minutes)
             return bool(new_keys)
         new_keys = minutes.keys() - self._twse.minutes.keys()
         self._twse.minutes.update(minutes)
@@ -459,6 +480,7 @@ class IndexEngine:
                 if self._pending_date != new_date:
                     self._pending_date = new_date
                     self._pending_minutes = {}
+                    self._pending_backfill.clear()  # in-place:worker 可能正握著它
                     self._source.set_trade_date(new_date)
                     try:
                         await asyncio.to_thread(
@@ -485,10 +507,17 @@ class IndexEngine:
             self._swap_day(backfill={})
 
     def _swap_day(self, *, backfill: dict[str, int]) -> None:
+        """換日:三份新日分鐘按**可信度由低到高**疊起來(N107 / review SP2(b))。
+
+        `_pending_backfill`(pending 期間 retry 抓的,可能是換窗當下還沒寫完的半份)
+        < `backfill`(rollover 當下最後一趟)< `_pending_minutes`(live 推播,最新)。
+        少了第一層,早輪 retry 的那份會贏過最終回補 —— 同 N058 那種「先佔的贏」失效。
+        """
         assert self._pending_date is not None
         self._trade_date = self._pending_date
         self._pending_date = None
-        self._twse.minutes = {**backfill, **self._pending_minutes}
+        self._twse.minutes = {**self._pending_backfill, **backfill, **self._pending_minutes}
+        self._pending_backfill.clear()  # in-place(同 `_rollover_loop` 的理由)
         self._pending_minutes = {}
         self._twse.last_minute = None
         self._twse.high = None
@@ -523,19 +552,28 @@ class IndexEngine:
             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
             #
-            # heal 窗 = **交易日** ∩(watchdog 窗 ∪ 13:25 之後整段)(N105):
-            # - 尾窗上界原本是 13:40,盤後 / 晚間啟動踩到 1K 回補 timeout 就要空到次日
-            #   09:06 才自癒。`_minutes_lag_exceeded` 的 `min(now, 13:30)` 封頂本來就
-            #   已經是條文要的「窗外以 13:30 為期望覆蓋終點」,缺的只是讓閘開著。
-            # - 09:00 之前不需要另外擋:空 minutes 以 09:00 起算,`now - 540 > 3` 在
-            #   09:04 之前恆偽,而閘的另一半(`now >= 13:25`)也還沒開。
-            # - **交易日閘**是這次放寬的必要配套:休市日 minutes 恆空,沒有它就會從
-            #   09:04 一路空打到午夜(UNSUB→SUB churn + log 噪音),而那天本來就沒有
-            #   任何資料可補。代價:交易日晚間若 TC4 整晚拿不到當日 1K,會以退避
-            #   (60 s 起、封頂 `_HEAL_BACKOFF_CAP`)持續重試到隔日 —— 那正是要換的東西。
-            if (self._in_watch_window() or self._now_fn() >= _WATCH_END) and self._is_trading_day(
-                self._today_fn()
-            ):
+            # heal 窗(N105 + review SP1)。三段分開想:
+            # 1. **watchdog 窗內(09:00–13:25)逐字沿用舊判準,不吃日曆**:日曆把一個
+            #    真交易日誤標成假日時,交易日閘會讓那天**整天**不自癒 —— 那是改動前
+            #    沒有的新失效(舊碼在窗內照樣救)。交易日閘的用途是壓休市日的**盤外**
+            #    噪音,不該把窗內的既有保護一起收走。
+            # 2. **有日曆時,盤外放寬到午夜**:尾窗上界原本 13:40,盤後 / 晚間啟動踩到
+            #    1K 回補 timeout 就要空到次日 09:06 才自癒。`_minutes_lag_exceeded` 的
+            #    `min(now, 13:30)` 封頂本來就是條文要的「窗外以 13:30 為期望覆蓋終點」。
+            #    休市日則一發都不打(否則從 13:25 空打到午夜)。
+            # 3. **沒有日曆時退回舊尾窗 13:25–13:40**:`_is_trading_day` 的預設是
+            #    `lambda _d: True`(W9),拿它當「今天有開盤」的證據等於閘恆開 ——
+            #    配上放寬到午夜的窗,休市日噪音會比改動前更大。不知道就不放寬。
+            # 09:00 之前不必另外擋:空 minutes 以 09:00 起算,`now - 540 > 3` 在 09:04
+            # 之前恆偽,而盤外那半邊(`now >= 13:25`)也還沒開。
+            now_t = self._now_fn()
+            if self._in_watch_window():
+                heal_window = True
+            elif self._has_calendar:
+                heal_window = now_t >= _WATCH_END and self._is_trading_day(self._today_fn())
+            else:
+                heal_window = _WATCH_END <= now_t < _HEAL_TAIL_END
+            if heal_window:
                 if not self._minutes_lag_exceeded():
                     # 覆蓋度跟上 → 退避歸零。**variant 不歸零**(review L1-P1-3):
                     # 0 號窗口一旦毒化就一直是毒的,恢復時打回 0 等於推播死的日子每兩發

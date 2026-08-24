@@ -205,8 +205,10 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `copycat/live/futures_source.py::fetch_bars_range`(raise `HistoryTimeoutError`)→
   `copycat/server/futures_engine.py::bars_range`(`BarsResult`:timeout / disconnected)→
   `copycat/server/bars.py::build_minute`(兩段取最壞)→ `app.py::_market_payload(status=…)`。
-  值域 `ok | timeout | disconnected`,沿 `/api/stock/bars` 既有三態語意。**目前只有期指
-  `tf=1` 那條路會給出非 `ok`**(加權 / 櫃買 / 日週月 K 的來源層沒有三態訊號,固定 `ok`)。
+  值域 `ok | timeout | disconnected`,沿 `/api/stock/bars` 既有三態語意。**這一格只在期指
+  `tf=1` 出現;其餘路徑(加權 / 櫃買 / 日週月 K)連鍵都不給** —— 缺欄 = 該路徑尚未三態化。
+  硬寫一個恆 `ok` 是謊報:index proxy miss 時會是 `source:"unavailable"` + `status:"ok"`,
+  而後者的意思正好是「問到了、就是沒有」。
   讀者 = `frontend/src/hooks/useMarketBars.ts::BarsMeta.status`(optional)與
   `components/futures/FuturesChart.tsx::EMPTY_TEXT`(空態三句話)。後端拿掉這一格 → 前端
   `?? "ok"` 靜默退回單一句「暫無資料(TC4 未回應)」,「TC4 忙」與「真沒 K 線」再度不可分辨,

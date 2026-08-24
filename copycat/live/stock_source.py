@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
-import math
 import threading
 import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
@@ -33,25 +32,31 @@ logger = logging.getLogger(__name__)
 _TRADING_START = _dt.time(8, 30)
 _TRADING_END = _dt.time(13, 35)
 
-_DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗**上限**(日曆日;25 交易日 + 假日餘裕)
-#: 視窗地板(日曆日):長假月份 20 日曆日 ≈ 7–14 個交易日,`_BASIS_BARS = 5` 仍取得到
-_DAILY_WINDOW_MIN_DAYS = 20
-#: 交易日 → 日曆日的換算率(5/7 個工作日 + 假日餘裕);40 / 25 就是這個數
-_DAILY_WINDOW_RATIO = 1.6
+_DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
+#: CDP basis sweep 的 n(`signal_hub._BASIS_BARS`)。**只有它小於這個數**,而它只要
+#: 最後一根已完成 bar → 1K fallback 可以走窄窗。
+_DAILY_SMALL_N = 5
+#: 小 n 的 1K fallback 視窗(日曆日)。20 日曆日 ≈ 12–14 個交易日,春節那種 9 天連假
+#: 之後仍有 7–8 個平日 —— 對「要 5 根」綽綽有餘。
+_DAILY_FALLBACK_SMALL_DAYS = 20
 
 
-def _daily_window_days(n: int) -> int:
-    """`fetch_daily_bars(n=…)` 的取數視窗(日曆日)。
+def _daily_fallback_window_days(n: int) -> int:
+    """`fetch_daily_bars` 的 **1K fallback 段**視窗(日曆日);DK 段不吃這個。
 
-    **上限維持 40**(`n >= 25` 逐字等於改動前):`overlay.build_overlay` 的 ma20 要 20 根
-    已完成日 bar,而 40 日曆日遇春節連假只剩 ~23 根 —— 餘裕本來就只有個位數,再放寬窗
-    是多收沒用的量、再縮窗是讓 ma20 靜默變 null(畫面上只是少一條線,零錯誤訊號)。
+    只有兩種輸入就寫成兩種輸出(review ST8):`n <= 5` → 20 日,其餘 → 40 日(逐字
+    等於改動前)。用連續公式表達一個只有兩格的對映,讀者得自己算才知道 `n=25` 沒變。
 
-    小 `n` 才縮:唯一的小 n 呼叫點是 CDP basis sweep(`signal_hub._BASIS_BARS = 5`),
-    它只要最後一根已完成 bar。DK 不支援的股號在那條路上每個交易日都整窗拉 1K
-    (≤275 列/交易日 × 25–28 個交易日 ≈ 7,700 列),而 20 日窗約砍一半(N024)。
+    為什麼只縮 fallback(review SP3):條文點名的是「DK 不支援的股號**每次 overlay 都
+    整窗拉 1K**」—— DK 一天一列,縮它省不到量卻多一個會漂的維度。兩段窗不同是刻意的,
+    與 `fetch_bars_range_tagged`(DK 全窗、fallback 縮到 90 日)同款姿態。
+
+    為什麼 `n=25` 不縮:`overlay.build_overlay` 的 ma20 要 20 根**已完成**日 bar,
+    40 日曆日 ≈ 25–28 個交易日、遇春節只剩 ~23 根,餘裕本來就只有個位數;再縮的失效
+    樣態是 ma20 靜默變 null(畫面上只是少一條線,零錯誤訊號)。
     """
-    return min(_DAILY_WINDOW_DAYS, max(_DAILY_WINDOW_MIN_DAYS, math.ceil(n * _DAILY_WINDOW_RATIO)))
+    return _DAILY_FALLBACK_SMALL_DAYS if n <= _DAILY_SMALL_N else _DAILY_WINDOW_DAYS
+
 
 # K 線 fallback:DK 空時改走 1K 聚合,但 1K 量級是 DK 的數百倍(180 日曆日 ≈ 4.8 萬列
 # 分頁收割)→ fallback 另用較小視窗,寧可根數不足也不打爆 REQ 往返(change-spec R2-7)
@@ -763,19 +768,22 @@ class StockQuoteSource(TC4QuoteSource):
         兩段都顯式帶 `BARS_POLL_DEADLINE`:預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞
         60s,hub 的重試會把 executor 佔滿,而畫面只是疊線遲遲不來(P2-13)。
 
-        視窗隨 `n` 縮(N024,見 `_daily_window_days`);兩段共用同一個窗。
+        **DK 段窗逐字 40 日;只有 1K fallback 段隨 `n` 縮**(N024,見
+        `_daily_fallback_window_days`)。
         """
         self._ensure_connected()
         sym = stock_symbol(code)
         end_d = _dt.date.today()
-        start_d = end_d - _dt.timedelta(days=_daily_window_days(n))
+        start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
         dk_rows, _dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
         bars = _parse_dk_rows(dk_rows)
         if not bars:
-            logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
+            fb_start_d = end_d - _dt.timedelta(days=_daily_fallback_window_days(n))
+            fb_start = f"{fb_start_d:%Y%m%d}00"
+            logger.info("daily bars %s: DK 空,fallback 1K 聚合(視窗 %s..)", code, fb_start_d)
             fb_rows, fb_timed_out = self._collect_history(
-                sym, "1K", start, end, BARS_POLL_DEADLINE
+                sym, "1K", fb_start, end, BARS_POLL_DEADLINE
             )
             if fb_timed_out:
                 raise HistoryTimeoutError(f"daily bars {sym}:1K fallback 首頁未備妥")
