@@ -184,6 +184,8 @@ export default function App() {
     setVisited((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
   }, [tab]);
 
+  // 誤報:`no-event-handler` 看不穿 `writeLocal` 這層間接(理由與實測見 lib/storage.ts 檔頭)
+  // react-doctor-disable-next-line react-doctor/no-event-handler
   useEffect(() => {
     if (stockCode) writeLocal(MAIN_CODE_KEY, stockCode);
   }, [stockCode]);
