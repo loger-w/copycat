@@ -16,6 +16,7 @@ import {
   paneUnitScale,
   svgFontRem,
 } from "@/lib/pane-frame";
+import { readLocal, writeLocal } from "@/lib/storage";
 import { pts } from "@/lib/svg-points";
 import { HOUR_TICKS } from "@/lib/time-labels";
 import {
@@ -320,11 +321,11 @@ export function MarketPane({
   active = true,
 }: Props) {
   const [futKey, setFutKey] = useState<FutKey>(() => {
-    const saved = window.localStorage.getItem(stores.fut);
+    const saved = readLocal(stores.fut);
     return saved === "MXF" || saved === "TMF" ? saved : "TXF";
   });
   const [marketKey, setMarketKeyState] = useState<MarketKey>(() => {
-    const saved = window.localStorage.getItem(stores.key);
+    const saved = readLocal(stores.key);
     return isMarketKey(saved) ? saved : defaultKey;
   });
   // mount 初始化也要過 coerceMode:兩個 key 各自持久化,重載後可能復原成
@@ -333,8 +334,8 @@ export function MarketPane({
   // 右 pane(defaultKey=OTC)在「只有 mode 存檔、沒有 key 存檔」時會拿 TWSE 去
   // coerce → 保留 day,而實際標的是 OTC → 開場就停在一顆 disabled 的週期鈕上。
   const [mode, setModeState] = useState<MarketMode>(() => {
-    const savedMode = window.localStorage.getItem(stores.mode);
-    const savedKey = window.localStorage.getItem(stores.key);
+    const savedMode = readLocal(stores.mode);
+    const savedKey = readLocal(stores.key);
     return coerceMode(
       isMarketKey(savedKey) ? savedKey : defaultKey,
       isMarketMode(savedMode) ? savedMode : "intraday",
@@ -342,31 +343,29 @@ export function MarketPane({
   });
   // 舊值 "overlay" / "side" 讀時遷移為布林(§4 backward compat);無 overlay key = 恆關
   const [overlay, setOverlay] = useState<boolean>(() =>
-    stores.overlay === undefined
-      ? false
-      : window.localStorage.getItem(stores.overlay) === "overlay",
+    stores.overlay === undefined ? false : readLocal(stores.overlay) === "overlay",
   );
 
   function selectKey(next: MarketKey): void {
     setMarketKeyState(next);
-    window.localStorage.setItem(stores.key, next);
+    writeLocal(stores.key, next);
     const coerced = coerceMode(next, mode);
     if (coerced !== mode) setModeState(coerced);
     // **寫入不可條件化**:mount initializer 的 coerce 結果沒回寫 storage,storage 可能留著
     // 已被畫面 coerce 掉的殘值(key=OTC + mode=day)。若這裡也只在 coerced !== mode 時寫,
     // 一次 no-op coerce 的切換(切回加權)就只寫 key → storage 湊成 TWSE+day 這組
     // 「合法但使用者沒選過」的組合,下次重載直接跳日K。任何標的切換都沖成當下有效值。
-    window.localStorage.setItem(stores.mode, coerced);
+    writeLocal(stores.mode, coerced);
   }
 
   function selectMode(next: MarketMode): void {
     setModeState(next);
-    window.localStorage.setItem(stores.mode, next);
+    writeLocal(stores.mode, next);
   }
 
   function selectFut(next: FutKey): void {
     setFutKey(next);
-    window.localStorage.setItem(stores.fut, next);
+    writeLocal(stores.fut, next);
     selectKey(next);
   }
 
@@ -374,7 +373,7 @@ export function MarketPane({
     if (stores.overlay === undefined) return;
     const next = !overlay;
     setOverlay(next);
-    window.localStorage.setItem(stores.overlay, next ? "overlay" : "side");
+    writeLocal(stores.overlay, next ? "overlay" : "side");
   }
 
   const otcDead = otcSourceDead(twse, otc);

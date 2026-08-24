@@ -13,6 +13,7 @@ import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fillDates, fillPoints, stkfutFillKey } from "@/lib/fill-marks";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { StockAccum } from "@/lib/stock-accum";
+import { readLocal, writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 /** 圖表模式切換容器(SC-6):江波圖 / 1–10 分K / 日K。
@@ -36,7 +37,7 @@ const MODE_LABELS: [ChartMode, string][] = [
 const VALID_MODE = /^(intraday|day|m([1-9]|10))$/;
 
 function initialMode(): ChartMode {
-  const saved = window.localStorage.getItem(CHART_MODE_KEY);
+  const saved = readLocal(CHART_MODE_KEY);
   return saved !== null && VALID_MODE.test(saved) ? (saved as ChartMode) : "intraday";
 }
 
@@ -120,7 +121,7 @@ export function StockChart({
 
   function selectMode(next: ChartMode): void {
     setMode(next);
-    window.localStorage.setItem(CHART_MODE_KEY, next);
+    writeLocal(CHART_MODE_KEY, next);
   }
 
   // n=1 時 aggregateBars 原樣回傳,不必特判
