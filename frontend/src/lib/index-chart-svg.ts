@@ -83,18 +83,21 @@ export function buildOverlayGeometry(
   series: { minutes: Record<string, number>; ref: number | null }[],
   size: Size,
 ): IndexOverlayGeometry {
-  // 先編號再過濾:過濾後才 map 的話原始位置就沒了(N262)。
-  const pctSeries = series
-    .map((s, index) => ({ s, index }))
-    .filter(({ s }) => s.ref !== null && s.ref > 0)
-    .map(({ s, index }) => ({
-      index,
-      pts: sortedEntries(s.minutes).map(([minute, p]) => ({
-        minute,
-        pct: ((p - s.ref!) / s.ref!) * 100,
-      })),
+  // 單趟 for 而不是 filter().map():**原始 index 要跟著過濾後的資料走**(N262),
+  // 而 `filter` 之後 `map` 的第二參數已經是塌陷後的位置。順手把 y 域用的 pct
+  // 收在同一趟裡(chained iteration 的 doctor 規則)。
+  const pctSeries: { index: number; pts: { minute: string; pct: number }[] }[] = [];
+  const all: number[] = [];
+  for (const [index, s] of series.entries()) {
+    const ref = s.ref;
+    if (ref === null || ref <= 0) continue; // ref 缺值 / 0 → 沒有「相對昨收」可談,不畫
+    const pts = sortedEntries(s.minutes).map(([minute, p]) => ({
+      minute,
+      pct: ((p - ref) / ref) * 100,
     }));
-  const all = pctSeries.flatMap((line) => line.pts).map((p) => p.pct);
+    pctSeries.push({ index, pts });
+    for (const pt of pts) all.push(pt.pct);
+  }
   const lo = Math.min(0, ...all) - 0.3;
   const hi = Math.max(0, ...all) + 0.3;
   const span = hi - lo || 1;
