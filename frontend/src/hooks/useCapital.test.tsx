@@ -15,7 +15,6 @@ import {
   useCapitalWsStatus,
   type CapitalEvent,
 } from "@/hooks/useCapital";
-import { resetWsPingMemory } from "@/lib/ws-reconnect";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -159,7 +158,6 @@ describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
   });
 
   it("收過 ping 後 35 s 全靜默 → wsStatus 轉 closed(W11:閃電武裝往安全方向解除)", () => {
-    resetWsPingMemory();
     vi.useFakeTimers();
     const hook = renderHook(
       () => {
@@ -183,8 +181,9 @@ describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
     hook.unmount();
   });
 
-  it("從未收 ping:60 s 全靜默仍是 open(舊後端不多出 closed 邊沿;W11)", () => {
-    resetWsPingMemory();
+  // 由「從未收 ping:60 s 全靜默仍是 open(W11)」翻轉而來(R4 N035,事前標記該變):
+  // open 即武裝 → 從未收 ping 的連線 30 s + tick 全靜默一樣轉 closed(閃電武裝往安全方向解除)。
+  it("從未收 ping:open 後 35 s 全靜默 → wsStatus 轉 closed(N035 open 即武裝)", () => {
     vi.useFakeTimers();
     const hook = renderHook(
       () => {
@@ -198,11 +197,10 @@ describe("useCapitalStream(WS 連線 + wsStatus store)", () => {
     expect(hook.result.current).toBe("open");
 
     act(() => {
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(35_000);
     });
-    expect(ws.closed).toBe(false);
-    expect(hook.result.current).toBe("open");
-    expect(FakeWS.instances.length).toBe(1);
+    expect(ws.closed).toBe(true);
+    expect(hook.result.current).toBe("closed");
     hook.unmount();
   });
 

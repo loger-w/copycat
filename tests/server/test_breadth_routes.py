@@ -375,12 +375,13 @@ class TestBreadthWebSocket:
         assert first["trade_date"] == _TODAY.isoformat()
         assert first["counts"] == {"twse": _EXPECTED_TWSE, "tpex": _EXPECTED_TPEX}
 
-    def test_engine_absent_closes(self) -> None:
+    def test_engine_absent_rejects_handshake(self) -> None:
+        # R4 N036(由「accept 後即關」翻轉):引擎停用 → 握手前就 close(uvicorn 回 403),
+        # TestClient 在進場那一步就拋;browser 端 onopen 不觸發、走「從未 open」退避。
         with _client() as c:
-            with c.websocket_connect("/ws/breadth") as ws:
-                # 引擎停用 → accept 後即關(`/ws/index` 同處置),不得讓 client 空等
-                with pytest.raises(WebSocketDisconnect):
-                    ws.receive_json()
+            with pytest.raises(WebSocketDisconnect):
+                with c.websocket_connect("/ws/breadth"):
+                    raise AssertionError("引擎停用時握手不該成功")
 
     def test_second_frame_carries_last_minute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -401,20 +402,19 @@ class TestBreadthWebSocket:
         assert second["type"] == "breadth"
         assert second["last_minute"] == {"t": _KEY, "twse": [1, 1, 0, 0, 0], "tpex": [0, 0, 0, 0, 1]}
 
-    def test_before_boot_sends_loading_frame_then_closes(self, tmp_path: Path) -> None:
-        """boot 未完成:先送一則載入中 scalar 再關(client 自行退避重連,屆時 boot 已完成)
-        —— 與 REST 同語意,不與「未設定」同形(review P2-1)。"""
+    def test_before_boot_rejects_handshake(self, tmp_path: Path) -> None:
+        """boot 未完成:握手前就拒(R4 N036,由「先送載入中 scalar 再關」翻轉)。
+
+        載入中語意由 REST `/api/breadth/state` 承擔(前端對該 WS frame 的處理與 REST 同形,
+        無獨立讀者);client 退避重連時 boot 已完成。
+        """
         client = TestClient(
             _make_app(breadth_fetchers=_ok_fetchers(), breadth_data_dir=tmp_path),
             raise_server_exceptions=False,
         )
-        with client.websocket_connect("/ws/breadth") as ws:
-            first = ws.receive_json()
-            assert first["type"] == "breadth"
-            assert first["counts"] is None
-            assert first["stale"] is True
-            with pytest.raises(WebSocketDisconnect):
-                ws.receive_json()
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/breadth"):
+                raise AssertionError("boot 未完成時握手不該成功")
 
 
 class TestProdWiring:

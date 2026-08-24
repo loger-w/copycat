@@ -239,17 +239,6 @@ def _recv_json(ws: Any, timeout: float = 5.0) -> dict:
     return box[0]
 
 
-def _expect_close(ws: Any, timeout: float = 5.0) -> None:
-    """有上限地斷言「accept 後隨即被 close」。
-
-    close 不會在 `websocket_connect` 那一步拋 —— route 先 `accept()` 才 `close()`,
-    TestClient 的 enter 只讀到 accept(既有 `/ws/breadth` 測試同款)。
-    """
-    box, err = _pump_receive(ws, timeout)
-    assert not box, f"連線沒被 close,反而收到訊息:{box}"
-    assert err and isinstance(err[0], WebSocketDisconnect), f"{timeout}s 內沒收到 close:{err}"
-
-
 def _recv_until(ws: Any, kind: str, timeout: float = 5.0) -> dict:
     """收到指定 `type` 為止(同一顆 broadcaster 上可能夾雜 status / 節流 quote)。"""
     deadline = time.monotonic() + timeout
@@ -1040,8 +1029,9 @@ class TestWsStockCloseBranches:
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
             assert app.state.signal_hub is None, "壞規則檔 → hub 降級(這條測試的前提)"
-            with client.websocket_connect("/ws/stock") as ws:
-                _expect_close(ws)
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/stock"):
+                    raise AssertionError("hub 亦缺席時握手不該成功")
 
     def test_closes_inside_boot_window(self, tmp_path: Path) -> None:
         """(b) boot 未完成 → close(早連的 client 錯過 seed,重連自癒比空流好)。
@@ -1063,8 +1053,9 @@ class TestWsStockCloseBranches:
             assert app.state.signal_hub is not None, "窗要落在 signals 之後,否則驗不到 boot_done"
             assert app.state.boot_done is False
 
-            with client.websocket_connect("/ws/stock") as ws:
-                _expect_close(ws)
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/stock"):
+                    raise AssertionError("boot 窗內握手不該成功")
 
             index.gate.set()
             wait_boot(app)

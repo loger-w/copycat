@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from copycat.server.app import create_app
@@ -62,12 +64,9 @@ class TestCorrWebSocket:
                 assert first["base"] == "TXF"
                 assert "pairs" in first
 
-    def test_closes_when_engine_disabled(self) -> None:
+    def test_rejects_handshake_when_engine_disabled(self) -> None:
+        # R4 N036(由「accept 後即關」翻轉):引擎停用 → 握手前就 close,進場即拋,不得空等
         with _client(None) as client:
-            with client.websocket_connect("/ws/corr") as ws:
-                # 引擎停用 → server 直接關閉,不得空等
-                try:
-                    ws.receive_json()
-                    raise AssertionError("引擎停用時不應收到訊息")
-                except Exception as exc:  # WebSocketDisconnect
-                    assert "AssertionError" not in type(exc).__name__
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect("/ws/corr"):
+                    raise AssertionError("引擎停用時握手不該成功")
