@@ -307,3 +307,38 @@ def test_next_trading_day_raises_when_calendar_is_broken() -> None:
     cal = _cal(holidays=[(date(2026, 8, 17) + timedelta(days=i)).isoformat() for i in range(90)])
     with pytest.raises(RuntimeError):
         cal.next_trading_day(date(2026, 8, 17))
+def test_warn_if_year_missing_is_atomic_across_threads(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N033(review C-3):`year in _warned_years` 與 `_warned_years.add(year)` 之間是
+    check-then-act,而這支是從**多條執行緒**進來的(`resolve_trade_date` 走 to_thread
+    的各條路徑 + 引擎自己的 worker)。節流因此不保證,失效樣態是 log 裡同一年重複幾行
+    —— 無害但會讓「這行只該出現一次」這個判準不可用。
+
+    治具把窗放大到 50 ms:沒有鎖時四條執行緒必然全部通過 check。
+    """
+    import threading
+    import time
+
+    import copycat.trading_calendar as cal_mod
+
+    class _SlowSet(set):
+        def __contains__(self, item: object) -> bool:
+            # 先算答案**再**睡:睡在前面等於把答案延後到別人 add 完之後才取,
+            # 治具自己就把競賽消掉了(而測試照樣綠)。
+            answer = super().__contains__(item)
+            time.sleep(0.05)
+            return answer
+
+    monkeypatch.setattr(cal_mod, "_warned_years", _SlowSet())
+    cal = load_trading_calendar()
+    with caplog.at_level(logging.WARNING, logger="copycat.trading_calendar"):
+        threads = [
+            threading.Thread(target=warn_if_year_missing, args=(cal, date(2031, 1, 6)))
+            for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+    assert len(caplog.records) == 1

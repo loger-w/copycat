@@ -39,6 +39,17 @@ from copycat.stkfut_map import load_map
 
 logger = logging.getLogger(__name__)
 
+#: `set_watchlist(seq=...)` 的 **boot 還原哨兵**(N112):恆小於 `WatchlistService` 的
+#: 取號(自 1 起),所以「使用者的 PUT 先到、boot 還原後到」時贏的是新的那一份。
+#: 舊碼的 `seq=None` 是無條件全套,它的安全前提(「service 在 restore 之後才建構 +
+#: routes 前置 503」)只寫在註解裡、沒有任何斷言;哨兵讓它變成結構性的。
+WATCHLIST_BOOT_SEQ = 0
+#: **非生產**的直呼(測試 / 一次性腳本)= 不參與定序。生產路徑只有兩個 caller:
+#: app boot(帶 `WATCHLIST_BOOT_SEQ`)與 `WatchlistService`(帶自己的取號),而
+#: `watchlist_service.StockPool` 那一側的簽名**沒有預設值** —— 未來的生產 caller
+#: 漏帶 keyword 在 pyright 期就紅,不會靜默拿到豁免。
+WATCHLIST_UNORDERED = -1
+
 _CLIENT_QUEUE_MAX = 1000
 # 同一檔當日回補失敗幾次之後就不再入列(code review A2)。群組 batch 每 60s 一輪,
 # 沒有這道冷卻的話一檔壞碼會對 TC4 發整天的必敗請求,還把單工 worker 排到滿。
@@ -306,8 +317,9 @@ class StockEngine:
         # 被 to_thread 與 loop 並發讀寫,check-then-act 交錯會退訂主圖/洩漏 owner(CR2)
         self._pool_lock = asyncio.Lock()
         # 已套用的自選定序號(X-3):service 在自己的鎖內取號,訂閱在鎖外送達 →
-        # 抵達順序不保證。0 = 還沒套過任何帶號的名單(取號自 1 起)。
-        self._wl_seq_applied = 0
+        # 抵達順序不保證。初值比 `WATCHLIST_BOOT_SEQ` 再小一號 = 「還沒套過任何名單」,
+        # 於是 boot 的哨兵(恆為最舊)在乾淨的引擎上仍套得進去(N112)。
+        self._wl_seq_applied = WATCHLIST_BOOT_SEQ - 1
         # 訂閱失敗的復原路徑(mod/subscribe-retry-recovery):三處失敗各自靜默 ——
         # watchlist 檔回滾出 `_refs` 後畫面永遠 `-`、stkfut 腿要切走再切回才會重掛、
         # rollover 重掛失敗更是連 `_refs` 都不動,對帳判準看不到
@@ -426,24 +438,34 @@ class StockEngine:
 
     # ---- 對外操作 ----
 
-    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None:
+    async def set_watchlist(self, codes: list[str], *, seq: int = WATCHLIST_UNORDERED) -> None:
         """`seq` = 呼叫端(`WatchlistService`)在**它自己的鎖內**取的定序號(X-3)。
 
         `seq <= 已套用` = 舊名單後到 → **整段跳過**(不訂不退不廣播不通知 hub),
         照套的話訂閱池 / hub membership / 種子廣播會一起退回上一版,而畫面上只是
         「剛加的股票又不見了」,零錯誤訊號。
 
-        誠實記帳:現況下取號(service 鎖內,同步)到本 method 進 `_pool_lock`
-        (FIFO)之間**沒有 yield 點**(無競爭的 `asyncio.Lock.acquire` 不讓出),
-        抵達順序 = 取號順序,這個防線今天走不到 —— `seq` 是 belt-and-braces。
-        它防的是那條保證**靜默消失**的未來:任何人在該窗內插入 await(例:落檔改
-        `to_thread`)後亂序就真的可能發生,而屆時不會有任何測試驅動 service→engine
-        的 reorder 提醒你。
+        **`WATCHLIST_BOOT_SEQ`(= 0)是 boot 還原專用的哨兵**(N112,取代舊的
+        `seq=None` 豁免):它恆小於 service 的取號(自 1 起),所以「PUT 先到、boot
+        還原後到」時贏的是使用者剛存的那一份。舊碼的 `None` 分支是**無條件全套**,
+        它的安全前提(「service 在 restore 之後才建構 + routes 前置 503」)沒有在任何
+        地方被斷言 —— 現在這條不變式是結構性的,不再靠讀 boot 序列來確認。
+        `WATCHLIST_UNORDERED` 是**非生產**的直呼(測試 / 一次性腳本)= 不參與定序;
+        `WatchlistService` 的 Protocol 那一側沒有預設值,漏帶 keyword 在 pyright 期就紅。
 
-        `None`(boot 還原 / 既有 caller)= 不參與定序,照舊全套。
+        **逐項取鎖,不是整段一鎖**(N111,照同檔 `_retry_round`):TC4 故障時單檔
+        SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10 s)才失敗,整段持鎖會讓第二個寫入者
+        (PUT / Discord `/watch` 的 `_settle`、切主圖)等**整段**迴圈走完 —— 50 檔
+        就是 500 s,Discord 的 interaction token(3 s)必逾時。逐項取鎖之後,等待上界
+        降到「當下這一檔」。ZMQ IO 仍在鎖內(per-code in-flight 狀態才能把 IO 完全
+        移出鎖,那是新的不變式,見 verification.md 留尾)。
+
+        逐項取鎖打開了一條舊碼結構上不可能發生的窗:**較舊**的那一發可能在較新的名單
+        套用之後才跑完剩下的檔。`_superseded` 因此在每一項重驗一次,過期即整段放棄
+        (`seq` 本來就是為這條路存在的,只是以前走不到)。
         """
-        async with self._pool_lock:  # CR2
-            if seq is not None:
+        async with self._pool_lock:  # CR2:判定 + 名單指派仍是一個原子區(無 await)
+            if seq != WATCHLIST_UNORDERED:
                 if seq <= self._wl_seq_applied:
                     logger.info(
                         "watchlist seq %d 已過期(已套用 %d),跳過", seq, self._wl_seq_applied
@@ -459,12 +481,22 @@ class StockEngine:
             # 盤後沒有後續 tick、flush 又只推 dirty,該檔就卡在 `-` 直到使用者重整。
             # 名單是「意圖」、訂閱是副作用;最終狀態與舊順序等價(舊碼也是不論成敗都指派)。
             self._watchlist = list(codes)
-            for code in added:
+        for code in added:
+            async with self._pool_lock:
+                if self._superseded(seq):
+                    return
+                if code not in self._watchlist:
+                    continue  # 這一檔在等鎖期間已被更新的名單移除
                 try:
                     await asyncio.to_thread(self._acquire, code, "watchlist")
                 except ConnectionError:
                     logger.warning("watchlist subscribe %s failed", code)
-            for code in removed:
+        for code in removed:
+            async with self._pool_lock:
+                if self._superseded(seq):
+                    return
+                if code in self._watchlist:
+                    continue  # 更新的名單又把它加回來了,不退
                 await asyncio.to_thread(self._release, code, "watchlist")
                 if code not in self._refs:
                     # **真正退訂了才**清(code review A7d,鏡像路徑 `set_main_contract`
@@ -498,6 +530,9 @@ class StockEngine:
                     # 重新訂閱後拿上一段訂閱期的前值跟新的第一則比對 = 一則跨訂閱期的
                     # 假轉態,而 episode 旗標還武裝著時更會生出一則沒有起點的假「恢復」。
                     self._trade_status.pop(code, None)
+        async with self._pool_lock:
+            if self._superseded(seq):
+                return
             # 新增的檔立刻給一則種子:不等第一筆成交(冷門股整天可能只有簿更新),
             # 盤後加股也要馬上看得到參考價。啟動期 `_clients` 為空 = no-op,
             # 開機路徑由 `stream()` 的 per-client 種子涵蓋。
@@ -506,6 +541,14 @@ class StockEngine:
             if self._signal_hub is not None:
                 # 全量替換 hub 的 membership(新增排 CDP 基準、移除逐出狀態)
                 self._signal_hub.on_watchlist(list(codes))
+
+    def _superseded(self, seq: int) -> bool:
+        """這一發是否已被更新的名單取代(N111 的逐項重驗判準)。
+
+        `WATCHLIST_UNORDERED`(非生產的直呼)沒有定序資訊,答不出來 → 一律回 False,
+        逐項的 `code in self._watchlist` 重驗仍在。生產路徑全部帶號。
+        """
+        return seq != WATCHLIST_UNORDERED and seq < self._wl_seq_applied
 
     async def set_main(self, code: str) -> None:
         """現貨主圖(既有 route 入口)= `set_main_contract` 的股號形。"""

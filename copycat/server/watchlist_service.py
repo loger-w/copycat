@@ -49,7 +49,10 @@ def _copy_groups(groups: list[Group]) -> list[Group]:
 class WatchlistEngine(Protocol):
     """StockEngine 結構子集(測試注入 fake)。"""
 
-    async def set_watchlist(self, codes: list[str], *, seq: int | None = None) -> None: ...
+    #: **`seq` 無預設值**(N112):Protocol 這一側是生產契約面 —— 帶預設等於讓未來的
+    #: caller 漏帶 keyword 時靜默拿到「不參與定序」的豁免,而那條路的失效樣態是
+    #: 「剛加的股票又不見了」,零錯誤訊號。哨兵值見 `stock_engine.WATCHLIST_BOOT_SEQ`。
+    async def set_watchlist(self, codes: list[str], *, seq: int) -> None: ...
 
     def _publish(self, msg: dict) -> None: ...
 
@@ -214,14 +217,15 @@ class WatchlistService:
         會缺。並發安全由 `seq` 在 engine 端負責(舊名單後到整段跳過)。
 
         收斂範圍要誠實:X-3 解掉的是 **service 這把鎖**的堆積(`current()` 讀路、
-        群組操作的驗證與落檔不再排在訂閱迴圈後面);engine 端 `_pool_lock` 仍序列化
-        整段逐檔訂閱迴圈,第二個寫入者的 `_settle` 還是得等第一個的迴圈走完 ——
-        TC4 故障下 Discord 回覆仍可能拖過 interaction token 上限。深修 = 把 ZMQ
-        迴圈移出 `_pool_lock`(同檔 backfill worker 的 per-code 取鎖模式),
-        見 docs/next-time.md。
+        群組操作的驗證與落檔不再排在訂閱迴圈後面);N111 再把 engine 端 `_pool_lock`
+        從「整段迴圈一鎖」改成**逐檔取鎖**,第二個寫入者的等待上界從「整段迴圈」
+        (50 檔 × 10 s)降到「當下這一檔」(≤ 10 s)。**仍不是零等待**:ZMQ IO 還在
+        鎖內,要完全移出得引進 per-code in-flight 狀態(新的不變式),見 next-time。
         """
         saved, changed, seq = pending
-        if not changed:
+        if not changed or seq is None:
+            # `_commit` 的不變式:changed=True 必帶號。兩個條件併寫讓型別也收窄成
+            # `int`(assert 在 -O 下會被移除,而這裡要的是收窄不是防呆)。
             return saved, False
         await self._engine.set_watchlist(saved["codes"], seq=seq)
         self._engine._publish({"type": "watchlist_changed"})

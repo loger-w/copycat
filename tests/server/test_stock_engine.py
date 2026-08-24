@@ -3295,3 +3295,115 @@ class TestCheckpointTradingDay:
             assert src.trade_dates == ["2026-08-12"]
         finally:
             await engine.close()
+
+
+class _PerCodeGateSource(FakeSource):
+    """逐碼閘門的 source:`gates[code]` 未 set 前 `subscribe_symbol` 卡住。
+
+    單一 `subscribe_gate` 表達不出「第一檔已放行、第二檔還卡著」這個形狀 —— 而
+    N111 要鎖的正是「第二個寫入者在**檔與檔之間**進得來」。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gates: dict[str, threading.Event] = {}
+        self.entered: dict[str, threading.Event] = {}
+
+    def _gate(self, code: str) -> threading.Event:
+        return self.gates.setdefault(code, threading.Event())
+
+    def _entered(self, code: str) -> threading.Event:
+        return self.entered.setdefault(code, threading.Event())
+
+    def subscribe_symbol(self, code: str) -> None:
+        self._entered(code).set()
+        assert self._gate(code).wait(timeout=5), f"gate {code} 沒放行"
+        super().subscribe_symbol(code)
+
+
+class TestWatchlistPoolLockGranularity:
+    """N111:`set_watchlist` 整段逐檔 `to_thread(_acquire)` 迴圈都在 `_pool_lock` 內
+    —— TC4 故障時單檔 SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10 s)才失敗,第二個寫入者
+    (PUT / Discord `/watch` 的 `_settle`、切主圖)得等**整段**迴圈走完,Discord 的
+    interaction token(3 s)必逾時。修法方向 = 同檔 `_retry_round` 的逐項取鎖。
+    """
+
+    async def test_second_writer_gets_in_between_codes(self) -> None:
+        src = _PerCodeGateSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        src._gate("9999").set()  # 第二個寫入者要訂的主圖放行(2330 / 5483 先卡住)
+        first = asyncio.create_task(engine.set_watchlist(["2330", "5483"], seq=1))
+        try:
+            await asyncio.to_thread(src._entered("2330").wait, 5)  # 第一檔的 SUB 在途中
+            second = asyncio.create_task(engine.set_main("9999"))  # 第二個寫入者排進鎖
+            await asyncio.sleep(0)
+            src._gate("2330").set()  # 第一檔完成 → 迴圈釋放鎖 → 第二個寫入者進得來
+            await asyncio.wait_for(second, timeout=2.0)
+            assert engine._main == "9999"
+            assert not first.done(), "第一個寫入者這時應仍卡在第二檔"
+        finally:
+            src._gate("5483").set()
+            await asyncio.wait_for(first, timeout=5.0)
+            await engine.close()
+
+    async def test_watchlist_is_assigned_before_any_subscribe(self) -> None:
+        """「名單先指派再訂閱」(round4 項 4)的不變式在逐項取鎖之後仍成立 ——
+        沒有它,SUB 回來後那第一則 REALTIME 會落在 `code not in _watchlist` 的窗內,
+        被 `_handle_quote` 的 meta 轉態補推擋掉,盤後就卡在 `-` 直到重整。"""
+        src = _PerCodeGateSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        task = asyncio.create_task(engine.set_watchlist(["2330"], seq=1))
+        try:
+            await asyncio.to_thread(src._entered("2330").wait, 5)
+            assert engine._watchlist == ["2330"]
+        finally:
+            src._gate("2330").set()
+            await asyncio.wait_for(task, timeout=5.0)
+            await engine.close()
+
+    async def test_stale_call_abandons_the_rest_of_its_loop(self) -> None:
+        """逐項取鎖打開了一條新的窗:**較舊**的那一發可能在較新的名單套用之後才跑完
+        剩下的檔 —— 照跑就是把名單退回上一版(`seq` 防的正是這個,只是舊碼靠整段
+        持鎖天然不可能發生)。"""
+        src = _PerCodeGateSource()
+        engine = StockEngine(src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False)
+        await engine.start()
+        src._gate("2330").set()
+        task = asyncio.create_task(engine.set_watchlist(["2330", "5483"], seq=1))
+        try:
+            await asyncio.to_thread(src._entered("5483").wait, 5)
+            src._gate("5483").set()
+            await asyncio.wait_for(engine.set_watchlist(["2330"], seq=2), timeout=2.0)
+            await asyncio.wait_for(task, timeout=5.0)
+            assert engine._watchlist == ["2330"], "舊名單覆寫了新名單"
+        finally:
+            await engine.close()
+
+
+class TestWatchlistBootSentinel:
+    """N112:`seq=None` 的豁免分支唯一的生產 caller 是 app boot 還原,而它的安全前提
+    (「service 在 restore 之後才建構 + routes 前置 503」)沒有在任何地方被斷言;
+    Protocol 的預設 `None` 又讓未來的 caller 漏帶 keyword 時零訊號。
+    收法 = boot 顯式帶 sentinel(恆為最舊),不變式從口頭約定變成結構性的。
+    """
+
+    async def test_boot_sentinel_applies_on_a_fresh_engine(self) -> None:
+        engine, _src = await _make()
+        await engine.set_watchlist(["2330"], seq=stock_engine_mod.WATCHLIST_BOOT_SEQ)
+        assert engine._watchlist == ["2330"]
+        await engine.close()
+
+    async def test_boot_sentinel_never_clobbers_a_newer_list(self) -> None:
+        """PUT 先到、boot 還原後到(未來若有人把 restore 挪到 service 之後)——
+        舊碼的 `seq=None` 是無條件全套,會把使用者剛存的名單退回上一版。"""
+        engine, _src = await _make()
+        await engine.set_watchlist(["2317"], seq=1)
+        await engine.set_watchlist(["2330"], seq=stock_engine_mod.WATCHLIST_BOOT_SEQ)
+        assert engine._watchlist == ["2317"]
+        await engine.close()
+
+    def test_boot_sentinel_is_the_oldest_possible_seq(self) -> None:
+        """service 取號自 1 起(`WatchlistService`)—— sentinel 必須嚴格小於它。"""
+        assert stock_engine_mod.WATCHLIST_BOOT_SEQ < 1

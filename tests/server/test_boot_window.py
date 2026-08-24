@@ -323,3 +323,67 @@ class TestBootSequenceException:
             assert "watchlist service 建構炸了" in app.state.boot_error
             # 後續引擎未啟動 = 既有降級形狀
             assert client.get("/api/index/state").status_code == 503
+
+
+class _OrderedCloseTxoSource(FakeTxoSource):
+    """close 時記一筆順序戳(TC4 session 的 UNSUB + Disconnect 在這一步)。"""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("txo")
+
+
+class _OrderedCloseStockSource(FakeStockSource):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("stock")
+
+
+class _FakeCapital:
+    """CapitalClient 的最小替身:`close()` 是同步的 COM 執行緒 join(prod ≤5 s)。"""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    def set_broadcast(self, cb: object) -> None:
+        pass
+
+    def start(self, loop: object) -> None:
+        pass
+
+    def close(self) -> None:
+        self._order.append("capital")
+
+
+def test_capital_com_teardown_runs_after_the_tc4_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """N049:關機時 TC4 的 UNSUB + `Disconnect()` 必須排在**群益 COM 執行緒 join 之前**。
+
+    09:00:49 那次事故的形狀:uvicorn 已開始 graceful shutdown,但 lifespan 還沒跑到
+    sources 的 `close()` 就被 `run.ps1` 的 `taskkill /T /F` 收掉 —— TC4 那頭直到 60 s
+    後 `ExecuteCheckPingTime` reap 才 `RemoveLoginInfo`,而 reap 會把那條殭屍 session
+    獨持的 key 歸零、連帶把 symbol 的上游 feed 帶走(新 server 開頭 ~60 s 零推播)。
+
+    `capital.close()` 是同步 join(prod ≤5 s),排在 TC4 前面等於在關機預算最前面挖掉
+    一塊。它與 index / stock / runtime 之間**沒有依賴**(corr→futures、signals→stock
+    那兩條才有),所以這裡刻意違反「一律照建立的反序收」——理由就是這條時間預算。
+    """
+    order: list[str] = []
+    monkeypatch.setattr(
+        app_mod.capital_factory, "get_capital", lambda: _FakeCapital(order)
+    )
+    app = create_app(
+        source=_OrderedCloseTxoSource(order),
+        stock_source=_OrderedCloseStockSource(order),
+        stock_watchlist_path=tmp_path / "stock_watchlist.json",
+    )
+    with TestClient(app):
+        wait_boot(app)
+    assert order.index("capital") > order.index("stock"), "群益 COM join 擋在 stock 前面"
+    assert order.index("capital") > order.index("txo"), "群益 COM join 擋在 TXO runtime 前面"

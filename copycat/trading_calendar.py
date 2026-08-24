@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -89,11 +90,16 @@ WEEKEND_ONLY = TradingCalendar(frozenset(), frozenset(), frozenset())
 # 缺年 WARNING 的節流狀態:長跑 server 跨年時要再提醒一次,所以是「每個年份一次」
 # 而不是「整個 process 一次」。
 _warned_years: set[int] = set()
+#: `_warned_years` 的 check-then-add 互斥(N033 / review C-3)。這支從多條執行緒進來
+#: (`resolve_trade_date` 的各個 `to_thread` 路徑 + 引擎自己的 worker),沒有它時節流
+#: 不成立,同一年會印出好幾行 —— 無害,但「這行只該出現一次」這個判準就不能用了。
+_warn_lock = threading.Lock()
 
 
 def _reset_year_warnings() -> None:
     """測試用:清掉節流狀態(module-level 狀態會跨測試殘留)。"""
-    _warned_years.clear()
+    with _warn_lock:
+        _warned_years.clear()
 
 
 def _parse_days(raw: object, *, path: Path, year_key: str, field: str) -> set[date]:
@@ -186,9 +192,12 @@ def load_trading_calendar(path: Path = DEFAULT_PATH) -> TradingCalendar:
 def warn_if_year_missing(cal: TradingCalendar, today: date) -> None:
     """缺當年資料時提醒更新 config;同一年只叫一次(長跑 server 跨年會再叫)。"""
     year = today.year
-    if cal.has_year(year) or year in _warned_years:
+    if cal.has_year(year):
         return
-    _warned_years.add(year)
+    with _warn_lock:  # check-then-add 必須原子(N033;呼叫端跨多條執行緒)
+        if year in _warned_years:
+            return
+        _warned_years.add(year)
     logger.warning(
         "交易日曆缺 %d 年資料,只擋週末;請更新 configs/trading_holidays.json",
         year,

@@ -50,6 +50,24 @@ function Stop-Tree {
     & taskkill.exe /PID $Proc.Id /T /F | Out-Null
 }
 
+function Wait-GracefulExit {
+    # backend 專用:Ctrl+C 的 CTRL_C_EVENT 會同時送到子行程,uvicorn 隨即開始 graceful
+    # shutdown —— 但這支腳本的 finally 幾十毫秒內就 taskkill /T /F,lifespan 根本跑不到
+    # TC4 sources 的 close()(UNSUB + Disconnect)。沒 LOGOUT 就死的 session 要等 TC4 端
+    # ~60s 的 ExecuteCheckPingTime 才被 reap,而 reap 會把它獨持的 refcount key 歸零、
+    # 連帶把 symbol 的上游 feed 帶走 —— 下一台 server 開頭 ~60s 零推播(2026-08-18 實證,
+    # 見 .claude/skills/tc4-market-facts/SKILL.md)。這裡先等它自己收乾淨,超時才硬殺。
+    param([System.Diagnostics.Process]$Proc, [int]$TimeoutSecs = 10)
+    if ($null -eq $Proc -or $Proc.HasExited) { return }
+    Write-Host "[run] 等 backend 自行收尾(TC4 退訂 + Disconnect,最多 ${TimeoutSecs}s) ..." -ForegroundColor DarkGray
+    if ($Proc.WaitForExit($TimeoutSecs * 1000)) {
+        Write-Host '[run] backend 已自行結束(TC4 session 已 LOGOUT)' -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "[run] backend ${TimeoutSecs}s 內未結束,改為強制收掉(TC4 session 會留到 reap)" -ForegroundColor Yellow
+    }
+}
+
 # --- 前置檢查(壞掉要有明確下一步,不要讓 uvicorn 或 vite 自己噴難懂的錯) ---
 
 if (-not (Test-Path $python)) {
@@ -126,5 +144,7 @@ try {
     }
 } finally {
     Stop-Tree -Proc $frontend -Label 'frontend'
-    Stop-Tree -Proc $backend  -Label 'backend'
+    # backend 先給 graceful 窗再硬殺(理由見 Wait-GracefulExit)
+    Wait-GracefulExit -Proc $backend
+    Stop-Tree -Proc $backend -Label 'backend'
 }

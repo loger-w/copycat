@@ -442,8 +442,9 @@ class TestHealGateThresholdCoversSessionClose:
         )
 
 
-def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """海外腿(SGX/CBOT/CME)在台灣假日照開 → corr 不接日曆(接了等於整天不自癒)。"""
+def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """海外腿(SGX/CBOT/CME)在台灣假日照開 → corr 的 **session 級**閘不接日曆
+    (接了等於整天不自癒)。逐腿的閘走 `heal_symbol_active`,見下一條。"""
     import copycat.live.corr_source as corr_mod
     from copycat.server import app as app_mod
 
@@ -452,6 +453,30 @@ def test_corr_source_keeps_the_always_on_gate(monkeypatch: pytest.MonkeyPatch) -
     app_mod._default_corr_source()
 
     assert "heal_active" not in seen["kwargs"]
+
+
+@pytest.mark.parametrize("clock", [True, False])
+def test_corr_leg_gate_only_applies_to_the_taifex_segment(
+    monkeypatch: pytest.MonkeyPatch, clock: bool
+) -> None:
+    """N051:台期交段的腿(SXF/UDF/SPF/UNF,與台指同時段同結算)吃「交易日曆 AND
+    盤別」;SGX / CME / CBOT / OSE 段恆 True(時段未實測,猜錯 = 該救的腿整場不救)。"""
+    import copycat.live.corr_source as corr_mod
+    import copycat.live.futures_source as futures_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
+    monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
+
+    app_mod._default_corr_source(_CAL)
+    gate = seen["kwargs"]["heal_symbol_active"]
+
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
+    assert gate("TC.F.TWF.SXF.HOT") is False, "非交易日的台期交腿不得 churn"
+    assert gate("TC.F.CME.NQ.HOT") is True, "海外段在台灣假日照開,不得被日曆關掉"
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
+    assert gate("TC.F.TWF.SXF.HOT") is clock, "交易日仍要 AND 盤別"
+    assert gate("TC.F.SGX.TWN.HOT") is True
 
 
 def test_create_app_passes_the_calendar_into_every_default_source(
