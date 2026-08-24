@@ -21,6 +21,17 @@
  *
  *  **key 一律從 `lib/constants.ts` 取**(本檔刻意不 import 它:出口不該知道有哪些鍵,
  *  而 `constants.ts` 的 `purgeOrphanKeys` 反過來要用本檔的 `removeLocal`)。
+ *
+ *  ---
+ *  **react-doctor `no-event-handler` 對本層是誤報**(`App.tsx` 的 `MAIN_CODE_KEY` effect
+ *  掛了一行 disable,是全 repo 唯一一處)。實測證據:同一個 effect 把 `writeLocal(...)`
+ *  換回字面的 `window.localStorage.setItem(...)`,finding 就消失 —— 規則把「字面上的
+ *  localStorage 成員呼叫」認成合法的 external-store 同步,卻看不穿一層具名函式。
+ *  規則建議的「搬進觸發它的事件處理器」在那裡是反向的:`stockCode` 有多個寫者(自選列 /
+ *  圖牆點卡 / 漲跌停跳轉 / 搜尋),逐一補一份寫入正是 N022 的病灶本身;而且「掛載時由
+ *  存檔還原的那一次回寫」也會一併消失。**整條規則不關**(它在別處抓得到真東西),
+ *  只關那一行 —— 日後有人在別的 effect 裡用 `writeLocal` 而被同一條規則擋下時,
+ *  先回來看這段,別直接把規則寫進 `doctor.config.json`。
  */
 
 // 三個旗標各自獨立:讀不到與寫不進去是不同的故障(政策鎖 vs 配額滿),共用一個旗標
