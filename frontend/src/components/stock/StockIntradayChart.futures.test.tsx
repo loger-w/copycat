@@ -386,6 +386,103 @@ describe("IntradayChartCore mode=\"futures\" 的 VWAP 標籤與 hline label(N045
     expect(text.getAttribute("x")).toBe(String(VB.width - R_AXIS_W - 2));
   });
 
+  /** 🔴 讓位路徑的**界單位**(2026-08-24 two-axis review N044-2)。
+   *
+   *  `edgeBounds`(`{ MARK_LABEL_TOP, plotBottom − 5 }`)是 **baseline** 語意(它與
+   *  `markLabelY` 的 limits 同一組數字),但讓位路徑拿它去夾**中心**值再 +3 還原 ——
+   *  於是有效的 baseline 上界變成 12 而不是 9,整整差一個 `BASELINE_TO_CENTER`。
+   *
+   *  幾何:tick 極值 h 23_240 / l 23_230(全段在 ref 之上)→ 半幅 = max(240, −230, 230)
+   *  × 1.1 = 264 → 域 [22_736_000, 23_264_000],toY(p) = 4 + (23_264_000 − p)/528_000 × 238。
+   *  vwap = (23_230×10 + 23_240×10) / 20 = 23_235 → 末點 y ≈ 17.07(貼右界);
+   *  hline 23_240_000 → 線 y ≈ 14.82、label 中心 8.82 → 中心距 8.25 < 10,往上讓到 7.07。
+   *  修前那顆 7.07 被「中心值 vs baseline 界」夾成 9 → **與 VWAP 只剩 8.07px,仍疊印**:
+   *  讓了位卻沒讓開,是 clamp 單位混用唯一會顯形的地方。 */
+  const FUT_TOP = futuresBarsToAccum({
+    bars: [
+      { t: "2026-08-18 08:46", o: 23_230_000, h: 23_240_000, l: 23_230_000, c: 23_230_000, v: 10, uv: 5, dv: 5 },
+      { t: "2026-08-19 05:00", o: 23_240_000, h: 23_240_000, l: 23_235_000, c: 23_240_000, v: 10, uv: 5, dv: 5 },
+    ],
+    live: null,
+    ref: 23_000_000,
+    name: "台指近",
+    code: "TXF.HOT",
+  });
+  const HLINE_TOP: readonly ChartHLine[] = [
+    { priceMilli: 23_240_000, label: "均 23240 多1口", className: "stroke-bull" },
+  ];
+
+  it("讓位撞到走廊頂界 → 夾制與界同語意(baseline ≥ 9),不因單位混用被推回 VWAP 上", () => {
+    const { container } = renderFut({ accum: FUT_TOP, hlines: HLINE_TOP });
+    const g = buildIntradayGeometry(
+      { minutes: FUT_TOP.minutes, meta: FUT_TOP.meta, high: FUT_TOP.high, low: FUT_TOP.low },
+      VB,
+      ALLDAY_WINDOW,
+    );
+    const vwapY = Number(
+      container.querySelector('[data-testid="edge-price-vwap"]')!.getAttribute("y"),
+    );
+    // 前置(敏感度所繫):末點貼右界(x 區間相交)、hline label 在 VWAP 上方且中心距 < 10、
+    // 且讓開後的位置落在「9 與 6」兩種界之間 —— 三者缺一本案就量不到單位差。
+    expect(g.vwapLine.at(-1)!.x).toBeCloseTo(VB.width - R_AXIS_W, 6);
+    const rawCenter = g.toY(23_240_000) - 3 - 3;
+    expect(rawCenter).toBeLessThan(vwapY);
+    expect(vwapY - rawCenter).toBeLessThan(10);
+    expect(vwapY - 10).toBeGreaterThan(6);
+    expect(vwapY - 10).toBeLessThan(9);
+    const text = screen.getAllByTestId("chart-hline")[0]!.querySelector("text")!;
+    // 讓位後真的讓開(修前:被夾成 baseline 12 / 中心 9,與 VWAP 只差 8.07px)
+    expect(Math.abs(Number(text.getAttribute("y")) - 3 - vwapY)).toBeGreaterThanOrEqual(10);
+    // 界仍然守得住:baseline 不得超出 `MARK_LABEL_TOP`(字上緣頂到 viewBox 外)
+    expect(Number(text.getAttribute("y"))).toBeGreaterThanOrEqual(9);
+  });
+
+  /** 🔴 N044 補完(2026-08-24 two-axis review):hline label 與 **MA 價位標**同走廊。
+   *
+   *  兩者都 anchor=end 釘在 `w − R_AXIS_W − 2`,x 區間必然相交;至今誰也不避誰 ——
+   *  持倉均價恰好落在 MA5 上(常見:均價就是這幾天的成本區)時兩層 halo 直接疊印。
+   *  hline label 的 y 由線位決定(與線體同一條資訊),MA 價位標是「這條線在哪」的冗餘
+   *  數值 → 讓位的是 MA。
+   *
+   *  可達性:`hlines` 與注入式 `overlay` 都是 core 的 prop,index 態(`MarketChart`)與
+   *  期貨態(疊線已列 next-time)任一邊補上另一半就會同時出現;契約先鎖住,否則那天
+   *  只會靜默疊印。幾何:域 [22_747_000, 23_253_000] → toY(23_100_000) ≈ 75.96,
+   *  hline label 中心 69.96、MA5 標籤中心 75.96 → 中心距 6px。 */
+  const HLINE_ON_MA: readonly ChartHLine[] = [
+    { priceMilli: 23_100_000, label: "均 23100 多2口", className: "stroke-bull" },
+  ];
+  const OVERLAY_MA = { cdp: null, ma5: 23_100_000, ma20: 22_800_000, date: "2026-08-18" };
+
+  it("持倉均價 hline 貼近 MA5 價位 → MA 價位標讓位,hline label 與線體不動", () => {
+    const { container } = renderFut({
+      hlines: HLINE_ON_MA,
+      overlay: OVERLAY_MA,
+      overlaySupported: true,
+    });
+    const g = buildIntradayGeometry(
+      { minutes: FUT.minutes, meta: FUT.meta, high: FUT.high, low: FUT.low },
+      VB,
+      ALLDAY_WINDOW,
+    );
+    const lineY = g.toY(23_100_000);
+    const hlText = screen.getAllByTestId("chart-hline")[0]!.querySelector("text")!;
+    const ma5 = container.querySelector('[data-testid="edge-price-ma5"]')!;
+    // 前置(敏感度所繫):MA5 真的畫出來了,且未避讓時兩者中心距 < EDGE_LABEL_H
+    expect(Number(hlText.getAttribute("y"))).toBeCloseTo(lineY - 3, 6);
+    expect(Math.abs(lineY - (lineY - 3 - 3))).toBeLessThan(10);
+    // MA 價位標(dy=0.35em → y 即中心)讓開 hline label 的中心
+    expect(
+      Math.abs(Number(ma5.getAttribute("y")) - (Number(hlText.getAttribute("y")) - 3)),
+    ).toBeGreaterThanOrEqual(10);
+    // 線體照畫在真價位上;MA20 遠離,不受牽連
+    expect(
+      Number(screen.getAllByTestId("chart-hline")[0]!.querySelector("line")!.getAttribute("y1")),
+    ).toBeCloseTo(lineY, 6);
+    expect(
+      Number(container.querySelector('[data-testid="edge-price-ma20"]')!.getAttribute("y")),
+    ).toBeCloseTo(g.toY(22_800_000), 6);
+  });
+
   it("對照組:hline 遠離 VWAP 末點 → label y 仍為「線 y − 3」逐值不變", () => {
     const { container } = renderFut();
     const g = buildIntradayGeometry(

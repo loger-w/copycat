@@ -2193,4 +2193,51 @@ describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
     // 翻面後的 baseline = 標記 y + labelUp.flip(14)
     expect(Number(label.getAttribute("y"))).toBeCloseTo(g.toY(2_540_000) + 14, 6);
   });
+
+  /** 🔴 讓位**方向**(2026-08-24 two-axis review N007-1)。
+   *
+   *  同樣是翻面態日高,只把 VWAP 末點換到文字的**外側**(下方)。
+   *  域 [2_090_000, 2_550_000]、plotH 238 → toY(p) = 4 + (2_550_000 − p)/460_000 × 238。
+   *  日高 2_540_000 → 標記 y ≈ 9.17;`9.17 − 7 < MARK_LABEL_TOP(9)` → 文字翻到標記下方
+   *  (baseline 23.17 / 中心 20.17)。累計 VWAP = (2_500_000×10 + 2_530_000×5) / 15
+   *  = 2_510_000 → y ≈ 24.70,中心距 4.52px(< EDGE_LABEL_H)→ 避讓啟動。
+   *
+   *  「遠離該鄰居」的推法在這一側**正好把文字推向標記圓**:24.70 − 10 = 14.70,距圓心
+   *  9.17 只剩 5.52px —— 讓開一層 halo 換來壓在圓上,而圓正是那顆不可動的資訊。
+   *  正解是**沿文字原本相對標記的那一側**推開(這裡是往下)。 */
+  const LATE_TOP_HIGH_VWAP_OUTSIDE = fromSnapshot({
+    code: "2330", seq: 2,
+    last: { p: 2_530_000, t: "13:25:10.000", cum_vol: 15 },
+    vwap: 2_510_000,
+    minutes: {
+      "541": { c: 2_500_000, v: 10, i: 0, o: 10, u: 0, h: 2_500_000, l: 2_500_000 },
+      "805": { c: 2_530_000, v: 5, i: 0, o: 5, u: 0, h: 2_540_000, l: 2_530_000 },
+    },
+    ticks: [], book: null,
+    high: 2_540_000, low: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  it("VWAP 在翻面文字的外側 → 文字沿原方向讓開(不被推回標記圓上)", () => {
+    const { container } = wrap(<StockIntradayChart accum={LATE_TOP_HIGH_VWAP_OUTSIDE} />);
+    const g = geom(LATE_TOP_HIGH_VWAP_OUTSIDE);
+    const markY = g.toY(2_540_000);
+    const vwapY = Number(
+      container.querySelector('[data-testid="edge-price-vwap"]')!.getAttribute("y"),
+    );
+    // 前置(敏感度所繫):VWAP 就地標籤真的在文字外側,且中心距 < EDGE_LABEL_H
+    expect(vwapY).toBeCloseTo(g.vwapLine.at(-1)!.y, 6);
+    const flippedCenter = markY + 14 - 3;
+    expect(vwapY).toBeGreaterThan(flippedCenter);
+    expect(vwapY - flippedCenter).toBeLessThan(EDGE_LABEL_H);
+    const label = container.querySelector('[data-testid="day-high-label"]')!;
+    const center = Number(label.getAttribute("y")) - 3;
+    // 主張一:標記圓不可壓(修前 5.52px = 文字直接落在圓上)
+    expect(Math.abs(center - markY)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    // 主張二:VWAP 仍讓開一個 EDGE_LABEL_H,且是**往原方向**(文字本來就在圓下方)
+    expect(center - vwapY).toBeCloseTo(EDGE_LABEL_H, 6);
+    // 標記圓照樣釘在那一分鐘 / 那個價位上
+    const circle = container.querySelector('[data-testid="day-high"]')!;
+    expect(Number(circle.getAttribute("cy"))).toBeCloseTo(markY, 6);
+  });
 });
