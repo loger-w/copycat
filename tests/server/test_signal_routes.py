@@ -912,11 +912,15 @@ class TestSignalRoutesWithoutStock:
             hub = app.state.signal_hub
             assert hub is not None
             assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
-            deadline = time.monotonic() + 2.0
-            while time.monotonic() < deadline:  # 給 worker 足夠時間「做錯事」
+            # 佇列本身就是判準:早退後它恆空,不必空轉等 worker「做錯事」。
+            # `qsize()==0` 對「還沒排」與「排了又做完」同形 → 再看 cache / 重試記帳,
+            # 三者一起才把「整批沒排進去」釘死(review ST2:原本 2.0 s 輪詢)。
+            assert hub._basis_jobs.qsize() == 0
+            deadline = time.monotonic() + 0.2
+            while time.monotonic() < deadline:
                 if hub._basis_cache:
                     raise AssertionError(f"無日 K 來源時不得落 basis:{hub._basis_cache}")
-                time.sleep(0.05)
+                time.sleep(0.02)
             assert hub._basis_retries == {}, "沒排過 job 就不該有重試記帳"
 
     def test_trade_date_is_evaluated_per_call(

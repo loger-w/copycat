@@ -425,17 +425,28 @@ class TestMarketPayloadUnaffectedByBarsStatus:
     畫面上就是「來源:ok」這種沒人會第一眼認出是 bug 的字(R5 的誤接守門)。
     """
 
-    def test_status_lives_in_meta_only_and_never_at_top_level(self) -> None:
-        """N104 起 `meta.status` 存在(三態通道),但**只在 meta 裡** —— 頂層仍不得有。
+    def test_status_only_appears_on_the_paths_that_really_have_it(self) -> None:
+        """N104 + review SP4:`meta.status` **只在期指 `tf=1`** 出現,別的路徑不給這一格。
 
-        頂層多一個 `status` 會與 `bars` / `meta` 這兩個既有鍵同層,消費端很容易把它讀成
-        「這個回應本身的狀態」;它答的是「這一趟回補的結果」,語意屬 meta。
+        未三態化的路徑硬寫 `"ok"` 是謊報:index proxy miss 時 payload 會是
+        `source:"unavailable"` + `status:"ok"`,而那正好是「問到了、就是沒有」的意思。
+        **缺欄 = 這條路徑還沒有三態訊號**,前端的 `?? "ok"` 已經吃得下 undefined。
+        另外 status 一律住在 `meta` 裡 —— 放頂層會與 `bars` / `meta` 同層,容易被讀成
+        「這個回應本身的狀態」。
         """
         with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
-            for path in ("/api/market/bars/TWSE?tf=D", "/api/market/bars/TWSE?tf=1&days=1"):
+            for path in (
+                "/api/market/bars/TWSE?tf=D",
+                "/api/market/bars/TWSE?tf=1&days=1",
+                "/api/market/bars/OTC?tf=D",
+                "/api/market/bars/TXF?tf=D",
+            ):
                 body = c.get(path).json()
-                assert "status" not in body
-                assert body["meta"]["status"] in ("ok", "timeout", "disconnected")
+                assert "status" not in body, path
+                assert "status" not in body["meta"], path
+            fut = c.get("/api/market/bars/TXF?tf=1&days=1").json()
+            assert "status" not in fut
+            assert fut["meta"]["status"] in ("ok", "timeout", "disconnected")
 
     def test_meta_source_is_never_a_status_word(self) -> None:
         with make_client(index_source=FakeIndexSource(), futures_source=FakeFuturesSource()) as c:
