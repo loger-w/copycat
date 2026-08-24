@@ -246,6 +246,7 @@ def test_default_txo_source_wires_realtime_heal(monkeypatch: pytest.MonkeyPatch)
 
 _FRIDAY = date(2026, 8, 14)
 _SATURDAY = date(2026, 8, 15)
+_SUNDAY = date(2026, 8, 16)
 _MONDAY = date(2026, 8, 17)
 _TUESDAY = date(2026, 8, 18)
 #: 假日表空 → 週末由 weekday() 擋、平日全開;閘的組合律用這一把就驗得完
@@ -363,6 +364,29 @@ class TestHealGateAcrossMidnight:
 
         monkeypatch.setattr(app_mod, "_now", lambda: _at(date(2026, 8, 19), 1))
         assert app_mod._heal_gate(_CAL_TUE_HOLIDAY, lambda: True)() is False
+
+    @pytest.mark.parametrize(
+        ("when", "expected", "why"),
+        [
+            (_at(_FRIDAY, 23, 0), True, "週五夜盤進行中(場別起始日 = 週五,交易日)"),
+            (_at(_SATURDAY, 23, 0), False, "週六晚上沒有夜盤(場別起始日 = 週六)"),
+            (_at(_SUNDAY, 1, 0), False, "週日凌晨 = 週六那一場"),
+            (_at(_MONDAY, 8, 50), True, "週一日盤開盤後(場別起始日 = 週一)"),
+        ],
+    )
+    def test_cross_midnight_table(
+        self, monkeypatch: pytest.MonkeyPatch, when: datetime, expected: bool, why: str
+    ) -> None:
+        """N015:跨午夜表補四格 —— 兩個週末邊界 + 一個夜盤中 + 一個日盤開盤。
+
+        現存三格(週六 01:00 / 週一 01:00 / 假日隔日凌晨)**全部落在 `hour == 1`**,
+        對門檻的另一半零覆蓋:把 `hour < 6` 寫成 `hour < 24`(= 恆歸前一日)三格照樣
+        全綠,而週一 08:50 會退成週日 → 開盤後該救不救,零錯誤訊號。
+        """
+        from copycat.server import app as app_mod
+
+        monkeypatch.setattr(app_mod, "_now", lambda: when)
+        assert app_mod._heal_gate(_CAL, lambda: True)() is expected, why
 
     def test_session_date_switches_at_six(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """門檻對稱案:05:59 仍屬前一場、06:00 起算當日(不經 AND,直接看取樣)。"""

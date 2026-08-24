@@ -254,6 +254,10 @@ class _Watch:
         return dict(self.quotes)
 
 
+#: `_Harness(daily_bars=...)` 的「未傳」哨兵(None 是合法且有意義的值)
+_UNSET: object = object()
+
+
 class _Harness:
     def __init__(
         self,
@@ -261,6 +265,7 @@ class _Harness:
         clock: _Clock,
         bars: _FakeBars | None = None,
         wl: _Watch | None = None,
+        daily_bars: object = _UNSET,
         **over: float | int,
     ) -> None:
         self.published: list[dict] = []
@@ -279,7 +284,9 @@ class _Harness:
         self.hub = SignalHub(
             cfg,
             publish=self.published.append,
-            daily_bars=self.bars,
+            # `daily_bars=None` 是**顯式的「沒有日 K 來源」**(N110),與「不傳 = 用
+            # `self.bars`」是兩件事 → 用 sentinel 分,不能拿 None 當「未傳」
+            daily_bars=self.bars if daily_bars is _UNSET else daily_bars,  # type: ignore[arg-type]
             notify_fallback=self._notify,
             data_dir=tmp_path,
             trade_date_fn=lambda: self.date,
@@ -1241,6 +1248,46 @@ class TestDiscordMerge:
         assert h.hub._discord_pending is None
         await asyncio.wait_for(h.hub._discord_queue.join(), 1)
         assert "sig-0" in caplog.text
+
+
+class TestNoDailyBarsSource:
+    """N110:`daily_bars=None` = **配置上就沒有日 K 來源**(app 層無 stock engine)。
+
+    改動前那條路是塞一個恆回空清單的替身,hub 把「配置上沒有」讀成「這一檔資料面
+    沒有」—— 自選 50 檔就是 50 行「無已完成日 K,CDP 停用」WARNING,外加逐檔一格
+    basis job(以及一個為了它而存在的 `basis_gap_secs=0` hack)。
+    """
+
+    async def test_request_basis_is_a_noop_without_source(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        h = _Harness(tmp_path, clock, bars=None, daily_bars=None)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.INFO):
+                h.hub.on_watchlist(["2330", "2317", "2454"])
+                await h.settle()
+            assert h.hub._basis_cache == {}
+            assert "CDP 停用" not in caplog.text
+            assert caplog.text.count("CDP 基準:無日 K 來源") == 1
+        finally:
+            await h.hub.close()
+
+    async def test_ticks_still_flow_without_a_daily_bars_source(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """CDP 停用不等於訊號鏈停用:非 CDP 規則照常發(XR-3 的既有語意不得回退)。"""
+        h = _Harness(tmp_path, clock, bars=None, daily_bars=None)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert [m["kind"] for m in h.published] == []  # CDP 無基準 → 不發
+            assert h.hub.today_signals() == []
+        finally:
+            await h.hub.close()
 
 
 class TestBasisWorker:

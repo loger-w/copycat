@@ -259,6 +259,7 @@ class TestCalendarRoute:
             "calendar_trade_date",
             "backfill_env",
             "holidays",
+            "extra_trading_days",
             "years_loaded",
             "calendar_loaded",
         }
@@ -270,6 +271,31 @@ class TestCalendarRoute:
         assert body["years_loaded"] == [2026]
         assert len(body["holidays"]) == 18
         assert "2026-10-09" in body["holidays"]
+
+    def test_extra_trading_days_are_exposed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """N090:補班交易日 additive 出到 payload —— 前端的週末守門要分得出
+        「普通週末」與「這個週六本來就該開盤」,而那份資料只有後端有。
+
+        2026 官方表無補班日 → 真檔那條只驗得到「欄位在、是空陣列」;內容面用注入的
+        日曆驗(否則等到 2027 有補班日才會發現欄位根本沒接上)。
+        """
+        _freeze(monkeypatch, SAT)
+        app = _app(tmp_path, cal=load_trading_calendar())
+        with _client(app) as c:
+            assert c.get("/api/calendar").json()["extra_trading_days"] == []
+
+        cal = TradingCalendar(
+            holidays=frozenset({_dt.date(2026, 8, 14)}),
+            extra_trading_days=frozenset({_dt.date(2026, 8, 15), _dt.date(2026, 8, 22)}),
+            years_loaded=frozenset({2026}),
+        )
+        app2 = _app(tmp_path, cal=cal)
+        with _client(app2) as c:
+            body = c.get("/api/calendar").json()
+        assert body["extra_trading_days"] == ["2026-08-15", "2026-08-22"]  # 升冪,同 holidays
+        assert body["calendar_trade_date"] == "2026-08-15"  # 補班日優先於週末規則
 
     def test_env_shifts_trade_date_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
