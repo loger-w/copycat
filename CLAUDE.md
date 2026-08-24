@@ -3,6 +3,21 @@
 User-global `~/.claude/CLAUDE.md` 的鐵則一律繼承,不重述。本檔只放「讀 code 看不出來」的
 專案級事實;**累積教訓已全數移至專案 skills(見 §8 索引),本檔不再累積教訓全文**(2026-08-10)。
 
+## Agent skills
+
+### Issue tracker
+
+Specs 與 tickets 走本 repo 的 GitHub Issues(`gh` CLI)。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+五個 canonical 角色標籤採預設字串。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context:根目錄 `CONTEXT.md`(領域術語 glossary)+ `docs/adr/`(架構決策,lazily
+建檔)。See `docs/agents/domain.md`.
+
 ---
 
 ## 0. 目的 & 結構
