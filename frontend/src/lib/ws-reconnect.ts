@@ -17,8 +17,9 @@
  *    半死 server 會在同一個 tick 窗齊判定,不抖就是齊重連 + 齊 refetch;onclose 路徑不抖;
  *  - `visibilitychange` 回前景時重設 tick 基準(R4 N037):Chrome 對隱藏 > 5 min 的分頁把
  *    timer 節流到 1/min,每個 tick 都撞下方凍結守門而恆不判定;回前景後第一個 tick 也會
- *    被吞,最壞再等 35 s。重設基準後下一個 tick(≤ 5 s)就以真實 `lastMsgAt` 判定。
- *    **不同步立判**:凍結期間積壓的 frame 要留派發窗口,否則健康連線會被誤殺;
+ *    被吞,最壞再等 35 s。重設基準後,**距回前景滿一個 tick 的第一個 tick**(≤ 5 s + ε)
+ *    才以真實 `lastMsgAt` 判定 —— 解凍後逾期的 interval 會在 ~0 ms 補跑,那時凍結期間積壓的
+ *    frame 可能還沒派發,直接判定會誤殺健康連線(review SP3),故留一個 tick 的 grace;
  *  - `onerror` 關**自身** socket(SC-5);`onclose` 只由 `stopped` 守門,不做世代比對
  *    (被 watchdog 放棄的那代已經卸掉 handler,遲到事件進不來);
  *  - `close()` 停止重連、清 watchdog(含 visibility listener)、卸掉當下 socket 的
@@ -107,7 +108,7 @@ export function connectWithRetry(
     handlers.onClose?.();
     const lived = openedAt !== null ? Date.now() - openedAt : null;
     const delay = lived !== null && lived >= minUptimeMs ? startMs : backoff;
-    const jitter = extraJitterMs > 0 ? Math.floor(Math.random() * extraJitterMs) : 0;
+    const jitter = Math.floor(Math.random() * extraJitterMs);
     timer = window.setTimeout(connect, delay + jitter);
     backoff = Math.min(delay * 2, lived !== null ? shortLivedCapMs : capMs);
   };
@@ -127,10 +128,15 @@ export function connectWithRetry(
     let lastMsgAt = 0;
     let lastTickAt = 0;
 
-    /** N037:回前景只重設 tick 基準,讓下一個 tick 不再被凍結守門吞掉;判定仍交給 tick。 */
+    /** 回前景後到此刻前的 tick 一律不判定(給凍結期間積壓的 frame 一個 tick 的派發窗;SP3)。 */
+    let graceUntil = 0;
+
+    /** N037:回前景重設 tick 基準(下一個 tick 不再被凍結守門吞掉)+ 開一個 tick 的 grace;判定仍交給 tick。 */
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== "visible") return;
-      lastTickAt = Date.now();
+      const now = Date.now();
+      lastTickAt = now;
+      graceUntil = now + tickMs;
     };
 
     const clearWatchdog = (): void => {
@@ -153,6 +159,7 @@ export function connectWithRetry(
         lastMsgAt = now;
         return;
       }
+      if (now < graceUntil) return; // 回前景後第一個 tick 內:積壓 frame 尚未派發完,不判定
       if (now - lastMsgAt <= silenceTimeoutMs) return;
 
       console.warn(`${label}: ${Math.round((now - lastMsgAt) / 1000)} s 無訊息,重連`);
