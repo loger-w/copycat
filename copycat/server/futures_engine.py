@@ -21,8 +21,8 @@ import functools
 import logging
 from typing import Callable, Protocol
 
+from copycat.live.stock_source import Bar, BarsStatus
 from copycat.live.tc4 import HistoryTimeoutError
-from copycat.server.bars import BarsResult
 from copycat.live.futures_models import (
     PRODUCTS,
     parse_futures_realtime,
@@ -272,7 +272,7 @@ class FuturesEngine:
 
     async def bars_range(
         self, product: str, tf: str, start: str, end: str, *, session: str = "day"
-    ) -> BarsResult:
+    ) -> tuple[list[Bar], BarsStatus]:
         """期指 K 線歷史 —— **必須從本引擎的 session 問**(同 `fetch_day_1k` 的理由)。
 
         借不到就回空、不 fallback 不猜:回空 + 固定可 grep 的 log 字串,3am 時
@@ -282,10 +282,15 @@ class FuturesEngine:
         「source 沒有這個參數就退回不帶」的相容分支** —— 那會讓漏改的 fake 靜默走
         日盤路徑,近全模式只是少了夜盤而不會有任何錯誤。fake 一律同步升簽名。
 
-        **回 `BarsResult(bars, status)`**(N104):bars 降級成空這件事仍在引擎內完成,
-        但「為什麼空」要帶出去 —— 少了它,`meta.source="unavailable"` 同時代表「TC4 忙」
-        「TC4 斷線」「這個商品真沒 K 線」三件事,而它們的處置各不相同(等下一輪輪詢 /
-        查連線 / 換商品)。log 那兩條固定字串是 3am 的判準,語意不變、逐字保留。
+        **回 `(bars, status)`**(N104):bars 降級成空這件事仍在引擎內完成,但「為什麼
+        空」要帶出去 —— 少了它,`meta.source="unavailable"` 同時代表「TC4 忙」「TC4
+        斷線」「這個商品真沒 K 線」三件事,而它們的處置各不相同(等下一輪輪詢 / 查連線 /
+        換商品)。log 那兩條固定字串是 3am 的判準,語意不變、逐字保留。
+
+        **回裸 tuple 而不是 `server.bars.BarsResult`**(review ST3):engine 是 live 層的
+        消費者,反向 import server 層的搬運型別是層級倒置(`bars.py` 反過來也要用 engine
+        時就是 import 迴圈)。`BarsStatus` 住 live 層(`stock_source`),值域由它單一持有;
+        要 `BarsResult` 的是 route/cache 那一側,由那邊自己組。
         """
         source = self._source
         # getattr 而非加進 Protocol:既有測試 fake 沒有這個方法,加進 Protocol 會讓
@@ -295,7 +300,7 @@ class FuturesEngine:
             # source 未建(未 start / 已 close)/ 不支援 = 現在問不到任何人,與斷線同一態:
             # 標 "timeout" 會叫前端「稍後自動重試」,而這條路重試一百次也一樣
             logger.warning("market: futures history proxy miss %s(source 未建/不支援)", product)
-            return BarsResult([], "disconnected")
+            return [], "disconnected"
         try:
             # partial 而非 lambda:閉包會在 executor thread 才取值,partial 當場綁定
             bars = await asyncio.to_thread(
@@ -305,11 +310,11 @@ class FuturesEngine:
             # **先於** ConnectionError(它是子類):不然「TC4 忙一下」會被 proxy miss
             # 那條字串讀成「TC4 掛了」,而三態 status 也會一起塌成 disconnected。
             logger.warning("市場:期貨 K 線 timeout(非 TC4 down)%s(%s)", product, e)
-            return BarsResult([], "timeout")
+            return [], "timeout"
         except ConnectionError as e:
             logger.warning("market: futures history proxy miss %s(%s)", product, e)
-            return BarsResult([], "disconnected")
-        return BarsResult(bars, "ok")
+            return [], "disconnected"
+        return bars, "ok"
 
     def resolved_contract(self, product: str) -> str | None:
         """HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。"""

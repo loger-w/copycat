@@ -2,7 +2,7 @@
 import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CalendarBadges } from "@/components/CalendarHolidayBadge";
+import { CalendarBadges } from "@/components/CalendarBadges";
 import { wrap } from "@/test-utils";
 import type { CalendarState } from "@/types";
 

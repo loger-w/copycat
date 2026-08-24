@@ -629,8 +629,9 @@ class SignalHub:
     ) -> None:
         """排 CDP 基準取數 job;**無日 K 來源時整批早退**(N110)。
 
-        早退點放在這裡(唯一的入隊口)而不是 worker:排進去再逐檔失敗的話,每一檔都要
-        走一遍例外 → 有限重試 → 落 None 的完整流程,而答案從第一檔就已經確定。
+        早退點放在這裡(**新** job 的唯一入口;`_requeue_basis` 只放回排過的)而不是
+        worker:排進去再逐檔失敗的話,每一檔都要走一遍例外 → 有限重試 → 落 None 的
+        完整流程,而答案從第一檔就已經確定。
         一行 INFO(固定字串供 grep)講清楚「CDP 今天全站停用、原因是配置」。
         """
         if self._daily_bars is None:
@@ -738,10 +739,13 @@ class SignalHub:
     async def _resolve_basis(self, code: str, basis_date: str, staged: bool) -> bool:
         """回傳「有沒有真的打一次日 K」—— worker 據此決定要不要付 gap sleep。
 
-        `_daily_bars is None` 到不了這裡:唯一的入隊口 `request_basis` 已整批早退
-        (重試 job 也是原封放回同一條佇列,不會憑空生出新的)。
+        `_daily_bars is None` 到不了這裡:佇列有兩個入口(`request_basis` 與重試路徑的
+        `_requeue_basis`),而後者只放回**已經排過**的 job —— `request_basis` 整批早退
+        之後,重試那條沒有東西可放。
         """
-        assert self._daily_bars is not None, "無日 K 來源時不得有 basis job(request_basis 早退)"
+        assert self._daily_bars is not None, (
+            "無日 K 來源時不得有 basis job:request_basis 已早退,_requeue_basis 只放回排過的 job"
+        )
         if self._stale(basis_date, staged):
             # 排進佇列後、輪到它之前就換日了 → 連 TC4 都不必打(review A3)
             logger.info("捨棄過期的基準 job:%s(%s,staged=%s)", code, basis_date, staged)

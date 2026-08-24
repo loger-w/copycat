@@ -9,7 +9,7 @@ import { QuoteTable } from "@/components/QuoteTable";
 import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { ToastStack } from "@/components/ToastStack";
-import { CalendarBadges } from "@/components/CalendarHolidayBadge";
+import { CalendarBadges } from "@/components/CalendarBadges";
 import { VersionDriftBadge } from "@/components/VersionDriftBadge";
 import { useBreadth } from "@/hooks/useBreadth";
 import { useCapitalStream } from "@/hooks/useCapital";
