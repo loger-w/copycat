@@ -311,3 +311,133 @@ tc4-market-facts 記的是「**任一把 key** SumSubCount 歸 0 → 上游退�
 | `FuturesEngine._handle_reconnect` / `CorrelationEngine._handle_reconnect` | 直呼(threadsafe 入口另有既有測試) |
 | `StockEngine.set_watchlist` + per-code gate source | 鎖粒度(N111)與哨兵(N112) |
 | `create_app` + fake source 的 `close()` 順序戳 | 關機序(N049) |
+
+---
+
+## §4 review round 1 逐條處置
+
+判定欄:**接受** = 照 review 修 / **接受(變形)** = 收同一個問題但手段不同 /
+**申報** = 做不到或只做一半,理由與留尾寫在此。
+
+### P1
+
+#### ST1 / SP3 — N111 退訂洩漏 — **接受**
+
+`removed` 改以 `_refs` 實況為準:「持有 `"watchlist"` ref 卻不在最新名單」的檔一律要退。
+名單那份會被較舊那一發覆寫,所以它算不出正確答案 —— 這是 review 指出的真洞。
+另兩處配套:
+- added 迴圈的 `_superseded` 早退由 `return` 改 **`break`**:過期的是「還要訂什麼」,
+  不是「還要退什麼」;退訂在任何名單下都仍正確(逐項另有 `code in self._watchlist` 重驗)。
+- removed 迴圈**移除** `_superseded` 早退(同上理由,留著就是同一個洩漏的第二條路)。
+
+紅先行:`TestWatchlistSupersededRelease` 兩條(兩發交錯 → 舊發被 superseded → 斷言
+5483/6669 零殘留 ref;以及直接鎖判準來源 = `_refs` 不是名單)。
+
+#### SP1 — N052 同步 ZMQ 佔 event loop — **接受**
+
+`set_trade_date`(N052 之後含一批同步 UNSUBQUOTE)兩個熱呼叫點都下沉到 worker:
+- `stock_engine`:從 `rollover_stage1` 的同步段移進 `_resubscribe_all(new_date=...)` 的
+  `_do()` —— **同一條 worker thread 上先換窗再逐檔重掛**,順序(舊窗歸零 → 新窗 0→1
+  觸發 `ReqSubQuote`)因此仍然成立,且不需要第二個同步點。
+- `index_engine._rollover_loop`:`await asyncio.to_thread(self._source.set_trade_date, ...)`,
+  排在既有的 `to_thread(subscribe_symbol)` **之前**。
+
+**該變清單**:`tests/server/test_stock_engine.py::test_rollover_stage1_does_not_block_event_loop`
+原本斷言「stage1 同步返回後 `'2026-07-22' in src.trade_dates`」—— 換窗既然下沉,
+同步段就**不該**再碰 source。改為斷言「同步段不碰 source + 背景段跑完才換窗」,
+順序另由新增的 `test_stale_window_unsub_happens_before_the_new_window_resub` 釘住。
+
+**代價(接受並記在 docstring)**:stage1 返回到 worker 真的跑到 `set_trade_date` 之間有
+一個次毫秒級的窗,期間 source 日窗還是舊的。`_generation` 已在 stage1 同步 bump,
+那個窗內發出的回補結果套用時會被 worker 的 generation guard 丟掉。
+
+紅先行:`TestRolloverStageOneOffLoop`(fake 記 `threading.get_ident()`)+
+`test_index_rollover_switches_the_source_date_off_the_loop`。
+
+### P2
+
+#### SP2 / ST7 — N050 offset 撞 variant 階梯 — **接受**
+
+`SPOT_WINDOW_OFFSET` 由 `1` 改為 `_HEAL_VARIANT_CYCLE + 1`(= 4):futures 的
+k ∈ [0..3] 與 TXO 的 k ∈ [4..7] 不相交。review 的判斷正確 —— offset=1 時 futures 自癒到
+variant 1 的窗會等於 TXO 的 offset 窗,雙持同一把 key 的原病在「其中一邊正在自癒」這個
+最需要它不復發的時刻復發。
+紅先行:四把 base 窗 × (futures variant 0..3 ∪ TXO variant 0..3) = 8 個窗字串互異;
+另一條 ST7 鎖 `start <= end` 與小時值域;第三條鎖結構性判準
+`SPOT_WINDOW_OFFSET > _HEAL_VARIANT_CYCLE`(不靠列舉)。
+
+#### ST2 — 關機路徑代價 — **接受(變形)**
+
+- `close()` **已經**是先 `self._stop.set()` 再取鎖(原碼即如此,無須改)。缺的是另一半:
+  在途那一發 `Connect()` 完成後**沒有**回頭看 `_stop` → 它會把一條 `close()` 已經
+  掃過去的連線發布出來,KeepAlive 執行緒續跑到 process 不退。已補:`Connect()` 成功後
+  若 `_stop` 已 set,就地 `Disconnect()` 並拋 `ConnectionError`,不發布。
+- `run.ps1` graceful 上限 10 s → **15 s**。
+- change-spec §1 N259 補「關機路徑」代價一段(見下)。
+
+紅先行:`TestEnsureConnectedShutdownRace`(在途 Connect 期間 set `_stop` → 斷言替身
+`disconnected is True`、`src._api is None`、呼叫端收到 `ConnectionError`)。
+
+#### ST3 — `_settle` 靜默丟棄 — **接受**
+
+`or seq is None` 拆成獨立分支 + `logger.error`(行為維持不訂閱不廣播:帶 `None` 往下送
+只會在 engine 端變成另一種靜默)。紅先行:`TestSettleMissingSeq`。
+
+#### SP4 — N260 清 `p` 造成畫面空一格 — **接受**
+
+改用 `_leaf_rearm: set[str]`:`_handle_reconnect` 對 `_leaf_fed` 的品清 `_leaf_done` 鍵
+**並放進 `_leaf_rearm`**;`_schedule_leaf_fallback` / `_leaf_fallback` 把它當成
+「等同 `p is None`」的第二種武裝條件;`_leaf_finish`(補訂成功)與 `_handle_quote`
+(HOT 自己回魂)各消耗一次。`st.p` 一行不動 → 使用者看的價位不再空格。
+紅先行:`TestReconnectLeafRearmKeepsPrice` 兩條(價不變 / 旗標用完就消,不 churn)。
+
+**verification §6.6 的過目說明同步更新**:重連時期貨價**不會**再空一格。
+
+#### SP5 — N094 orphan worker 的 subscribe 副作用 — **接受**
+
+`_subscribe_and_backfill(variant, epoch)` 在**副作用之前**比對世代:
+`_schedule_retry` 每次 `_retry_epoch += 1`,對不上(或 `_loop is None` = close 中)
+就整支早退回空 + 一行 INFO。cancel 只攔得到還沒返回的 `await`,攔不到已排進 executor
+的工作項 —— review 指出的正是這一段。
+紅先行:`TestRetrySupersededSideEffects` 三條(作廢 → 零 SUBQUOTE / 當代 → 照訂 /
+close 中 → 零 SUBQUOTE)。
+
+**該變清單**:`test_worker_does_not_write_shared_dicts` 直呼 `_subscribe_and_backfill`
+時要自己備妥 `eng._loop`(新閘看它),已補一行。
+
+#### SP6 — run.ps1「frontend 先退」白等 — **接受(變形)+ 部分申報**
+
+- **做了**:區分兩條退出路徑。Ctrl+C(while 迴圈被中斷 → 直接跳 finally)維持等待;
+  「frontend 自己先死」是我們主動 `break` 出來的,設 `$backendGotCtrlC = $false` →
+  **不等**,直接硬殺並印黃字說明 TC4 session 會留到 reap。白等一輪 timeout 的問題消失。
+- **申報(沒做成)**:PowerShell 5.1 沒有安全的「對別的 process 送 Ctrl+C」——
+  `AttachConsole` + `GenerateConsoleCtrlEvent` 會連本 shell 自己的 handler 一起打到
+  (整支腳本會被自己的 Ctrl+C 中斷);backend 也**沒有** HTTP 關機端點,而 review 明講
+  「不存在就別發明」。所以那條路上 TC4 仍會留到 ~60 s 後被 reap。
+- **留尾**:若之後真的要收,方向是 backend 自己監看 frontend(反過來),或改用
+  job object / `Stop-Process -Force` 之外的受控訊號機制 —— 都不是這一輪該開的範圍。
+
+### P3
+
+- **ST4 — 🔵 併進 🔴 commit**:**接受(記錄偏離,不重寫歷史)**。N092 的
+  `stock_source.backfill` / `tc4._fetch_symbol_ticks` 兩處 log-only(自標 🔵)與
+  run.ps1 尾行空白,都與同檔的 🔴 hunk 相鄰,拆出來要動同一個函式的相鄰行。
+  偏離已記在 verification §7.4;下不為例。
+- **ST5 — corr / futures `_handle_reconnect` 逐字同形**:**接受(留尾)**,見
+  verification §5.7。本輪不抽共用基底 —— 兩者的「對帳單位」不同(futures 是 product、
+  corr 是 leg.symbol),抽出來的參數化基底會比兩份各自 10 行更難讀,而且 /refactor
+  的 Why gate 沒過。
+- **ST6 — river warning 與例外訊息重複**:**接受**。刪 warning,判準留在例外訊息裡
+  (呼叫端 `corr_engine._fetch_leg_minutes` 自己會記一行帶處置的 warning)。
+  **該變清單**:`test_all_rows_dropped_raises_history_timeout` 的
+  `assert "疑似凍結 stub" in caplog.text` 改成斷言例外訊息,並加一條
+  `not in caplog.text` 鎖住「不再印兩次」。
+- **SP7 — N051 只收 SXF**:**接受(不動)**,已如實記在 verification §5.5。
+
+### §1 N259 補充(關機路徑代價)
+
+持 `_api_lock` 跨 `Connect()` 的第三個代價(review ST2):`close()` 的第一步是
+`self._stop.set()`,第二步就要拿同一把鎖 —— 在途那一發最壞讓關機多等一整個
+`_REQ_TIMEOUT_MS`(10 s)。因此 `run.ps1` 的 graceful 上限取 **15 s** 而不是 10 s,
+且在途那一發 `Connect()` 成功後必須回頭看 `_stop`、就地 `Disconnect()` 不發布 ——
+否則發布出去的是一條 `close()` 已經掃過去的連線,KeepAlive 續跑到 process 不退。
