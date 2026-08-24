@@ -1,0 +1,72 @@
+{
+ "round": 1,
+ "lenses": [
+  "two-axis standards(opus)",
+  "two-axis spec(opus)"
+ ],
+ "findings": [
+  {
+   "id": "SP1",
+   "severity": "P1",
+   "summary": "N007 讓位方向:VWAP 在文字外側時把文字推上標記圓",
+   "disposition": "accepted",
+   "resolution": "yieldToObstacles 加 prefer 沿原方向推;紅 5.52px→綠 25.52"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "讓位 clamp baseline/中心單位混用差 3px",
+   "disposition": "accepted",
+   "resolution": "baseline 進出、界投影;紅 8.07→綠 10.00"
+  },
+  {
+   "id": "SP3",
+   "severity": "P2",
+   "summary": "N044 半套:hline label 未併 maObstacles",
+   "disposition": "accepted",
+   "resolution": "渲染前計算併入,同一份餵渲染;紅 6px→綠 10"
+  },
+  {
+   "id": "ST1",
+   "severity": "P2",
+   "summary": "三處測試斷言同常數回算(恆綠),其一本來就恆真",
+   "disposition": "accepted",
+   "resolution": "字面量化;index 條改鎖 x=720+內容,指回 vwapLabelBox 單測"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2",
+   "summary": "buildVwapLabel 純函式留在元件檔",
+   "disposition": "accepted",
+   "resolution": "移入 lib + 五條單測(🔵/🟢 分 commit)"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2",
+   "summary": "讓位正規化三處重複 + yieldToFixed 命名",
+   "disposition": "accepted",
+   "resolution": "抽 yieldToObstaclesBaseline/labelCenter,改名 yieldToObstacles"
+  },
+  {
+   "id": "SP4",
+   "severity": "P2",
+   "summary": "verification 基線數字不實(2561 vs 實 2533)",
+   "disposition": "accepted",
+   "resolution": "實跑 merge-base 更正 + §6 紅→綠"
+  },
+  {
+   "id": "SP5",
+   "severity": "P2",
+   "summary": "AdvanceDeclineChart 註解 10rem 漂移",
+   "disposition": "accepted",
+   "resolution": "改 6rem 附理由"
+  },
+  {
+   "id": "ST4",
+   "severity": "P2",
+   "summary": "LabelSpan 三表示法 / maLabelLeft 硬編 34 / index 極值 fmt 口徑 / N062 餘裕 10px / NUL byte",
+   "disposition": "accepted",
+   "resolution": "五條入 next-time 留尾節"
+  }
+ ]
+}
