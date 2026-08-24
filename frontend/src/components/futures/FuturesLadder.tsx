@@ -275,7 +275,8 @@ export function FuturesLadder({
     setCloseOpen(false);
     for (const t of closeTargets) {
       if (t.est === null) continue; // 型別收斂;closeDisabled 已擋整批
-      const body = closeBodyOf(t.pos, t.est);
+      // 鎖定態平倉也是鎖定態送單(N082 / review SP3):審計檔要看得出來
+      const body = closeBodyOf(t.pos, t.est, arm.state.locked ? "flash-locked" : undefined);
       closePosition
         .mutateAsync(body)
         .then((r) => {

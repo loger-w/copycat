@@ -19,6 +19,29 @@ function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
   };
 }
 
+describe("closeBodyOf 稽核分流(N082 / review SP3)", () => {
+  const pos = {
+    market: "fut",
+    stock_no: "TXFI6",
+    qty: -2,
+    name: "臺股期貨",
+    avg_price: 23_000,
+    kind: "cash",
+    pnl_base: null,
+    pnl_base_price: null,
+    pnl_cost: null,
+    code: null,
+  } as unknown as Parameters<typeof closeBodyOf>[0];
+
+  it("未帶 source → body 無 source 欄(後端預設 panel,舊契約零改)", () => {
+    expect("source" in closeBodyOf(pos, 25_080)).toBe(false);
+  });
+
+  it("鎖定態 → source = flash-locked", () => {
+    expect(closeBodyOf(pos, 25_080, "flash-locked").source).toBe("flash-locked");
+  });
+});
+
 describe("kindOf / KIND_TEXT(值域單一定義)", () => {
   it("PositionKind 三值認得", () => {
     expect(kindOf(pos({ kind: "cash" }))).toBe("cash");

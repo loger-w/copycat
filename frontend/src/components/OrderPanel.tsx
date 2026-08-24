@@ -36,6 +36,9 @@ function useTxoContracts() {
   });
 }
 
+/** N011:市價估價缺時 pill title 與送出鈕下方提示共用同一句(review R6 ST5)。 */
+const MARKET_ESTIMATE_MISSING = "此合約尚無成交估價,市價暫不可送出";
+
 export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
   const status = useCapitalStatus();
   const submit = useSubmitFuture();
@@ -216,7 +219,7 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
                 // disabled 只擋**進入**方向(N011):已選市價的那顆恆可聚焦 / 恆可切走,
                 // 送出由 `marketBlocked` 擋。兩者都鎖的話 radiogroup 會零可聚焦項。
                 disabled: marketEstimate == null && kind !== "market",
-                title: marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined,
+                title: marketEstimate == null ? MARKET_ESTIMATE_MISSING : undefined,
               },
             ]}
             pillClass={(item, checked) =>
@@ -274,7 +277,7 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
           {/* N011:市價選著、估價缺 → 送出鈕已 disabled,但沒有理由的話畫面等於「按不動」。
               放在 blockedReason 之前:估價缺是**這一格**的具體原因,連線類阻擋是全域的。 */}
           {marketBlocked && (
-            <p className="text-xs text-loss">此合約尚無成交估價,市價暫不可送出</p>
+            <p className="text-xs text-loss">{MARKET_ESTIMATE_MISSING}</p>
           )}
           {blockedReason != null && <p className="text-xs text-loss">{blockedReason}</p>}
           {degradedNote != null && <p className="text-xs text-loss">{degradedNote}</p>}
