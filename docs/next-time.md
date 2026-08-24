@@ -35,15 +35,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
 **待 user 過目 / 盤中觀察(真環境無法刻意觸發,以測試代證的五項)**:
 以下為本次不動的 P2:
 
-- [ ] **VWAP 標籤寬度 index 態低估**(2026-08-22 mod/vwap-label-avoid review P2):`StockIntradayChart.tsx` VWAP 文字硬編 `fmt`
-  不吃 `priceText`,加權 `24283.54` 實寬 ≈45px > `VWAP_LABEL_W`=40 → clamp 字尾溢右緣帶(既有)+ 新 obstacle 判定多一道 ≈5px 誤判窄帶。
-  修法 = VWAP 文字走 priceText 或寬度依 mode 取值。
-- [ ] **VWAP 就地標籤 × 極值標記文字不互相避讓**(同上 review P2):兩者都「不可動」,日高/低落在盤末最後幾分鐘且價位≈VWAP 時疊印仍可達。
 - [ ] **VP 圖層在 tapeOmitted 時的佔位**(2026-08-22 mod/calendar-poll-tape-omitted out of scope):群組切單檔首 paint VP 空,
   與「無成交」同形;可沿 `accum.tapeOmitted` 讓 VP toggle 區印載入中。
   **user 附註(2026-08-24):顯示載入中時 UI 不得跑版,排版要固定(佔位同尺寸)。**
-- [ ] **R1 超容 clamp 全堆界邊**:`lib/stock-intraday-svg.ts:643-666` dropOverflow=false 時上緣標籤被
-  clamp 成完全同 y(測試字面量 `[4,4,4,4,10,20,30]`),4×4 圖牆 capacity 6 / n=7 會踩到;改成界內等距壓縮。
 - [ ] **R2 OrderPanel kind 單向靜默收斂**(`OrderPanel.tsx:66`):估價暫缺(WS 快照空窗)時市價翻回限價且不復原;
   改回 disabled 送出鈕或估價回來時還原。
 - [ ] **R2 StockChart 停用 pill 新增 cursor-not-allowed**(`RadioPills.tsx:84` vs `StockChart.tsx:169`,視覺零變偏差);
@@ -88,11 +82,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   仍掛得起來且退回預設值;(b) `setItem` stub 成拋 `QuotaExceededError` → 呼叫端不炸。
   承接 2026-08-14 mod/overview-subtabs 節的舊條(已標作廢改指本條);2026-08-06 節
   「`MarketPane.tsx` 七個 localStorage 呼叫點裸奔」是同一批,動工時一併帶走。
-- [ ] **`outOfDomainLevels` 的邊界案 `p === yTop` / `p === yBottom` 無測試**(既有,R10 review T-4):
-  `index-chart-svg.test.ts` 只有「明顯域外(±50~100 萬)/ 明顯域內」兩組,價位**恰好落在域端點**時
-  沒有任何 assertion 釘住。現行實作是嚴格不等式(`p > yTop` / `p < yBottom`,`lib/index-chart-svg.ts:48`)
-  → 端點值算**域內**、不掛牌;改成 `>=` 就會多掛一顆而全套照樣綠。補 2 案即可(純測試,🟢)。
-
 ## 2026-08-21(bug/history-timeout-propagation code review round-1 留尾)
 
 - [ ] **F10:`stock_source.fetch_daily_bars` 的 1K fallback 沒有縮窗**。同檔的
@@ -101,11 +90,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   兩段各自的 deadline 已收到 10s,所以不是延遲問題,是**收割量**問題(DK 不支援的股號
   每次 overlay 都整窗拉 1K)。要動之前先量一次真實列數,別憑感覺調窗。
 
-## 2026-08-21(mod/overview-narrow-pane-legibility B1 留尾)
-
-- [ ] CandleChart figcaption(`120 根 / 高 / 低 / 期間`)在 < ~320px 寬會折兩行溢出固定 `h-4`(既有,
-  與上條同根)。
-- [ ] `Y_TICKS = 5` 不隨 svg 高調整:1:1 後 96px 高的圖 5 條刻度 + 10px 字幾乎相接(可依高度降為 3)。
 ## 2026-08-20(盤後 server log 巡檢發現)
 
 - [ ] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
@@ -163,10 +147,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   已有)前端算 CDP / MA5 / MA20,經 core 的 `overlay` 注入(index 態同管道)。
 - [ ] **期貨分時成交點**(承 08-17 R2 留尾):core 已共用幾何,只差近全軸的日期界(夜盤成交屬錨定日;
   `fillPoints` 現為今日 ∨ 昨日活單)+ 成交分鐘 → `alldayIndexOf`;做完把 `fills.available = !futures` 解開。
-- [ ] **hlines label 與 VWAP 末點標籤同走廊無避讓**(cr1 A-1):持倉均價貼近 VWAP 時兩標籤 halo 互蓋。
-  候選 = 域內 hline 的 y 併入 `maObstacles`,VWAP 標籤也避 hlines。
-- [ ] **VWAP 末點標籤走 `fmt` 不走 `priceText`**(cr1 A-5b):期指 VWAP 8 字 > `VWAP_LABEL_W` 估值,與同圖
-  左緣 `fmtIndexPts` 兩套口徑(index 態既有同型)。候選 = VWAP 標籤吃注入口徑並重估寬。
 - [ ] **近全軸 hover 命中率**(KR-5):1139 索引壓 724 單位,無 bar 分鐘反演回 null → 十字退化;夜盤薄量常見。
   候選 = futures 態限定「±N 索引最近 snap」(動 `minuteOf` 白名單,另案)。
 - [ ] **副圖 1140 根 1 單位寬 rect 每 tick 重建**(KR-4):真環境 hover 目視未見掉幀(TMF 夜盤);若日後 TXF
@@ -200,12 +180,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
   可帶 `--listen-secs` 拉長在 13:5x 起跑順帶驗。
 
-## 2026-08-17(mod/index-intraday-core batch3 R4 留尾)
-
-- [ ] **兩欄態較矮視窗(容器 ≥ 1050 但主 grid 高 < ~800px)家數帶 section 溢出走主 grid 捲軸**(KR-3,
-  code review C-3):`--idx-adl-min` 10rem 地板 + 家數帶兩列固定 chrome ≈ 306px > 分到的 5/11。1080p /
-  864p 實測不捲;命中再降地板或 section 改 `5 1 auto`。〔2026-08-20 機械實測釘邊界:1536×700
-  主 grid 622/676 = 54px 捲軸、溢出源家數帶 section 262/316;1536×864 = 786/786 不捲〕
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
 - [ ] **個股期均價字面兩份**:header / chip 用 `fmt(Math.round(avg*1000))`(`1185`),`StkfutLadder` 部位列用
