@@ -103,7 +103,7 @@ function Harness({
 }
 
 // test-infra:FuturesPage 自 SC-1 起掛 FuturesChart(TQ hooks)→ render 必須有
-// QueryClientProvider 與這三條路由的 fetch mock,否則與本檔斷言無關的 query 會炸開。
+// QueryClientProvider 與這四條路由的 fetch mock,否則與本檔斷言無關的 query 會炸開。
 let barsUrls: string[] = [];
 
 beforeEach(() => {
@@ -135,6 +135,10 @@ beforeEach(() => {
       }
       if (u.includes("/api/capital/positions")) {
         return new Response(JSON.stringify({ positions: [] }));
+      }
+      // R2 起 FuturesChart 掛 useCapitalOrders(近全軸成交點 N043/N070)
+      if (u.includes("/api/capital/orders")) {
+        return new Response(JSON.stringify({ orders: [] }));
       }
       throw new Error(`unexpected fetch: ${u}`);
     }),

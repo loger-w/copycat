@@ -872,7 +872,7 @@ interface CoreProps extends Props {
    *
    *  `"futures"` = 期貨近全時段分時:語彙**同 stock**(副圖 / 說明列 / readout 六欄 / VP),
    *  但價位口徑同 index(`fmtIndexPts` —— 期指沒有個股 tick 表)、不打 `/api/stock/overlay`
-   *  (CDP/MA/成交點反灰)、x 軸由 caller 注入(近全三段軸的**索引**當 key)。 */
+   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全三段軸的**索引**當 key)。 */
   mode?: "stock" | "index" | "futures";
   /** x 軸窗覆寫(key 值域;預設 `stkfut ? STKFUT_WINDOW : SPOT_WINDOW`)。
    *  **必經模組層常數**(identity 穩定)—— 它會一路傳進 `ChartStatic` / `EnergySub` 的 props,
@@ -953,7 +953,8 @@ export function IntradayChartCore({
   // —— 疊線由 caller(`MarketChart`)從 `/api/index/overlay` 注入。
   //
   // 第四道閘 `futures`:期貨的 code 是契約鍵(`TXF.HOT`),同樣既不是股號也不該套現股
-  // 的 CDP/MA —— 本輪期貨分時不提供疊線(caller 傳 `overlaySupported={false}` 讓鈕反灰)。
+  // 的 CDP/MA —— 疊線改由 caller 以**期貨日 K** 算好注入(`lib/futures-overlay.ts`,
+  // 算式與 `server/overlay.py` 逐式相同),與 index 態同一條管道。
   const overlayQ = useStockOverlay(
     index || futures ? null : accum.code || null,
     !index && !futures && !stkfut && !isInstrumentKey(accum.code) && (toggles.cdp || toggles.ma),
@@ -1204,7 +1205,11 @@ export function IntradayChartCore({
     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
   }
 
-  // 期貨態三顆一律反灰(D10):CDP/MA 是現股日線衍生、VP 的折入窗仍是現貨窗。
+  // 期貨(近全軸)態自 R2 起五顆全開:CDP/MA 由 caller 以**期貨日 K** 前端算好注入
+  //（`lib/futures-overlay.ts`;不打 `/api/stock/overlay`，那支吃股號)、成交點的近全軸
+  // 日期界由 `alldayFillPoints` 收(夜盤成交屬前一錨定日)、VP 由 `futuresBarsToAccum`
+  // 自折(不經 `foldVp`,所以現貨窗硬編與期貨態無關)。反灰只剩「資料源真的沒有」那條路。
+  // 個股期(`stkfut`)態維持三顆反灰:它的 accum 走 `foldVp`,分鐘窗仍是現貨窗。
   // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
   //
   // index 態只三顆:量分佈 / 成交點都需要逐筆量或委託,指數兩者皆無。
@@ -1225,13 +1230,21 @@ export function IntradayChartCore({
         { key: "vwap", label: "均價", available: true },
         { key: "cdp", label: "CDP", available: !stkfut && cdpAvailable },
         { key: "ma", label: "MA", available: !stkfut && maAvailable },
-        // 價位別成交量沒有外部資料依賴(全由手上的 tick 折出來),現貨態恆可用
-        { key: "vp", label: "量分佈", available: !stkfut },
+        // 價位別成交量沒有外部資料依賴(全由手上的 tick / 1K 折出來),現貨與期貨態恆可用。
+        // `hint`(N087):snapshot 的 tick 已被後端 deque(20k)截斷時,VP 折不到開盤那一段
+        // —— 卡片 / 群組的後端增量 VP 是全日,兩處 POC 可能不同檔。這是**只在那種日子**
+        // 才出現的一句話,不是常態文案(正常日 hint 為 undefined = 無 tooltip)。
+        {
+          key: "vp",
+          label: "量分佈",
+          available: !stkfut,
+          hint: accum.vpTruncated ? "量分佈僅含最近 20000 筆成交(更早的已被截斷)" : undefined,
+        },
         // 成交點同樣零外部資料依賴(orders 已在手上),**個股期態也不反灰**(AD-5):
         // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
-        // futures(近全軸)態反灰:`fillPoints` 現為「今日 ∨ 昨日活單」,近全軸的日期界
-        // (夜盤成交屬前一錨定日)要另做 —— 本輪不提供,反灰 + tooltip 才講得出為什麼。
-        { key: "fills", label: "成交點", available: !futures },
+        // futures(近全軸)態自 R2 起同樣不反灰:日期界改由 `alldayFillPoints` 以錨定日
+        // 相等判定(夜盤 00:00–05:00 的成交屬前一交易日),caller 折好後由 `fills` 傳入。
+        { key: "fills", label: "成交點", available: true },
       ];
 
   const body = (

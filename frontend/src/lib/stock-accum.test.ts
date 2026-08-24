@@ -8,6 +8,7 @@ import {
   type MinuteAgg,
   type StockAccum,
   type StockTickMsg,
+  VP_TICK_CAP,
 } from "@/lib/stock-accum";
 import { sideSummary } from "@/lib/stock-intraday-svg";
 
@@ -531,5 +532,42 @@ describe("tape_omitted(2026-08-22 review R9 P2)", () => {
   it("fromSnapshot 讀 tape_omitted → tapeOmitted;缺欄(舊後端 / 全量)→ false", () => {
     expect(fromSnapshot({ ...SNAP, ticks: [], tape_omitted: true }).tapeOmitted).toBe(true);
     expect(fromSnapshot(SNAP).tapeOmitted).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N087:>20k tick 的日子,snapshot ticks 被後端 deque 截斷 → VP 折出來偏小
+// ---------------------------------------------------------------------------
+describe("fromSnapshot 的 vpTruncated(VP 折入來源被截斷的旗標)", () => {
+  /** n 筆同價同分鐘的 tick(只測筆數界,不測 VP 內容)。 */
+  function ticks(n: number) {
+    return Array.from({ length: n }, () => ({
+      t: "09:01:30.000",
+      p: 2_380_000,
+      q: 1,
+      side: "outer",
+    }));
+  }
+
+  it("一般日(筆數未觸頂)→ false", () => {
+    expect(fromSnapshot(SNAP).vpTruncated).toBe(false);
+  });
+
+  it("筆數恰達後端 deque 上限 20000 → true(VP 只含最近 20000 筆)", () => {
+    const acc = fromSnapshot({ ...SNAP, ticks: ticks(VP_TICK_CAP) });
+    expect(acc.vpTruncated).toBe(true);
+  });
+
+  it("上限前一筆 → 仍 false(界是 >=,不是 >)", () => {
+    expect(fromSnapshot({ ...SNAP, ticks: ticks(VP_TICK_CAP - 1) }).vpTruncated).toBe(false);
+  });
+
+  it("tape=0(tape_omitted)→ false:明細是被**省略**不是被截斷,VP 本來就空", () => {
+    const acc = fromSnapshot({ ...SNAP, ticks: [], tape_omitted: true });
+    expect(acc.vpTruncated).toBe(false);
+  });
+
+  it("VP_TICK_CAP 逐值等於後端 stock_state._TICKS_MAXLEN", () => {
+    expect(VP_TICK_CAP).toBe(20_000);
   });
 });

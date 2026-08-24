@@ -26,6 +26,7 @@
  *
  *  梯是價格軸、沒有時間軸,所以「昨日建立的幽靈活單」最多多一格徽章;圖有時間軸,幽靈單
  *  會在**今日的圖上畫出一個假成交**(AD-2)。代價不對稱,日期界因此比梯窄。 */
+import { alldayIndexOf, anchorDateOf } from "@/lib/allday";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { ymdOf } from "@/lib/ladder-lots";
 import { minuteKey } from "@/lib/stock-accum";
@@ -88,6 +89,37 @@ interface RawFill extends FillPoint {
   code: string;
 }
 
+/** 與軸無關的欄位守門(成交量 / 均價 / 側 / 單位)。**兩種軸共用這一份**:
+ *  現貨窗(`rawFill`)與近全軸(`alldayRawFill`)只在「哪一天算數 + 分鐘怎麼變成 key」
+ *  上不同,其餘條件各寫一次的話,漂掉的樣態是「圖上多一個不該有的三角」而兩邊都不報錯。 */
+interface FillBase {
+  code: string;
+  side: FillSide;
+  priceMilli: number;
+  qty: number;
+  /** YYYYMMDD(最新事件日)/ HH:MM:SS —— 日期界與軸映射由呼叫端各自解讀 */
+  date: string;
+  time: string;
+}
+
+function baseFill(o: CapitalOrder, excludeUnit?: string): FillBase | null {
+  if (o.stock_no === null || o.time === null || o.avg_fill_price === null) return null;
+  if (o.date === null) return null;
+  if (o.filled_qty <= 0) return null;
+  if (excludeUnit !== undefined && o.unit === excludeUnit) return null;
+  // 非 B/S 整筆跳過(無側可歸;同 aggregateLots 的紀律)
+  const side: FillSide | null = o.buy_sell === "B" ? "B" : o.buy_sell === "S" ? "S" : null;
+  if (side === null) return null;
+  return {
+    code: o.stock_no,
+    side,
+    priceMilli: Math.round(o.avg_fill_price * 1000),
+    qty: o.filled_qty,
+    date: o.date,
+    time: o.time,
+  };
+}
+
 /** 單筆委託 → `RawFill`,不合條件回 null。
  *
  *  `excludeUnit`:現股(單檔頁現貨態 + 群組卡)傳 `"股"` 把零股單整筆排除 —— 與現股梯同
@@ -102,20 +134,10 @@ interface RawFill extends FillPoint {
  *  不放寬到「活單恆計」是因為 `CapitalStore` 跨日不清 + prod server 長跑,更早的幽靈
  *  活單會在今日圖上畫出假成交。 */
 function rawFill(o: CapitalOrder, dates: FillDates, excludeUnit?: string): RawFill | null {
-  if (o.stock_no === null || o.time === null || o.avg_fill_price === null) return null;
-  if (o.filled_qty <= 0) return null;
-  if (excludeUnit !== undefined && o.unit === excludeUnit) return null;
-  // 非 B/S 整筆跳過(無側可歸;同 aggregateLots 的紀律)
-  const side: FillSide | null = o.buy_sell === "B" ? "B" : o.buy_sell === "S" ? "S" : null;
-  if (side === null) return null;
-  if (o.date !== dates.today && !(o.actionable && o.date === dates.yesterday)) return null;
-  return {
-    code: o.stock_no,
-    minute: minuteKey(o.time),
-    priceMilli: Math.round(o.avg_fill_price * 1000),
-    side,
-    qty: o.filled_qty,
-  };
+  const b = baseFill(o, excludeUnit);
+  if (b === null) return null;
+  if (b.date !== dates.today && !(o.actionable && b.date === dates.yesterday)) return null;
+  return { code: b.code, minute: minuteKey(b.time), priceMilli: b.priceMilli, side: b.side, qty: b.qty };
 }
 
 /** 同分鐘同向合併 → 依 minute 升冪(同分鐘 B 先 S 後)。
@@ -166,6 +188,40 @@ export function fillPoints(
     if (o.stock_no !== key) continue;
     const r = rawFill(o, dates, excludeUnit);
     if (r !== null) raws.push(r);
+  }
+  return aggregate(raws);
+}
+
+/** 近全軸(期貨分時)的成交點(N043/N070)。回傳的 `minute` 是**近全軸索引**不是分鐘數
+ *  —— 與 `futuresBarsToAccum` 的 key 同一套(core 的幾何對 key 只要求「窗內整數、可排序」)。
+ *
+ *  **日期界換成「錨定日相等」**,不沿用 `fillPoints` 的「今日 ∨ 昨日活單」:近全軸一格圖
+ *  橫跨兩個日曆日(D 08:46 → D+1 05:00),日曆日界在這裡兩頭都錯 —— 夜盤 01:00 的成交
+ *  (日曆日 = D+1)本來就屬於 D 這張圖,而 D+1 日盤的成交不該畫在 D 上。錨定日的推導
+ *  走與 slice / live gate 同一支 `anchorDateOf`(三處各算一份必漂移)。
+ *
+ *  死區(13:46–15:00 / 05:01–08:45)成交 → `alldayIndexOf` 回 null → **不畫**,不夾到最近
+ *  的段界:夾了就是把成交時間講錯(同 `projectFills` 窗外不畫的既有規則)。
+ *
+ *  `anchorDate` = `YYYY-MM-DD`,由 caller 以圖上最後一根 bar 反推(`anchorDateOf(last.t)`)。 */
+export function alldayFillPoints(
+  orders: readonly CapitalOrder[] | undefined,
+  key: string | null,
+  anchorDate: string,
+): readonly FillPoint[] {
+  if (key === null) return EMPTY_FILLS;
+  const raws: RawFill[] = [];
+  for (const o of orders ?? []) {
+    if (o.stock_no !== key) continue;
+    const b = baseFill(o);
+    if (b === null) continue;
+    // `YYYYMMDD` + `HH:MM:SS` → `YYYY-MM-DD HH:MM`(`anchorDateOf` / `alldayIndexOf` 的輸入形)
+    const hhmm = `${b.time.slice(0, 2)}${b.time.slice(3, 5)}`;
+    const stamp = `${b.date.slice(0, 4)}-${b.date.slice(4, 6)}-${b.date.slice(6, 8)} ${b.time.slice(0, 5)}`;
+    if (anchorDateOf(stamp) !== anchorDate) continue;
+    const index = alldayIndexOf(hhmm);
+    if (index === null) continue;
+    raws.push({ code: b.code, minute: index, priceMilli: b.priceMilli, side: b.side, qty: b.qty });
   }
   return aggregate(raws);
 }

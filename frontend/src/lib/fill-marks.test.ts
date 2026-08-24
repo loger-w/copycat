@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  alldayFillPoints,
   clampFillX,
   EMPTY_FILLS,
   EMPTY_MARKS,
@@ -353,5 +354,109 @@ describe("fillsAtMinute / fillLabel", () => {
 
   it("fillLabel 零筆 → 空字串", () => {
     expect(fillLabel(EMPTY_FILLS, fmt)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N043 / N070:近全軸(期貨分時)的成交點
+// ---------------------------------------------------------------------------
+
+/** 期貨單:`stock_no` 放期交所契約碼,單位「口」。 */
+function futOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
+  return order({
+    stock_no: "TXFH6",
+    market: "TF",
+    unit: "口",
+    date: "20260821",
+    time: "09:30:00",
+    avg_fill_price: 23_000,
+    filled_qty: 2,
+    ...over,
+  });
+}
+
+/** 錨定日 2026-08-21 的近全軸索引(期望值不由 alldayIndexOf 算回來:段長寫死推導)。
+ *  日盤段 0846 起 offset 0 → 0930 = 44;夜盤前半 1501 起 offset 300 → 2200 = 300 + 419 = 719;
+ *  夜盤後半 0000 起 offset 839 → 0100 = 839 + 60 = 899。 */
+const IDX_0930 = 44;
+const IDX_2200 = 719;
+const IDX_0100 = 899;
+const ANCHOR = "2026-08-21";
+
+describe("alldayFillPoints — 近全軸日期界(夜盤成交屬錨定日)", () => {
+  it("日盤成交 → 軸索引 = 段內偏移(09:30 → 44)", () => {
+    const r = alldayFillPoints([futOrder()], "TXFH6", ANCHOR);
+    expect(r).toEqual([{ minute: IDX_0930, priceMilli: 23_000_000, side: "B", qty: 2 }]);
+  });
+
+  it("同日夜盤 22:00 → 索引 719(夜盤前半段)", () => {
+    const r = alldayFillPoints([futOrder({ time: "22:00:00" })], "TXFH6", ANCHOR);
+    expect(r[0]!.minute).toBe(IDX_2200);
+  });
+
+  it("**次一日曆日 01:00 的成交仍屬本錨定日** → 索引 899(夜盤後半),不被日期界丟掉", () => {
+    const r = alldayFillPoints(
+      [futOrder({ date: "20260822", time: "01:00:00" })],
+      "TXFH6",
+      ANCHOR,
+    );
+    expect(r[0]!.minute).toBe(IDX_0100);
+  });
+
+  it("次一日曆日的**日盤**成交(錨定日 = 08-22)→ 不畫在 08-21 的圖上", () => {
+    const r = alldayFillPoints(
+      [futOrder({ date: "20260822", time: "09:30:00" })],
+      "TXFH6",
+      ANCHOR,
+    );
+    expect(r).toBe(EMPTY_FILLS);
+  });
+
+  it("前一日夜盤(08-20 22:00,錨定日 08-20)→ 不畫", () => {
+    const r = alldayFillPoints(
+      [futOrder({ date: "20260820", time: "22:00:00" })],
+      "TXFH6",
+      ANCHOR,
+    );
+    expect(r).toBe(EMPTY_FILLS);
+  });
+
+  it("死區成交(14:30,近全軸上沒有那一格)→ 不畫(不夾到最近的段界)", () => {
+    const r = alldayFillPoints([futOrder({ time: "14:30:00" })], "TXFH6", ANCHOR);
+    expect(r).toBe(EMPTY_FILLS);
+  });
+
+  it("契約碼不符 / key null → 零筆(同 fillPoints 的 guard)", () => {
+    expect(alldayFillPoints([futOrder()], "MXFH6", ANCHOR)).toBe(EMPTY_FILLS);
+    expect(alldayFillPoints([futOrder()], null, ANCHOR)).toBe(EMPTY_FILLS);
+  });
+
+  it("同索引同向合併成一點,價 = 量加權平均(與 fillPoints 同一支聚合)", () => {
+    const r = alldayFillPoints(
+      [
+        futOrder({ seq_no: "A", avg_fill_price: 23_000, filled_qty: 2 }),
+        futOrder({ seq_no: "B", avg_fill_price: 23_006, filled_qty: 1 }),
+      ],
+      "TXFH6",
+      ANCHOR,
+    );
+    expect(r).toEqual([
+      // 23_002_000 = (23_000_000×2 + 23_006_000) / 3
+      { minute: IDX_0930, priceMilli: 23_002_000, side: "B", qty: 3 },
+    ]);
+  });
+
+  it("未成交 / 無均價 / 無時間 / 非 B|S 一律不畫(共用 fillPoints 的欄位守門)", () => {
+    const bad = [
+      futOrder({ filled_qty: 0 }),
+      futOrder({ avg_fill_price: null }),
+      futOrder({ time: null }),
+      futOrder({ buy_sell: null }),
+    ];
+    expect(alldayFillPoints(bad, "TXFH6", ANCHOR)).toBe(EMPTY_FILLS);
+  });
+
+  it("orders undefined → EMPTY_FILLS", () => {
+    expect(alldayFillPoints(undefined, "TXFH6", ANCHOR)).toBe(EMPTY_FILLS);
   });
 });
