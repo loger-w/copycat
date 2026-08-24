@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { CHART_TOGGLES_KEY } from "@/lib/constants";
 
@@ -95,11 +95,14 @@ export function useChartToggles() {
   // 每個呼叫端各持一份。StockChart(管 bb)與 StockIntradayChart(管 vwap/cdp/ma)同時
   // 存活,用 stale prev 整包寫回會讓後寫的一方回滾對方剛做的變更 ——
   // 實際症狀是「江波圖把 CDP 關掉、去 K 線按了 BB、切回來 CDP 自己亮回來」。
-  function set(key: keyof ChartToggles, value: boolean): void {
+  // useCallback:讓 `set` 身分穩定,memo 節點日後收 onToggle 時不會因每 render 新函式
+  // 而被打穿(plan review R9 deferred;2026-08-24 user 拍板直接做)。deps 空陣列成立的
+  // 前提:load/persist 是 module-level、setToggles 由 React 保證穩定。
+  const set = useCallback((key: keyof ChartToggles, value: boolean): void => {
     const next = { ...load(), [key]: value };
     persist(next);
     setToggles(next);
-  }
+  }, []);
 
   return { toggles, set };
 }

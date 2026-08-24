@@ -142,8 +142,9 @@ const GroupCard = memo(function GroupCard({
   snap: GroupSnapshot | undefined;
   quote: WatchlistQuote | undefined;
   active: boolean;
-  /** 圖牆頂那一份(**不含 `set`**:`useChartToggles.set` 每次 render 都是新 identity,
-   *  傳進來會讓 memo 每輪都比不過 —— 而 toggle 鈕不在卡片內,卡片只讀) */
+  /** 圖牆頂那一份(**不含 `set`**:toggle 鈕不在卡片內,卡片只讀 —— 沒有理由把寫入口
+   *  穿進 memo 邊界。註:`set` 自 2026-08-24 起已包 useCallback 身分穩定,舊理由
+   *  「每 render 新 identity 打穿 memo」不再成立,但「卡片只讀」仍然成立) */
   toggles: ChartToggles;
   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
    *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */

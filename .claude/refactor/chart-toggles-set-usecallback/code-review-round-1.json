@@ -1,0 +1,48 @@
+{
+  "round": 1,
+  "lenses": ["zero-behaviour(opus)"],
+  "findings": [
+    {
+      "id": "Z1",
+      "severity": "P2",
+      "summary": "deps=[] 本身安全,無 stale closure 面:set 閉包只引用 load / persist(module-level function 宣告,未被重新指派)與 setToggles(React 保證穩定);刻意不捕獲 toggles / prev,故渲染期變數的捕獲面為零 —— 這是 useCallback([], ...) 最乾淨的適用形狀。無需修正,登記為已查核。",
+      "disposition": "rejected_with_reason",
+      "resolution": "不是缺陷。逐一核對閉包引用:load(useChartToggles.ts:65 module-level)、persist(:53 module-level)、setToggles(useState setter,React 契約穩定)。set 內 `{ ...load(), [key]: value }` 重讀 localStorage 而非 prev(檔內 R21 註解已述理由,test :139『兩個 instance 交替 set 不互相覆蓋』鎖住),因此 deps 陣列即使填滿也不會有任何渲染期值 —— [] 與 exhaustive 等價。eslint(react-hooks/exhaustive-deps 含在 npx eslint src)0 warning 亦佐證。"
+    },
+    {
+      "id": "Z2",
+      "severity": "P2",
+      "summary": "GroupGridView.tsx:145-146 的註解在本次改動後成為假敘述:『useChartToggles.set 每次 render 都是新 identity,傳進來會讓 memo 每輪都比不過』—— set 現已穩定,該理由不再成立。註解是 GroupCard(memo)排除 set 的首要記載理由,留著會誤導後人以為顧慮已消失而把 set 穿進 memo 卡片。",
+      "disposition": "accepted",
+      "resolution": "改註解、不改行為。GroupCard 不收 set 的決定仍正確,但正確理由是同句後半已寫的『toggle 鈕不在卡片內,卡片只讀』。建議把前半段的 identity 理由刪掉或改寫為『set 已是穩定參照(useChartToggles 用 useCallback),但卡片只讀不寫,傳進來只是加寬 memo 比較面』。屬純註解修正,不影響 🔵 零行為差異前提。"
+    },
+    {
+      "id": "Z3",
+      "severity": "P2",
+      "summary": "新引入的不變式(set 參照跨 render 穩定)沒有 regression lock:把 useCallback 改回 function 宣告,pytest/vitest/tsc/eslint 全數照綠。本次改動的唯一效益就是這個不變式(檔內註解自陳為『memo 節點日後收 onToggle 時不會被打穿』),而效益現階段尚未兌現(見 Z6),等於一條無人看守的承諾。",
+      "disposition": "accepted",
+      "resolution": "在 useChartToggles.test.ts 補一條兩行 lock:`const h = renderHook(() => useChartToggles()); const first = h.result.current.set; h.rerender(); expect(h.result.current.set).toBe(first);`。注意必須用同一個 hook instance 的 rerender(),不能開第二個 renderHook —— 不同 instance 各有自己的 useCallback cell,參照本來就不同,那樣寫會是一條永遠紅的假 lock。本專案 memo 邊界一向做雙向 mutation 驗證(MarketPane.memo.test.tsx 檔頭有先例),此處門檻應一致。"
+    },
+    {
+      "id": "Z4",
+      "severity": "P2",
+      "summary": "React 並未『契約上』保證 useCallback 快取永不失效(官方文件允許實作丟棄快取,如 Offscreen / 未來版本),故 set 的穩定性理論上非鐵板一塊 —— 是否動搖本次改動的立論?",
+      "disposition": "rejected_with_reason",
+      "resolution": "不成立。本 hook 的正確性完全不依賴 identity:set 每次呼叫都重讀 localStorage 再整包寫回,呼叫幾次、由哪個參照呼叫,結果都一樣。identity 穩定純粹是效能提示,快取即使被丟棄也只是退回改動前的狀態,不會產生錯誤行為。無需處置。"
+    },
+    {
+      "id": "Z5",
+      "severity": "P2",
+      "summary": "function 宣告(hoisted)改為 const(TDZ)的提升語意差異,是否造成 hook body 內的前向引用炸掉?",
+      "disposition": "rejected_with_reason",
+      "resolution": "不成立。useChartToggles body 只有三行:useState(load) → const set = useCallback(...) → return { toggles, set }。set 沒有任何早於宣告點的引用,TDZ 無觸及面。tsc -b exit 0 亦覆蓋此面(TS 會靜態抓 block-scoped-before-declaration)。"
+    },
+    {
+      "id": "Z6",
+      "severity": "P2",
+      "summary": "零行為差異的真正風險面:identity 穩定後,原本被『每 render 新函式』打穿的 memo 可能開始真的跳過 re-render;若下游元件靠那次順帶 re-render 讀取非 prop 來源(context / ref / 時鐘),畫面會改變。已逐一核對所有 set 的接收點,風險不成立。",
+      "disposition": "rejected_with_reason",
+      "resolution": "全部 5 個 useChartToggles 呼叫端逐一核對:(a) IndexPage:166/177 → MarketPane —— MarketPane.tsx:311 是普通 export function,非 React.memo;(b) FuturesChart:251 與 StockIntradayChart:1470 → IntradayChartCore(StockIntradayChart.tsx:857)—— 同樣是普通 function,非 memo;(c) StockChart:211 與 GroupGridView:354 → 傳的是行內箭頭 `(v) => set('bb', v)` / `() => set(key, ...)`,每 render 本來就是新 identity,set 穩不穩定完全不影響;(d) GroupCard(唯一相關的 memo 邊界,GroupGridView.tsx:129)刻意不收 set。另外全 src grep 正規式 `[...set|onToggle...])` 於 useMemo/useCallback/useEffect deps 陣列零命中 —— 沒有任何 effect 或 memo 以 set/onToggle 為 dep,故本次改動不可能改變任何 render 或 effect 的排程。結論:目前效益為 0、行為差異亦為 0,改動是純粹的前瞻性佈局(與檔內註解自陳一致)。證據:npx tsc -b exit 0;npx eslint src exit 0;npm test 137 files / 2532 tests 全綠(含 useChartToggles.test.ts 14 條、MarketPane.memo.test.tsx 2 條、GroupGridView.toggle.test.tsx 3 條)。"
+    }
+  ]
+}
