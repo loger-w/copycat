@@ -12,24 +12,20 @@
 import { useSyncExternalStore } from "react";
 
 import { SOUND_KEY } from "@/lib/constants";
+import { readLocal, writeLocal } from "@/lib/storage";
 
 const subscribers = new Set<() => void>();
 
 /** 預設開;storage 被鎖(隱私模式)時偏好設定不落檔,不是關掉音效。 */
 export function getSoundOn(): boolean {
-  try {
-    return window.localStorage.getItem(SOUND_KEY) !== "off";
-  } catch {
-    return true;
-  }
+  return readLocal(SOUND_KEY) !== "off";
 }
 
 export function setSoundOn(next: boolean): void {
-  try {
-    window.localStorage.setItem(SOUND_KEY, next ? "on" : "off");
-  } catch {
-    // 存不進去就算了 —— 但仍要通知訂閱者,本次 session 照設定走
-  }
+  // 寫入結果**刻意不看**:存不進去就算了,但仍要通知訂閱者,本次 session 照設定走
+  // (與 `lib/fee-discount.ts::persistDiscount` 的「寫失敗就不通知」刻意相反 ——
+  // 那邊的真相在 storage、這邊的真相是使用者剛按下的那個開關)。
+  writeLocal(SOUND_KEY, next ? "on" : "off");
   for (const notify of [...subscribers]) notify();
 }
 

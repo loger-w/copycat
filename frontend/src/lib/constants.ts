@@ -1,3 +1,5 @@
+import { removeLocal } from "@/lib/storage";
+
 /** localStorage key 的唯一宣告處。
  *
  *  **為什麼集中**:key 原本散在 8 個元件 / hook 各自 `const`,每輪 UI 功能都在長新 key,
@@ -37,15 +39,13 @@ export const ORPHAN_STORAGE_KEYS = [
 /** 清除孤兒鍵。冪等(removeItem 對不存在的 key 是 no-op),由 App.tsx 的 module scope
  *  呼叫一次 —— 它與元件生命週期無關,也不該隨 re-render 重跑。
  *
- *  **整段包 try/catch**:呼叫點在 App module 的頂層求值期,localStorage 在 Safari 私密
- *  視窗 / storage 被政策鎖時光是存取就會拋 —— 拋出去就是整個 App chunk 求值失敗 = 白屏。
- *  清不掉遠好於白屏(同 `hooks/useChartToggles.ts` 的 `persist()` 慣例)。 */
+ *  失敗吞掉的理由(現由 `lib/storage.ts::removeLocal` 承擔):呼叫點在 App module 的
+ *  頂層求值期,localStorage 在 Safari 私密視窗 / storage 被政策鎖時光是存取就會拋 ——
+ *  拋出去就是整個 App chunk 求值失敗 = 白屏。清不掉遠好於白屏。
+ *  逐鍵各自吞(舊版是整個迴圈一個 try,第一鍵拋就跳過其餘)—— storage 壞掉時七鍵
+ *  一樣都清不掉,差別只在多試六次 no-op。 */
 export function purgeOrphanKeys(): void {
-  try {
-    for (const key of ORPHAN_STORAGE_KEYS) window.localStorage.removeItem(key);
-  } catch {
-    // 清不掉就算了 —— 殘值只是佔位,沒人讀
-  }
+  for (const key of ORPHAN_STORAGE_KEYS) removeLocal(key);
 }
 
 /** 期貨 tab 的商品(TXF / MXF / TMF)— App.tsx */

@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 
 import { useBreadthRows } from "@/hooks/useBreadthRows";
 import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
+import { readLocalJson, writeLocal } from "@/lib/storage";
 import { monthDay } from "@/lib/format";
 import { isoLocalDate } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
@@ -163,37 +164,29 @@ function pickText(src: Record<string, unknown>, key: keyof LimitListFilter): str
 }
 
 function loadFilter(): LimitListFilter {
-  try {
-    const raw = window.localStorage.getItem(LIMIT_LIST_FILTER_KEY);
-    if (!raw) return DEFAULT_FILTER;
-    const parsed: unknown = JSON.parse(raw);
-    // `JSON.parse("null")` 成功且回 null;陣列 / 字串同樣是合法 JSON —— 解構在 try 之外
-    // 就會是 TypeError,而這裡是 useState initializer,拋出去就是整頁白屏。
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return DEFAULT_FILTER;
-    }
-    const o = parsed as Record<string, unknown>;
-    return {
+  // `readLocalJson` 已把「未設 / 空字串 / 存取即拋 / 壞 JSON」收成同一個 null;
+  // 形狀檢查仍要自己做 —— `JSON.parse("null")` 成功且回 null,陣列 / 字串同樣是合法
+  // JSON,少了它下面的 cast 就會讓 `o.twse` 在 useState initializer 裡 TypeError。
+  const parsed = readLocalJson(LIMIT_LIST_FILTER_KEY);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return DEFAULT_FILTER;
+  }
+  const o = parsed as Record<string, unknown>;
+  return {
       twse: pickBool(o, "twse", DEFAULT_FILTER.twse),
       tpex: pickBool(o, "tpex", DEFAULT_FILTER.tpex),
       limitUp: pickBool(o, "limitUp", DEFAULT_FILTER.limitUp),
       limitDown: pickBool(o, "limitDown", DEFAULT_FILTER.limitDown),
       touched: pickBool(o, "touched", DEFAULT_FILTER.touched),
-      minAmount: pickText(o, "minAmount"),
-      priceMin: pickText(o, "priceMin"),
-      priceMax: pickText(o, "priceMax"),
-    };
-  } catch {
-    return DEFAULT_FILTER;
-  }
+    minAmount: pickText(o, "minAmount"),
+    priceMin: pickText(o, "priceMin"),
+    priceMax: pickText(o, "priceMax"),
+  };
 }
 
+/** 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉(`writeLocal` 不拋)。 */
 function persistFilter(filter: LimitListFilter): void {
-  try {
-    window.localStorage.setItem(LIMIT_LIST_FILTER_KEY, JSON.stringify(filter));
-  } catch {
-    // 存不進去就算了 —— 偏好不落檔遠好於畫面崩掉(useChartToggles 同慣例)
-  }
+  writeLocal(LIMIT_LIST_FILTER_KEY, JSON.stringify(filter));
 }
 
 // ---------------------------------------------------------------------------

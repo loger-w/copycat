@@ -6,6 +6,7 @@
  */
 
 import { FUT_CHART_MODE_KEY } from "@/lib/constants";
+import { readLocal, writeLocal } from "@/lib/storage";
 
 /** 分 K 檔位(分鐘數);**值域的唯一來源**,順序即渲染順序 —— `FutChartMode` 的 union
  *  由它推導(code review A-4):加檔位只改這一處,型別 / 模式列 / 白名單自動跟上。 */
@@ -39,21 +40,15 @@ export function futMinutesOf(mode: FutChartMode): number {
 
 /** localStorage 還原:壞值 / 別頁的值一律退回 `intraday`。
  *
- *  整段包 try/catch 的理由同 `constants.purgeOrphanKeys`:Safari 私密視窗下光是存取
- *  localStorage 就會拋,而這支是在 `useState` 初始器裡跑 —— 拋出去就是整頁白屏。 */
+ *  讀失敗退預設由 `lib/storage.ts::readLocal` 承擔(本檔的 try/catch 是 N022 之前的
+ *  先例,理由不變):Safari 私密視窗下光是存取 localStorage 就會拋,而這支是在
+ *  `useState` 初始器裡跑 —— 拋出去就是整頁白屏。 */
 export function initialFutChartMode(): FutChartMode {
-  try {
-    const saved = window.localStorage.getItem(FUT_CHART_MODE_KEY);
-    return saved !== null && isFutChartMode(saved) ? saved : "intraday";
-  } catch {
-    return "intraday";
-  }
+  const saved = readLocal(FUT_CHART_MODE_KEY);
+  return saved !== null && isFutChartMode(saved) ? saved : "intraday";
 }
 
+/** 寫不進去就是這次不記住,不值得為此讓切模式這個動作失敗(`writeLocal` 不拋)。 */
 export function persistFutChartMode(mode: FutChartMode): void {
-  try {
-    window.localStorage.setItem(FUT_CHART_MODE_KEY, mode);
-  } catch {
-    // 寫不進去就是這次不記住,不值得為此讓切模式這個動作失敗
-  }
+  writeLocal(FUT_CHART_MODE_KEY, mode);
 }
