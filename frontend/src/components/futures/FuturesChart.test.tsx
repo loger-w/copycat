@@ -475,6 +475,58 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(g.toY(23_040_000)).not.toBe(g.toY(23_000_000));
   });
 
+  // bug/futures-intraday-lag-bridge:當日段回補不完整(TC4 首頁 timeout / 分頁靜默截斷 →
+  // 後端 `_today` 快取 15–30 s 內回的是截到某分鐘的序列)時,live 點仍照「當前分 + 1」追加,
+  // core 的單條 polyline 就從資料尾直線拉到現在 —— 畫面上是一段橫貫數十分鐘的假直線
+  // (user:「線的交易不連貫」),下一輪輪詢補齊後才消失。判準吃 WS **最後成交時刻**
+  // (`state.t`):成交發生了而 bars 沒有,落後超過輪詢節奏(60 s + 終點標記 = ≤ 2 格)就不架橋。
+  it("gate 5 資料落後成交:bars 至 D 10:00、最後成交 11:29:30、時鐘 11:30 → 不追加 live 點、不架橋,印回補提示", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 11, 30, 0));
+    const live: FuturesProductState = { ...STATE, t: "11:29:30.000" };
+    const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
+    await findIntraday();
+    // 前置條件寫死:錨定日相同、非死區、live(11:31)在末根(10:00)之後 → 前四道 gate 全不成立;
+    // 最後成交 11:29:30 → 終點標記 11:30,與末根差 90 格
+    expect(alldayIndexOf("1131")! - alldayIndexOf("1000")!).toBe(91);
+    expect(alldayIndexOf("1130")! - alldayIndexOf("1000")!).toBe(90);
+    expect(mainLineXs(container).length).toBe(2); // 不架橋:主線止於末根 bar
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1000")!));
+    expect(screen.getByText("分時資料落後 90 分(TC4 回補中)")).toBeTruthy();
+  });
+
+  it("牆鐘落後但無成交(TMF 夜盤空檔):bars 至 D 10:00、最後成交 10:00:10、時鐘 11:30 → 照追加 live 點", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 11, 30, 0));
+    // 最後成交 10:00:10 → 終點標記 10:01,與末根只差 1 格:bars 沒有落後於成交,空檔是真的沒人交易
+    const idle: FuturesProductState = { ...STATE, t: "10:00:10.000" };
+    const { container } = wrap(<FuturesChart product="TXF" state={idle} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(3);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1131")!));
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
+  it("常態落後(bars 至 D 09:30、最後成交 09:31:20、時鐘 09:31:30)仍追加 live 點", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 09:30", 23_000_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 31, 30));
+    const live: FuturesProductState = { ...STATE, t: "09:31:20.000" };
+    const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(3);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0932")!));
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
   it("live 分鐘落死區(14:30)→ 不畫 live 點", async () => {
     barsBody = {
       bars: [bar("2026-08-05 13:44", 22_960_000), bar("2026-08-05 13:45", 23_000_000)],
