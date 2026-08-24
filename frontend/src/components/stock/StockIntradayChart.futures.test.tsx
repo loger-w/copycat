@@ -333,3 +333,68 @@ describe("W-1:mode 預設 = stock,軸 / 時間文字 / 價位口徑 / hlines 零
     expect([3, 4, 5].map((i) => readout.children[i]!.textContent)).toEqual(["量 0", "外 0", "內 0"]);
   });
 });
+
+// 🔴 N045 / N044(mod/chart-label-batch):期貨態 VWAP 標籤口徑,與 hlines label 的走廊避讓。
+describe("IntradayChartCore mode=\"futures\" 的 VWAP 標籤與 hline label(N045/N044)", () => {
+  it("VWAP 文字走整數點口徑(fmtIndexPts),不再是同圖唯一的 fmt 兩位小數", () => {
+    const { container } = renderFut();
+    // Σc·v / Σv = 23_006_154(毫點)→ `fmt` 印「23006.15」(8 字)、整數點口徑印「23006」
+    expect(FUT.vwap).toBe(23_006_154);
+    expect(fmt(23_006_154)).toBe("23006.15");
+    expect(fmtIndexPts(23_006_154)).toBe("23006");
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')!.textContent).toBe("23006");
+  });
+
+  /** 近全軸末格(05:00 → 索引 1139)有 bar → VWAP 末點貼繪圖區右界,標籤 x 區間
+   *  [720, 760] 與 hline label(anchor=end,右緣 758)完全重疊。
+   *  vwap = (23000×120 + 23050×80 + 22960×60 + 23000×60) / 320 = 23_005(毫點 ×1000)。 */
+  const FUT_LATE = futuresBarsToAccum({
+    bars: [
+      ...BARS,
+      { t: "2026-08-19 05:00", o: 23_000_000, h: 23_010_000, l: 22_990_000, c: 23_000_000, v: 60, uv: 30, dv: 30 },
+    ],
+    live: null,
+    ref: 23_000_000,
+    name: "台指近",
+    code: "TXF.HOT",
+  });
+  /** 域 [22_747_000, 23_253_000] → toY(23_000_000) = 123、label baseline 120 / 中心 117;
+   *  VWAP 末點 toY(23_005_000) ≈ 120.63 → 中心距 3.63px(修前),兩層 halo 互蓋。 */
+  const HLINE_NEAR: readonly ChartHLine[] = [
+    { priceMilli: 23_000_000, label: "均 23000 多2口", className: "stroke-bull" },
+  ];
+
+  it("hline label 與 VWAP 末點標籤同走廊且 y 幾乎重合 → label 讓位(中心距 ≥ 10),線體不動", () => {
+    const { container } = renderFut({ accum: FUT_LATE, hlines: HLINE_NEAR });
+    const g = buildIntradayGeometry(
+      { minutes: FUT_LATE.minutes, meta: FUT_LATE.meta, high: FUT_LATE.high, low: FUT_LATE.low },
+      VB,
+      ALLDAY_WINDOW,
+    );
+    const vwapY = Number(
+      container.querySelector('[data-testid="edge-price-vwap"]')!.getAttribute("y"),
+    );
+    // 前置(敏感度所繫):末點真的貼右界,且兩者 y 差 < 10px
+    expect(g.vwapLine.at(-1)!.x).toBeCloseTo(VB.width - R_AXIS_W, 6);
+    expect(Math.abs(g.toY(23_000_000) - 6 - vwapY)).toBeLessThan(10);
+    const hl = screen.getAllByTestId("chart-hline")[0]!;
+    const text = hl.querySelector("text")!;
+    // hline label 無 dy → y 是 baseline,中心 = baseline − 3
+    expect(Math.abs(Number(text.getAttribute("y")) - 3 - vwapY)).toBeGreaterThanOrEqual(10);
+    // 讓位的只有文字:線體仍畫在真價位上,x 也不動
+    expect(Number(hl.querySelector("line")!.getAttribute("y1"))).toBeCloseTo(g.toY(23_000_000), 6);
+    expect(text.getAttribute("x")).toBe(String(VB.width - R_AXIS_W - 2));
+  });
+
+  it("對照組:hline 遠離 VWAP 末點 → label y 仍為「線 y − 3」逐值不變", () => {
+    const { container } = renderFut();
+    const g = buildIntradayGeometry(
+      { minutes: FUT.minutes, meta: FUT.meta, high: FUT.high, low: FUT.low },
+      VB,
+      ALLDAY_WINDOW,
+    );
+    const text = screen.getAllByTestId("chart-hline")[0]!.querySelector("text")!;
+    expect(Number(text.getAttribute("y"))).toBeCloseTo(g.toY(23_100_000) - 3, 6);
+    expect(container.querySelector('[data-testid="edge-price-vwap"]')).toBeTruthy();
+  });
+});

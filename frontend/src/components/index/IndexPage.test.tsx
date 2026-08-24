@@ -355,7 +355,13 @@ describe("IndexPage 一頁總覽版面(§4.1 + amendment r3)", () => {
       "@[1050px]:[--idx-chart-flex:6_1_0%]",
       "@[1050px]:[--idx-adl-flex:5_1_0%]",
       "@[1050px]:[--idx-adl-wrap-flex:1_1_0%]",
-      "@[1050px]:[--idx-adl-min:10rem]",
+      // 🔴 N062(2026-08-24,事前標為該變):地板 10rem → 6rem。
+      // 10rem 地板 + 家數帶兩列固定 chrome(≈148px)+ gap 8 = 316px > 矮視窗兩欄態
+      // 分給 section 的 5/11(2026-08-20 機械實測 1536×700:主 grid 622/676 出 54px
+      // 捲軸、溢出源正是這個 section 262/316)。6rem = wrapper 自身 `h-24` 的 96px
+      // (= 單欄態高度)—— 它是**地板不是指定高**,1536×864 實測 wrapper 拿到 181px
+      // 遠高於任一地板,正常視窗逐值不變。
+      "@[1050px]:[--idx-adl-min:6rem]",
     ]) {
       expect(leftCol.className).toContain(v);
     }

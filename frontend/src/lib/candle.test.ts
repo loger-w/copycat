@@ -608,3 +608,39 @@ describe("hlineYOf(SC-7/SC-11 水平 overlay 線;超窗不畫)", () => {
     expect(hlineYOf(140_000, wide)).not.toBeNull();
   });
 });
+
+// 🔴 N027(mod/chart-label-batch):矮圖的 y 刻度數。
+//
+// 1:1 viewBox 之後,群組卡 / 窄 pane 的 K 線 svg 高可以低到 96px:
+// 可用高 = (96 − X_LABEL_H 14) × (1 − VOL_RATIO 0.22) − 2 × PAD_Y 6 ≈ 52px,
+// 5 條刻度間距只剩 ~13px 而字高 10px —— 上下兩行字幾乎相接。
+describe("buildCandleGeometry y 刻度數隨圖高降階(N027)", () => {
+  /** 域夠寬、tick 夠細(0.5 元帶)→ 5 個等分候選不會被 snap 去重吃掉,
+   *  「刻度數」才真的由降階規則決定而不是由去重決定。 */
+  const BARS = [bar("d1", 100_000, 140_000, 100_000, 130_000), bar("d2", 130_000, 150_000, 90_000, 120_000)];
+  /** 字高 @0.625rem ≈ 10px;相接的判準取 2× 字高。 */
+  const FONT_H = 10;
+
+  function gaps(ys: number[]): number[] {
+    const sorted = [...ys].sort((a, b) => a - b);
+    return sorted.slice(1).map((y, i) => y - sorted[i]!);
+  }
+
+  it("96px 高(群組卡 / 窄 pane)→ 至多 3 條,相鄰間距 ≥ 2× 字高", () => {
+    const g = buildCandleGeometry(BARS, { width: 400, height: 96 });
+    expect(g.yTicks.length).toBeGreaterThanOrEqual(2);
+    expect(g.yTicks.length).toBeLessThanOrEqual(3);
+    for (const gap of gaps(g.yTicks.map((t) => t.y))) {
+      expect(gap).toBeGreaterThanOrEqual(FONT_H * 2);
+    }
+  });
+
+  it("對照組:200px 高(單檔頁既有尺寸)→ 仍 5 條(既有行為逐值不變)", () => {
+    expect(buildCandleGeometry(BARS, { width: 400, height: 200 }).yTicks.length).toBe(5);
+  });
+
+  it("門檻附近:140px(降階門檻)仍 5 條、139px 降為 3 條", () => {
+    expect(buildCandleGeometry(BARS, { width: 400, height: 140 }).yTicks.length).toBe(5);
+    expect(buildCandleGeometry(BARS, { width: 400, height: 139 }).yTicks.length).toBe(3);
+  });
+});
