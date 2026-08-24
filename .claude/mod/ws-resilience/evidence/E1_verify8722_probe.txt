@@ -1,0 +1,20 @@
+REJECTED  ws://127.0.0.1:8722/ws/corr  HTTP 403  (t=0.02s)
+REJECTED  ws://127.0.0.1:8722/ws/river  HTTP 403  (t=0.00s)
+REJECTED  ws://127.0.0.1:8722/ws/index  HTTP 403  (t=0.00s)
+ACCEPTED  ws://127.0.0.1:8722/ws/breadth
+    t=   0.0s breadth    keys=['type', 'trade_date', 'as_of', 'stale']
+    t= 10.01s ping       keys=['type']
+    t= 20.01s ping       keys=['type']
+    t= 24.61s breadth    keys=['type', 'trade_date', 'as_of', 'stale']
+REJECTED  ws://127.0.0.1:8722/ws/capital  HTTP 403  (t=0.00s)
+REJECTED  ws://127.0.0.1:8722/ws/futures  HTTP 403  (t=0.00s)
+ACCEPTED  ws://127.0.0.1:8722/ws/stock
+    t=   0.0s status     keys=['type', 'tc4', 'backfilling']
+    t= 10.01s ping       keys=['type']
+    t= 20.02s ping       keys=['type']
+    t= 30.03s ping       keys=['type']
+ACCEPTED  ws://127.0.0.1:8722/ws/txo-pnl
+    t=   0.0s snapshot   keys=['series_id', 'series_name', 'status', 'accumulated_from']
+    t= 10.01s ping       keys=['type']
+    t= 20.02s ping       keys=['type']
+    t= 30.02s ping       keys=['type']

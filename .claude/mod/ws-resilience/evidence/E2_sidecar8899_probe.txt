@@ -1,0 +1,9 @@
+REJECTED  ws://127.0.0.1:8899/ws/capital  HTTP 403  (t=0.02s)
+ACCEPTED  ws://127.0.0.1:8899/ws/futures
+    t= 10.01s ping       keys=['type']
+    t= 20.02s ping       keys=['type']
+ACCEPTED  ws://127.0.0.1:8899/ws/index
+    t=  3.86s index      keys=['type', 'trade_date', 'twse', 'otc']
+    t=  9.91s index      keys=['type', 'trade_date', 'twse', 'otc']
+    t= 10.02s ping       keys=['type']
+    t= 14.95s index      keys=['type', 'trade_date', 'twse', 'otc']

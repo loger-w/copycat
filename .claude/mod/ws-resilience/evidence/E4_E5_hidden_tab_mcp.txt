@@ -1,0 +1,9 @@
+# Chrome MCP 分頁(document.visibilityState = "hidden":視窗被使用者的盤點分頁佔著,未搶)— 2026-08-25 01:15–01:18
+patched 17:15:27Z;閒置至 17:16:58Z(92 s):warns=[](零「無訊息,重連」)、live 四條 WS 零重建。
+/ws/capital + /ws/breadth(側車缺席 → 403):new 於 17:15:29 / 15:38 / 15:55 / 16:26 / 16:57 → 時距 9 / 17 / 31 / 31 s
+  = 「從未 open」分支 8,16,30,30 各 +1 s(hidden 分頁 timer 1 s 對齊;舊 accept-then-close 版本會是 1,2,4,5,5)。
+stall 01:17:10–01:17:55(45 s):
+  warns 17:17:40.333–.337:txo-pnl 31 s / index 31 s / stock 30 s / futures 31 s 無訊息,重連(同一 tick 窗)
+  new  17:17:42.337 ×4(stock / futures / index / txo-pnl 同一毫秒)→ hidden 分頁把 [1,2) s 的 jitter 對齊到同一個 1 s 邊界,
+       jitter 在 hidden 分頁量不到(不是實作沒生效:headless visible 分頁同一實驗量到 1.04 / 1.37 / 1.53 / 1.56 s,見 E4_E5_headless_visible_tab.txt)
+  open 17:17:55.876–.922(stall 釋放即接上)
