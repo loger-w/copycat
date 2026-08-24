@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import threading
 import logging
 from typing import Any, Callable
 
@@ -948,3 +949,51 @@ class TestOtcSynthBars:
         eng._pending_date = "2026-07-31"
         eng._apply_otc(self._snap(100, "101601"))
         assert eng.otc_bars() == ([], None)
+class TestBackfillMergesOnEventLoop:
+    """N094:`_subscribe_and_backfill` 跑在 worker thread 卻直接 in-place 寫
+    `_twse.minutes` / `_pending_backfill` —— 被取消的 retry 其 orphan `to_thread` 仍會
+    `update()`,與 event loop 端 `_minutes_lag_exceeded` 的 `max(m)` / `_payload` 的
+    `dict(...)` 理論可撞 `RuntimeError: dictionary changed size during iteration`,
+    而炸點在 `_broadcast_loop` 的 try/except **之外** —— 該發的自癒靜默消失。
+    收法:worker 只回傳 dict、合併在 event loop 端做。
+    """
+
+    async def test_worker_does_not_write_shared_dicts(self) -> None:
+        fake = FakeIndexSource()
+        fake.day_minutes = {"0901": 43_000_000}
+        eng = make_engine(fake)
+        got = eng._subscribe_and_backfill()
+        assert got == {"0901": 43_000_000}
+        assert eng._twse.minutes == {}, "worker thread 直接寫共享 dict(N094)"
+        assert eng._merge_backfill(got) is True  # 合併在 loop 端做,回「有沒有新鍵」
+        assert eng._twse.minutes == {"0901": 43_000_000}
+        assert eng._merge_backfill(got) is False  # 同一份再合併 = 零新鍵
+
+    async def test_cancelled_retry_never_merges(self) -> None:
+        """被取消的 retry:orphan 的 executor 工作項照樣跑完 fetch,但它的結果**不得**
+        落進 `minutes` —— 舊碼在 worker 裡直接 `update()`,cancel 攔不到。"""
+        fake = FakeIndexSource()
+        gate = threading.Event()
+        entered = threading.Event()
+        orig = fake.fetch_day_minutes
+
+        def _gated(code: str, *, window_variant: int = 0) -> dict[str, int]:
+            entered.set()
+            assert gate.wait(timeout=2)
+            return {"0901": 43_000_000}
+
+        fake.fetch_day_minutes = _gated  # type: ignore[method-assign]
+        eng = make_engine(fake, retry_secs=0.001)
+        eng._loop = asyncio.get_running_loop()
+        eng._schedule_retry()
+        await asyncio.to_thread(entered.wait, 2)
+        assert eng._retry_task is not None
+        eng._retry_task.cancel()
+        gate.set()
+        try:
+            await eng._retry_task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.05)
+        assert eng._twse.minutes == {}, "取消的 retry 仍把結果寫進 minutes"
+        assert orig is not None
