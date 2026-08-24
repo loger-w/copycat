@@ -72,11 +72,6 @@ export function RadioPills<V extends string>({
             htmlFor={id}
             title={item.title}
             aria-disabled={item.disabled ? "true" : undefined}
-            /** 每一次點都算「使用者還在操作」——`onChange` 對已選中項不發(A11Y-6)。 */
-            onClick={() => {
-              if (item.disabled) return;
-              onInteract?.();
-            }}
             className={cn(
               pillClass(item, checked),
               // `<label>` 沒有 UA cursor / user-select 樣式:不補的話每顆 pill 都是
@@ -93,6 +88,20 @@ export function RadioPills<V extends string>({
               value={item.value}
               checked={checked}
               disabled={item.disabled}
+              /** 「使用者還在操作」的訊號,**掛 input 不掛 label**(N265)。
+               *
+               *  掛 label 的話同一次點擊會跑兩趟:label activation 的預設行為是把 click
+               *  **轉發**到被標記的控制項(這裡是內層 input),轉發出去的那則再冒泡回
+               *  label → handler 第二次。現有讀者(閃電梯重置武裝閒置計時)冪等所以看不出來,
+               *  但任何拿它計數 / 節流的呼叫端都會多算一倍。
+               *
+               *  掛 input 三條路徑各恰一次:點 label(轉發)/ 點到 input 本體 / 鍵盤選取
+               *  (原生 radio 的鍵盤啟動同樣派 click 到 input)。`onChange` 不夠用的理由
+               *  不變 —— 點已選中項不發 change(A11Y-6)。 */
+              onClick={() => {
+                if (item.disabled) return;
+                onInteract?.();
+              }}
               /** `disabled` 之外再擋一層:jsdom 的 `fireEvent.click` 會直接把 click 派到
                *  disabled input 上(真瀏覽器根本不派),React 由 click 推導 change 時不吃
                *  disabled 判別子 → 沒有這道 guard,測試環境與真環境對「停用項被點」的

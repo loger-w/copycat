@@ -584,7 +584,7 @@ describe("TickRow.n 單調序號(N120)", () => {
       t: "09:01:30.000",
       p: 2_380_000,
       q: 1,
-      side: "outer",
+      side: "outer" as const,
       seq,
     };
   }
@@ -630,5 +630,47 @@ describe("TickRow.n 單調序號(N120)", () => {
     let acc = fromSnapshot({ ...SNAP, seq: 3 });
     for (let s = 4; s < 12; s += 1) acc = applyTick(acc, tickAt(s));
     expect(new Set(acc.ticks.map((r) => r.n)).size).toBe(acc.ticks.length);
+  });
+
+  // 跨檔契約(CLAUDE.md §4):`snapshot.seq` = `ticks` **尾筆**的序號、`tick.seq` 每收下
+  // 一筆成交 +1 —— 兩者同一把尺,所以「同一筆成交」在增量與全量兩條路徑上拿到同一個號。
+  // 後端若改成「seq 是別的東西」(例如訊息計數 / 每次 snapshot 自增),這裡的回推起點就
+  // 錯位,全量 refetch 後既有列全部換號 → tbody 整片卸載重掛,而畫面只是閃一下、零訊號。
+  it("全量 refetch(同一尾筆 seq)後既有列的 n 逐值不變", () => {
+    const rows = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        t: `09:0${1 + Math.floor(i / 10)}:${String(i % 60).padStart(2, "0")}.000`,
+        p: 2_380_000,
+        q: 1,
+        side: "outer",
+      }));
+    // 全量 #1:5 筆,尾筆 seq = 10
+    let acc = fromSnapshot({ ...SNAP, seq: 10, ticks: rows(5) });
+    expect(acc.ticks.map((r) => r.n)).toEqual([6, 7, 8, 9, 10]);
+    // 增量三筆
+    for (const s of [11, 12, 13]) acc = applyTick(acc, tickAt(s));
+    const incremental = acc.ticks.map((r) => r.n);
+    // 全量 #2(切回單檔 / ?tape=0 補打):後端此刻共 8 筆,尾筆 seq = 13
+    const refetched = fromSnapshot({ ...SNAP, seq: 13, ticks: rows(8) });
+    expect(refetched.ticks.map((r) => r.n)).toEqual(incremental);
+  });
+
+  // ⚠ 但書(characterization,不是期望行為):`apply_backfill` 會讓後端 seq 一次跳增
+  // `_BACKFILL_SEQ_MARGIN`(1000)+ 回補筆數,而號是由尾回推的 → **同一批成交的 n 整段
+  // 平移**,回補後那一次 tbody 會重掛一次。可接受(回補是一次性事件、號只往上長不撞舊號),
+  // 留尾記在 docs/next-time.md 2026-08-24 節。
+  it("回補後 seq 跳增 → 同一批成交的 n 整段平移(一次性重掛)", () => {
+    const rows = [
+      { t: "09:01:28.000", p: 2_380_000, q: 1, side: "outer" },
+      { t: "09:01:29.000", p: 2_380_000, q: 1, side: "outer" },
+    ];
+    const before = fromSnapshot({ ...SNAP, seq: 7, ticks: rows });
+    const after = fromSnapshot({ ...SNAP, seq: 7 + 1_000 + rows.length, ticks: rows });
+    expect(before.ticks.map((r) => r.n)).toEqual([6, 7]);
+    expect(after.ticks.map((r) => r.n)).toEqual([1008, 1009]);
+    // 號只往上長,不與舊號相撞(key 的唯一性在跳增後仍成立)
+    expect(Math.min(...after.ticks.map((r) => r.n))).toBeGreaterThan(
+      Math.max(...before.ticks.map((r) => r.n)),
+    );
   });
 });

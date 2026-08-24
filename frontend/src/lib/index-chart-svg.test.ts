@@ -71,6 +71,29 @@ describe("buildOverlayGeometry", () => {
     );
     expect(twseOnly.lines.map((l) => l.index)).toEqual([0]);
   });
+
+  // 🔴 `ref: NaN` 的 series 一律不畫。單趟改寫時判定由「保留 `ref !== null && ref > 0`」
+  // 反寫成「排除 `ref === null || ref <= 0`」—— 對 NaN 兩個比較皆為 false,壞掉的那腿
+  // 反而被**留下**:它的 pct 全 NaN,`Math.min(0, ...all)` 跟著 NaN → span / toY 全 NaN,
+  // **另一腿的座標也一起壞掉**,兩條線同時消失而畫面照畫、零錯誤訊號。
+  it("ref 為 NaN 的線被略過,且不污染另一腿的 y 域", () => {
+    const g = buildOverlayGeometry(
+      [
+        { minutes: minutes([["0901", 100]]), ref: Number.NaN },
+        { minutes: minutes([["0901", 378_090], ["0930", 359_800]]), ref: 378_090 },
+      ],
+      SIZE,
+    );
+    expect(g.lines.map((l) => l.index)).toEqual([1]);
+    // 倖存那腿的每一點都要是有限數(NaN 腿混進 `all` 時這裡整條變 NaN)
+    for (const pt of g.lines[0]!.pts) {
+      expect(Number.isFinite(pt.x)).toBe(true);
+      expect(Number.isFinite(pt.y)).toBe(true);
+      expect(Number.isFinite(pt.pct)).toBe(true);
+    }
+    expect(Number.isFinite(g.zeroY)).toBe(true);
+    expect(g.pctDomain.every((v) => Number.isFinite(v))).toBe(true);
+  });
 });
 
 describe("outOfDomainLevels(SC-7 域內/域外分類)", () => {

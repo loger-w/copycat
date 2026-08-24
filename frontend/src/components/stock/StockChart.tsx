@@ -81,6 +81,16 @@ export function StockChart({
   );
 
   // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。
+  //
+  // **prod 沒有讀者,刻意保留**(N121,2026-08-24 覆查):`StockPage` 的主圖掛在
+  // `{accum ? …}` 底下,而 `useStockStream` 換合約時第一件事就是 `setAccum(null)`
+  // → StockChart **卸載重掛**,本 state 歸零,`initialMode()` 直接從 localStorage 讀回
+  // 使用者的現貨偏好(下面的收斂刻意不寫 localStorage,A6 因此在 prod 由它兌現)。
+  // 唯一走得到本分支的是**同一個元件實例**內 `contract` 由非 null 變 null 的路徑 =
+  // `StockChart.futconverge.test.tsx` / `StockChart.test.tsx` A6 節。
+  // 判定:**不刪**。它是「圖表哪天脫離 accum gate(常駐掛載)」時唯一還撐得住 A6 的
+  // 東西,而那個前提由 `StockPage.test.tsx` 的「主圖 accum gate(N121 前提)」釘住 ——
+  // 那條紅了就回來重新決定要刪它還是真驗 A6。
   const [spotMode, setSpotMode] = useState<ChartMode | null>(null);
 
   // 期貨態只提供江波圖(D10)。模式是**持久化狀態** —— 使用者上次停在日 K 時,切進
@@ -162,6 +172,10 @@ export function StockChart({
           const blocked = isFut && id !== "intraday";
           return { value: id, label, disabled: blocked, title: blocked ? FUT_MODE_HINT : undefined };
         })}
+        // 停用態這裡只給 `opacity-40`:游標(`cursor-not-allowed`)由 `RadioPills` 統一補。
+        // 那是 R2 a11y 批相對「視覺零變」的一個**已接受偏差**(N012,2026-08-24 覆查:
+        // 原 `<button disabled>` 沒有 not-allowed 游標)—— 判定保留,因為停用態的正確
+        // 游標本來就該有,而且兩處各寫一份的失效樣態是「只有其中一組 pill 的游標漂掉」。
         pillClass={(item, checked) =>
           cn(
             "rounded border px-2 py-0.5 text-xs",

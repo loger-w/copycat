@@ -35,7 +35,11 @@ export interface MinuteAgg {
   l?: number | null;
 }
 
-export interface TickRow {
+/** 逐筆明細一列的**線上形狀**(snapshot / group-state 的 `ticks` 元素)。
+ *
+ *  與 `TickRow` 分開是因為序號 `n` 是**前端指派**的:後端不發它,把它寫進線上形狀
+ *  等於宣告一條不存在的契約,而 tsc 只會在「誰忘了補」時指著錯的那一端。 */
+export interface WireTickRow {
   t: string;
   p: number;
   q: number;
@@ -43,6 +47,29 @@ export interface TickRow {
   /** 成交當下最佳買 / 賣價(毫元);**選填** —— 舊 snapshot 與既有測試 fixture 都沒有 */
   b?: number | null;
   a?: number | null;
+}
+
+export interface TickRow extends WireTickRow {
+  /** 逐筆列的單調序號 —— **唯一用途是 React key**(N120)。
+   *
+   *  改前 `TickTape` 用「尾端回推索引」當 key,前插時不動,但 `ticks` 觸到
+   *  `TAPE_MAX` 之後陣列每來一筆就整體左移一格 → 回推索引同樣逐筆 −1,整個 tbody
+   *  (30–200 列)卸載重掛,而畫面上只是「明細偶爾閃一下」,沒有任何錯誤訊號。
+   *
+   *  **兩個產生點同一把尺**(`fromSnapshot` 由 `snap.seq` 往前回推 / `applyTick` 取
+   *  `msg.seq`):`snapshot.seq` = `ticks` 的**尾筆**序號、`tick.seq` 每收下一筆成交 +1
+   *  (跨檔契約,CLAUDE.md §4;產生點 `copycat/live/stock_state.py::ingest` / `snapshot()`)
+   *  —— 所以同一筆成交在兩條路徑上拿到同一個號,全量 refetch 之後既有列的 key 不變。
+   *
+   *  ⚠ **但書:回補會讓號整段平移一次**。`apply_backfill` 把 seq 一次跳增
+   *  `_BACKFILL_SEQ_MARGIN`(1000)+ 回補筆數,而號是由尾回推的 → 回補後的那一份全量裡,
+   *  **同一批成交**拿到的是平移後的號 → tbody 在回補當下重掛一次。這是刻意接受的現況
+   *  (回補是一次性事件;跳增讓前端偵測得到並重抓全量,正是它存在的理由),不是「既有列
+   *  永不重掛」的反例 —— key 真正要的三件事「單調 + 同批唯一 + **穩態下**既有列不變」
+   *  在跳增後仍成立(號只會往上長,不會與舊號相撞)。characterization 見
+   *  `stock-accum.test.ts`「回補後 seq 跳增」;若哪天要連這一次重掛也消掉,見
+   *  docs/next-time.md 2026-08-24 節。 */
+  n: number;
 }
 
 export interface StockMeta {
@@ -169,7 +196,7 @@ interface SnapshotShape {
   last: { p: number; t: string; cum_vol: number } | null;
   vwap: number | null;
   minutes: Record<string, MinuteAgg>;
-  ticks: TickRow[];
+  ticks: WireTickRow[];
   book: StockBook | null;
   meta: StockMeta | null;
   high?: number | null;
@@ -211,13 +238,17 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
   const srcTicks = snap.ticks ?? [];
   const vp = new Map<number, VpCell>();
   for (const row of srcTicks) foldVp(vp, row.t, row.p, row.q, row.side);
+  // key 用的單調序號(N120):由 `snap.seq`(= 最後一筆的號)**往前回推**,而不是自
+  // 0 起編 —— 自 0 起編的話每次全量 refetch 都把同一筆成交換一個號,既有列全部重掛。
+  const kept = srcTicks.slice(-TAPE_MAX);
+  const firstN = snap.seq - (kept.length - 1);
   return {
     code: snap.code ?? "",
     seq: snap.seq,
     last: snap.last,
     vwap: snap.vwap,
     minutes,
-    ticks: [...srcTicks].slice(-TAPE_MAX),
+    ticks: kept.map((row, i) => ({ ...row, n: firstN + i })),
     vp,
     book: snap.book,
     meta: snap.meta,
@@ -358,7 +389,8 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
   const volume = acc.volume + msg.q;
   const ticks = [
     ...acc.ticks,
-    { t: msg.t, p: msg.p, q: msg.q, side: msg.side, b: msg.b ?? null, a: msg.a ?? null },
+    // `n` 取 `msg.seq`:與 `fromSnapshot` 的回推同一把尺(N120),丟頭時倖存列的號不動。
+    { t: msg.t, p: msg.p, q: msg.q, side: msg.side, b: msg.b ?? null, a: msg.a ?? null, n: msg.seq },
   ].slice(-TAPE_MAX);
   // 淺拷後折本筆:O(當日成交過的檔位數)。**不是固定的 ~200** —— 有漲跌停時域是
   // [lower, upper](± 10%),autofit 的低價股(tick 0.01 元)可以近千檔。仍遠小於

@@ -104,9 +104,10 @@ describe("StockPage", () => {
 
   // 🔴 N109:`tc4 === "down"` 有兩個來源 —— engine 在但 TC4 斷(恢復會自癒回補),
   // 以及 XR-3 後的**無 engine 模式**(server 啟動時 TC4 沒開,stock engine 只在 boot 建
-  // → TC4 之後開起來也不會自癒,得重啟 server)。兩者的 seed 逐值相同,前端分不出來
+  // → TC4 之後開起來也不會自癒,得重啟伺服器)。兩者的 seed 逐值相同,前端分不出來
   // (`/api/health` 刻意不含引擎健康度),所以文案要對**兩態都誠實**:改前那句
   // 「恢復後自動回補」對無 engine 模式是錯的,而使用者只會一直等。
+  // 斷言字串 2026-08-24 two-axis 收修時**事前標為該變**:「server」→「伺服器」(UI 全繁中)。
   it("TC4 斷線告警列:自癒與需重啟兩態都講得到", () => {
     wrap(
       <StockPage
@@ -117,7 +118,7 @@ describe("StockPage", () => {
     );
     const note = screen.getByText(/達錢 4 未連線/);
     expect(note.textContent).toContain("自動回補");
-    expect(note.textContent).toContain("重啟 server");
+    expect(note.textContent).toContain("重啟伺服器");
   });
 
   it("伺服器斷線顯示重連告警列(文案不變)", () => {

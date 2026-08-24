@@ -63,6 +63,13 @@ export function outOfDomainLevels(
 }
 
 export interface OverlayLinePts {
+  /** 這條線在**輸入陣列**裡的原始位置(N262)。
+   *
+   *  呼叫端拿它去查自己那份「第 n 腿長什麼樣」的表(`MarketPane` 的 `OVERLAY_LINES`
+   *  = 0 加權 / 1 櫃買)。**不可用 `lines` 的陣列位置代替** —— ref 缺值(或為 0)的腿
+   *  在下面被濾掉,twse.ref 缺時僅剩的櫃買線就落在位置 0,被畫成加權色、標成「加權」,
+   *  而畫面照畫、沒有任何錯誤訊號。 */
+  index: number;
   pts: { x: number; y: number; pct: number }[];
 }
 
@@ -76,21 +83,32 @@ export function buildOverlayGeometry(
   series: { minutes: Record<string, number>; ref: number | null }[],
   size: Size,
 ): IndexOverlayGeometry {
-  const pctSeries = series
-    .filter((s) => s.ref !== null && s.ref > 0)
-    .map((s) =>
-      sortedEntries(s.minutes).map(([minute, p]) => ({
-        minute,
-        pct: ((p - s.ref!) / s.ref!) * 100,
-      })),
-    );
-  const all = pctSeries.flat().map((p) => p.pct);
+  // 單趟 for 而不是 filter().map():**原始 index 要跟著過濾後的資料走**(N262),
+  // 而 `filter` 之後 `map` 的第二參數已經是塌陷後的位置。順手把 y 域用的 pct
+  // 收在同一趟裡(chained iteration 的 doctor 規則)。
+  const pctSeries: { index: number; pts: { minute: string; pct: number }[] }[] = [];
+  const all: number[] = [];
+  for (const [index, s] of series.entries()) {
+    const ref = s.ref;
+    // 判定寫成**保留條件的否定**(`!(ref !== null && ref > 0)`),不是看起來等價的
+    // `ref === null || ref <= 0` —— 後者對 `NaN` 的兩個比較都是 false,壞掉的 ref
+    // 反而被留下:該腿 pct 全 NaN,再經 `Math.min(0, ...all)` 把 y 域一起變 NaN
+    // → **兩條線同時消失**,而畫面照畫、零錯誤訊號(同 `stock-accum.ts::foldVp` 的窗判)。
+    if (!(ref !== null && ref > 0)) continue; // ref 缺值 / 0 / NaN → 沒有「相對昨收」可談,不畫
+    const pts = sortedEntries(s.minutes).map(([minute, p]) => ({
+      minute,
+      pct: ((p - ref) / ref) * 100,
+    }));
+    pctSeries.push({ index, pts });
+    for (const pt of pts) all.push(pt.pct);
+  }
   const lo = Math.min(0, ...all) - 0.3;
   const hi = Math.max(0, ...all) + 0.3;
   const span = hi - lo || 1;
   const toY = (pct: number): number => ((hi - pct) / span) * size.height;
   return {
-    lines: pctSeries.map((pts) => ({
+    lines: pctSeries.map(({ index, pts }) => ({
+      index,
       pts: pts.map(({ minute, pct }) => ({ x: toX(minute, size.width), y: toY(pct), pct })),
     })),
     zeroY: toY(0),

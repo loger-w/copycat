@@ -29,7 +29,10 @@ export function ToastStack({ toasts, overflow, onDismiss }: Props) {
           type="button"
           // 整則可點即關(design §8.3):5s 自動消失之外的手動出口,不另設 × 小鈕
           onClick={() => onDismiss(t.key)}
-          className="pointer-events-auto rounded border border-accent/60 bg-bg-deep px-2 py-1 text-left font-mono text-sm text-ink shadow-lg hover:border-accent"
+          // `line-clamp-2 break-words`(比照 B3 的 SignalRail 合併列):合併 toast 的文案是
+          // 「代號 名稱 <kind 段以「・」串接> 價格」,同一 tick 併進三四則時會把這張 w-72 的
+          // 卡片撐成一整片,把下面幾張擠出視窗。clamp 是**縱向**的事,寬度不變。
+          className="pointer-events-auto line-clamp-2 rounded border border-accent/60 bg-bg-deep px-2 py-1 text-left font-mono text-sm break-words text-ink shadow-lg hover:border-accent"
         >
           {t.text}
         </button>

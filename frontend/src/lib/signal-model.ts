@@ -78,7 +78,12 @@ export function kindLabel(sig: SignalMsg): string {
   return kind;
 }
 
-/** toast 一行文字:`代號 名稱 訊號名 價格`(名稱缺值時不留雙空格)。 */
+/** toast 一行文字:`代號 名稱 訊號名 價格`(名稱缺值時不留雙空格)。
+ *
+ *  **prod 已無讀者**(N013,2026-08-24 覆查):`useSignalAlerts` 自合併 toast(D1'')起
+ *  一律走 `formatGroupToastText`。留著的唯一理由是它是那支的**參照組** ——
+ *  `signal-model.test.ts` 鎖「單則組的 `formatGroupToastText` 輸出與本函式逐字相同」,
+ *  刪掉等於把那條欄位口徑的 lock 一併刪掉。要刪請連同該 lock 一起想清楚。 */
 export function formatToastText(sig: SignalMsg): string {
   return [sig.code, sig.name, kindLabel(sig), fmt(sig.price)].filter((x) => x !== "").join(" ");
 }

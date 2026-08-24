@@ -63,14 +63,13 @@ export function TickTape({
           </tr>
         </thead>
         <tbody>
-          {/* key 用**尾端回推**索引:`rows` 是反轉後的清單,新成交前插 —— 用前端索引
-              (`i`)的話每來一筆成交所有 key 位移一格,整個 tbody(30–200 列)卸載重掛。
-              回推索引在前插時不變,既有列的 DOM node 因此保留。
-              已知限制:`ticks` 滿 `TAPE_MAX = 200`(stock-accum 環形丟頭)後陣列會左移,
-              回推索引一樣逐筆 −1 → 滿載時退回與現況同級(不惡化)。真解是後端帶單調
-              序號當 key,需要 API 變更,已記 next-time。 */}
-          {rows.map((t, i) => (
-            <tr key={`${t.t}-${ticks.length - 1 - i}`} className="h-6">
+          {/* key 用**該筆自己的單調序號**(`TickRow.n`,N120):前端索引(含尾端回推)
+              在「前插」時不變,但 `ticks` 滿 `TAPE_MAX = 200` 後 stock-accum 是環形丟頭
+              —— 陣列整體左移一格,任何以位置推導的 key 都會逐筆位移,整個 tbody
+              (30–200 列)卸載重掛。序號由 `fromSnapshot` / `applyTick` 兩處以後端 `seq`
+              指派,丟頭與全量 refetch 都不換號。 */}
+          {rows.map((t) => (
+            <tr key={t.n} className="h-6">
               <td className="text-ink-muted">{t.t.slice(0, 8)}</td>
               <td className={cn("text-right", priceTone(t.b, ref_))}>
                 {t.b == null ? "-" : fmt(t.b)}

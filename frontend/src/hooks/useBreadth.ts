@@ -8,8 +8,9 @@
  * 期間抵達的增量格(見 `mergeSnapshot`)。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { commitRef } from "@/lib/commit-ref";
 import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { BreadthPoint, BreadthState } from "@/types";
 
@@ -58,25 +59,24 @@ export function useBreadth(): BreadthState | null {
   const [state, setState] = useState<BreadthState | null>(null);
   const stateRef = useRef<BreadthState | null>(null);
 
-  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。同步寫在
-  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
-  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。
   //
-  // 強度說明(review TC-1):本 ref **只在 commit 之後同步,handler 內不做同 tick 回寫**
-  // —— 與 `useFuturesStream` / `useStockStream` 那種 imperative 配對(寫入點當場同步 ref)
-  // **不同級**:那種配對連「同一個 tick 內兩則訊息 read-modify-write」都守得住,這裡守不住
-  // (第二則讀到的仍是上一次 commit 的值)。本 hook 的 handler 只拿 ref 比 `trade_date`
-  // (換日一天一次),沒有同 tick 連鎖需求;日後若有,要升級成 imperative 配對。
-  useLayoutEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  // **imperative 配對**(N119,2026-08-24 升級;同 `useFuturesStream` / `useStockStream`):
+  // 每個寫入點都走 `commitRef`(寫 ref → setState,單一出口)。改前 ref 只在 commit 後由
+  // 一支 `useLayoutEffect` 同步,同一個 macrotask 內兩則換日訊息時第二則讀到的仍是舊日
+  // → 再清一次序列、再打一次全量(自癒型:多一發不是少一發,但盤中每次換日都白跑)。
+  //
+  // 那支 layout effect 曾以「commit 後的 backstop」留著,two-axis review 收修時**移除**:
+  // 配對之後 commit 的值恆 ≤ ref,它能寫進去的只有**較舊**的 commit 值,補不上漏掉的配對
+  // (mutation 實證見 `useBreadth.test.ts` 的「全量在途」)。新增 setState 路徑就補 `commitRef`。
 
   const refetch = async (): Promise<void> => {
     try {
       const res = await fetch(ENDPOINT);
       if (!res.ok) return;
       const snapshot = (await res.json()) as BreadthState;
-      setState((prev) => mergeSnapshot(prev, snapshot));
+      // ref 與 state 同批寫:全量回來後緊接著抵達的增量,基底必須是這一份。
+      commitRef(stateRef, setState, mergeSnapshot(stateRef.current, snapshot));
     } catch (err) {
       console.warn("breadth: state 載入失敗", err);
     }
@@ -92,23 +92,25 @@ export function useBreadth(): BreadthState | null {
       if (incomingDate !== null && localDate !== null && incomingDate !== localDate) {
         // 換日:本地序列屬於舊日,清掉並以全量 refetch 對齊(refetch 不 await 安全 ——
         // 全量快照恆 ≥ 增量,後續 WS 訊息只會 upsert 新日的分鐘鍵)
-        setState((prev) =>
+        const prev = stateRef.current;
+        commitRef(
+          stateRef,
+          setState,
           prev === null ? prev : { ...prev, trade_date: incomingDate, series: [] },
         );
         void refetch();
         return;
       }
-      setState((prev) => {
-        if (prev === null) return prev; // 初載 fetch 尚未回來:全量將覆蓋,不從增量拼半份
-        const series = msg.last_minute ? upsert(prev.series, msg.last_minute) : prev.series;
-        return {
-          ...prev,
-          trade_date: incomingDate ?? prev.trade_date,
-          as_of: msg.as_of ?? null,
-          stale: Boolean(msg.stale),
-          counts: msg.counts ?? null,
-          series,
-        };
+      const prev = stateRef.current;
+      if (prev === null) return; // 初載 fetch 尚未回來:全量將覆蓋,不從增量拼半份
+      const series = msg.last_minute ? upsert(prev.series, msg.last_minute) : prev.series;
+      commitRef(stateRef, setState, {
+        ...prev,
+        trade_date: incomingDate ?? prev.trade_date,
+        as_of: msg.as_of ?? null,
+        stale: Boolean(msg.stale),
+        counts: msg.counts ?? null,
+        series,
       });
     };
 

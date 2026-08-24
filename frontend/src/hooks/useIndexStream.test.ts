@@ -218,4 +218,46 @@ describe("useIndexStream 同 tick 兩則訊息(N119)", () => {
     // 第一則觸發一次全量對齊;第二則的日期與本地已相同 → 不得再排一次
     expect(fetchMock.mock.calls.length - before).toBe(1);
   });
+
+  // 🔴 N119 收修:`useLayoutEffect` backstop 移除後,**handler / refetch 的配對是 ref 的
+  // 唯一寫入點**。這條打的是 refetch 路徑:全量回應在 microtask 裡寫 ref(此時 React 還沒
+  // commit —— 排程走的是 macrotask),同一批抵達的增量必須以那份全量為基底。
+  // 靠 commit 後的 effect 同步 ref 的話,這裡讀到的是**換日清空後的 null** → 全量的分鐘格
+  // 被增量整份覆蓋掉,下一格 upsert 才自癒。
+  it("全量在途:回應寫入 ref 後、commit 前抵達的增量以全量為基底", async () => {
+    const { hook, ws } = await setup();
+    const D2 = {
+      ...STATE,
+      trade_date: "2026-07-29",
+      twse: { ...STATE.twse, minutes: { "0901": 43_000_000 } },
+    };
+    let release!: () => void;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((res) => {
+          release = () => res(new Response(JSON.stringify(D2)));
+        }),
+    );
+    // 換日 → 清空 + 排一發全量(gate 住)
+    act(() => ws.emit(wsMsg({ trade_date: "2026-07-29" } as never)));
+    expect(hook.result.current.twse).toBeNull();
+
+    await act(async () => {
+      release();
+      // 只 drain microtask(不讓出 macrotask)→ refetch 的 .then 跑完寫了 ref,
+      // 而 React 的 render 仍排在 macrotask 上還沒 commit
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      ws.emit(
+        wsMsg({
+          trade_date: "2026-07-29",
+          twse: { ...wsMsg().twse, last_minute: ["0940", 41_000_000] },
+        } as never),
+      );
+    });
+
+    expect(hook.result.current.twse!.minutes).toEqual({
+      "0901": 43_000_000,
+      "0940": 41_000_000,
+    });
+  });
 });

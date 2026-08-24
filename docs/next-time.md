@@ -1,3 +1,33 @@
+## 2026-08-24(mod/stream-ui-misc two-axis 留尾)
+
+review 收修已出貨(NaN ref 語意反轉 / `commitRef` 單一出口 + backstop 移除 / 文案全繁中 /
+seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
+
+- [ ] **`OVERLAY_LINES` 以「輸入序」查表,輸入本身不帶識別**(`lib/index-chart-svg.ts::
+  `OverlayLinePts.index` → `MarketPane` 的 `OVERLAY_LINES[l.index]`):N262 修的是「過濾後
+  位置塌陷」,但**位置仍是唯一的識別**——哪天有人在 `buildOverlayGeometry` 的輸入陣列前面
+  插一腿(或把加權 / 櫃買調換),線色與標籤會整排錯位,而畫面照畫、零錯誤訊號(現有測試
+  鎖的是 `[0,1]` / `[1]` 這種**位置**,同樣跟著漂)。候選 = 輸入改帶 key
+  (`{ key: "TWSE" | "OTC", minutes, ref }`),幾何回傳 key、呼叫端以 key 查表(ST4);
+  順帶讓 `OVERLAY_LINES` 從陣列變 `Record<key, style>`,「腿數多於樣式表」那條 guard 可退休。
+- [ ] **`signal-model.ts::formatToastText` 待刪**:prod 已無讀者(只剩 `useSignalAlerts.test`
+  拿它當期望值來源)。現況是**同源同義反覆** —— 實作與斷言同一顆函式,文案改動 mutant 全綠。
+  順序不可顛倒:**先**把測試的期望值改成字面量(逐字寫死文案 + 註解寫拆解),lock 生效後
+  才刪 `formatToastText`。先刪的話那批斷言只能整條拿掉,等於把文案的守門一起丟了。
+- [ ] **N109 的真分態需後端 seed 加欄位**:`status.tc4 === "down"` 的兩個來源(engine 在但
+  TC4 斷 / 無 engine 模式)前端沒有可分辨訊號,本輪只能出「對兩態都誠實」的單句。真解 =
+  `stock_engine` 的 status seed 加一個「engine 是否存在」欄(`/api/health` 刻意不含引擎
+  健康度,不要改那支),前端才分得出「等它自癒」與「去重啟伺服器」。屬後端改動,擇日排。
+- [ ] **N108 判別子是啟發式,換源要重看**(`lib/index-source-health.ts::otcSourceDead`):
+  「加權 ≥2 格而櫃買 0 格」只抓得到**開盤即死透**;MIS 盤中才壞(已有格)判不出來,
+  而櫃買改用非 MIS 的來源時整條判準的前提(otc 不吃 `stale`、5s poll)就不成立了。
+  改櫃買資料源時**必須連這支一起重看**,否則它會靜默地永遠回 false。
+- [ ] **N120 回補後 `n` 整段平移一次 → tbody 重掛一次**:`apply_backfill` 的 seq 跳增
+  (`_BACKFILL_SEQ_MARGIN` 1000 + 回補筆數)讓由尾回推的號整段位移,同一批成交換一批 key。
+  可接受(回補是一次性事件,且跳增本來就是要前端偵測到並重抓全量),characterization 已鎖在
+  `stock-accum.test.ts`。真要消掉這一次重掛,key 得改吃「不隨 seq 走的成交識別」
+  (後端逐筆給 id,或以 `t + cum_vol` 組鍵)—— 屬跨檔契約改動,不順手做。
+
 ## 2026-08-24(架構債盤點,唯讀)
 
 - [ ] **全站抽象化 /refactor Why gate 未過(user 拍板 (d) 沒有具體被卡住)→ 改為盤點文件**
