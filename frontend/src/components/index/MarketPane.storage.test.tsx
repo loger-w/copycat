@@ -69,7 +69,12 @@ function pill(name: string): HTMLInputElement {
   return screen.getByRole("radio", { name }) as HTMLInputElement;
 }
 
+/** jsdom 把 `localStorage` 定義成 window 的自有 configurable accessor → 還原要把原本
+ *  那份 descriptor 裝回去(細節見 `lib/storage.test.ts`)。 */
+let ownStorageDesc: PropertyDescriptor | undefined;
+
 beforeEach(() => {
+  ownStorageDesc = Object.getOwnPropertyDescriptor(window, "localStorage");
   window.localStorage.clear();
   vi.stubGlobal(
     "fetch",
@@ -81,6 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  if (ownStorageDesc) Object.defineProperty(window, "localStorage", ownStorageDesc);
   vi.unstubAllGlobals();
   // spy 還原放 afterEach:斷言先炸時主體末尾的 restore 不會執行,
   // Storage.prototype 的 spy 會漏到後續測試(review A-2 慣例)。
@@ -97,6 +103,23 @@ describe("MarketPane:localStorage 存取即拋(私密視窗 / 政策鎖)", () =>
     expect(() => renderPane()).not.toThrow();
     expect(screen.getByTestId("market-pane-left")).toBeTruthy();
     // defaultKey 與 coerceMode 的 "intraday" 是唯二正確的退路
+    expect(pill("加權").checked).toBe(true);
+    expect(pill("分時").checked).toBe(true);
+  });
+
+  // 🔴 SP1:真 Safari 私密視窗拋的是 **`window.localStorage` 這個 getter 本身**,連
+  // `Storage` 實例都拿不到 —— 上一條的 `Storage.prototype` spy 量不到這一層。把
+  // `window.localStorage` 提到 try 外(或存成 module 級 const)時,上一條仍綠而本條會紅。
+  it("連 window.localStorage getter 都拋 → 仍掛得起來,退回預設值", () => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("The operation is insecure.", "SecurityError");
+      },
+    });
+
+    expect(() => renderPane()).not.toThrow();
+    expect(screen.getByTestId("market-pane-left")).toBeTruthy();
     expect(pill("加權").checked).toBe(true);
     expect(pill("分時").checked).toBe(true);
   });
