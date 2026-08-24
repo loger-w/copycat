@@ -229,3 +229,33 @@ heal 窗 `_in_watch_window() or _WATCH_END <= now < _HEAL_TAIL_END` →
 | N016/N090/N091 前端 | `CalendarHolidayBadge` 渲染(RTL) | `frontend/src/components/CalendarHolidayBadge.test.tsx`(新檔) |
 | N021 | `corr_config.load_config` / `DEFAULT_CONFIG` | `tests/test_corr_config.py` |
 | N101 | 純 docstring,無 seam | — |
+
+---
+
+## §4 review round 1 逐條處置
+
+### Spec 軸
+
+| # | 處置 | 做了什麼 / 為什麼 |
+|---|---|---|
+| **SP1** | 接受 | heal 窗拆三段:(1) watchdog 窗內**逐字沿用舊判準、不吃日曆** —— 日曆誤標會讓真交易日整天不自癒,那是改動前沒有的新失效;(2) **有日曆**時盤外放寬到午夜 + 交易日閘;(3) **無日曆**(`is_trading_day=None`)退回舊尾窗 `13:25–13:40`。新增 `_has_calendar`(≠ `_is_trading_day` 的答案:後者無日曆時恆 True,拿它當證據等於閘恆開)。兩條紅先行 |
+| **SP2** | 接受 | (a) worker 側改 in-place `.update()`,不再 `d = {**new, **d}` 重新綁定(read-then-swap 會吃掉 event loop 在中間寫進舊 dict 的那一筆);以物件恆等測試釘住 —— 那個 race 無法穩定重現。(b) 新增 `_pending_backfill`,`_swap_day` 合併順序改 `{**_pending_backfill, **backfill, **_pending_minutes}` = 早輪 retry 回補 < 最終回補 < live pending。進展判定改比「回補 ∪ live」的鍵集合 |
+| **SP3** | 接受 | 只縮 1K fallback;DK 段回到 `_DAILY_WINDOW_DAYS` 逐字舊值。兩段窗不同是刻意的,與 `fetch_bars_range_tagged`(DK 全窗 / fallback 90 日)同款姿態。**量測前置閘由 verification SC-1 事後補**,本輪只動條文點名的那一段 |
+| **SP4** | 接受 | `_market_payload(status=None)` → `meta` 不放這一格。未三態化的路徑硬寫 `"ok"` 是謊報(index proxy miss 時 `source:"unavailable"` + `status:"ok"` 剛好等於「問到了、就是沒有」)。route 只對 `key in FUTURES_MARKET_KEYS` 且 `tf=="1"` 傳 status;前端 `?? "ok"` 本來就吃得下 undefined。CLAUDE.md §4 同步改口 |
+| **SP5** | 接受 | timeout 句改「回補中…(TC4 忙,**交易時段內每分鐘重試**)」。重取只來自 `useFuturesBars` 的 `refetchInterval`,而它同時吃 `active`(人在期貨 tab)與 `inFuturesAllDayHours()` —— 切走 tab 或收盤後根本不會再打,原句「稍後自動重試」會讓人乾等。本輪新測試期望跟改 |
+| **SP6** | 申報 | bars 非空 + 今日段 timeout 時 `status` 不被讀(空態分支根本走不到)→ 留尾 §6.6 |
+| **SP7** | 申報 | N090 偵測面改記為 **scope 決定**(不是「做不到」):App 內確實有獨立於日曆的成交訊號(index minutes / WS tick),把它們接進膠囊要跨元件拉狀態,不在本輪 → 留尾 §6.3 改寫 |
+
+### Standards 軸
+
+| # | 處置 | 做了什麼 / 為什麼 |
+|---|---|---|
+| **ST1** | 接受(文件) | verification §2 的「紅態不足」由兩處改列**六處** |
+| **ST2** | 接受 | `test_basis_is_disabled_without_a_daily_bars_source` 的 2.0 s 空轉改成「`_basis_jobs.qsize()==0` 當主判準 + 0.2 s 複核」;該案是**既有測試改寫,非紅測**,verification §8 註明 |
+| **ST3** | 接受(🔵) | `futures_engine.bars_range` 改回裸 `tuple[list[Bar], BarsStatus]`,型別取自 `live/stock_source`;`BarsResult` 由 route 那側組。engine 是 live 層消費者,反向 import server 層搬運型別是層級倒置(`bars.py` 哪天要用 engine 就是 import 迴圈) |
+| **ST4** | 接受 | `EMPTY_TEXT[...] ?? EMPTY_TEXT.ok`。`status` 是後端字串,型別擋不住第四態;查表 miss 回 undefined → 空態框整片空白,與「畫面壞了」不可分辨。加一條未知 status 的測試 |
+| **ST5** | 反駁(已消解) | 原 finding = 「TWSE / OTC 固定 ok」。**SP4 把「硬寫 ok」改成「不給欄」後,謊報面消失** —— 現在缺欄的語意就是「這條路徑尚未三態化」,與留尾 §6.4(`build_period` 三態化)是同一件事的兩半:一個是誠實的現況表述,一個是要不要補齊。因此不另做改動 |
+| **ST6** | 接受(🔵) | `git mv` → `CalendarBadges.tsx` / `CalendarBadges.test.tsx`,`App.tsx` import 與 `useTradingCalendar.ts:33` 註解同步改名 |
+| **ST7** | 接受 | 刪掉 `_quote_payload` docstring 裡「grep 實得 8 處 + 八處清單」那段 —— 上一句才說「不寫會漂的數字」,下一句就寫了一個 |
+| **ST8** | 接受(🔵) | `_daily_window_days`(連續公式)→ `_daily_fallback_window_days`(顯式兩格對映:`n <= 5` → 20、否則 40)。只有兩種輸入的東西寫成公式,讀者得自己算才知道 `n=25` 沒變 |
+| **ST9** | 接受 | assert 訊息改口:佇列有兩個入口(`request_basis` 與 `_requeue_basis`),後者只放回**已排過**的 job;`request_basis` 早退後它沒有東西可放 |
