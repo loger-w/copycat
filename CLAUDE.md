@@ -177,6 +177,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   省略 ticks 並回 `tape_omitted: true`;讀者 `frontend/src/hooks/useStockStream.ts::stateUrl`(送 `tape=0`)與
   `lib/stock-accum.ts::fromSnapshot`(讀 `tape_omitted` → `accum.tapeOmitted`,TickTape 空態分流)。漂掉的症狀:
   群組檢視省不到流量 / 切回單檔空態永遠印「尚無成交」。
+- **個股 `seq` 的兩個口徑**(2026-08-24 起):`snapshot.seq` = `ticks` 的**尾筆**序號;
+  `tick.seq` **每收下一筆成交 +1**(產生點 `copycat/live/stock_state.py::ingest` 與 `snapshot()`)。
+  讀者 = `frontend/src/lib/stock-accum.ts::fromSnapshot`(自 `snap.seq` **由尾回推**指派逐筆列的
+  React key `n`)與 `applyTick`(新列直接取 `msg.seq`)—— 兩條路徑靠這條契約落在同一把尺上。
+  後端改成別的語意(訊息計數 / 每次 snapshot 自增)= 改契約要同時改兩邊;漂掉的症狀是
+  **成交明細 tbody 靜默整片重掛**(畫面只是閃一下,零錯誤訊號)。
+  例外已知且刻意:`apply_backfill` 的 seq 跳增會讓號整段平移一次(回補當下重掛一次)。
 - **期貨 CDP/MA 前後端同式**(2026-08-24 起):產生點 `copycat/server/overlay.py::compute_cdp/compute_ma`
   (+ `build_overlay` 的 `date < today` 界),前端鏡像 `frontend/src/lib/futures-overlay.ts`
   (期貨分時不打 `/api/stock/overlay` —— 那支吃股號,拿現股 CDP 疊期貨價是假陳述)。

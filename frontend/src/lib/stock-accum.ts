@@ -57,12 +57,18 @@ export interface TickRow extends WireTickRow {
    *  (30–200 列)卸載重掛,而畫面上只是「明細偶爾閃一下」,沒有任何錯誤訊號。
    *
    *  **兩個產生點同一把尺**(`fromSnapshot` 由 `snap.seq` 往前回推 / `applyTick` 取
-   *  `msg.seq`):後端的 `seq` 每收下一筆成交 +1,所以「同一筆成交在兩條路徑上拿到
-   *  同一個號」—— 全量 refetch 之後既有列的 key 因此也不變。
+   *  `msg.seq`):`snapshot.seq` = `ticks` 的**尾筆**序號、`tick.seq` 每收下一筆成交 +1
+   *  (跨檔契約,CLAUDE.md §4;產生點 `copycat/live/stock_state.py::ingest` / `snapshot()`)
+   *  —— 所以同一筆成交在兩條路徑上拿到同一個號,全量 refetch 之後既有列的 key 不變。
    *
-   *  值**不保證等於該筆自己的 state seq**:`apply_backfill` 會讓 seq 一次跳增
-   *  (`_BACKFILL_SEQ_MARGIN`),回補後由尾回推的號整段平移。key 要的是「單調 + 同批
-   *  唯一 + 既有列不變」,這三件事在跳增後仍成立(號只會往上長,不會與舊號相撞)。 */
+   *  ⚠ **但書:回補會讓號整段平移一次**。`apply_backfill` 把 seq 一次跳增
+   *  `_BACKFILL_SEQ_MARGIN`(1000)+ 回補筆數,而號是由尾回推的 → 回補後的那一份全量裡,
+   *  **同一批成交**拿到的是平移後的號 → tbody 在回補當下重掛一次。這是刻意接受的現況
+   *  (回補是一次性事件;跳增讓前端偵測得到並重抓全量,正是它存在的理由),不是「既有列
+   *  永不重掛」的反例 —— key 真正要的三件事「單調 + 同批唯一 + **穩態下**既有列不變」
+   *  在跳增後仍成立(號只會往上長,不會與舊號相撞)。characterization 見
+   *  `stock-accum.test.ts`「回補後 seq 跳增」;若哪天要連這一次重掛也消掉,見
+   *  docs/next-time.md 2026-08-24 節。 */
   n: number;
 }
 
