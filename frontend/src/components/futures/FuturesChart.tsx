@@ -75,20 +75,24 @@ function tradeSlotOf(date: string, t: string): { index: number; anchor: string }
   if (m === null || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const onBoundary = Number(m[3]) === 0 && Number(m[4] ?? "0") === 0;
   const total = (Number(m[1]) * 60 + Number(m[2]) + (onBoundary ? 0 : 1)) % (24 * 60);
-  const hh = pad2(Math.floor(total / 60));
-  const mm = pad2(total % 60);
-  const index = alldayIndexOf(`${hh}${mm}`);
+  const hhmm = hhmmOf(total);
+  const index = alldayIndexOf(hhmm);
   if (index === null) return null;
   // 跨午夜(23:59:30 → 00:00)的日期進位:終點標記落到次日
   const carry = total === 0 && !onBoundary ? 1 : 0;
   const base = new Date(`${date}T00:00:00`);
   base.setDate(base.getDate() + carry);
   const d = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
-  return { index, anchor: anchorDateOf(`${d} ${hh}:${mm}`) };
+  return { index, anchor: anchorDateOf(`${d} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`) };
 }
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+/** 一日內的分鐘數(0–1439)→ 近全軸的 `HHMM` 鍵(`liveSlotOf` / `tradeSlotOf` 共用)。 */
+function hhmmOf(totalMinutes: number): string {
+  return `${pad2(Math.floor(totalMinutes / 60))}${pad2(totalMinutes % 60)}`;
 }
 
 /** 牆上時鐘 → live 點的落點。
@@ -101,12 +105,11 @@ function pad2(n: number): string {
  *  錨在前一交易日,live 點若照畫會落在 x=0 拉出一條橫貫整圖的假線。 */
 function liveSlotOf(now: Date): { index: number; anchor: string } | null {
   const t = new Date(now.getTime() + 60_000);
-  const hh = pad2(t.getHours());
-  const mm = pad2(t.getMinutes());
-  const index = alldayIndexOf(`${hh}${mm}`);
+  const hhmm = hhmmOf(t.getHours() * 60 + t.getMinutes());
+  const index = alldayIndexOf(hhmm);
   if (index === null) return null; // 死區(13:46–15:00 / 05:01–08:45)
   const date = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
-  return { index, anchor: anchorDateOf(`${date} ${hh}:${mm}`) };
+  return { index, anchor: anchorDateOf(`${date} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`) };
 }
 
 interface Props {
