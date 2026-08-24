@@ -172,9 +172,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
-- [ ] **RiverOverlay hover 的 render body 成本**(review F5):幾何已 memo,但每 mousemove
-  仍重跑 timeTicks + 七腿 polyline 字串重組(夜盤滿窗 840 分);要收斂把 polyline 字串
-  併入幾何 useMemo — 注意 RiverCards 的 timeTicks 現在是計次探針,動它要一併換探針。
 - [ ] **GroupGridView 2.5 萬 SVG 節點縮減**(handoff R6 原文):per-card memo 已有,
   節點數縮減屬視覺/結構設計變更(虛擬化或降採樣),另案 /mod。
 ## 2026-08-20(mod/signals-today-offload 留尾)
@@ -213,11 +210,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   6949 59 發 —— 個股 R3 健檢對「當日本來就沒成交」的檔一樣狂重掛,建議併入同一條收;**收盤段 IX0001 加權 13:25:37–13:34 每 30 s 一發共 18 發**(收盤集合競價 + 收盤後指數本就停推,source 層 R2 靜默閘不知道指數的時段)、13:45 日盤收後 TXF/MXF/TMF 各 2 發(夜盤 15:00 前的空窗,同類)〕
 - [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
   session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
-## 2026-08-18(mod/signal-denoise 個股訊號降噪留尾)
-
-- [ ] **規則 UI `rearm_dwell_secs` step="1" 且前端不擋 0–3600 值域**(code review T-10 rejected):沿
-  `window_secs` 既有慣例(值域由後端 INVALID_RULE 擋、文案泛用);要做就連 rearm_ticks / window_secs 一起
-  加前端值域提示。
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
 - [ ] **江波圖 end 格被 clamp 近似值先佔後,1K 回補的真收盤 bar 被「只填尚無值」擋掉**(2026-08-21 R5 spec review R5;characterization 已鎖
@@ -228,18 +220,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
-- [ ] **個股期均價字面兩份**:header / chip 用 `fmt(Math.round(avg*1000))`(`1185`),`StkfutLadder` 部位列用
-  `toFixed(2)`(`1185.00`);同值不同字面,收斂時二選一(建議 ladder 改 fmt,🔴 `StkfutLadder.test.tsx` 值斷言該紅)。
 - [ ] **`code` null 的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)三處靜默不顯示**,閃電梯照舊;
   無任何提示。候選:positions 回傳 `code_missing` 計數 → 側欄底一行「n 筆個股期倉位無法對映」。
 - [ ] **成交點精確版 / 群組卡個股期委託標記可直接吃 `code`**(R2 留尾的「契約碼→股號反查」已由本輪後端
   `stock_code_of` 提供;`GET /api/capital/positions` 有欄,orders 尚無 —— 精確版加 `code` 到 orders 同款)。
-- [ ] `useFeeDiscount` 跨分頁 `storage` 事件有掛未驗收(spec §5);另 `PriceLadder` 折數輸入框仍是元件內
-  state(改值時 persist 通知其他三處,但另一分頁的 PriceLadder 不會跟)。
-- [ ] `useCapitalPositions` 現有 ≥ 4 個 observer(側欄 / header / 圖牆 / 梯):實測同 tick 掛載去重成 15s 一發;
-  若日後有 observer 在不同時點掛載(lazy 頁面),15s 窗內可能多打 —— 要收斂就把 refetchInterval 移到單一
-  provider hook。
-
 ## 2026-08-17(mod/intraday-fill-marks batch3 R2 留尾)
 
 - [ ] **成交點精確版**(D7 拍板近似版的替代):後端 `CapitalStore` 保留逐筆 D 事件
@@ -266,7 +250,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **未鎖定時「WS closed 期間仍可武裝」的既有邊沿語意**(spec review R1 衍生):鎖定鈕已在非 open
   時 disabled + level 觸發,武裝鈕未跟進(維持既有);要一致化可把 `armDisabled` 也吃 wsStatus。
 - [ ] **後端 source="flash-locked" 稽核**(spec §8):payload source 可擴,讓審計檔看得出鎖定態送單。
-- [ ] `FuturesLadder.tsx` 內 `futExchangeContract` 未 try/catch(App.tsx 那份有;既有問題,review p2 (d))。
 ## 2026-08-17(mod/group-grid-full-chart R4 留尾)
 
 - [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
@@ -313,7 +296,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
 
-- [ ] **側欄下方空白區拖曳仍 append 最後一組**(2026-08-21 R4 review F3,作廢帶鏡像):zonesNow 回傳最後 section bottom,`y > lastBottom + ROW_H` → null。S 級。
 - [ ] **後端個股期平倉路徑不過 `_require_legal_tick`**(R4 review F4,後端 /mod):`/api/capital/position/close` 直送 close_position,只驗 price>0;
   前端 edgeOf 是唯一檔位守門,漏接 = 券商退單零訊號。修法:close route 由 req.key 反查 product,tickable 個股期補 tick 閘。
 - [ ] **ETF 期貨 / 除權息調整腿的平倉估價用現股 tick 表**(R4 review F5):`isOrderBlocked` 只擋閃電梯,平倉鍵不擋;現為嚴格改善(0.01 倍數),可比照送單面讓 blocked 腿 closePriceOf 回 null。
@@ -380,28 +362,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   caller = app.py boot 還原,安全前提是「service 在 restore 之後才建構 + routes 前置
   503」,這條不變式沒在任何地方斷言;Protocol 預設 None → 未來 caller 漏帶 keyword
   零訊號。最便宜的硬化 = boot 顯式帶 sentinel(seq=0)、刪 None 分支。
-## 2026-08-11(mod/capital-confirm-native-dialog 收尾留尾巴)
-
-- [ ] **CapitalConfirmDialog 新 caller 硬性契約**:onConfirm / onCancel 必須卸載元件
-  (closedRef 一次性 settled 旗標;JSDoc 已載明,無機械防護)。
-
-## 2026-08-11(fix/watchlist-dialog-swallowed-callback 收尾留尾巴)
-
-- [ ] **BAD_GROUP eager 驗證與套用基底分歧(review C-4/W-3,P2)**:submitAddGroup /
-  submitRename 用 render 閉包 `wl` 做撞名 eager 檢查,套用卻在佇列 `baseRef` 上 —— 佇列
-  視窗內交錯時偽陰性(驗證放行 → 套用撞名 → 靜默零 PUT 無文案,輸入框已清空看似成功)
-  或偽陽性(誤報 BAD_GROUP)。已無資料錯(dedup 兜底),只剩無回饋的罕見交錯。要收:
-  撞名判定搬進 transform(make 回傳 reject 訊號 → setLocalError),eager 檢查降級純 UX。
-- [ ] **Dialog 佇列 onDone 在 unmount 後仍執行(review W-8,已拍板採「不漏清」語意)**:
-  promise chain 不受掛載狀態約束,PUT 在途時整頁換 tab 卸載後 `onGroupDeleted` 照跑
-  (冪等 localStorage 清理,unmount 後執行正是 W-20 要的;setSelected 是 React no-op)。
-  與 CapitalConfirmDialog「unmount 零 callback」lock 語意刻意不同(真錢下單 vs 冪等清理)。
-  若要機械釘住:補一條 unmount-after-PUT 仍清 `WL_COLLAPSED_KEY` 的 lock。
-- [ ] **跨元件並發寫者(Dialog 佇列 vs 側欄拖曳)**:兩者各持獨立 mutation observer,不互相
-  序列化;關窗後佇列殘餘的 sub-second 窗內側欄拖曳仍以 render 閉包算 next,理論上可互相
-  覆寫(modal 開著時側欄不可互動,窗口極窄)。要收 = 佇列上提到 hook 層讓三個 caller 共用。
-- [ ] **佇列交錯覆蓋缺口其餘兩類(review W-5 附帶)**:刪組+改名交錯、失敗短路後
-  「新動作以未變基底重算」的更多組合,現有 lock 只釘了連刪 / 連點 / 失敗短路三條主路徑。
 ## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
 
 - [ ] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
@@ -479,8 +439,3 @@ prod 8721 = 6adf20d9、dist 已重建)。
   (corr_engine.py:108 註解自承)— corr 腿在重連掉訂下疑似同病,下次動 corr 時
   比照 futures 接對帳。
 
-## 2026-08-11(react-doctor /chore 快修批 review 留尾巴,全部既存非本批引入)
-
-- [ ] **P2:自選列組內排序無鍵盤路徑**(既存):拖拉握把是唯一排序入口(pointer
-  only;aria-hidden 化後對 AT 不可見)。管理 Dialog 只有移組/移除,無排序。
-  補鍵盤排序入口(如 Dialog 內上移/下移鈕)列排期。
