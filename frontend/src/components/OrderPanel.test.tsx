@@ -52,7 +52,7 @@ function capStatus(overrides: Partial<CapitalStatus> = {}): CapitalStatus {
 function expectMarketLocked() {
   const market = screen.getByRole("radio", { name: "市價" }) as HTMLInputElement;
   expect(market.disabled).toBe(true);
-  expect(market.closest("label")?.getAttribute("title")).toBe("此合約尚無成交估價,市價不可用");
+  expect(market.closest("label")?.getAttribute("title")).toBe("此合約尚無成交估價,市價暫不可送出");
 }
 
 function json(body: unknown, status = 200): Response {

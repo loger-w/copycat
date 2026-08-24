@@ -4,9 +4,10 @@
  *  這支 hook 是**唯一**掛 Esc / conn_lost 監聽與閒置計時的地方(自三座梯上提),
  *  而武裝是唯一繞過確認彈窗的路徑 —— 監聽掛錯層或 `active` 閘寫反,畫面上都毫無異狀。
  */
-import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import { setCapitalWsStatus } from "@/hooks/useCapital";
 import { useFlashArm } from "@/hooks/useFlashArm";
 import { ARM_IDLE_MS } from "@/lib/flash-arm";
@@ -165,6 +166,33 @@ describe("useFlashArm 的 Esc 相位(N080)", () => {
     fireEvent.keyDown(target, { key: "Escape" });
     expect(result.current.state).toEqual({ armed: false, locked: false, failStreak: 0 });
     root.remove();
+  });
+
+  // review R6 SP2:上面三條用合成 subtree 代打 stopPropagation;這條用**真**確認窗:
+  // 窗自己的 Esc 處理(onCancel 一次)一個字都沒被剝奪,同時鎖定也解除。
+  it("真 CapitalConfirmDialog 開著時按 Esc:窗 onCancel 恰一次 + 鎖定同時解除", () => {
+    const onCancel = vi.fn();
+    function Harness() {
+      const arm = useFlashArm();
+      harnessArm = arm;
+      return (
+        <CapitalConfirmDialog
+          title="確認平倉"
+          rows={[{ label: "TXFI6", value: "空 2 口" }]}
+          onConfirm={() => {}}
+          onCancel={onCancel}
+        />
+      );
+    }
+    let harnessArm: ReturnType<typeof useFlashArm> | null = null;
+    render(<Harness />);
+    act(() => harnessArm!.dispatch({ type: "lock" }));
+    expect(harnessArm!.state).toEqual({ armed: true, locked: true, failStreak: 0 });
+    const dialog = document.querySelector("dialog");
+    expect(dialog).not.toBeNull();
+    fireEvent.keyDown(dialog!, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1); // 窗照關(自己的 Esc 處理沒被剝奪)
+    expect(harnessArm!.state).toEqual({ armed: false, locked: false, failStreak: 0 });
   });
 
   it("Esc 以外的鍵不受影響(capture 監聽不是把所有鍵都吃掉)", () => {

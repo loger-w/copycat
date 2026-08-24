@@ -33,7 +33,12 @@ export function kindOf(p: CapitalPosition): PositionKind | null {
  *  - `kind` 只在 `market === "sec"` 且認得種類時附加 —— fut 硬送 "cash" 會讓每筆期貨
  *    平倉的審計多一個看起來像「現股」的誤導欄位(後端也只在 sec 分支讀它)
  *  - `qty` 一律送絕對值(空單的 `qty` 是負數) */
-export function closeBodyOf(pos: CapitalPosition, price: number): CapitalCloseBody {
+export function closeBodyOf(
+  pos: CapitalPosition,
+  price: number,
+  /** 稽核分流(N082):鎖定態的梯上平倉帶 `"flash-locked"`;未鎖 / 非梯路徑不帶(後端預設 panel,零改) */
+  source?: "flash-locked",
+): CapitalCloseBody {
   const market = pos.market as CapitalMarket;
   const kind = market === "sec" ? kindOf(pos) : null;
   return {
@@ -42,5 +47,6 @@ export function closeBodyOf(pos: CapitalPosition, price: number): CapitalCloseBo
     price,
     qty: Math.abs(pos.qty),
     ...(kind !== null ? { kind } : {}),
+    ...(source !== undefined ? { source } : {}),
   };
 }
