@@ -526,3 +526,89 @@ def test_collector_closed_round_terminator_still_consumes_debt() -> None:
     assert len(got) == 1
     c.feed(RAW_END)  # 放棄輪遲到的 ## 在 _closed 期間抵達
     assert c._owed == 0
+
+
+# ── N017:欠帳是**逐筆** deadline,不是一個被續命的共用窗 ─────────────
+
+
+def test_collector_expired_debt_does_not_ride_on_a_later_abandon() -> None:
+    """N017:`abandon()` 原本把**單一** `_stale_until` 推到 now+20 —— 等於替所有未清欠帳續命。
+
+    profit / OI 兩段的 abandon 相距可達 60s(pending watchdog 一輪一次):第 1 筆欠帳
+    早在 t+20 就該過期,卻跟著第 2 筆的窗一起活著 → 解卡後接連抵達的兩個零列 `##`
+    被吞掉兩個,而其中第二個是**合法的空回應**(帳戶真的沒部位)→ 幽靈部位多掛一輪。
+
+    逐筆 deadline 下:第 1 筆在 t=61 早已過期被作廢,只剩第 2 筆能吞一個;
+    第二個零列 `##` 照 flush 空集合。
+    """
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()  # 第 1 筆欠帳,deadline = t0 + 20
+    clock.now += 60.0  # 下一輪 watchdog(第 1 筆早已過期)
+    c.reset(keep_abandoned=True)
+    c.abandon()  # 第 2 筆欠帳,deadline = t0 + 80
+    clock.now += 1.0
+    c.reset(keep_abandoned=True)
+    c.feed(RAW_END)  # 遲到的零列 ## #1 → 消耗僅存的那一筆欠帳
+    assert got == []
+    c.feed(RAW_END)  # 合法的空回應:欠帳已清光,必須 flush
+    assert got == [[]]
+
+
+def test_collector_debt_deadlines_expire_independently() -> None:
+    """逐筆 deadline 的第二面:兩筆欠帳**分別**到期。
+    第 1 筆過期後仍在窗內的第 2 筆照樣擋得住一個零列 `##`(不是「過期一筆就全清」)。"""
+    got: list[list[object]] = []
+    clock = _FakeClock()
+    c = BalanceCollector(on_complete=got.append, clock=clock)
+    c.reset()
+    c.abandon()  # deadline = t0 + 20
+    clock.now += 15.0
+    c.reset(keep_abandoned=True)
+    c.abandon()  # deadline = t0 + 35
+    clock.now += 10.0  # t0+25:第 1 筆過期、第 2 筆仍在窗內
+    c.reset(keep_abandoned=True)
+    c.feed(RAW_END)
+    assert got == []  # 第 2 筆欠帳吞掉它
+    c.feed(RAW_END)
+    assert got == [[]]  # 沒有第三筆可吞
+
+
+# ── N018-1:吞終止符的 WARNING 要指名是哪一段 collector ─────────────
+
+
+def test_swallowed_terminator_warning_names_the_collector(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """三段(balance / profit / oi)共用同一句「忽略放棄輪遲到的終止符」——
+    prod log 分不出被抑制的是哪一段部位更新。名字由建構參數帶入。"""
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append, parse=parse_profit_line, name="oi")
+    c.reset()
+    c.abandon()
+    with caplog.at_level("WARNING"):
+        c.feed(RAW_END)
+    assert got == []
+    assert any("oi" in r.getMessage() for r in caplog.records)
+
+
+# ── N018-2:重連落地用專用 clear(),不走 reset() ────────────────────
+
+
+def test_clear_does_not_mark_awaiting() -> None:
+    """`reset()` 的語意是「發新查詢」→ `_awaiting = True`。重連落地(`_set_status("ok")`)
+    根本沒有在途查詢,拿 reset 當清點會讓 collector 進入「等回應中」——
+    下一次 watchdog 的 `abandon()` 於是記帳成功,白吞一輪合法的空回應。"""
+    got: list[list[object]] = []
+    c = BalanceCollector(on_complete=got.append)
+    c.reset()
+    c.abandon()
+    c.clear()
+    assert c._stale_until is None and c._owed == 0
+    c.abandon()  # 沒在等回應 → no-op
+    assert c._stale_until is None and c._owed == 0
+    c.reset()
+    c.feed(RAW_END)
+    assert got == [[]]  # 合法的空回應沒被吞

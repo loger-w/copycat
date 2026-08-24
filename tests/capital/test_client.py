@@ -12,6 +12,7 @@ import asyncio
 import json
 import queue
 import time
+from datetime import date, datetime
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ from copycat.capital.reply import parse_onnewdata
 from copycat.capital.safety import SafetyConfig
 from copycat.server.audit import AuditWriteError
 from copycat.stkfut_map import write_map
+from copycat.trading_calendar import TradingCalendar, load_trading_calendar  # noqa: F401
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 
@@ -1893,3 +1895,113 @@ def test_two_dead_queries_then_two_late_end_markers_keep_positions(tmp_path: Pat
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("2493", 1)]
+
+
+def test_no_futures_account_clears_oi_abandon_debt(tmp_path: Path) -> None:
+    """N018-3:`_query_open_interest` 在無期貨帳號時提前 return,卻沒清 `_oi_abandoned`
+    與 OI collector 的欠帳。那條路徑**永遠不會再發 OI 查詢** → 旗標與欠帳只是殘留;
+    一旦日後 GetUserAccount 補到期貨帳號,第一次 `reset(keep_abandoned=True)` 會把這個
+    跨了不知多久的舊窗帶進新一輪,白吞一次合法的零列 OI 回應(期貨部位多掛一輪幽靈)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    client._oi.reset()
+    client._oi.abandon()
+    client._oi_abandoned = True
+    client._pending_sec = []  # _finalize_positions 的前置(pending 已備妥)
+
+    client._query_open_interest()
+
+    assert client._oi_abandoned is False
+    assert (client._oi._stale_until, client._oi._owed) == (None, 0)
+
+
+def test_set_status_ok_does_not_leave_collectors_awaiting(tmp_path: Path) -> None:
+    """N018-2:重連落地的清點走 `reset()` = 把三個 collector 標成「已發查詢、等回應中」,
+    但那一刻根本沒有在途查詢 —— 下一次 pending watchdog 的 `abandon()` 於是記帳成功,
+    白吞一輪合法的空回應。清點必須走專用 `clear()`(`_awaiting = False`)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._status = "degraded"
+
+    client._set_status("ok")
+
+    for collector in (client._balance, client._profit, client._oi):
+        collector.abandon()  # 沒發過查詢 → 必須是 no-op
+        assert (collector._stale_until, collector._owed) == (None, 0)
+
+
+# ---------------------------------------------------------------------------
+# N075:`_trade_ymd` —— 送單時刻所屬的交易日(價格別標籤的第二個比對候選)
+# ---------------------------------------------------------------------------
+
+
+class TestTradeYmd:
+    """三個時段分支。日曆注入,不吃版控真檔(假日表更新不該讓這幾條轉紅)。"""
+
+    CAL = TradingCalendar(
+        holidays=frozenset({date(2026, 8, 21)}),  # 週五假日 → 夜盤跨到下週一
+        extra_trading_days=frozenset(),
+        years_loaded=frozenset({2026}),
+    )
+
+    def _at(self, monkeypatch: pytest.MonkeyPatch, when: datetime) -> str:
+        monkeypatch.setattr(client_mod, "_calendar", lambda: self.CAL)
+        return client_mod._trade_ymd(when)
+
+    def test_day_session_is_today(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 週一 10:30 日盤 → 交易日就是今天
+        assert self._at(monkeypatch, datetime(2026, 8, 24, 10, 30)) == "20260824"
+
+    def test_night_session_after_1500_rolls_to_next_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週一 23:50 的夜盤單屬於「週二」那個交易日 —— 本機日曆日(0824)不是它的交易日
+        assert self._at(monkeypatch, datetime(2026, 8, 24, 23, 50)) == "20260825"
+
+    def test_night_session_before_0500_is_that_days_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週二 01:30(前一晚開的夜盤延續)→ 仍是週二那個交易日,本機日已相符
+        assert self._at(monkeypatch, datetime(2026, 8, 25, 1, 30)) == "20260825"
+
+    def test_night_session_skips_holiday_and_weekend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週四 20:00,週五(0821)休市 → 夜盤屬於下週一(0824)
+        assert self._at(monkeypatch, datetime(2026, 8, 20, 20, 0)) == "20260824"
+
+    def test_saturday_small_hours_walks_forward_to_monday(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週六 01:00 = 週五夜盤的延續 → 下週一
+        assert self._at(monkeypatch, datetime(2026, 8, 22, 1, 0)) == "20260824"
+
+    def test_broken_calendar_degrades_to_weekend_only(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """標籤路徑不得炸掉 COM 執行緒的送單結果處理:日曆載入失敗 → 只擋週末 + WARNING。"""
+
+        def _boom(*_a: object, **_k: object) -> TradingCalendar:
+            raise ValueError("壞掉的日曆")
+
+        monkeypatch.setattr(client_mod, "_CALENDAR", None)
+        monkeypatch.setattr(client_mod, "load_trading_calendar", _boom)
+        with caplog.at_level("WARNING"):
+            assert client_mod._trade_ymd(datetime(2026, 8, 24, 10, 30)) == "20260824"
+        assert any("日曆" in r.getMessage() for r in caplog.records)
+
+
+async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """送單成功時兩個候選日都要記進 store(夜盤標籤在回報日是哪一種語意下都帶得出)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    monkeypatch.setattr(client_mod, "_today_ymd", lambda: "20260824")
+    monkeypatch.setattr(client_mod, "_trade_ymd", lambda when=None: "20260825")
+    result = await client.submit_stock_order(
+        StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market")
+    )
+    assert result.seq_no is not None
+    assert client.store._price_types[result.seq_no][1] == ("20260824", "20260825")
