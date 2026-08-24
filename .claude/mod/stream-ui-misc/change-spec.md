@@ -24,6 +24,11 @@ User 附註:**N008 顯示載入中時 UI 不得跑版,排版要固定**;**N013 �
 - **不跑版**:同一顆 button、class 逐字不變、`disabled`/`aria-pressed` 不變,兩個 label
   同為 3 個全形字 → box 尺寸不變。測試鎖「兩態 className 相同」。
 - 只在現貨 / 期貨(有 VP)態成立;`tapeOmitted` 在 index / futures / group adapter 恆 false。
+- **補申報(2026-08-24 two-axis 收修)**:同一顆鈕的 `hint`(tooltip)在 `tapeOmitted`
+  態一併改成「**明細補抓中,量分佈稍後出現**」,優先於既有的 `vpTruncated` 那句
+  (`StockIntradayChart.tsx` 的 vp toggle)。理由 = label 只剩「載入中」三個字,不講
+  「載入什麼、為什麼」;兩句同時可成立時先講**暫時態**(補抓完就消失),截斷那句是
+  常態說明,晚一步講不會漏。此項原 spec 漏申報,**行為上已隨 N008 出貨**,此處補登記。
 
 ### N120 — TickTape key 穩定序號(🔴 內部資料形狀)
 `TickRow` 新增 `n`(單調序號),兩入口一致產生:
