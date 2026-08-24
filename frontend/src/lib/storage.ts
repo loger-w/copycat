@@ -34,11 +34,17 @@
  *  先回來看這段,別直接把規則寫進 `doctor.config.json`。
  */
 
-// 三個旗標各自獨立:讀不到與寫不進去是不同的故障(政策鎖 vs 配額滿),共用一個旗標
-// 會讓先發生的那個把另一個永久靜音。宣告與賦值同在本檔(formatter prefer-const 陷阱)。
+// 四個旗標各自獨立:讀不到 / 寫不進去 / 刪不掉 / 資料壞了是四種不同的故障
+// (政策鎖 vs 配額滿 vs 殘值清不掉 vs 舊值格式壞),共用旗標會讓先發生的那個把其餘的
+// 永久靜音。宣告與賦值同在本檔(formatter prefer-const 陷阱)。
 let warnedRead = false;
 let warnedWrite = false;
-let warnedParse = false;
+let warnedRemove = false;
+
+/** 壞 JSON 的旗標是 **per-key**(review ST1):共用一個的話,第一把壞掉的鍵會讓其餘
+ *  四個 JSON 呼叫點(圖表疊線 / 漲跌停篩選 / 自選折疊 / 江波圖腿位)永遠不出聲 ——
+ *  而它們是各自獨立的資料,壞了要各自看得到。 */
+const warnedParseKeys = new Set<string>();
 
 function warnRead(err: unknown): void {
   if (warnedRead) return;
@@ -50,6 +56,14 @@ function warnWrite(err: unknown): void {
   if (warnedWrite) return;
   warnedWrite = true;
   console.warn("storage: localStorage 寫入失敗(配額滿 / 政策鎖?),本次偏好設定不落檔", err);
+}
+
+/** 刪除失敗與寫入失敗刻意分開(review ST3):兩者的後果不同 —— 寫失敗是「這次不記住」,
+ *  刪失敗是「殘值留著、下次啟動再清」,套同一句話是錯敘述。 */
+function warnRemove(err: unknown): void {
+  if (warnedRemove) return;
+  warnedRemove = true;
+  console.warn("storage: localStorage 刪除失敗(政策鎖?),殘值留著,下次啟動再清", err);
 }
 
 /** 讀。契約與 `getItem` 逐字相同(沒設過 = `null`),多的只是**讀不到也回 `null`**。 */
@@ -79,7 +93,7 @@ export function removeLocal(key: string): boolean {
     window.localStorage.removeItem(key);
     return true;
   } catch (err) {
-    warnWrite(err);
+    warnRemove(err);
     return false;
   }
 }
@@ -87,18 +101,23 @@ export function removeLocal(key: string): boolean {
 /** 讀 + `JSON.parse`。
  *
  *  **未設 / 空字串 / 壞 JSON / 存取即拋,一律回 `null`** —— 呼叫端因此只有一條退預設
- *  的路徑。壞 JSON 單獨算一種故障(那是資料壞了不是 storage 壞了),故獨立的警告旗標。
+ *  的路徑。壞 JSON 單獨算一種故障(那是資料壞了不是 storage 壞了),故獨立的 per-key 旗標。
+ *
+ *  **空字串走「無資料」而不是丟給 `JSON.parse`**(review ST1):舊碼一律是
+ *  `if (!raw) return DEFAULT` —— 沒存過與存了空字串都是**正常路徑**,靜默退預設。
+ *  丟給 `JSON.parse("")` 會拋,於是被算成「資料壞了」而印一則不成立的警告,
+ *  還吃掉那把鍵唯一一次的警告額度。
  *
  *  回 `unknown` 而不是泛型:存進去的是使用者瀏覽器裡的舊資料,`as T` 會讓「schema 變了」
  *  這件事在型別上消失。呼叫端一律自己驗形狀(既有四個呼叫點都已經這麼做)。 */
 export function readLocalJson(key: string): unknown {
   const raw = readLocal(key);
-  if (raw === null) return null;
+  if (raw === null || raw === "") return null;
   try {
     return JSON.parse(raw) as unknown;
   } catch (err) {
-    if (!warnedParse) {
-      warnedParse = true;
+    if (!warnedParseKeys.has(key)) {
+      warnedParseKeys.add(key);
       console.warn(`storage: ${key} 的內容不是合法 JSON,改走預設值`, err);
     }
     return null;
