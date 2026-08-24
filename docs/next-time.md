@@ -111,23 +111,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 - [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
   守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
-## 2026-08-21(refactor/housekeeping-batch-2026-08-21 R10 留尾)
-
-- [ ] **全站 `localStorage` get/set 收斂到 `lib/storage.ts::readLocal` / `writeLocal`**(/mod)。
-  先例已有、但只做在單一模組:`lib/fut-chart-mode.ts::initialFutChartMode` / `persistFutChartMode`
-  兩支都包 try/catch,註解也寫明理由(「在 `useState` 初始器裡跑,拋出去就是整頁白屏」)——
-  問題是同一套 try/catch 每個呼叫端各抄一次,漏抄的那份零訊號。
-  **散落規模(2026-08-24 重 grep,不含測試)= 45 處,分佈 14 個檔(08-21 記 13 檔,新增 `StockPage.tsx`)**:
-  `App.tsx` / `RightRail.tsx`(`initialTab()`)/ `MarketPane.tsx` / `RiverPanel.tsx` /
-  `LimitListSection.tsx` / `GroupGridView.tsx` / `StockChart.tsx` / `StockPage.tsx` / `WatchlistSidebar.tsx` /
-  `useChartToggles.ts` / `useSignalSound.ts` / `fee-discount.ts` / `fut-chart-mode.ts` /
-  `stock-view.ts`(判準 `grep -rn "localStorage\.\(get\|set\)Item" frontend/src`,不寫死行號)。
-  失效面:Safari 私密視窗 / 企業政策鎖儲存時,光是**存取** localStorage 就拋 → 讀取端在 render
-  路徑上 = 白屏(全 frontend 零 ErrorBoundary);quota 滿時 `setItem` 拋 → 使用者操作中途炸掉。
-  **紅測試先行**(這是升成 /mod 而非 🔵 順手批的理由):(a) `getItem` stub 成「存取即拋」→ 元件
-  仍掛得起來且退回預設值;(b) `setItem` stub 成拋 `QuotaExceededError` → 呼叫端不炸。
-  承接 2026-08-14 mod/overview-subtabs 節的舊條(已標作廢改指本條);2026-08-06 節
-  「`MarketPane.tsx` 七個 localStorage 呼叫點裸奔」是同一批,動工時一併帶走。
 ## 2026-08-20(盤後 server log 巡檢發現)
 
 - [ ] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
