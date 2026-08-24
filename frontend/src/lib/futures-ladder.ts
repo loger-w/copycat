@@ -152,8 +152,11 @@ export function futMarketEdgeMilli(
  *  只對「當前商品的 resolved 契約」有行情可估,其餘 null = 平倉鍵鎖住。
  *
  *  `edgeOf` = 該路徑的**邊價口徑**,預設期貨 FUT_TICK。注入而不是各寫一支:同一個
- *  標的的市價鈕與平倉估價必須同值,而個股期走的是股票 tick 表(RightRail 傳
- *  `stkfutMarketEdgeMilli`)—— raw 界未對齊檔位時後端 `_require_legal_tick` 直接 400。
+ *  標的的市價鈕與平倉估價必須同值(機械閘見 `futures-ladder.test.ts` 的「邊價等值 lock」),
+ *  而個股期走的是股票 tick 表(RightRail 傳 `stkfutMarketEdgeMilli`)。
+ *  平倉路由自 N098 起對**可用現股 tick 表的個股期**(標準 / 小型腿)也過
+ *  `_require_legal_tick` → raw 界未對齊就是 400 BAD_TICK;指數期權與 ETF / 除權息調整腿
+ *  在後端是放行分支,那些路徑的檔位正確性仍**只**由這裡的 `edgeOf` 負責。
  *  回傳前**自己再守一次 ≤ 0**:注入者是呼叫端寫的,不能假設它守門。 */
 export function futCloseEstimate(
   pos: FutClosePos,
