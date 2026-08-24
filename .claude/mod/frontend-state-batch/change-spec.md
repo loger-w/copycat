@@ -24,7 +24,7 @@ N067 / N068 / N083 / N097 / N115 / N117 / N114 / N116 / N118 / N266)。user 對 
 | W2 | 自選寫入的**零 PUT 早退**(深度比對):內容相同的 PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB) | 判定搬進 hook,`isSameWatchlist` 邏輯逐字不變;既有 dedup 測試(連點兩次刪除)不改 |
 | W3 | 佇列既有四條契約:序列化 / 逐發 `onDone` 不被吞 / 失敗世代短路 / chain 尾恆 fulfilled | 既有「連續操作」四案不改,全綠 |
 | W4 | 「自選未載入成功 → 不以空殼為基底 PUT」(側欄 `wlReady` gate + StockPage `canAdd` gate) | gate 保留,佇列再加一道 `base === null → 早退` |
-| W5 | `CapitalConfirmDialog`:unmount 零 callback、Esc/close 只發一次 onCancel、StrictMode showModal 恰一次 | 既有 16 案不改;N114 只加 dev-only 警告,不動任何 callback 次序 |
+| W5 | `CapitalConfirmDialog`:unmount 零 callback、Esc/close 只發一次 onCancel、StrictMode showModal 恰一次 | 既有 16 案不改;N114 只加 dev-only 警告,callback 次序逐字沿用舊版(按鈕路徑直呼在前、旗標在後;Esc/close 路徑旗標在前、直呼在後 —— review ST3/SP4 收修後才真的成立) |
 | W6 | 折數:非法值只更新 raw、計算沿用上一個合法值、localStorage 字面 key、多讀者同 tick 同數字 | 既有 6 案不改;raw 的本地 state 語意保留(只多一條「外部改動才覆寫」) |
 | W7 | 個股期 / 期貨梯的送單 payload、武裝解除鍵、活單徽章、平倉對象比對 | 不碰;N083 只把 throw 換成既有的 `contract = null` 安全態 |
 | W8 | 訊號規則 params 鍵集必須與後端 `PARAM_SPECS` **完全相同**(多鍵 / 缺鍵 = INVALID_RULE) | 鍵集零改;只加 `min`/`max` 兩個顯示 / 檢查用欄位 |

@@ -92,7 +92,7 @@ class TestConstants:
         而畫面上的說明還寫著錯的界。
 
         共用 fixture 是唯一真相:本條與前端
-        `frontend/src/components/stock/signal-param-parity.test.ts` 各自對它斷言,
+        `frontend/src/lib/signal-param-parity.test.ts` 各自對它斷言,
         改壞任一邊只有那一邊紅。上面的 `test_param_specs_literal` 仍留著 —— 它鎖的是
         「後端這份表的字面值」,fixture 被改壞時兩條一起紅才看得出是誰動了誰。
         """

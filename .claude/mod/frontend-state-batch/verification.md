@@ -118,3 +118,20 @@ replay/golden 面不受影響。
 - **側欄下方空白區拖曳**(N097):容差為一列高,貼著最後一列下緣放開仍會 append —— 手感要真滑鼠試。
 - **dev console**(N114):跑 `npm run dev` 開任一確認窗按確認 / 取消,console 應**零** `CapitalConfirmDialog` 警告
   (四個 caller 都守約);若有,代表某條路徑沒卸載,那正是這條要抓的東西。
+
+## 7. two-axis review round 1 收修(主 session)
+
+| 項 | 處置 |
+|---|---|
+| SP1 N115 | 撞名早退拿掉(只留保留名 / 空白前置),撞名一律 transform 回 null → BAD_GROUP;既有 N115 案未改仍全綠 |
+| ST3/SP4 | `requestCancel` 旗標回到 `onCancel()` 之前(重入保護),`markSettled` 拆為各路徑自設旗標 + `armContractCheck` |
+| ST1/ST2/SP3 | CLAUDE.md §4 登錄「訊號規則參數值域前後端同表」;fixture `_note` / pytest docstring / 前端測試檔頭三處路徑改指 `lib/signal-params.ts` / `lib/signal-param-parity.test.ts` |
+| ST5 / ST6 / ST7 | 🔵:`useFeeDiscountField` 直呼 `useFeeDiscount()`;RiverOverlay memo 回傳 `xOf` 供十字線共用;刪 `errorMessage` 別名 |
+| ST4 | 反駁:N266 與 N115/N117/N118 同檔同 hunk,不拆 commit(偏離記錄) |
+
+**收修後 gate**:`npx tsc -b` PASS / `npx vitest run` **142 files / 2710 tests** / `npx eslint src` PASS / react-doctor No issues / `pytest tests/test_signal_rules.py` 122 passed / ruff PASS。
+
+### 申報(review 補的、要 user 知道)
+- **SP2 N068 反向代價**:`useCapitalStream`(provider)現在**無條件**每 15 s 打 `/api/capital/positions`,停在 TXO / 廣度頁也照打;舊行為是零 observer 零請求(但 prod header 恆掛部位讀者,實務上舊版也幾乎恆輪詢)。要不要加「有讀者才輪詢」由 user 拍板。
+- **SP5**:`useWatchlistCommit` reject 發 `BAD_GROUP` 後,同批後續動作成功會 `onError(null)` 洗掉文案 —— 與 §5 第 3 條(輸入框清空)同題,pending-aware 回饋另開題。
+- **SP6**:`instances 0→1` 整份重置是測試隔離加的 prod 語意;三 writer 全卸載且 PUT 在途時新佇列 base 回退(`setQueryData` 兜底,風險低)。
