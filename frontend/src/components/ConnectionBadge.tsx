@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { WsStatus } from "@/hooks/useTxoSnapshot";
+import type { WsStatus } from "@/types";
 
 /** 後端交接(回補)進度;產生點 `EngineRuntime._handover`(copycat/server/engine.py)。
  *

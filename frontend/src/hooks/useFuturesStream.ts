@@ -8,9 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type { FuturesProductState, FuturesState } from "@/types";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { FuturesProductState, FuturesState, WsStatus } from "@/types";
 
 export interface FuturesWsMsg {
   type: string; // "futures"

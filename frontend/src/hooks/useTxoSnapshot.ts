@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type { Snapshot } from "@/types";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { Snapshot, WsStatus } from "@/types";
 
 /** WS push 流(不套 TanStack Query:TQ 是 request/response 模型,design §5)。 */
 export function useTxoSnapshot(): { data: Snapshot | null; wsStatus: WsStatus } {

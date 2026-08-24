@@ -2,14 +2,13 @@ import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { FuturesChart } from "@/components/futures/FuturesChart";
 import { DepthBar } from "@/components/quote/DepthBar";
 import { RadioPills } from "@/components/ui/RadioPills";
-import type { WsStatus } from "@/hooks/useFuturesStream";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import type { FuturesBarsKey } from "@/hooks/useFuturesBars";
 import { fmt, fmtPct, formatPts } from "@/lib/format";
 import { settlementCountdown } from "@/lib/settlement";
 import { inTwseSessionNow } from "@/lib/spot-session";
 import { cn } from "@/lib/utils";
-import type { FuturesProductState } from "@/types";
+import type { FuturesProductState, WsStatus } from "@/types";
 
 /** 期貨頁中間主區(SC-1/5/6):商品切換 → 報價列(含期現價差 / 結算倒數)→
  *  水平五檔 → 近全時段主圖。
