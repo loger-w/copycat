@@ -33,6 +33,18 @@ describe("useChartToggles", () => {
     expect(hook.result.current.toggles).toEqual(DEFAULTS);
   });
 
+  // useCallback lock(2026-08-24 N032):必須用同一 instance 的 rerender() —— 開第二個
+  // renderHook 是不同 instance 各自的 useCallback cell,永遠紅的假 lock。
+  it("set 在 rerender 後身分穩定(useCallback)", () => {
+    const hook = renderHook(() => useChartToggles());
+    const first = hook.result.current.set;
+    hook.rerender();
+    expect(hook.result.current.set).toBe(first);
+    act(() => hook.result.current.set("cdp", false));
+    hook.rerender();
+    expect(hook.result.current.set).toBe(first);
+  });
+
   it("set 更新並持久化 localStorage", () => {
     const hook = renderHook(() => useChartToggles());
     act(() => hook.result.current.set("cdp", false));
