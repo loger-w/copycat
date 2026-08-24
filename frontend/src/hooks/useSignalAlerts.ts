@@ -137,7 +137,15 @@ export function useSignalAlerts() {
    *  `setTimeout`(單調時鐘)—— 兩把尺(review C4)。NTP 回跳時「TTL 剩餘」會被高估
    *  幾秒,後果僅止於該組多併一則進去(舊那張仍照原時間消失,合併分支不重排 timer)。
    *  取捨與 `lastNotifyRef` 同一套:改用 `performance.now()` 得把 fake timer 之外
-   *  再假造一支時鐘,測試成本不成比例。 */
+   *  再假造一支時鐘,測試成本不成比例。
+   *
+   *  ⚠ **與 rail 的 `groupSignals` 刻意不等價**(N013,2026-08-24 user 拍板不改):
+   *  這裡是一張以 `code|time` 為鍵的**全索引**(只要那張 toast 還在、TTL 還夠久,
+   *  同鍵的訊號無論中間隔了幾則別檔的都併得進去);`signal-model.ts::groupSignals`
+   *  只併**相鄰**的同 (code, time)(輸入是依 time 降冪的清單,同秒兩檔交錯時跨列搜尋
+   *  會把中間那檔的列吃掉)。兩者的載體不同 —— toast 是「同時間浮在畫面上的幾張卡」,
+   *  沒有「中間那一列」的概念,rail 是一條有序清單。硬要對齊只會讓其中一邊變差,
+   *  可觀察的差異只有「同一秒兩檔交錯時 toast 併得起來、rail 分兩列」,不是錯誤。 */
   const groupIndexRef = useRef(
     new Map<string, { key: string; items: SignalMsg[]; expiresAt: number }>(),
   );
