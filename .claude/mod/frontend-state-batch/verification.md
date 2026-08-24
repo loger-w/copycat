@@ -135,3 +135,13 @@ replay/golden 面不受影響。
 - **SP2 N068 反向代價**:`useCapitalStream`(provider)現在**無條件**每 15 s 打 `/api/capital/positions`,停在 TXO / 廣度頁也照打;舊行為是零 observer 零請求(但 prod header 恆掛部位讀者,實務上舊版也幾乎恆輪詢)。要不要加「有讀者才輪詢」由 user 拍板。
 - **SP5**:`useWatchlistCommit` reject 發 `BAD_GROUP` 後,同批後續動作成功會 `onError(null)` 洗掉文案 —— 與 §5 第 3 條(輸入框清空)同題,pending-aware 回饋另開題。
 - **SP6**:`instances 0→1` 整份重置是測試隔離加的 prod 語意;三 writer 全卸載且 PUT 在途時新佇列 base 回退(`setQueryData` 兜底,風險低)。
+
+## 8. 真實環境截圖(主 session;vite 5199 → prod 8721 唯讀,headless Chrome + CDP `cdp_shots.py`)
+
+| 證據 | 內容 | 結果 |
+|---|---|---|
+| `evidence/R5_N266_manage_dialog.png` | 管理群組與股票窗:每列列首 ▲/▼ 上下堆疊(首列 ▲ 反灰、末列只剩 ▲);DOM 按鈕清單含「上移 6415 / 下移 6415 / 從自選移除 6415 …」 | PASS |
+| `evidence/R5_N055_rules_dialog.png` | 訊號規則窗列表四條規則照舊 | PASS(未改功能抽查) |
+| `evidence/R5_N055_rule_edit_form.png` | 編輯 CDP 穿越:input 值域 `重新武裝 tick 數 0..50 step=1`、`線外駐留秒數 0..3600 step=1`、`冷卻秒數 60..86400 step=1`(DOM 直讀) | PASS |
+
+未改功能抽查 2:側欄自選列 / 訊號 rail 在同截圖內照常渲染;prod 資料(部位 / 家數)未受影響(唯讀)。
