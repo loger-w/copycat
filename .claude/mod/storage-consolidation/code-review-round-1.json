@@ -1,0 +1,59 @@
+{
+ "fixed_point": "master (7ad28906)",
+ "reviewed_head": "f5ce18f9",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P2(判斷)",
+   "summary": "warnedParse 跨 key 單一旗標;空字串 JSON.parse 拋被算成壞資料吃掉唯一警告",
+   "location": "lib/storage.ts:88-96",
+   "disposition": "accepted → 空字串走無資料早退不警告;壞 JSON 旗標 per-key;三條紅測試"
+  },
+  {
+   "id": "ST2",
+   "severity": "P3(判斷)",
+   "summary": "🔵 d8c3924e 夾兩處可觀察面極小的行為改動(靜默→warn;purgeOrphanKeys 逐鍵)",
+   "location": "constants.ts:42-49",
+   "disposition": "申報 → verification §8.4 偏離記錄;判準「commit 產生任何新可觀察輸出(含 console)就不算 🔵」"
+  },
+  {
+   "id": "ST3",
+   "severity": "P3(硬)",
+   "summary": "removeLocal 失敗用 warnWrite 文案且共用旗標",
+   "location": "lib/storage.ts:79-87",
+   "disposition": "accepted → warnRemove 獨立文案 / 旗標(3→4)"
+  },
+  {
+   "id": "ST4",
+   "severity": "P3(判斷)",
+   "summary": "loadFilter 縮排混排;@/lib/storage import 破字母序",
+   "location": "LimitListSection.tsx:167-189 等",
+   "disposition": "accepted → 🔵 9245c21d(StockPage 既有 stock-view 位置 master 即如此,不動)"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "App.test (a)(b) 無 mutation 證據",
+   "location": "App.test.tsx:170-196",
+   "disposition": "accepted → 裸讀 / 裸寫 mutation 各 RED,殘留 0"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "中",
+   "summary": "存取即拋的鎖只 stub Storage.prototype.getItem;真 Safari 私密視窗是 window.localStorage getter 拋 SecurityError(行為已覆蓋,鎖鑑別力缺口)",
+   "location": "storage.test.ts / MarketPane.storage.test.tsx / App.test.tsx",
+   "disposition": "accepted → lib + MarketPane 各一條 defineProperty getter 拋案;mutation:把 window.localStorage 提到 try 外 → 新兩條 RED、舊六條仍綠(缺口本身)"
+  },
+  {
+   "id": "SP-nit",
+   "severity": "nit",
+   "summary": "空字串在 LimitListSection / useChartToggles 舊路靜默早退,新路多一則 dev 警告",
+   "location": "lib/storage.ts",
+   "disposition": "accepted(同 ST1)"
+  }
+ ],
+ "whitelist": "兩軸皆核:22 支 key 字面值 / 序列化格式 / 預設值零改;useState lazy initializer 只讀一次;storage 事件監聽未動;既有 assertion 0 條被改;收斂 grep = 0(主 session 複驗)",
+ "disposition": "Standards 5:接受 4、申報 1。Spec 1 中 + 1 nit 全接受。收修後 tsc / vitest 147 files 2782 / eslint / doctor 存量一條(GroupGridView:72,master 既有)全綠(主 session 獨立重跑)。"
+}
