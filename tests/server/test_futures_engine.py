@@ -8,7 +8,7 @@ from typing import Callable
 import pytest
 
 from copycat.live.tc4 import HistoryTimeoutError
-from copycat.server.bars import BarsResult
+from copycat.live.stock_source import Bar, BarsStatus
 from copycat.server.futures_engine import FuturesEngine
 from tests.helpers.wait import wait_until
 
@@ -1006,7 +1006,7 @@ class TestBarsRangeProxy:
     那條字串是「TC4 掛了 vs 真沒資料」的唯一五秒判準,沒有測試等於沒人驗過它真的會印。
     """
 
-    async def _run(self, engine: FuturesEngine, caplog) -> BarsResult:
+    async def _run(self, engine: FuturesEngine, caplog) -> tuple[list[Bar], BarsStatus]:
         with caplog.at_level(logging.WARNING):
             return await engine.bars_range("TXF", "D", "2026-07-01", "2026-07-30")
 
@@ -1076,8 +1076,9 @@ class TestBarsRangeProxy:
             got = await self._run(engine, caplog)
         finally:
             await engine.close()
-        assert got.status == "ok"
-        assert len(got.bars) == 1
+        bars, status = got
+        assert status == "ok"
+        assert len(bars) == 1
 
 
 class TestBarsRangeSession:

@@ -30,7 +30,7 @@ async function fetchCalendar(): Promise<CalendarState> {
   return (await res.json()) as CalendarState;
 }
 
-/** 共用 query options(D1):第二個讀者(`CalendarHolidayBadge`)要的是**同一份 cache**,
+/** 共用 query options(D1):第二個讀者(`CalendarBadges`)要的是**同一份 cache**,
  *  不是第二次取數 —— 各自寫一份 options 會在 queryKey 相同但 staleTime 不同時,
  *  讓兩邊互相觸發背景重取。掛載點仍只有 App 那一支寫入模組級假日集合。 */
 export const calendarQueryOptions = {
