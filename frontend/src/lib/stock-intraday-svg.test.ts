@@ -26,7 +26,7 @@ import {
   X_LABEL_H,
   X_START_MIN,
   Y_AXIS_W,
-  yieldToFixed,
+  yieldToObstacles,
   type OverlayLevel,
   type OverlayLine,
 } from "@/lib/stock-intraday-svg";
@@ -1415,37 +1415,37 @@ describe("spansOverlap(走廊避讓的水平判準)", () => {
   });
 });
 
-describe("yieldToFixed(可動標籤讓開不可動鄰居;N007 / N044 同一套機制)", () => {
+describe("yieldToObstacles(可動標籤讓開不可動鄰居;N007 / N044 同一套機制)", () => {
   const BOUNDS = { top: 4, bottom: 246 };
 
   it("無鄰居 / 距離已夠 → 逐值不動(不無故位移)", () => {
-    expect(yieldToFixed(100, [], EDGE_LABEL_H, BOUNDS)).toBe(100);
-    expect(yieldToFixed(100, [110], EDGE_LABEL_H, BOUNDS)).toBe(100); // 恰 10,不算相撞
-    expect(yieldToFixed(100, [200], EDGE_LABEL_H, BOUNDS)).toBe(100);
+    expect(yieldToObstacles(100, [], EDGE_LABEL_H, BOUNDS)).toBe(100);
+    expect(yieldToObstacles(100, [110], EDGE_LABEL_H, BOUNDS)).toBe(100); // 恰 10,不算相撞
+    expect(yieldToObstacles(100, [200], EDGE_LABEL_H, BOUNDS)).toBe(100);
   });
 
   it("在鄰居上方 → 往上推到剛好 gap;在下方 → 往下推", () => {
-    expect(yieldToFixed(97, [100], EDGE_LABEL_H, BOUNDS)).toBe(90);
-    expect(yieldToFixed(103, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
+    expect(yieldToObstacles(97, [100], EDGE_LABEL_H, BOUNDS)).toBe(90);
+    expect(yieldToObstacles(103, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
   });
 
   it("恰好同 y(最壞情形)→ 往下讓(方向固定才決定性)", () => {
-    expect(yieldToFixed(100, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
+    expect(yieldToObstacles(100, [100], EDGE_LABEL_H, BOUNDS)).toBe(110);
   });
 
   it("讓開第一個後撞上第二個 → 繼續讓到不再相撞", () => {
-    expect(yieldToFixed(100, [100, 108], EDGE_LABEL_H, BOUNDS)).toBe(118);
+    expect(yieldToObstacles(100, [100, 108], EDGE_LABEL_H, BOUNDS)).toBe(118);
   });
 
   it("讓位後才 clamp 進界;沒讓位的一律不 clamp(界外輸入原樣帶出)", () => {
     // 讓位:往下推到 250 超界 → clamp 回 246
-    expect(yieldToFixed(244, [242], EDGE_LABEL_H, { top: 4, bottom: 246 })).toBe(246);
+    expect(yieldToObstacles(244, [242], EDGE_LABEL_H, { top: 4, bottom: 246 })).toBe(246);
     // 未讓位:界外輸入不動(hline label 的 y 由線位決定,不該被這道機制無故拉回)
-    expect(yieldToFixed(300, [], EDGE_LABEL_H, BOUNDS)).toBe(300);
+    expect(yieldToObstacles(300, [], EDGE_LABEL_H, BOUNDS)).toBe(300);
   });
 
   it("界退化(top > bottom)→ 不動(同 bandLabels 的紀律:寧可疊也不亂放)", () => {
-    expect(yieldToFixed(100, [100], EDGE_LABEL_H, { top: 9, bottom: 6 })).toBe(100);
+    expect(yieldToObstacles(100, [100], EDGE_LABEL_H, { top: 9, bottom: 6 })).toBe(100);
   });
 });
 

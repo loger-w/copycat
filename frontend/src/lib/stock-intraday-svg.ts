@@ -560,8 +560,9 @@ export function spansOverlap(a: readonly [number, number], b: readonly [number, 
 
 /** **可動標籤讓開不可動鄰居**的唯一機制(N007 極值文字 / N044 hline label 共用)。
  *
- *  `fixed` = 已經佔住那條 y 的**不可動**圖元中心(目前唯一的來源是 VWAP 就地標籤 ——
- *  它的 y = 「線末點在哪」是資訊)。單位一律是視覺中心,呼叫端負責把 baseline 正規化。
+ *  `obstacles` = 已經佔住那條 y 的**不可動**圖元中心(VWAP 就地標籤 —— 它的 y =
+ *  「線末點在哪」是資訊;極值標記圓;hline label)。單位一律是視覺中心,baseline 語意的
+ *  呼叫端走 `yieldToObstaclesBaseline` 正規化,不要就地各扣各的。
  *
  *  規則:與任一 fixed 的中心距 < `gap` 時推到剛好 gap;讓開一個之後可能撞上下一個,
  *  所以掃到不再相撞(上限 = 鄰居數)。
@@ -576,23 +577,61 @@ export function spansOverlap(a: readonly [number, number], b: readonly [number, 
  *  **沒讓位就完全不動**(不無故 clamp):hline label 的 y 由線位決定,可以合法地落在
  *  `bounds` 之外(那時線體本來就不畫),把它無條件拉回界內等於憑空改位置。
  *  界退化(top > bottom)一樣不動 —— 同 `bandLabels` 的紀律:寧可疊也不亂放。 */
-export function yieldToFixed(
+export function yieldToObstacles(
   y: number,
-  fixed: readonly number[],
+  obstacles: readonly number[],
   gap: number,
   bounds: { top: number; bottom: number },
   opts: { prefer?: "up" | "down" } = {},
 ): number {
-  if (fixed.length === 0 || bounds.top > bounds.bottom) return y;
+  if (obstacles.length === 0 || bounds.top > bounds.bottom) return y;
   let out = y;
-  for (let pass = 0; pass < fixed.length; pass += 1) {
-    const hit = fixed.find((o) => Math.abs(out - o) < gap);
+  for (let pass = 0; pass < obstacles.length; pass += 1) {
+    const hit = obstacles.find((o) => Math.abs(out - o) < gap);
     if (hit === undefined) break;
     const down = opts.prefer === undefined ? out >= hit : opts.prefer === "down";
     out = down ? hit + gap : hit - gap;
   }
   if (out === y) return y;
   return Math.min(Math.max(out, bounds.top), bounds.bottom);
+}
+
+/** SVG `<text>` 無 `dy` 時 y 是 baseline;視覺中心 ≈ baseline − 0.35em(9px 字 ≈ 3px)。
+ *
+ *  避讓幾何一律以**中心**為單位(`EDGE_LABEL_H` 是中心距),baseline 語意的圖元進
+ *  obstacle 集前要先扣掉這一段(review B-1)—— 不扣的話向上讓位那側的實際字框間距
+ *  只剩半 px,兩層 halo 直接相疊,而數字上「距離夠」。 */
+export const BASELINE_TO_CENTER = 3;
+
+/** baseline → 視覺中心。**進 obstacle 集的唯一入口**:三處各寫一次 `− 3` 的話,
+ *  漏掉一處的樣態是那個圖元的避讓帶整個偏 3px(仍會讓位,只是讓錯位置)。 */
+export function labelCenter(baselineY: number): number {
+  return baselineY - BASELINE_TO_CENTER;
+}
+
+/** `yieldToObstacles` 的 **baseline 版**(極值文字 / hline label 兩條路徑共用)。
+ *
+ *  進出都是 baseline,`bounds` 也是 baseline 語意(與 `markLabelY` 的 limits 同一種
+ *  單位),中間換成中心單位跑避讓幾何時**界一起換**。
+ *
+ *  這道換算原本散在呼叫端(`base − 3` 餵進去、回來 `+ 3`,界卻照原樣傳),於是同一條
+ *  路徑上界被讀成兩種單位,有效上界悄悄多 3px —— 症狀是「讓了位卻還疊著」
+ *  (2026-08-24 review 實測讓位後與 VWAP 只剩 8.07px,兩種讀法各自都合理、零錯誤訊號)。 */
+export function yieldToObstaclesBaseline(
+  baselineY: number,
+  obstacles: readonly number[],
+  gap: number,
+  bounds: { top: number; bottom: number },
+  opts: { prefer?: "up" | "down" } = {},
+): number {
+  const center = yieldToObstacles(
+    labelCenter(baselineY),
+    obstacles,
+    gap,
+    { top: labelCenter(bounds.top), bottom: labelCenter(bounds.bottom) },
+    opts,
+  );
+  return center + BASELINE_TO_CENTER;
 }
 
 /** VWAP 就地標籤的寬度**下限**(= 既有硬編值)。
@@ -614,6 +653,32 @@ export function vwapLabelBox(
 ): { x: number; width: number } {
   const wLabel = Math.max(VWAP_LABEL_W, labelWidth(text));
   return { x: Math.min(endX + 4, width - R_AXIS_W - wLabel), width: wLabel };
+}
+
+export interface VwapLabel {
+  x: number;
+  /** 走勢線末點的 y(= 資訊本身)。這是圖上唯一不可動的文字,別的標籤讓它。 */
+  y: number;
+  text: string;
+  /** 水平佔位 `[左, 右]`;避讓的水平判準(`spansOverlap`)吃這一份。 */
+  span: [number, number];
+}
+
+/** VWAP 就地標籤的文字 / 位置 / x 區間(N006/N045)。
+ *
+ *  **一處算完四處共用**(渲染 / 極值避讓 / hline 避讓 / MA obstacle 判定):文字口徑決定
+ *  字長、字長決定寬度、寬度決定 x 與 x 區間 —— 這條鏈任一環各算一次就會出現「判定說
+ *  不撞、畫出來撞」。`milli` 為 null(toggle 關 / 後端 VWAP 不可得)或線空 → 不畫。 */
+export function buildVwapLabel(
+  end: { x: number; y: number } | null,
+  milli: number | null,
+  w: number,
+  text: (milli: number) => string,
+): VwapLabel | null {
+  if (end === null || milli === null) return null;
+  const s = text(milli);
+  const box = vwapLabelBox(end.x, s, w);
+  return { x: box.x, y: end.y, text: s, span: [box.x, box.x + box.width] };
 }
 
 export interface EdgePriceLabel {
