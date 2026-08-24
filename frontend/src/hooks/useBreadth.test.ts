@@ -282,4 +282,35 @@ describe("useBreadth 同 tick 兩則訊息(N119)", () => {
     });
     expect(hook.result.current!.series.map((p) => p.t)).toEqual(["0901", "0903", "0905", "0907"]);
   });
+
+  // 🔴 N119 收修:`useLayoutEffect` backstop 移除後,**handler / refetch 的配對是 ref 的
+  // 唯一寫入點**。這條打的是 refetch 路徑:全量回應在 microtask 裡寫 ref(React 的 render
+  // 排在 macrotask 上,此時還沒 commit),同一批抵達的增量必須以那份全量為基底 ——
+  // 靠 commit 後的 effect 同步的話這裡讀到的是**換日清空後的空序列**,全量那幾格被靜默抹掉。
+  it("全量在途:回應寫入 ref 後、commit 前抵達的增量以全量為基底", async () => {
+    const { hook, ws } = await setup();
+    const D2 = { ...STATE, trade_date: "2026-08-07" };
+    let release!: () => void;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((res) => {
+          release = () => res(new Response(JSON.stringify(D2)));
+        }),
+    );
+    act(() => ws.emit(wsMsg({ trade_date: "2026-08-07" })));
+    expect(hook.result.current!.series).toEqual([]);
+
+    await act(async () => {
+      release();
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      ws.emit(
+        wsMsg({
+          trade_date: "2026-08-07",
+          last_minute: { t: "0905", twse: [3, 1, 1, 1, 0], tpex: [1, 1, 1, 1, 0] },
+        }),
+      );
+    });
+
+    expect(hook.result.current!.series.map((p) => p.t)).toEqual(["0901", "0903", "0905"]);
+  });
 });
