@@ -1,0 +1,19 @@
+## sidecar8899b.log(copycat.server.ws DEBUG 開啟)— stall / close_sent / traceback / WebSocket 行
+INFO:     127.0.0.1:54953 - "WebSocket /ws/futures" [accepted]
+INFO:     127.0.0.1:51837 - "WebSocket /ws/stock" [accepted]
+INFO:     127.0.0.1:49168 - "WebSocket /ws/index" [accepted]
+INFO:     127.0.0.1:51288 - "WebSocket /ws/txo-pnl" [accepted]
+INFO:     127.0.0.1:64833 - "WebSocket /ws/txo-pnl" [accepted]
+INFO:     127.0.0.1:56950 - "WebSocket /ws/txo-pnl" [accepted]
+INFO:     127.0.0.1:54517 - "WebSocket /ws/index" [accepted]
+INFO:     127.0.0.1:54443 - "WebSocket /ws/stock" [accepted]
+INFO:     127.0.0.1:53838 - "WebSocket /ws/futures" [accepted]
+[stall] 01:21:49.119157 blocking event loop 45.0s
+[stall] 01:22:34.119596 released
+2026-08-25 01:22:34,124 copycat.server.ws DEBUG relay ����:close_sent �᪺��� send(RuntimeError('Cannot call "send" once a close message has been sent.'))
+INFO:     127.0.0.1:49595 - "WebSocket /ws/index" [accepted]
+INFO:     127.0.0.1:49323 - "WebSocket /ws/futures" [accepted]
+INFO:     127.0.0.1:65051 - "WebSocket /ws/stock" [accepted]
+INFO:     127.0.0.1:62282 - "WebSocket /ws/txo-pnl" [accepted]
+## ASGI traceback 總數: 0
+## N039 debug 行數(close_sent 後的遲到 send / 對端已斷): 1

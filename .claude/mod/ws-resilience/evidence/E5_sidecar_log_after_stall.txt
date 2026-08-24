@@ -1,0 +1,37 @@
+## sidecar8899.log 自 stall(01:17:10)起的 WebSocket / stall / traceback 行
+10:INFO:     127.0.0.1:56162 - "WebSocket /ws/capital" 403
+12:INFO:     127.0.0.1:56163 - "WebSocket /ws/futures" [accepted]
+14:INFO:     127.0.0.1:56180 - "WebSocket /ws/index" [accepted]
+21:INFO:     127.0.0.1:62609 - "WebSocket /ws/txo-pnl" [accepted]
+25:INFO:     127.0.0.1:62612 - "WebSocket /ws/txo-pnl" [accepted]
+30:INFO:     127.0.0.1:50090 - "WebSocket /ws/index" [accepted]
+36:INFO:     127.0.0.1:57788 - "WebSocket /ws/breadth" 403
+38:INFO:     127.0.0.1:53099 - "WebSocket /ws/capital" 403
+40:INFO:     127.0.0.1:60464 - "WebSocket /ws/stock" [accepted]
+42:INFO:     127.0.0.1:60279 - "WebSocket /ws/futures" [accepted]
+47:INFO:     127.0.0.1:60186 - "WebSocket /ws/breadth" 403
+49:INFO:     127.0.0.1:50679 - "WebSocket /ws/capital" 403
+51:INFO:     127.0.0.1:52033 - "WebSocket /ws/breadth" 403
+53:INFO:     127.0.0.1:61974 - "WebSocket /ws/capital" 403
+55:INFO:     127.0.0.1:64298 - "WebSocket /ws/breadth" 403
+57:INFO:     127.0.0.1:56513 - "WebSocket /ws/capital" 403
+59:INFO:     127.0.0.1:53607 - "WebSocket /ws/breadth" 403
+61:INFO:     127.0.0.1:57643 - "WebSocket /ws/capital" 403
+63:INFO:     127.0.0.1:50355 - "WebSocket /ws/breadth" 403
+65:INFO:     127.0.0.1:56412 - "WebSocket /ws/capital" 403
+67:INFO:     127.0.0.1:65353 - "WebSocket /ws/breadth" 403
+69:INFO:     127.0.0.1:56850 - "WebSocket /ws/capital" 403
+71:INFO:     127.0.0.1:60724 - "WebSocket /ws/breadth" 403
+73:INFO:     127.0.0.1:49261 - "WebSocket /ws/capital" 403
+75:[stall] 01:17:10.830921 blocking event loop 45.0s
+76:[stall] 01:17:55.831242 released
+79:INFO:     127.0.0.1:51473 - "WebSocket /ws/breadth" 403
+81:INFO:     127.0.0.1:58035 - "WebSocket /ws/capital" 403
+83:INFO:     127.0.0.1:60520 - "WebSocket /ws/stock" [accepted]
+85:INFO:     127.0.0.1:65001 - "WebSocket /ws/futures" [accepted]
+88:INFO:     127.0.0.1:55091 - "WebSocket /ws/index" [accepted]
+91:INFO:     127.0.0.1:50666 - "WebSocket /ws/txo-pnl" [accepted]
+93:INFO:     127.0.0.1:58745 - "WebSocket /ws/breadth" 403
+95:INFO:     127.0.0.1:52577 - "WebSocket /ws/capital" 403
+## ASGI traceback 總數: 0
+## ws 任務收尾例外 warning 總數: 0

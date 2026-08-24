@@ -1,0 +1,15 @@
+## verify8722.log — WebSocket 行
+INFO:     127.0.0.1:56106 - "WebSocket /ws/corr" 403
+INFO:     127.0.0.1:56107 - "WebSocket /ws/river" 403
+INFO:     127.0.0.1:56108 - "WebSocket /ws/index" 403
+INFO:     127.0.0.1:56109 - "WebSocket /ws/breadth" [accepted]
+INFO:     127.0.0.1:56121 - "WebSocket /ws/capital" 403
+INFO:     127.0.0.1:56122 - "WebSocket /ws/futures" 403
+INFO:     127.0.0.1:56123 - "WebSocket /ws/stock" [accepted]
+INFO:     127.0.0.1:56137 - "WebSocket /ws/txo-pnl" [accepted]
+## ASGI traceback 行數: 0
+## sidecar8899.log — WebSocket 行
+INFO:     127.0.0.1:56162 - "WebSocket /ws/capital" 403
+INFO:     127.0.0.1:56163 - "WebSocket /ws/futures" [accepted]
+INFO:     127.0.0.1:56180 - "WebSocket /ws/index" [accepted]
+## ASGI traceback 行數: 0
