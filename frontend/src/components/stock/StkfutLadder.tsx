@@ -26,7 +26,7 @@ import {
 } from "@/hooks/useCapital";
 import { MarketOrderButtons } from "@/components/stock/MarketOrderButtons";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
-import { ARM_WS_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
+import { armGate, LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { BLOCKED_TEXT, flashSource, marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import { futExchangeContract } from "@/lib/futures-ladder";
@@ -283,9 +283,7 @@ export function StkfutLadder({
   // blocked 與 WS 非 open 都只是「不得進入鎖定」的理由,已鎖定時解鎖鈕恆可按 —— 否則
   // 鎖定態在 blocked 契約 / connecting 上就沒有 UI 出口。點價另有 priceLocked 擋。
   const lockDisabled = (blocked || arm.wsStatus !== "open") && !arm.state.locked;
-  // N081:武裝鈕跟上鎖定鈕的連線判準(同一列兩顆鈕不得對「連線未就緒」給兩個答案)。
-  // 文案優先序 = blocked > 連線:前置閘先講「這個契約根本不能下單」,那是更根本的理由。
-  const armWsBlocked = arm.wsStatus !== "open";
+  const armState = armGate(arm.wsStatus === "open", blocked ? BLOCKED_TEXT : null);
 
   return (
     <LadderView
@@ -297,8 +295,8 @@ export function StkfutLadder({
       buyLots={lots.buy}
       sellLots={lots.sell}
       armed={arm.state.armed}
-      armDisabled={blocked || armWsBlocked}
-      armTitle={blocked ? BLOCKED_TEXT : armWsBlocked ? ARM_WS_TITLE : undefined}
+      armDisabled={armState.disabled}
+      armTitle={armState.title}
       onToggleArm={() => {
         touchIdle();
         dispatchArm({ type: "toggle" });

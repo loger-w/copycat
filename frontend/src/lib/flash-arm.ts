@@ -19,6 +19,23 @@ export const LOCK_WS_TITLE = "連線未就緒,無法鎖定";
  *  以為自己按錯了哪一顆。 */
 export const ARM_WS_TITLE = "連線未就緒,無法武裝";
 
+/** 武裝鈕的 `disabled` + `title`(N081)。三座梯共用一支,不各寫一次三元式。
+ *
+ *  `blockedTitle` = 商品面的阻擋理由(個股期 `BLOCKED_TEXT` / 期貨「合約未解析」),
+ *  給了就**優先於**連線理由:那是更根本的「這張單根本送不出去」,而連線是暫時的。
+ *  三處各寫一次的話,失效樣態是其中一梯在兩個理由同時成立時印出另一句 —— 畫面照常,
+ *  使用者被指向錯的原因。
+ *
+ *  回傳的 `disabled` 交給 `ArmRow`,它以 `armDisabled && !armed` 保證**只擋進入方向**
+ *  (已武裝時解除鈕恆可按)—— 清除路徑一律寬於進入路徑,見檔頭。 */
+export function armGate(
+  wsOpen: boolean,
+  blockedTitle?: string | null,
+): { disabled: boolean; title: string | undefined } {
+  if (blockedTitle != null) return { disabled: true, title: blockedTitle };
+  return wsOpen ? { disabled: false, title: undefined } : { disabled: true, title: ARM_WS_TITLE };
+}
+
 export interface ArmState {
   armed: boolean;
   /** 鎖定中:換標的 / 換梯 / 閒置不解除。恆隨 armed 一起被清,不會有 armed=false + locked=true。 */
