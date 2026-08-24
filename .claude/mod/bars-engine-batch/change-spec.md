@@ -52,6 +52,7 @@
 | `tests/server/test_market_routes.py::TestMarketPayloadUnaffectedByBarsStatus::test_market_payload_has_no_status_field` 的 `"status" not in body["meta"]` | N104 加的正是 `meta.status`;該案的另一半守門(`meta.source` 不得變成 status 字)由同 class 的 `test_meta_source_is_never_a_status_word` 完整保留,**那條一字不動** |
 
 | `tests/server/test_calendar_wiring.py::TestCalendarRoute::test_payload_with_calendar_on_saturday` 的 `set(body) == {...}` | N090 additive 加 `extra_trading_days`;鍵集合鎖正是 additive 改動要動的那一格(其餘欄位斷言一字不動) |
+| `tests/server/test_signal_routes.py::test_basis_falls_back_to_empty_daily_bars` | N110 拿掉的正是那個「恆回空清單的替身」;該案鎖的是替身的行為(cache 落 `(日別, None)`) |
 | `tests/test_corr_config.py` 的 `test_has_six_legs` / `test_non_base_legs_are_tc4_subscriptions`(`len(others) == 5`)/ `test_repo_config_first_six_legs_match_default` / `test_seventh_leg_added_without_engine_change`(`len == 7` 改成相對長度)/ `TestRepoConfigFile` docstring 的「仍六腿」 | N021 條文明寫 DEFAULT_CONFIG 要補 NK225M;這五處全部是「預設有幾腿」的直接函數 |
 
 其餘既有測試一律不得改。

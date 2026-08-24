@@ -7,10 +7,13 @@ per-leg `{offset: 收盤毫點}`,offset = 當場盤別窗內的分鐘位移(`riv
 1. **同分鐘 last-write-wins**:一分鐘內多筆成交,圖上那一點的語意是「該分鐘收盤」。
    唯一例外是收盤補正窗(`river_models.close_clamp_rank`):`end+2` 起(13:46– / 05:01–)
    的取樣不覆寫已有值的 end 格,否則收盤後的殘留成交會蓋掉真收盤價。
+   **名次小者贏**(N015):end 格裡若已經是更遠的殘留分鐘,近的那筆仍蓋得過去。
 2. **換場清空**:盤別或 UTC 日期一變,舊場的點與新場的 x 軸無關(窗也不同)。
    `set_session` 讓「還沒有任何報價」的情形也能換窗 —— TC4 掛掉時 `push` 永不被呼叫,
    窗若只靠 push 更新,畫面會停在上一場的軸上。
 3. **回補只補空缺**:1K 回補資料延遲數十秒,覆蓋 live 值會讓當前分鐘的價格倒退。
+   **唯一例外**(N058):end 格裝的是 clamp 近似值(rank ≥ 2)時覆寫一次 —— 那一格
+   本來就是「沒有真收盤時的最佳猜測」,回補帶來的正是它等的那根 bar。
 
 `snapshot.last` 取**最大 offset** 的值(不是最後寫入的值):回補完成後,「現價」應該是
 時間軸上最後那一分鐘,而回補的寫入順序與時間序無關。`delta` 反過來只帶**最後寫入**的那
@@ -26,6 +29,11 @@ from collections.abc import Mapping, Sequence
 
 from copycat.live.river_models import close_clamp_rank, offset_of, window_bounds
 
+#: `_end_rank` 的「這一格是真值」值:live 非 clamp 取樣、或 1K 回補寫進去的 bar。
+_RANK_TRUE = 0
+#: 收盤撮合那一分鐘(`end+1`)—— 是**真成交**不是近似,回補不得覆寫它。
+_RANK_CLOSE_AUCTION = 1
+
 __all__ = ["RiverState", "SessionKey"]
 
 SessionKey = tuple[str, str]  # (ymd_utc, "day" | "night");copycat.live.session 同型
@@ -37,6 +45,12 @@ class RiverState:
         self._keys = list(leg_keys)
         self._minutes: dict[str, dict[int, int]] = {k: {} for k in self._keys}
         self._last_write: dict[str, tuple[int, int] | None] = {k: None for k in self._keys}
+        #: per-leg:**end 格**現在裝的那個值的收盤補正名次(`close_clamp_rank`)。
+        #: 只有 end 格會被 clamp(`offset_of` 把 `end+1..end+5` 全併進它),所以「per-offset
+        #: rank」在這裡就等於一個 per-leg 的數字 —— 不必為其餘 300/840 格各存一份 0。
+        #: 兩個讀者:`push` 的「名次小者贏」(N015)與 `apply_backfill` 的「近似值可覆寫
+        #: 一次」(N058)。
+        self._end_rank: dict[str, int] = {k: _RANK_TRUE for k in self._keys}
         self._session: SessionKey | None = None
 
     # ---- 寫入 ----
@@ -50,6 +64,9 @@ class RiverState:
                 minutes.clear()
             for key in self._last_write:
                 self._last_write[key] = None
+            for key in self._end_rank:
+                self._end_rank[key] = _RANK_TRUE  # 名次帳跟著點一起清,否則上一場的
+                # 名次會擋掉新場 end 格的第一筆(那筆是新場當下最好的近似)
         self._session = session
 
     def push(self, key: str, minute_end: int, price_milli: int, session: SessionKey) -> None:
@@ -69,16 +86,32 @@ class RiverState:
         # `rank is not None` 是防禦性冗餘 —— 兩者共用 `_expand` 與同一個 clamp 寬度,
         # rank 為 None 的分鐘 `offset_of` 也回 None,上面早就 return 了。留著是因為
         # 「兩函式恆同時失效」是耦合假設而非型別保證,拆尺時這裡不該變成 TypeError。
+        #
+        # **名次小者贏**(N015):守門原本只看「這格有沒有值」,tick 稀疏時先落地的
+        # 13:48(rank 4)會把之後才到的 13:46(rank 2,離真收盤近兩分鐘)永遠擋在外面。
+        # 改成比名次後,近的一律蓋掉遠的;同名次不覆寫(否則等於沒有守門)。
         rank = close_clamp_rank(minute_end, session[1])
-        if rank is not None and rank >= 2 and offset in minutes:
+        if rank is not None and rank >= 2 and offset in minutes and rank >= self._end_rank[key]:
             return
         minutes[offset] = price_milli
         self._last_write[key] = (offset, price_milli)
+        if offset == self._end_offset():
+            # `offset_of` 只把 end 格併過來,所以 rank>=1 恆落在這一格;非 clamp 的
+            # 直球寫入(rank 0,例如 13:45 那根 bar 本身)要把名次歸回「真值」。
+            self._end_rank[key] = rank or _RANK_TRUE
 
     def apply_backfill(self, key: str, rows: list[tuple[int, int]], session: SessionKey) -> int:
         """1K 回補:**只填尚無值的 offset**;session 與當前不符 → 全數丟棄回 0。
 
-        回傳實際填入筆數(供 log 與測試斷言;0 = 該腿無回補可用)。
+        **唯一例外 = end 格裝著 clamp 近似值時,覆寫一次**(N058):`end+2` 起
+        (13:46– / 05:01–)的殘留取樣在 end 格空著時是「當下最好的近似」而被寫進去,
+        但 1K 回補的那根 end bar 才是真收盤 —— 改動前 `apply_backfill` 只看「這格有沒有
+        值」,分不出裡面是近似還是真值,真收盤就此補不進來。
+        覆寫後名次歸 `_RANK_TRUE` → 第二趟回補回到「只補空缺」(「一次」的來源)。
+
+        `rank 1`(收盤撮合那一分鐘)**不覆寫**:那是真成交,不是近似。
+
+        回傳實際填入筆數(含這一次覆寫;供 log 與測試斷言,0 = 該腿無回補可用)。
         """
         if self._session is not None and session != self._session:
             return 0
@@ -86,11 +119,18 @@ class RiverState:
         minutes = self._minutes.get(key)
         if minutes is None:
             return 0
+        end_offset = self._end_offset()
         filled = 0
         for minute_end, price_milli in rows:
             offset = offset_of(minute_end, session[1])
-            if offset is None or offset in minutes:
+            if offset is None:
                 continue
+            if offset in minutes:
+                if offset != end_offset or self._end_rank[key] < 2:
+                    continue
+                self._end_rank[key] = _RANK_TRUE
+            elif offset == end_offset:
+                self._end_rank[key] = _RANK_TRUE
             minutes[offset] = price_milli
             filled += 1
         return filled
@@ -103,6 +143,15 @@ class RiverState:
     def _window(self) -> dict[str, int]:
         start, end = window_bounds(self._kind())
         return {"start_min": start, "end_min": end}
+
+    def _end_offset(self) -> int:
+        """收盤那一格的 offset(= `offset_of` 對 clamp 區回的值)。
+
+        寫在這裡而不是各處現算:`push` / `apply_backfill` 兩邊各展一次的話,窗界一改
+        就會有一邊悄悄對到別格,而畫面上只是收盤那一點的行為變得不一致。
+        """
+        start, end = window_bounds(self._kind())
+        return end - start
 
     def snapshot(self, labels: Mapping[str, str], seq: int) -> dict:
         """全量(REST / WS 首則):`last` = 最大 offset 的值。"""

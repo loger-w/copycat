@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import math
 import threading
 import time
 from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
@@ -32,7 +33,25 @@ logger = logging.getLogger(__name__)
 _TRADING_START = _dt.time(8, 30)
 _TRADING_END = _dt.time(13, 35)
 
-_DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
+_DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗**上限**(日曆日;25 交易日 + 假日餘裕)
+#: 視窗地板(日曆日):長假月份 20 日曆日 ≈ 7–14 個交易日,`_BASIS_BARS = 5` 仍取得到
+_DAILY_WINDOW_MIN_DAYS = 20
+#: 交易日 → 日曆日的換算率(5/7 個工作日 + 假日餘裕);40 / 25 就是這個數
+_DAILY_WINDOW_RATIO = 1.6
+
+
+def _daily_window_days(n: int) -> int:
+    """`fetch_daily_bars(n=…)` 的取數視窗(日曆日)。
+
+    **上限維持 40**(`n >= 25` 逐字等於改動前):`overlay.build_overlay` 的 ma20 要 20 根
+    已完成日 bar,而 40 日曆日遇春節連假只剩 ~23 根 —— 餘裕本來就只有個位數,再放寬窗
+    是多收沒用的量、再縮窗是讓 ma20 靜默變 null(畫面上只是少一條線,零錯誤訊號)。
+
+    小 `n` 才縮:唯一的小 n 呼叫點是 CDP basis sweep(`signal_hub._BASIS_BARS = 5`),
+    它只要最後一根已完成 bar。DK 不支援的股號在那條路上每個交易日都整窗拉 1K
+    (≤275 列/交易日 × 25–28 個交易日 ≈ 7,700 列),而 20 日窗約砍一半(N024)。
+    """
+    return min(_DAILY_WINDOW_DAYS, max(_DAILY_WINDOW_MIN_DAYS, math.ceil(n * _DAILY_WINDOW_RATIO)))
 
 # K 線 fallback:DK 空時改走 1K 聚合,但 1K 量級是 DK 的數百倍(180 日曆日 ≈ 4.8 萬列
 # 分頁收割)→ fallback 另用較小視窗,寧可根數不足也不打爆 REQ 往返(change-spec R2-7)
@@ -730,28 +749,36 @@ class StockQuoteSource(TC4QuoteSource):
 
         含今日 partial bar 也照回 — 「已完成 bar」剔除在 overlay 層(design R1)。
 
-        **DK 逾時仍走 fallback、兩段都逾時才 raise**(plan review P0-1):fallback 是
-        「DK 不支援這檔」與「DK 現在忙」共用的那條路,逾時就直接放棄等於把還可能有貨的
-        1K 也一起丟了;反過來,兩段都逾時卻回空,SignalHub 會讀成「無已完成日 K,
-        CDP 停用」而且**永不重試**(空清單 = 資料面沒有;例外 = 暫時性 → X-2b 有限重試)。
+        **DK 逾時仍走 fallback、fallback 首頁未備妥才 raise**(plan review P0-1 + N019):
+        fallback 是「DK 不支援這檔」與「DK 現在忙」共用的那條路,DK 逾時就直接放棄等於
+        把還可能有貨的 1K 也一起丟了;反過來,fallback 也逾時卻回空,SignalHub 會讀成
+        「無已完成日 K,CDP 停用」而且**永不重試**(空清單 = 資料面沒有;例外 = 暫時性
+        → X-2b 有限重試)。
+
+        判準**只看 `fb_timed_out`**(N019;原本是 `dk_timed_out and fb_timed_out`):
+        AND 的另一半只在「DK 首頁非空、但整批解析不出 bar」時為 False,而那是**解析面**
+        的失敗,不是「資料面就是沒有」—— 拿它當「不必重試」的理由是把兩件事混為一談。
+        1K 首頁有沒有等滿是 TC4 協定側**唯一**的暫時性訊號,它為真就該往外拋。
 
         兩段都顯式帶 `BARS_POLL_DEADLINE`:預設是 `poll_wait*30` ≈ 30s **兩段** = 最壞
         60s,hub 的重試會把 executor 佔滿,而畫面只是疊線遲遲不來(P2-13)。
+
+        視窗隨 `n` 縮(N024,見 `_daily_window_days`);兩段共用同一個窗。
         """
         self._ensure_connected()
         sym = stock_symbol(code)
         end_d = _dt.date.today()
-        start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
+        start_d = end_d - _dt.timedelta(days=_daily_window_days(n))
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
-        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
+        dk_rows, _dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
         bars = _parse_dk_rows(dk_rows)
         if not bars:
             logger.info("daily bars %s: DK 空,fallback 1K 聚合", code)
             fb_rows, fb_timed_out = self._collect_history(
                 sym, "1K", start, end, BARS_POLL_DEADLINE
             )
-            if dk_timed_out and fb_timed_out:
-                raise HistoryTimeoutError(f"daily bars {sym}:DK 與 1K 兩段首頁皆未備妥")
+            if fb_timed_out:
+                raise HistoryTimeoutError(f"daily bars {sym}:1K fallback 首頁未備妥")
             bars = _aggregate_1k_rows(fb_rows)
         return bars[-n:]
 

@@ -8,7 +8,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date as _date
 from datetime import datetime as _datetime
 from datetime import time as _clock_time
@@ -42,7 +42,7 @@ from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
-from copycat.live.stock_source import Bar, DailyBar
+from copycat.live.stock_source import Bar, BarsStatus, DailyBar
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.bars import (
@@ -135,6 +135,7 @@ def _market_payload(
     partial_last: bool = False,
     refusal: str | None = None,
     synth_since: str | None = None,
+    status: BarsStatus = "ok",
 ) -> dict:
     """大盤 K 線回應(index-board N-5)。
 
@@ -142,6 +143,10 @@ def _market_payload(
     看畫面就能答(/adhd 三個 frame 收斂到的同一點)。`source` 必須是**實際走到的分支**,
     不能是預期值 —— DK 空時 fallback 成 1K 聚合而 meta 仍標 tc4_dk,等於在最可能出事的
     那條路上說謊(review P1-4)。
+
+    `status`(N104)與 `source` 是**兩把不同的尺**,同為 str 但不可互換:`source` 答
+    「這份 bar 從哪來」,`status` 答「這一趟取數的結果」(ok / timeout / disconnected)。
+    預設 `"ok"` = 沒有三態訊號可報的路徑(TWSE / OTC / `tf != "1"`,見 route 註解)。
     """
     # volume 未指定時**由資料判定**:指數(IX0001)的 DK/1K 沒有量欄位,`_int_field`
     # 缺值回 0 → 整條序列 v=0。標 volume=true 會讓前端畫一排貼底的 0 高柱,與「真的
@@ -159,6 +164,7 @@ def _market_payload(
             "volume": has_volume,
             "refusal": refusal,
             "synth_since": synth_since,
+            "status": status,
         },
     }
 
@@ -373,17 +379,6 @@ def _default_corr_source() -> CorrSource:
     from copycat.live.corr_source import CorrQuoteSource  # 延遲 import:測試不觸 pyzmq
 
     return CorrQuoteSource(port=_tc4_port())
-
-
-async def _empty_daily_bars(code: str, n: int = 25) -> list[DailyBar]:
-    """無 stock engine 時 SignalHub 的 `daily_bars` 替身(XR-3):恆回空清單。
-
-    空清單在 hub 既有路徑上讀成**「資料面就是沒有」**(= 新上市無歷史那一類):
-    逐檔一次「無已完成日 K,CDP 停用」warning、cache 落 `(基準日, None)`、**不重試**。
-    改成拋例外的話會被讀成暫時性失敗 → 走 X-2b 的有限重試,自選 50 檔在 TC4 關著的
-    整天變成一輪又一輪的重試,而它們永遠不可能成功。
-    """
-    return []
 
 
 def _session_date() -> _date:
@@ -680,15 +675,15 @@ def create_app(
                 engine = stock
                 cfg = load_signals_config()
                 if engine is None:
-                    daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] = _empty_daily_bars
+                    # `None` = 沒有日 K 來源(N110):hub 的 `request_basis` 整批早退,
+                    # 一行 INFO 交代「CDP 全域停用」。改動前是塞一個恆回空清單的替身,
+                    # 那讓 hub 逐檔印「無已完成日 K,CDP 停用」(自選 50 檔 = 50 行),
+                    # 還得為它把 `basis_gap_secs` 歸零(假取數也會回 True 讓 worker 付
+                    # 0.2s/檔)—— 兩個症狀同一個根因,一起消失。
+                    daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] | None = None
                     trade_date_fn: Callable[[], str] = _resolve_trade_date
                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
-                    # gap 的用途是「連發打 TC4 要讓位」,而 `_empty_daily_bars` 根本沒打
-                    # TC4 —— 但它從 `_resolve_basis` 回 True(有走完取數路徑),worker
-                    # 會照付 0.2s/檔:自選 50 檔就是 10s 的純空轉。engine 在場時 config
-                    # 逐字不變(白名單 1)。
-                    cfg = replace(cfg, basis_gap_secs=0.0)
                 else:
                     daily_bars = engine.daily_bars
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
@@ -1105,6 +1100,7 @@ def create_app(
           env 模式下兩者會不一致(KR-5),合成一個欄位就沒有任何管道分辨得出來。
         - `years_loaded` 不含當年 = 日曆過期(此後只擋週末),要更新
           `configs/trading_holidays.json`。
+        - `extra_trading_days` = 補班交易日(週末仍開盤),升冪;`holidays` 的鏡像欄。
 
         **不依賴任何引擎**:純 config 推導,boot 窗內(引擎還在起)也答得出來 —— 前端
         開站第一件事就是問它,拿 503 會讓假日集合整天不進前端(E7)。
@@ -1119,6 +1115,12 @@ def create_app(
             ),
             "backfill_env": os.environ.get("TXO_BACKFILL_DATE"),
             "holidays": sorted(d.isoformat() for d in cal.holidays) if cal is not None else [],
+            # N090:補班交易日(週末仍開盤)。前端的週末守門要分得出「普通週末」與
+            # 「這個週六本來就該開盤」,而那份資料只有後端有 —— 少了它,補班日設了卻
+            # 沒生效的那次,畫面上與一般週末完全同形。
+            "extra_trading_days": (
+                sorted(d.isoformat() for d in cal.extra_trading_days) if cal is not None else []
+            ),
             "years_loaded": sorted(cal.years_loaded) if cal is not None else [],
             "calendar_loaded": cal is not None,
         }
@@ -1601,11 +1603,18 @@ def create_app(
                 partial_last=is_partial_last(bars, tf, today),
             )
 
+        # 兩個閉包的第二元素語意不同(source tag vs 三態 status)且同為 str ——
+        # 名字必須隔開,否則接錯的表現是 meta.source 靜默變成 "ok"(spec R5)
         if key == "TWSE":
             index = _index(request)
 
             async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
                 return TaggedBars(*await index.bars_range(tf_, s, e))
+
+            async def plain_with_status(_c: str, tf_: str, s: str, e: str) -> BarsResult:
+                # 加權路徑仍固定 "ok":`index.bars_range` 回的是 (bars, tag),來源層沒有
+                # 三態訊號可帶(N104 的 scope 界)。空態仍由 source tag 表述。
+                return BarsResult((await tagged_source(_c, tf_, s, e)).bars, "ok")
         else:
             futures: FuturesEngine | None = request.app.state.futures
             if futures is None:
@@ -1613,14 +1622,13 @@ def create_app(
 
             async def tagged_source(_c: str, tf_: str, s: str, e: str) -> TaggedBars:
                 # 期指沒有 DK→1K 的 fallback 分支,tag 恆定;回空 = 借不到(engine 已 log)
-                got = await futures.bars_range(key, tf_, s, e, session=eff_session)
+                got, _status = await futures.bars_range(key, tf_, s, e, session=eff_session)
                 return TaggedBars(got, "tc4_dk" if got else "unavailable")
 
-        # 兩個閉包的第二元素語意不同(source tag vs 三態 status)且同為 str ——
-        # 名字必須隔開,否則接錯的表現是 meta.source 靜默變成 "ok"(spec R5)
-        async def plain_with_status(c: str, tf_: str, s: str, e: str) -> BarsResult:
-            # 大盤路徑本輪不做三態(out of scope):固定 "ok",空態仍由 source tag 表述
-            return BarsResult((await tagged_source(c, tf_, s, e)).bars, "ok")
+            async def plain_with_status(_c: str, tf_: str, s: str, e: str) -> BarsResult:
+                # 期指分 K 是**唯一**有三態訊號的路徑(N104):engine 已把
+                # HistoryTimeoutError / ConnectionError 分成 timeout / disconnected。
+                return await futures.bars_range(key, tf_, s, e, session=eff_session)
 
         # 分鐘路徑的 cache code 加 |M 後綴:裸 "IX0001" 會與 /api/stock/bars/IX0001
         # (走 **stock** session)共用 `_hist` / `_today` / `_empty` 同一格 —— 那會讓
@@ -1628,7 +1636,9 @@ def create_app(
         # 長窗路徑的 |L 後綴同理(review P2-1)。期指的 F: 前綴含冒號,本來就撞不到。
         code = ("IX0001|M" if tf == "1" else "IX0001") if key == "TWSE" else f"F:{key}"
         if tf == "1":
-            bars, _ = await build_minute(
+            # 第二元素**不再丟棄**(N104):`build_minute` 早就把兩段取最壞算好了,
+            # 丟掉它等於在 payload 裡把「TC4 忙」與「真沒這段 K 線」講成同一句話。
+            bars, status = await build_minute(
                 plain_with_status,
                 bars_cache,
                 code,
@@ -1643,7 +1653,10 @@ def create_app(
                 bars,
                 source="tc4_1k" if bars else "unavailable",
                 partial_last=is_partial_last(bars, tf, today),
+                status=status,
             )
+        # 日 / 週 / 月 K 走 `build_period`,它回的是 `TaggedBars` 沒有 status 欄 →
+        # 沿用預設 "ok"。要一起三態化得動 `bars.py` 的 cache 型別(白名單 §0.2-1)。
         bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
         return _market_payload(
             key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)

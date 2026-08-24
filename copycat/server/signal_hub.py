@@ -222,7 +222,7 @@ class SignalHub:
         cfg: SignalsConfig,
         *,
         publish: Callable[[dict], None],
-        daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]],
+        daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] | None,
         notify_fallback: Callable[[str], bool],
         data_dir: Path,
         trade_date_fn: Callable[[], str],
@@ -232,6 +232,10 @@ class SignalHub:
     ) -> None:
         self._cfg = cfg
         self._publish = publish
+        #: `None` = **配置上沒有日 K 來源**(app 層無 stock engine)→ CDP 全域停用。
+        #: 不用「恆回空清單的替身」表達(N110):空清單在 `_resolve_basis` 讀成「這一檔
+        #: 資料面就是沒有」,自選 50 檔就是 50 行「無已完成日 K,CDP 停用」WARNING
+        #: —— 把配置態講成資料態,而那 50 行完全沒有診斷價值。
         self._daily_bars = daily_bars
         self._notify_fallback = notify_fallback
         self._data_dir = Path(data_dir)
@@ -623,6 +627,16 @@ class SignalHub:
     def request_basis(
         self, codes: list[str], *, basis_date: str | None = None, staged: bool = False
     ) -> None:
+        """排 CDP 基準取數 job;**無日 K 來源時整批早退**(N110)。
+
+        早退點放在這裡(唯一的入隊口)而不是 worker:排進去再逐檔失敗的話,每一檔都要
+        走一遍例外 → 有限重試 → 落 None 的完整流程,而答案從第一檔就已經確定。
+        一行 INFO(固定字串供 grep)講清楚「CDP 今天全站停用、原因是配置」。
+        """
+        if self._daily_bars is None:
+            if codes:
+                logger.info("CDP 基準:無日 K 來源,%d 檔一律不排 job(CDP 全域停用)", len(codes))
+            return
         date = basis_date or self._trade_date_fn()
         for code in codes:
             self._basis_jobs.put_nowait((code, date, staged))
@@ -722,7 +736,12 @@ class SignalHub:
         self._distribute(code)
 
     async def _resolve_basis(self, code: str, basis_date: str, staged: bool) -> bool:
-        """回傳「有沒有真的打一次日 K」—— worker 據此決定要不要付 gap sleep。"""
+        """回傳「有沒有真的打一次日 K」—— worker 據此決定要不要付 gap sleep。
+
+        `_daily_bars is None` 到不了這裡:唯一的入隊口 `request_basis` 已整批早退
+        (重試 job 也是原封放回同一條佇列,不會憑空生出新的)。
+        """
+        assert self._daily_bars is not None, "無日 K 來源時不得有 basis job(request_basis 早退)"
         if self._stale(basis_date, staged):
             # 排進佇列後、輪到它之前就換日了 → 連 TC4 都不必打(review A3)
             logger.info("捨棄過期的基準 job:%s(%s,staged=%s)", code, basis_date, staged)
