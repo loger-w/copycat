@@ -1,3 +1,7 @@
+## 2026-08-25(fix/futures-intraday-lag-bridge 期貨分時 live 點架橋 留尾)
+
+- [ ] **歷史段永久 memo 會把「分頁靜默截斷的非空日」永久釘住**(bug H3;`bars.py::put_hist_range` 只對「截斷後面的日子」不寫負向快取,截斷**當日本身**的非空殘段照樣 `_hist[(code,day)] = got` 永久化):症狀 = 前一交易日序列中間 / 尾巴缺一段,一直到 server 重啟才消失,零 log。候選 = 對 allday 1K 以「該日應有分鐘數 / 尾根時刻」做覆蓋度判定,不足者不入 memo(同 `_possible_data_days` 的日曆判定可算出期望尾根)。本輪 gate 5 只擋「live 點架橋」,中間缺格仍會被 core 單條 polyline 直線相連。
+
 ## 2026-08-24(mod/stream-ui-misc two-axis 留尾)
 
 review 收修已出貨(NaN ref 語意反轉 / `commitRef` 單一出口 + backstop 移除 / 文案全繁中 /
