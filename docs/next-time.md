@@ -173,17 +173,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   日盤價變頻率更高,量級成比例放大〕〔2026-08-21 M0 日盤 12:35 實測 60s:19 則(另 5 則 ping),
   每則 **27.1 KB**(日盤鏈更寬),0.32 則/s,間隔中位 2.7 s(min 1.0 s / max 10.2 s)≈ **503 KB/min**;
   則數比夜盤少但單則大 58%,總流量 +23%〕
-## 2026-08-18(mod/futures-intraday-core 期貨分時圖換 core + 檔位 1–10/15/30/60 留尾)
-
-- [ ] **期貨分時 CDP / MA 疊線(2026-08-24 已拍板:昨日 H/L/C 用前一交易日資料)**:本輪反灰
-  (title「期貨分時本輪不提供 CDP/MA/成交點」)。做法 = 以期貨日 K(`useFuturesBars(product, "day")`
-  已有)前端算 CDP / MA5 / MA20,經 core 的 `overlay` 注入(index 態同管道)。
-- [ ] **期貨分時成交點**(承 08-17 R2 留尾):core 已共用幾何,只差近全軸的日期界(夜盤成交屬錨定日;
-  `fillPoints` 現為今日 ∨ 昨日活單)+ 成交分鐘 → `alldayIndexOf`;做完把 `fills.available = !futures` 解開。
-- [ ] **近全軸 hover 命中率**(KR-5):1139 索引壓 724 單位,無 bar 分鐘反演回 null → 十字退化;夜盤薄量常見。
-  候選 = futures 態限定「±N 索引最近 snap」(動 `minuteOf` 白名單,另案)。
-- [ ] **副圖 1140 根 1 單位寬 rect 每 tick 重建**(KR-4):真環境 hover 目視未見掉幀(TMF 夜盤);若日後 TXF
-  日盤高頻 tick 卡,候選 = EnergySub 改單一 path。
 ## 2026-08-18(fix/tc4-realtime-refcount-kill 開盤全站零推播 root cause 留尾)
 
 - [ ] **shutdown 保證 LOGOUT**:09:00:49 那次是 uvicorn graceful shutdown 但 lifespan 沒跑完就被 run.ps1 `taskkill /T /F`
@@ -234,10 +223,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   近似版已知失真:分批成交壓成一點(最新事件時間 × 均價)、尾段事件是刪單時點落在刪單時刻、
   **昨日部分成交今日刪單的單會以(今日刪單分鐘 × 昨日均價)畫上今日圖**(`date` 是最新事件日,
   日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。
-- [ ] **期貨分時成交點 ▲/▼ 仍關閉**(2026-08-24 盤點更正:期貨分時已換 `IntradayChartCore`,「另一套幾何」
-  前提不再成立;現況是 `StockIntradayChart.tsx` ~1187 `{ key: "fills", available: !futures }` 在 futures 態
-  寫死不可用,理由 = 近全軸(夜盤跨日)的日期界未處理)。資料源同 `fillPoints`(契約碼 key);
-  做法 = fills 的 x 映射走 `allday.ts` 三段軸,再解開 `available`。
 - [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。
 - [ ] **toggle 關態 `EMPTY_MARKS` identity 無機械閘**(cr1 B-p2-3 rejected:關態沒有可計次函式);
   症狀僅掉幀。若日後改 ChartStatic memo 契約,順手補 render-count 閘。
@@ -263,12 +248,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
   balance / group-state 最大延遲。〔2026-08-21 M0:6 檔暖 cache waterfall 已錄(overlay 各 12–19 ms、
   group-state 6 ms、同期 capital/orders 4 ms、positions 19 ms);冷 cache + 50 檔仍未量〕
-- [ ] **>20k tick 日單檔頁 vp 偏小**(review R2-5):單檔頁 vp 折自已被 deque(20k)截斷的 snapshot
-  ticks,後端增量 vp 全日 → 該類日子卡片與單檔頁 POC 可能不同;parity fixture 只鎖同輸入折法。
-  〔2026-08-21 M0 真樣本:2609 陽明 12:36 回補 29772 ticks,`/api/stock/state/2609` 回 20000 ticks、
-  首筆 09:16:54 → 09:00–09:16 開盤段已被截掉;航運大漲日一檔就中,非罕見路徑〕
-- 文案殘留:`GroupGridView.test.tsx` 仍有「mini 分時圖」字樣的 describe 敘述(行為無涉);順手時改。
-
 ## 2026-08-16(mod/trading-calendar 留尾)
 
 - [ ] **TXO 面的 `backfill_date` 仍是手動 env**:`_default_source` / `session_rollover` /
@@ -307,9 +286,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   stub 的 Time 是否恆為訂閱建立時刻」與「盤中建立的新窗口在該窗真無 1K 時是否產生
   in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
   升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。
-
-- [ ] **期貨態 POC(2026-08-24 已拍板要做)**:需 `foldVp` 分鐘窗參數化(現硬編現貨窗)+
-  期貨態 vp toggle 解禁,連動 stock_state 折入層。
 
 ## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
 
