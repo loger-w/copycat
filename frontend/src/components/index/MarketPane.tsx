@@ -7,6 +7,7 @@ import { useContainerSize } from "@/hooks/useContainerSize";
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { chgPct, fmtPct } from "@/lib/format";
 import { buildOverlayGeometry, X_END_MIN, X_START_MIN } from "@/lib/index-chart-svg";
+import { otcSourceDead } from "@/lib/index-source-health";
 import {
   PANE_FRAMES,
   paneCandleBox,
@@ -69,26 +70,6 @@ export interface PaneStores {
 export interface PaneFutState {
   p: number | null;
   ref: number | null;
-}
-
-/** 「櫃買快照源(MIS)中斷」的判定寬限:加權要先累積這麼多分鐘格,才開始認為
- *  「櫃買一格都沒有」是壞掉而不是還沒輪到(MIS 是 5s poll,加權是 TC4 push)。
- *  2 格 ≈ 開盤後兩分鐘 —— 比 poll 週期大兩個量級,又短到整天空的日子一眼看得到。 */
-const OTC_DEAD_MIN_TWSE_MINUTES = 2;
-
-/** 櫃買快照源是否已中斷(N108)。
- *
- *  MIS(`copycat/server/mis.py`)是非契約的公開端點,壞掉時 `_mis_loop` 拿到 None 就
- *  跳過 —— 從開盤即死透的日子 otc 的 `p`/`ref` 恆 null、`minutes` 恆空,而 **otc 不吃
- *  `stale`**(watchdog 只看加權 TC4 推播),畫面因此是一條沒有任何說明的空線。
- *
- *  判別子刻意**不看時鐘**(不引進交易時段 / 日曆判斷,也就沒有跨日、假日、盤前的誤報):
- *  拿同一條 WS 上的加權當對照 —— 加權都已經有分鐘格了而櫃買一格都沒有,只可能是櫃買
- *  這一路壞了。盤前兩者皆空 → 恆 false。 */
-function otcSourceDead(twse: IndexSeries | null, otc: IndexSeries | null): boolean {
-  if (otc === null || twse === null) return false;
-  if (otc.p !== null || Object.keys(otc.minutes).length > 0) return false;
-  return Object.keys(twse.minutes).length >= OTC_DEAD_MIN_TWSE_MINUTES;
 }
 
 function fmt(millipts: number): string {
