@@ -12,8 +12,8 @@ import asyncio
 import json
 import queue
 import time
-from datetime import date, datetime
 from collections.abc import Awaitable, Callable
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +41,7 @@ from copycat.capital.reply import parse_onnewdata
 from copycat.capital.safety import SafetyConfig
 from copycat.server.audit import AuditWriteError
 from copycat.stkfut_map import write_map
-from copycat.trading_calendar import TradingCalendar, load_trading_calendar  # noqa: F401
+from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 
@@ -108,10 +108,12 @@ def _audit_lines(client: CapitalClient) -> list[dict[str, Any]]:
     return out
 
 
-def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000", bs: str = "B00R2") -> str:
+def _stock_evt_raw(
+    seq: str, qty: str = "1000", price: str = "90.0000", bs: str = "B00R2", stock: str = "3357"
+) -> str:
     arr = [""] * 48
     arr[0], arr[1], arr[2], arr[3] = seq, "TS", "N", "N"
-    arr[6], arr[8], arr[11], arr[20] = bs, "3357", price, qty
+    arr[6], arr[8], arr[11], arr[20] = bs, stock, price, qty
     return ",".join(arr)
 
 
@@ -1786,7 +1788,7 @@ async def test_submit_notes_price_type_into_store(
         ),
     )
     assert sec.seq_no == "SEQ0001" and fut.seq_no == "SEQF001"
-    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001", stock="2330"))))
     client.store.apply_reply(parse_onnewdata(_dated(_fut_evt_raw("SEQF001"))))
     by_seq = {o.seq_no: o for o in client.store.orders()}
     assert by_seq["SEQ0001"].price_type == "market"
@@ -1830,7 +1832,7 @@ async def test_late_result_notes_price_type(
         StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market")
     )
     assert res.ok is False and res.seq_no is None
-    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001", stock="2330"))))
     assert client.store.orders()[0].price_type is None  # 結果未知的當下不記
     cmd = client._cmd_q.get_nowait()
     assert cmd is not None
@@ -1857,7 +1859,7 @@ async def test_correct_price_forgets_price_type(
             )
         ),
     )
-    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001"))))
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001", stock="2330"))))
     assert client.store.orders()[0].price_type == "market"
     await _drive(
         client,
@@ -2010,3 +2012,5 @@ async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: p
     )
     assert result.seq_no is not None
     assert client.store._price_types[result.seq_no][1] == ("20260824", "20260825")
+    # review R6 ST1:候選日多開一天的誤標窗由標的 + 方向綁定封住("buy" → 回報口徑 "B")
+    assert client.store._price_types[result.seq_no][2:] == ("2330", "B")
