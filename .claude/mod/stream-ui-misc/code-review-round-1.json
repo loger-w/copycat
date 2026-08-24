@@ -1,0 +1,73 @@
+{
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P2(硬)",
+   "summary": "StockPage 文案混用 server/伺服器",
+   "disposition": "accepted → 全繁中並補主詞「達錢 4」"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2",
+   "summary": "snap.seq/tick.seq 新跨檔契約未登記 §4",
+   "disposition": "accepted → CLAUDE.md §4 新條 + refetch key 不變 lock + backfill 但書"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2",
+   "summary": "imperative ref 配對 12 處無 helper、backstop 防護感大於實效",
+   "disposition": "accepted → lib/commit-ref.ts 單一出口;backstop 移除(mutation 證明其補不上漏配對)"
+  },
+  {
+   "id": "ST4",
+   "severity": "P2",
+   "summary": "OVERLAY_LINES 以輸入序查表(index 只補平行陣列)",
+   "disposition": "next-time(輸入改帶 key)"
+  },
+  {
+   "id": "ST5",
+   "severity": "P2",
+   "summary": "spotMode / formatToastText 刻意死碼",
+   "disposition": "接受;formatToastText 先字面量 lock 再刪入 next-time"
+  },
+  {
+   "id": "ST6",
+   "severity": "P2",
+   "summary": "otcSourceDead 純述詞留元件",
+   "disposition": "accepted → 抽 lib/index-source-health.ts + 6 單測"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "P2",
+   "summary": "doctor 消警單趟改寫把 NaN 語意反轉(壞腿被留下畫全 NaN)",
+   "disposition": "accepted → 改回逐值等價;紅 [0,1]→綠 [1]"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "N119 backstop 註解不實",
+   "disposition": "accepted(理由修正:非回捲而是補不上漏配對)→ 移除 + lock"
+  },
+  {
+   "id": "SP3",
+   "severity": "P2",
+   "summary": "N120 無 refetch key 穩定性測試、缺 backfill 但書",
+   "disposition": "accepted → 兩條測試"
+  },
+  {
+   "id": "SP4",
+   "severity": "P2",
+   "summary": "N008 hint 文案未申報",
+   "disposition": "accepted → change-spec 補"
+  },
+  {
+   "id": "SP5",
+   "severity": "P2",
+   "summary": "N109 一句雙態文案(後端 seed 無訊號)/ N108 啟發式",
+   "disposition": "留尾合格,入 next-time"
+  }
+ ],
+ "disposition": "11 條:9 accepted 已修(1 理由修正後接受),2 入 next-time;0 rejected"
+}
