@@ -51,6 +51,7 @@ BARS_POLL_DEADLINE = 10.0
 #: stock_source 上提 — index-board R-3)
 _POLL_BACKOFF_START = 0.15
 
+
 class HistoryResult(NamedTuple):
     """`_collect_history` 的回傳:rows + 「是否等滿 deadline 仍未備妥」。
 
@@ -90,6 +91,9 @@ _HEAL_VARIANT_CYCLE = 3
 #: 窗小時的合法值域(TC4 窗字串 = YYYYMMDDHH)
 _WINDOW_HOUR_MAX = 23
 _WINDOW_HOUR_MIN = 0
+#: TXO runtime 的 `TXF.HOT` 常駐窗位移(小時)。futures session 用盤別窗原窗持有同一個
+#: symbol —— 位移 1 小時即兩把互異的 TC4 refcount key(N050;`subscribe` 登記)。
+SPOT_WINDOW_OFFSET = 1
 #: TXO session 的門檻:R1 60s、R2 關 —— 277 檔契約深價外本就整場靜默,R2 收它們
 #: 等於無止盡 churn(change-spec §3)。
 #:
@@ -106,6 +110,11 @@ _HARVEST_DRY_LIMIT = 3
 
 def always_active() -> bool:
     """`heal_active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
+    return True
+
+
+def always_symbol_active(symbol: str) -> bool:
+    """`heal_symbol_active` 預設:每個 symbol 都在母體內(逐字等於逐 symbol 閘之前)。"""
     return True
 
 
@@ -277,6 +286,11 @@ class TC4QuoteSource:
         heal_symbol_silence_secs: float | None = None,
         #: 只在回 True 時自癒(盤外不 churn)
         heal_active: Callable[[], bool] = always_active,
+        #: **逐 symbol** 的自癒閘(N051):同一條 session 上各腿的交易時段不同時,
+        #: session 級的 `heal_active` 表達不了 —— 台期交國外指數腿(SXF/UDF/SPF/UNF)
+        #: 在自己休市段照樣落進 R2「從未推播」母體,每 300s 一發 UNSUB+SUB。
+        #: 回 False 的 symbol 整輪不進母體(R1 的全場靜默判定也扣掉它)。
+        heal_symbol_active: Callable[[str], bool] = always_symbol_active,
         heal_poll_secs: float = 5.0,
     ) -> None:
         self._port = port
@@ -302,6 +316,7 @@ class TC4QuoteSource:
         self._heal_silence = heal_silence_secs
         self._heal_symbol_silence = heal_symbol_silence_secs
         self._heal_active = heal_active
+        self._heal_symbol_active = heal_symbol_active
         self._heal_poll = heal_poll_secs
         #: symbol → 最後一則 REALTIME 推播的 monotonic(`_realtime_msg` 單點記錄)
         self._last_push: dict[str, float] = {}
@@ -311,33 +326,57 @@ class TC4QuoteSource:
         self._heal_next: dict[str, float] = {}
         #: symbol → 訂閱窗變體序號(0 = 原窗);見 `_apply_variant`
         self._window_variant: dict[str, int] = {}
+        #: symbol → **常駐**窗位移(N050)。與 variant 的差別:variant 是自癒的節奏
+        #: (會被 `_note_push` / `_unsub` 清),offset 是「這條 session 對這個 symbol
+        #: 用哪一把 key」的身分,一經登記就不再變 —— TXO runtime 用它把 `TXF.HOT`
+        #: 的訂閱窗與 futures session 的盤別窗錯開成兩把 key(見 `subscribe`)。
+        self._window_offset: dict[str, int] = {}
         self._healer: threading.Thread | None = None
 
     # ---- 連線 ----
 
     def _ensure_connected(self) -> None:
-        if self._api is not None and self._session is not None:
-            return
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"))
-        from tcoreapi_mq import QuoteAPI  # type: ignore[import-untyped]
+        """未連線則建立連線;**check + 建立 + 發布整段持 `_api_lock`**(N259)。
 
-        api = QuoteAPI(TC4_APPID, TC4_SKEY)
-        # Connect() 內部裸 recv → context 級 timeout 讓之後建立的 socket 全部繼承;
-        # LINGER=0 讓失敗被棄的 api 在 GC term 時不為 pending LOGIN 無限阻塞
-        # (同 tc4_trade R2-2 / F-1 防護;timeout 值依據見 _REQ_TIMEOUT_MS 註解)
-        api.context.setsockopt(zmq.RCVTIMEO, _REQ_TIMEOUT_MS)
-        api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
-        api.context.setsockopt(zmq.LINGER, 0)
-        try:
-            q = api.Connect(self._port)
-        except (zmq.ZMQError, OSError) as exc:
-            raise ConnectionError(f"TC4 quote connect failed: {exc}") from exc
-        if q.get("Success") != "OK":
-            raise ConnectionError(f"TC4 login failed: {q}")
+        舊碼的 check(指標為 None)在鎖外,只有發布在鎖內 —— `_check_stale` 的重連與
+        任何 REQ 生產者同時進來時,兩邊各自看到 None、各自 `QuoteAPI(...)`,後發布的
+        那個蓋掉先發布的:**落敗者永遠不會被 `Disconnect()`**,它的 KeepAlive 執行緒
+        續跑到 process 結束(§0a:不 Disconnect 則 process 不退),而兩條 session 都
+        對同一批 symbol 持著 refcount key,零錯誤訊號。
+
+        持鎖跨越 `Connect()`(最壞 = `_REQ_TIMEOUT_MS`)的代價:同期的 `_connection()`
+        / `_req` 讀側要等這段。那條路本來就只能拿到 None → `ConnectionError`,等完拿到
+        **新連線**嚴格優於當場失敗。鎖序不變(`self._lock` → `_api_lock`,見 `_dispose`)。
+
+        `_stop` 早退:`close()` 之後在途的 executor 工作項(futures `_retry_subscribe` /
+        stock 健檢 timer)不得再把連線建回來 —— 建回來就是一條沒人會關的 KeepAlive。
+        """
         with self._api_lock:
+            if self._api is not None and self._session is not None:
+                return
+            if self._stop.is_set():
+                raise ConnectionError("TC4 quote source 已收工,不再重建連線")
+            sys.path.insert(
+                0, str(Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY")
+            )
+            from tcoreapi_mq import QuoteAPI  # type: ignore[import-untyped]
+
+            api = QuoteAPI(TC4_APPID, TC4_SKEY)
+            # Connect() 內部裸 recv → context 級 timeout 讓之後建立的 socket 全部繼承;
+            # LINGER=0 讓失敗被棄的 api 在 GC term 時不為 pending LOGIN 無限阻塞
+            # (同 tc4_trade R2-2 / F-1 防護;timeout 值依據見 _REQ_TIMEOUT_MS 註解)
+            api.context.setsockopt(zmq.RCVTIMEO, _REQ_TIMEOUT_MS)
+            api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
+            api.context.setsockopt(zmq.LINGER, 0)
+            try:
+                q = api.Connect(self._port)
+            except (zmq.ZMQError, OSError) as exc:
+                raise ConnectionError(f"TC4 quote connect failed: {exc}") from exc
+            if q.get("Success") != "OK":
+                raise ConnectionError(f"TC4 login failed: {q}")
             self._api = api
             self._session = q["SessionKey"]
-        self._sub_port = q["SubPort"]
+            self._sub_port = q["SubPort"]
         logger.info("TC4 connected, session=%s", q["SessionKey"][:8])
 
     def _dispose(self, api: Any) -> None:
@@ -437,8 +476,11 @@ class TC4QuoteSource:
 
         **歷史路徑(`_sub_history` / `_get_history`)不吃 variant** —— 回補窗與 REALTIME
         窗是不同 DataType 的兩把鍵,動它只會讓回補改抓別的區間。
+
+        總位移 k = **常駐 offset(`_window_offset`,N050)+ 自癒 variant**:兩者疊在
+        同一條階梯上,登記了 offset 的 symbol 其 variant 0/1/2/3 仍是四把互異的鍵。
         """
-        k = self._window_variant.get(symbol, 0)
+        k = self._window_variant.get(symbol, 0) + self._window_offset.get(symbol, 0)
         if k <= 0:
             return window
         start, end = window
@@ -499,7 +541,11 @@ class TC4QuoteSource:
             return
         # tuple() 先取快照再排序:巡檢期間 engine 可能訂/退訂(集合的單步操作在 GIL
         # 下原子,但迭代中被改會 RuntimeError)。定序 → log 與重掛順序可預期。
-        subs = sorted(tuple(self._subscribed))
+        #
+        # 逐 symbol 閘(N051)在**母體形成處**扣除,不是在 R2 迴圈裡 continue ——
+        # R1 的「全部 symbol 都靜默」若把休市腿算進去,它們的恆靜默會把還在流動的腿
+        # 一起拖進整批重掛(而 R1 命中即 return,R2 那一輪也一起跳過)。
+        subs = sorted(s for s in tuple(self._subscribed) if self._heal_symbol_active(s))
         if not subs:
             return
         t1 = self._heal_silence
@@ -756,7 +802,15 @@ class TC4QuoteSource:
 
         for page in iter_qry_pages(_page):
             rows.extend(page)
-        return [t for r in rows if (t := parse_history_tick(symbol, r)) is not None]
+        ticks = [t for r in rows if (t := parse_history_tick(symbol, r)) is not None]
+        if rows and not ticks:
+            # N092:「首頁非空即 break」的 ready-check 擋不住凍結 stub(窗內無資料時
+            # 建立的 history 訂閱會回一列 Time = 訂閱建立時刻的假列,2026-08-14 實證)。
+            # 落到這裡 = rows 非空但一筆都解不出來,呼叫端只看得到空 list,與「這檔
+            # 今天真沒成交」無從分辨。**控制流不變**(round 制本來就把「0 tick」當
+            # still-pending 再試一輪),只補上這條路上唯一的 grep 判準。
+            logger.warning("history %s:%d 列全數解析失敗(疑似凍結 stub)", symbol, len(rows))
+        return ticks
 
     def _resub(self, sym: str) -> None:
         """UNSUB→SUB 冪等重掛(逐 symbol 訂閱路徑共用;stock/futures/corr 三 source)。
@@ -799,6 +853,12 @@ class TC4QuoteSource:
         # TXF 現貨獨立於序列(DR-13);每次都重掛(UNSUB→SUB 冪等)— rollover 重訂閱
         # 必須讓 spot 也換新時段窗,否則其訂閱窗永遠停在最初時段(review F2)
         symbols.append(SPOT_SYMBOL)
+        # N050:`TXF.HOT` 同時被 futures session 以**盤別窗**持有。同一把 key 兩個持有者
+        # → 單 session 的 UNSUB→SUB 永遠到不了 SumSubCount 0,TC4 就不會 `ReqSubQuote`
+        # 重掛上游 feed,要等自癒爬到第 3 次的 window variant 才救得回(多兩輪 backoff)。
+        # 這裡把 TXO 這一邊常駐位移一小時 = 兩把互不干擾的 key。**只位移 TXO 這邊**:
+        # 兩邊一起位移還是同一把,而期貨面的訂閱窗是它自己的既有行為,不動。
+        self._window_offset[SPOT_SYMBOL] = SPOT_WINDOW_OFFSET
         for sym in symbols:
             self._rt_request("UNSUBQUOTE", sym)
             r = self._rt_request("SUBQUOTE", sym)
