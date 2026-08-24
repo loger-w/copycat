@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from copycat.live.stock_source import DailyBar
 from copycat.server.overlay import OverlayCache, build_overlay, compute_cdp, compute_ma
+
+#: CDP/MA 前後端同式的 parity fixture(前端 `src/lib/futures-overlay.test.ts` 讀同一個檔)
+_PARITY_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "overlay_parity.json"
 
 
 def _bar(date: str, h: int, lo: int, c: int) -> DailyBar:
@@ -61,6 +67,33 @@ class TestBuildOverlay:
         assert result["cdp"] is not None
         assert result["ma5"] is not None
         assert result["ma20"] is None
+
+
+def test_overlay_parity_with_frontend() -> None:
+    """跨語言 parity:同一組日 K 折出同一份 CDP/MA(CLAUDE.md §4 跨檔契約)。
+
+    前端鏡像 `frontend/src/lib/futures-overlay.ts::buildFuturesOverlay`(期貨分時的
+    疊線不打 `/api/stock/overlay` —— 那支吃股號),兩份實作各自漂移的失效樣態是「同一
+    檔的 CDP 在個股頁與期貨頁長不一樣」:兩張圖都畫得出來、兩組數字都看起來對,沒有
+    任何錯誤訊號。所以只能靠**共用 fixture** 釘住:`tests/fixtures/overlay_parity.json`
+    的 `expected` 是手算寫死的(不是任一邊跑出來回填),前端
+    `src/lib/futures-overlay.test.ts` 對同一份各自斷言,改壞任一邊就只有那一邊紅。
+    """
+    fixture = json.loads(_PARITY_PATH.read_text(encoding="utf-8"))
+
+    # fixture 自身健檢:少了任一項,parity 就退化成「兩邊都算得出一個數」的空談
+    bars: list[DailyBar] = [
+        DailyBar(date=b["date"], high=b["high"], low=b["low"], close=b["close"])
+        for b in fixture["bars"]
+    ]
+    boundary = fixture["boundary_date"]
+    assert len([b for b in bars if b["date"] < boundary]) >= 20, (
+        "不足 20 根 → ma20 恆 null,零鑑別力"
+    )
+    assert any(b["date"] >= boundary for b in bars), "無界外 bar → 界的判準未被覆蓋"
+    assert all(b["close"] > 0 for b in bars), "0 價屬前端 usable() 白名單,不得入 parity fixture"
+
+    assert build_overlay(bars, today=boundary) == fixture["expected"]
 
 
 class TestOverlayCache:
