@@ -1,3 +1,11 @@
+## 2026-08-24(fix/futures-bars-gap 收尾留尾)
+
+- [ ] **非交易日「當日段」查詢仍白付 10s**(review C1,刻意不對稱):週日/假日開站時
+  today 段照發、15s TTL 節流;日曆錯標風險考量不套過濾。若之後嫌 log 吵或假日看盤卡,
+  候選 = today 段接 resolve_trade_date(與 R3/N089 盤前冷啟動案同一塊)。
+- [ ] **連假首日無夜盤且為窗尾唯一可能日 → 仍重複探測**(review C2,2026-02 春節形狀):
+  要收得動 put_hist_range last_seen 防護(P1-2 取捨),屆時一併評估。
+
 ## 2026-08-22(日間鏈 R1–R10 review 留尾;結論 `docs/superpowers/specs/2026-08-22-daytime-chain-review.md`)
 
 P0/P1 與四輪小批已全數出貨(PR #88 欠帳計數 / #89 VWAP 避讓 / #90 R8 留尾 / #91 calendar+tape_omitted;

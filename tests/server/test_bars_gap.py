@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 
 from copycat.live.stock_source import Bar, BarsStatus
-from copycat.server.bars import BarsCache, BarsResult, build_minute
+from copycat.server.bars import BarsCache, BarsResult, _possible_data_days, build_minute
 from copycat.trading_calendar import TradingCalendar
 
 # 空 holidays → 週末即非交易日;2026 標成已載入,避免退化語意混進斷言。
@@ -130,3 +130,22 @@ class TestNonTradingDayNotRefetched:
         assert [c[1:] for c in fetch.hist_calls] == [("1", "2026-08-23", "2026-08-23")]
         assert status == "timeout"
         assert out  # 回應內容不受影響(memo + 當日段)
+
+
+def test_holiday_filtered_like_weekend_and_night_tail_kept() -> None:
+    """假日與週末同權(review C3):國定假日(平日)被剔除;其前一交易日的夜盤尾日保留。
+
+    2026-09-25(五)/ 09-28(一)設為假日:day 盤別只留 09-24(四);allday 額外留
+    09-25(週四夜盤尾 00:00-05:00 落在週五),09-26/27/28 前一日皆非交易日 → 剔除。
+    """
+    cal = TradingCalendar(
+        holidays=frozenset({_dt.date(2026, 9, 25), _dt.date(2026, 9, 28)}),
+        extra_trading_days=frozenset(),
+        years_loaded=frozenset({2026}),
+    )
+    days = [_dt.date(2026, 9, d) for d in range(24, 29)]
+    assert _possible_data_days(days, "day", cal) == [_dt.date(2026, 9, 24)]
+    assert _possible_data_days(days, "allday", cal) == [
+        _dt.date(2026, 9, 24),
+        _dt.date(2026, 9, 25),
+    ]
