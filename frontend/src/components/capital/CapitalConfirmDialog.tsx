@@ -76,10 +76,10 @@ export function CapitalConfirmDialog({
     };
   }, []);
 
-  /** settled 標記 + 契約檢查(見 `contractTimer`)。**旗標一定在 callback 之後設**
-   *  (呼叫次數與順序跟舊版逐 click 直呼完全一致,旗標只擋「之後」的 Esc/close 補發)。 */
-  function markSettled(): void {
-    closedRef.current = true;
+  /** 契約檢查(見 `contractTimer`);settled 旗標由各路徑自己設 —— 順序**逐字沿用舊版**:
+   *  按鈕路徑「直呼在前、旗標在後」,Esc/close 路徑「旗標在前、直呼在後」(重入保護:
+   *  onCancel 內同步再觸發 close 時第二次 requestCancel 被旗標擋住;review ST3/SP4)。 */
+  function armContractCheck(): void {
     if (!import.meta.env.DEV) return;
     window.clearTimeout(contractTimer.current);
     contractTimer.current = window.setTimeout(() => {
@@ -92,8 +92,9 @@ export function CapitalConfirmDialog({
 
   function requestCancel(): void {
     if (closedRef.current) return;
+    closedRef.current = true;
     onCancel();
-    markSettled();
+    armContractCheck();
   }
 
   return (
@@ -152,7 +153,8 @@ export function CapitalConfirmDialog({
               // 直呼在前、旗標在後:呼叫次數與順序跟舊版逐 click 直呼完全一致,
               // 旗標只擋「之後」的 Esc/close 補發。
               onCancel();
-              markSettled();
+              closedRef.current = true;
+              armContractCheck();
             }}
             className="flex-1 border border-line px-3 py-2 text-sm text-ink-muted transition-colors hover:border-ink-dim hover:text-ink"
           >
@@ -162,7 +164,8 @@ export function CapitalConfirmDialog({
             type="button"
             onClick={() => {
               onConfirm();
-              markSettled();
+              closedRef.current = true;
+              armContractCheck();
             }}
             className={cn(
               "flex-1 border px-3 py-2 text-sm font-bold transition-colors",
