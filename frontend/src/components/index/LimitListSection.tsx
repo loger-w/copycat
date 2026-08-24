@@ -14,8 +14,8 @@ import { useMemo, useState } from "react";
 
 import { useBreadthRows } from "@/hooks/useBreadthRows";
 import { LIMIT_LIST_FILTER_KEY } from "@/lib/constants";
-import { readLocalJson, writeLocal } from "@/lib/storage";
 import { monthDay } from "@/lib/format";
+import { readLocalJson, writeLocal } from "@/lib/storage";
 import { isoLocalDate } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
 import type { BreadthRow } from "@/types";
@@ -173,11 +173,11 @@ function loadFilter(): LimitListFilter {
   }
   const o = parsed as Record<string, unknown>;
   return {
-      twse: pickBool(o, "twse", DEFAULT_FILTER.twse),
-      tpex: pickBool(o, "tpex", DEFAULT_FILTER.tpex),
-      limitUp: pickBool(o, "limitUp", DEFAULT_FILTER.limitUp),
-      limitDown: pickBool(o, "limitDown", DEFAULT_FILTER.limitDown),
-      touched: pickBool(o, "touched", DEFAULT_FILTER.touched),
+    twse: pickBool(o, "twse", DEFAULT_FILTER.twse),
+    tpex: pickBool(o, "tpex", DEFAULT_FILTER.tpex),
+    limitUp: pickBool(o, "limitUp", DEFAULT_FILTER.limitUp),
+    limitDown: pickBool(o, "limitDown", DEFAULT_FILTER.limitDown),
+    touched: pickBool(o, "touched", DEFAULT_FILTER.touched),
     minAmount: pickText(o, "minAmount"),
     priceMin: pickText(o, "priceMin"),
     priceMax: pickText(o, "priceMax"),
