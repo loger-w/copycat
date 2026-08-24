@@ -1,7 +1,7 @@
 /** 訊號規則參數值域的跨語言 parity(CLAUDE.md §4 跨檔契約)。
  *
  *  產生點 `copycat/signal_rules.py::PARAM_SPECS`(唯一擋人的地方:出界 → INVALID_RULE);
- *  本檔測的是前端鏡像 `SignalRulesDialog.tsx::PARAM_FIELDS` 的 `min`/`max`(N055 起前端
+ *  本檔測的是前端鏡像 `lib/signal-params.ts::PARAM_FIELDS` 的 `min`/`max`(N055 起前端
  *  也擋值域,好讓使用者知道是哪一格、界在哪)。
  *
  *  兩份表各自漂移的失效樣態**沒有錯誤訊號**:前端界比後端寬 → 使用者拿回一句泛用的

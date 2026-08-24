@@ -1,0 +1,101 @@
+{
+ "fixed_point": "master (4b9440f1)",
+ "reviewed_head": "9cbef58c",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P2(硬)",
+   "summary": "新跨檔契約 tests/fixtures/signal_param_specs.json 未登錄 CLAUDE.md §4",
+   "location": "CLAUDE.md §4",
+   "disposition": "accepted → §4 新條「訊號規則參數值域前後端同表」"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2(硬)",
+   "summary": "契約指標三處指錯檔(表已搬 lib/signal-params.ts、測試在 lib/)",
+   "location": "signal_param_specs.json:2 / test_signal_rules.py:89-97 / signal-param-parity.test.ts:1-14",
+   "disposition": "accepted → 三處路徑改正"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2(判斷)",
+   "summary": "requestCancel 的 settled 旗標由 onCancel 之前移到之後,失去重入保護;W5 明文不動次序",
+   "location": "CapitalConfirmDialog.tsx:94-96",
+   "disposition": "accepted → 旗標回到 onCancel 之前;markSettled 拆成各路徑自設旗標 + armContractCheck;change-spec W5 自述對齊"
+  },
+  {
+   "id": "ST4",
+   "severity": "P3(判斷)",
+   "summary": "N266(🟢 新功能)併進 🔴 commit d03c70e7",
+   "location": "commit d03c70e7",
+   "disposition": "rejected(記錄偏離)— N266 與 N115/N117/N118 同檔(WatchlistManagerDialog.tsx + test)同 hunk,事後拆 commit 需重寫 12 條的歷史;rebase merge 保留逐筆,偏離記在 verification"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "useFeeDiscountField 重抄 useSyncExternalStore 三參數",
+   "location": "lib/fee-discount.ts:100",
+   "disposition": "accepted → 直呼 useFeeDiscount()"
+  },
+  {
+   "id": "ST6",
+   "severity": "P3(判斷)",
+   "summary": "RiverOverlay memo 內外兩份 span/xOf 同式",
+   "location": "RiverOverlay.tsx:49-50 / 82-84",
+   "disposition": "accepted → memo 回傳 xOf,十字線 toX 共用"
+  },
+  {
+   "id": "ST7",
+   "severity": "P3(判斷)",
+   "summary": "errorMessage 純別名",
+   "location": "WatchlistManagerDialog.tsx:188",
+   "disposition": "accepted → 刪別名直用 localError"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "P2",
+   "summary": "N115 偽陽性未收:submit 仍拿 render 閉包 wl 做撞名阻斷式早退,spec 要求 eager 降級純 UX",
+   "location": "WatchlistManagerDialog.tsx:96 / 120",
+   "disposition": "accepted → 拿掉撞名早退,只留與基底無關的保留名 / 空白前置;撞名一律由 transform 回 null → BAD_GROUP"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "N068 反向代價未申報:provider 零讀者(TXO / 廣度頁)也每 15 s 打 positions;舊行為零 observer 零請求",
+   "location": "useCapital.ts:236",
+   "disposition": "accepted 為申報 → verification §5 補;prod App 恆掛 header 部位讀者,實務上舊行為也幾乎恆輪詢;要不要加「有讀者才輪詢」由 user 拍板"
+  },
+  {
+   "id": "SP3",
+   "severity": "P3",
+   "summary": "新契約未落 CLAUDE.md §4;fixture _note 指路過時",
+   "location": "同 ST1/ST2",
+   "disposition": "accepted(同 ST1/ST2)"
+  },
+  {
+   "id": "SP4",
+   "severity": "P3",
+   "summary": "change-spec W5「不動 callback 次序」與 diff 不符;StrictMode 誤報:無",
+   "location": "change-spec W5 / CapitalConfirmDialog.tsx",
+   "disposition": "accepted(同 ST3)"
+  },
+  {
+   "id": "SP5",
+   "severity": "P3",
+   "summary": "useWatchlistCommit reject 後同批後續成功會 onError(null) 洗掉 BAD_GROUP 文案",
+   "location": "hooks/useWatchlistCommit.ts",
+   "disposition": "accepted 為留尾 → verification §5(與 N115 輸入框清空同題:pending-aware 回饋)"
+  },
+  {
+   "id": "SP6",
+   "severity": "P3",
+   "summary": "instances 0→1 整份重置是為測試隔離加的 prod 語意;三 writer 全卸載且 PUT 在途時新佇列 base 回退",
+   "location": "hooks/useWatchlistCommit.ts",
+   "disposition": "accepted 為留尾 → verification §5(setQueryData 兜底,風險低)"
+  }
+ ],
+ "whitelist": "兩軸皆核 W1–W10 全數守住;既有 assertion 只改事前標「該變」的兩處(StkfutLadder @100.00→@100、RiverPanel.memo 探針)",
+ "disposition": "Standards 7 條:接受 ST1/ST2/ST3/ST5/ST6/ST7,反駁 ST4(記錄偏離)。Spec 6 條:SP1(P2)接受收修、SP2(P2)申報待 user 拍板、SP3/SP4 同 ST、SP5/SP6 留尾。收修後 gate:tsc / vitest 142 files 2710 / eslint / react-doctor 無 issue / pytest test_signal_rules 122 / ruff 全綠。"
+}
