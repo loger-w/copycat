@@ -60,7 +60,12 @@ from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stkfut_catalog import StkfutCatalog
-from copycat.server.stock_engine import _CLIENT_QUEUE_MAX, StockEngine, StockSource
+from copycat.server.stock_engine import (
+    _CLIENT_QUEUE_MAX,
+    WATCHLIST_BOOT_SEQ,
+    StockEngine,
+    StockSource,
+)
 from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
@@ -376,10 +381,21 @@ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesS
     )
 
 
-def _default_corr_source() -> CorrSource:
-    from copycat.live.corr_source import CorrQuoteSource  # 延遲 import:測試不觸 pyzmq
+def _default_corr_source(calendar: TradingCalendar | None = None) -> CorrSource:
+    from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
+    from copycat.live.corr_source import CorrQuoteSource, taifex_leg_gate
 
-    return CorrQuoteSource(port=_tc4_port())
+    # **逐腿**閘(N051),不是 session 級:corr 這條 session 上同時掛著台期交段與
+    # SGX/CME/CBOT/OSE 段的腿,時段各不相同。session 級的閘全開時,台期交段的國外
+    # 指數腿(SXF/UDF/SPF/UNF,與台指同時段同結算)在自己的休市段整晚每 240s 一發
+    # UNSUB+SUB(2026-08-21 M0:SXF 三小時 8 發);全關則會把在自己盤中的海外腿一起
+    # 關掉(台灣連假 SGX / CME 照開)。日曆也只 AND 在台期交那半邊,理由同上。
+    return CorrQuoteSource(
+        port=_tc4_port(),
+        heal_symbol_active=taifex_leg_gate(
+            _heal_gate(calendar, futures_mod.in_futures_session_now)
+        ),
+    )
 
 
 def _session_date() -> _date:
@@ -639,7 +655,10 @@ def create_app(
                 # 現況正是由 _boot 的 except 接住(留在 try 內是行為契約)
                 persisted = load_watchlist(wl_path)["codes"]
                 if persisted:
-                    await o.set_watchlist(persisted)
+                    # 顯式帶 boot 哨兵(N112):`WatchlistService` 的取號自 1 起,哨兵
+                    # 恆為最舊 → 就算未來有人把 restore 挪到 service 之後,使用者剛
+                    # 存的那一份也不會被還原蓋掉(舊碼的 `seq=None` 是無條件全套)。
+                    await o.set_watchlist(persisted, seq=WATCHLIST_BOOT_SEQ)
 
             stock = await _boot(
                 "stock",
@@ -845,7 +864,7 @@ def create_app(
             def _make_corr() -> CorrelationEngine | None:
                 # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
                 if corr_source is DEFAULT_CORR:
-                    resolved_corr: CorrSource | None = _default_corr_source()
+                    resolved_corr: CorrSource | None = _default_corr_source(trading_calendar)
                 else:
                     resolved_corr = cast("CorrSource | None", corr_source)
                 if resolved_corr is None:
@@ -986,11 +1005,12 @@ def create_app(
                 # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /
                 # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
                 logger.exception("boot task 以例外結束(關機續行)")
-            # 關機反序:breadth → signals → corr → futures → capital → index → stock →
-            # runtime。順序即依賴:corr 讀 futures.state(),必須排在 futures 之前收;
-            # signals 段的 `_close_signals` 會呼 `stock.detach_signal_hub()`,也必須排在
-            # stock 之前收(stock engine 還活著才解得掉掛點)。其餘各段無此類依賴,但
-            # 一律照建立的反序收,新增引擎時才有一條唯一的規則可循。
+            # 關機反序:breadth → signals → corr → futures → index → stock → runtime,
+            # **capital 最後**(N049,見該段註解)。順序即依賴:corr 讀 futures.state(),
+            # 必須排在 futures 之前收;signals 段的 `_close_signals` 會呼
+            # `stock.detach_signal_hub()`,也必須排在 stock 之前收(stock engine 還活著
+            # 才解得掉掛點)。其餘各段無此類依賴,一律照建立的反序收,新增引擎時才有
+            # 一條唯一的規則可循 —— capital 是**唯一**的例外,理由是關機時間預算不是依賴。
             if booted.crosscheck_task is not None:
                 # 引擎之前先收:它只讀 index 的歷史,關機時沒有任何理由讓它跑完
                 booted.crosscheck_task.cancel()
@@ -1025,11 +1045,6 @@ def create_app(
                     await booted.futures.close()
                 except Exception:
                     logger.exception("futures close 失敗(關機續行)")
-            if booted.capital is not None:
-                try:
-                    await asyncio.to_thread(booted.capital.close)  # join COM 執行緒(≤5s)
-                except Exception:
-                    logger.exception("capital close 失敗(關機續行)")
             if booted.index is not None:
                 try:
                     await booted.index.close()
@@ -1041,6 +1056,18 @@ def create_app(
                 except Exception:
                     logger.exception("stock close 失敗(關機續行)")
             await runtime.close()
+            # **capital 刻意排在 TC4 全部收完之後**(N049,唯一違反「照建立反序收」的一段):
+            # `capital.close()` 是同步的 COM 執行緒 join(prod ≤5 s),而 TC4 那四條 session
+            # 的 UNSUB + `Disconnect()` 是關機路徑上真正有**時間預算**的一段 —— 沒跑到就
+            # 是一條殭屍 session,TC4 要 ~60 s 後 `ExecuteCheckPingTime` reap 才 `RemoveLoginInfo`,
+            # 而 reap 會把它獨持的 key 歸零、連帶把 symbol 的上游 feed 帶走(下一台 server
+            # 開頭 ~60 s 零推播,2026-08-18 實證)。capital 與 index / stock / runtime 之間
+            # 沒有依賴(有依賴的是 corr→futures 與 signals→stock 那兩條),重排安全。
+            if booted.capital is not None:
+                try:
+                    await asyncio.to_thread(booted.capital.close)  # join COM 執行緒(≤5s)
+                except Exception:
+                    logger.exception("capital close 失敗(關機續行)")
 
     app = FastAPI(lifespan=lifespan)
     origin = os.environ.get("FRONTEND_ORIGIN")
