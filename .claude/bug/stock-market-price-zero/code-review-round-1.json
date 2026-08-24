@@ -1,0 +1,48 @@
+{
+  "round": 1,
+  "lenses": ["correctness(opus)"],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "P1",
+      "summary": "「市價單 OrderPrice 必須為 0」已由 SKCOM 訊息原文實證,但「字面送 \"0\"(而非 \"0.00\")會被接受」是未驗推定 —— 程式註解與測試卻以確定語氣寫死,違反本專案對未實測 literal 的既有標註慣例(期貨 bstrPrice=\"M\" 在 mapping.py:13 docstring 與 test_mapping.py:151 皆明寫「未實測」)。查證結果:repo 內無 SKCOM 官方文件/STOCKORDER 欄位規格(docs/research/2026-07-28-skcom-typelib.md 只列 COMMETHOD 簽名,STOCKORDER 14 欄未展開,且明載「市價 literal 無法先驗」);移植來源 treading-king backend/services/capital_mapping.py:22 同樣是無條件 f\"{req.price:.2f}\" —— 即上游帶著同一個潛伏 bug,不構成任何格式佐證;tc4-market-facts skill 群益節無此條。可得的最強佐證是 audit 實錄的 SKCOM 回文 \"Because MarketPrice Type then OrderPrice should be 0\"(data/audit/capital-20260824.jsonl),支持 \"0\" 但不排除 \"0.00\" 也合法。風險上限受控:1068 是 SendStockOrder 同步回傳的 SKCOM client-side 驗證(單未到交易所),猜錯只會再被拒單,不會錯價成交。",
+      "disposition": "accepted",
+      "resolution": "不改邏輯(\"0\" 是最合理選擇),只補標註,三處各一行:(1) mapping.py 新註解把兩層拆開 —— 「OrderPrice 必須為 0 = 2026-08-24 prod 1068 實證;送出字面 \"0\" 為依 SKCOM 錯誤訊息文字的推定,\"0.00\" 未試,待真環境首單驗」;(2) tests/capital/test_mapping.py 新測試的 assert 註解同步(比照 :151 「未實測」寫法);(3) repro.md §真環境驗收 加 fallback 決策:首單若仍回 1068,下一步即改試 \"0.00\",不再另開排查。"
+    },
+    {
+      "id": "C2",
+      "severity": "P2",
+      "summary": "Blast radius 低估:現股「一鍵平倉」是第二條受同一 bug 影響、也被此修一併修好的真錢路徑,repro.md §Blast radius 完全沒提。鏈路 = CapitalPositionsList → close-order.ts::closeBodyOf(body 不帶 price_type)→ capital_api.py:108 PositionCloseBody 預設 \"market\" → close.py::build_close_order(price_type 原樣帶入)→ 同一個 to_stockorder_fields。另查 audit 全史(capital-20260818~0824.jsonl):price_type=market 的現股單 7 筆全 ok:false(即今日這 7 筆 1068),action=close 0 筆 —— 亦即這條路徑**從未成功過一次**,此修是讓它首次真正成立。連帶首次會被走到的下游:回報事件的委託價欄(市價單群益回什麼值未知,store.apply_reply 直接吃 rec.price 寫進 OrderRecord.price)、委託列表「市價」標籤、ladder-lots 徽章聚合。程式面本次無需改動(修在共用 mapping 層,兩條路徑一起好)。",
+      "disposition": "accepted",
+      "resolution": "驗收清單擴為兩筆並寫進 repro.md §真環境驗收:(a) 閃電梯市價買/賣 1 張(現行計畫);(b) 現股部位一鍵平倉(走 price_type 預設 market)。首單成功後額外看一眼委託列表該列的委託價欄與「市價」標籤是否合理(若群益回 0,前端會顯示 0.00 —— 屬新觀察點,不預先改 code)。"
+    },
+    {
+      "id": "C3",
+      "severity": "P2",
+      "summary": "repro.md 兩處事實不精確(不影響修法,影響日後回查的可信度)。(a)「市價單不存在改價場景」不成立:現股市價 ROD 在鎖漲跌停日會留存簿中(tc4-market-facts skill 已載『鎖漲跌停:市價單佇列價格欄 = 0』,同一 skill 群益節亦已機械反證現股 market+ROD 合法),該單在委託列表 actionable,使用者可對它改價;程式面已正確處理(client.correct_price → store.forget_price_type,tests/capital/test_client.py::test_correct_price_forgets_price_type 有鎖),故結論(不需改 code)對、理由錯。(b) 筆數:audit 實錄 5608 為 6 筆(09:02:28/33/35/38/39/40)+ 6770 1 筆 = 7 筆,repro 寫「6 筆(5608 市價賣 ×5)」。",
+      "disposition": "accepted",
+      "resolution": "改 repro.md 文字:症狀段筆數改 7(5608×6 + 6770×1);Blast radius 段把「不存在改價場景」改為「留存簿中的市價單可被改價,已由 correct_price → forget_price_type 處理並有測試鎖住」。"
+    },
+    {
+      "id": "C4",
+      "severity": "P2",
+      "summary": "測試覆蓋有一道現實的縫:新測試只覆蓋 market + ROD + cash 一組,而既有 test_stock_sell_market_fok_short_maps(market + FOK + short)未斷 bstrPrice。若日後有人把條件誤寫成 `req.price_type == \"market\" and req.time_in_force == \"ROD\"`,整套測試不會紅 —— 這不是假想的誤植:期貨端 to_futureorder_fields 的市價分支正好帶 TIF 特判(ROD→IOC),照著抄過來就會長成這樣。歸零與 TIF 正交是本修的真實契約(證交所逐筆交易下 market 的 IOC/FOK 走同一 nTradeType 欄,價格歸零同樣適用),值得用一行鎖住。",
+      "disposition": "accepted",
+      "resolution": "在既有 test_stock_sell_market_fok_short_maps 補一行 `assert f[\"bstrPrice\"] == \"0\"  # 歸零與 TIF 無關`。零成本,不新增測試函式。"
+    },
+    {
+      "id": "C5",
+      "severity": "P2",
+      "summary": "名目金額閘(safety._check_qty_amount)對市價單用的是前端帶的估價(最近成交價),而市價單實際可成交到漲/跌停,最大偏離約 ±10% → 閘會低估名目金額。此修讓市價路徑首次真正送得出去,這個既有落差因此首次成為活的。",
+      "disposition": "rejected_with_reason",
+      "resolution": "駁回(非本 diff 引入,且屬已拍板設計):models.py::PositionCloseRequest.price 註明「market=閘用估價(前端帶)」、safety.py::_bad_price 註解已明寫 market 的 price 是閘用估價、flash-send.ts::STOCK_OK_TEXT 亦對使用者明示「估價 = 最近成交價」。CAPITAL_MAX_AMOUNT 未設/0 = 不限亦為 user 拍板。要收緊(改用漲跌停價估名目)是行為改動,屬另案 /mod,不塞進這次 bug 修。"
+    },
+    {
+      "id": "C6",
+      "severity": "P2",
+      "summary": "審計 JSONL 記的 req.price(如 19.0)與實際送出的 bstrPrice=\"0\" 從此不一致,單看 price 欄會誤讀成限價單。",
+      "disposition": "rejected_with_reason",
+      "resolution": "駁回:審計語意是「請求意圖」而非 wire 欄位(client._record 只 asdict(req)/asdict(result)),同一筆已含 price_type=\"market\",配合 models.py 的欄位語意可完整還原;期貨市價路徑(bstrPrice=\"M\")自始即是同一形狀,本修未新增歧義。改記 wire 欄位是審計格式變更,blast radius 大於本 bug,不在此動。"
+    }
+  ]
+}

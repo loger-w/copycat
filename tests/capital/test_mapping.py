@@ -102,6 +102,9 @@ def test_stock_sell_market_fok_short_maps() -> None:
     assert f["nSpecialTradeType"] == 1  # 市價=1
     assert f["nTradeType"] == 2  # FOK=2
     assert f["sFlag"] == 2  # 融券=2
+    # review C4:歸零條件只看 price_type、與 TIF 正交 —— 若照抄期貨分支誤寫成
+    # `market and ROD` 的組合條件,這一行(FOK 市價)會抓到。
+    assert f["bstrPrice"] == "0"
 
 
 def test_stock_margin_maps_to_one() -> None:
@@ -448,3 +451,18 @@ def test_product_of_bad_symbol_raises() -> None:
         product_of("TC.S.TWS.2330")  # 個股段非期權
     with pytest.raises(ValueError):
         product_of("not-a-symbol")
+
+
+# 🔴 2026-08-24 prod 實錄:市價單帶估價 → SKCOM 1068
+# SK_ERROR_SPECIAL_TRADE_TYPE_IS_MARKETPRICE_AND_ORDERPRICE_SHOULD_BE_ZERO
+# (user 5608 市價賣 ×5 / 6770 市價買 ×1 全數被拒;audit data/audit/capital-20260824.jsonl)。
+# 現股市價單 bstrPrice 必須為 "0";req.price 仍供 safety 金額閘估算,不動。
+def test_stock_market_order_price_field_must_be_zero() -> None:
+    f = to_stockorder_fields(_stock(price_type="market"), full_account="x")
+    assert f["nSpecialTradeType"] == 1  # 市價
+    assert f["bstrPrice"] == "0"  # 1068:委託價必須為 0(已實證);字面 "0" 為推定,首單驗
+
+
+def test_stock_limit_order_price_field_unchanged() -> None:
+    f = to_stockorder_fields(_stock(), full_account="x")
+    assert f["bstrPrice"] == "590.00"  # 對照組:限價路徑不受市價歸零影響
