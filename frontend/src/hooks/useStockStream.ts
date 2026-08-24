@@ -13,8 +13,7 @@ import type { SignalMsg } from "@/lib/signal-model";
 import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 import { connectWithRetry } from "@/lib/ws-reconnect";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { WsStatus } from "@/types";
 
 export interface WatchlistQuote {
   p: number | null;

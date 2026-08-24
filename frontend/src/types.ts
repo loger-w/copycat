@@ -9,6 +9,10 @@ export type SnapshotStatus =
   | "degraded"
   | "replay";
 
+/** 8 支 WS hook 共用的連線狀態(R4 N034 自 7 份同值宣告收斂到此):
+ *  `connecting` = 建 socket 中(含每次重連)/ `open` = onopen 後 / `closed` = 斷線或 watchdog 放棄後。 */
+export type WsStatus = "connecting" | "open" | "closed";
+
 export interface SnapshotTotals {
   call_net_qty: number;
   put_net_qty: number;

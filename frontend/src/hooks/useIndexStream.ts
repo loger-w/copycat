@@ -10,8 +10,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { commitRef } from "@/lib/commit-ref";
 import { connectWithRetry } from "@/lib/ws-reconnect";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { WsStatus } from "@/types";
 
 export interface IndexSeries {
   p: number | null;

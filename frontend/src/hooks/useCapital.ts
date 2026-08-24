@@ -25,9 +25,8 @@ import type {
   CapitalStatus,
   CapitalStockOrderBody,
   OrderResult,
+  WsStatus,
 } from "@/types";
-
-export type WsStatus = "connecting" | "open" | "closed";
 
 // ---------------------------------------------------------------------------
 // WS 事件 pub/sub(module-level;useCapitalStream 發布、query hooks 訂閱)

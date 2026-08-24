@@ -7,9 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type { CorrState } from "@/types";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { CorrState, WsStatus } from "@/types";
 
 export interface CorrStreamState {
   state: CorrState | null;

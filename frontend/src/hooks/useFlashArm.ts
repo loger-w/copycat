@@ -13,7 +13,8 @@
  */
 import { useCallback, useEffect, useReducer, useRef, type Dispatch } from "react";
 
-import { useCapitalWsStatus, type WsStatus } from "@/hooks/useCapital";
+import { useCapitalWsStatus } from "@/hooks/useCapital";
+import type { WsStatus } from "@/types";
 import { ARM_IDLE_MS, initialArm, reduceArm, type ArmEvent, type ArmState } from "@/lib/flash-arm";
 
 export interface FlashArmControl {

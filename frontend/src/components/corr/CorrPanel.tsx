@@ -1,7 +1,6 @@
 import { ConnectionBadge } from "@/components/ConnectionBadge";
-import type { WsStatus } from "@/hooks/useTxoSnapshot";
 import { cn } from "@/lib/utils";
-import type { CorrState } from "@/types";
+import type { CorrState, WsStatus } from "@/types";
 
 /** 窗長(秒)→ 表頭文字。 */
 export function windowLabel(secs: number): string {

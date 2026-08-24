@@ -15,9 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type { RiverDelta, RiverLeg, RiverState } from "@/types";
-
-export type WsStatus = "connecting" | "open" | "closed";
+import type { RiverDelta, RiverLeg, RiverState, WsStatus } from "@/types";
 
 export interface RiverStreamState {
   state: RiverState | null;
