@@ -1714,7 +1714,8 @@ def create_app(
         if breadth is None:
             # 載入中 / 未設定都在 accept **之前**拒握手(R4 N036;starlette 在 CONNECTING 態送
             # close = uvicorn 回 403):browser 端 onopen 不觸發、走「從未 open」退避。
-            # 載入中語意由 REST `/api/breadth/state` 承擔,不再送「載入中 scalar」再關。
+            # 載入中語意由 REST `/api/market/breadth` 承擔(loading → enabled/stale),不再送
+            # 「載入中 scalar」再關。
             await websocket.close()
             return
         await websocket.accept()
