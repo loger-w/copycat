@@ -1221,7 +1221,7 @@ export function IntradayChartCore({
   }
 
   // 期貨(近全軸)態自 R2 起五顆全開:CDP/MA 由 caller 以**期貨日 K** 前端算好注入
-  //（`lib/futures-overlay.ts`;不打 `/api/stock/overlay`，那支吃股號)、成交點的近全軸
+  // (`lib/futures-overlay.ts`;不打 `/api/stock/overlay`,那支吃股號)、成交點的近全軸
   // 日期界由 `alldayFillPoints` 收(夜盤成交屬前一錨定日)、VP 由 `futuresBarsToAccum`
   // 自折(不經 `foldVp`,所以現貨窗硬編與期貨態無關)。反灰只剩「資料源真的沒有」那條路。
   // 個股期(`stkfut`)態維持三顆反灰:它的 accum 走 `foldVp`,分鐘窗仍是現貨窗。

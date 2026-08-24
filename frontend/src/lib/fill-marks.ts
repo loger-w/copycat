@@ -172,6 +172,19 @@ function aggregate(raws: readonly RawFill[]): readonly FillPoint[] {
     .sort((a, b) => a.minute - b.minute || (a.side === b.side ? 0 : a.side === "B" ? -1 : 1));
 }
 
+/** 群益回報的 `date`(`YYYYMMDD`)+ `time`(`HH:MM:SS`)→ 近全軸兩支 helper 各自要的輸入形:
+ *  `stamp` = `YYYY-MM-DD HH:MM`(`anchorDateOf` 吃的)、`hhmm` = `HHMM`(`alldayIndexOf` 吃的)。
+ *
+ *  兩個字串**同源一次切完**:分開在呼叫端各切各的話,漂掉的樣態是「日期界用了 A 的分鐘、
+ *  軸索引用了 B 的分鐘」—— 成交點畫在別的分鐘上,而兩邊的切法都自己看起來對。 */
+function splitCapitalStamp(date: string, time: string): { stamp: string; hhmm: string } {
+  const hm = time.slice(0, 5); // HH:MM
+  return {
+    stamp: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)} ${hm}`,
+    hhmm: `${hm.slice(0, 2)}${hm.slice(3, 5)}`,
+  };
+}
+
 /** 單一比對鍵(股號 / 期交所契約碼)的成交點。
  *
  *  `key === null` 直接回 `EMPTY_FILLS`(同 `aggregateLots` 的 guard)—— 個股期合約 ym
@@ -215,9 +228,7 @@ export function alldayFillPoints(
     if (o.stock_no !== key) continue;
     const b = baseFill(o);
     if (b === null) continue;
-    // `YYYYMMDD` + `HH:MM:SS` → `YYYY-MM-DD HH:MM`(`anchorDateOf` / `alldayIndexOf` 的輸入形)
-    const hhmm = `${b.time.slice(0, 2)}${b.time.slice(3, 5)}`;
-    const stamp = `${b.date.slice(0, 4)}-${b.date.slice(4, 6)}-${b.date.slice(6, 8)} ${b.time.slice(0, 5)}`;
+    const { stamp, hhmm } = splitCapitalStamp(b.date, b.time);
     if (anchorDateOf(stamp) !== anchorDate) continue;
     const index = alldayIndexOf(hhmm);
     if (index === null) continue;
