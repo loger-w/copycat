@@ -1374,8 +1374,16 @@ class StockEngine:
     def _quote_payload(self, code: str) -> dict:
         """`watchlist_quote` 的**唯一** payload builder(round4 項 4)。
 
-        四個產出點(連線種子 / set_watchlist 新增 / 轉態補推 / 1s flush)共用這一份,
-        否則同一個訊息型別會長出多種形狀,而消費端只會在缺欄位那一刻靜默降級。
+        所有產生點共用這一份,否則同一個訊息型別會長出多種形狀,而消費端只會在缺欄位
+        那一刻靜默降級。
+
+        **判準,不是清單**(N101:原本寫「四個產出點」,實際已漂到 8 處):凡是要把
+        `watchlist_quote` 推出去的地方一律呼叫本函式,不得就地組 dict。要看現況有幾處走
+        `grep -n "_quote_payload" copycat/server/stock_engine.py` —— 記數字的那一版註解在
+        2026-08-13 spec review 已經對不上(當時 7 處),再寫一次只是換一個會漂的數字。
+        （2026-08-25 grep 實得 8 處:set_watchlist 新增種子 / `quotes()` 的 Discord 摘要
+        取 `chg_pct` / retry 重掛後補種子 / `_handle_no_data` / 轉態補推 / 連線 seed /
+        試撮窗翻轉補推 / 1s flush。）
 
         尚無成交時參考價走**獨立欄位 `ref`**,絕不塞進 `p` —— 塞進 `p` 會讓新舊 client
         都把昨收讀成今價。取 `meta.ref_milli` 而不是 `y_close`:`chg_pct` 的分母就是它,
