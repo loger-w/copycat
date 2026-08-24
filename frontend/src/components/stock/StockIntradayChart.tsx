@@ -235,11 +235,27 @@ const ChartStatic = memo(function ChartStatic({
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   hlines?: readonly ChartHLine[];
 }) {
-  // MA 價位標籤走廊(anchor=end 在 w − R_AXIS_W − 2,向左佔 EDGE_LABEL_W)的左緣。
-  const maLabelLeft = w - R_AXIS_W - 2 - EDGE_LABEL_W;
+  // 走廊 B 的右錨點:MA 價位標 / 掛牌 / hline label 三者同 x、同 anchor=end。
+  const edgeLabelRight = w - R_AXIS_W - 2;
+  // MA 價位標籤走廊(anchor=end 在 edgeLabelRight,向左佔 EDGE_LABEL_W)的左緣。
+  const maLabelLeft = edgeLabelRight - EDGE_LABEL_W;
   // 界與極值文字同一組(review F4):兩份界各寫一次的話,兩種文字會在同一個角落
   // 各自夾制到不同的位置。底部再收 5px 是給字的下半身,`plotBottom` 是 baseline 上限。
   const edgeBounds = { top: MARK_LABEL_TOP, bottom: plotBottom - 5 };
+  // `edgeBounds` 投影到**中心**單位(2026-08-24 review N044-2)。
+  //
+  // 走廊 B 上兩種標籤的 y 單位天生不同:MA 價位標 / 掛牌帶 `dy=0.35em`(y = 中心),
+  // 極值文字 / hline label 沒有 dy(y = baseline)。界只有一組數字,所以**每條路徑
+  // 只能挑一種單位、從頭到尾用同一種**:讓位路徑吃 baseline(它的輸入來自
+  // `markLabelY`,那裡的 limits 就是 baseline 語意),中間為了套避讓幾何換成中心,
+  // 界也必須跟著換 —— 原本拿 baseline 界去夾中心值再 +3 還原,等於上界悄悄變成 12,
+  // 而症狀是「讓了位卻還疊著」(實測讓位後與 VWAP 只剩 8.07px):兩種讀法各自都
+  // 「合理」,沒有任何錯誤訊號。`edgePriceLabels` / `pegLabels` 的輸入本來就是中心,
+  // 那兩條路徑照舊整條走 `edgeBounds`,不受本行影響。
+  const edgeCenterBounds = {
+    top: edgeBounds.top - BASELINE_TO_CENTER,
+    bottom: edgeBounds.bottom - BASELINE_TO_CENTER,
+  };
   // 走廊 A(右緣帶內)的界(D7):`[PAD_Y, plotBottom − PAD_Y]` 就是線 y 的值域
   // (`toY` 的映射範圍),所以任何不相疊的標籤都不會被 clamp 無故位移。
   // **在 ChartStatic 內算、不從外面傳**(W6):新增 prop 會打穿本元件的 memo,
@@ -279,18 +295,48 @@ const ChartStatic = memo(function ChartStatic({
       top: MARK_LABEL_TOP,
       bottom: plotBottom,
     });
-    // 極值文字無 dy → base 是 baseline;避讓幾何一律以中心為單位(review B-1)
+    // 極值文字無 dy → base 是 baseline;避讓幾何一律以中心為單位(review B-1),
+    // 界也一起換成中心單位(`edgeCenterBounds`)。
+    // 讓位方向 = **文字原本站在標記圓的哪一側**(2026-08-24 review N007-1):
+    // 圓與文字的中心距恰好一個 `EDGE_LABEL_H`,所以「遠離 VWAP」在 VWAP 落於文字外側時
+    // 剛好把文字推到圓上(實測 5.52px)—— 讓開一層 halo 換來壓住那顆不可動的資訊。
+    // 沿原方向推則永遠是「再往外一點」。
+    const baseCenter = base - BASELINE_TO_CENTER;
     const center = yieldToFixed(
-      base - BASELINE_TO_CENTER,
+      baseCenter,
       avoidVwap([x - half, x + half]),
       EDGE_LABEL_H,
-      edgeBounds,
+      edgeCenterBounds,
+      { prefer: baseCenter < mark.y ? "up" : "down" },
     );
     return [{ id, mark, x, text, half, y: center + BASELINE_TO_CENTER }];
   });
   // 掛牌**先定位**:它是「CDP 在域外」的唯一訊號(KR-1),不能被 MA 標籤推開。
   // 兩者同一條走廊(x = w − R_AXIS_W − 2、anchor=end)、同一組界。
   const pegList = pegLabels(pegs, edgeBounds);
+  // 域內 hline 的 label **先定位**(N044):它與 VWAP 就地標籤同一條走廊(盤末末點貼
+  // 右界時 x 區間完全重疊),兩層 halo 互蓋。讓位的是 hline label —— 它是「這條線在哪」
+  // 的冗餘訊息(線體照畫),與 MA 價位標同級;VWAP 標籤不可動。**同 N007 一套機制**
+  // (`yieldToFixed`),不另做第二套。label 無 dy → y 是 baseline,先正規化成中心。
+  //
+  // **算在渲染之前**(2026-08-24 review N044-3):MA 價位標要避開這裡的結果(見下面的
+  // `maObstacles`),而下面那份渲染直接吃這一份 —— 兩處各算一次的話,「MA 讓開的位置」
+  // 與「label 實際畫在哪」會各自漂,漂掉的樣態就是兩段文字疊在一起。
+  // 域外的線不畫(clamp 到邊緣 = 把「圖外的價位」講成「圖緣的價位」,靜默假陳述),
+  // 所以域外的在這裡就濾掉,不進 obstacles 也不進渲染。
+  const hlineLabels = hlines.flatMap((ln, i) => {
+    const [yBottom, yTop] = g.yDomain;
+    if (ln.priceMilli < yBottom || ln.priceMilli > yTop) return [];
+    const y = g.toY(ln.priceMilli);
+    const labelY =
+      yieldToFixed(
+        y - 3 - BASELINE_TO_CENTER,
+        avoidVwap([edgeLabelRight - labelWidth(ln.label), edgeLabelRight]),
+        EDGE_LABEL_H,
+        edgeCenterBounds,
+      ) + BASELINE_TO_CENTER;
+    return [{ key: `hl-${i}-${ln.priceMilli}`, line: ln, y, labelY }];
+  });
   // MA 價位標籤的固定 obstacle = **與 MA 標籤水平相交的**極值標記(D3/review F2)。
   // 判準是顯式的區間相交(review A-2):極值文字右緣(clamp 後的 x + 半寬)伸過 MA
   // 標籤左緣才算 —— 只比 mark.x 一個點會留下一條「疊了卻不進避讓集」的窄帶。
@@ -305,7 +351,12 @@ const ChartStatic = memo(function ChartStatic({
     .concat(pegList.map((p) => p.y))
     // VWAP 就地標籤(2026-08-22 review R1 P1):末點貼右界時它的右緣 = w − R_AXIS_W,
     // 與 MA 價位標的 x 區間完全重疊(PR #78 SC-4 近拍實證白 2387.74 壓琥珀 2380)。
-    .concat(vwapLabel !== null && vwapLabel.span[1] > maLabelLeft ? [vwapLabel.y] : []);
+    .concat(vwapLabel !== null && vwapLabel.span[1] > maLabelLeft ? [vwapLabel.y] : [])
+    // 域內 hline 的 label(2026-08-24 review N044-3)。**不必判 x 相交**:兩者同一個
+    // 右錨點 `edgeLabelRight`、同 anchor=end,x 區間必然相交(不像極值文字釘在那一分鐘
+    // 的 x 上、可能整段在左半場)。持倉均價恰好落在 MA5 上是常態(均價就是這幾天的
+    // 成本區),誰也不避誰的話就是兩層 halo 直接疊印。
+    .concat(hlineLabels.map((l) => l.labelY - BASELINE_TO_CENTER));
   const maLabels = edgePriceLabels(oLines, maObstacles, edgeBounds);
   // POC(域內量最大的價位);vp toggle 關 → vpBars 空 → 自然沒有
   const pocBar = vpBars.find((b) => b.poc) ?? null;
@@ -511,48 +562,31 @@ const ChartStatic = memo(function ChartStatic({
           填色與雙色價線);排在極值標記之後則會把那兩顆環的文字蓋掉。
           label 畫在**繪圖區右緣內側**(不是 viewBox 右緣):右緣 `R_AXIS_W` 帶是 CDP/MA
           價位標的走廊,壓進去兩種標籤會互疊。 */}
-      {hlines.map((ln, i) => {
-        const [yBottom, yTop] = g.yDomain;
-        if (ln.priceMilli < yBottom || ln.priceMilli > yTop) return null;
-        const y = g.toY(ln.priceMilli);
-        // N044:label 與 VWAP 就地標籤同一條走廊(盤末末點貼右界時 x 區間完全重疊),
-        // 兩層 halo 互蓋。讓位的是 hline label —— 它是「這條線在哪」的冗餘訊息
-        // (線體照畫),與 MA 價位標同級;VWAP 標籤不可動。**同 N007 一套機制**
-        // (`yieldToFixed`),不另做第二套。label 無 dy → y 是 baseline,先正規化成中心。
-        const labelRight = w - R_AXIS_W - 2;
-        const labelY =
-          yieldToFixed(
-            y - 3 - BASELINE_TO_CENTER,
-            avoidVwap([labelRight - labelWidth(ln.label), labelRight]),
-            EDGE_LABEL_H,
-            edgeBounds,
-          ) + BASELINE_TO_CENTER;
-        return (
-          <g key={`hl-${i}-${ln.priceMilli}`} data-testid="chart-hline">
-            {ln.title === undefined ? null : <title>{ln.title}</title>}
-            <line
-              x1={Y_AXIS_W}
-              x2={w - R_AXIS_W}
-              y1={y}
-              y2={y}
-              className={ln.className}
-              strokeWidth={1}
-              strokeDasharray="5 3"
-            />
-            <text
-              x={labelRight}
-              y={labelY}
-              textAnchor="end"
-              className="fill-ink stroke-surface"
-              strokeWidth={2}
-              paintOrder="stroke"
-              fontSize="0.5625rem"
-            >
-              {ln.label}
-            </text>
-          </g>
-        );
-      })}
+      {hlineLabels.map(({ key, line: ln, y, labelY }) => (
+        <g key={key} data-testid="chart-hline">
+          {ln.title === undefined ? null : <title>{ln.title}</title>}
+          <line
+            x1={Y_AXIS_W}
+            x2={w - R_AXIS_W}
+            y1={y}
+            y2={y}
+            className={ln.className}
+            strokeWidth={1}
+            strokeDasharray="5 3"
+          />
+          <text
+            x={edgeLabelRight}
+            y={labelY}
+            textAnchor="end"
+            className="fill-ink stroke-surface"
+            strokeWidth={2}
+            paintOrder="stroke"
+            fontSize="0.5625rem"
+          >
+            {ln.label}
+          </text>
+        </g>
+      ))}
       {/* 當日高低(round4 項 1;round6 項 1 改圓環並上移圖層)。
           橫貫左右的虛線已移除 —— 它把整條價位軸都染上「今天的高」這個語意,而使用者要的
           只是「最高點在哪、多少錢」。標在**摸到極值的那一分鐘**上 + 就地價位文字。

@@ -563,9 +563,15 @@ export function spansOverlap(a: readonly [number, number], b: readonly [number, 
  *  `fixed` = 已經佔住那條 y 的**不可動**圖元中心(目前唯一的來源是 VWAP 就地標籤 ——
  *  它的 y = 「線末點在哪」是資訊)。單位一律是視覺中心,呼叫端負責把 baseline 正規化。
  *
- *  規則:與任一 fixed 的中心距 < `gap` 時,往**遠離該鄰居**的方向推到剛好 gap;
- *  讓開一個之後可能撞上下一個,所以掃到不再相撞(上限 = 鄰居數)。恰好同 y 時往下讓,
- *  方向固定才決定性。
+ *  規則:與任一 fixed 的中心距 < `gap` 時推到剛好 gap;讓開一個之後可能撞上下一個,
+ *  所以掃到不再相撞(上限 = 鄰居數)。
+ *
+ *  `opts.prefer` = 讓位方向。未指定時往**遠離該鄰居**的那一側(恰好同 y 時往下,方向
+ *  固定才決定性)。指定時**一律往該側**,即使那一側離鄰居比較近的那個方向 ——
+ *  「遠離」只看得到鄰居一個,看不到呼叫端還有別的不可壓區:極值文字的另一側就是它的
+ *  標記圓(距離恰好一個 `gap`),VWAP 落在文字外側時「遠離 VWAP」正好把文字推到圓上
+ *  (2026-08-24 review 實測中心距 5.52px)。呼叫端知道文字原本站在圓的哪一側,
+ *  把那一側傳進來,讓位就永遠是「再往外一點」而不是「翻過去壓別人」。
  *
  *  **沒讓位就完全不動**(不無故 clamp):hline label 的 y 由線位決定,可以合法地落在
  *  `bounds` 之外(那時線體本來就不畫),把它無條件拉回界內等於憑空改位置。
@@ -575,13 +581,15 @@ export function yieldToFixed(
   fixed: readonly number[],
   gap: number,
   bounds: { top: number; bottom: number },
+  opts: { prefer?: "up" | "down" } = {},
 ): number {
   if (fixed.length === 0 || bounds.top > bounds.bottom) return y;
   let out = y;
   for (let pass = 0; pass < fixed.length; pass += 1) {
     const hit = fixed.find((o) => Math.abs(out - o) < gap);
     if (hit === undefined) break;
-    out = out >= hit ? hit + gap : hit - gap;
+    const down = opts.prefer === undefined ? out >= hit : opts.prefer === "down";
+    out = down ? hit + gap : hit - gap;
   }
   if (out === y) return y;
   return Math.min(Math.max(out, bounds.top), bounds.bottom);
