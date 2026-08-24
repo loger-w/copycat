@@ -111,16 +111,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 - [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
   守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
-- [ ] **R6 膠囊不讀 `years_loaded`**(日曆過期零提示);盤前 hub 聯集 vs 標題 trade_date 落差歸 R3b。
-- [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
-  鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
-- [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
-  路徑 phase≠status 無測。〔`handover.attempt` 與 `tape=0` 契約已於 2026-08-22 mod/calendar-poll-tape-omitted 登記 CLAUDE.md §4〕
-- [ ] **R10 `corr_config.py` 預設仍是六腿,不只 logger 文案**(2026-08-24 盤點更正):`DEFAULT_CONFIG`
-  (`corr_config.py:59-68`)legs 只有 TXF/TWN/YM/ES/NQ/SXF、缺 NK225M,而 `configs/correlation.json`
-  已 7 腿 → 設定檔壞掉退回預設時江波圖/相關係數會**真的少一腿**;`:97/100/104/108` 四條 logger
-  「改用預設六腿」文案同批。→ 🔴 微幅,下次動 corr_config 帶走(DEFAULT_CONFIG 補 NK225M + 文案改「預設腿」)。
-
 ## 2026-08-21(refactor/housekeeping-batch-2026-08-21 R10 留尾)
 
 - [ ] **全站 `localStorage` get/set 收斂到 `lib/storage.ts::readLocal` / `writeLocal`**(/mod)。
@@ -138,14 +128,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   仍掛得起來且退回預設值;(b) `setItem` stub 成拋 `QuotaExceededError` → 呼叫端不炸。
   承接 2026-08-14 mod/overview-subtabs 節的舊條(已標作廢改指本條);2026-08-06 節
   「`MarketPane.tsx` 七個 localStorage 呼叫點裸奔」是同一批,動工時一併帶走。
-## 2026-08-21(bug/history-timeout-propagation code review round-1 留尾)
-
-- [ ] **F10:`stock_source.fetch_daily_bars` 的 1K fallback 沒有縮窗**。同檔的
-  `fetch_bars_range_tagged` 對 DK 空的 fallback 會把視窗縮到 `_OHLC_FALLBACK_WINDOW_DAYS`
-  (避免 4.5× 量級放大,R2-7),`fetch_daily_bars` 兩段卻都用整個 `_DAILY_WINDOW_DAYS`。
-  兩段各自的 deadline 已收到 10s,所以不是延遲問題,是**收割量**問題(DK 不支援的股號
-  每次 overlay 都整窗拉 1K)。要動之前先量一次真實列數,別憑感覺調窗。
-
 ## 2026-08-20(盤後 server log 巡檢發現)
 
 - [ ] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
@@ -202,8 +184,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
-- [ ] **江波圖 end 格被 clamp 近似值先佔後,1K 回補的真收盤 bar 被「只填尚無值」擋掉**(2026-08-21 R5 spec review R5;characterization 已鎖
-  `test_clamp_approximation_blocks_the_real_close_bar`,改時該案該紅):per-leg 旗標「end 格為近似值」讓 `apply_backfill` 覆寫一次。S 級。
 - [ ] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。
 - [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
   可帶 `--listen-secs` 拉長在 13:5x 起跑順帶驗。
@@ -240,11 +220,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   交易日 00:00–08:30 重啟 → source 日窗 = 今天而今天還沒開盤,空圖到開盤(spec KR-4 / Q3-R8);
   非交易日已由 R3 日曆處理,此案補「交易日盤前」段。要對齊 stock stage1 08:00 / index 08:30 /
   breadth streak 06:00 三個時序。
-## 2026-08-16(mod/overview-onepage-corr-tab 收尾留尾巴)
-
-- [ ] **週末補班(extra_trading_days)漏設無膠囊提示**(2026-08-21 R6 spec review R9):膠囊週末守門排除;後端判休市 → 報價凍住 + 無(緩)(tick 層 is_trial 純窗丟棄)。
-  候選:`/api/calendar` additive 加 extra_trading_days,條件改「後端判非交易日且(非週末 或 …)」。
-- [ ] **`TXO_BACKFILL_DATE` 忘了清造成整盤凍結無提示**(R6 review 觀察):payload 已有 `backfill_env`,可比照膠囊掛一顆。S 級。
 ## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
 
 - [ ] **TC4 凍結 stub 的姊妹 ready-check 未收緊**(review L2-P2-4):`river_backfill.
@@ -289,37 +264,15 @@ prod 8721 = 6adf20d9、dist 已重建)。
   各一次(即第二段要亮的那種)。0→1 那筆 tick qty 極小(1–15)、1→0 那筆 qty 大(62–608,
   = 延緩後集合撮合那筆)。可據此做 (a) skill 事實回填:**TradeStatus=1 即延緩撮合中,episode
   ≈ 2 min,恢復 tick 即集合撮合成交**;(b) per-code `trial` 可直接吃 TradeStatus==1。
-- [ ] **`stock_engine._quote_payload` docstring「四個產出點」已漂移**:實為 8 處
-  (:373 set_watchlist / :457 quotes() Discord 摘要 / :647 retry 重掛種子 /
-  :767 _handle_no_data / :919 轉態補推 / 連線 seed / 1s flush / 本輪新增的
-  窗翻轉補推;2026-08-13 spec review R5 grep 證實 7 處 + 本輪 +1)。
-  下次動該函式時順修 docstring。
-
 ## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
 
 - [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷 / 跨輪混合快照並關閉本輪**(2026-08-21 R7 review F7;2026-08-22 review P1 補:舊輪 rows 與新輪 rows 落同一 staging 時會復活已出清的幽靈部位):COM 無查詢識別不可根治;
   機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 / 多一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。
-- [ ] **期貨 K 線三態 status 通道**(2026-08-21 R8 plan review P1-6):`_market_payload` 無 status 欄、`build_minute` 丟棄第二元素、前端 BarsMeta 只看 `source === "unavailable"`;
-  timeout 目前在 `futures_engine.bars_range` 內吃掉只 log。要三態需 payload + route + 前端 FuturesChart 分支同批。
-- [ ] **盤外時段啟動踩 timeout 無自癒**:分時自癒 gate 在 watch window(09:00–13:25),
-  盤後/晚間啟動若 1K 回補 timeout,線缺到次日 09:06 才自癒。實測晚間 TC4 閒時回補快
-  (18:17 啟動無 timeout),風險低;若要覆蓋,detector 改「窗外以 min(now, 13:30) 為
-  期望覆蓋終點」,但要處理休市日恆空的輪詢噪音。
 - [ ] **heal 帶 minutes 的廣播對飽和 client 是 at-most-once**(review T-4/C-2,known-risk):
   per-client queue(`ws.py::CLIENT_QUEUE_MAX`,2026-08-24 現為 500;原記 32 已過時)飽和期間
   `QueueFull: pass` 靜默丟掉 heal 那一則 → 該分頁線仍空且無二次機會(引擎
   state 與 log 都顯示已自癒)。觸發窗極窄;系統性解法(per-client 補送 / 低頻週期全量)
   會動 scalar-only 頻寬慣例,獨立輪評估。
-- [ ] **pending 期間連線類 retry 把新日 1K merge 進舊日 minutes dict**(review T-1 附帶,
-  latent 既有):廣播已被 T-1 修復擋住,但 server 端 `state()` 在 swap 前(≤60s)仍可能
-  給出混日 minutes(重整頁面恰落在該窗會短暫畫混日線)。修法 = retry 成功時 pending 態
-  寫進 `_pending_minutes` 而非 `_twse.minutes`,要對齊 swap 的 backfill 合併語意,獨立小輪。
-## 2026-08-12(mod/signal-hub-decouple XR-3 收尾留尾巴)
-
-- [ ] **`_empty_daily_bars` 語意堆疊**(C-4 已修 gap sleep;殘餘觀察):無 engine 時
-  basis job 仍逐檔跑一輪(50 檔 50 行「CDP 停用」warning,一次性)。若嫌吵,候選
-  = 無 engine 時 on_watchlist 不排 basis job(hub 加模式分支,spec 當時判不值得)。
-
 ## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
 
 - [ ] **X-3 深修:把 ZMQ 訂閱迴圈移出 `stock_engine._pool_lock`(review 首位 finding,P2)**:
