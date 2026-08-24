@@ -137,8 +137,15 @@ export function IndexPage({
             預設值 = 改動前那個 class 的展開值**,單欄態逐值不變由建構保證(W-4)。
             比例 6:5(兩張指數圖比一條騰落線資訊密度略高;原案 3:2 實測 1080p 騰落線 / figure
             只有 0.47、864p 還溢出 18px 出捲軸,6:5 在 1080p / 864p 皆 ≥ 0.6 且不捲 —— 家數帶
-            兩列 + 標題 ≈ 150px 固定 chrome 是吃掉比例的主因)。 */}
-        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0 @[1050px]:[--idx-chart-flex:6_1_0%] @[1050px]:[--idx-adl-flex:5_1_0%] @[1050px]:[--idx-adl-wrap-flex:1_1_0%] @[1050px]:[--idx-adl-min:10rem]">
+            兩列 + 標題 ≈ 150px 固定 chrome 是吃掉比例的主因)。
+
+            **`--idx-adl-min` 是 6rem 不是 10rem(N062)**:地板 160 + 家數帶固定 chrome
+            ≈148 + gap 8 = 316px,超過矮視窗兩欄態分給該 section 的 5/11(2026-08-20 機械
+            實測 1536×700:主 grid 622/676 出 54px 捲軸,溢出源正是這個 section 262/316)。
+            6rem = 騰落線 wrapper 自身 `h-24` 的 96px(= 單欄態高度)—— **它是地板不是
+            指定高**,1536×864 實測 wrapper 拿到 181px 遠高於任一地板,正常視窗逐值不變;
+            只有被壓到極限時才退回單欄態的高度而不再溢出。 */}
+        <div className="@container flex flex-col gap-3 @[1050px]:min-h-0 @[1050px]:[--idx-chart-flex:6_1_0%] @[1050px]:[--idx-adl-flex:5_1_0%] @[1050px]:[--idx-adl-wrap-flex:1_1_0%] @[1050px]:[--idx-adl-min:6rem]">
           <BasisRow txf={txf} twse={twse} />
           {/* 顯式斷點取代舊 auto-fit minmax(480px):auto-fit 量的是這個 grid 自己的寬,
               與左欄 container 同寬故語意等價,但斷點值得寫在看得見的地方(W-12)。

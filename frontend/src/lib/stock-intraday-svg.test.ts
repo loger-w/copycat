@@ -1242,12 +1242,13 @@ describe("bandLabels(R1 SC-1)", () => {
   it("容量不足(7 顆 > capacity)→ 仍全印 7 顆,界內等距壓縮(不再堆成同一個 y)", () => {
     const out = bandLabels(CROWDED, { top: 4, bottom: 30 });
     expect(out.length).toBe(7);
-    const ys = out.map((l) => Math.round(l.y * 100) / 100);
-    expect(ys).toEqual([4, 8.33, 12.67, 17, 21.33, 25.67, 30]);
-    // 等距:相鄰間距全等(浮點 → 6 位小數容差),且兩兩相異(無一對重疊成同 y)
-    const gaps = ys.slice(1).map((y, i) => y - ys[i]!);
-    for (const gap of gaps) expect(gap).toBeCloseTo((30 - 4) / 6, 6);
-    expect(new Set(ys).size).toBe(7);
+    expect(out.map((l) => Math.round(l.y * 100) / 100)).toEqual([
+      4, 8.33, 12.67, 17, 21.33, 25.67, 30,
+    ]);
+    // 等距:相鄰間距全等(取未捨入的原值比,6 位小數容差),且兩兩相異(無一對疊成同 y)
+    const raw = out.map((l) => l.y);
+    for (const [i, y] of raw.slice(1).entries()) expect(y - raw[i]!).toBeCloseTo((30 - 4) / 6, 6);
+    expect(new Set(raw).size).toBe(7);
     for (const l of out) {
       expect(l.y).toBeGreaterThanOrEqual(4);
       expect(l.y).toBeLessThanOrEqual(30);

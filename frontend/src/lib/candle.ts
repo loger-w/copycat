@@ -183,6 +183,18 @@ const PAD_Y = 6;
 const MIN_BODY_H = 1; // 開收同價仍要看得見
 const VOL_RATIO = 0.22; // 量區佔價圖高度比例
 const Y_TICKS = 5;
+/** 矮圖的 y 刻度數(N027)。 */
+const Y_TICKS_TIGHT = 3;
+/** 降階門檻(svg 高)。可用高 = `(h − X_LABEL_H) × (1 − VOL_RATIO) − 2 × PAD_Y`:
+ *  h=140 → 86.3px,5 條的間距 21.6px ≈ 2× 字高(0.625rem ≈ 10px);再矮就開始相接
+ *  (1:1 viewBox 後群組卡 / 窄 pane 的 h 可以低到 96 → 可用高 52、間距只剩 13px)。 */
+const Y_TICKS_MIN_H = 140;
+
+/** 這張圖的 y 刻度數。**由高度單一決定**,不看域寬 —— 域窄時的去重由下面的
+ *  `seen` 收(那是「刻度撞同價」,與「字擠在一起」是兩件事)。 */
+function yTickCount(height: number): number {
+  return height < Y_TICKS_MIN_H ? Y_TICKS_TIGHT : Y_TICKS;
+}
 
 /** bars(升冪)→ 蠟燭幾何。空輸入回空幾何(不崩)。
  *
@@ -292,8 +304,9 @@ export function buildCandleGeometry(
     // 單的價位(round3 項 10)。snap 後可能溢出 [lo, hi] —— lo/hi 本身不必然合法
     // (extraSeries 的 MA/布林是 Math.floor 的任意整數),端點被 snap 出界是常態。
     const seen = new Set<number>();
-    for (let i = 0; i < Y_TICKS; i += 1) {
-      const raw = Math.round(lo + (span * i) / (Y_TICKS - 1));
+    const ticks = yTickCount(size.height);
+    for (let i = 0; i < ticks; i += 1) {
+      const raw = Math.round(lo + (span * i) / (ticks - 1));
       const priceMilli = snapNearest(raw);
       if (priceMilli < lo || priceMilli > hi) continue;
       if (seen.has(priceMilli)) continue; // tick 粗於等分間距時相鄰刻度會 snap 同價

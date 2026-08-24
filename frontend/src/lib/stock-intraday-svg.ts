@@ -529,6 +529,85 @@ export function overlayLines(
  *  baseline 與中心混用的失效樣態是兩顆標籤看起來仍黏在一起,而數字上「距離夠」。 */
 export const EDGE_LABEL_H = 10;
 
+/** 0.5625rem(≈9px)字級下的單字元寬估值。**係數由既有兩顆常數反推**:
+ *  「1005.0」6 字 × 5.7 = 34.2 ≈ `EDGE_LABEL_W`(34)、「1405.67」7 字 × 5.7 = 39.9 ≈
+ *  `VWAP_LABEL_W`(40)。全形(hline label 的中文)取 1em = 9px。 */
+const HALF_CHAR_W = 5.7;
+const FULL_CHAR_W = 9;
+
+/** 右緣走廊 / 就地標籤的文字寬**估值**(N006)。
+ *
+ *  估值不是量測:SVG 的 advance width 只有瀏覽器排版後才知道,jsdom 恆 0。字級固定
+ *  0.5625rem 時等寬近似的誤差(±1px)遠小於避讓間距 `EDGE_LABEL_H`,而**硬編上界**
+ *  的誤差不是:index / 期指的 8 字數字實寬 ≈45.6px,拿個股口徑的 34 / 40 當寬,
+ *  盤末 clamp 會內縮不足(字尾溢進右緣帶)、避讓判定會漏掉 ≈5px 的窄帶。
+ *
+ *  同一段文字**只能有一個寬度**:定位、clamp、避讓的水平判準一律走這支,
+ *  三處各估各的失效樣態是「判定說不撞、畫出來撞」。 */
+export function labelWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) w += (ch.codePointAt(0) ?? 0) > 0x2e7f ? FULL_CHAR_W : HALF_CHAR_W;
+  return w;
+}
+
+/** 兩段文字的 x 區間是否相交(端點相接不算 = 不相交)。
+ *
+ *  走廊避讓的**水平判準**:只比中心點一個座標會留下一條「疊了卻不進避讓集」的窄帶
+ *  (review A-2 的既有教訓),而不比 x 的話,盤中末點在畫面中段時所有標籤都會無故位移。 */
+export function spansOverlap(a: readonly [number, number], b: readonly [number, number]): boolean {
+  return a[0] < b[1] && b[0] < a[1];
+}
+
+/** **可動標籤讓開不可動鄰居**的唯一機制(N007 極值文字 / N044 hline label 共用)。
+ *
+ *  `fixed` = 已經佔住那條 y 的**不可動**圖元中心(目前唯一的來源是 VWAP 就地標籤 ——
+ *  它的 y = 「線末點在哪」是資訊)。單位一律是視覺中心,呼叫端負責把 baseline 正規化。
+ *
+ *  規則:與任一 fixed 的中心距 < `gap` 時,往**遠離該鄰居**的方向推到剛好 gap;
+ *  讓開一個之後可能撞上下一個,所以掃到不再相撞(上限 = 鄰居數)。恰好同 y 時往下讓,
+ *  方向固定才決定性。
+ *
+ *  **沒讓位就完全不動**(不無故 clamp):hline label 的 y 由線位決定,可以合法地落在
+ *  `bounds` 之外(那時線體本來就不畫),把它無條件拉回界內等於憑空改位置。
+ *  界退化(top > bottom)一樣不動 —— 同 `bandLabels` 的紀律:寧可疊也不亂放。 */
+export function yieldToFixed(
+  y: number,
+  fixed: readonly number[],
+  gap: number,
+  bounds: { top: number; bottom: number },
+): number {
+  if (fixed.length === 0 || bounds.top > bounds.bottom) return y;
+  let out = y;
+  for (let pass = 0; pass < fixed.length; pass += 1) {
+    const hit = fixed.find((o) => Math.abs(out - o) < gap);
+    if (hit === undefined) break;
+    out = out >= hit ? hit + gap : hit - gap;
+  }
+  if (out === y) return y;
+  return Math.min(Math.max(out, bounds.top), bounds.bottom);
+}
+
+/** VWAP 就地標籤的寬度**下限**(= 既有硬編值)。
+ *
+ *  下限而不是定值(N006):短字(stock 態 `fmt` 的「2380」)時位置與改動前逐值相同,
+ *  長字(index / 期指的 8 字)才由 `labelWidth` 的實測寬接手。原註解的推導照舊 ——
+ *  VWAP 走 `fmt` 口徑、統計量幾乎必帶兩位小數,千元帶最長 7 字(「1405.67」)≈ 40px。 */
+export const VWAP_LABEL_W = 40;
+
+/** VWAP 就地標籤(走勢線末點右側)的水平定位 + 寬度估值。
+ *
+ *  x 的上界留一整個標籤寬:盤末末點恰在繪圖區右界上,`+4` 會把整塊字推進右緣疊線標籤帶
+ *  甚至出畫布,而那是「畫了但看不到」的靜默失敗。**渲染與 obstacle 判定共用這一份**
+ *  (兩處各算各的會出現「判定說不撞、畫出來撞」)。 */
+export function vwapLabelBox(
+  endX: number,
+  text: string,
+  width: number,
+): { x: number; width: number } {
+  const wLabel = Math.max(VWAP_LABEL_W, labelWidth(text));
+  return { x: Math.min(endX + 4, width - R_AXIS_W - wLabel), width: wLabel };
+}
+
 export interface EdgePriceLabel {
   y: number;
   priceMilli: number;
@@ -605,8 +684,9 @@ export function pegLabels(
  *  - `true`(走廊 B / `edgePriceLabels`):capacity 截斷 + clamp 後殘餘重疊丟棄 +
  *    界退化回 `[]`。那條走廊的標籤是「這條線在哪」的**冗餘**訊息(線本身照畫),
  *    疊印兩段數字比少畫一顆更不可讀。
- *  - `false`(走廊 A / `bandLabels`):不截斷、不丟棄、界退化回原 y。帶內的
- *    `價位*` 是 CDP 的**唯一**價位訊息,靜默消失等於改資訊 —— 寧可疊在界邊。 */
+ *  - `false`(走廊 A / `bandLabels`):不截斷、不丟棄、界退化回原 y;裝不下時改
+ *    **界內等距壓縮**(N009)。帶內的 `價位*` 是 CDP 的**唯一**價位訊息,靜默消失等於
+ *    改資訊,而堆成同一個 y 與消失是同一件事(只看得到最後畫的那顆)。 */
 export function layoutEdgeLabels<T extends { y: number }>(
   items: readonly T[],
   obstacles: readonly number[],
@@ -625,9 +705,20 @@ export function layoutEdgeLabels<T extends { y: number }>(
   // 空間裝不下全部(review B-5):疊印(兩段數字印在同一 y)比少畫一顆更不可讀。
   // 依 y 排序保留裝得下的前幾顆 —— 決定性,且與最後一道 clamp 的「寧可貼近不裁掉」
   // 分工:那條管的是「裝得下但被 obstacle 擠到界邊」,這條管的是「根本裝不下」。
+  const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
   if (opts.dropOverflow) {
-    const capacity = Math.floor((bounds.bottom - bounds.top) / EDGE_LABEL_H) + 1;
     if (labels.length > capacity) labels.length = capacity;
+  } else if (labels.length > capacity) {
+    // 走廊 A 裝不下(N009):原本靠最後那道 clamp 收尾,結果上緣好幾顆被壓成**完全
+    // 同一個 y**(4×4 圖牆 capacity 6 / n 7 實測 [4,4,4,4,10,20,30])—— 疊成同 y 的
+    // 那幾顆等於只看得到最後畫的那一顆,與本分支「寧可擠也不丟資訊」的立場矛盾。
+    // 改為界內等距:間距雖 < EDGE_LABEL_H,但每顆都還讀得出上下次序與對應的線。
+    // 直接回傳不跑下面兩輪 sweep:空間本來就不夠,對 obstacle 讓位無解,再推只會
+    // 把整組擠回界邊(= 回到同一個症狀)。`length > capacity` 蘊含 length ≥ 2,
+    // 分母不會是 0。
+    const step = (bounds.bottom - bounds.top) / (labels.length - 1);
+    for (const [i, l] of labels.entries()) l.y = bounds.top + i * step;
+    return labels;
   }
   const fixed = [...obstacles].sort((a, b) => a - b);
 

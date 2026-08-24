@@ -2176,7 +2176,9 @@ describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
     const label = container.querySelector('[data-testid="day-high-label"]')!;
     // 極值文字無 dy → y 是 baseline,中心 = baseline − 0.35em(≈3px)
     const center = Number(label.getAttribute("y")) - 3;
-    expect(Math.abs(center - vwapY)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
+    // 推到**剛好**一個 EDGE_LABEL_H(不多推:讓位是為了不疊,不是為了離得遠)。
+    // 用 closeTo 不用 ≥:浮點下 toY 算出來的差是 9.999999999999996。
+    expect(center - vwapY).toBeCloseTo(EDGE_LABEL_H, 6);
     // 標記圓承載「哪一分鐘 / 什麼價位」→ 一律不動
     const circle = container.querySelector('[data-testid="day-high"]')!;
     expect(Number(circle.getAttribute("cy"))).toBeCloseTo(g.toY(2_540_000), 6);
