@@ -498,23 +498,24 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.getByText("分時資料落後 90 根(TC4 回補中)")).toBeTruthy();
   });
 
-  // review ST1:門檻常數要有鑑別力 —— 兩案夾住 FUT_LIVE_LAG_MAX(5):差 6 擋、差 5 放行
-  it("gate 5 邊界:最後成交終點標記與末根差 6 格 → 擋;差 5 格 → 放行", async () => {
+  // review ST1:門檻常數要有鑑別力 —— 兩案夾住 FUT_LIVE_LAG_MAX(3):差 4 擋、差 3 放行。
+  // 3 的依據 = 2026-08-25 02:41–02:46 prod 真事件峰值 5 格(門檻 5 抓不到),常態 ≤ 3。
+  it("gate 5 邊界:最後成交終點標記與末根差 4 格 → 擋;差 3 格 → 放行", async () => {
     barsBody = {
       bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
       meta: META,
     };
-    vi.setSystemTime(new Date(2026, 7, 5, 10, 6, 30));
-    // 10:05:30 → 終點標記 10:06,與末根 10:00 差 6
-    const six: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:05:30.000" };
-    const a = wrap(<FuturesChart product="TXF" state={six} resolvedYm="202608" />);
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 4, 30));
+    // 10:03:30 → 終點標記 10:04,與末根 10:00 差 4
+    const four: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:03:30.000" };
+    const a = wrap(<FuturesChart product="TXF" state={four} resolvedYm="202608" />);
     await findIntraday();
     expect(mainLineXs(a.container).length).toBe(2);
-    expect(screen.getByText("分時資料落後 6 根(TC4 回補中)")).toBeTruthy();
+    expect(screen.getByText("分時資料落後 4 根(TC4 回補中)")).toBeTruthy();
     cleanup();
 
-    // 10:05:00.000 整分成交屬 10:05 那根(終點標記不 +1),與末根差 5 → 放行
-    const five: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:05:00.000" };
+    // 10:03:00.000 整分成交屬 10:03 那根(終點標記不 +1),與末根差 3 → 放行
+    const five: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:03:00.000" };
     const b = wrap(<FuturesChart product="TXF" state={five} resolvedYm="202608" />);
     await findIntraday();
     expect(mainLineXs(b.container).length).toBe(3);
