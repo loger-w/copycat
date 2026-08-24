@@ -8,8 +8,9 @@
  * 期間抵達的增量格(見 `mergeSnapshot`)。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { commitRef } from "@/lib/commit-ref";
 import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { BreadthPoint, BreadthState } from "@/types";
 
@@ -61,15 +62,13 @@ export function useBreadth(): BreadthState | null {
   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這顆 ref 取當下值。
   //
   // **imperative 配對**(N119,2026-08-24 升級;同 `useFuturesStream` / `useStockStream`):
-  // 每個寫入點都是「自 ref 讀基底 → 算出 next → **當場寫 ref** → setState(next)」。
-  // 改前 ref 只在 commit 後同步,同一個 macrotask 內兩則換日訊息時第二則讀到的仍是舊日
+  // 每個寫入點都走 `commitRef`(寫 ref → setState,單一出口)。改前 ref 只在 commit 後由
+  // 一支 `useLayoutEffect` 同步,同一個 macrotask 內兩則換日訊息時第二則讀到的仍是舊日
   // → 再清一次序列、再打一次全量(自癒型:多一發不是少一發,但盤中每次換日都白跑)。
   //
-  // 本 layout effect **保留為 commit 後的 backstop**(值相同時 no-op),涵蓋日後新增而
-  // 忘了配對的 setState 路徑。
-  useLayoutEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  // 那支 layout effect 曾以「commit 後的 backstop」留著,two-axis review 收修時**移除**:
+  // 配對之後 commit 的值恆 ≤ ref,它能寫進去的只有**較舊**的 commit 值,補不上漏掉的配對
+  // (mutation 實證見 `useBreadth.test.ts` 的「全量在途」)。新增 setState 路徑就補 `commitRef`。
 
   const refetch = async (): Promise<void> => {
     try {
@@ -77,9 +76,7 @@ export function useBreadth(): BreadthState | null {
       if (!res.ok) return;
       const snapshot = (await res.json()) as BreadthState;
       // ref 與 state 同批寫:全量回來後緊接著抵達的增量,基底必須是這一份。
-      const next = mergeSnapshot(stateRef.current, snapshot);
-      stateRef.current = next;
-      setState(next);
+      commitRef(stateRef, setState, mergeSnapshot(stateRef.current, snapshot));
     } catch (err) {
       console.warn("breadth: state 載入失敗", err);
     }
@@ -96,25 +93,25 @@ export function useBreadth(): BreadthState | null {
         // 換日:本地序列屬於舊日,清掉並以全量 refetch 對齊(refetch 不 await 安全 ——
         // 全量快照恆 ≥ 增量,後續 WS 訊息只會 upsert 新日的分鐘鍵)
         const prev = stateRef.current;
-        const cleared = prev === null ? prev : { ...prev, trade_date: incomingDate, series: [] };
-        stateRef.current = cleared;
-        setState(cleared);
+        commitRef(
+          stateRef,
+          setState,
+          prev === null ? prev : { ...prev, trade_date: incomingDate, series: [] },
+        );
         void refetch();
         return;
       }
       const prev = stateRef.current;
       if (prev === null) return; // 初載 fetch 尚未回來:全量將覆蓋,不從增量拼半份
       const series = msg.last_minute ? upsert(prev.series, msg.last_minute) : prev.series;
-      const next: BreadthState = {
+      commitRef(stateRef, setState, {
         ...prev,
         trade_date: incomingDate ?? prev.trade_date,
         as_of: msg.as_of ?? null,
         stale: Boolean(msg.stale),
         counts: msg.counts ?? null,
         series,
-      };
-      stateRef.current = next;
-      setState(next);
+      });
     };
 
     // 本 hook 無 wsStatus → 不需要 onConnecting

@@ -6,8 +6,9 @@
  * reconnect → refetch /api/index/state 全量。
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { commitRef } from "@/lib/commit-ref";
 import { connectWithRetry } from "@/lib/ws-reconnect";
 
 export type WsStatus = "connecting" | "open" | "closed";
@@ -94,19 +95,16 @@ export function useIndexStream(): IndexStreamState {
   // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。
   //
   // **imperative 配對**(N119,2026-08-24 升級;同 `useFuturesStream` / `useStockStream`):
-  // 每個寫入點都是「自 ref 讀基底 → 算出 next → **當場寫 ref** → setState(next)」。
-  // 改前 ref 只在 commit 後由本 layout effect 同步,同一個 macrotask 內兩則訊息時第二則
-  // 讀到的是**上一次 commit** 的值 —— merge 基底舊 → 第一則的 last_minute 被抹掉;
-  // 換日比對用舊日 → 同一 tick 的第二則又被判成換日,再清一次序列、再打一次全量。
-  // 兩者都會自癒(下一格 upsert / onopen refetch),所以症狀只是「偶爾少一格 / 多一發」。
+  // 每個寫入點都走 `commitRef`(寫 ref → setState,單一出口)。改前 ref 只在 commit 後由
+  // 一支 `useLayoutEffect` 同步,同一個 macrotask 內兩則訊息時第二則讀到的是**上一次
+  // commit** 的值 —— merge 基底舊 → 第一則的 last_minute 被抹掉;換日比對用舊日 →
+  // 同一 tick 的第二則又被判成換日,再清一次序列、再打一次全量。兩者都會自癒
+  // (下一格 upsert / onopen refetch),所以症狀只是「偶爾少一格 / 多一發」。
   //
-  // 本 effect **保留為 commit 後的 backstop**:涵蓋日後新增而忘了配對的 setState 路徑
-  // (值相同時是 no-op)。維護前提不變:凡被 handler 以 ref 讀取的 state 一律進 deps。
-  useLayoutEffect(() => {
-    twseRef.current = twse;
-    otcRef.current = otc;
-    tradeDateRef.current = tradeDate;
-  }, [twse, otc, tradeDate]);
+  // 那支 layout effect 曾以「commit 後的 backstop」留著,two-axis review 收修時**移除**:
+  // 配對之後 commit 的值恆 ≤ ref,它能寫進去的只有**較舊**的 commit 值,補不上漏掉的
+  // 配對(mutation 實證:拿掉 refetch 的三行 ref 寫入、只留 backstop,兩支 hook 的
+  // 「全量在途」測試同時轉紅)。要新增 setState 路徑就補 `commitRef`,沒有安全網可靠。
 
   const refetch = async (): Promise<void> => {
     const seq = ++fetchSeqRef.current;
@@ -125,15 +123,10 @@ export function useIndexStream(): IndexStreamState {
       retryTimerRef.current = undefined;
       // ref 與 state 同批寫(imperative 配對):全量回來後緊接著抵達的 WS 訊息,
       // 基底必須是這一份而不是上一次 commit 的。
-      const nextTwse = toSeries(body.twse, null);
-      const nextOtc = toSeries(body.otc, null);
-      tradeDateRef.current = body.trade_date;
-      twseRef.current = nextTwse;
-      otcRef.current = nextOtc;
-      setTradeDate(body.trade_date);
-      setTwse(nextTwse);
-      setOtc(nextOtc);
-      setTxf(body.txf);
+      commitRef(tradeDateRef, setTradeDate, body.trade_date);
+      commitRef(twseRef, setTwse, toSeries(body.twse, null));
+      commitRef(otcRef, setOtc, toSeries(body.otc, null));
+      setTxf(body.txf); // 無 ref(handler 不以它為 merge 基底)
     } catch (err) {
       console.warn("index: state 載入失敗", err);
       // 已有更新一發在跑 → 重試交給它;pending timer 只留一顆不堆疊
@@ -162,29 +155,15 @@ export function useIndexStream(): IndexStreamState {
       ) {
         // 換日(F3):清本地 minutes,以全量 refetch 對齊。refetch 不 await 是安全的:
         // state 為全量快照恆 ≥ 增量,且後續 WS 訊息只會 upsert 新日分鐘(review A3)
-        tradeDateRef.current = incomingDate;
-        twseRef.current = null;
-        otcRef.current = null;
-        setTradeDate(incomingDate);
-        setTwse(null);
-        setOtc(null);
+        commitRef(tradeDateRef, setTradeDate, incomingDate);
+        commitRef(twseRef, setTwse, null);
+        commitRef(otcRef, setOtc, null);
         void refetch();
         return;
       }
-      if (incomingDate !== null) {
-        tradeDateRef.current = incomingDate;
-        setTradeDate(incomingDate);
-      }
-      if (msg.twse) {
-        const next = toSeries(msg.twse, twseRef.current);
-        twseRef.current = next;
-        setTwse(next);
-      }
-      if (msg.otc) {
-        const next = toSeries(msg.otc, otcRef.current);
-        otcRef.current = next;
-        setOtc(next);
-      }
+      if (incomingDate !== null) commitRef(tradeDateRef, setTradeDate, incomingDate);
+      if (msg.twse) commitRef(twseRef, setTwse, toSeries(msg.twse, twseRef.current));
+      if (msg.otc) commitRef(otcRef, setOtc, toSeries(msg.otc, otcRef.current));
       if (msg.txf !== undefined) setTxf(msg.txf);
     };
 

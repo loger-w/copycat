@@ -90,7 +90,11 @@ export function buildOverlayGeometry(
   const all: number[] = [];
   for (const [index, s] of series.entries()) {
     const ref = s.ref;
-    if (ref === null || ref <= 0) continue; // ref 缺值 / 0 → 沒有「相對昨收」可談,不畫
+    // 判定寫成**保留條件的否定**(`!(ref !== null && ref > 0)`),不是看起來等價的
+    // `ref === null || ref <= 0` —— 後者對 `NaN` 的兩個比較都是 false,壞掉的 ref
+    // 反而被留下:該腿 pct 全 NaN,再經 `Math.min(0, ...all)` 把 y 域一起變 NaN
+    // → **兩條線同時消失**,而畫面照畫、零錯誤訊號(同 `stock-accum.ts::foldVp` 的窗判)。
+    if (!(ref !== null && ref > 0)) continue; // ref 缺值 / 0 / NaN → 沒有「相對昨收」可談,不畫
     const pts = sortedEntries(s.minutes).map(([minute, p]) => ({
       minute,
       pct: ((p - ref) / ref) * 100,
