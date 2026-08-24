@@ -105,16 +105,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
 **待 user 過目 / 盤中觀察(真環境無法刻意觸發,以測試代證的五項)**:
 以下為本次不動的 P2:
 
-- [ ] **VP 圖層在 tapeOmitted 時的佔位**(2026-08-22 mod/calendar-poll-tape-omitted out of scope):群組切單檔首 paint VP 空,
-  與「無成交」同形;可沿 `accum.tapeOmitted` 讓 VP toggle 區印載入中。
-  **user 附註(2026-08-24):顯示載入中時 UI 不得跑版,排版要固定(佔位同尺寸)。**
 - [ ] **R2 OrderPanel kind 單向靜默收斂**(`OrderPanel.tsx:66`):估價暫缺(WS 快照空窗)時市價翻回限價且不復原;
   改回 disabled 送出鈕或估價回來時還原。
-- [ ] **R2 StockChart 停用 pill 新增 cursor-not-allowed**(`RadioPills.tsx:84` vs `StockChart.tsx:169`,視覺零變偏差);
-  `RadioPills.test.tsx:260/276` onInteract 改 `toHaveBeenCalledTimes`。
-- [ ] **R3 toast 合併與 `groupSignals` 不等價**(`useSignalAlerts.ts:187` 全索引 vs 相鄰)→ hook 內補註解;
-  `formatToastText` 只剩測試在用要標明;`ToastStack.tsx:29` 比照 B3 clamp;背景 >5 分鐘 intensive throttling
-  首則延遲待 user 實測。**2026-08-24 拍板:不改成一致(兩面用途不同、差異僅極端交錯可見),補註解即可。**
 - [ ] **R4 `RightRail.tsx:285` / `futures-ladder.ts:156` 註解「後端會 400 BAD_TICK」不實**(平倉路由不過
   `_require_legal_tick`,前端 edgeOf 是唯一守門)→ 改口;`WatchlistSidebar.tsx:334` `to` 未變時回同 reference;
   補兩處邊價顯式等值 lock;作廢態給視覺回饋。
@@ -375,17 +367,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
   latent 既有):廣播已被 T-1 修復擋住,但 server 端 `state()` 在 swap 前(≤60s)仍可能
   給出混日 minutes(重整頁面恰落在該窗會短暫畫混日線)。修法 = retry 成功時 pending 態
   寫進 `_pending_minutes` 而非 `_twse.minutes`,要對齊 swap 的 backfill 合併語意,獨立小輪。
-- [ ] **櫃買(MIS)無回補來源的同症狀**:MIS 從開盤即死透的日子,otc 分時線整天空且
-  引擎無從回補(已文件化降級)。唯一可做的是 UI 分態文案(「櫃買快照源中斷」vs 現在
-  的無線靜默),順下輪前端批。
-
 ## 2026-08-12(mod/signal-hub-decouple XR-3 收尾留尾巴)
 
-- [ ] **前端 tc4="down" 文案分態**(review R2-6 accepted 偏差):StockPage 對
-  `status.tc4 === "down"` 顯示「達錢 4 連線中斷,恢復後自動回補」,但 XR-3 後無
-  engine 模式(TC4 從未開)也會收到 status down seed,而該模式 TC4 恢復**不會**
-  自癒(stock engine 只在 boot 建,需重啟 server)。候選:seed 加欄位或前端分態
-  文案(「達錢 4 未連線,啟動後需重啟 server」)。frontend 小改,順下輪前端批。
 - [ ] **`_empty_daily_bars` 語意堆疊**(C-4 已修 gap sleep;殘餘觀察):無 engine 時
   basis job 仍逐檔跑一輪(50 檔 50 行「CDP 停用」warning,一次性)。若嫌吵,候選
   = 無 engine 時 on_watchlist 不排 basis job(hub 加模式分支,spec 當時判不值得)。
@@ -424,18 +407,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   覆寫(modal 開著時側欄不可互動,窗口極窄)。要收 = 佇列上提到 hook 層讓三個 caller 共用。
 - [ ] **佇列交錯覆蓋缺口其餘兩類(review W-5 附帶)**:刪組+改名交錯、失敗短路後
   「新動作以未變基底重算」的更多組合,現有 lock 只釘了連刪 / 連點 / 失敗短路三條主路徑。
-- [ ] **useBreadth / useIndexStream handler 同 tick 回寫升級(P2,自癒型)**:兩檔 ref 只在
-  commit 後由 useLayoutEffect 同步,同一 macrotask 兩則 WS 訊息時第二則以舊底合併(下一格
-  upsert / onopen refetch 自癒)。若要關窗:handle 內算出 next 同步回寫 ref(與
-  useFuturesStream imperative 配對同形,各 3-4 行)。註解已標明不同級。
-- [ ] **TickTape key 穩定序號真解**:回推索引 key 在 `TAPE_MAX=200` 滿載後仍逐筆位移
-  (與修前同級,未惡化)。真解 = stock-accum 累加單調 dropped 計數或後端 seq 入 TickRow,
-  key 改 `${dropped + ticks.length - 1 - i}`。
-- [ ] **StockChart spotMode 在 prod 無讀者(記錄性)**:StockPage 的 `{accum ? …}` gate 讓
-  換合約必卸載重掛,A6「還原現貨模式」實際由 localStorage 兌現;spotMode 只在
-  same-instance(測試)路徑有讀者。日後想刪它或想真驗 A6,先看 StockChart 是否已脫離
-  accum gate。
-
 ## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
 
 - [ ] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
@@ -515,12 +486,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-11(react-doctor /chore 快修批 review 留尾巴,全部既存非本批引入)
 
-- [ ] **P2:MarketPane OverlayCard 單邊 ref 缺值時線色/標籤錯位**(既存):
-  `buildOverlayGeometry` filter 掉 ref null/0 的 series,`g.lines` index 與
-  OVERLAY_LINES 錯位 —— twse.ref 缺時僅剩的櫃買線會畫成加權色標「加權」。
-  修法 = callee 帶回原始 index(或 filter 改保位 null),OVERLAY_LINES 註解已標。
-- [ ] **RadioPills `onInteract` 每次 label 點擊觸發兩次**(2026-08-21 fix 波實測:label activation 轉發 click 到內層 input 再冒泡):
-  現僅用於 PriceLadder 重置武裝閒置計時,冪等無害;若之後有人拿它計數,要在 label onClick 過濾 `e.target` 為 input 的那次。
 - [ ] **P2:自選列組內排序無鍵盤路徑**(既存):拖拉握把是唯一排序入口(pointer
   only;aria-hidden 化後對 AT 不可見)。管理 Dialog 只有移組/移除,無排序。
   補鍵盤排序入口(如 Dialog 內上移/下移鈕)列排期。
