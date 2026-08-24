@@ -752,9 +752,17 @@ function XAxisLabels({
  *  「判不出方向」。修完後端判定的根因、又改成紋理之後 user 仍覺得多餘 ——
  *  拍板「不要分顏色,單純顯示量」。內外盤統計沒有消失,只是移出圖形語彙由說明列承載。
  *
- *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 個 `<rect>`,
- *  不可每次重建(對齊 ChartStatic 的慣例)。
- *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。 */
+ *  **必須 memo**:hover 每個 mousemove 都 re-render 父層,這層最多 270 個 `<rect>`
+ *  (近全軸 1140 個),不可每次重建(對齊 ChartStatic 的慣例)。
+ *  hover 垂直線刻意畫在本元件之外(同一個 `<svg>` 內的獨立 `<g>`),不進 memo props。
+ *
+ *  **N047(2026-08-24 量測後留原樣)**:memo 擋得住 hover,但擋不住報價 —— 每則 tick 讓
+ *  `accum.minutes` 換 identity → `subEnergy` 重算 → 本層 1140 個 rect 全部重建。
+ *  jsdom 量到滿窗一輪 ~15 ms(隔離的純 rect 層 ~17 ms,即成本幾乎全在這一層;真瀏覽器
+ *  的 diff 快一個量級,且期貨 WS 已 coalesce 到 ≤10 則/s 的量級)—— 與原記載「真環境
+ *  hover 目視未見掉幀」一致,不值得為它換寫法。**要收的話別用「總量當資料版本」**:
+ *  1K 回補可以在總量不變下改寫某一分鐘的量,那種 memo key 會讓副圖靜默停在舊值;
+ *  真正安全的是 EnergySub 改單一 `<path>`(節點數 1140 → 1),留 next-time。 */
 const EnergySub = memo(function EnergySub({
   bars,
   maxTotal,
