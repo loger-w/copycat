@@ -17,6 +17,12 @@ import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
 export const MARKET_MINUTE_DAYS = 30;
 const POLL_MS = 60_000;
 
+/** 這一趟取數的結果(N104;後端 `copycat/live/stock_source.py::BarsStatus`)。
+ *
+ *  與 `BarsMeta.source` 是**兩把不同的尺**:`source` 答「這份 bar 從哪來」,
+ *  `status` 答「這一趟問到了沒」。同為字串,不可互換。 */
+export type BarsStatus = "ok" | "timeout" | "disconnected";
+
 export interface BarsMeta {
   source: string;
   coverage_from: string | null;
@@ -25,6 +31,10 @@ export interface BarsMeta {
   volume: boolean;
   refusal: string | null;
   synth_since: string | null;
+  /** **optional**:後端 2026-08-25 才 additive 加上,且目前只有期指分 K 那條路會給出
+   *  非 `"ok"` 的值(加權 / 櫃買 / 日週月 K 的來源層沒有三態訊號)。讀取端遇 undefined
+   *  一律退回改動前的單一空態文案。 */
+  status?: BarsStatus;
 }
 
 export interface MarketBars {

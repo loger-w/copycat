@@ -282,6 +282,9 @@ export interface CalendarState {
   calendar_trade_date: string;
   backfill_env: string | null;
   holidays: string[]; // YYYY-MM-DD 升冪
+  /** 補班交易日(週末仍開盤),升冪。**optional**:後端 2026-08-25 才 additive 加上,
+   *  舊 payload / 舊治具沒有這格 —— 讀取端一律 `?? []`(失效方向 = 退回改動前行為)。 */
+  extra_trading_days?: string[];
   years_loaded: number[];
   calendar_loaded: boolean;
 }
