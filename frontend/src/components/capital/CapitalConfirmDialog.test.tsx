@@ -220,3 +220,39 @@ describe("CapitalConfirmDialog(showModal 分支,手動裝 prototype stub)", () =
     expect(onCancel).not.toHaveBeenCalled();
   });
 });
+
+/** 🔴 N114:「onConfirm / onCancel 必須卸載本元件」原本只寫在 JSDoc 裡,沒有任何機械防護。
+ *
+ *  違反的後果不是崩潰,是**靜默降級**:`closedRef` 是一次性 settled 旗標,不卸載的話
+ *  第二次 Esc 完全沒有反應(只剩取消鈕可關),而這是真錢確認窗 —— 使用者按 Esc 沒關掉,
+ *  下一個直覺是按 Enter。JSDoc 對「新 caller 複製貼上既有 caller 的一半」擋不住任何事。
+ *
+ *  形式選擇(change-spec §1 有完整理由):dev-only console.error,不是 throw、不是改語意。
+ *  throw 會讓一個 UI 契約瑕疵升級成真錢流程中斷;重置 closedRef 則直接違反「settled 之後
+ *  不再補發」這條安全語意。**檢查點在 macrotask**:React 由事件處理器觸發的卸載會在
+ *  同一個 task 內 flush 完,正確的 caller 到期前就已 unmount(cleanup 順手清掉計時器)。 */
+describe("CapitalConfirmDialog caller 契約防護(N114)", () => {
+  it("callback 後未卸載 → dev console.error 指名契約", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+    );
+    fireEvent.click(screen.getByText("確認")); // caller 沒卸載本元件 = 違約
+    await new Promise((r) => setTimeout(r, 5));
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0]![0])).toContain("CapitalConfirmDialog");
+    err.mockRestore();
+  });
+
+  it("callback 後有卸載(正確 caller)→ 零 console.error", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { unmount } = render(
+      <CapitalConfirmDialog title="確認刪單" rows={[]} onConfirm={noopCb} onCancel={noopCb} />,
+    );
+    fireEvent.click(screen.getByText("取消"));
+    unmount(); // 契約:callback 一律卸載
+    await new Promise((r) => setTimeout(r, 5));
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+});

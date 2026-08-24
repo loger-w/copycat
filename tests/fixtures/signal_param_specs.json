@@ -1,0 +1,21 @@
+{
+  "_note": "訊號規則 per-kind 參數的閉區間值域。產生點 = copycat/signal_rules.py::PARAM_SPECS;前端鏡像 = frontend/src/components/stock/SignalRulesDialog.tsx::PARAM_FIELDS(min/max)。兩邊各自對本檔斷言(tests/test_signal_rules.py::test_param_specs_parity_with_frontend + frontend/src/components/stock/signal-param-parity.test.ts),改壞任一邊只有那一邊紅。值是 [min, max],閉區間。",
+  "specs": {
+    "cdp_cross": {
+      "rearm_ticks": [0, 50],
+      "rearm_dwell_secs": [0, 3600]
+    },
+    "surge_crash": {
+      "pct": [0.1, 50],
+      "window_secs": [10, 3600]
+    },
+    "vol_burst": {
+      "ratio": [1, 100],
+      "window_secs": [10, 3600],
+      "min_elapsed_min": [0, 240],
+      "min_window_lots": [0, 1000000],
+      "min_day_lots": [0, 10000000]
+    },
+    "limit_lock": {}
+  }
+}

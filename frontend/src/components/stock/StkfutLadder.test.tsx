@@ -393,10 +393,25 @@ describe("StkfutLadder 部位條(R2-4)", () => {
     const bar = await screen.findByTestId("stkfut-position-bar");
     const rows = within(bar).getAllByTestId("stkfut-position-row");
     expect(rows.length).toBe(1);
-    expect(rows[0]!.textContent).toContain("多 2 口 @100.00");
+    // 🔴 N064:均價字面與 header / 自選 chip 同走 `fmt`(整數不帶小數)—— 舊值 `100.00`
+    // 是 `toFixed(2)` 的第二套口徑,同一個數字在同一畫面上長兩個樣子。
+    // 逐字比對第一顆 span(`toContain` 對 `@100.00` 也成立 —— 鑑別力為零)
+    expect(rows[0]!.firstElementChild!.textContent).toBe("多 2 口 @100");
     expect(rows[0]!.textContent).toContain("+800");
     // 現股口徑的「打平(含稅費)」不適用期貨 —— 出現就是抄錯口徑
     expect(bar.textContent).not.toContain("打平");
+  });
+
+  /** 🔴 N064:非整數均價仍印兩位以內、去尾隨 0(`fmt` 口徑)。整數案單獨不夠 ——
+   *  `toFixed(2)` 對 100.5 給 `100.50`,兩者只在整數案才有差、只鎖整數會漏掉半邊。 */
+  it("非整數均價走 fmt 口徑(100.5 → 100.5,不是 100.50)", async () => {
+    mockCapitalFetch({
+      "/api/capital/positions": () => json({ positions: [futPos({ avg_price: 100.5 })] }),
+    });
+    render(ladder());
+    const bar = await screen.findByTestId("stkfut-position-bar");
+    expect(bar.textContent).toContain("@100.5");
+    expect(bar.textContent).not.toContain("@100.50");
   });
 
   it("無本合約部位 → 部位條整段不渲染", async () => {

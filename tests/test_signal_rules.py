@@ -85,6 +85,26 @@ class TestConstants:
             "limit_lock": {},
         }
 
+    def test_param_specs_parity_with_frontend(self) -> None:
+        """跨語言 parity(N055):前端 Dialog 自 2026-08-25 起**也擋值域**(好讓使用者
+        知道是哪一格、界在哪),於是同一張表存在兩份實作。兩份漂掉沒有任何錯誤訊號 ——
+        前端寬於後端 → 使用者拿回泛用的 INVALID_RULE;前端窄於後端 → 合法值被擋掉,
+        而畫面上的說明還寫著錯的界。
+
+        共用 fixture 是唯一真相:本條與前端
+        `frontend/src/components/stock/signal-param-parity.test.ts` 各自對它斷言,
+        改壞任一邊只有那一邊紅。上面的 `test_param_specs_literal` 仍留著 —— 它鎖的是
+        「後端這份表的字面值」,fixture 被改壞時兩條一起紅才看得出是誰動了誰。
+        """
+        raw = json.loads(
+            (Path(__file__).parent / "fixtures" / "signal_param_specs.json").read_text("utf-8")
+        )
+        expected = {
+            kind: {key: (lo, hi) for key, (lo, hi) in fields.items()}
+            for kind, fields in raw["specs"].items()
+        }
+        assert PARAM_SPECS == expected
+
 
 class TestNormalizeHappyPath:
     @pytest.mark.parametrize("kind", RULE_KINDS)
