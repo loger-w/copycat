@@ -109,19 +109,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
 **待 user 過目 / 盤中觀察(真環境無法刻意觸發,以測試代證的五項)**:
 以下為本次不動的 P2:
 
-- [ ] **R2 OrderPanel kind 單向靜默收斂**(`OrderPanel.tsx:66`):估價暫缺(WS 快照空窗)時市價翻回限價且不復原;
-  改回 disabled 送出鈕或估價回來時還原。
-- [ ] **R4 `RightRail.tsx:285` / `futures-ladder.ts:156` 註解「後端會 400 BAD_TICK」不實**(平倉路由不過
-  `_require_legal_tick`,前端 edgeOf 是唯一守門)→ 改口;`WatchlistSidebar.tsx:334` `to` 未變時回同 reference;
-  補兩處邊價顯式等值 lock;作廢態給視覺回饋。
 - [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
   守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
 - [ ] **R6 膠囊不讀 `years_loaded`**(日曆過期零提示);盤前 hub 聯集 vs 標題 trade_date 落差歸 R3b。
-- [ ] **R7 欠帳窗續命**(2026-08-22 round-2 review P2):`abandon()` 把單一 `_stale_until` 推到 now+20 會替所有未清欠帳續命
-  (profit/OI 段兩次 abandon 相距 60s,第 1 筆早該過期)→ 多吞一次合法空回應。正解 = 每筆欠帳各自 deadline(deque),或 abandon 時先剔除已過期。
-- [ ] **R7 P2 三條**(profit 段 `000` 表頭先關窗已由 2026-08-22 fix/balance-collector-owed-count「rows 不動欠帳 + 吞終止符清 _last_feed」一併消滅):吞終止符 WARNING 帶
-  collector 名;`_set_status("ok")` 改專用 clear 不走 reset(`client.py:240`);`_query_open_interest` 無期貨
-  帳號提前 return 不清 `_oi_abandoned`(`client.py:467`)。
 - [ ] **R8 `fetch_daily_bars` AND → 只看 `fb_timed_out`**(`stock_source.py:753`;`test_dk_ready_but_empty_plus_1k_timeout_returns_empty`
   鎖住的是窄路徑錯誤行為,事前標該變);期貨 K 線三態 status 通道(已有條)。
 - [ ] **R9 `phase` / `attempts_max` write-only**(`engine.py:251`,註解引用不存在的 UI 症狀);`buffer is None`
@@ -220,8 +210,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
-- [ ] **`code` null 的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)三處靜默不顯示**,閃電梯照舊;
-  無任何提示。候選:positions 回傳 `code_missing` 計數 → 側欄底一行「n 筆個股期倉位無法對映」。
 - [ ] **成交點精確版 / 群組卡個股期委託標記可直接吃 `code`**(R2 留尾的「契約碼→股號反查」已由本輪後端
   `stock_code_of` 提供;`GET /api/capital/positions` 有欄,orders 尚無 —— 精確版加 `code` 到 orders 同款)。
 ## 2026-08-17(mod/intraday-fill-marks batch3 R2 留尾)
@@ -232,24 +220,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
   **昨日部分成交今日刪單的單會以(今日刪單分鐘 × 昨日均價)畫上今日圖**(`date` 是最新事件日,
   日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。
 - [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。
-- [ ] **toggle 關態 `EMPTY_MARKS` identity 無機械閘**(cr1 B-p2-3 rejected:關態沒有可計次函式);
-  症狀僅掉幀。若日後改 ChartStatic memo 契約,順手補 render-count 閘。
-
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
-- [ ] **委託列表「市價」標籤的日界語意**(KL-4):`store.note_price_type` 記本機日曆日,`_price_type_of`
-  要求與回報 `_Agg.date`(委託建立日)相等;夜盤跨午夜 / 盤後預約單未實證 → 不符只缺標籤不誤標。
-  收斂候選:交易日口徑(`trading_calendar`)或 ±1 日窗(與前端 `ymdWindow` 同口徑)。
 - [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
   屆時 OrdersList 標籤對這兩梯才會出現(現在 wire 就是限價 IOC,不標)。
   (2026-08-24 註:user 之後找機會下單再驗;現股側 1068 修時一併盤點期貨端 `"M"` 路徑。)
-## 2026-08-17(mod/flash-arm-lock 留尾)
-
-- [ ] **CapitalConfirmDialog 開著時 Esc 不解除鎖定**(spec R-6;next-time:190 既有語意的鎖定版):
-  窗內 stopPropagation → 鎖定中 + 平倉確認窗開著時 Esc 只關窗。改 capture 監聽屬 🔴,另案。
-- [ ] **未鎖定時「WS closed 期間仍可武裝」的既有邊沿語意**(spec review R1 衍生):鎖定鈕已在非 open
-  時 disabled + level 觸發,武裝鈕未跟進(維持既有);要一致化可把 `armDisabled` 也吃 wsStatus。
-- [ ] **後端 source="flash-locked" 稽核**(spec §8):payload source 可擴,讓審計檔看得出鎖定態送單。
 ## 2026-08-17(mod/group-grid-full-chart R4 留尾)
 
 - [ ] **冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
@@ -294,11 +269,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
   升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。
 
-## 2026-08-13(mod/watchlist-ux-limit-50 收尾留尾巴)
-
-- [ ] **後端個股期平倉路徑不過 `_require_legal_tick`**(R4 review F4,後端 /mod):`/api/capital/position/close` 直送 close_position,只驗 price>0;
-  前端 edgeOf 是唯一檔位守門,漏接 = 券商退單零訊號。修法:close route 由 req.key 反查 product,tickable 個股期補 tick 閘。
-- [ ] **ETF 期貨 / 除權息調整腿的平倉估價用現股 tick 表**(R4 review F5):`isOrderBlocked` 只擋閃電梯,平倉鍵不擋;現為嚴格改善(0.01 倍數),可比照送單面讓 blocked 腿 closePriceOf 回 null。
 ## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
 
 - [ ] **緩撮標示第二段:TradeStatus-based per-code 盤中偵測**(本輪只出時間窗版,
