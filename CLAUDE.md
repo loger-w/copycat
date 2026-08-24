@@ -201,6 +201,18 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `tests/fixtures/overlay_parity.json`(expected 手算寫死)釘住:後端
   `tests/server/test_overlay.py::test_overlay_parity_with_frontend` + 前端
   `frontend/src/lib/overlay-parity.test.ts` 各一條,改壞任一邊只有那一邊紅。
+- **`/api/market/bars` 的 `meta.status` 三態**(2026-08-25 起,N104):產生點
+  `copycat/live/futures_source.py::fetch_bars_range`(raise `HistoryTimeoutError`)→
+  `copycat/server/futures_engine.py::bars_range`(`BarsResult`:timeout / disconnected)→
+  `copycat/server/bars.py::build_minute`(兩段取最壞)→ `app.py::_market_payload(status=…)`。
+  值域 `ok | timeout | disconnected`,沿 `/api/stock/bars` 既有三態語意。**目前只有期指
+  `tf=1` 那條路會給出非 `ok`**(加權 / 櫃買 / 日週月 K 的來源層沒有三態訊號,固定 `ok`)。
+  讀者 = `frontend/src/hooks/useMarketBars.ts::BarsMeta.status`(optional)與
+  `components/futures/FuturesChart.tsx::EMPTY_TEXT`(空態三句話)。後端拿掉這一格 → 前端
+  `?? "ok"` 靜默退回單一句「暫無資料(TC4 未回應)」,「TC4 忙」與「真沒 K 線」再度不可分辨,
+  零錯誤訊號。**與 `FuturesChart` 的 gate 5「分時資料落後 N 根(TC4 回補中)」是兩件事**:
+  `status` = 這一趟回補請求的結果(bars **空**時才讀得到);gate 5 = 資料尾 vs WS 最後成交
+  (bars **非空**時才成立)。兩者並存不合併 —— 處置不同(等重試 vs 看當日段完整性)。
 
 ## 5. 資料源
 
