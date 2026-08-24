@@ -166,22 +166,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   日盤價變頻率更高,量級成比例放大〕〔2026-08-21 M0 日盤 12:35 實測 60s:19 則(另 5 則 ping),
   每則 **27.1 KB**(日盤鏈更寬),0.32 則/s,間隔中位 2.7 s(min 1.0 s / max 10.2 s)≈ **503 KB/min**;
   則數比夜盤少但單則大 58%,總流量 +23%〕
-## 2026-08-18(fix/tc4-realtime-refcount-kill 開盤全站零推播 root cause 留尾)
-
-- [ ] **shutdown 保證 LOGOUT**:09:00:49 那次是 uvicorn graceful shutdown 但 lifespan 沒跑完就被 run.ps1 `taskkill /T /F`
-  收掉(TC4 log 直到 60s 後 reap 才 `RemoveLoginInfo`);sources `close()` 有 UNSUB+Disconnect 但沒機會執行。
-  候選 = run.ps1 Ctrl+C 後先等 lifespan(輪詢 :8721 消失、上限 ~10s)再 taskkill;或 app lifespan 把 capital-com
-  執行緒收尾放到 TC4 sources close 之後。有自癒後不再是必要條件,但少一輪 ~60s 暗窗。
-- [ ] **TXO session 與 futures session 雙持 `TXF.HOT` 同 key**:單 session UNSUB→SUB 永遠到不了 count 0,靠第 3 次
-  heal 的 window variant 才救得回(多一輪 backoff)。候選 = TXO source 的 SPOT 訂閱改用不同窗(例如 EndTime 07)或
-  由 futures_engine 單持、TXO 讀 futures.state。
-- [ ] **corr 海外腿在自身休市段落入 R2「從未推播」母體**(C-6 放寬後):每腿最慢 300s 一發 UNSUB+SUB、每 3 發換窗;
-  上限 6 腿 × 12 發/小時。要收 = corr 每腿各自時段閘。〔2026-08-21 M0 log 對帳(08:39–11:42 三小時):
-  SXF.HOT 8 發(靜默 240–244s,10:28 起每 4–12 分一發,全 attempt 1),其餘海外腿零發;
-  **真正的 churn 大戶是個股冷門檔**:6921 嘉雨恩-創 153 發(全日 6 ticks,60s 靜默 → 每 ~70s 重掛)、
-  6949 59 發 —— 個股 R3 健檢對「當日本來就沒成交」的檔一樣狂重掛,建議併入同一條收;**收盤段 IX0001 加權 13:25:37–13:34 每 30 s 一發共 18 發**(收盤集合競價 + 收盤後指數本就停推,source 層 R2 靜默閘不知道指數的時段)、13:45 日盤收後 TXF/MXF/TMF 各 2 發(夜盤 15:00 前的空窗,同類)〕
-- [ ] **rollover 舊窗 key 洩漏(既有行為,非本輪引入)**:stage 2 `_resub` 的 UNSUB 用新日期窗,前一交易日的 key 留在 session 上直到
-  session 死;死時歸零會把 symbol 上游帶走(正是殭屍 reap 殺 key 的素材)。要收 = set_trade_date 前先對舊窗逐 symbol UNSUB。
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
 - [ ] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。
@@ -222,23 +206,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
   breadth streak 06:00 三個時序。
 ## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
 
-- [ ] **TC4 凍結 stub 的姊妹 ready-check 未收緊**(review L2-P2-4):`river_backfill.
-  collect_1k_minutes:52`、`stock_source.backfill:499`、`tc4._fetch_symbol_ticks` 仍是
-  「首頁非空即 break」(2026-08-24 盤點:三處仍在 `river_backfill.py:58`、`stock_source.py:608`、
-  `tc4.py:751`);空窗毒化訂閱回凍結 stub 時同樣被騙。~~river 的 `minute_end_from_1k` 只讀 Time
-  不讀 Date~~ 這半邊已由 `river_models.py::parse_1k_minutes(rows, utc_day)` 丟棄異日列解掉,
-  剩 ready-check 本體。index 側已用「差量進展 + 窗口 variant」繞開;姊妹路徑要收就沿
-  `_collect_history 靜默回空家族`(2026-08-13 節)一起做三態化 + stub 簽名判定,獨立輪。
 - [ ] **heal 每個 variant 新發一個 history 訂閱、無釋放路徑**(review L1-P2-4):壞日子
   單 session 最多累積 ~18 個 IX0001 1K 訂閱(`_unsub` 只管 REALTIME)。TC4 per-session
   history 訂閱上限未實測;SC-5 側車重演時順手觀察連續多窗口訂閱的行為,若有上限,
   觸頂樣態可能又是「靜默回空」。
-- [ ] **`_twse.minutes` 的 worker thread 寫 vs event loop 迭代讀無鎖**(review L1-P2-3,
-  既有家族、本輪把讀寫推得更中心):被取消 retry 的 orphan to_thread 仍會 `update()`,
-  與 `_minutes_lag_exceeded` 的 `max(m)` / `_payload` 的 `dict(...)` 理論可撞
-  `RuntimeError: dictionary changed size during iteration`(炸點在 try/except 外,
-  该發 heal 靜默消失)。收法 = worker 只回傳 dict、event loop 端合併,動 `_retry_loop`
-  與 `_subscribe_and_backfill` 簽名,小輪。
 - [ ] **SC-5 側車順驗 stub 語意**(review L1-P2-1 / L2-P1-2 Known Risk):驗「凍結
   stub 的 Time 是否恆為訂閱建立時刻」與「盤中建立的新窗口在該窗真無 1K 時是否產生
   in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
@@ -273,18 +244,6 @@ prod 8721 = 6adf20d9、dist 已重建)。
   `QueueFull: pass` 靜默丟掉 heal 那一則 → 該分頁線仍空且無二次機會(引擎
   state 與 log 都顯示已自癒)。觸發窗極窄;系統性解法(per-client 補送 / 低頻週期全量)
   會動 scalar-only 頻寬慣例,獨立輪評估。
-## 2026-08-11(fix/tc4-lock-p2s 收尾留尾巴)
-
-- [ ] **X-3 深修:把 ZMQ 訂閱迴圈移出 `stock_engine._pool_lock`(review 首位 finding,P2)**:
-  X-3 只收斂了 service 鎖(讀路 / 落檔不再堆積),engine 端 `_pool_lock` 仍序列化整段
-  逐檔 `to_thread(_acquire)` 迴圈 —— TC4 故障下第二個寫入者的 `_settle` 還是等第一個
-  的迴圈走完,Discord 回覆仍可能拖過 interaction token 上限。修法方向 = 同檔 backfill
-  worker 的 per-code 取鎖模式(鎖只護共享結構,ZMQ IO 在鎖外逐檔做);要重新對齊
-  「名單先指派再訂閱」(round4 項 4)與 seq 定序的不變式,獨立輪做。
-- [ ] **`set_watchlist(seq=None)` 豁免顯式化(review,latent)**:None 分支唯一生產
-  caller = app.py boot 還原,安全前提是「service 在 restore 之後才建構 + routes 前置
-  503」,這條不變式沒在任何地方斷言;Protocol 預設 None → 未來 caller 漏帶 keyword
-  零訊號。最便宜的硬化 = boot 顯式帶 sentinel(seq=0)、刪 None 分支。
 ## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
 
 - [ ] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
@@ -337,28 +296,3 @@ prod 8721 = 6adf20d9、dist 已重建)。
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
 - [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價
-## 2026-08-10(startup-names-futures-resub 回溯補審 — 當輪漏跑 code review,補審抓到 3 P1)
-
-> 完整 findings:`.claude/bug/startup-names-futures-resub/code-review-round-1.json`
-> (2 lens 回溯審 diff 99ef8888^..2d144765,逐條對照 HEAD e3aeda5b 現碼,全部仍成立)。
-> 三條 P1 的正解都已存在於 corr/stock 姊妹實作,照抄即可 — 建議合併成一輪 /bug 或 /mod。
-
-- [ ] P2(共用層,獨立 /mod):tc4 `_ensure_connected` 無鎖 check-then-act ×
-  `_check_stale` 重連 race → 雙 QuoteAPI 落敗者永不 Disconnect;本輪 diff 讓觸發窗
-  系統性放大。**2026-08-24 盤點:`_api_lock` 已存在(`tc4.py:295-299`)但只護 `_dispose` 的
-  check-then-clear 與指標發布(:337-339);`_ensure_connected` 的 check(:319)與 QuoteAPI 建立(:324-336)
-  仍在鎖外、無 `_stop` 早退 → 本條未解。**修 = check+建立+發布以 `_api_lock` 原子化 + `_stop` 早退,
-  stock/corr/index 四 source 一起回歸。
-
-## 2026-08-12(fix/futures-resub-recovery 收尾留尾巴)
-
-- [ ] **reconnect 對帳不含 leaf 訂閱**:`_handle_reconnect` 只回填 HOT 品;重連若掉了
-  leaf 契約訂閱(`_leaf_done` 記帳仍在、p 有舊值不武裝),要等跨日重武裝才補回。
-  影響限「HOT 因 spot 衝突零推播 + 重連掉 leaf」雙重疊加,低頻記錄備查;要收 =
-  on_reconnect 時對 `_leaf_fed` 品清 `_leaf_done` 當日鍵重走 fallback。
-- [ ] **`_check_stale` 迴圈中途拋錯尾段蒸發對 stock/corr/index 的復原完整性未逐一盤點**
-  (本輪只修 futures + tc4 warning):stock 有 `_resubscribe_all`/`_failed_resubs`
-  對帳、index 有 self-heal 鏈,corr 的 `_on_reconnect` 只重跑回補**不重訂閱**
-  (corr_engine.py:108 註解自承)— corr 腿在重連掉訂下疑似同病,下次動 corr 時
-  比照 futures 接對帳。
-
