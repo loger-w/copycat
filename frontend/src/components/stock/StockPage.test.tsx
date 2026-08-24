@@ -102,7 +102,12 @@ describe("StockPage", () => {
     expect(screen.getByText(/從自選清單選擇/)).toBeTruthy();
   });
 
-  it("TC4 斷線顯示告警列(文案不變)", () => {
+  // 🔴 N109:`tc4 === "down"` 有兩個來源 —— engine 在但 TC4 斷(恢復會自癒回補),
+  // 以及 XR-3 後的**無 engine 模式**(server 啟動時 TC4 沒開,stock engine 只在 boot 建
+  // → TC4 之後開起來也不會自癒,得重啟 server)。兩者的 seed 逐值相同,前端分不出來
+  // (`/api/health` 刻意不含引擎健康度),所以文案要對**兩態都誠實**:改前那句
+  // 「恢復後自動回補」對無 engine 模式是錯的,而使用者只會一直等。
+  it("TC4 斷線告警列:自癒與需重啟兩態都講得到", () => {
     wrap(
       <StockPage
         code="2330"
@@ -110,7 +115,9 @@ describe("StockPage", () => {
         stream={stream({ status: { tc4: "down", backfilling: null } })}
       />,
     );
-    expect(screen.getByText(/達錢 4 連線中斷,恢復後自動回補/)).toBeTruthy();
+    const note = screen.getByText(/達錢 4 未連線/);
+    expect(note.textContent).toContain("自動回補");
+    expect(note.textContent).toContain("重啟 server");
   });
 
   it("伺服器斷線顯示重連告警列(文案不變)", () => {
@@ -1168,5 +1175,19 @@ describe("StockPage 訊號欄標題資料日(SC-2)", () => {
       expect(screen.getByTestId("signal-rail").getAttribute("aria-label")).toBe("08-20 訊號"),
     );
     expect(screen.getByRole("heading", { name: "08-20 訊號" })).toBeTruthy();
+  });
+});
+
+// 🔵 N121 的前提鎖:`StockChart` 的 `spotMode`(進合約前的現貨模式)在 prod 之所以沒有
+// 讀者,是因為主圖被 `{accum ? …}` 關著 —— 換合約時 `useStockStream` 先 `setAccum(null)`,
+// StockChart 因此**卸載重掛**,待還原偏好歸零(還原實際由 localStorage 兌現)。
+// 這條測試把那個前提釘住:哪天圖表脫離 accum gate(常駐掛載),這裡會紅,
+// 提醒去看 StockChart 的 spotMode 是不是該重新驗 A6 或刪掉。
+describe("StockPage 主圖 accum gate(N121 前提)", () => {
+  it("accum === null(切標的中)→ 圖表整棵不掛,模式列也不在", () => {
+    wrap(<StockPage code="2330" onSelect={vi.fn()} stream={stream({ accum: null })} />);
+    expect(screen.getByText("載入中…")).toBeTruthy();
+    expect(screen.queryByRole("radiogroup", { name: "圖表模式" })).toBeNull();
+    expect(screen.queryByTestId("stock-lower-row")).toBeNull();
   });
 });

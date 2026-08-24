@@ -1,3 +1,10 @@
+## 2026-08-24(架構債盤點,唯讀)
+
+- [ ] **全站抽象化 /refactor Why gate 未過(user 拍板 (d) 沒有具體被卡住)→ 改為盤點文件**
+  `docs/superpowers/specs/2026-08-24-architecture-debt-inventory.md`:A 後端 engine 骨架 /
+  B app.py / C 三座梯 / D 分時圖 / E localStorage(/mod)/ F WsStatus ×7 / G fade / H fake source
+  兩份,每條附觸發條件、半徑、seam、步數草案。**沒撞到觸發條件不動**;撞到時直接取用不重調研。
+
 ## 2026-08-24(mod/futures-intraday-features two-axis 留尾)
 
 review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture / `splitCapitalStamp` /

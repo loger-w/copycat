@@ -106,6 +106,10 @@ interface RenderOver {
   defaultKey?: MarketKey;
   futures?: Record<string, PaneFutState> | null;
   onToggle?: (key: keyof ChartToggles, value: boolean) => void;
+  /** 兩條指數流。預設 = 既有 fixture;`null` 是「流還沒回來」的合法值,故用
+   *  `undefined` 才代表「不覆寫」(不可寫成 `over.twse ?? series()`)。 */
+  twse?: IndexSeries | null;
+  otc?: IndexSeries | null;
 }
 
 function renderPane(over: RenderOver = {}) {
@@ -114,8 +118,8 @@ function renderPane(over: RenderOver = {}) {
     <QueryClientProvider client={client}>
       <MarketPane
         paneId={over.paneId ?? "left"}
-        twse={series()}
-        otc={OTC}
+        twse={over.twse === undefined ? series() : over.twse}
+        otc={over.otc === undefined ? OTC : over.otc}
         futures={over.futures === undefined ? FUTURES : over.futures}
         stores={over.stores ?? LEFT_STORES}
         defaultKey={over.defaultKey ?? "TWSE"}
@@ -548,5 +552,72 @@ describe("MarketPane meta 行(自 IndexPage 搬遷)", () => {
     expect(meta.textContent).toContain("自 10:17 起");
     expect(screen.getByText("無量資料")).toBeTruthy();
     expect(screen.getByText("—")).toBeTruthy(); // 資訊列的量欄
+  });
+});
+
+// 🔴 N262:`buildOverlayGeometry` 濾掉 ref 缺值的 series,而 OverlayCard 以陣列位置查
+// `OVERLAY_LINES` → twse.ref 缺時僅剩的**櫃買**線被畫成加權色、標成「加權」。
+// 兩腿都在的正常態逐值不變(白名單 W4)。
+describe("MarketPane 重疊單邊 ref 缺值(N262)", () => {
+  function openOverlay() {
+    fireEvent.click(btn("重疊"));
+    return screen.getByLabelText("指數重疊走勢");
+  }
+
+  it("加權 ref 缺值 → 僅存的櫃買線用櫃買色與「櫃買」標籤", () => {
+    renderPane({ twse: series({ ref: null }) });
+    const svg = openOverlay();
+    const lines = [...svg.querySelectorAll("polyline")];
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.getAttribute("class")).toContain("stroke-idx-otc");
+    // 線末端的標籤同樣不可錯位
+    const labels = [...svg.querySelectorAll("text")].map((t) => t.textContent);
+    expect(labels).toContain("櫃買");
+    expect(labels).not.toContain("加權");
+  });
+
+  it("兩腿都在 → 顏色 / 標籤逐值不變(既有行為)", () => {
+    renderPane();
+    const svg = openOverlay();
+    const lines = [...svg.querySelectorAll("polyline")];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.getAttribute("class")).toContain("stroke-profit");
+    expect(lines[1]!.getAttribute("class")).toContain("stroke-idx-otc");
+  });
+});
+
+// 🔴 N108:MIS(櫃買快照源)從開盤即死透的日子 —— otc 的 p/ref 恆 null、minutes 恆空,
+// 而 otc **不吃 `stale`**(watchdog 只看加權)→ 畫面是一條靜默的空線。加權有分鐘格
+// 而櫃買一格都沒有 = 唯一自足的判別子(盤前兩者皆空 → 不誤報)。
+describe("MarketPane 櫃買快照源中斷(N108)", () => {
+  const DEAD = series({ p: null, ref: null, high: null, low: null, minutes: {} });
+
+  it("加權有分鐘格、櫃買整片空 → 櫃買 pane 印「櫃買快照源中斷」", () => {
+    renderPane({ defaultKey: "OTC", otc: DEAD });
+    expect(screen.getByText("櫃買快照源中斷")).toBeTruthy();
+  });
+
+  it("加權 pane 不受影響(不是它的問題)", () => {
+    renderPane({ defaultKey: "TWSE", otc: DEAD });
+    expect(screen.queryByText("櫃買快照源中斷")).toBeNull();
+  });
+
+  it("盤前(加權也還沒有分鐘格)不誤報", () => {
+    renderPane({ defaultKey: "OTC", twse: series({ p: null, ref: null, minutes: {} }), otc: DEAD });
+    expect(screen.queryByText("櫃買快照源中斷")).toBeNull();
+  });
+
+  it("開盤頭兩分鐘給 MIS poll 寬限(加權只有一格時不報)", () => {
+    renderPane({
+      defaultKey: "OTC",
+      twse: series({ minutes: { "0901": 43_000_000 } }),
+      otc: DEAD,
+    });
+    expect(screen.queryByText("櫃買快照源中斷")).toBeNull();
+  });
+
+  it("櫃買有值 → 不報(既有行為)", () => {
+    renderPane({ defaultKey: "OTC" });
+    expect(screen.queryByText("櫃買快照源中斷")).toBeNull();
   });
 });

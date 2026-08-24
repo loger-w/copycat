@@ -257,7 +257,10 @@ describe("RadioPills", () => {
     const label = screen.getByRole("radio", { name: "現股" }).closest("label")!;
     fireEvent.click(label);
     expect(onChange).not.toHaveBeenCalled();
-    expect(onInteract).toHaveBeenCalled();
+    // 🔴 N265:一次點擊只算一次互動 —— label activation 會把 click 轉發到內層 input
+    // 再冒泡回 label,handler 掛在 label 上時同一次點擊會跑兩趟(冪等所以現況無害,
+    // 但任何拿它計數的呼叫端都會多算一倍)。
+    expect(onInteract).toHaveBeenCalledTimes(1);
   });
 
   it("onInteract:點未選中的項也觸發;disabled 項不觸發", () => {
@@ -273,7 +276,7 @@ describe("RadioPills", () => {
       />,
     );
     fireEvent.click(screen.getByRole("radio", { name: "融資" }).closest("label")!);
-    expect(onInteract).toHaveBeenCalled();
+    expect(onInteract).toHaveBeenCalledTimes(1); // N265:轉發 + 冒泡不得算兩次
     onInteract.mockClear();
     // 停用項不是「使用者在操作」的訊號(原 `<button disabled>` 連 click 都不派)
     fireEvent.click(screen.getByRole("radio", { name: "無券" }).closest("label")!);
@@ -300,5 +303,43 @@ describe("RadioPills", () => {
     expect(kids[0]?.textContent).toBe("群組");
     expect(kids.at(-1)?.textContent).toBe("重疊");
     expect(within(group).getAllByRole("radio").length).toBe(3);
+  });
+});
+
+// 🔴 N265 的另外兩條路徑:直接點 radio 本體(鍵盤選取在真瀏覽器也是派 click 到 input)
+// 與連點兩次。handler 掛 label 時前者只跑一次、後者跑四次 —— 兩邊都要恰等。
+describe("RadioPills onInteract 恰一次(N265)", () => {
+  it("直接點 radio 本體(= 鍵盤選取的派發路徑)也恰一次", () => {
+    const onInteract = vi.fn();
+    render(
+      <RadioPills<Kind>
+        ariaLabel="交易別"
+        value="cash"
+        onChange={() => {}}
+        onInteract={onInteract}
+        items={ITEMS}
+        pillClass={pill}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "融資" }));
+    expect(onInteract).toHaveBeenCalledTimes(1);
+  });
+
+  it("連點兩下 label = 恰兩次(不是四次)", () => {
+    const onInteract = vi.fn();
+    render(
+      <RadioPills<Kind>
+        ariaLabel="交易別"
+        value="cash"
+        onChange={() => {}}
+        onInteract={onInteract}
+        items={ITEMS}
+        pillClass={pill}
+      />,
+    );
+    const label = screen.getByRole("radio", { name: "現股" }).closest("label")!;
+    fireEvent.click(label);
+    fireEvent.click(label);
+    expect(onInteract).toHaveBeenCalledTimes(2);
   });
 });

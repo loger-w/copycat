@@ -38,6 +38,39 @@ describe("buildOverlayGeometry", () => {
     );
     expect(g.lines).toHaveLength(1);
   });
+
+  // 🔴 N262:呼叫端(`OverlayCard`)以 `lines` 的**陣列位置**去查 `OVERLAY_LINES`
+  // 的顏色與標籤,而這裡會濾掉 ref 缺值的 series —— twse.ref 缺時僅剩的櫃買線落在
+  // index 0,被畫成加權色、標成「加權」。修法 = 每筆帶回**原始 index**。
+  it("每條線帶回原始 index(濾掉某腿後呼叫端仍對得上顏色 / 標籤)", () => {
+    const both = buildOverlayGeometry(
+      [
+        { minutes: minutes([["0901", 43_634_190]]), ref: 43_634_190 },
+        { minutes: minutes([["0901", 378_090]]), ref: 378_090 },
+      ],
+      SIZE,
+    );
+    expect(both.lines.map((l) => l.index)).toEqual([0, 1]);
+
+    const otcOnly = buildOverlayGeometry(
+      [
+        { minutes: minutes([["0901", 100]]), ref: null },
+        { minutes: minutes([["0901", 378_090]]), ref: 378_090 },
+      ],
+      SIZE,
+    );
+    expect(otcOnly.lines.map((l) => l.index)).toEqual([1]);
+
+    // ref 為 0(TC4 尚未給昨收)同樣被濾掉,index 一樣要保真
+    const twseOnly = buildOverlayGeometry(
+      [
+        { minutes: minutes([["0901", 43_634_190]]), ref: 43_634_190 },
+        { minutes: minutes([["0901", 378_090]]), ref: 0 },
+      ],
+      SIZE,
+    );
+    expect(twseOnly.lines.map((l) => l.index)).toEqual([0]);
+  });
 });
 
 describe("outOfDomainLevels(SC-7 域內/域外分類)", () => {

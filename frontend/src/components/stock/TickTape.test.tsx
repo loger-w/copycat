@@ -11,9 +11,9 @@ const REF = 2_372_000;
 
 /** 三態各一列:低於參考價 / 高於 / 等於(第三列的買賣價缺值) */
 const TICKS: TickRow[] = [
-  { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner", b: 2_369_000, a: 2_371_000 },
-  { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer", b: 2_374_000, a: 2_376_000 },
-  { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral", b: null, a: null },
+  { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner", b: 2_369_000, a: 2_371_000, n: 1 },
+  { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer", b: 2_374_000, a: 2_376_000, n: 2 },
+  { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral", b: null, a: null, n: 3 },
 ];
 
 describe("TickTape 五欄(SC-4)", () => {
@@ -28,8 +28,8 @@ describe("TickTape 五欄(SC-4)", () => {
     render(
       <TickTape
         ticks={[
-          { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" },
-          { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer" },
+          { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner", n: 1 },
+          { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer", n: 2 },
         ]}
         ref_={REF}
       />,
@@ -86,7 +86,7 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
   // 沒有這條護欄,日後誰把 h-full 換回 max-h-* 不會有任何測試變紅。
   it("root 由下半列撐高(h-full),非固定 max-h-80(SC-6)", () => {
     render(
-      <TickTape ticks={[{ t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" }]} ref_={REF} />,
+      <TickTape ticks={[{ t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner", n: 1 }]} ref_={REF} />,
     );
     const root = screen.getByTestId("tick-tape");
     expect(root.className).toContain("h-full");
@@ -99,8 +99,8 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
   // 盤中每秒數筆,這是持續的 DOM 重建。修法是回推索引(尾端錨定),前插時既有列 key 不變。
   it("追加新成交後,原有列的 DOM node 恆等保留(key 不隨前插位移)", () => {
     const base: TickRow[] = [
-      { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner" },
-      { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer" },
+      { t: "09:00:01.000", p: 2_370_000, q: 5, side: "inner", n: 1 },
+      { t: "09:00:02.000", p: 2_375_000, q: 3, side: "outer", n: 2 },
     ];
     const { rerender } = render(<TickTape ticks={base} ref_={REF} />);
     const before = screen.getAllByRole("row").slice(1); // [09:00:02, 09:00:01]
@@ -108,7 +108,7 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
 
     rerender(
       <TickTape
-        ticks={[...base, { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral" }]}
+        ticks={[...base, { t: "09:00:03.000", p: 2_372_000, q: 1, side: "neutral", n: 3 }]}
         ref_={REF}
       />,
     );
@@ -128,6 +128,7 @@ describe("TickTape 既有行為(W-13 / W-14)", () => {
       p: 2_370_000 + i,
       q: 1,
       side: "outer",
+      n: i + 1,
     }));
     render(<TickTape ticks={many} ref_={REF} />);
     expect(screen.getAllByRole("row").slice(1)).toHaveLength(30);
@@ -145,5 +146,36 @@ describe("TickTape 空態分流(2026-08-22 review R9 P2)", () => {
   it("未傳 loading → 既有「尚無成交」", () => {
     render(<TickTape ticks={[]} ref_={REF} />);
     expect(screen.getByText("尚無成交")).toBeTruthy();
+  });
+});
+
+// 🔴 N120:回推索引 key 在 `TAPE_MAX = 200` 滿載後仍逐筆位移 —— stock-accum 是環形丟頭,
+// 陣列每來一筆就整體左移一格,回推索引跟著 −1 → 既有列全部卸載重掛(與修前同級)。
+// 真解是每列自帶單調序號(`TickRow.n`),丟頭時倖存列的號不變。
+describe("TickTape 滿載後 key 穩定(N120)", () => {
+  /** 第 n 筆(1-based):時間互異、序號 = n。 */
+  function row(n: number): TickRow {
+    const sec = String(n % 60).padStart(2, "0");
+    const min = String(Math.floor(n / 60)).padStart(2, "0");
+    return { t: `09:${min}:${sec}.000`, p: 2_370_000 + n, q: 1, side: "outer", n };
+  }
+
+  it("滿載丟頭 + 前插一筆後,既有列的 DOM node 恆等保留", () => {
+    const CAP = 200;
+    const full = Array.from({ length: CAP }, (_, i) => row(i + 1));
+    const { rerender } = render(<TickTape ticks={full} ref_={REF} />);
+    const before = screen.getAllByRole("row").slice(1); // 顯示 30 列(PAGE)
+    expect(before).toHaveLength(30);
+
+    // 環形丟頭:最舊那筆掉出去,尾端接上新的一筆(陣列長度仍 = CAP)
+    rerender(<TickTape ticks={[...full.slice(1), row(CAP + 1)]} ref_={REF} />);
+
+    const after = screen.getAllByRole("row").slice(1);
+    expect(after).toHaveLength(30);
+    expect(after[0]!.textContent).toContain("03:21"); // 第 201 筆在最上
+    // 同一筆成交 = 同一個 DOM node(key 位移的話這裡全是新物件)
+    for (let i = 1; i < 30; i += 1) {
+      expect(after[i]).toBe(before[i - 1]);
+    }
   });
 });

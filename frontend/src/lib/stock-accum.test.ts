@@ -571,3 +571,64 @@ describe("fromSnapshot 的 vpTruncated(VP 折入來源被截斷的旗標)", () =
     expect(VP_TICK_CAP).toBe(20_000);
   });
 });
+
+// 🔴 N120:逐筆列的 React key。改前是「回推索引」(`ticks.length - 1 - i`),在 `TAPE_MAX`
+// 滿載後陣列每來一筆就左移一格 → 既有列的回推索引同樣逐筆 −1,整個 tbody 卸載重掛。
+// 真解 = 每列自帶單調序號(`n`),兩個入口(fromSnapshot / applyTick)同一把尺:
+// 由 state `seq` 決定 —— 滿載丟頭時倖存列的 `n` 逐值不變。
+describe("TickRow.n 單調序號(N120)", () => {
+  function tickAt(seq: number) {
+    return {
+      type: "tick" as const,
+      code: "2330",
+      t: "09:01:30.000",
+      p: 2_380_000,
+      q: 1,
+      side: "outer",
+      seq,
+    };
+  }
+
+  it("fromSnapshot 自 seq 由尾回推:最後一列 = snap.seq,往前遞減 1", () => {
+    const acc = fromSnapshot({
+      ...SNAP,
+      seq: 7,
+      ticks: [
+        { t: "09:01:28.000", p: 2_380_000, q: 1, side: "outer" },
+        { t: "09:01:29.000", p: 2_380_000, q: 1, side: "outer" },
+        { t: "09:01:30.000", p: 2_380_000, q: 1, side: "outer" },
+      ],
+    });
+    expect(acc.ticks.map((r) => r.n)).toEqual([5, 6, 7]);
+  });
+
+  it("applyTick 的新列取 msg.seq(與 snapshot 同一把尺,不重號)", () => {
+    const acc = applyTick(fromSnapshot({ ...SNAP, seq: 3 }), tickAt(4));
+    expect(acc.ticks.at(-1)?.n).toBe(4);
+    expect(acc.ticks.at(-2)?.n).toBe(3);
+  });
+
+  it("滿載(200 筆)後再來一筆:倖存列的 n 逐值不變(丟頭不位移)", () => {
+    // 200 筆 = TAPE_MAX;snapshot seq 對齊最後一筆
+    const rows = Array.from({ length: 200 }, () => ({
+      t: "09:01:30.000",
+      p: 2_380_000,
+      q: 1,
+      side: "outer",
+    }));
+    const full = fromSnapshot({ ...SNAP, seq: 200, ticks: rows });
+    expect(full.ticks).toHaveLength(200);
+    const before = full.ticks.map((r) => r.n);
+    const next = applyTick(full, tickAt(201));
+    expect(next.ticks).toHaveLength(200); // 仍是上限,頭被丟掉
+    // 倖存的 199 列(原本的第 2..200 筆)序號完全沒動
+    expect(next.ticks.slice(0, 199).map((r) => r.n)).toEqual(before.slice(1));
+    expect(next.ticks.at(-1)?.n).toBe(201);
+  });
+
+  it("序號在單份 accum 內唯一(React key 的硬要求)", () => {
+    let acc = fromSnapshot({ ...SNAP, seq: 3 });
+    for (let s = 4; s < 12; s += 1) acc = applyTick(acc, tickAt(s));
+    expect(new Set(acc.ticks.map((r) => r.n)).size).toBe(acc.ticks.length);
+  });
+});
