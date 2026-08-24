@@ -11,7 +11,6 @@ import { fromSnapshot } from "@/lib/stock-accum";
 import {
   buildIntradayGeometry,
   EDGE_LABEL_H,
-  labelWidth,
   R_AXIS_W,
   SPOT_WINDOW,
   type StockOverlay,
@@ -318,7 +317,7 @@ describe("IntradayChartCore mode=\"index\" 的 VWAP 標籤口徑(N006/N045)", ()
     expect(container.querySelector('[data-testid="edge-price-vwap"]')!.textContent).toBe("24284");
   });
 
-  it("末點貼右界 → 標籤**實寬**整塊不出繪圖區(硬編 40 低估 8 字的 45.6px)", () => {
+  it("末點貼右界 → 標籤整塊不出繪圖區(x = 760 − 寬;8 字實寬案見 vwapLabelBox 單元測試)", () => {
     const { container } = renderIndex({ accum: HEAVY_ACCUM });
     const label = container.querySelector('[data-testid="edge-price-vwap"]')!;
     const x = Number(label.getAttribute("x"));
@@ -329,6 +328,12 @@ describe("IntradayChartCore mode=\"index\" 的 VWAP 標籤口徑(N006/N045)", ()
     );
     // 前置:末點真的貼在繪圖區右界上(否則 clamp 不啟動,本案恆綠)
     expect(g.vwapLine.at(-1)!.x).toBeCloseTo(800 - R_AXIS_W, 6);
-    expect(x + labelWidth(label.textContent!)).toBeLessThanOrEqual(800 - R_AXIS_W);
+    // index 態的文字走 `fmtIndexPts` → 「24284」5 個半形字、實寬 28.5px < 下限 40,
+    // 所以本案的寬度是**下限 40**:貼右界時 x = 760 − 40 = 720,右緣恰在繪圖區界上。
+    // 字面值不回算 `labelWidth(textContent)`(那正是本案要驗的東西):回算的版本量的是
+    // 「28.5px 裝不裝得下」—— 恆真,連硬編 40 的舊版都會綠,等於沒有斷言。
+    // 真正會溢出的 8 字(45.6px)案在 `vwapLabelBox` 的單元測試裡逐值鎖住。
+    expect(x).toBe(720);
+    expect(label.textContent).toBe("24284");
   });
 });

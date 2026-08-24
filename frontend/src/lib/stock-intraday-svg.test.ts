@@ -1456,7 +1456,9 @@ describe("vwapLabelBox(VWAP 就地標籤的定位與寬度;N006)", () => {
   it("盤中末點在中段 → x = 末點 + 4,寬取下限 40(stock 態短字逐值不變)", () => {
     const box = vwapLabelBox(400, "2380", W);
     expect(box.x).toBe(404);
-    expect(box.width).toBe(VWAP_LABEL_W);
+    // 字面 40 不回算 `VWAP_LABEL_W`:下限常數是本案要釘的值本身,
+    // 回算的話改常數 = 改行為,而測試會跟著一起漂成綠的。
+    expect(box.width).toBe(40);
   });
 
   it("盤末末點貼右界 + 8 字長數字 → 整塊仍在繪圖區內(硬編 40 會溢出 5.6px)", () => {

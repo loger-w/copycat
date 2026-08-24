@@ -2176,9 +2176,11 @@ describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
     const label = container.querySelector('[data-testid="day-high-label"]')!;
     // 極值文字無 dy → y 是 baseline,中心 = baseline − 0.35em(≈3px)
     const center = Number(label.getAttribute("y")) - 3;
-    // 推到**剛好**一個 EDGE_LABEL_H(不多推:讓位是為了不疊,不是為了離得遠)。
+    // 推到**剛好**一個 EDGE_LABEL_H = 字面 10(不多推:讓位是為了不疊,不是為了離得遠)。
     // 用 closeTo 不用 ≥:浮點下 toY 算出來的差是 9.999999999999996。
-    expect(center - vwapY).toBeCloseTo(EDGE_LABEL_H, 6);
+    // 字面值不回算常數:回算的話 EDGE_LABEL_H 改了、實際間距跟著改,本案照樣綠
+    // —— 那正是「同義反覆」量不到的那一格。
+    expect(center - vwapY).toBeCloseTo(10, 6);
     // 標記圓承載「哪一分鐘 / 什麼價位」→ 一律不動
     const circle = container.querySelector('[data-testid="day-high"]')!;
     expect(Number(circle.getAttribute("cy"))).toBeCloseTo(g.toY(2_540_000), 6);
@@ -2229,13 +2231,14 @@ describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
     expect(vwapY).toBeCloseTo(g.vwapLine.at(-1)!.y, 6);
     const flippedCenter = markY + 14 - 3;
     expect(vwapY).toBeGreaterThan(flippedCenter);
-    expect(vwapY - flippedCenter).toBeLessThan(EDGE_LABEL_H);
+    expect(vwapY - flippedCenter).toBeLessThan(10);
     const label = container.querySelector('[data-testid="day-high-label"]')!;
     const center = Number(label.getAttribute("y")) - 3;
-    // 主張一:標記圓不可壓(修前 5.52px = 文字直接落在圓上)
-    expect(Math.abs(center - markY)).toBeGreaterThanOrEqual(EDGE_LABEL_H);
-    // 主張二:VWAP 仍讓開一個 EDGE_LABEL_H,且是**往原方向**(文字本來就在圓下方)
-    expect(center - vwapY).toBeCloseTo(EDGE_LABEL_H, 6);
+    // 主張一:標記圓不可壓(修前 5.52px = 文字直接落在圓上)。字面 10 = EDGE_LABEL_H
+    // 當下的值,不回算常數(理由同上一案)。
+    expect(Math.abs(center - markY)).toBeGreaterThanOrEqual(10);
+    // 主張二:VWAP 仍讓開剛好一個 10,且是**往原方向**(文字本來就在圓下方)
+    expect(center - vwapY).toBeCloseTo(10, 6);
     // 標記圓照樣釘在那一分鐘 / 那個價位上
     const circle = container.querySelector('[data-testid="day-high"]')!;
     expect(Number(circle.getAttribute("cy"))).toBeCloseTo(markY, 6);
