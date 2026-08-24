@@ -1,0 +1,123 @@
+{
+ "fixed_point": "master (979cb511)",
+ "reviewed_head": "ab799da3",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P2(判斷)",
+   "summary": "verification §2 稱紅態不足兩處,實為六處(三條 river 案改動前即綠 + signal_routes 改寫)",
+   "location": "verification.md:60-72",
+   "disposition": "accepted → §2 如實列"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2(判斷)",
+   "summary": "signal_routes 既有測試改寫落在 🔴 commit、2.0 s 空轉輪詢",
+   "location": "tests/server/test_signal_routes.py",
+   "disposition": "accepted → 改事件驅動 / 縮短;紅態在 834a571e"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2(判斷)",
+   "summary": "層級倒置:futures_engine 反向 import server/bars.py::BarsResult",
+   "location": "futures_engine.py:25",
+   "disposition": "accepted → 🔵 06a62849 改用 live 層 BarsStatus tuple,bars.py 端組 BarsResult"
+  },
+  {
+   "id": "ST4",
+   "severity": "P2(判斷)",
+   "summary": "EMPTY_TEXT[status ?? 'ok'] 對未知第四態回 undefined → 空態框空白",
+   "location": "FuturesChart.tsx:340",
+   "disposition": "accepted → 尾綴 ?? EMPTY_TEXT.ok + 測試"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "TWSE/OTC/D·W·M 硬寫 status=ok 與 docstring 判準兩套標準",
+   "location": "app.py:135-170",
+   "disposition": "rejected as stated / superseded — SP4 改成不給欄後謊報面消失,缺欄 = 該路徑未三態化(留尾 §6.4)"
+  },
+  {
+   "id": "ST6",
+   "severity": "P3(判斷)",
+   "summary": "CalendarHolidayBadge.tsx 只 export CalendarBadges;註解舊名",
+   "location": "同左",
+   "disposition": "accepted → 🔵 git mv CalendarBadges.tsx"
+  },
+  {
+   "id": "ST7",
+   "severity": "P3(判斷)",
+   "summary": "N101 docstring 自相矛盾(寫死 8 處)",
+   "location": "stock_engine.py:1377-1383",
+   "disposition": "accepted → 🔵"
+  },
+  {
+   "id": "ST8",
+   "severity": "P3(判斷)",
+   "summary": "_daily_window_days 三常數 + ceil 公式只有兩個輸入輸出",
+   "location": "stock_source.py:203-220",
+   "disposition": "accepted → 顯式對映(與 SP3 同函式,併 🔴)"
+  },
+  {
+   "id": "ST9",
+   "severity": "P3(判斷)",
+   "summary": "assert 訊息「唯一入隊口」與 _requeue_basis 不符",
+   "location": "signal_hub.py:660",
+   "disposition": "accepted → 🔵 改口"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "中",
+   "summary": "N105 無日曆時閘退成恆真、窗放寬到午夜噪音反增;日曆誤標交易日 → 整天不自癒(舊碼窗內仍救)",
+   "location": "app.py:770 / index_engine.py:173",
+   "disposition": "accepted → 自癒閘分三段:watch window 內逐字舊判準、窗外才吃交易日閘、無日曆退回舊行為;紅先行"
+  },
+  {
+   "id": "SP2",
+   "severity": "中",
+   "summary": "N107 worker 內重新綁定 _pending_minutes(event loop 寫入遺失);retry 回補列在 swap 贏過最終回補",
+   "location": "index_engine.py:266 / :491",
+   "disposition": "accepted → in-place update 姿態不變;pending 分 retry 回補 / live 兩區,合併序「早輪回補 < 最終回補 < live pending」;紅先行兩條"
+  },
+  {
+   "id": "SP3",
+   "severity": "中",
+   "summary": "N024 條文要先量再動;且縮到 DK+1K 兩段(條文只點 1K fallback)",
+   "location": "stock_source.py",
+   "disposition": "accepted → 只縮 1K fallback、DK 段回 40 日逐字舊值;量測由 SC-1 事後補(本 session 零 TC4)"
+  },
+  {
+   "id": "SP4",
+   "severity": "低中",
+   "summary": "TWSE/OTC/tf!=1 硬寫 status ok = index proxy miss 時謊報",
+   "location": "app.py::_market_payload",
+   "disposition": "accepted → 不給欄;CLAUDE.md §4 同步"
+  },
+  {
+   "id": "SP5",
+   "severity": "低中",
+   "summary": "timeout 文案「稍後自動重試」在死區 / 非 active 不成立",
+   "location": "FuturesChart.tsx",
+   "disposition": "accepted → 「回補中…(TC4 忙,交易時段內每分鐘重試)」"
+  },
+  {
+   "id": "SP6",
+   "severity": "低",
+   "summary": "bars 非空 + 今日段 timeout 時 status 不被讀",
+   "location": "FuturesChart.tsx",
+   "disposition": "申報 → 留尾 §6"
+  },
+  {
+   "id": "SP7",
+   "severity": "低",
+   "summary": "N090「做不到」理由過強(App 內有獨立於日曆的成交訊號)",
+   "location": "verification §5",
+   "disposition": "申報 → 改記 scope 決定"
+  }
+ ],
+ "whitelist": "兩軸皆核 §0 十一條全守;既有斷言改動全部落在 §0.3 事前清單(唯一超出 = test_corr_config assert 訊息字串,非語意);bars.py / futures_source.py / overlay.py 零 diff",
+ "process_note": "implementer 首次 🔴 commit 誤帶 ST6 git mv(三類混),未 push 即 reset --soft 重切;verification §8 已記",
+ "disposition": "Standards 9:接受 8、反駁 1(ST5 被 SP4 取代)。Spec 7:接受 5、申報 2。收修後 pytest 2976 / ruff / pyright 0 / validate 42 / tsc / vitest 145 files 2759 / eslint / react-doctor 全綠(主 session 獨立重跑)。"
+}
