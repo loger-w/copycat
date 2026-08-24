@@ -16,7 +16,7 @@ import {
   useSubmitStock,
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
-import { loadDiscount, persistDiscount, type DiscountState } from "@/lib/fee-discount";
+import { useFeeDiscountField } from "@/lib/fee-discount";
 import { LOCK_WS_TITLE } from "@/lib/flash-arm";
 import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
@@ -222,7 +222,8 @@ export function PriceLadder({
   // 值式會用到 stale state(review P2-9(3))
   const setQtyState = onQtyState ?? setQtyLocal;
   const [hint, setHint] = useState<string | null>(null);
-  const [discount, setDiscount] = useState<DiscountState>(loadDiscount);
+  /** 折數:計算值走共用 store、輸入框原始字串留本地(同步規則收在 `useFeeDiscountField`)。 */
+  const discount = useFeeDiscountField();
   const hintTimer = useRef<number | undefined>(undefined);
   const lastClick = useRef<{ key: string; ts: number } | null>(null);
   const lastMarketClick = useRef<{ key: string; ts: number } | null>(null);
@@ -456,13 +457,7 @@ export function PriceLadder({
             value={discount.raw}
             // 非法值不是「沒事」:輸入框顯示 raw、計算卻用舊 value,不給訊號就是靜默態
             aria-invalid={discountInvalid ? true : undefined}
-            onChange={(e) => {
-              const raw = e.target.value;
-              const v = clampDiscount(raw);
-              // 非法值只更新 raw(不吃掉按鍵),value 沿用上一個合法值 → 計算不跳動
-              setDiscount((s) => ({ raw, value: v ?? s.value }));
-              if (v !== null) persistDiscount(v);
-            }}
+            onChange={(e) => discount.onRawChange(e.target.value)}
             className={cn(
               // **spinner 必須收掉**:Chrome 的 number input 右側恆佔 ~13-16px 給
               // 上下箭頭,吃掉的是可視字元數 —— w-10 時「1.8」的 8 直接被裁掉(真

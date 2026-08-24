@@ -13,7 +13,8 @@ import { useSignalFeed } from "@/hooks/useSignalFeed";
 import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
 import { useSignalSound } from "@/hooks/useSignalSound";
 import { useStkfutContracts } from "@/hooks/useStkfutContracts";
-import { errText, useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
+import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
+import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
 import { readStockView, type StockView } from "@/lib/stock-view";
@@ -24,7 +25,7 @@ import { futSummary, headerSegments, positionsByCode, secSummary } from "@/lib/p
 import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/lib/stkfut";
 import { limitState } from "@/lib/stock-tick";
 import { cn } from "@/lib/utils";
-import { addCode, assignToGroup, isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
+import { addCode, assignToGroup } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。
@@ -114,7 +115,9 @@ export function StockPage({
   // 「還在載」「載入失敗」「真的零群組」壓成同一個空陣列,而空態文案會叫使用者去
   // 建群組 —— 把「後端出事」講成「你沒建群組」。
   const { data: wl, isPending: wlPending, isError: wlError } = useStockWatchlist();
-  const save = useSaveWatchlist();
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // 寫入走跨元件共用佇列(N117):側欄拖曳 / 管理窗與本入口序列化在同一條 chain 上。
+  const { commit: enqueue, isPending: savePending } = useWatchlistCommit({ onError: setSaveError });
   const [pickerOpen, setPickerOpen] = useState(false);
   // 換股時關掉面板(review F3)。App 渲染本元件沒帶 key,同一個 instance 會活過切檔 ——
   // 面板留在展開狀態、按鈕卻已綁到新的 code,誤觸就把**錯的股票**靜默加進群組。
@@ -157,21 +160,22 @@ export function StockPage({
   // 靜默清空。這是新入口才有的 gate,不是既有行為。
   const canAdd = wl !== undefined && code !== null && !wl.codes.includes(code);
 
-  /** 零 PUT 早退(W-9):`assignToGroup` 內部恆回新陣列,內容相同也會送出,
-   *  而內容相同的 PUT 會讓後端重設整個訂閱池(TC4 全量 UNSUB/SUB)。 */
-  function commit(next: Watchlist): void {
-    setPickerOpen(false);
-    if (wl === undefined) return;
-    if (isSameWatchlist(next, wl)) return;
-    save.mutate(next);
-  }
-
-  /** 加自選 + 指派群組**合成單次 PUT**:分兩次會產出「在群組但不在 codes」的中間態。 */
+  /** 加自選 + 指派群組**合成單次 PUT**:分兩次會產出「在群組但不在 codes」的中間態。
+   *
+   *  基底由佇列在**套用當下**餵進(N117),不是 render 閉包的 `wl` —— 側欄剛拖完一檔、
+   *  PUT 還在途時,用舊 `wl` 算出來的 next 會把那一步原樣還原掉。
+   *  零 PUT 早退(W-9)與「自選未載入 → 不寫」都在佇列內統一處理。 */
   function addTo(group: string | null): void {
-    if (wl === undefined || code === null) return;
-    const withCode = addCode(wl, code);
-    const g = group === null ? null : withCode.groups.find((x) => x.name === group);
-    commit(g === null || g === undefined ? withCode : assignToGroup(withCode, code, g.name, g.codes.length));
+    setPickerOpen(false);
+    if (code === null) return;
+    enqueue((base) => {
+      const withCode = addCode(base, code);
+      // 目標組的存在性與組員數以套用當下的基底為準;組在佇列前段被刪 → 退化為只加進自選
+      const g = group === null ? null : withCode.groups.find((x) => x.name === group);
+      return g === null || g === undefined
+        ? withCode
+        : assignToGroup(withCode, code, g.name, g.codes.length);
+    });
   }
 
   /** 規則開關 = 整條規則 PUT(只翻 `enabled`)。PUT 失敗時 query data 不動 →
@@ -393,7 +397,7 @@ export function StockPage({
                     type="button"
                     aria-label="加入自選"
                     aria-expanded={pickerOpen}
-                    disabled={save.isPending}
+                    disabled={savePending}
                     onClick={() => setPickerOpen((v) => !v)}
                     className="rounded border border-accent px-2 py-0.5 text-xs text-accent disabled:opacity-50"
                   >
@@ -408,7 +412,7 @@ export function StockPage({
                           aria-label={`加入 ${code} 到 ${g.name}`}
                           // PUT 未回前 wl 仍是舊值 → commit() 的零 PUT 早退擋不住重複送出
                           // (算出來的 next 與舊 wl 內容確實不同),只能靠停用(review F5)
-                          disabled={save.isPending}
+                          disabled={savePending}
                           onClick={() => addTo(g.name)}
                           className="rounded border border-line px-1 py-0.5 text-xs text-ink hover:border-accent disabled:opacity-50"
                         >
@@ -419,7 +423,7 @@ export function StockPage({
                       <button
                         type="button"
                         aria-label={`加入 ${code} 到未分組`}
-                        disabled={save.isPending}
+                        disabled={savePending}
                         onClick={() => addTo(null)}
                         className="rounded border border-line px-1 py-0.5 text-xs text-ink-dim hover:border-accent hover:text-ink disabled:opacity-50"
                       >
@@ -430,8 +434,8 @@ export function StockPage({
                 </span>
               ) : null}
               {/* 上限 / 壞碼的文案要看得見,否則點了像沒反應 */}
-              {save.error ? (
-                <span className="text-xs text-bear">{errText(save.error.message)}</span>
+              {saveError !== null ? (
+                <span className="text-xs text-bear">{errText(saveError)}</span>
               ) : null}
               <span className="ml-auto font-mono text-xs text-ink-dim">
                 總量 {last?.cum_vol ?? "-"} · 昨量 {meta?.y_vol ?? "-"}

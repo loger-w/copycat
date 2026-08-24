@@ -28,17 +28,26 @@ const EDGE_TOLERANCE = 16;
  *  sticky 區浮在第一組上面,少了這條的話「游標停在搜尋框放開」會落到最上面那組的 index 0
  *  —— 使用者以為是取消,實際是不可逆的搬組。向上無界是刻意的(側欄上方也不是落點)。
  *  邊界是 `<`:`y === voidBelowY` 已在 sticky 之外,照舊取最近 zone。
- *  未傳(ref 還沒掛上)→ 舊行為,不猜一個假的界。 */
+ *  未傳(ref 還沒掛上)→ 舊行為,不猜一個假的界。
+ *
+ *  `voidAboveY` = **下緣作廢帶上界**(最後一個 section 的 `bottom` + 一列容差)。
+ *  `(voidAboveY, +∞)` 一律作廢:少了這條的話「側欄最後一組下方的整片空白區放開」會落到
+ *  最後那一組的尾端(取最近 zone),使用者以為是取消、實際是不可逆的搬組 —— 與
+ *  `voidBelowY` 是同一個 bug 的鏡像(2026-08-21 R4 review F3)。留一列容差是為了「貼著
+ *  最後一列下緣放開 = append 到該組尾」這個**刻意保留**的落點,不然使用者要對準像素。
+ *  邊界是 `>`:`y === voidAboveY` 仍取最近 zone。未傳 → 舊行為。 */
 export function dropTargetFromPointer(
   p: { x: number; y: number },
   zones: readonly DropZone[],
   rowHeight: number,
   bounds: { left: number; right: number },
   voidBelowY?: number,
+  voidAboveY?: number,
 ): { group: string | null; index: number } | null {
   if (zones.length === 0) return null;
   if (p.x < bounds.left - EDGE_TOLERANCE || p.x > bounds.right + EDGE_TOLERANCE) return null;
   if (voidBelowY !== undefined && p.y < voidBelowY) return null;
+  if (voidAboveY !== undefined && p.y > voidAboveY) return null;
   let best: DropZone | null = null;
   let bestDist = Infinity;
   for (const z of zones) {
