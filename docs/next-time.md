@@ -216,11 +216,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
-- [ ] **D4 現股市價安全首單 — 2026-08-24 已試,被 1068 拒單,已排待修**:user 盤中 5608 市價賣 ×5、
+- [ ] **D4 現股市價安全首單 — 1068 已修(PR #94),待 prod 重啟 + 安全首單兩筆**:user 盤中 5608 市價賣 ×5、
   6770 市價買 ×1 全被群益拒:`SK_ERROR_SPECIAL_TRADE_TYPE_IS_MARKETPRICE_AND_ORDERPRICE_SHOULD_BE_ZERO`。
-  根因 = `capital/mapping.py::to_stockorder_fields` 市價單仍送 `bstrPrice=估價`,SKCOM 要求市價
-  `bstrPrice="0"`(期貨端有特判 `"M"`,現股端漏了)。修一行 + 測試 lock 後,首單流程照舊:
-  低價股 1 張市價 → 群益 APP 核對 → 截圖回填 `.claude/mod/ladder-market-buttons/verification.md` §4。
+  根因(已修,PR #94):市價映射 `bstrPrice` 歸 "0"(字面 "0" 為推定,仍 1068 → 改試 "0.00")。
+  驗收兩筆:低價股 1 張市價 + **一鍵平倉一筆**(該路徑 audit 全史零成功,本修首次成立)→
+  群益 APP 核對 → 截圖回填 `.claude/mod/ladder-market-buttons/verification.md` §4。
 - [ ] **委託列表「市價」標籤的日界語意**(KL-4):`store.note_price_type` 記本機日曆日,`_price_type_of`
   要求與回報 `_Agg.date`(委託建立日)相等;夜盤跨午夜 / 盤後預約單未實證 → 不符只缺標籤不誤標。
   收斂候選:交易日口徑(`trading_calendar`)或 ±1 日窗(與前端 `ymdWindow` 同口徑)。
