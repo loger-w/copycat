@@ -208,3 +208,16 @@
 - [ ] **N017 / N018 欠帳窗**:盤中觀察 `capital-com` 的 log —— 「忽略放棄輪遲到的終止符」
       現在會帶段名(`balance` / `profit` / `oi`)。若部位面板仍有「瞬清一輪」的樣態,
       該行的段名就是下一步的線索。
+
+## 8. two-axis review round 1 收修(主 session)
+
+| 項 | 處置 |
+|---|---|
+| ST1/SP1(P1)| `store.note_price_type` 綁 `stock_no` / `buy_sell`,`_price_type_of` 等值才帶出;`client._side_code`;三個 caller + `_on_late_result` 帶綁定;`test_store` 兩案(同 seq 不同標的 / 方向 → None;完全相符 → 帶出;None = 不綁)+ `test_client` N075 案補綁定斷言;三條既有 client 案的回報 fixture 股號改對上請求(`_stock_evt_raw(stock=)`,斷言不動) |
+| SP3 | `closeBodyOf(pos, price, source?)` + FuturesLadder 鎖定態平倉帶 `flash-locked`;`close-order.test` 兩案 |
+| SP2 | `useFlashArm.test` 真 dialog 端到端案 |
+| ST5 | `MARKET_ESTIMATE_MISSING` 常數 |
+| ST3 | import 清理 |
+| ST2 / ST4 | 反駁(理由見 change-spec §4)|
+
+**收修後 gate**:pytest **2951 passed** / ruff / pyright 0 / tsc / vitest **144 files 2745 tests** / eslint / react-doctor No issues。
