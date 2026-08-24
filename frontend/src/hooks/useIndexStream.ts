@@ -91,18 +91,17 @@ export function useIndexStream(): IndexStreamState {
   // timer),先發後至的舊回應不得整份覆蓋新回應(trade_date 會倒退)。
   const fetchSeqRef = useRef(0);
 
-  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。同步寫在
-  // layout effect 而非 render 期間:render 必須是純的(StrictMode / 中止的 render 都會
-  // 讓 ref 提前髒掉),而 layout effect 在 paint 前同步跑完,WS 訊息一律晚於它抵達。
+  // WS handler 是 deps `[]` 的閉包,讀不到最新 state → 靠這三顆 ref 取當下值。
   //
-  // 兩條維護前提(review F-6 / TC-1):
-  // 1. **凡被 WS handler 以 ref 讀取的 state,一律進本 effect 的 deps**。少列一個的症狀是
-  //    handler 永遠讀到第一輪的值(merge 基底 / 換日比對用舊值),沒有任何錯誤訊號。
-  // 2. 本 ref **只在 commit 之後同步,handler 內不做同 tick 回寫** —— 與
-  //    `useFuturesStream` / `useStockStream` 那種 imperative 配對(寫入點當場同步 ref)
-  //    **不同級**:那種配對連「同一個 tick 內兩則訊息 read-modify-write」都守得住,這裡
-  //    守不住(第二則讀到的仍是上一次 commit 的值)。本 hook 的 handler 目前沒有同 tick
-  //    連鎖需求,故可接受;日後若有,要升級成 imperative 配對,不是再加 deps。
+  // **imperative 配對**(N119,2026-08-24 升級;同 `useFuturesStream` / `useStockStream`):
+  // 每個寫入點都是「自 ref 讀基底 → 算出 next → **當場寫 ref** → setState(next)」。
+  // 改前 ref 只在 commit 後由本 layout effect 同步,同一個 macrotask 內兩則訊息時第二則
+  // 讀到的是**上一次 commit** 的值 —— merge 基底舊 → 第一則的 last_minute 被抹掉;
+  // 換日比對用舊日 → 同一 tick 的第二則又被判成換日,再清一次序列、再打一次全量。
+  // 兩者都會自癒(下一格 upsert / onopen refetch),所以症狀只是「偶爾少一格 / 多一發」。
+  //
+  // 本 effect **保留為 commit 後的 backstop**:涵蓋日後新增而忘了配對的 setState 路徑
+  // (值相同時是 no-op)。維護前提不變:凡被 handler 以 ref 讀取的 state 一律進 deps。
   useLayoutEffect(() => {
     twseRef.current = twse;
     otcRef.current = otc;
@@ -124,9 +123,16 @@ export function useIndexStream(): IndexStreamState {
       retryAttemptRef.current = 0;
       window.clearTimeout(retryTimerRef.current); // 成功 → 取消已排退避(review C-4)
       retryTimerRef.current = undefined;
+      // ref 與 state 同批寫(imperative 配對):全量回來後緊接著抵達的 WS 訊息,
+      // 基底必須是這一份而不是上一次 commit 的。
+      const nextTwse = toSeries(body.twse, null);
+      const nextOtc = toSeries(body.otc, null);
+      tradeDateRef.current = body.trade_date;
+      twseRef.current = nextTwse;
+      otcRef.current = nextOtc;
       setTradeDate(body.trade_date);
-      setTwse(toSeries(body.twse, null));
-      setOtc(toSeries(body.otc, null));
+      setTwse(nextTwse);
+      setOtc(nextOtc);
       setTxf(body.txf);
     } catch (err) {
       console.warn("index: state 載入失敗", err);
@@ -156,15 +162,29 @@ export function useIndexStream(): IndexStreamState {
       ) {
         // 換日(F3):清本地 minutes,以全量 refetch 對齊。refetch 不 await 是安全的:
         // state 為全量快照恆 ≥ 增量,且後續 WS 訊息只會 upsert 新日分鐘(review A3)
+        tradeDateRef.current = incomingDate;
+        twseRef.current = null;
+        otcRef.current = null;
         setTradeDate(incomingDate);
         setTwse(null);
         setOtc(null);
         void refetch();
         return;
       }
-      if (incomingDate !== null) setTradeDate(incomingDate);
-      if (msg.twse) setTwse(toSeries(msg.twse, twseRef.current));
-      if (msg.otc) setOtc(toSeries(msg.otc, otcRef.current));
+      if (incomingDate !== null) {
+        tradeDateRef.current = incomingDate;
+        setTradeDate(incomingDate);
+      }
+      if (msg.twse) {
+        const next = toSeries(msg.twse, twseRef.current);
+        twseRef.current = next;
+        setTwse(next);
+      }
+      if (msg.otc) {
+        const next = toSeries(msg.otc, otcRef.current);
+        otcRef.current = next;
+        setOtc(next);
+      }
       if (msg.txf !== undefined) setTxf(msg.txf);
     };
 

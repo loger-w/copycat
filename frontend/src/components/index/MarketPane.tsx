@@ -71,6 +71,26 @@ export interface PaneFutState {
   ref: number | null;
 }
 
+/** 「櫃買快照源(MIS)中斷」的判定寬限:加權要先累積這麼多分鐘格,才開始認為
+ *  「櫃買一格都沒有」是壞掉而不是還沒輪到(MIS 是 5s poll,加權是 TC4 push)。
+ *  2 格 ≈ 開盤後兩分鐘 —— 比 poll 週期大兩個量級,又短到整天空的日子一眼看得到。 */
+const OTC_DEAD_MIN_TWSE_MINUTES = 2;
+
+/** 櫃買快照源是否已中斷(N108)。
+ *
+ *  MIS(`copycat/server/mis.py`)是非契約的公開端點,壞掉時 `_mis_loop` 拿到 None 就
+ *  跳過 —— 從開盤即死透的日子 otc 的 `p`/`ref` 恆 null、`minutes` 恆空,而 **otc 不吃
+ *  `stale`**(watchdog 只看加權 TC4 推播),畫面因此是一條沒有任何說明的空線。
+ *
+ *  判別子刻意**不看時鐘**(不引進交易時段 / 日曆判斷,也就沒有跨日、假日、盤前的誤報):
+ *  拿同一條 WS 上的加權當對照 —— 加權都已經有分鐘格了而櫃買一格都沒有,只可能是櫃買
+ *  這一路壞了。盤前兩者皆空 → 恆 false。 */
+function otcSourceDead(twse: IndexSeries | null, otc: IndexSeries | null): boolean {
+  if (otc === null || twse === null) return false;
+  if (otc.p !== null || Object.keys(otc.minutes).length > 0) return false;
+  return Object.keys(twse.minutes).length >= OTC_DEAD_MIN_TWSE_MINUTES;
+}
+
 function fmt(millipts: number): string {
   const v = millipts / 1000;
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
@@ -131,9 +151,9 @@ function Btn({
 }
 
 /** 重疊圖兩條線的樣式與標籤,依**輸入序**(0=加權、1=櫃買)。
- *  ⚠ `buildOverlayGeometry` 會 filter 掉 ref 為 null/0 的 series —— 單邊 ref 缺值時
- *  `g.lines` 的 index 與這裡錯位(僅剩的櫃買線會標成加權)。既存行為,與 hoist 前
- *  逐值相同;修正記於 docs/next-time.md。 */
+ *  查表一律用 `line.index`(callee 帶回的原始位置)**不用 `g.lines` 的陣列位置**:
+ *  `buildOverlayGeometry` 會濾掉 ref 為 null/0 的腿,單邊缺值時位置會塌陷一格
+ *  → 僅剩的櫃買線畫成加權色、標成「加權」(N262,2026-08-24 修)。 */
 const OVERLAY_LINES = [
   { color: "stroke-profit", label: "加權" },
   { color: "stroke-idx-otc", label: "櫃買" },
@@ -223,26 +243,25 @@ function OverlayCard({
           strokeDasharray="2 3"
           strokeWidth={1}
         />
-        {g.lines.map((l, i) => (
-          <g key={OVERLAY_LINES[i]!.label}>
-            <polyline
-              points={pts(l.pts)}
-              fill="none"
-              className={OVERLAY_LINES[i]!.color}
-              strokeWidth={1.4}
-            />
-            {l.pts.length > 0 ? (
-              <text
-                x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
-                y={l.pts[l.pts.length - 1]!.y + 3}
-                className={OVERLAY_LINES[i]!.color.replace("stroke-", "fill-")}
-                fontSize={font}
-              >
-                {OVERLAY_LINES[i]!.label}
-              </text>
-            ) : null}
-          </g>
-        ))}
+        {g.lines.map((l) => {
+          const style = OVERLAY_LINES[l.index];
+          if (style === undefined) return null; // 幾何腿數多於樣式表 = 呼叫端漏更新,寧可不畫
+          return (
+            <g key={style.label}>
+              <polyline points={pts(l.pts)} fill="none" className={style.color} strokeWidth={1.4} />
+              {l.pts.length > 0 ? (
+                <text
+                  x={Math.min(l.pts[l.pts.length - 1]!.x + 4, SIZE.width - 28)}
+                  y={l.pts[l.pts.length - 1]!.y + 3}
+                  className={style.color.replace("stroke-", "fill-")}
+                  fontSize={font}
+                >
+                  {style.label}
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
       </svg>
     </figure>
   );
@@ -377,6 +396,7 @@ export function MarketPane({
     window.localStorage.setItem(stores.overlay, next ? "overlay" : "side");
   }
 
+  const otcDead = otcSourceDead(twse, otc);
   const isFut = marketKey === "TXF" || marketKey === "MXF" || marketKey === "TMF";
   // 標的列顯示層的選中值(見 `TargetKey`)。寫成 narrowing 而不是 `isFut ? "FUT" : marketKey`
   // —— TS 不會用布林變數去窄化 `marketKey`,那樣要多一個 cast。
@@ -523,6 +543,11 @@ export function MarketPane({
             />
           )}
           {series?.stale ? <span className="text-xs text-ink-dim">資料中斷</span> : null}
+          {/* 櫃買專屬(N108):`stale` 是加權 watchdog 的旗標,櫃買沒有等價物 ——
+              沒有這一句時「MIS 整天死透」與「櫃買今天沒動」在畫面上完全同形。 */}
+          {marketKey === "OTC" && otcDead ? (
+            <span className="text-xs text-ink-dim">櫃買快照源中斷</span>
+          ) : null}
         </figcaption>
         {/* 量測用的恆存 wrapper:重疊 / 分時 / K 線三種模式都掛在它底下(ref 只掛其中
             一支的話,切模式那一幀會量到 0×0 而 hook 不再重跑)。 */}

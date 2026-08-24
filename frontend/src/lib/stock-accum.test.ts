@@ -584,7 +584,7 @@ describe("TickRow.n 單調序號(N120)", () => {
       t: "09:01:30.000",
       p: 2_380_000,
       q: 1,
-      side: "outer",
+      side: "outer" as const,
       seq,
     };
   }

@@ -1251,9 +1251,18 @@ export function IntradayChartCore({
         // 才出現的一句話,不是常態文案(正常日 hint 為 undefined = 無 tooltip)。
         {
           key: "vp",
-          label: "量分佈",
+          // 載入佔位(N008):群組檢視走 `?tape=0`(明細與 VP 全空),切回單檔的首 paint
+          // 手上還是那份 accum —— VP 一片空,與「今天真的沒成交」同形。
+          // **佔位就掛在這顆鈕上,不另開節點**:同一顆 button、class / disabled /
+          // aria-pressed 逐值不變,兩個 label 又同為 3 個全形字 → box 尺寸不變,
+          // 排版不跑版(user 附註)。全量補打回來後 `tapeOmitted` 轉 false 自動復原。
+          label: accum.tapeOmitted ? "載入中" : "量分佈",
           available: !stkfut,
-          hint: accum.vpTruncated ? "量分佈僅含最近 20000 筆成交(更早的已被截斷)" : undefined,
+          hint: accum.tapeOmitted
+            ? "明細補抓中,量分佈稍後出現"
+            : accum.vpTruncated
+              ? "量分佈僅含最近 20000 筆成交(更早的已被截斷)"
+              : undefined,
         },
         // 成交點同樣零外部資料依賴(orders 已在手上),**個股期態也不反灰**(AD-5):
         // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。

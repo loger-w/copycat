@@ -237,7 +237,15 @@ export function StockPage({
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (
           <p className="rounded border border-bear bg-bear/10 px-3 py-1 text-sm text-bear">
-            {status.tc4 === "down" ? "達錢 4 連線中斷,恢復後自動回補" : "伺服器連線中斷,重連中…"}
+            {status.tc4 === "down"
+              ? // 一句話要對**兩態**都誠實(N109):`tc4: "down"` 有兩個來源 —— engine 在
+                // 但 TC4 斷(接上就自癒回補),以及 XR-3 之後的**無 engine 模式**
+                // (server 啟動時 TC4 沒開;stock engine 只在 boot 建,TC4 後來開起來也
+                // 不會自己接上,要重啟 server)。兩者的 status seed 逐值相同、前端沒有
+                // 可分辨的訊號(`/api/health` 刻意不含引擎健康度),所以不分兩句 ——
+                // 改前只講「恢復後自動回補」,在無 engine 模式下是錯的,而使用者只會一直等。
+                "達錢 4 未連線 —— 連線後自動回補;若 server 啟動時未開,需重啟 server"
+              : "伺服器連線中斷,重連中…"}
           </p>
         ) : null}
         {/* 檢視切換 pill(group-grid SC-3)。掛在 main 頂層、`code === null` 與

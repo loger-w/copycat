@@ -63,6 +63,13 @@ export function outOfDomainLevels(
 }
 
 export interface OverlayLinePts {
+  /** 這條線在**輸入陣列**裡的原始位置(N262)。
+   *
+   *  呼叫端拿它去查自己那份「第 n 腿長什麼樣」的表(`MarketPane` 的 `OVERLAY_LINES`
+   *  = 0 加權 / 1 櫃買)。**不可用 `lines` 的陣列位置代替** —— ref 缺值(或為 0)的腿
+   *  在下面被濾掉,twse.ref 缺時僅剩的櫃買線就落在位置 0,被畫成加權色、標成「加權」,
+   *  而畫面照畫、沒有任何錯誤訊號。 */
+  index: number;
   pts: { x: number; y: number; pct: number }[];
 }
 
@@ -76,21 +83,25 @@ export function buildOverlayGeometry(
   series: { minutes: Record<string, number>; ref: number | null }[],
   size: Size,
 ): IndexOverlayGeometry {
+  // 先編號再過濾:過濾後才 map 的話原始位置就沒了(N262)。
   const pctSeries = series
-    .filter((s) => s.ref !== null && s.ref > 0)
-    .map((s) =>
-      sortedEntries(s.minutes).map(([minute, p]) => ({
+    .map((s, index) => ({ s, index }))
+    .filter(({ s }) => s.ref !== null && s.ref > 0)
+    .map(({ s, index }) => ({
+      index,
+      pts: sortedEntries(s.minutes).map(([minute, p]) => ({
         minute,
         pct: ((p - s.ref!) / s.ref!) * 100,
       })),
-    );
-  const all = pctSeries.flat().map((p) => p.pct);
+    }));
+  const all = pctSeries.flatMap((line) => line.pts).map((p) => p.pct);
   const lo = Math.min(0, ...all) - 0.3;
   const hi = Math.max(0, ...all) + 0.3;
   const span = hi - lo || 1;
   const toY = (pct: number): number => ((hi - pct) / span) * size.height;
   return {
-    lines: pctSeries.map((pts) => ({
+    lines: pctSeries.map(({ index, pts }) => ({
+      index,
       pts: pts.map(({ minute, pct }) => ({ x: toX(minute, size.width), y: toY(pct), pct })),
     })),
     zeroY: toY(0),
