@@ -7,6 +7,7 @@ import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { useFuturesBars, type FuturesBarsKey } from "@/hooks/useFuturesBars";
+import type { BarsStatus } from "@/hooks/useMarketBars";
 import { useOiLevels } from "@/hooks/useOiLevels";
 import {
   ALLDAY_HOUR_TICKS,
@@ -65,6 +66,21 @@ const MINUTE_INIT_BARS = 240;
  *  那種空檔 bars 本來就沒東西可補,拿牆鐘比會把「沒人交易」講成「回補中」。
  *  索引差 = 近全軸上缺的 1K 根數(跨死區時不等於牆鐘分鐘),文案因此講「根」。 */
 const FUT_LIVE_LAG_MAX = 3;
+
+/** 空序列時的文案,依 `meta.status`(N104)。
+ *
+ *  與上面那條 gate 5 的「分時資料落後 N 根」**並存不合併**,兩者定義域幾乎互斥:
+ *  這裡答「這一趟根本沒拿到」(bars 空),gate 5 答「拿到的不夠新」(bars 非空)。
+ *  合成一句話會讓「TC4 忙」與「回補缺尾」共用同一個提示,而處置不同(等重試 vs
+ *  看資料完整性)。
+ *
+ *  `ok` 那句刻意仍是**進行式**:後端說「這一趟問完了、就是空」,但那既可能是這個
+ *  商品今天真沒 K 線、也可能是 TC4 那頭還沒寫出來 —— 不下結論。 */
+const EMPTY_TEXT: Record<BarsStatus, string> = {
+  timeout: "回補中…(TC4 忙,稍後自動重試)",
+  disconnected: "暫無資料(TC4 未連線)",
+  ok: "暫無資料(TC4 未回應)",
+};
 
 /** WS 最後成交(台北 `YYYY-MM-DD` + `HH:MM:SS.fff`)→ 它所屬 1K bar 的近全軸索引與錨定日。
  *
@@ -318,12 +334,13 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
         </div>
       );
     }
-    // 空態文案用**進行式**:market bars 路徑無三態,`unavailable` 涵蓋「TC4 慢」與
-    // 「真的沒有」兩件事,不可下「這個商品沒有資料」的結論(design §1.4 D8)
+    // 空態依 `meta.status` 分三句話(N104)。改動前只有最後那一句,而 `unavailable`
+    // 同時涵蓋「TC4 忙(等下一輪輪詢就有)」「TC4 斷線(要去看連線)」「真的沒有這段
+    // K 線」—— 三件事的處置完全不同。舊 payload(無 status)逐字退回原句(design §1.4 D8)。
     if (data.meta.source === "unavailable") {
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
-          <p className="text-sm text-ink-muted">暫無資料(TC4 未回應)</p>
+          <p className="text-sm text-ink-muted">{EMPTY_TEXT[data.meta.status ?? "ok"]}</p>
         </div>
       );
     }

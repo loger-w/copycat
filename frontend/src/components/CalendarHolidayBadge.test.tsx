@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CalendarBadges } from "@/components/CalendarHolidayBadge";
@@ -34,8 +34,11 @@ async function settled(): Promise<void> {
   await waitFor(() =>
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0),
   );
-  await waitFor(() => expect(document.body.dataset.settled).toBe(undefined));
-  await new Promise((r) => setTimeout(r, 0));
+  // TQ observer 走 notifyManager 的 macrotask 排程:光排乾 microtask 不足以讓
+  // 「資料到了、元件也重繪過」成立(frontend-testing skill 的 TQ 條目)
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
 }
 
 beforeEach(() => {
@@ -125,7 +128,8 @@ describe("休市膠囊的週末守門(N090)", () => {
 
   it("舊 payload(無 extra_trading_days 欄)→ 逐字退回週末靜音", async () => {
     vi.setSystemTime(new Date(2026, 9, 10, 12, 0, 0));
-    const { extra_trading_days: _drop, ...legacy } = BASE;
+    const legacy: Record<string, unknown> = { ...BASE };
+    delete legacy.extra_trading_days; // 舊 payload:這一格根本不存在(不是空陣列)
     vi.stubGlobal(
       "fetch",
       vi.fn(

@@ -9,7 +9,7 @@ import { QuoteTable } from "@/components/QuoteTable";
 import { RightRail, type RailContext } from "@/components/rail/RightRail";
 import { SeriesSelect } from "@/components/SeriesSelect";
 import { ToastStack } from "@/components/ToastStack";
-import { CalendarHolidayBadge } from "@/components/CalendarHolidayBadge";
+import { CalendarBadges } from "@/components/CalendarHolidayBadge";
 import { VersionDriftBadge } from "@/components/VersionDriftBadge";
 import { useBreadth } from "@/hooks/useBreadth";
 import { useCapitalStream } from "@/hooks/useCapital";
@@ -290,8 +290,10 @@ export default function App() {
         {/* 一個 ml-auto 推到右側,兩個會平分剩餘空間把膠囊卡在 nav 中段(design R4);
             IndexBar 自身的 ml-auto 在這個內容尺寸容器內成為 no-op。 */}
         <div className="ml-auto flex items-baseline gap-3">
-          {/* 兩顆膠囊同在這個 ml-auto 容器內(R4:各自帶 ml-auto 會平分剩餘空間) */}
-          <CalendarHolidayBadge />
+          {/* 膠囊全在這個 ml-auto 容器內(R4:各自帶 ml-auto 會平分剩餘空間);
+              `CalendarBadges` 是 fragment,最多吐三顆(休市 / 日曆過期 / TXO 回補日鎖定),
+              健康態零 DOM 所以平常這裡與改動前長得一樣 */}
+          <CalendarBadges />
           <VersionDriftBadge />
           <IndexBar twse={twse} otc={otc} txf={txf} />
         </div>
