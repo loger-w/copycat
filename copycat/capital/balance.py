@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -225,13 +226,20 @@ class BalanceCollector:
 
     ⚠ 輪次識別:COM 回呼(OnRealBalanceReport / OnProfitLossGWReport / OnOpenInterest)
     **不帶任何查詢識別欄**,遲到的 `##` 無法與發出的查詢配對。client 在「零事件死查詢
-    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記一筆**欠帳**(`_owed` 計數)
-    並把時間窗 `_stale_until` 推到 `now + STALE_WINDOW_S`。每個 `##` 消耗一筆欠帳:
-    零列且窗內 → 視為舊輪遲到、吞掉不 flush;帶列 → 照 flush(那批列就是它的快照);
-    窗外 → 欠帳歸零、零列 `##` 照 flush。rows 抵達**不動**欠帳(損益段首列固定是 `000`
+    逾期解卡」等放棄整輪的路徑呼叫 `abandon()`,collector 記一筆**欠帳** —— 一筆欠帳
+    = 一個 `now + STALE_WINDOW_S` 的 deadline,存進 `_debts`(FIFO)。每個 `##` 消耗一筆欠帳:
+    零列且尚有未過期欠帳 → 視為舊輪遲到、吞掉不 flush;帶列 → 照 flush(那批列就是它的快照);
+    欠帳全過期 → 零列 `##` 照 flush。rows 抵達**不動**欠帳(損益段首列固定是 `000`
     表頭,一到就關窗會讓欠帳對 profit 段形同虛設)。
-    `_awaiting`(reset 開、flush 關)守門:沒在等回應的 collector 不記欠帳 —— 否則
+    `_awaiting`(reset 開、flush / clear 關)守門:沒在等回應的 collector 不記欠帳 —— 否則
     pending watchdog 會替已正常收尾的那一段多記一筆,白吞掉下一輪合法的空回應。
+
+    **逐筆 deadline,不是一個共用窗**(N017,2026-08-25):舊版所有欠帳共用單一
+    `_stale_until`,`abandon()` 把它推到 `now + 20` 等於替**所有**未清欠帳續命。
+    profit / OI 兩段的 abandon 相距可達 60s(pending watchdog 一輪一次),第 1 筆早該
+    過期卻跟著第 2 筆的窗活著 → 多吞一次合法的空回應(真空帳戶多掛一輪幽靈部位)。
+    deadline 隨 monotonic clock 單調遞增,故 FIFO 的隊首必為最早到期者,popleft-while 即正確。
+    `_stale_until` / `_owed` 保留為唯讀 property(「窗開著嗎」/「還欠幾筆」的既有觀測窗)。
 
     為什麼是計數 + 時間窗(2026-08-22 review P0):純時間戳吞一個終止符即關窗,連續兩輪
     死查詢的第二個遲到 `##` 照 flush 空集合 → 有庫存清成無部位(原 bug 兩輪重現);
@@ -252,17 +260,31 @@ class BalanceCollector:
         timeout_s: float = 1.0,
         parse: Callable[[str], object | None] = parse_balance_line,
         clock: Callable[[], float] = time.monotonic,
+        name: str = "balance",
     ) -> None:
         self._on_complete = on_complete
         self._timeout_s = timeout_s
         self._parse = parse
         self._clock = clock  # 可注入:欠帳時間窗的兩態(窗內/窗外)測試不能靠 sleep
+        #: 段名(balance / profit / oi)。三段共用同一批 log 文案時,prod log 分不出
+        #: 被抑制的是哪一段部位更新 —— 而「抑制一次」正是要人看得懂的那一行(N018)。
+        self._name = name
         self._staging: list[Any] = []
         self._last_feed: float | None = None
         self._closed = False  # 本輪已 flush;reset(發新查詢)前的事件一律丟棄
-        self._stale_until: float | None = None  # 欠帳有效到此刻(見 docstring)
-        self._owed = 0  # 放棄輪還欠幾個終止符(每個 `##` 消耗一筆)
+        #: 未清欠帳的 deadline(FIFO,單調遞增;見 docstring 的逐筆 deadline 段)
+        self._debts: deque[float] = deque()
         self._awaiting = False  # 已發查詢、還在等這一輪的回應(abandon 的守門)
+
+    @property
+    def _stale_until(self) -> float | None:
+        """最後一筆欠帳的 deadline(None = 沒有未清欠帳)。唯讀觀測窗,語意 =「窗還開著嗎」。"""
+        return self._debts[-1] if self._debts else None
+
+    @property
+    def _owed(self) -> int:
+        """還欠幾個終止符。唯讀觀測窗。"""
+        return len(self._debts)
 
     def reset(self, *, keep_abandoned: bool = False) -> None:
         """發新查詢前清空本輪。預設把欠帳窗關掉(正常路徑 = 上一輪已正常收尾);
@@ -273,27 +295,40 @@ class BalanceCollector:
         self._closed = False
         self._awaiting = True
         if not keep_abandoned:
-            self._stale_until = None
-            self._owed = 0
+            self._debts.clear()
+
+    def clear(self) -> None:
+        """重連 / 重登落地的清點(N018)。與 `reset()` 的差別只有一個字但是關鍵:
+        **`_awaiting` 留在 False** —— 那一刻沒有任何在途查詢,標成「等回應中」會讓
+        下一次 pending watchdog 的 `abandon()` 記帳成功,白吞一輪合法的空回應
+        (帳戶真的沒部位時多掛一輪幽靈)。斷線前的欠帳同樣跨不過重連:那一輪的 `##`
+        隨連線一起沒了,留著只是白吞。"""
+        self._staging = []
+        self._last_feed = None
+        self._closed = False
+        self._awaiting = False
+        self._debts.clear()
 
     def abandon(self, now_monotonic: float | None = None) -> None:
         """放棄本輪(client 逾期解卡 / pending watchdog 逾時):清空 + 開遲到終止符窗。
         必須在放棄的當下呼叫,不能延到下一次發查詢 —— 兩者之間(balance 段最長 60s)
         遲到的 `##` 正是要擋的那一個。`_awaiting` 為假(沒發查詢/本輪已 flush)= no-op:
         watchdog 會對已收尾的那一段照樣呼叫,記帳等於白吞一輪合法的空回應。
-        窗開著仍算 awaiting(還在等新一輪的回應),每次呼叫多記一筆欠帳並把窗往後推。"""
+        窗開著仍算 awaiting(還在等新一輪的回應),每次呼叫**多記一筆自己的 deadline**
+        (不動既有欠帳的 deadline —— 那正是 N017 修掉的續命 bug)。"""
         if not self._awaiting:
-            logger.debug("collector 未在等待回應,abandon 略過")
+            logger.debug("%s collector 未在等待回應,abandon 略過", self._name)
             return
         now = self._clock() if now_monotonic is None else now_monotonic
-        self._stale_until = now + STALE_WINDOW_S
-        self._owed += 1
+        self._expire_debts(now)  # 先剔除已過期的,別讓它們搭新欠帳的便車活下去
+        self._debts.append(now + STALE_WINDOW_S)
         self._staging = []
         self._last_feed = None
         self._closed = False
         logger.debug(
-            "collector 放棄本輪(欠 %d 個終止符),%.0fs 內的零列終止符視為遲到",
-            self._owed,
+            "%s collector 放棄本輪(欠 %d 個終止符),各自 %.0fs 內的零列終止符視為遲到",
+            self._name,
+            len(self._debts),
             STALE_WINDOW_S,
         )
 
@@ -305,13 +340,11 @@ class BalanceCollector:
         if is_end:
             self._settle_debt(now)  # 窗外作廢;本輪已關閉時仍要消欠帳,否則殘留到下一輪白吞
         if self._closed:
-            logger.debug("collector 本輪已 flush,事件丟棄: %r", raw)
+            logger.debug("%s collector 本輪已 flush,事件丟棄: %r", self._name, raw)
             return
         if is_end:
-            if self._owed > 0:
-                self._owed -= 1  # 每個 ## 消耗一筆欠帳,帶列的照 flush、零列的吞掉
-                if self._owed == 0:
-                    self._stale_until = None
+            if self._debts:
+                self._debts.popleft()  # 每個 ## 消耗一筆欠帳,帶列的照 flush、零列的吞掉
                 if not self._staging:
                     # 放棄輪遲到的終止符:不 flush、不關閉本輪(新一輪的事件照收)。
                     # 連 _last_feed 一起清:遲到輪吐過的列(損益段 `000` 表頭必然)parse 成 None
@@ -319,7 +352,9 @@ class BalanceCollector:
                     # WARNING 不是 INFO:代價是這一輪的部位更新被整個抑制掉。
                     self._last_feed = None
                     logger.warning(
-                        "collector 忽略放棄輪遲到的終止符(部位更新抑制一次,尚欠 %d)", self._owed
+                        "%s collector 忽略放棄輪遲到的終止符(部位更新抑制一次,尚欠 %d)",
+                        self._name,
+                        len(self._debts),
                     )
                     return
             self._flush()
@@ -329,17 +364,18 @@ class BalanceCollector:
         if p is not None:
             self._staging.append(p)
 
+    def _expire_debts(self, now: float) -> None:
+        """剔除已過期的欠帳(真空帳戶的逃生路)。deadline 隨 monotonic clock 單調遞增
+        → 隊首必為最早到期者,popleft-while 掃到第一個未過期的即可停。"""
+        while self._debts and now >= self._debts[0]:
+            self._debts.popleft()
+
     def _settle_debt(self, now: float) -> None:
-        """終止符抵達時先結算欠帳:窗外 → 全數作廢(真空帳戶的逃生路);本輪已 `_closed`
+        """終止符抵達時先結算欠帳:過期的逐筆作廢;本輪已 `_closed`
         (timeout 保險先 flush 了)→ 這個 `##` 不會再走消耗路徑,在此先扣一筆。"""
-        if self._stale_until is not None and now >= self._stale_until:
-            self._stale_until = None
-            self._owed = 0
-            return
-        if self._closed and self._owed > 0:
-            self._owed -= 1
-            if self._owed == 0:
-                self._stale_until = None
+        self._expire_debts(now)
+        if self._closed and self._debts:
+            self._debts.popleft()
 
     def poll(self, now_monotonic: float | None = None) -> None:
         """COM 幫浦圈呼叫:距最後一筆事件超過 timeout → flush(沒等到 ## 的保險)。"""

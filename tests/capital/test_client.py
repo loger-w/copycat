@@ -2000,8 +2000,13 @@ async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: p
     _mark_ready(client)
     monkeypatch.setattr(client_mod, "_today_ymd", lambda: "20260824")
     monkeypatch.setattr(client_mod, "_trade_ymd", lambda when=None: "20260825")
-    result = await client.submit_stock_order(
-        StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market")
+    result = await _drive(
+        client,
+        lambda: client.submit_stock_order(
+            StockOrderRequest(
+                stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market"
+            )
+        ),
     )
     assert result.seq_no is not None
     assert client.store._price_types[result.seq_no][1] == ("20260824", "20260825")
