@@ -287,3 +287,19 @@ N081 / N099 的實作把 `RightRail.tsx` 與 `StkfutLadder.tsx` 推過 `no-giant
 
 真錢紀律:全部走 `tests/conftest.py` 的憑證中和 + `FakeCom`,無任何腳本會碰群益正式環境,
 `.env` 不動。
+
+## 4. two-axis review round 1 修正(主 session)
+
+- **W17 措辭改精確(review ST1/SP1)**:N075 的候選日多開「所屬交易日」一天,是 seq 重用的誤標窗(群益 seq 是日曆日還是
+  交易日重置**未實證**)。收修:`note_price_type` 綁 `stock_no` + `buy_sell`(回報口徑 "B"/"S"),帶出時同名欄位必須等值;
+  期貨單只綁方向(`tc4_symbol` 與回報契約碼不同域)、平倉經送單函式一併綁;`_on_late_result` 同款。
+  W17 自此成立的形式 = 「同 seq + 同標的 + 同方向 + 候選日相符才帶出;任一不符只缺標籤」。
+- **SP3**:鎖定態的梯上平倉(`FuturesLadder.confirmClose`)`closeBodyOf(pos, est, "flash-locked")`;未鎖 / 面板路徑不帶
+  `source`(後端預設 panel,舊契約零改)。
+- **ST5**:OrderPanel 兩句同義文案收 `MARKET_ESTIMATE_MISSING`(pill title 與提示同句;本輪新測試的 title 期望跟改)。
+- **SP2**:`useFlashArm.test` 補真 `CapitalConfirmDialog` 端到端案(窗 onCancel 恰一次 + 鎖定同時解除)。
+- **ST3**:`test_client.py` 未用 import 與 noqa 清掉、stdlib import 順序。
+- 反駁:**ST2**(四檔 `beforeEach` wsStatus `connecting→open` 是前提變更非改斷言,SC-13 自身保留 `connecting` 覆蓋;
+  只在 `armUp()` 內設 open 會讓「非武裝路徑在 connecting 下」的既有案語意跟著漂,受影響面反而更難說清);
+  **ST4**(route 層 tick 閘早於 client 的 `CAPITAL_ORDER_ENABLED`,與既有 `order/future` / `correct-price` 兩個 caller
+  同一順序 —— 三處一致優先;總開關關閉時仍是 client 層擋,安全語意不變)。

@@ -1,0 +1,66 @@
+{
+ "fixed_point": "master (9a5b5ef6)",
+ "reviewed_head": "21a73fb7",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P1(硬)",
+   "summary": "W17「只缺標籤不誤標」被放寬:N075 候選日往未來多開一天,seq 重用(日曆日重置未實證)可把隔日限價單標成市價",
+   "location": "copycat/capital/store.py:363-372 / :389",
+   "disposition": "accepted → note 綁 stock_no + buy_sell,等值才帶出;測試釘住;W17 措辭改精確"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2(判斷)",
+   "summary": "四檔 beforeEach wsStatus connecting→open 把數百條既有案前提一次換掉",
+   "location": "PriceLadder/StkfutLadder/FuturesLadder/RightRail tests",
+   "disposition": "rejected — 前提變更非改斷言(Spec 軸同判);SC-13 自身保留 connecting;只在 armUp 內設 open 反而讓非武裝路徑語意漂"
+  },
+  {
+   "id": "ST3",
+   "severity": "P3(硬)",
+   "summary": "noqa 遮住未用 import;stdlib import 順序",
+   "location": "tests/capital/test_client.py:574",
+   "disposition": "accepted → 清理"
+  },
+  {
+   "id": "ST4",
+   "severity": "P3(判斷)",
+   "summary": "平倉 route 的 BAD_TICK 早於 CAPITAL_ORDER_ENABLED",
+   "location": "server/capital_api.py:337",
+   "disposition": "rejected — 與既有 order/future、correct-price 兩處同序;總開關仍由 client 層擋,安全語意不變"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "OrderPanel 近同文案手寫兩處;armState / arm.state 命名",
+   "location": "OrderPanel.tsx:216/276",
+   "disposition": "accepted(文案常數);命名 rejected(cosmetic)"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "P2",
+   "summary": "N075 加法形式非舊行為純超集:多一個往後交易日候選,seq 重用即誤標",
+   "location": "store.py::_price_type_of",
+   "disposition": "accepted(同 ST1)"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "N080 三條測試用合成 subtree 代打,沒有真 CapitalConfirmDialog 端到端",
+   "location": "useFlashArm.test.tsx",
+   "disposition": "accepted → 補真 dialog 案(onCancel 恰一次 + 鎖定解除)"
+  },
+  {
+   "id": "SP3",
+   "severity": "P3",
+   "summary": "closeBodyOf 平倉未帶 flash-locked,鎖定態平倉審計無線索",
+   "location": "lib/close-order.ts / FuturesLadder.tsx",
+   "disposition": "accepted → 鎖定態帶 flash-locked,其餘不帶 source"
+  }
+ ],
+ "whitelist": "兩軸皆核 W1–W16 / W18–W23 全守;W17 見 ST1(收修後成立);真錢三道閘零改;既有斷言只改事前標「該變」的 5 條;後端測試 diff 零刪除行",
+ "disposition": "Standards 5 條:接受 ST1/ST3/ST5(文案),反駁 ST2/ST4。Spec 3 條全接受。收修後 pytest 2951 / vitest 2745 / 其餘 gate 全綠。"
+}
