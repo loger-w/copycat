@@ -65,13 +65,25 @@ tests/test_corr_config.py::TestRepoConfigFile::test_repo_config_matches_default_
   `ok` 與「gate 5 並存」兩案在紅態即綠 —— 它們鎖的是**不得回歸**的既有行為)。
 - `CalendarHolidayBadge.test.tsx`:整檔 import 失敗(`CalendarBadges` 尚未存在)。
 
-### 紅態不足的兩處(誠實標註)
-- `tests/server/test_main_wiring.py::TestHealGateAcrossMidnight::test_cross_midnight_table`
-  (N015 跨午夜表四格)**一開始就綠** —— 條文要的是「補表」= 補覆蓋,不是修 bug。
-  teeth 已用推理釘住並寫進 docstring:現存三格全落在 `hour == 1`,把 `hour < 6` 改成
-  `hour < 24` 三格照樣全綠,而新加的「週一 08:50」會退成週日 → 該救不救。
-- `TestNoDailyBarsSource::test_ticks_still_flow_without_a_daily_bars_source` 亦一開始就綠
-  (鎖 XR-3 的既有語意不得回退)。
+### 紅態不足的六處(誠實標註;review ST1 更正,原本只列兩處)
+
+以下新增案**改動前即綠**,它們鎖的是「不得回歸 / 不得被順手改壞」而不是修 bug:
+
+1. `test_main_wiring.py::TestHealGateAcrossMidnight::test_cross_midnight_table`(N015 跨
+   午夜表四格)—— 條文要的是「補表」= 補覆蓋。teeth 寫進 docstring:現存三格全落在
+   `hour == 1`,把 `hour < 6` 改成 `hour < 24` 三格照樣全綠,而新加的「週一 08:50」會
+   退成週日 → 該救不救。
+2. `test_signal_hub.py::TestNoDailyBarsSource::test_ticks_still_flow_without_a_daily_bars_source`
+   —— 鎖 XR-3 的既有語意(CDP 停用 ≠ 訊號鏈停用)不得回退。
+3. `test_river_state.py::TestCloseClampPush::test_equal_rank_does_not_overwrite`
+   —— 鎖「小者贏」是**嚴格**小於;寫成 `>` 會退化成「後到就贏」= 等於沒有守門。
+4. `test_river_state.py::TestApplyBackfill::test_backfill_does_not_overwrite_the_close_auction_minute`
+   —— 鎖 rank 1(收盤撮合)是真成交不得被回補覆寫,是 N058 覆寫範圍的**上界**。
+5. `test_river_state.py::TestApplyBackfill::test_backfill_does_not_overwrite_a_plain_live_minute`
+   —— 白名單案:非 end 格的「回補只補空缺」逐字不變。
+6. `test_signal_routes.py::test_basis_is_disabled_without_a_daily_bars_source`
+   —— **既有測試改寫**(N110 拿掉了它原本鎖的那個替身),不是紅測;改寫後的斷言
+   (cache 一格不落 + 佇列空 + 零重試記帳)在實作完成後才有意義。
 
 ### 前端 mutation 實測(negative case 有沒有牙齒)
 `CalendarHolidayBadge.tsx` 同時注入兩個 mutant(拿掉 `!years_loaded.includes(year)`、
@@ -97,16 +109,16 @@ tests/test_corr_config.py::TestRepoConfigFile::test_repo_config_matches_default_
 | # | 白名單條目 | 核對 |
 |---|---|---|
 | 1 | `bars.py` 三層 cache 全數不動 | `git diff master..HEAD -- copycat/server/bars.py` **空**(零 diff) |
-| 2 | `fetch_bars_range_tagged` 逐字不動 | diff 只動 `fetch_daily_bars` 與新增 `_daily_window_days`;90 日 fallback 窗與 `dk_timed_out or fb_timed_out` 未被觸及 |
-| 3 | `fetch_daily_bars` 在 n=25 時窗逐字 40 日 | `_daily_window_days(25) = min(40, max(20, 40)) = 40`;測試 `test_window_shrinks_with_small_n_but_is_verbatim_at_25` 對 `n=25` 斷言 `today-40` 兩段同窗 |
+| 2 | `fetch_bars_range_tagged` 逐字不動 | diff 只動 `fetch_daily_bars` 與新增 `_daily_fallback_window_days`;90 日 fallback 窗與 `dk_timed_out or fb_timed_out` 未被觸及 |
+| 3 | `fetch_daily_bars` 在 n=25 時窗逐字 40 日 | **收修後(SP3)更強**:DK 段恆 40 日、與 `n` 無關;1K fallback `n<=5` → 20 日、其餘 40 日。測試 `test_only_the_1k_fallback_window_shrinks_and_only_for_small_n` 對 `n=25` / `n=5` 都斷言 `("DK", today-40)` |
 | 4 | `futures_source.fetch_bars_range` raise 語意不動 | `git diff -- copycat/live/futures_source.py` **空** |
 | 5 | index watchdog 窗 09:00–13:25 不動 | diff 只改 heal 那個 `if`;watchdog 的 `self._in_watch_window()` 分支與 `_WATCH_START/_WATCH_END` 值未動 |
-| 6 | `_swap_day` 覆寫順序不動 | `_swap_day` 零 diff;N107 的新分支刻意用同方向 `{**minutes, **self._pending_minutes}` |
+| 6 | `_swap_day` 覆寫順序不動 | **收修後(SP2b)改動**:`_swap_day` 由 `{**backfill, **pending}` 擴成三層 `{**_pending_backfill, **backfill, **_pending_minutes}` —— 既有兩者的相對順序(backfill < pending)**逐字不變**,只在最底下多墊一層可信度更低的早輪 retry 回補 |
 | 7 | RiverState 換場清空 / 同分鐘 last-write-wins / 非 end 格「只補空缺」 | 換場清空多清一個名次帳(同語意);`test_non_clamp_minutes_keep_last_write_wins` / `test_fills_only_missing_offsets` / 新增 `test_backfill_does_not_overwrite_a_plain_live_minute` 全綠 |
 | 8 | SignalHub 既有重試 / `_stale` 尺 / cache 收斂點不變 | diff 只加 `request_basis` 早退 + 一個 assert;`_resolve_basis` / `_basis_failed` / `_schedule_basis_retry` 本體零改 |
 | 9 | market route 值域檢查 / OTC / 分派 / cache 後綴 | diff 只重排兩個閉包的定義位置 + 接第二元素;`MARKET_KEYS` / `BAD_*` / OTC 分支 / `IX0001\|M`·`\|L` 未動 |
 | 10 | `/api/calendar` 既有欄位語意不變 | 新增一鍵;既有六鍵的斷言(`trade_date` vs `calendar_trade_date` 分帳、18 個 holidays)全部原封通過 |
-| 11 | `CalendarHolidayBadge` 三道既有否決不變 | `shouldShowHoliday` 前三行逐字沿用;`App.test.tsx` 既有六案零改動且全綠 |
+| 11 | 休市膠囊三道既有否決不變 | `CalendarBadges.tsx::shouldShowHoliday` 前三行逐字沿用;`App.test.tsx` 既有六案零改動且全綠(ST6 只改檔名與 import,元件邏輯零 diff) |
 
 **另一組零 diff 核對**(本輪沒碰、review 可直接跳過):`copycat/server/bars.py`、
 `copycat/live/futures_source.py`、`copycat/server/overlay.py`、`copycat/trading_calendar.py`、
@@ -129,10 +141,17 @@ tests/test_corr_config.py::TestRepoConfigFile::test_repo_config_matches_default_
    寫 dict(既有姿態未變)。正解是「worker 只回傳 dict、event loop 端合併」,要動
    `_retry_loop` / `_subscribe_and_backfill` 簽名 —— 獨立小輪(R8 已有此條)。
 2. **N015 封關夜**:見 §5。
-3. **N090 漏設偵測**:需要一個獨立於日曆的「今天有沒有在成交」訊號才做得到。
+3. **N090 漏設偵測 = scope 決定,不是做不到**(review SP7 更正):App 內其實有獨立於
+   日曆的成交訊號(index `minutes` 有沒有在長、`/ws/stock` 的 tick 有沒有進來)——
+   「後端判非交易日 **而畫面上明明在成交**」就是補班日漏設的正字標記。沒做是因為要把
+   那些狀態拉進一顆 nav 膠囊,得跨 `IndexBar` / stock WS 兩條流,屬另一個 scope。
 4. **`build_period` 三態化**:`TaggedBars` 沒有 status 欄,日 / 週 / 月 K 與加權的
    `meta.status` 恆 `ok`。要收得動 `bars.py` 的 `_hist` / `daily_tag` 型別。
-5. **index 盤後 heal 的上限**:交易日晚間若 TC4 整晚拿不到當日 1K,退避封頂 900 s
+5. **`meta.status` 在 bars 非空時無人讀**(review SP6):今日段 timeout 但歷史段有貨時
+   payload 帶著 `status:"timeout"`,而 `FuturesChart` 只在空序列分支讀它 —— 那個情境的
+   使用者可見訊號目前只有 gate 5 的「落後 N 根」(它答的是「拿到的不夠新」,不是「這一趟
+   沒問到」)。要不要在非空時也提示、提示什麼,是獨立的 UX 決定。
+6. **index 盤後 heal 的上限**:交易日晚間若 TC4 整晚拿不到當日 1K,退避封頂 900 s
    → 到隔日約 40 發 UNSUB→SUB。目前判斷可接受(換的是「線整晚空著」),若 prod log
    噪音過大,候選 = 盤後段另設更長的 base interval。
 
@@ -149,3 +168,74 @@ tests/test_corr_config.py::TestRepoConfigFile::test_repo_config_matches_default_
 | SC-5 | **三顆日曆膠囊** | 平常 nav 右側應**完全看不到**它們(健康態零 DOM)。要看樣子:暫時設 `TXO_BACKFILL_DATE=2026-08-24` 重啟 → 應亮「TXO 回補日鎖定 2026-08-24」;把 `configs/trading_holidays.json` 的 `years` 只留 2025 重啟 → 應亮「交易日曆過期」。**看完記得還原**(前者會把 TXO 面鎖住) |
 | SC-6 | **N110 開機 log** | 無 stock engine 的情境(TC4 沒開就起 server)boot 後 `grep "CDP 停用" logs/…` 應**零筆**,改為一行 `CDP 基準:無日 K 來源,N 檔一律不排 job` |
 | SC-7 | **N021 降級腿數** | 把 `configs/correlation.json` 改壞(例如刪掉 `legs`)重啟 → 江波圖 / 相關係數應仍是**七腿**(改動前會少一腿)。看完還原 |
+
+---
+
+## §8 review round 1 收修
+
+處置全表在 change-spec §4(接受 15 / 申報 2 / 反駁 1)。
+
+### commits
+
+| commit | 類 | 內容 |
+|---|---|---|
+| `834a571e` | 🟢 | SP1–SP5 / ST4 紅先行(7 條紅)+ ST2 既有測試改寫 |
+| `47103680` | 🔴 | SP1 / SP2 / SP3+ST8 / SP4 後端 + SP5+ST4 前端 + CLAUDE.md §4 改口 |
+| `06a62849` | 🔵 | ST3 層級倒置 / ST6 檔名 / ST7 / ST9 |
+
+> 首次 🔴 commit 誤把 ST6 的 `git mv`(R100 純改名)一起帶進去 = 三類混 + 自述≠diff;
+> 未 push,以 `reset --soft` 重切成上表兩則。ST8 與 SP3 同函式、分不開 → 併在 🔴 且
+> 在訊息裡標明。
+
+### 紅態(commit `834a571e` 當下)
+
+```
+tests/server/test_index_engine.py::test_heal_after_hours_falls_back_to_the_old_window_without_a_calendar
+tests/server/test_index_engine.py::test_heal_inside_watch_window_ignores_the_calendar
+tests/server/test_index_engine.py::test_pending_retry_keeps_new_day_minutes_out_of_state
+tests/server/test_index_engine.py::test_pending_worker_never_rebinds_the_live_pending_dict
+tests/server/test_index_engine.py::test_swap_merges_retry_backfill_under_the_final_backfill
+tests/live/test_stock_source.py::TestFetchDailyBars::test_only_the_1k_fallback_window_shrinks_and_only_for_small_n
+tests/server/test_market_routes.py::TestMarketPayloadUnaffectedByBarsStatus::test_status_only_appears_on_the_paths_that_really_have_it
+frontend FuturesChart.test.tsx「空態三態文案」2 failed | 3 passed
+```
+
+代表性紅訊息:
+- SP2(b) `AttributeError: 'IndexEngine' object has no attribute '_pending_backfill'`
+- SP3 `assert [('DK', ...0716...), ('1K', ...0716...)] == [('DK', ...0716...), ('1K', ...0805...)]`
+- SP4 `assert 'status' not in body['meta']`(TWSE 仍帶著硬寫的 `"ok"`)
+- SP5 / ST4 `Unable to find an element with the text: 回補中…(TC4 忙,交易時段內每分鐘重試)`
+
+**ST2 那條不是紅測**(既有測試改寫):N110 已經把它原本鎖的替身拿掉,改寫後的斷言
+要等實作完成才有意義 —— 已列進 §2 的「六處」。
+
+### gate(收修後全部重跑)
+
+| gate | 結果 | 對照 round 0 |
+|---|---|---|
+| `pytest -q` | **2976 passed** `170.97s` | 2972 → +4(SP1/SP2 新增 5、SP3/SP4 併入既有案) |
+| `ruff check copycat tests` | `All checks passed!` | 同 |
+| `pyright` | `0 errors, 0 warnings` | 同 |
+| `copycat validate` | **42/42 PASS** | 同 |
+| `frontend npx tsc -b` | 無輸出(通過) | 同 |
+| `frontend npx vitest run` | **145 files / 2759 tests passed** | 2758 → +1(ST4 未知 status) |
+| `frontend npx eslint src` | 無輸出(通過) | 同 |
+| `react-doctor --scope changed` | `Scanned 8 files` → **No issues found** | 零新增 finding |
+
+### 收修後的白名單補充核對
+
+- `copycat/server/bars.py` 仍是**零 diff**(ST3 之後 `BarsResult` 只在 `app.py` 組)。
+- `git grep -n "BarsResult" copycat/server/futures_engine.py` → 只剩註解兩行,無 import。
+- SP3 之後 `fetch_daily_bars` 的 DK 段 start 與改動前逐字相同(`_DAILY_WINDOW_DAYS`),
+  測試 `test_only_the_1k_fallback_window_shrinks_and_only_for_small_n` 對 `n=25` / `n=5`
+  兩次都斷言 `("DK", wide)`。
+- `_HEAL_TAIL_END` 常數**復活**(SP1(a) 的無日曆退路要用它),不再是 dead code。
+
+### §7 過目清單的變更
+
+- SC-2 補一句:**無日曆(`configs/trading_holidays.json` 缺檔)時盤外不再自癒** ——
+  要驗放寬,prod 必須帶著日曆跑(現況 `__main__` 有傳)。
+- SC-4 的 timeout 文案改為「回補中…(TC4 忙,交易時段內每分鐘重試)」。
+- 新增 SC-8:**加權 / 櫃買 / 日週月 K 的 `meta.status` 應該不存在**(不是 `"ok"`)——
+  `curl -s 'localhost:8721/api/market/bars/TWSE?tf=1&days=1' | python -m json.tool` 看
+  `meta` 裡沒有 `status` 那一格;期指 `TXF?tf=1` 則要有。
