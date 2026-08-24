@@ -159,9 +159,12 @@ class TestCorrSourceFetchDay1k:
             return _his([_row(1, "004600", "51666", date="20200101")] if qi == "0" else [])
 
         src = CorrQuoteSource(api=FakeApi(handler), session="s1", poll_wait_secs=0)
-        with caplog.at_level(logging.WARNING), pytest.raises(HistoryTimeoutError):
+        with caplog.at_level(logging.WARNING), pytest.raises(HistoryTimeoutError) as excinfo:
             src.fetch_day_1k("TC.F.SGX.TWN.HOT")
-        assert "疑似凍結 stub" in caplog.text
+        # 判準搬到例外訊息(review ST6:同一件事不印兩次 —— 呼叫端
+        # `corr_engine._fetch_leg_minutes` 自己會記一行帶處置的 warning)
+        assert "疑似凍結 stub" in str(excinfo.value)
+        assert "疑似凍結 stub" not in caplog.text
 
     def test_unparsable_rows_do_not_claim_frozen_stub(
         self, caplog: pytest.LogCaptureFixture

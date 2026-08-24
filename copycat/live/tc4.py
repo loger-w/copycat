@@ -91,9 +91,15 @@ _HEAL_VARIANT_CYCLE = 3
 #: 窗小時的合法值域(TC4 窗字串 = YYYYMMDDHH)
 _WINDOW_HOUR_MAX = 23
 _WINDOW_HOUR_MIN = 0
-#: TXO runtime 的 `TXF.HOT` 常駐窗位移(小時)。futures session 用盤別窗原窗持有同一個
-#: symbol —— 位移 1 小時即兩把互異的 TC4 refcount key(N050;`subscribe` 登記)。
-SPOT_WINDOW_OFFSET = 1
+#: TXO runtime 的 `TXF.HOT` 常駐窗位移(小時)。futures session 用**原窗**持有同一個
+#: symbol,位移之後兩邊是兩把互異的 TC4 refcount key(N050;`subscribe` 登記)。
+#:
+#: **必須整段落在自癒 variant 階梯之外**(review SP2):總位移 k = variant + offset,
+#: 而兩邊的 variant 各自獨立地在 0..`_HEAL_VARIANT_CYCLE` 之間爬 —— offset 取 1 的話,
+#: futures 自癒到 variant 1 的窗會**等於** TXO 的 offset 窗,雙持同一把 key 的原病在
+#: 「其中一邊正在自癒」這個最需要它不復發的時刻復發。取 cycle+1 讓
+#: futures 的 k ∈ [0..3] 與 TXO 的 k ∈ [4..7] 不相交。
+SPOT_WINDOW_OFFSET = _HEAL_VARIANT_CYCLE + 1
 #: TXO session 的門檻:R1 60s、R2 關 —— 277 檔契約深價外本就整場靜默,R2 收它們
 #: 等於無止盡 churn(change-spec §3)。
 #:
@@ -374,6 +380,16 @@ class TC4QuoteSource:
                 raise ConnectionError(f"TC4 quote connect failed: {exc}") from exc
             if q.get("Success") != "OK":
                 raise ConnectionError(f"TC4 login failed: {q}")
+            if self._stop.is_set():
+                # 收工在 `Connect()` 期間發生(`close()` 第一步就 set `_stop`,接著才
+                # 排隊等這把鎖)—— **不得發布**:發布出去的是一條 `close()` 已經看不到
+                # 的連線(它拿到鎖時 `_api` 才被填,但那時 UNSUB 迴圈已經跑完),
+                # KeepAlive 執行緒續跑到 process 不退(review ST2)。就地收掉。
+                try:
+                    api.Disconnect()
+                except (zmq.ZMQError, OSError):
+                    logger.exception("TC4 quote 收工中的在途連線 Disconnect 失敗(best-effort)")
+                raise ConnectionError("TC4 quote source 已收工,棄置在途連線")
             self._api = api
             self._session = q["SessionKey"]
             self._sub_port = q["SubPort"]

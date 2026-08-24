@@ -223,9 +223,14 @@ class WatchlistService:
         鎖內,要完全移出得引進 per-code in-flight 狀態(新的不變式),見 next-time。
         """
         saved, changed, seq = pending
-        if not changed or seq is None:
-            # `_commit` 的不變式:changed=True 必帶號。兩個條件併寫讓型別也收窄成
-            # `int`(assert 在 -O 下會被移除,而這裡要的是收窄不是防呆)。
+        if not changed:
+            return saved, False
+        if seq is None:
+            # `_commit` 的不變式:changed=True 必帶號。走到這裡代表**檔已經改了**而
+            # 訂閱池與畫面不會跟上 —— 靜默丟棄使用者的變更是最壞的失效樣態,所以這條
+            # 「不該發生」的路要有訊號(review ST3)。行為維持不訂閱不廣播:帶著 None
+            # 往下送只會在 engine 端變成另一種靜默。
+            logger.error("watchlist 已落檔卻沒有定序號(_commit 不變式被打破),本次不訂閱不廣播")
             return saved, False
         await self._engine.set_watchlist(saved["codes"], seq=seq)
         self._engine._publish({"type": "watchlist_changed"})

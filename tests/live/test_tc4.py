@@ -1317,3 +1317,72 @@ class TestFetchSymbolTicksStubSignature:
             ticks = src._fetch_symbol_ticks("S", "2026081800", "2026081806")
         assert ticks == []
         assert "疑似凍結 stub" in caplog.text
+
+
+class TestSpotOffsetOutsideTheVariantLadder:
+    """review SP2 / ST7:offset 疊在同一條 variant 階梯上(`k = variant + offset`)時,
+    futures 自癒爬到 variant 1 的窗會**等於** TXO 的 offset 窗 —— 雙持同一把 key 的
+    原病復發,而且是在「其中一邊正在自癒」這個最需要它不復發的時刻。
+    offset 必須整段落在 variant 階梯之外。
+    """
+
+    @staticmethod
+    def _windows(base: tuple[str, str], offset: int) -> list[tuple[str, str]]:
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        sym = "TC.F.TWF.TXF.HOT"
+        if offset:
+            src._window_offset[sym] = offset
+        out = []
+        for k in (0, 1, 2, 3):
+            src._window_variant[sym] = k
+            out.append(src._apply_variant(sym, base))
+        return out
+
+    @pytest.mark.parametrize("base", list(_BASE_WINDOWS.values()), ids=list(_BASE_WINDOWS))
+    def test_futures_and_txo_ladders_never_collide(self, base: tuple[str, str]) -> None:
+        futures = self._windows(base, 0)  # 期貨側:無 offset,自癒 variant 0..3
+        txo = self._windows(base, tc4_mod.SPOT_WINDOW_OFFSET)  # TXO 側:offset + variant 0..3
+        assert len(set(futures) | set(txo)) == 8, f"兩條階梯撞窗:{sorted(set(futures) & set(txo))}"
+
+    @pytest.mark.parametrize("base", list(_BASE_WINDOWS.values()), ids=list(_BASE_WINDOWS))
+    def test_offset_ladder_windows_stay_well_formed(self, base: tuple[str, str]) -> None:
+        """ST7:總位移最大到 `offset + 3`,窗字串仍必須 start <= end 且小時在 00–23。"""
+        for start, end in self._windows(base, tc4_mod.SPOT_WINDOW_OFFSET):
+            assert len(start) == 10 and len(end) == 10
+            assert 0 <= int(start[8:10]) <= 23
+            assert 0 <= int(end[8:10]) <= 23
+            assert start <= end, f"窗顛倒:{start} > {end}"
+
+    def test_offset_clears_the_variant_cycle(self) -> None:
+        """結構性判準(不靠列舉):offset 必須嚴格大於 variant 階梯的最大值。"""
+        assert tc4_mod.SPOT_WINDOW_OFFSET > tc4_mod._HEAL_VARIANT_CYCLE
+
+
+class TestEnsureConnectedShutdownRace:
+    """review ST2:`_ensure_connected` 持 `_api_lock` 跨 `Connect()`(最壞 10 s),
+    而 `close()` 開頭就要拿同一把鎖 —— 關機最壞多等一整個 10 s,正好把 run.ps1 的
+    graceful 窗吃掉。在途那一發至少不得**發布**一條沒人會關的連線。
+    """
+
+    def test_connect_finishing_after_stop_is_disposed_not_published(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api_cls = _install_slow_quote_api(monkeypatch)
+        src = TC4QuoteSource(port="0")
+        errors: list[BaseException] = []
+
+        def _worker() -> None:
+            try:
+                src._ensure_connected()
+            except BaseException as exc:  # noqa: BLE001 - 測試觀測點
+                errors.append(exc)
+
+        t = threading.Thread(target=_worker)
+        t.start()
+        time.sleep(0.05)  # 讓它進到 Connect()(替身睡 0.2 s)
+        src._stop.set()  # close() 的第一步
+        t.join(timeout=5.0)
+        assert len(api_cls.created) == 1
+        assert api_cls.created[0].disconnected is True, "在途連線建成後沒被收掉(KeepAlive 洩漏)"
+        assert src._api is None, "收工中仍把連線發布出去"
+        assert errors and isinstance(errors[0], ConnectionError)
