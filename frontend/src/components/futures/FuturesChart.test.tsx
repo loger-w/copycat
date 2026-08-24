@@ -246,6 +246,50 @@ describe("FuturesChart 分時圖(SC-1)", () => {
   });
 });
 
+/** N104:`meta.status` 三態 —— 空態那句話要分得出「TC4 現在忙」與「TC4 連不上」。
+ *
+ *  改動前後端把 `HistoryTimeoutError` 吞成空、route 丟掉 `build_minute` 的 status,
+ *  兩件事在畫面上長得一模一樣;而前者只要等下一輪輪詢就有,後者要去看連線。 */
+describe("FuturesChart 空態三態文案(N104)", () => {
+  async function textFor(status: string | undefined): Promise<void> {
+    barsBody = {
+      bars: [],
+      meta: { ...META, source: "unavailable", ...(status === undefined ? {} : { status }) },
+    };
+    wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+  }
+
+  it("status=timeout → 進行式(還在回補,不是沒有資料)", async () => {
+    await textFor("timeout");
+    await waitFor(() => expect(screen.getByText("回補中…(TC4 忙,稍後自動重試)")).toBeTruthy());
+  });
+
+  it("status=disconnected → 講連線,不講資料", async () => {
+    await textFor("disconnected");
+    await waitFor(() => expect(screen.getByText("暫無資料(TC4 未連線)")).toBeTruthy());
+  });
+
+  it("status=ok(真的沒有這段 K 線)與舊 payload(無 status)同一句", async () => {
+    await textFor("ok");
+    await waitFor(() => expect(screen.getByText("暫無資料(TC4 未回應)")).toBeTruthy());
+    cleanup();
+    await textFor(undefined);
+    await waitFor(() => expect(screen.getByText("暫無資料(TC4 未回應)")).toBeTruthy());
+  });
+
+  it("gate 5 的落後提示與空態三態並存不合併(bars 非空時才可能亮)", async () => {
+    // 有 bars → 走不到空態;status 即使是 timeout 也不得把圖換成文字
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 22_960_000)],
+      meta: { ...META, status: "timeout" },
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    expect(container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')).toBeTruthy();
+    expect(screen.queryByText("回補中…(TC4 忙,稍後自動重試)")).toBeNull();
+  });
+});
+
 /** 換 `IntradayChartCore`(mode="futures")後的語彙(change-spec SC-1/2/3/4/7)。
  *
  *  這一組鎖的是**接線**:軸 / 時間文字 / 價位口徑 / hlines 有沒有真的注進 core。
