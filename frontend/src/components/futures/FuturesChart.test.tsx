@@ -261,7 +261,7 @@ describe("FuturesChart 空態三態文案(N104)", () => {
 
   it("status=timeout → 進行式(還在回補,不是沒有資料)", async () => {
     await textFor("timeout");
-    await waitFor(() => expect(screen.getByText("回補中…(TC4 忙,稍後自動重試)")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("回補中…(TC4 忙,交易時段內每分鐘重試)")).toBeTruthy());
   });
 
   it("status=disconnected → 講連線,不講資料", async () => {
@@ -277,6 +277,13 @@ describe("FuturesChart 空態三態文案(N104)", () => {
     await waitFor(() => expect(screen.getByText("暫無資料(TC4 未回應)")).toBeTruthy());
   });
 
+  it("未知 status(後端加了第四態)→ 退回 ok 那句,不得整片空白", async () => {
+    // 查表 miss 回 undefined,React 把它渲染成空 —— 空態框裡一個字都沒有,
+    // 而那正好是「畫面壞了」與「沒有資料」在視覺上不可分辨的樣子(review ST4)
+    await textFor("degraded");
+    await waitFor(() => expect(screen.getByText("暫無資料(TC4 未回應)")).toBeTruthy());
+  });
+
   it("gate 5 的落後提示與空態三態並存不合併(bars 非空時才可能亮)", async () => {
     // 有 bars → 走不到空態;status 即使是 timeout 也不得把圖換成文字
     barsBody = {
@@ -286,7 +293,7 @@ describe("FuturesChart 空態三態文案(N104)", () => {
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
     expect(container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')).toBeTruthy();
-    expect(screen.queryByText("回補中…(TC4 忙,稍後自動重試)")).toBeNull();
+    expect(screen.queryByText("回補中…(TC4 忙,交易時段內每分鐘重試)")).toBeNull();
   });
 });
 

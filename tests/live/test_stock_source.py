@@ -329,15 +329,17 @@ class TestFetchDailyBars:
         with pytest.raises(HistoryTimeoutError):
             src.fetch_daily_bars("2330")
 
-    def test_window_shrinks_with_small_n_but_is_verbatim_at_25(
+    def test_only_the_1k_fallback_window_shrinks_and_only_for_small_n(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """N024:視窗隨 `n` 縮 —— `n=5`(CDP basis sweep)不必付 `n=25`(overlay)的窗。
+        """N024(review SP3 收窄):**只縮 1K fallback 那一段**,DK 段逐字 40 日不動。
 
-        兩段(DK / 1K fallback)共用同一個窗,所以只驗其中一段的 start 就等於驗了兩段
-        (下面順帶斷言兩段同窗)。`n=25` 那條**逐字 40 日**不得動:`build_overlay` 的
-        ma20 要 20 根已完成日 bar,40 日窗遇春節只剩 ~23 根,再縮的失效樣態是 ma20
-        靜默變 null(畫面上只是少一條線)。
+        條文點名的是 fallback:「DK 不支援的股號每次 overlay 都整窗拉 1K」。DK 一天
+        一列,縮它省不到量卻多一個會漂的維度 —— 兩段窗不同是刻意的,和
+        `fetch_bars_range_tagged` 的既有姿態(DK 全窗、fallback 縮到 90 日)同款。
+
+        `n=25` 那條兩段都**逐字 40 日**不得動:`build_overlay` 的 ma20 要 20 根已完成
+        日 bar,40 日窗遇春節只剩 ~23 根,再縮的失效樣態是 ma20 靜默變 null。
         """
 
         def handler(obj: dict) -> bytes:
@@ -364,13 +366,14 @@ class TestFetchDailyBars:
             with pytest.raises(HistoryTimeoutError):
                 src.fetch_daily_bars("2330", n=n)
 
-        _run(25)
         wide = f"{today - _dt.timedelta(days=40):%Y%m%d}00"
-        assert [s for _t, s in seen] == [wide, wide], "n=25 兩段同窗且逐字 40 日"
+        narrow = f"{today - _dt.timedelta(days=20):%Y%m%d}00"
+
+        _run(25)
+        assert seen == [("DK", wide), ("1K", wide)], "n=25 兩段都逐字 40 日"
 
         _run(5)
-        narrow = f"{today - _dt.timedelta(days=20):%Y%m%d}00"
-        assert [s for _t, s in seen] == [narrow, narrow], "n=5 兩段同窗且縮到 20 日地板"
+        assert seen == [("DK", wide), ("1K", narrow)], "n=5 只有 1K fallback 縮到 20 日"
 
     def test_both_segments_get_the_short_bars_deadline(
         self, monkeypatch: pytest.MonkeyPatch

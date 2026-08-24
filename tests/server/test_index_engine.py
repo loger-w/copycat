@@ -301,10 +301,15 @@ async def test_heal_runs_after_hours_on_a_trading_day() -> None:
 
     改動前 heal 窗上界是 13:40(`_HEAL_TAIL_END`),20:00 起的 server 整晚不重抓,
     而 `_minutes_lag_exceeded` 的 `min(now, 13:30)` 封頂本來就已經表達了「窗外以
-    13:30 為期望覆蓋終點」—— 缺的只是讓 gate 開著。
+    13:30 為期望覆蓋終點」—— 缺的只是讓 gate 開著。**放寬只在有日曆時生效**(SP1)。
     """
     fake = FakeIndexSource()  # day_minutes 空 = 回補 timeout 靜默降級成空
-    eng = make_engine(fake, in_watch_window=lambda: False, now_fn=lambda: _dt.time(20, 0))
+    eng = make_engine(
+        fake,
+        in_watch_window=lambda: False,
+        now_fn=lambda: _dt.time(20, 0),
+        is_trading_day=lambda _d: True,
+    )
     eng._heal_secs = 0.05  # type: ignore[attr-defined]
     await eng.start()
     try:
@@ -315,14 +320,59 @@ async def test_heal_runs_after_hours_on_a_trading_day() -> None:
         await eng.close()
 
 
-async def test_heal_never_runs_on_a_non_trading_day() -> None:
-    """N105 條文明寫的另一半:休市日 minutes 恆空 → 舊碼在 09:04 之後整窗空打
-    (60s → 900s 退避),噪音一整天。交易日曆閘讓它一發都不打。"""
+async def test_heal_after_hours_falls_back_to_the_old_window_without_a_calendar() -> None:
+    """SP1(a):**沒有日曆**時盤外放寬必須退回舊行為,不得退成「恆真」。
+
+    `is_trading_day=None` 在 engine 內是 `lambda _d: True`(W9 的既有預設),拿它
+    當交易日閘等於閘恆開 —— 配上放寬到午夜的窗,休市日的噪音比改動前**更大**
+    (改動前至少 13:40 就收工)。沒有日曆時唯一誠實的答案是「不知道今天開不開盤」,
+    而不知道就不該放寬。
+    """
+    fake = FakeIndexSource()  # is_trading_day 不傳 = 無日曆
+    eng = make_engine(fake, in_watch_window=lambda: False, now_fn=lambda: _dt.time(20, 0))
+    eng._heal_secs = 0.01  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "1330": 2_000}
+        await asyncio.sleep(0.3)
+        assert fake.fetch_minutes_calls == 1, "無日曆 → 盤外一發 heal 都不許出"
+        assert eng.state()["twse"]["minutes"] == {}
+    finally:
+        await eng.close()
+
+
+async def test_heal_inside_watch_window_ignores_the_calendar() -> None:
+    """SP1(b):**窗內逐字沿用舊判準,不吃日曆**。
+
+    日曆把一個真交易日誤標成假日時,交易日閘會讓那天**整天**不自癒 —— 那是改動前
+    沒有的新失效(舊碼 09:00–13:25 照樣救)。交易日閘的用途是壓休市日的盤外噪音,
+    只該套在盤外那一段;窗內的行為不得因為多了一份設定檔而變差。
+    """
     fake = FakeIndexSource()
     eng = make_engine(
         fake,
         in_watch_window=lambda: True,
         now_fn=lambda: _dt.time(10, 0),
+        is_trading_day=lambda _d: False,  # 日曆說今天休市(可能是誤標)
+    )
+    eng._heal_secs = 0.05  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "0959": 2_000}
+        await asyncio.sleep(0.3)
+        assert eng.state()["twse"]["minutes"] == {"0901": 1_000, "0959": 2_000}
+    finally:
+        await eng.close()
+
+
+async def test_heal_never_runs_after_hours_on_a_non_trading_day() -> None:
+    """N105 條文明寫的另一半:休市日 minutes 恆空 → 放寬後的盤外段會從 13:25 一路
+    空打到午夜。交易日閘讓**盤外**一發都不打(窗內另有 SP1(b) 的界)。"""
+    fake = FakeIndexSource()
+    eng = make_engine(
+        fake,
+        in_watch_window=lambda: False,
+        now_fn=lambda: _dt.time(20, 0),
         is_trading_day=lambda _d: False,
     )
     eng._heal_secs = 0.01  # type: ignore[attr-defined]
@@ -342,8 +392,6 @@ async def test_pending_retry_keeps_new_day_minutes_out_of_state() -> None:
 
     T-1 已擋住廣播面;`state()` 這一面沒擋 —— swap 前(≤60s)重整頁面就會拿到混日
     minutes(舊日 trade_date + 新舊混在一起的分鐘),畫面上是一條短暫的混日線。
-    修法要對齊 `_swap_day` 的合併語意:retry 抓到的當回補(`{**backfill, **pending}`),
-    live pending 勝過它。
     """
     fake = FakeIndexSource()
     fake.subscribe_error = ConnectionError("down")
@@ -352,14 +400,63 @@ async def test_pending_retry_keeps_new_day_minutes_out_of_state() -> None:
     try:
         eng._twse.minutes = {"0901": 1}  # type: ignore[attr-defined]  # 舊日既有分鐘
         eng._pending_date = "2026-07-29"  # type: ignore[attr-defined]
-        eng._pending_minutes = {"0902": 22}  # type: ignore[attr-defined]  # 新日 live pending
+        eng._pending_minutes["0902"] = 22  # 新日 live pending
         fake.subscribe_error = None
         fake.day_minutes = {"0901": 9, "0902": 99}  # retry 抓回的是「新日」1K
         await asyncio.sleep(0.15)
         # 舊日 dict 一格都不許被新日資料蓋掉 / 加料
         assert eng.state()["twse"]["minutes"] == {"0901": 1}
-        # 新日回補落在 pending 區,且 live pending 勝過回補(與 `_swap_day` 同方向)
-        assert eng._pending_minutes == {"0901": 9, "0902": 22}  # type: ignore[attr-defined]
+        # 回補列落在**回補區**,live pending 區一格都不動(兩者分開存)
+        assert eng._pending_backfill == {"0901": 9, "0902": 99}  # type: ignore[attr-defined]
+        assert eng._pending_minutes == {"0902": 22}  # type: ignore[attr-defined]
+    finally:
+        await eng.close()
+
+
+async def test_pending_worker_never_rebinds_the_live_pending_dict() -> None:
+    """SP2(a):worker thread 不得**重新綁定** `_pending_minutes`。
+
+    `{**minutes, **self._pending_minutes}` 是「讀快照 → 換一顆新 dict」:讀與寫之間
+    event loop 的 `_handle_quote` 若寫進舊 dict,那一筆就人間蒸發(而畫面上只是少一個
+    分鐘點)。既有姿態是 in-place,worker 側必須維持它 —— 用物件恆等釘住,因為那個
+    race 本身沒有辦法在測試裡穩定重現。
+    """
+    fake = FakeIndexSource()
+    fake.subscribe_error = ConnectionError("down")
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        eng._pending_date = "2026-07-29"  # type: ignore[attr-defined]
+        live_dict = eng._pending_minutes  # type: ignore[attr-defined]
+        fake.subscribe_error = None
+        fake.day_minutes = {"0901": 9}
+        await asyncio.sleep(0.15)
+        assert eng._pending_minutes is live_dict  # type: ignore[attr-defined]
+    finally:
+        await eng.close()
+
+
+async def test_swap_merges_retry_backfill_under_the_final_backfill() -> None:
+    """SP2(b):合併順序 = **早輪 retry 回補 < 最終回補 < live pending**。
+
+    改動前把 retry 抓的那份塞進 `_pending_minutes`,swap 的 `{**backfill, **pending}`
+    就讓**早輪**回補贏過 rollover 當下的最終回補 —— 與 N058 同一種失效(先佔的近似值
+    擋掉後到的真值),而兩份都是合法分鐘,畫面上零錯誤訊號。
+    """
+    fake = FakeIndexSource()
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        eng._pending_date = "2026-07-29"  # type: ignore[attr-defined]
+        eng._pending_backfill.update({"0901": 1, "0902": 2, "0903": 3})  # type: ignore[attr-defined]
+        eng._pending_minutes["0903"] = 33  # type: ignore[attr-defined]  # live 最大
+        eng._swap_day(backfill={"0902": 22, "0903": 999})  # type: ignore[attr-defined]
+        assert eng.state()["twse"]["minutes"] == {
+            "0901": 1,  # 只有早輪 retry 有 → 留著
+            "0902": 22,  # 最終回補贏過早輪 retry
+            "0903": 33,  # live pending 贏過兩份回補
+        }
+        assert eng._pending_backfill == {}  # type: ignore[attr-defined]  # swap 後清空
     finally:
         await eng.close()
 
