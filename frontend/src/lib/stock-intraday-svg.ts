@@ -141,9 +141,28 @@ export interface IntradayGeometry {
   toY: (priceMilli: number) => number;
   /** y 座標 → 價格(`toY` 的逆函數);回傳前夾制進 yDomain */
   priceAtY: (y: number) => number;
-  /** X 座標反演到分鐘 bucket;bucket 無資料 → null(SC-1/R6,不 snap 最近) */
+  /** X 座標反演到分鐘 bucket;bucket 無資料 → null(SC-1/R6),除非建構時開了 `snapRadius`
+   *  (見 `GeometryOpts`;預設關 = 不 snap 最近)。 */
   minuteOf: (xPx: number) => number | null;
 }
+
+/** 建構選項。**新選項一律給預設值 = 現行行為**:三個既有呼叫端(個股 / 指數 / 群組卡)
+ *  不傳這一包時逐值與改動前相同。 */
+export interface GeometryOpts {
+  /** `minuteOf` 反演落空時,往左右各找幾個 key(0 = 關,現行行為)。見 `MINUTE_SNAP_RADIUS`。 */
+  snapRadius?: number;
+}
+
+/** 近全軸(期貨分時)的 hover 命中半徑(N046)。
+ *
+ *  **為什麼只有近全軸需要**:現貨窗是 270 個 key 壓在 ~724px 的繪圖區上(1 key ≈ 2.7px,
+ *  每個 key 都有自己的像素),近全軸卻是 **1139 個 key 壓同一段** —— 1px ≈ 1.6 key,
+ *  游標停在哪都可能反演到一個「這一分鐘沒成交」的 key,而夜盤薄量時那是常態:
+ *  十字線只剩水平量尺、readout 整列退回「-」(KR-5 的症狀)。
+ *
+ *  **3 的由來**:±3 key ≈ ±2px 的游標位移,小於一顆游標熱點 —— 命中的那一分鐘在畫面上
+ *  仍緊貼游標,不會出現「指著這裡、報那裡」。再大就開始說謊(±10 key ≈ 6px 且時間差 10 分)。 */
+export const MINUTE_SNAP_RADIUS = 3;
 
 /** 判定率低於這個門檻時,**判定率本身**在畫面上標警示色(不是暗化外盤比,見下)。
  *  外盤比的分母排除了未分類量,判定率一低就等於「這個百分比是用不到一半的資料算出來的」。
@@ -321,6 +340,7 @@ export function buildIntradayGeometry(
   input: Input,
   size: Size,
   xw: XWindow = SPOT_WINDOW,
+  opts: GeometryOpts = {},
 ): IntradayGeometry {
   const entries = windowedEntries(input.minutes, xw);
   const prices = entries.map(([, m]) => m.c).filter((p) => p > 0);
@@ -435,7 +455,17 @@ export function buildIntradayGeometry(
     if (xPx < Y_AXIS_W || xPx > Y_AXIS_W + plotWidth(size.width)) return null;
     const m =
       Math.round(((xPx - Y_AXIS_W) / plotWidth(size.width)) * (xw.end - xw.start)) + xw.start;
-    return haveMinutes.has(m) ? m : null;
+    if (haveMinutes.has(m)) return m;
+    // N046:落在無資料的 key 時往兩側找最近的有資料 key(近全軸限定,見 `MINUTE_SNAP_RADIUS`)。
+    // **由近而遠、同距取較早那一邊**:結果必須是決定性的 —— 「取有量的那邊」這種偏好會讓
+    // 同一個 x 在資料到齊前後指到不同分鐘,而畫面上只是十字線抖了一下。
+    // 找不到就維持 null(既有的分解退化:水平量尺照畫、垂直線與資料點不畫)。
+    const r = opts.snapRadius ?? 0;
+    for (let d = 1; d <= r; d++) {
+      if (haveMinutes.has(m - d)) return m - d;
+      if (haveMinutes.has(m + d)) return m + d;
+    }
+    return null;
   };
 
   // 「真的有昨收」才有平盤可言 —— ref 的 fallback 是首筆成交價,拿它當平盤畫紅綠填色

@@ -12,6 +12,7 @@ import {
   hasWindowedMinutes,
   labelWidth,
   layoutEdgeLabels,
+  MINUTE_SNAP_RADIUS,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -1514,5 +1515,84 @@ describe("buildVwapLabel(VWAP 就地標籤:文字 / 位置 / x 區間一處算�
     // 兩處各算一次就會出現「判定說不撞、畫出來撞」——這一條把它們釘在同一份上
     expect(label.x).toBe(box.x);
     expect(label.span).toEqual([box.x, box.x + box.width]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N046:近全軸 hover 命中(無 bar 分鐘反演到最近有 bar 的 key)
+// ---------------------------------------------------------------------------
+describe("buildIntradayGeometry(opts.snapRadius)", () => {
+  /** 繪圖區 270px 對 270 個 key(現貨窗)→ 1px = 1 key,反演算式與既有案同一組。 */
+  const SIZE = { width: Y_AXIS_W + 270 + R_AXIS_W, height: 100 };
+  const MINS = minutes([
+    [540, { c: 2_320_000, v: 1 }],
+    [600, { c: 2_330_000, v: 1 }],
+  ]);
+
+  it("預設(不傳 opts)= 現行行為:無 bar 的分鐘回 null", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE);
+    expect(g.minuteOf(Y_AXIS_W + 30)).toBeNull();
+    expect(g.minuteOf(Y_AXIS_W + 3)).toBeNull();
+  });
+
+  it("snapRadius=0 與不傳等價(顯式關閉不走 snap 路徑)", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE, SPOT_WINDOW, {
+      snapRadius: 0,
+    });
+    expect(g.minuteOf(Y_AXIS_W + 3)).toBeNull();
+  });
+
+  it("snapRadius=3:距離 1–3 key 內命中最近那一分鐘", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE, SPOT_WINDOW, {
+      snapRadius: 3,
+    });
+    expect(g.minuteOf(Y_AXIS_W + 1)).toBe(540); // 09:01 → 09:00
+    expect(g.minuteOf(Y_AXIS_W + 3)).toBe(540); // 09:03 → 09:00(邊界含)
+    expect(g.minuteOf(Y_AXIS_W + 57)).toBe(600); // 09:57 → 10:00(往後也 snap)
+  });
+
+  it("snapRadius=3:超過閾值仍回 null(不夾到畫面另一端)", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE, SPOT_WINDOW, {
+      snapRadius: 3,
+    });
+    expect(g.minuteOf(Y_AXIS_W + 4)).toBeNull(); // 09:04:兩側最近都是 4 key 外
+    expect(g.minuteOf(Y_AXIS_W + 30)).toBeNull();
+  });
+
+  it("等距兩側 → 取**較早**那一分鐘(結果必須是決定性的)", () => {
+    const g = buildIntradayGeometry(
+      {
+        minutes: minutes([
+          [540, { c: 2_320_000, v: 1 }],
+          [542, { c: 2_330_000, v: 1 }],
+        ]),
+        meta: META,
+      },
+      SIZE,
+      SPOT_WINDOW,
+      { snapRadius: 3 },
+    );
+    expect(g.minuteOf(Y_AXIS_W + 1)).toBe(540); // 09:01 距 09:00 與 09:02 皆 1
+  });
+
+  it("snap 不放寬左右界:價位帶內 / 右緣帶內仍回 null", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE, SPOT_WINDOW, {
+      snapRadius: 3,
+    });
+    expect(g.minuteOf(Y_AXIS_W - 1)).toBeNull();
+    expect(g.minuteOf(SIZE.width)).toBeNull();
+  });
+
+  it("命中的 key 一定是**有 bar** 的 key(snap 後 minutes.get 必有值)", () => {
+    const g = buildIntradayGeometry({ minutes: MINS, meta: META }, SIZE, SPOT_WINDOW, {
+      snapRadius: 3,
+    });
+    const m = g.minuteOf(Y_AXIS_W + 2);
+    expect(m).not.toBeNull();
+    expect(MINS.get(m!)).toBeTruthy();
+  });
+
+  it("MINUTE_SNAP_RADIUS 是模組層常數(元件端不寫魔數)", () => {
+    expect(MINUTE_SNAP_RADIUS).toBe(3);
   });
 });

@@ -43,6 +43,7 @@ import {
   LEVEL_FILL,
   LEVEL_STROKE,
   LOW_DECIDED_PCT,
+  MINUTE_SNAP_RADIUS,
   minuteToX,
   overlayLines,
   PAD_Y,
@@ -872,7 +873,8 @@ interface CoreProps extends Props {
    *
    *  `"futures"` = 期貨近全時段分時:語彙**同 stock**(副圖 / 說明列 / readout 六欄 / VP),
    *  但價位口徑同 index(`fmtIndexPts` —— 期指沒有個股 tick 表)、不打 `/api/stock/overlay`
-   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全三段軸的**索引**當 key)。 */
+   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全三段軸的**索引**當 key),
+   *  且 hover 反演開就近 snap(`MINUTE_SNAP_RADIUS`;1139 個 key 壓一張圖)。 */
   mode?: "stock" | "index" | "futures";
   /** x 軸窗覆寫(key 值域;預設 `stkfut ? STKFUT_WINDOW : SPOT_WINDOW`)。
    *  **必經模組層常數**(identity 穩定)—— 它會一路傳進 `ChartStatic` / `EnergySub` 的 props,
@@ -967,17 +969,22 @@ export function IntradayChartCore({
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
 
+  // 近全軸(1139 個 key 壓 ~724px)才開 hover 命中的就近 snap(N046);現貨 / 個股期 /
+  // index 窗的 key 密度本來就一格一格分得開,開了只會讓「這一分鐘沒成交」變得看不出來。
+  // **模組層常數 × 三元式**,不寫魔數也不每 render 造物件(下面 useMemo 的 deps 吃它)。
+  const snapRadius = futures ? MINUTE_SNAP_RADIUS : 0;
   const g = useMemo(
     () =>
       buildIntradayGeometry(
         { minutes: accum.minutes, meta: accum.meta, high: accum.high, low: accum.low },
         { width: w, height: mainH },
         xw,
+        { snapRadius },
       ),
     // w / mainH 必入 deps:少了高度,viewBox 會換成新高而 toY / 刻度仍是舊高算的,
     // 畫面錯位且不報錯(專案 eslint 沒裝 react-hooks,exhaustive-deps 抓不到)。
     // `xw` 同理 —— 漏了它,現貨↔期貨切換時幾何會停在舊窗上。
-    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw],
+    [accum.minutes, accum.meta, accum.high, accum.low, w, mainH, xw, snapRadius],
   );
 
   // 成交點 → SVG 座標(SC-3)。**必經 useMemo**,理由同 `vpBars`:hover 每個 mousemove
@@ -1330,7 +1337,9 @@ export function IntradayChartCore({
         ) : null}
         {/* hover 十字 + 軸標籤(SC-7)。
             分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
-            垂直線與資料點需要資料,缺就不畫(白名單 2:minuteOf 不 snap 最近)。 */}
+            垂直線與資料點需要資料,缺就不畫(白名單 2:現貨 / index 窗 `minuteOf` 不 snap
+            最近;近全軸例外,見 `snapRadius` —— 那裡 1px ≈ 1.6 個 key,不 snap 等於整片
+            退化,而 snap 的位移小於一顆游標熱點)。 */}
         {hover !== null ? (
           <g pointerEvents="none">
             {hoverMin !== null && hoverAgg ? (

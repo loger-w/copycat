@@ -578,6 +578,51 @@ describe("mode=\"futures\" 的成交點(N043/N070)", () => {
   });
 });
 
+describe("mode=\"futures\" 的 hover 命中(N046)", () => {
+  /** 09:01(索引 15)沒有 bar —— 現貨態的規則是整段退化(十字垂直線不畫)。 */
+  const IDX_0901 = IDX_0900 + 1;
+
+  it("落在無 bar 的相鄰索引 → 命中最近有 bar 的那一分鐘(垂直線 x = 該分鐘)", () => {
+    const { container } = renderFut();
+    const svg = container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(IDX_0901, VB.width, ALLDAY_WINDOW), clientY: 100 });
+    expect(screen.getByTestId("crosshair-v").getAttribute("x1")).toBe(
+      String(minuteToX(IDX_0900, VB.width, ALLDAY_WINDOW)),
+    );
+    expect(screen.getByTestId("time-tag-text").textContent).toBe("09:00");
+  });
+
+  it("離最近的 bar 超過閾值 → 維持既有退化(水平量尺在、垂直線不畫)", () => {
+    const { container } = renderFut();
+    const svg = container.querySelector('svg[aria-label="期貨近全時段分時走勢"]')!;
+    fireEvent.mouseMove(svg, {
+      clientX: minuteToX(IDX_0900 + 20, VB.width, ALLDAY_WINDOW),
+      clientY: 100,
+    });
+    expect(screen.queryByTestId("crosshair-v")).toBeNull();
+    expect(screen.getByTestId("crosshair-h")).toBeTruthy();
+  });
+
+  it("stock 態不 snap(W-1:同一個相鄰空分鐘仍退化)", () => {
+    const acc = fromSnapshot({
+      code: "2330",
+      seq: 1,
+      last: { p: 2_380_000, t: "09:00:30.000", cum_vol: 10 },
+      vwap: 2_380_000,
+      minutes: { "540": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+      ticks: [],
+      book: null,
+      meta: { name: "台積電", ref: 2_380_000, upper: 2_550_000, lower: 2_090_000, y_vol: 1 },
+    });
+    const { container } = wrap(
+      <IntradayChartCore accum={acc} toggles={TOGGLES} onToggle={() => {}} variant="page" />,
+    );
+    const svg = container.querySelector('svg[aria-label="分時走勢圖"]')!;
+    fireEvent.mouseMove(svg, { clientX: minuteToX(541, VB.width, SPOT_WINDOW), clientY: 100 });
+    expect(screen.queryByTestId("crosshair-v")).toBeNull();
+  });
+});
+
 describe("mode=\"futures\" 的 VP / POC(N096 characterization)", () => {
   it("POC = 域內量最大的價位帶,highlight + 價位標(語彙同現貨)", () => {
     const { container } = renderFut();
