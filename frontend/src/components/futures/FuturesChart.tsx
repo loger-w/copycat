@@ -52,6 +52,25 @@ const INTRADAY_VB_W = 800;
 const DAILY_INIT_BARS = 120;
 const MINUTE_INIT_BARS = 240;
 
+/** live 點允許的「資料尾 → 最後成交落點」最大索引差(gate 5;bug/futures-intraday-lag-bridge)。
+ *
+ *  常態落後 = 60 s 輪詢 + 終點標記 → ≤ 2 格。超過就是當日段回補不完整(TC4 首頁 timeout /
+ *  分頁靜默截斷,後端 `_today` 快取 15–30 s 內都回同一份),此時再追加 live 點,core 的單條
+ *  polyline 會從資料尾直線拉到現在 —— 一段橫貫數十分鐘的假直線,而畫面上零錯誤訊號。
+ *
+ *  判準吃 **WS 最後成交時刻**(`state.t`)不吃牆上時鐘:TMF 夜盤數分鐘零成交是常態,
+ *  那種空檔 bars 本來就沒東西可補,拿牆鐘比會把「沒人交易」講成「回補中」。 */
+const FUT_LIVE_LAG_MAX = 3;
+
+/** WS 最後成交時刻(台北 `HH:MM:SS.fff`)→ 它所屬 1K bar 的近全軸索引(終點標記 = 分 + 1)。
+ *  壞格式 / 死區 → null(gate 5 不參與)。 */
+function tradeSlotOf(t: string): number | null {
+  const m = /^(\d{2}):(\d{2})/.exec(t);
+  if (m === null) return null;
+  const total = (Number(m[1]) * 60 + Number(m[2]) + 1) % (24 * 60);
+  return alldayIndexOf(`${pad2(Math.floor(total / 60))}${pad2(total % 60)}`);
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -188,8 +207,9 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   // live 點吃牆上時鐘 → **刻意不進 useMemo**(memo 的 deps 表達不了「現在幾點」;
   // 重算成本是一次 Date 運算)。WS 每則推播都會讓本元件 re-render,自然跟著走。
   // 四道 gate 的判準逐字不動(白名單 W-4);同索引覆寫 / 新索引補格的分派下沉到 adapter。
-  const { liveIndex } = ((): { liveIndex: number | null } => {
-    const none = { liveIndex: null };
+  // gate 5(資料落後時鐘)另帶回落後格數給回補提示用。
+  const { liveIndex, lagBehind } = ((): { liveIndex: number | null; lagBehind: number | null } => {
+    const none = { liveIndex: null, lagBehind: null };
     const last = slice[slice.length - 1];
     const p = state?.p ?? null;
     if (p === null || last === undefined) return none;
@@ -197,7 +217,12 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     if (live === null) return none; // 死區
     if (live.anchor !== anchorDateOf(last.t)) return none; // 錨定日 gate(§3.2)
     if (tailIndex !== null && tailIndex > live.index) return none; // 時鐘落後資料
-    return { liveIndex: live.index };
+    // gate 5:bars 落後**最後成交**超過輪詢節奏 → 當日段回補不完整,不架橋
+    const tradeIndex = state?.t == null ? null : tradeSlotOf(state.t);
+    if (tailIndex !== null && tradeIndex !== null && tradeIndex - tailIndex > FUT_LIVE_LAG_MAX) {
+      return { liveIndex: null, lagBehind: tradeIndex - tailIndex };
+    }
+    return { liveIndex: live.index, lagBehind: null };
   })();
   const liveP = state?.p ?? null;
 
@@ -317,6 +342,10 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {modeRow}
+      {mode === "intraday" && lagBehind !== null ? (
+        // gate 5 擋下 live 點時把原因講出來:圖停在資料尾不是「沒在動」,是當日段還沒補齊
+        <p className="mb-1 text-xs text-ink-muted">分時資料落後 {lagBehind} 分(TC4 回補中)</p>
+      ) : null}
       {/* 量測 wrapper **恆存**(loading / error / data 三態都在內):只包 data 分支的話
           冷載入量到 0×0,而 `useContainerSize` 的 callback ref 不會為此再跑一次 */}
       <div ref={sizeRef} className="flex min-h-0 flex-1 flex-col">
