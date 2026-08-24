@@ -8,7 +8,7 @@
  *
  *  `vi.mock` 是檔案級 + hoisted,所以這條計次測試獨立成檔(主檔的 100+ 條不受影響)。
  */
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WatchlistSidebar } from "@/components/stock/WatchlistSidebar";
@@ -98,22 +98,31 @@ describe("WatchlistSidebar 拖曳重繪(N014-2)", () => {
   it("落點未變的 pointermove 不重繪(drag state 回同一個 reference)", async () => {
     wrap(<WatchlistSidebar active={null} onSelect={() => {}} quotes={QUOTES} />);
     await waitFor(() => expect(screen.getByTestId("wl-group-主力")).toBeTruthy());
+    // 等倉位 query 落地再開始 —— 它晚一拍 resolve 會在拖曳中途插一次 render,
+    // 計次就不是在量 drag state 的 identity 了(假紅)
+    await waitFor(() => expect(screen.getAllByText(/3張/).length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20)); // 讓 TQ 的 notifyManager 排程收乾淨
+    });
     stubRects();
     const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
     fireEvent(handle, ptr("pointerdown", 10, 80));
 
     const probe = vi.mocked(positionSummary.secSummary);
-    // 換組(主力 → 觀察):探針**確實會動**,否則下面的「不動」是 vacuous
-    const before = probe.mock.calls.length;
-    fireEvent(window, ptr("pointermove", 100, 160));
-    expect(probe.mock.calls.length).toBeGreaterThan(before);
+    // 先移進目標組並停穩(第一則 move 會真的換 `to`,是狀態轉移不是重繪浪費)
+    fireEvent(window, ptr("pointermove", 100, 180));
+    fireEvent(window, ptr("pointermove", 100, 185));
 
-    // 同一組內繼續移動:`to` 沒變 → 一次都不該重繪(手指移動每秒數十則)
+    // 落點不變的連續 move:手指移動時每秒數十則,一則都不該重繪
     const settled = probe.mock.calls.length;
-    fireEvent(window, ptr("pointermove", 101, 170));
-    fireEvent(window, ptr("pointermove", 102, 180));
-    fireEvent(window, ptr("pointermove", 103, 190));
+    fireEvent(window, ptr("pointermove", 101, 190));
+    fireEvent(window, ptr("pointermove", 102, 195));
+    fireEvent(window, ptr("pointermove", 103, 200));
     expect(probe.mock.calls.length).toBe(settled);
+
+    // 非 vacuous 自檢:真的換組時探針**必須**動(否則上面在量一個永遠不動的東西)
+    fireEvent(window, ptr("pointermove", 100, 60));
+    expect(probe.mock.calls.length).toBeGreaterThan(settled);
 
     fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });

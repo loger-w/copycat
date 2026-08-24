@@ -1164,7 +1164,8 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     // 前提:高亮真的會跟著移動(否則下面的斷言 vacuous)
     expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent");
     fireEvent(window, ptr("pointermove", 100, 10));
-    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
+    // 高亮回來源組(語意不變);框改虛線 = 作廢態的視覺可辨性(N014-4)
+    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-dashed");
     expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
     fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
@@ -1181,7 +1182,7 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     fireEvent(window, ptr("pointermove", 100, 60));
     expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent"); // 前提
     fireEvent(window, ptr("pointermove", 900, 60));
-    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-accent");
+    expect(screen.getByTestId("wl-group-觀察").className).toContain("border-dashed");
     expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-accent");
     expect(screen.getByTestId("wl-ungrouped").className).not.toContain("border-accent");
     fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

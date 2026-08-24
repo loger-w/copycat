@@ -89,9 +89,13 @@ const LADDER_VIEW_ARM_ROW_LOCKED =
   ARM_CONTROLS +
   "</div>";
 
+/** 🔴 N081:期貨梯在 WS 非 open(本檔 beforeEach = connecting)時,**武裝鈕也 disabled**
+ *  —— 同一列上兩顆鈕對「連線未就緒」不得給兩個答案。改前只有鎖定鈕帶 disabled。 */
 const FUTURES_ARM_ROW =
   '<div class="flex items-center gap-2">' +
-  ARM_BUTTON +
+  '<button type="button" aria-pressed="false" disabled="" title="連線未就緒,無法武裝"' +
+  ' class="min-w-0 flex-1 rounded border px-2 py-1 text-xs font-bold border-line text-ink-dim' +
+  ' hover:border-accent hover:text-ink opacity-40">武裝</button>' +
   '<button type="button" aria-pressed="false" disabled="" title="連線未就緒,無法鎖定"' +
   ' class="shrink-0 rounded border px-2 py-1 text-xs font-bold border-line text-ink-dim' +
   ' hover:border-accent hover:text-ink opacity-40">鎖定</button>' +

@@ -12,8 +12,8 @@ import {
 } from "@/hooks/useCapital";
 import { useFlashArm, type FlashArmControl } from "@/hooks/useFlashArm";
 import { closeBodyOf } from "@/lib/close-order";
-import { LOCK_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
-import { marketButtonState, settleFlashSend } from "@/lib/flash-send";
+import { ARM_WS_TITLE, LOCK_TITLE, LOCK_WS_TITLE } from "@/lib/flash-arm";
+import { flashSource, marketButtonState, settleFlashSend } from "@/lib/flash-send";
 import { fmt } from "@/lib/format";
 import {
   buildFuturesLadder,
@@ -149,6 +149,9 @@ export function FuturesLadder({
   // 鎖定鈕 disabled 只擋**進入**方向,**整條**都要 `&& !locked`(R2 + code review r1 S3):
   // 合約失解析與 WS 非 open(SC-13)都只是「不得進入鎖定」的理由,已鎖定時解鎖鈕恆可按。
   const lockDisabled = (contract === null || arm.wsStatus !== "open") && !arm.state.locked;
+  // N081:武裝鈕跟上鎖定鈕的連線判準(同一列兩顆鈕不得對「連線未就緒」給兩個答案)。
+  // 文案優先序 = 合約未解析 > 連線:前者是更根本的「送不出去」。
+  const armWsBlocked = arm.wsStatus !== "open";
 
   // 市價鈕的貼漲跌停邊價(已對齊 FUT_TICK);合約未解析 / 界缺 / 無中心價 → 鎖鈕
   const marketEdge = (side: "buy" | "sell") =>
@@ -197,7 +200,7 @@ export function FuturesLadder({
         price_type: "limit",
         time_in_force: "ROD",
         day_trade: dayTrade,
-        source: "flash",
+        source: flashSource(arm.state.locked),
       }),
       {
         alive: () => aliveRef.current,
@@ -241,7 +244,7 @@ export function FuturesLadder({
         price_type: "limit",
         time_in_force: "IOC",
         day_trade: dayTrade,
-        source: "flash",
+        source: flashSource(arm.state.locked),
       }),
       {
         alive: () => aliveRef.current,
@@ -366,8 +369,10 @@ export function FuturesLadder({
         <ArmRow
           className="flex items-center gap-2"
           armed={arm.state.armed}
-          armDisabled={contract === null}
-          armTitle={contract === null ? "合約未解析" : undefined}
+          armDisabled={contract === null || armWsBlocked}
+          armTitle={
+            contract === null ? "合約未解析" : armWsBlocked ? ARM_WS_TITLE : undefined
+          }
           onToggleArm={() => {
             touchIdle();
             dispatchArm({ type: "toggle" });

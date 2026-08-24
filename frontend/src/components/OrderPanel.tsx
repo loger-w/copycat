@@ -57,13 +57,12 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
   const selected = symbol || symbols[0] || "";
   // 市價閘用估價 = 該合約最近成交價(snapshot last_price);缺值 → 鎖市價選項
   const marketEstimate = (contracts ?? []).find((c) => c.symbol === selected)?.last_price ?? null;
-  // 🔴 A11Y-2:估價消失(換到無成交合約)時 `kind` 還停在 market —— 市價 radio 於是是
-  // 「disabled 但 checked」,而 HTML radio group 只讓 checked 的那顆進 tab 序 → **整組
-  // 從鍵盤消失**,使用者切不回限價,畫面上卻兩顆 pill 都在(零錯誤訊號)。
-  // 收斂用 **render 期間調整 state**(官方 adjust-state-on-prop-change;樣板
-  // `StockChart` 的 isFut 收斂),不用 effect:effect 要下一個 commit 才生效,中間那一格
-  // 就是壞的那一格。React 在本函式 return 後立刻用新 state 重跑,不會 commit 中間態。
-  if (marketEstimate == null && kind === "market") setKind("limit");
+  // 🔴 N011(推翻舊 A11Y-2 的單向收斂):估價消失(換到無成交合約)時,舊版在 render
+  // 期間把 `kind` 翻回 limit —— 而且**不還原**:估價回來後畫面停在限價,使用者以為
+  // 自己還在市價,零訊號。改成 `disabled` 只擋**進入**方向(`ArmRow` 的既有慣例):
+  // checked 的那顆不 disabled(舊註解擔心的「整組從鍵盤消失」因此不成立)、送出鈕靠
+  // `formInvalid` 照樣鎖住並印出可見理由,估價一回來 `formInvalid` 自然轉 false = 還原。
+  const marketBlocked = kind === "market" && marketEstimate == null;
 
   const capStatus = info?.status;
   const blockedReason =
@@ -83,7 +82,7 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
     !Number.isFinite(qtyNum) ||
     qtyNum < 1 ||
     (kind === "limit" && (price.trim() === "" || !Number.isFinite(priceNum) || priceNum <= 0)) ||
-    (kind === "market" && marketEstimate == null);
+    marketBlocked;
   const disabled = blockedReason != null || formInvalid || submit.isPending;
 
   const handleOpen = () => {
@@ -214,7 +213,9 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
               {
                 value: "market",
                 label: "市價",
-                disabled: marketEstimate == null,
+                // disabled 只擋**進入**方向(N011):已選市價的那顆恆可聚焦 / 恆可切走,
+                // 送出由 `marketBlocked` 擋。兩者都鎖的話 radiogroup 會零可聚焦項。
+                disabled: marketEstimate == null && kind !== "market",
                 title: marketEstimate == null ? "此合約尚無成交估價,市價不可用" : undefined,
               },
             ]}
@@ -270,6 +271,11 @@ export function OrderPanel({ contracts }: { contracts?: ContractRow[] }) {
             {submit.isPending ? "送出中…" : "送出"}
           </button>
 
+          {/* N011:市價選著、估價缺 → 送出鈕已 disabled,但沒有理由的話畫面等於「按不動」。
+              放在 blockedReason 之前:估價缺是**這一格**的具體原因,連線類阻擋是全域的。 */}
+          {marketBlocked && (
+            <p className="text-xs text-loss">此合約尚無成交估價,市價暫不可送出</p>
+          )}
           {blockedReason != null && <p className="text-xs text-loss">{blockedReason}</p>}
           {degradedNote != null && <p className="text-xs text-loss">{degradedNote}</p>}
           {submitError != null && <p className="text-xs text-loss">{submitError}</p>}

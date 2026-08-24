@@ -17,6 +17,7 @@ import {
   futSummary,
   positionsByCode,
   secSummary,
+  unmappedFutCount,
 } from "@/lib/position-summary";
 import { searchStocks, SUGGEST_LIMIT } from "@/lib/stock-search";
 import { limitState } from "@/lib/stock-tick";
@@ -60,6 +61,14 @@ function applyDrop(
   return from === null
     ? assignToGroup(base, code, to, slot)
     : moveToGroup(base, code, from, to, slot);
+}
+
+/** 落點高亮的框(N014)。作廢態(側欄外 / 作廢帶 / 零 zone)高亮**回到來源組**,
+ *  畫面因此與「真的停在來源組上」同形 —— 一個是「放開就是原樣」,一個是「放開會放回這裡」,
+ *  兩者都不寫資料,但使用者要不要重來一次不一樣。實線 accent = 可放;虛線灰 = 作廢。
+ *  **模組層純函式**(兩個渲染點共用):行內各寫一次的話,兩處的作廢畫面遲早長不一樣。 */
+function dropHint(voided: boolean): string {
+  return voided ? "border-dashed border-ink-dim" : "border-accent";
 }
 
 function fmtPrice(milli: number | null): string {
@@ -169,9 +178,15 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
   // 落點 index 不入 state:插入位置在 pointerup 當下由 `dropTargetFromPointer` 現算,
   // 存一份在這裡只會多一個「拖曳過程中的 index」而沒有任何讀者(DC-20)。
-  const [drag, setDrag] = useState<{ code: string; from: string | null; to: string | null } | null>(
-    null,
-  );
+  // `voided`(N014)= 目前落點是「整個作廢」(側欄外 / 作廢帶 / 零 zone)。高亮仍回來源組
+  // (見 `move`),但畫面必須與「真的停在來源組上」分得開 —— 兩者都不寫資料,差別在
+  // 使用者要不要重來一次,而實線 accent 框讀起來就是「放開會放回這一組」。
+  const [drag, setDrag] = useState<{
+    code: string;
+    from: string | null;
+    to: string | null;
+    voided: boolean;
+  } | null>(null);
   // aria-controls 的 id 前綴(React 19 的 useId 產出 «r0» 形態 → 過濾成合法 id token)
   const uid = safeIdToken(useId());
   const asideRef = useRef<HTMLElement | null>(null);
@@ -190,6 +205,9 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
   // 折數與閃電梯同一個 localStorage key:梯上改了折數,這裡同 tick 跟著換。
   const positions = useCapitalPositions().data?.positions;
   const posMap = useMemo(() => positionsByCode(positions), [positions]);
+  // N065:`code` 反查不到的個股期倉位在三處顯示裡被靜默跳過(猜股號會掛到別檔頭上)。
+  // 跳過是對的,缺的是「說一聲」—— 否則使用者手上壓著部位而畫面一個字都沒有。
+  const unmappedFut = unmappedFutCount(positions);
   const discount = useFeeDiscount();
 
   /** `collapsed` 的**單一寫入點**:同步 ref → persist → setState 三步一律成對(review TC-4)。
@@ -313,7 +331,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
 
   function onHandleDown(from: string | null, code: string, e: React.PointerEvent): void {
     e.preventDefault();
-    setDrag({ code, from, to: from });
+    setDrag({ code, from, to: from, voided: false });
     // 取消(Esc)與完成(pointerup)走**同一個** teardown。取消之所以有效是因為這裡把
     // `pointerup` listener 移掉了 —— 之後放開手指根本進不到 `up`。
     // ⚠ 曾另外加過一個 `cancelled` 旗標在 `up` 開頭早退,mutation test 證明它不可達
@@ -342,7 +360,16 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
       // (整個作廢)。分態處理的話畫面會說「放開會掉到未分組」而實際是取消,
       // 也就是高亮與落地行為講不同的話。鎖在測試「移入作廢帶 / 移到側欄外 →
       // 高亮回來源組」兩條。
-      setDrag((p) => (p === null ? p : { ...p, to: target === null ? p.from : target.group }));
+      //
+      // **落點沒變就回同一個 reference**(N014):每則 pointermove 都造新物件的話,
+      // React 拿不到 `Object.is` 相等 → 手指移動時每秒數十次重繪整份自選列。
+      // 症狀只是掉幀,零錯誤訊號(機械閘在 `WatchlistSidebar.dragrender.test.tsx`)。
+      setDrag((p) => {
+        if (p === null) return p;
+        const voided = target === null;
+        const to = voided ? p.from : target.group;
+        return p.to === to && p.voided === voided ? p : { ...p, to, voided };
+      });
     };
     const up = (ev: PointerEvent): void => {
       const { zones, bounds, voidBelowY, voidAboveY } = zonesNow();
@@ -444,7 +471,8 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           className={cn(
             "group flex items-center gap-1.5 border-b border-line px-1",
             active === code && "bg-bg-deep",
-            drag?.code === code && "opacity-50",
+            // 作廢態再淡一階(N014):與「停在可放的組上」兩種畫面必須分得開
+            drag?.code === code && (drag.voided ? "opacity-30" : "opacity-50"),
           )}
         >
           {/* 純 pointer 拖曳握把:`role="button"` 沒有 tabIndex / 鍵盤路徑,是「宣告了做不到
@@ -722,7 +750,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
         }}
         className={cn(
           "rounded border border-transparent",
-          drag !== null && drag.to === null && "border-accent",
+          drag !== null && drag.to === null && dropHint(drag.voided),
         )}
       >
         {sectionHeader({
@@ -765,7 +793,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
             }}
             className={cn(
               "rounded border border-transparent",
-              drag !== null && drag.to === g.name && "border-accent",
+              drag !== null && drag.to === g.name && dropHint(drag.voided),
             )}
           >
             {sectionHeader({
@@ -809,6 +837,17 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
           open/close 循環而言它仍是常駐掛載 —— 不影響其 prevOpen 重置設計。
           **同一個 gate 還守著 sticky 區的「全部收合」鈕**(`wlReady` 的另一個讀者):
           那顆鈕在危險窗內按下去會把折疊清單覆寫成空,同樣是 EMPTY_WL 當基底的寫入。 */}
+      {/* N065:反查不到股號的個股期倉位計數。放在最底(不是各組之間)——
+          它不屬於任何一組,而三處顯示會缺的正是這幾筆。0 筆不渲染,不留空殼。 */}
+      {unmappedFut > 0 ? (
+        <p
+          className="px-1 text-[0.625rem] text-ink-muted"
+          title="契約碼對映不到股號(除權息調整碼 / 新上市未更新對映表),故不出現在自選列與群組卡的倉位摘要;閃電梯與部位列不受影響"
+        >
+          {unmappedFut} 筆個股期倉位無法對映
+        </p>
+      ) : null}
+
       {wlReady ? (
         <>
           <button

@@ -48,6 +48,19 @@ export function settleFlashSend(
   });
 }
 
+/** 送單 payload 的稽核 `source`(N082)。
+ *
+ *  鎖定態 = 換標的 / 換梯 / 閒置都不解除武裝,是誤送半徑最大的狀態。舊值域只有
+ *  `panel` / `flash` 兩種,事後翻審計檔(`capital-YYYYMMDD.jsonl`)查「這張單是不是
+ *  在鎖定態下按出去的」完全沒有線索。
+ *
+ *  **六個送單點共用這一支**(三座梯 × 點價 / 市價鈕):各寫一次三元式的話,失效樣態是
+ *  其中一處漂成別的字串,而審計檔上看起來只是「少了幾筆 flash-locked」—— 沒有訊號。
+ *  後端 `source: str` 值域本就可擴,舊值語意逐字不變。 */
+export function flashSource(locked: boolean): "flash" | "flash-locked" {
+  return locked ? "flash-locked" : "flash";
+}
+
 // ---------------------------------------------------------------------------
 // 梯頂市價鈕的三態(SC-6 / SC-7 / SC-8)。三座梯各自算一次的話,「什麼時候鎖」這條
 // 安全規則會有三份且必然漂移 —— 純函式收在這裡,元件只餵判準。

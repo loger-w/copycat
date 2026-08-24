@@ -221,9 +221,11 @@ describe("OrderPanel(群益)", () => {
     await waitFor(() => expect(bodies.length).toBe(1));
     expect(bodies[0]).toMatchObject({ tc4_symbol: CALL, price: 15.5, price_type: "market" });
 
-    // 無估價合約(PUT last_price=null)→ 市價鈕 disabled
+    // 無估價合約(PUT last_price=null)→ 選擇不被改寫,改由送出鈕 + 理由擋(N011)
     fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
-    expectMarketLocked();
+    expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("此合約尚無成交估價,市價暫不可送出")).toBeTruthy();
+    expect(screen.getByText("送出").closest("button")?.getAttribute("disabled")).not.toBeNull();
   });
 
   // TC-2:買賣別 radiogroup 在 a11y 批之前**零測試** —— 它決定的是買還是賣(真錢方向),
