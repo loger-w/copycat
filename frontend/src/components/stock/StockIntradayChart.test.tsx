@@ -2244,3 +2244,61 @@ describe("StockIntradayChart 極值文字 × VWAP 標籤避讓(N007)", () => {
     expect(Number(circle.getAttribute("cy"))).toBeCloseTo(markY, 6);
   });
 });
+
+// 🔴 N008:群組檢視走 `?tape=0`(明細與 VP 全空),切回單檔的**首 paint** 手上還是那份
+// accum —— VP 圖層一片空,與「今天真的沒成交」同形。`accum.tapeOmitted` 為真時 toggle
+// 區改印「載入中」。**排版必須固定**(user 附註):同一顆 button、class 逐字不變、
+// 兩個 label 同為 3 個全形字 → box 尺寸不變。
+describe("StockIntradayChart VP 載入佔位(N008)", () => {
+  function accumWith(over: Record<string, unknown>) {
+    return { ...WITH_TICKS_FOR_PLACEHOLDER, ...over };
+  }
+
+  const WITH_TICKS_FOR_PLACEHOLDER = fromSnapshot({
+    code: "2330",
+    seq: 2,
+    last: { p: 2_390_000, t: "09:02:10.000", cum_vol: 12 },
+    vwap: 2_380_000,
+    minutes: { "541": { c: 2_380_000, v: 10, i: 0, o: 10, u: 0 } },
+    ticks: [{ t: "09:01:30.000", p: 2_380_000, q: 7, side: "outer" }],
+    book: null,
+    meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
+  });
+
+  it("tapeOmitted → VP toggle 印「載入中」;正常態印「量分佈」", () => {
+    const { unmount } = wrap(<StockIntradayChart accum={accumWith({ tapeOmitted: true })} />);
+    expect(screen.getByRole("button", { name: "載入中" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "量分佈" })).toBeNull();
+    unmount();
+    wrap(<StockIntradayChart accum={WITH_TICKS_FOR_PLACEHOLDER} />);
+    expect(screen.getByRole("button", { name: "量分佈" })).toBeTruthy();
+  });
+
+  // 不跑版的機械證據:同一顆鈕、class 與 disabled / aria-pressed 逐值相同,
+  // label 字數相同 → 佔位與正常態的 box 尺寸不變。
+  it("佔位與正常態的 class / 狀態 / 字數完全相同(不跑版)", () => {
+    const { unmount } = wrap(<StockIntradayChart accum={WITH_TICKS_FOR_PLACEHOLDER} />);
+    const normal = screen.getByRole("button", { name: "量分佈" });
+    const normalClass = normal.className;
+    const normalPressed = normal.getAttribute("aria-pressed");
+    const normalDisabled = (normal as HTMLButtonElement).disabled;
+    const toggleCount = screen.getAllByRole("button").length;
+    unmount();
+
+    wrap(<StockIntradayChart accum={accumWith({ tapeOmitted: true })} />);
+    const loading = screen.getByRole("button", { name: "載入中" });
+    expect(loading.className).toBe(normalClass);
+    expect(loading.getAttribute("aria-pressed")).toBe(normalPressed);
+    expect((loading as HTMLButtonElement).disabled).toBe(normalDisabled);
+    expect(screen.getAllByRole("button").length).toBe(toggleCount); // 顆數不變
+    expect((loading.textContent ?? "").length).toBe(3); // 與「量分佈」同字數
+  });
+
+  it("按下去仍是同一顆 VP toggle(佔位不吃掉互動)", () => {
+    wrap(<StockIntradayChart accum={accumWith({ tapeOmitted: true })} />);
+    const btn = screen.getByRole("button", { name: "載入中" });
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(btn);
+    expect(screen.getByRole("button", { name: "載入中" }).getAttribute("aria-pressed")).toBe("false");
+  });
+});

@@ -56,3 +56,20 @@ describe("ToastStack", () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+// 🔴 N013:合併 toast 的文案是「代號 名稱 <kind 段以「・」串接> 價格」,同一 tick 併進
+// 三四則時會長到把 w-72 的卡片撐成一整片。比照 B3(SignalRail 合併列)clamp 2 行 +
+// 斷詞;**只加 class,文案與 TTL / 合併行為一字不動**(user 拍板不改合併)。
+describe("ToastStack 長文案 clamp(N013)", () => {
+  it("toast 文字 clamp 2 行且可斷詞", () => {
+    render(<ToastStack toasts={[toast(1)]} overflow={0} onDismiss={vi.fn()} />);
+    const btn = screen.getByText("訊號 1");
+    expect(btn.className).toContain("line-clamp-2");
+    expect(btn.className).toContain("break-words");
+  });
+
+  it("容器寬度不變(w-72;clamp 是縱向的事)", () => {
+    render(<ToastStack toasts={[toast(1)]} overflow={0} onDismiss={vi.fn()} />);
+    expect(screen.getByTestId("toast-stack").className).toContain("w-72");
+  });
+});

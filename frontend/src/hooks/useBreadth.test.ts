@@ -259,3 +259,27 @@ describe("useBreadth refetch 競態(review P2-3)", () => {
     ]);
   });
 });
+
+// 🔴 N119:handler 以 ref 讀 `trade_date`,而 ref 只在 commit 後由 useLayoutEffect 同步 ——
+// 同一個 macrotask 內兩則換日訊息時,第二則讀到的仍是舊日 → 再清一次序列 + 再打一次全量。
+describe("useBreadth 同 tick 兩則訊息(N119)", () => {
+  it("換日後同 tick 的第二則不再被判成換日(不重複清空 + 重抓)", async () => {
+    const { hook, ws } = await setup();
+    const before = fetchMock.mock.calls.length;
+    act(() => {
+      ws.emit(wsMsg({ trade_date: "2026-08-07" }));
+      ws.emit(wsMsg({ trade_date: "2026-08-07" }));
+    });
+    expect(hook.result.current!.trade_date).toBe("2026-08-07");
+    expect(fetchMock.mock.calls.length - before).toBe(1);
+  });
+
+  it("同 tick 兩格 last_minute 都留下", async () => {
+    const { hook, ws } = await setup();
+    act(() => {
+      ws.emit(wsMsg({ last_minute: { t: "0905", twse: [3, 1, 1, 1, 0], tpex: [1, 1, 1, 1, 0] } }));
+      ws.emit(wsMsg({ last_minute: { t: "0907", twse: [3, 2, 2, 2, 0], tpex: [1, 2, 2, 2, 0] } }));
+    });
+    expect(hook.result.current!.series.map((p) => p.t)).toEqual(["0901", "0903", "0905", "0907"]);
+  });
+});

@@ -189,3 +189,33 @@ describe("useIndexStream", () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(before));
   });
 });
+
+// 🔴 N119:handler 以 ref 讀 merge 基底,而 ref 只在 commit 後由 useLayoutEffect 同步 ——
+// 同一個 macrotask 內兩則訊息時,第二則讀到的仍是**上一次 commit** 的 series → 第一則
+// 的 last_minute 被靜默抹掉(下一格 upsert / onopen refetch 才自癒)。
+describe("useIndexStream 同 tick 兩則訊息(N119)", () => {
+  it("兩則 last_minute 都留下(第二則不以舊底覆蓋第一則)", async () => {
+    const { hook, ws } = await setup();
+    act(() => {
+      ws.emit(wsMsg({ twse: { ...wsMsg().twse, last_minute: ["0932", 42_000_000] } as never }));
+      ws.emit(wsMsg({ twse: { ...wsMsg().twse, last_minute: ["0933", 41_900_000] } as never }));
+    });
+    expect(hook.result.current.twse!.minutes).toEqual({
+      "0901": 43_000_000,
+      "0932": 42_000_000,
+      "0933": 41_900_000,
+    });
+  });
+
+  it("換日後同 tick 的第二則不再被判成換日(不重複清空 + 重抓)", async () => {
+    const { hook, ws } = await setup();
+    const before = fetchMock.mock.calls.length;
+    act(() => {
+      ws.emit(wsMsg({ trade_date: "2026-07-29" } as never));
+      ws.emit(wsMsg({ trade_date: "2026-07-29" } as never));
+    });
+    expect(hook.result.current.tradeDate).toBe("2026-07-29");
+    // 第一則觸發一次全量對齊;第二則的日期與本地已相同 → 不得再排一次
+    expect(fetchMock.mock.calls.length - before).toBe(1);
+  });
+});
