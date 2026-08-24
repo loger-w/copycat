@@ -28,6 +28,13 @@ seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
   `stock-accum.test.ts`。真要消掉這一次重掛,key 得改吃「不隨 seq 走的成交識別」
   (後端逐筆給 id,或以 `t + cum_vol` 組鍵)—— 屬跨檔契約改動,不順手做。
 
+## 2026-08-24(架構債盤點,唯讀)
+
+- [ ] **全站抽象化 /refactor Why gate 未過(user 拍板 (d) 沒有具體被卡住)→ 改為盤點文件**
+  `docs/superpowers/specs/2026-08-24-architecture-debt-inventory.md`:A 後端 engine 骨架 /
+  B app.py / C 三座梯 / D 分時圖 / E localStorage(/mod)/ F WsStatus ×7 / G fade / H fake source
+  兩份,每條附觸發條件、半徑、seam、步數草案。**沒撞到觸發條件不動**;撞到時直接取用不重調研。
+
 ## 2026-08-24(mod/futures-intraday-features two-axis 留尾)
 
 review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture / `splitCapitalStamp` /
