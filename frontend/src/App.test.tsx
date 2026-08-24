@@ -605,8 +605,9 @@ describe("App 資料流上提(D-3 / D-16)", () => {
   });
 
   // 🔴 N109(2026-08-24):文案由「達錢 4 連線中斷,恢復後自動回補」改成對**兩態**都
-  // 誠實的一句(engine 在但 TC4 斷 vs 無 engine 模式需重啟 server)。此處**事前標為該變**,
+  // 誠實的一句(engine 在但 TC4 斷 vs 無 engine 模式需重啟伺服器)。此處**事前標為該變**,
   // 守的仍是同一件事:status=down 這條路要一路走到個股頁的告警列。
+  // 2026-08-24 two-axis 收修再改一次(同樣事前標為該變):「server」→「伺服器」(UI 全繁中)。
   it("stock WS status=down → 個股頁告警列(自 StockPage.test 上移)", async () => {
     window.localStorage.setItem("copycat-tab", "stock");
     renderApp();
@@ -618,7 +619,11 @@ describe("App 資料流上提(D-3 / D-16)", () => {
       ws.onmessage?.({ data: JSON.stringify({ type: "status", tc4: "down", backfilling: null }) });
     });
     await waitFor(() =>
-      expect(screen.getByText(/達錢 4 未連線 —— 連線後自動回補;若 server 啟動時未開,需重啟 server/)).toBeTruthy(),
+      expect(
+        screen.getByText(
+          /達錢 4 未連線 —— 連線後自動回補;若伺服器啟動時達錢 4 未開,需重啟伺服器/,
+        ),
+      ).toBeTruthy(),
     );
   });
 
