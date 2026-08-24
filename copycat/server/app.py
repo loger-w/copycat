@@ -135,7 +135,7 @@ def _market_payload(
     partial_last: bool = False,
     refusal: str | None = None,
     synth_since: str | None = None,
-    status: BarsStatus = "ok",
+    status: BarsStatus | None = None,
 ) -> dict:
     """大盤 K 線回應(index-board N-5)。
 
@@ -146,27 +146,28 @@ def _market_payload(
 
     `status`(N104)與 `source` 是**兩把不同的尺**,同為 str 但不可互換:`source` 答
     「這份 bar 從哪來」,`status` 答「這一趟取數的結果」(ok / timeout / disconnected)。
-    預設 `"ok"` = 沒有三態訊號可報的路徑(TWSE / OTC / `tf != "1"`,見 route 註解)。
+
+    **`None` = 這條路徑還沒有三態訊號 → `meta` 裡連這一格都不給**(review SP4)。
+    硬寫 `"ok"` 是謊報:index proxy miss 時 payload 會變成 `source:"unavailable"` +
+    `status:"ok"`,而後者的意思正好是「問到了、就是沒有」。缺欄是誠實的「不知道」,
+    前端的 `?? "ok"` 也已經吃得下 undefined。
     """
     # volume 未指定時**由資料判定**:指數(IX0001)的 DK/1K 沒有量欄位,`_int_field`
     # 缺值回 0 → 整條序列 v=0。標 volume=true 會讓前端畫一排貼底的 0 高柱,與「真的
     # 零成交」在畫面上無法區分 —— 正是 SC-6 要避免的假造零(2026-07-30 real-env 抓到)。
     has_volume = volume if volume is not None else any(b["v"] > 0 for b in bars)
-    return {
-        "key": key,
-        "tf": tf,
-        "bars": bars,
-        "meta": {
-            "source": source,
-            "coverage_from": bars[0]["t"][:10] if bars else None,
-            "coverage_to": bars[-1]["t"][:10] if bars else None,
-            "partial_last": partial_last,
-            "volume": has_volume,
-            "refusal": refusal,
-            "synth_since": synth_since,
-            "status": status,
-        },
+    meta: dict = {
+        "source": source,
+        "coverage_from": bars[0]["t"][:10] if bars else None,
+        "coverage_to": bars[-1]["t"][:10] if bars else None,
+        "partial_last": partial_last,
+        "volume": has_volume,
+        "refusal": refusal,
+        "synth_since": synth_since,
     }
+    if status is not None:
+        meta["status"] = status
+    return {"key": key, "tf": tf, "bars": bars, "meta": meta}
 
 
 # sentinel:__main__ 顯式傳入才建真 source(測試不傳 → None → 零連線)
@@ -1612,8 +1613,9 @@ def create_app(
                 return TaggedBars(*await index.bars_range(tf_, s, e))
 
             async def plain_with_status(_c: str, tf_: str, s: str, e: str) -> BarsResult:
-                # 加權路徑仍固定 "ok":`index.bars_range` 回的是 (bars, tag),來源層沒有
-                # 三態訊號可帶(N104 的 scope 界)。空態仍由 source tag 表述。
+                # `build_minute` 的 cache 型別要求一個 status,而加權路徑沒有真訊號可帶
+                # (`index.bars_range` 回的是 (bars, tag))→ 這裡給 "ok" 只是**餵給 cache**,
+                # **不會**進 payload:下面 tf=="1" 分支對非期指鍵不傳 status(SP4)。
                 return BarsResult((await tagged_source(_c, tf_, s, e)).bars, "ok")
         else:
             futures: FuturesEngine | None = request.app.state.futures
@@ -1628,7 +1630,9 @@ def create_app(
             async def plain_with_status(_c: str, tf_: str, s: str, e: str) -> BarsResult:
                 # 期指分 K 是**唯一**有三態訊號的路徑(N104):engine 已把
                 # HistoryTimeoutError / ConnectionError 分成 timeout / disconnected。
-                return await futures.bars_range(key, tf_, s, e, session=eff_session)
+                # engine 回裸 tuple(ST3:不反向 import server 層型別),`BarsResult`
+                # 在這裡才組 —— 它是 cache/route 這一側的搬運型別。
+                return BarsResult(*await futures.bars_range(key, tf_, s, e, session=eff_session))
 
         # 分鐘路徑的 cache code 加 |M 後綴:裸 "IX0001" 會與 /api/stock/bars/IX0001
         # (走 **stock** session)共用 `_hist` / `_today` / `_empty` 同一格 —— 那會讓
@@ -1653,10 +1657,12 @@ def create_app(
                 bars,
                 source="tc4_1k" if bars else "unavailable",
                 partial_last=is_partial_last(bars, tf, today),
-                status=status,
+                # **只有期指鍵給 status**(SP4):TWSE / OTC 的來源層沒有三態訊號,
+                # 給一個恆 "ok" 等於在 proxy miss 時說「問到了、就是沒有」
+                status=status if key in FUTURES_MARKET_KEYS else None,
             )
         # 日 / 週 / 月 K 走 `build_period`,它回的是 `TaggedBars` 沒有 status 欄 →
-        # 沿用預設 "ok"。要一起三態化得動 `bars.py` 的 cache 型別(白名單 §0.2-1)。
+        # 不給這一格(未三態化)。要一起做得動 `bars.py` 的 cache 型別(白名單 §0.2-1)。
         bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
         return _market_payload(
             key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)

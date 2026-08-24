@@ -77,7 +77,10 @@ const FUT_LIVE_LAG_MAX = 3;
  *  `ok` 那句刻意仍是**進行式**:後端說「這一趟問完了、就是空」,但那既可能是這個
  *  商品今天真沒 K 線、也可能是 TC4 那頭還沒寫出來 —— 不下結論。 */
 const EMPTY_TEXT: Record<BarsStatus, string> = {
-  timeout: "回補中…(TC4 忙,稍後自動重試)",
+  // 「稍後自動重試」會說謊(review SP5):重取只來自 `useFuturesBars` 的
+  // `refetchInterval`,而它同時吃 `active`(使用者在期貨 tab)與 `inFuturesAllDayHours()`
+  // —— 切走 tab 或收盤後根本不會再打。講清楚重試的條件,不然使用者會坐在那裡等。
+  timeout: "回補中…(TC4 忙,交易時段內每分鐘重試)",
   disconnected: "暫無資料(TC4 未連線)",
   ok: "暫無資料(TC4 未回應)",
 };
@@ -340,7 +343,12 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     if (data.meta.source === "unavailable") {
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">
-          <p className="text-sm text-ink-muted">{EMPTY_TEXT[data.meta.status ?? "ok"]}</p>
+          {/* 尾綴 `?? EMPTY_TEXT.ok`(review ST4):`status` 是後端字串,型別擋不住
+              第四態;查表 miss 回 undefined → React 渲染成空 → 空態框一個字都沒有,
+              而那正好與「畫面壞了」不可分辨。 */}
+          <p className="text-sm text-ink-muted">
+            {EMPTY_TEXT[data.meta.status ?? "ok"] ?? EMPTY_TEXT.ok}
+          </p>
         </div>
       );
     }
