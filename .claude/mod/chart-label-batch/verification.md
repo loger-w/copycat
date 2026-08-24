@@ -2,6 +2,9 @@
 
 九條:N006 / N045 / N007 / N044 / N009 / N026 / N027 / N023 / N062。
 commit:`d222df47`(🟢 red)→ `65196a11`(🔴 green)→ `413507c6`(🟢 N023 lock)。
+two-axis review 收修(2026-08-24):`82534781`(🟢 red)→ `ef73d1b3`(🔴 green)
+→ `d5f35bae`(🔵 helper 抽取 / 改名 / buildVwapLabel 移入 lib)→ `14e25a81`(🔵 斷言字面量)
+→ `7a8e3dd6`(🟢 buildVwapLabel 單元測試)。詳見 §6。
 
 ---
 
@@ -10,9 +13,9 @@ commit:`d222df47`(🟢 red)→ `65196a11`(🔴 green)→ `413507c6`(🟢 N023 lo
 | gate | 指令 | 結果 |
 |---|---|---|
 | 型別 | `npx tsc -b` | **PASS**(exit 0,零輸出) |
-| 測試 | `npm test -- --run` | **138 檔 / 2563 tests 全綠**(改動前基線 2561,本輪 +2 = N023 兩條;紅測試批的其餘案子併進既有 describe) |
+| 測試 | `npm test -- --run` | **138 檔 / 2571 tests 全綠**(基線 = merge-base `1835f827` 實跑 **137 檔 / 2533**;本分支淨增 38 條 `it`,其中 R1 批 30 條、two-axis 收修 8 條 —— 多數併進既有 describe,只多一個新檔 `CandleChart.caption.test.tsx`) |
 | Lint | `npx eslint src` | **PASS**(exit 0,零輸出) |
-| react-doctor | `npx react-doctor@latest --scope changed --no-telemetry` | **Scanned 13 files → No issues found**(零新增 finding) |
+| react-doctor | `npx react-doctor@latest --scope changed --no-telemetry` | **Scanned 14 files → No issues found**(零新增 finding) |
 
 後端未動任何 `.py` → `pytest` / `ruff` / `pyright` / `copycat validate` 本輪不涉。
 
@@ -67,3 +70,28 @@ headless 重現需要後端 8721 有真家數資料(無資料時 `BreadthBand` �
 - `CandleChart.test.tsx` 內含一個歷史遺留的 NUL 位元組(git 判整檔 binary),N026 的 class 鎖
   因此落在新檔 `CandleChart.caption.test.tsx`。**該 NUL 未順手清**(不在本輪 scope),
   建議入 next-time。
+
+---
+
+## 6. two-axis review 收修(2026-08-24)
+
+紅測試先行(`82534781`),三條**皆先量到症狀值**再修:
+
+| 條 | 紅態實測 | 綠態 |
+|---|---|---|
+| N007-1 讓位方向 | VWAP 落在翻面文字外側 → 「遠離該鄰居」把文字推到標記圓上,中心距 **5.52px** | 沿文字原本相對圓的那一側推 → 距圓心 **25.52**、距 VWAP 恰 **10.00** |
+| N044-2 界單位 | 讓位路徑拿 baseline 界夾中心值再 +3,有效上界 12 → 頂界案讓位後與 VWAP 仍只有 **8.07px** | `yieldToObstaclesBaseline` 界一起換單位 → **10.00**(且本案根本不必 clamp) |
+| N044-3 走廊補完 | 持倉均價 hline 落在 MA5 上,兩者中心距 **6px**,誰也不避誰 | MA 價位標讓位 → **10.00**;hline label 與線體 y 逐值不變 |
+
+**對照組(先綠、修後仍綠)**:R1 的「日高翻面撞 VWAP → 恰推 10」「日高在左半場不位移」
+「hline 遠離 VWAP → 線 y − 3 逐值不變」三案未動且仍綠 —— `prefer` 在那些案子推出來的
+方向與舊規則同號,不是把舊行為改掉。
+
+行為零變化的兩個 🔵 commit 各自跑過:`d5f35bae` 後 lib + stock 元件 24 檔 877 tests 全綠
+(含逐值 x/y 斷言);`14e25a81` 改斷言時發現 index 態那條**本來就恆真**(5 字 28.5px,
+連硬編 40 的舊版都綠),已改鎖 `x` 逐值 720 + 文字內容,並把標題指回真正驗 45.6px 的
+`vwapLabelBox` 單元測試。
+
+留尾(本輪刻意不做)已 append 到 `docs/next-time.md` 2026-08-24 節:LabelSpan 三種表示法、
+`maLabelLeft` 的 MA 標籤寬仍硬編 34、index 態極值文字仍走 `fmt`、N062 修後 1536×678 以下
+仍會溢出(餘裕 10px)、`CandleChart.test.tsx` 的歷史 NUL 位元組。
