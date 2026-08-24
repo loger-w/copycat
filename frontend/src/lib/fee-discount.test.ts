@@ -62,6 +62,21 @@ describe("useFeeDiscount", () => {
     expect(hook.result.current).toBe(3);
   });
 
+  /** 🟢 N067(spec §5 未驗收項):`subscribe` 掛了 `storage` listener,但沒有任何測試
+   *  釘住它 —— 拿掉那一行,同分頁通知照常運作、全套照樣綠,而**另一分頁**改折數時
+   *  這一頁的損益永遠停在舊折數(兩個視窗兩個口徑,零錯誤訊號)。
+   *  jsdom 不會跨 window 真的派發 storage 事件,所以直接派發事件模擬另一分頁的寫入。 */
+  it("另一分頁改折數(storage 事件)→ 本頁跟著換值", () => {
+    const hook = renderHook(() => useFeeDiscount());
+    expect(hook.result.current).toBe(FEE_DISCOUNT_DEFAULT);
+    act(() => {
+      // 另一分頁的寫入:localStorage 已是新值,本頁只收到事件(本頁自己沒呼叫 persist)
+      window.localStorage.setItem(FEE_DISCOUNT_KEY, "2.8");
+      window.dispatchEvent(new StorageEvent("storage", { key: FEE_DISCOUNT_KEY }));
+    });
+    expect(hook.result.current).toBe(2.8);
+  });
+
   it("多個訂閱者同時收到通知", () => {
     const a = renderHook(() => useFeeDiscount());
     const b = renderHook(() => useFeeDiscount());

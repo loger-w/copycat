@@ -810,6 +810,40 @@ describe("WatchlistSidebar 管理入口(SC-13 / SC-15)", () => {
       expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]),
     );
   });
+
+  /** 🔒 N116 lock:佇列的 `onDone` **不受掛載狀態約束**,而這是刻意的。
+   *
+   *  PUT 在途時整頁換 tab / 收掉側欄 → 元件卸載,但 promise chain 照跑 → `onGroupDeleted`
+   *  → `dropCollapsed` 把折疊孤兒清掉。**不漏清正是 W-20 要的**:漏清的症狀是使用者日後
+   *  建同名群組時它意外呈折疊,而那時已經沒有任何線索指回這一次卸載。
+   *  與 `CapitalConfirmDialog` 的「unmount 零 callback」語意刻意相反(真錢下單 vs 冪等
+   *  localStorage 清理)—— 兩條 lock 並存,誰也不許被「統一」掉。 */
+  it("N116:PUT 在途時卸載側欄 → 回應到達後仍清掉折疊孤兒", async () => {
+    const gate: { resolve?: () => void } = {};
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Promise<Response>((r) => {
+          gate.resolve = () => r(new Response(JSON.stringify(body)));
+        });
+      }
+      return respond(url);
+    });
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(["觀察", "主力"]));
+    const view = sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByRole("button", { name: "管理群組與股票" }));
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+
+    view.unmount(); // 換 tab:側欄連同 Dialog 一起卸載,PUT 仍在途
+    gate.resolve!();
+
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem(COLLAPSED_KEY)!)).toEqual(["主力"]),
+    );
+  });
 });
 
 // 🟢 round4 SC-4 + round5 SC-12:跨群組 / 未分組拖曳。jsdom 的 getBoundingClientRect 恆 0
@@ -879,6 +913,69 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     fireEvent(window, ptr("pointermove", 250, 160));
     fireEvent(window, ptr("pointerup", 250, 160));
     await waitFor(() => expect(putGroups()[0]?.[1]?.codes).toEqual(["5483", "3231", "2330"]));
+  });
+
+  // 🔴 N097(2026-08-21 R4 review F3,作廢帶鏡像):最後一組**下方的整片空白區**放開,
+  // 舊行為是「取最近的 zone」= 靜默 append 到最後一組(不可逆的移動語意)。
+  // 未分組 zone 的 bottom = 340 → 作廢帶自 340 + ROW_H(52)= 392 起。
+  it("在最後一組下方的空白區放開 → 零 PUT(下緣作廢帶)", async () => {
+    await startDrag();
+    fireEvent(window, ptr("pointermove", 100, 500));
+    fireEvent(window, ptr("pointerup", 100, 500));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toEqual([]);
+  });
+
+  it("貼著最後一列下緣(容差內)放開 → 照舊 append 到該組(刻意保留的落點)", async () => {
+    await startDrag();
+    fireEvent(window, ptr("pointermove", 100, 380));
+    fireEvent(window, ptr("pointerup", 100, 380));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    // 未分組是衍生集合 → 落點語意 = 從所有群組移除(detachFromGroups)
+    expect(putGroups()[0]).toEqual([
+      { name: "主力", codes: ["2330"] },
+      { name: "觀察", codes: ["3231", "2330"] },
+    ]);
+  });
+
+  /** 🔴 N117 的跨元件那一半:Dialog 的 PUT 在途時側欄拖曳。
+   *
+   *  兩者以前各持一顆 mutation observer、各自以 render 閉包算 next —— 拖曳那一發會以
+   *  「刪組之前」的內容為基底整份 PUT,把剛刪掉的組**原樣還原**回去(後端 last-write-wins),
+   *  而畫面上兩步都成功了。修法 = 兩個寫者共用同一條 chain 與同一份基底。 */
+  it("N117:Dialog 的 PUT 在途時拖曳 → 序列化,且第二發以第一發結果為基底", async () => {
+    const gated: Array<() => void> = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Promise<Response>((r) => {
+          gated.push(() => r(new Response(JSON.stringify(body))));
+        });
+      }
+      return respond(url);
+    });
+    sidebar();
+    await waitGroups();
+    fireEvent.click(screen.getByRole("button", { name: "管理群組與股票" }));
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("關閉")); // 關窗,佇列殘餘仍在途
+
+    stubRects();
+    const handle = within(screen.getByTestId("wl-group-主力")).getByTestId("wl-handle-5483");
+    fireEvent(handle, ptr("pointerdown", 10, 80));
+    fireEvent(window, ptr("pointermove", 100, 300));
+    fireEvent(window, ptr("pointerup", 100, 300));
+
+    // 序列化:第一發未回之前第二發不上路(後端 last-write-wins,唯有序列化保得住順序)
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    gated.shift()!();
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    // 第二發必須**含第一發的刪組結果**:以 stale 基底算的話「觀察」會在這裡復活
+    expect(putBodies[1]!.groups.map((g) => g.name)).toEqual(["主力"]);
+    gated.shift()!();
   });
 
   it("剛超出側欄右緣寬容 → 零 PUT(右邊界釘在真實 aside 寬度)", async () => {

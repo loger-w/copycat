@@ -187,6 +187,52 @@ describe("SignalRulesDialog 編輯表單", () => {
     expect(input.getAttribute("max")).toBe("86400");
   });
 
+  /** 🔴 N055:參數欄原本一律只有 `step`,值域全交給後端 —— 使用者填 `rearm_dwell_secs`
+   *  = 99999 送出去只拿到一句「規則設定不合法」,不知道是哪一格、也不知道界在哪。
+   *  冷卻秒數早就有 min/max(既有慣例),參數欄同款補齊(表與後端 PARAM_SPECS 同源,
+   *  parity 由 `signal-param-parity.test.ts` 釘)。 */
+  it("參數欄位帶後端值域(min/max)", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
+    const dwell = screen.getByLabelText("線外駐留秒數") as HTMLInputElement;
+    expect([dwell.getAttribute("min"), dwell.getAttribute("max")]).toEqual(["0", "3600"]);
+    const ticks = screen.getByLabelText("重新武裝 tick 數") as HTMLInputElement;
+    expect([ticks.getAttribute("min"), ticks.getAttribute("max")]).toEqual(["0", "50"]);
+
+    fireEvent.change(screen.getByLabelText("種類"), { target: { value: "surge_crash" } });
+    const win = screen.getByLabelText("時間窗(秒)") as HTMLInputElement;
+    expect([win.getAttribute("min"), win.getAttribute("max")]).toEqual(["10", "3600"]);
+    const pct = screen.getByLabelText("漲跌幅 %") as HTMLInputElement;
+    expect([pct.getAttribute("min"), pct.getAttribute("max")]).toEqual(["0.1", "50"]);
+  });
+
+  it("參數超出值域 → 零送出並指出是哪一格(N055)", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
+    fireEvent.change(screen.getByLabelText("線外駐留秒數"), { target: { value: "99999" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("線外駐留秒數須在 0–3600 之間")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("線外駐留秒數"), { target: { value: "300" } });
+    fireEvent.change(screen.getByLabelText("重新武裝 tick 數"), { target: { value: "-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("重新武裝 tick 數須在 0–50 之間")).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("值域邊界值(恰等於 min / max)照樣送得出去(閉區間,與後端同)", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
+    fireEvent.change(screen.getByLabelText("線外駐留秒數"), { target: { value: "3600" } });
+    fireEvent.change(screen.getByLabelText("重新武裝 tick 數"), { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    const body = JSON.parse(String(writes()[0]!.init.body)) as Record<string, unknown>;
+    expect(body.params).toEqual({ rearm_ticks: 0, rearm_dwell_secs: 3600 });
+  });
+
   it("kind 專屬數字欄位隨種類切換(爆量五欄 / 鎖漲跌停零欄)", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));

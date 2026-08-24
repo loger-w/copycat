@@ -287,6 +287,44 @@ describe("useCapitalStream = 唯一 invalidate 擁有者(review B2/B4)", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  /** 🔴 N068:`useCapitalPositions` 現有 ≥ 4 個 observer(側欄 / header / 圖牆 / 梯)。
+   *  以前每個 observer 各帶 `refetchInterval: 15_000` —— 同 tick 掛載時各自的計時器對齊,
+   *  肉眼看起來就是 15 s 一發;但**掛載時點不同**(lazy 頁面 / 條件渲染的梯)時每個
+   *  observer 有自己的相位,15 s 窗內會打好幾次同一支 API,而畫面上完全看不出來。
+   *  收斂 = 輪詢節奏移到單一 provider(`useCapitalStream`,App 層掛一次)。 */
+  function posCalls(): number {
+    return fetchMock.mock.calls.filter((c) => String(c[0]).includes("/api/capital/positions"))
+      .length;
+  }
+
+  it("N068:consumer 單獨掛載不自行輪詢(節奏歸 provider)", async () => {
+    vi.useFakeTimers();
+    const client = newClient();
+    renderHook(() => useCapitalPositions(), { wrapper: makeWrapper(client) });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(posCalls()).toBe(1); // 掛載那一發,之後零輪詢
+  });
+
+  it("N068:節奏由 provider 擁有 —— provider 卸載後 consumer 不接手輪詢", async () => {
+    vi.useFakeTimers();
+    const client = newClient();
+    const consumer = renderHook(() => useCapitalPositions(), { wrapper: makeWrapper(client) });
+    const provider = renderHook(() => useCapitalStream(), { wrapper: makeWrapper(client) });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(posCalls()).toBe(3); // 掛載 1 + 15 s 節奏 2
+    provider.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    // consumer 還掛著,但節奏的擁有者已走 → 零新增(舊實作:consumer 自己續打 4 次)
+    expect(posCalls()).toBe(3);
+    consumer.unmount();
+  });
+
   it("stream unmount 後事件不再 invalidate(退訂 + 清 timer)", () => {
     vi.useFakeTimers();
     const client = newClient();

@@ -39,7 +39,38 @@ const hoisted = vi.hoisted(() => ({
    *  量不出 `memo(RiverCard)` 在不在 —— 拔掉 memo 卡片照樣每輪重跑整個 render body
    *  (七腿 × 全窗刻度 + polyline 字串),而 buildLegGeometry 計次紋風不動。 */
   ticks: 0,
+  /** `RiverOverlay` 的 **render body 執行次數**(N030 起的重疊圖探針)。
+   *
+   *  舊探針是 `timeTicks`:它當時落在 RiverOverlay 的 render body 上,計次剛好等於
+   *  render 次數。N030 把 `timeTicks` 與七條 polyline 字串一起收進幾何 useMemo 之後,
+   *  那個位置就沒有東西可數了 —— 沿用它會讓「重疊圖 render 次數」的斷言變成恆 0 的
+   *  假綠(mousemove 照樣重跑 render body,只是探針看不到)。
+   *  改成直接包住元件本體:與「哪個 lib 函式恰好留在 render body」解耦。 */
+  overlayRenders: 0,
+  /** `pts()` 呼叫次數 = **polyline 座標字串重組**次數(N030 的收斂目標)。
+   *  滿窗夜盤是 840 分鐘 × 七腿,每則 mousemove 重組一次是純浪費。 */
+  pts: 0,
 }));
+
+vi.mock("@/lib/svg-points", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/svg-points")>();
+  return {
+    ...actual,
+    pts: (...args: Parameters<typeof actual.pts>) => {
+      hoisted.pts += 1;
+      return actual.pts(...args);
+    },
+  };
+});
+
+vi.mock("@/components/corr/RiverOverlay", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/corr/RiverOverlay")>();
+  const Wrapped = (props: Parameters<typeof actual.RiverOverlay>[0]) => {
+    hoisted.overlayRenders += 1;
+    return actual.RiverOverlay(props);
+  };
+  return { ...actual, RiverOverlay: Wrapped, default: Wrapped };
+});
 
 vi.mock("@/lib/river-chart-svg", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/river-chart-svg")>();
@@ -84,6 +115,8 @@ beforeEach(() => {
   hoisted.overlay = 0;
   hoisted.legs.length = 0;
   hoisted.ticks = 0;
+  hoisted.overlayRenders = 0;
+  hoisted.pts = 0;
   window.localStorage.clear();
 });
 
@@ -101,7 +134,13 @@ describe("江波圖 memo 邊界計次(S3)", () => {
     // 自檢:圖真的畫出來了(幾何至少算過一次),否則下面量的 +0 與 memo 無關
     expect(hoisted.overlay).toBeGreaterThan(0);
     const before = hoisted.overlay;
-    const beforeRender = hoisted.ticks;
+    const beforeRender = hoisted.overlayRenders;
+    const beforeTicks = hoisted.ticks;
+    const beforePts = hoisted.pts;
+    // 自檢:兩個探針在**掛載時**確實被叫過(掛載都是 0 的話,下面的「+0」與 memo 無關,
+    // 而是探針根本沒接上 —— 那條斷言會靜默變成恆真)
+    expect(beforeTicks).toBeGreaterThan(0);
+    expect(beforePts).toBeGreaterThan(0);
 
     // 三個**相異**的 offset:同一 offset 連發會被 setState 的相同值 bail out,量不到東西
     fireEvent.mouseMove(svg, { clientX: xAt(20), clientY: 100 });
@@ -111,12 +150,15 @@ describe("江波圖 memo 邊界計次(S3)", () => {
     // 自檢:讀值列真的跟著游標動了(hover 沒生效的話 +0 是假綠)
     expect(screen.getByText("台指 —")).toBeTruthy();
     expect(hoisted.overlay - before).toBe(0);
-    // **成本現況拍照,不是收斂目標**:hover 仍然每則 mousemove 重跑一次 RiverOverlay 的
-    // render body(timeTicks 全窗刻度 + 七條 polyline 字串 + 讀值列),S3 的 useMemo
-    // 只擋住了「幾何」那一塊。這條在意的是這個數字**別在無人察覺下往上長**(例如把
-    // cursor 提到 RiverPanel 層 → 連 RiverCards / 勾選列一起重繪);要往下收得換手法
-    // (cursor 下沉到子元件 / 十字線獨立成一層),那是另一個題目。
-    expect(hoisted.ticks - beforeRender).toBe(3);
+    // **現況拍照,不是收斂目標**:cursor 住在 RiverOverlay 內,每則 mousemove 仍重跑一次
+    // 它的 render body(讀值列 + 十字線)。這條在意的是這個數字別在無人察覺下往上長
+    // (例如把 cursor 提到 RiverPanel 層 → 連 RiverCards / 勾選列一起重繪);要往下收
+    // 得換手法(cursor 下沉到子元件 / 十字線獨立成一層),那是另一個題目。
+    expect(hoisted.overlayRenders - beforeRender).toBe(3);
+    // 🔵 N030 的收斂:render body 重跑,但**全窗刻度與七條 polyline 字串一次都不重組**
+    // (兩者已隨幾何進 useMemo)。把它們搬回 render body 的話這兩個數字會變成 3 / 21。
+    expect(hoisted.ticks - beforeTicks).toBe(0);
+    expect(hoisted.pts - beforePts).toBe(0);
   });
 
   it("重疊圖:一腿有新 tick → 幾何恰重算一次,且該腿末點跟著換(entries deps 反向守門)", () => {

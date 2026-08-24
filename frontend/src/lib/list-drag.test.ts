@@ -84,6 +84,36 @@ describe("dropTargetFromPointer", () => {
     });
   });
 
+  // 🔴 N097(作廢帶下緣鏡像):側欄最後一組**下方的空白區**放開,舊行為是「在所有 zone
+  // 下方 → 取最近的 zone」= 靜默 append 到最後一組(不可逆的移動語意),與 sticky 區
+  // 那頭同一個 bug 的鏡像。`voidAboveY` = 最後一個 section 的 bottom + 一列高度容差。
+  it("y 在最後一組下方的空白區(> voidAboveY)→ null", () => {
+    // ZONES 最後一組 bottom = 220 → voidAboveY = 220 + ROW = 264
+    expect(dropTargetFromPointer({ x: 100, y: 300 }, ZONES, ROW, BOUNDS, undefined, 264)).toBeNull();
+  });
+
+  it("y 恰等於 voidAboveY → 照舊取最近 zone(邊界是 `>` 不是 `>=`)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 264 }, ZONES, ROW, BOUNDS, undefined, 264)).toEqual({
+      group: "空組",
+      index: 0,
+    });
+  });
+
+  it("未傳 voidAboveY → 五參數行為位元不變(W1;下方空白仍落最後一組)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 300 }, ZONES, ROW, BOUNDS, 40)).toEqual({
+      group: "空組",
+      index: 0,
+    });
+  });
+
+  it("兩條作廢帶並存 → 各自生效(上緣 sticky / 下緣空白區)", () => {
+    expect(dropTargetFromPointer({ x: 100, y: 10 }, ZONES, ROW, BOUNDS, 40, 264)).toBeNull();
+    expect(dropTargetFromPointer({ x: 100, y: 300 }, ZONES, ROW, BOUNDS, 40, 264)).toBeNull();
+    expect(dropTargetFromPointer({ x: 100, y: 200 }, ZONES, ROW, BOUNDS, 40, 264)?.group).toBe(
+      "空組",
+    );
+  });
+
   // 未分組區塊也是一個 drop zone,用 `group: null` 表示(round5 §🔴-8)
   it("group 為 null 的 zone(未分組)→ 回 { group: null, index }", () => {
     const zones: DropZone[] = [

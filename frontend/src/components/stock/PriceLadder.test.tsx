@@ -880,6 +880,34 @@ describe("PriceLadder 手續費折數(SC-5 / D1)", () => {
     expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("2.5");
   });
 
+  /** 🔴 N067:折數框的值原本是元件內 `useState(loadDiscount)` —— 只在掛載時讀一次。
+   *  另一分頁改折數時 `useFeeDiscount` 的訂閱者(自選列 / header / 群組卡)都跟著換,
+   *  唯獨**本頁閃電梯的輸入框與計算**停在舊折數:同一個畫面上兩個折數並存,
+   *  而使用者看到的框裡寫的是舊值 → 以為自己設的就是那個。 */
+  it("另一分頁改折數(storage 事件)→ 輸入框與計算一起跟著換(N067)", async () => {
+    renderWith([capitalPosition()], { ...LAST, p: 102_000 });
+    const bar = await screen.findByTestId("ladder-position-bar");
+    expect(within(bar).getByText("+3,284")).toBeTruthy();
+    act(() => {
+      window.localStorage.setItem("copycat-fee-discount", "0.5");
+      window.dispatchEvent(new StorageEvent("storage", { key: "copycat-fee-discount" }));
+    });
+    expect((screen.getByLabelText("手續費折數") as HTMLInputElement).value).toBe("0.5");
+    expect(within(screen.getByTestId("ladder-position-bar")).getByText("+3,359")).toBeTruthy();
+  });
+
+  /** 🔴 N067 的反向守門:本頁自己打字時**不可**被 store 通知洗回去 —— 打「2.50」
+   *  (clamp 後 = 2.5)若把 raw 覆寫成 `2.5`,使用者正在打的字串會在游標底下被改掉,
+   *  下一個按鍵接在被改過的字串後面。 */
+  it("自己改折數時輸入框保留原始字串(不被 store 回寫洗掉)", () => {
+    mockCapitalFetch();
+    render(ladder());
+    const input = screen.getByLabelText("手續費折數") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2.50" } });
+    expect(input.value).toBe("2.50");
+    expect(window.localStorage.getItem("copycat-fee-discount")).toBe("2.5");
+  });
+
   it("改折數 → 重算 pnl 並以字面 key 寫入 localStorage(IS-10)", async () => {
     renderWith([capitalPosition()], { ...LAST, p: 102_000 });
     const bar = await screen.findByTestId("ladder-position-bar");

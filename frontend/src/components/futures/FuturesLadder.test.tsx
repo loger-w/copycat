@@ -1010,4 +1010,18 @@ describe("FuturesLadder 梯頂市價鈕", () => {
     expect(screen.getByTestId("ladder-market-buttons")).toBeTruthy();
     expect(marketBtn("買").hasAttribute("disabled")).toBe(true);
   });
+
+  /** 🔴 N083:`futExchangeContract` 對非 YYYYMM 會 throw,而它在 render body 上 ——
+   *  未捕捉 = 整個期貨頁白屏(App.tsx / FuturesChart / StkfutLadder 三處早已各自 try/catch,
+   *  只有這裡漏了)。contract=null 是既有的安全狀態:活單 / 部位比對自然落空、梯照畫。 */
+  it("resolved_contract 壞值 → 不拋(梯照渲染,活單 / 平倉對象落空)", () => {
+    mockFetch({
+      "/api/capital/orders": () => json({ orders: [futOrder()] }),
+      "/api/capital/positions": () => json({ positions: [futPos()] }),
+    });
+    expect(() =>
+      render(ladder({ ...TXF_STATE, resolved_contract: "2026" })),
+    ).not.toThrow();
+    expect(screen.getByLabelText("買 22999")).toBeTruthy();
+  });
 });
