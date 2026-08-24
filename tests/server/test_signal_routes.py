@@ -892,13 +892,15 @@ class TestSignalRoutesWithoutStock:
                 }
                 assert _recv_until(ws, "ping") == {"type": "ping"}
 
-    def test_basis_falls_back_to_empty_daily_bars(
+    def test_basis_is_disabled_without_a_daily_bars_source(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """T5:無 engine → `daily_bars` stub 恆回 `[]` = 「資料面就是沒有」。
+        """T5(N020 後改口徑):無 engine → `daily_bars=None` = **配置上沒有日 K 來源**。
 
-        hub 既有路徑因此逐檔一次「CDP 停用」warning + cache 落 `(日別, None)`,
-        **不重試**(重試留給例外路徑 X-2b)—— 自選 50 檔不會變成重試風暴。
+        改動前是塞一個恆回 `[]` 的替身,讓 hub 把配置態讀成「這一檔資料面就是沒有」——
+        自選 50 檔 = 50 行「CDP 停用」WARNING + 50 格 job。現在 `request_basis` 整批
+        早退:cache 一格都不落,membership 種子照舊(訊號鏈其餘部分不受影響),
+        也仍然**不重試**(重試留給例外路徑 X-2b)。
         """
         monkeypatch.delenv("TXO_BACKFILL_DATE", raising=False)
         (tmp_path / "watchlist.json").write_text(
@@ -910,14 +912,12 @@ class TestSignalRoutesWithoutStock:
             hub = app.state.signal_hub
             assert hub is not None
             assert hub._watch == {"2330"}, "membership 種子不得因為 engine 缺席而漏掉"
-            today = f"{_date.today():%Y-%m-%d}"
-            deadline = time.monotonic() + 5.0
-            while "2330" not in hub._basis_cache:
-                if time.monotonic() > deadline:
-                    raise AssertionError(f"basis 未在 5s 內落定:{hub._basis_cache}")
-                time.sleep(0.01)
-            assert hub._basis_cache["2330"] == (today, None)
-            assert hub._basis_retries == {}, "資料面回空不得排重試"
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:  # 給 worker 足夠時間「做錯事」
+                if hub._basis_cache:
+                    raise AssertionError(f"無日 K 來源時不得落 basis:{hub._basis_cache}")
+                time.sleep(0.05)
+            assert hub._basis_retries == {}, "沒排過 job 就不該有重試記帳"
 
     def test_trade_date_is_evaluated_per_call(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

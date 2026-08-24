@@ -246,6 +246,11 @@ class EngineRuntime:
             # 重試進度(B14):快照只在**內容有變**才推(08-19 R1),而重試期間狀態值
             # 恆為 "backfilling"、五個觀測欄要到 attempt 結束才寫 —— 沒有這一則,整段
             # 重試在 WS 上是零訊息(心跳已解保活),前端 badge 固定「回補中」不知第幾次。
+            #
+            # 讀者分帳(N020):`attempt` 是**唯一**有前端讀者的欄(`ConnectionBadge.tsx`,
+            # CLAUDE.md §4 已登錄);`phase` / `attempts_max` / `buffer_*` / `overflows`
+            # 是 `/api/txo/state` 的**診斷欄**,只給值班的人看。下面幾條註解因此不得再
+            # 拿「badge 會顯示成 X」當理由 —— badge 只看 `status`,寫錯了也不會有人發現。
             # **不 merge 上一輪的舊欄**(D1''):上一次的 backfill_secs / buffer_used 掛在
             # 新一輪的進度上就是假資料,而畫面看不出來。
             self._handover = {
@@ -276,8 +281,9 @@ class EngineRuntime:
                 # 由 route 層轉 502(TC4_DOWN 合約);自癒路徑由 _maybe_self_heal 接住。
                 self._buffer = None
                 # `phase` 與 status 同義(SC-1),這裡也要一起降 —— 只降 status 的話
-                # 進度欄停在 "backfilling",badge 掛著「回補中(第 n 次)」而後端已經
-                # 放棄,使用者等一個永遠不會來的完成。merge 而非重建:`attempt` /
+                # 進度欄停在 "backfilling" 而後端已經放棄,值班的人從 `/api/txo/state`
+                # 讀到的是「還在回補」,與 `status: degraded` 自相矛盾(而畫面上什麼都
+                # 看不出來,badge 只看 status)。merge 而非重建:`attempt` /
                 # `attempts_max` 留著,才看得出是第幾次失敗的。
                 self._handover = {**(self._handover or {}), "phase": "degraded"}
                 self._set_status("degraded")
@@ -332,6 +338,11 @@ class EngineRuntime:
                 self._accumulated_from = "-"
             self._set_status("live")
             return
+        # 迴圈用盡的出口也要把 `phase` 降下來(N020):溢出路徑在上面已經寫過
+        # `phase="degraded"`,但 `buffer is None` 那條防禦分支一路 `continue` 到這裡,
+        # `phase` 會停在迴圈開頭寫的 "backfilling" —— SC-1 的「phase 與 status 同義」
+        # 就在**唯一沒被測到**的那條路上不成立。merge 而非重建:attempt / 溢出計數留著。
+        self._handover = {**(self._handover or {}), "phase": "degraded"}
         self._set_status("degraded")
         logger.warning("handover degraded after %d attempts", _HANDOVER_RETRIES)
 

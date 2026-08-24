@@ -51,11 +51,10 @@ _WATCH_END = _dt.time(13, 25)
 #: 分時自癒門檻:heal 窗內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
 #: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
 _LAG_HEAL_MIN = 3
-#: heal 尾窗終點:watchdog 窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K」不成立,
-#: 1K 域到 1330 —— 尾段 13:25–13:30 正是要補的那截,收盤後留 10 分鐘做最後回補
-#: (review T-3)。lag 的期望覆蓋終點同步封頂 13:30。
-_HEAL_TAIL_END = _dt.time(13, 40)
-#: 期望覆蓋終點(分鐘數):1330 = 13*60+30
+#: 期望覆蓋終點(分鐘數):1330 = 13*60+30。
+#: watchdog 窗 13:25 凍結的理由(試撮不推成交)對「重抓 1K」不成立,1K 域到 1330 ——
+#: 尾段 13:25–13:30 正是要補的那截(review T-3)。N105 起 heal 窗自 13:25 一路開到午夜
+#: (交易日限定),而 lag 的期望覆蓋終點仍封頂在這裡:minutes 覆蓋到 1330 就是完整。
 _HEAL_TARGET_MIN = 13 * 60 + 30
 #: 無進展退避封頂:1K 持續回空(假日 / 該日資料不可得)時 heal 間隔倍增至此為止,
 #: 不以固定 60s 整窗空轉(UNSUB→SUB churn + log 噪音;review T-5)。
@@ -253,9 +252,19 @@ class IndexEngine:
         但它的 Close 隨現價漂 —— 以值比對會把同一根 stub 每發都算成進展,自癒又回到
         「宣告治好、重用死窗口」的原狀。回傳 False 只代表「零新鍵」,不代表 fetch 失敗
         (失敗一律是 ConnectionError)。
+
+        **pending 期間寫 `_pending_minutes` 而不是 `_twse.minutes`**(N107):rollover
+        偵測到新日之後,source 的日窗已經切到新日 → 這一趟抓回來的是**新日**的 1K,
+        merge 進舊日 dict 就是混日線(廣播面已由 T-1 擋住,但 swap 前 ≤60 s 內重整頁面
+        仍會從 `state()` 拿到)。合併方向對齊 `_swap_day` 的 `{**backfill, **pending}`
+        —— 回補是底稿,live pending 蓋在它上面。
         """
         self._source.subscribe_symbol(_SYMBOL)
         minutes = self._source.fetch_day_minutes(_SYMBOL, window_variant=variant)
+        if self._pending_date is not None:
+            new_keys = minutes.keys() - self._pending_minutes.keys()
+            self._pending_minutes = {**minutes, **self._pending_minutes}
+            return bool(new_keys)
         new_keys = minutes.keys() - self._twse.minutes.keys()
         self._twse.minutes.update(minutes)
         return bool(new_keys)
@@ -513,8 +522,20 @@ class IndexEngine:
             # minutes 沒有任何回復路徑,而 TC4 端 1K 資料整天可取(2026-08-13 事故)。
             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
-            # heal 窗 = watchdog 窗 ∪ 收盤尾窗(13:25–13:40;review T-3)。
-            if self._in_watch_window() or _WATCH_END <= self._now_fn() < _HEAL_TAIL_END:
+            #
+            # heal 窗 = **交易日** ∩(watchdog 窗 ∪ 13:25 之後整段)(N105):
+            # - 尾窗上界原本是 13:40,盤後 / 晚間啟動踩到 1K 回補 timeout 就要空到次日
+            #   09:06 才自癒。`_minutes_lag_exceeded` 的 `min(now, 13:30)` 封頂本來就
+            #   已經是條文要的「窗外以 13:30 為期望覆蓋終點」,缺的只是讓閘開著。
+            # - 09:00 之前不需要另外擋:空 minutes 以 09:00 起算,`now - 540 > 3` 在
+            #   09:04 之前恆偽,而閘的另一半(`now >= 13:25`)也還沒開。
+            # - **交易日閘**是這次放寬的必要配套:休市日 minutes 恆空,沒有它就會從
+            #   09:04 一路空打到午夜(UNSUB→SUB churn + log 噪音),而那天本來就沒有
+            #   任何資料可補。代價:交易日晚間若 TC4 整晚拿不到當日 1K,會以退避
+            #   (60 s 起、封頂 `_HEAL_BACKOFF_CAP`)持續重試到隔日 —— 那正是要換的東西。
+            if (self._in_watch_window() or self._now_fn() >= _WATCH_END) and self._is_trading_day(
+                self._today_fn()
+            ):
                 if not self._minutes_lag_exceeded():
                     # 覆蓋度跟上 → 退避歸零。**variant 不歸零**(review L1-P1-3):
                     # 0 號窗口一旦毒化就一直是毒的,恢復時打回 0 等於推播死的日子每兩發

@@ -63,6 +63,10 @@ DEFAULT_CONFIG = CorrConfig(
         Leg("ES", "標普", "TC.F.CME.ES.HOT", SOURCE_TC4),
         Leg("NQ", "納指", "TC.F.CME.NQ.HOT", SOURCE_TC4),
         Leg("SXF", "費半", "TC.F.TWF.SXF.HOT", SOURCE_TC4),
+        # 第七腿(2026-08-17 R5 上線,N021 於 2026-08-25 補進預設):`configs/correlation.json`
+        # 早就有它,預設卻沒有 —— 設定檔壞掉退回這裡時,江波圖 / 相關係數會**真的少一腿**,
+        # 而畫面上只是少一條線,零錯誤訊號。預設必須與 repo 真檔逐腿相同。
+        Leg("NK225M", "小日經", "TC.F.OSE.NK225M.HOT", SOURCE_TC4),
     ),
     base="TXF",
 )
@@ -94,17 +98,17 @@ def load_config(path: Path | None = None) -> CorrConfig:
     try:
         raw = json.loads(target.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("corr 設定檔讀取失敗,改用預設六腿:%s", exc)
+        logger.warning("corr 設定檔讀取失敗,改用預設腿:%s", exc)
         return DEFAULT_CONFIG
     if not isinstance(raw, dict):
-        logger.warning("corr 設定檔頂層非 object,改用預設六腿")
+        logger.warning("corr 設定檔頂層非 object,改用預設腿")
         return DEFAULT_CONFIG
     legs = _parse_legs(raw.get("legs"))
     if legs is None:
-        logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設六腿")
+        logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設腿")
         return DEFAULT_CONFIG
     base = str(raw.get("base", DEFAULT_CONFIG.base))
     if base not in {leg.key for leg in legs}:
-        logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設六腿", base)
+        logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
         return DEFAULT_CONFIG
     return CorrConfig(legs=legs, base=base)
