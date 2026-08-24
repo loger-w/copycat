@@ -483,6 +483,47 @@ describe("RightRail 個股期態 market 貫穿(stkfut-contracts R4)", () => {
     expect(screen.getByText("90.1")).toBeTruthy();
   });
 
+  // 🔴 N099(R4 review F5):ETF 期貨(單位 10,000)與除權息調整腿(2,157 之類)在**送單面**
+  // 一律 `PRODUCT_NOT_ALLOWED`(前端 `isOrderBlocked` 先擋、後端 `_stkfut_gates` 是權威),
+  // 平倉鍵卻照樣放行 —— 而它拿的是**現股 tick 表**(0.01 倍數)去 snap 一個不適用的檔位。
+  // 同一個標的兩處給出不同答案,且平倉那側是猜的。比照送單面回 null = 鍵鎖住。
+  it("N099:ETF 期貨腿的平倉估價回 null(平倉鍵鎖住,比照送單面)", async () => {
+    positions = [position({ market: "fut", stock_no: "NYFI6", name: "台灣50期貨", qty: 2 })];
+    render(
+      rail({
+        ...STKFUT_CTX,
+        code: "0050",
+        contract: { prod: "NYF", ym: "202609", mini: false, unit: 10_000 },
+      }),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    const close = await screen.findByRole("button", { name: "平倉" });
+    expect(close.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("N099:除權息調整單位(2,157)同樣鎖住 —— 判準吃 unit 不是股號開頭", async () => {
+    positions = [position({ market: "fut", stock_no: "EEFI6", name: "國喬期貨", qty: 1 })];
+    render(
+      rail({
+        ...STKFUT_CTX,
+        code: "1312",
+        contract: { prod: "EEF", ym: "202609", mini: false, unit: 2157 },
+      }),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    expect((await screen.findByRole("button", { name: "平倉" })).hasAttribute("disabled")).toBe(
+      true,
+    );
+  });
+
+  it("N099:標準腿(2,000)不受影響 —— 既有估價逐字不變(白名單)", async () => {
+    positions = [position({ market: "fut", stock_no: "CDFI6", name: "台積電期貨", qty: 2 })];
+    render(rail(STKFUT_CTX));
+    fireEvent.click(screen.getByRole("tab", { name: "部位" }));
+    const close = await screen.findByRole("button", { name: "平倉" });
+    expect(close.hasAttribute("disabled")).toBe(false);
+  });
+
   it("他契約的期貨部位估不出價 → 平倉鍵鎖住(不放行跨商品平倉)", async () => {
     positions = [position({ market: "fut", stock_no: "TXFH6", name: "台指期", qty: 1 })];
     render(rail(STKFUT_CTX));

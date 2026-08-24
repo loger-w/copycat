@@ -14,6 +14,7 @@ import {
   positionsByCode,
   secQtyText,
   secSummary,
+  unmappedFutCount,
   type FutSummary,
   type SecSummary,
 } from "@/lib/position-summary";
@@ -264,5 +265,41 @@ describe("chip / 卡片 / header 文字", () => {
 
   it("headerSegments:無倉兩側皆 null → 空陣列(整段不渲染)", () => {
     expect(headerSegments(null, null)).toEqual([]);
+  });
+});
+
+// 🔴 N065:`code` 反查不到的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)
+// 在自選 chip / 單檔 header / 群組卡三處**靜默不顯示**,畫面上零提示 —— 使用者會以為
+// 那筆部位不存在。跳過本身是對的(猜股號會把部位掛到別檔頭上),缺的是「說一聲」。
+describe("unmappedFutCount(N065:反查不到股號的個股期倉位計數)", () => {
+  it("code null 的 fut 列計入", () => {
+    expect(unmappedFutCount([fut({ stock_no: "EE1I6", code: null })])).toBe(1);
+  });
+
+  it("空字串同樣算反查不到(後端 code 恆為 string|null,防禦性同 positionsByCode)", () => {
+    expect(unmappedFutCount([fut({ stock_no: "EE1I6", code: "" })])).toBe(1);
+  });
+
+  it("qty 0 不是部位,不計(與 positionsByCode 同一條)", () => {
+    expect(unmappedFutCount([fut({ stock_no: "EE1I6", code: null, qty: 0 })])).toBe(0);
+  });
+
+  it("反查得到的 fut 列不計;sec 列的 code 語意不同(恆為股號)也不計", () => {
+    expect(unmappedFutCount([fut(), pos({ code: null })])).toBe(0);
+  });
+
+  it("undefined / 空陣列 → 0(呼叫端不必自己判 loading)", () => {
+    expect(unmappedFutCount(undefined)).toBe(0);
+    expect(unmappedFutCount([])).toBe(0);
+  });
+
+  it("多筆累加", () => {
+    expect(
+      unmappedFutCount([
+        fut({ stock_no: "EE1I6", code: null }),
+        fut({ stock_no: "CD1I6", code: null }),
+        fut(),
+      ]),
+    ).toBe(2);
   });
 });

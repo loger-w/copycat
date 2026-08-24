@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   BLOCKED_TEXT,
+  flashSource,
   marketButtonState,
   settleFlashSend,
   type FlashSendCtx,
@@ -177,5 +178,18 @@ describe("marketButtonState 市價鈕三態", () => {
       buyTitle: MISSING,
       sellTitle: MISSING,
     });
+  });
+});
+
+// 🔴 N082:鎖定態(換標的 / 換梯 / 閒置都不解除武裝)是誤送風險最高的狀態,
+// 而審計檔的 `source` 只有 panel / flash 兩值 —— 事後查「這張單是不是在鎖定態下按出去的」
+// 沒有任何線索。值域擴一個,三座梯共用同一支(各寫一份必然漂成兩種字串)。
+describe("flashSource(N082:鎖定態的稽核 source)", () => {
+  it("未鎖定 → flash(既有值,不得改)", () => {
+    expect(flashSource(false)).toBe("flash");
+  });
+
+  it("鎖定中 → flash-locked", () => {
+    expect(flashSource(true)).toBe("flash-locked");
   });
 });

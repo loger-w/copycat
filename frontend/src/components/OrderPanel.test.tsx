@@ -268,11 +268,12 @@ describe("OrderPanel(群益)", () => {
     }
   });
 
-  // 🔴 A11Y-2:選了市價之後換到**無估價**的合約 —— 市價 radio 變 disabled,但 `kind`
-  // 還停在 market 所以它仍是 checked。HTML 的 radio group 只有 checked 的那顆進 tab 序,
-  // 而它 disabled → **整組零可聚焦**:鍵盤使用者再也切不回限價,而畫面上兩顆 pill 都在。
-  // 收斂回 limit 是唯一出路(送出鈕本來就會因估價缺失而 disabled,不是替代品)。
-  it("A11Y-2:市價態換到無估價合約 → 收斂回限價,radiogroup 仍有可聚焦項", async () => {
+  // 🔴 N011(推翻舊 A11Y-2 的單向收斂):選了市價之後換到**無估價**的合約,舊版在
+  // render 期間把 `kind` 翻回 limit 且**不還原** —— 估價回來後畫面停在限價,使用者
+  // 以為自己還在市價。改成「disabled 只擋**進入**方向」(同 ArmRow 慣例):checked 的
+  // 那顆不 disabled(radiogroup 仍有可聚焦項)、送出鈕照樣鎖住並印出可見理由,
+  // 估價回來即自動可送 = 還原。
+  it("N011:市價態換到無估價合約 → 維持市價 + 送出鈕鎖定 + 可見理由,不靜默翻回限價", async () => {
     mockFetch({
       "/api/capital/status": () => json(capStatus()),
       "/api/capital/orders": () => json({ orders: [] }),
@@ -281,16 +282,33 @@ describe("OrderPanel(群益)", () => {
     await screen.findByText("模擬");
     fireEvent.click(screen.getByRole("radio", { name: "市價" }));
     expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(true);
+
     fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
-    expectMarketLocked();
-    expect((screen.getByRole("radio", { name: "限價" }) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(false);
-    // 可聚焦 = 「未 disabled 且 checked」的那顆(原生 roving tabindex 的落點)恰一個
+    const market = screen.getByRole("radio", { name: "市價" }) as HTMLInputElement;
+    expect(market.checked).toBe(true); // 使用者的選擇不被靜默改寫
+    expect(market.disabled).toBe(false); // disabled 只擋進入方向 → checked 的那顆恆可聚焦
+    expect(screen.getByText("此合約尚無成交估價,市價暫不可送出")).toBeTruthy();
+    expect(screen.getByText("送出").closest("button")?.getAttribute("disabled")).not.toBeNull();
     const group = screen.getByRole("radiogroup", { name: "委託類型" });
     const radios = within(group).getAllByRole("radio") as HTMLInputElement[];
     expect(radios.filter((r) => r.checked && !r.disabled).length).toBe(1);
-    // 限價態的價格欄跟著回來(否則使用者連價都填不了)
-    expect(screen.getByLabelText("價格(點)")).toBeTruthy();
+
+    // 估價回來(換回有成交的合約)→ 仍是市價、鈕解鎖:「還原」不需要使用者再點一次
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: CALL } });
+    expect((screen.getByRole("radio", { name: "市價" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("送出").closest("button")?.getAttribute("disabled")).toBeNull();
+  });
+
+  it("N011:未選市價時,無估價合約的市價 pill 仍 disabled(進入方向照擋)", async () => {
+    mockFetch({
+      "/api/capital/status": () => json(capStatus()),
+      "/api/capital/orders": () => json({ orders: [] }),
+    });
+    renderPanel();
+    await screen.findByText("模擬");
+    fireEvent.change(screen.getByLabelText("商品"), { target: { value: PUT } });
+    expectMarketLocked();
+    expect((screen.getByRole("radio", { name: "限價" }) as HTMLInputElement).checked).toBe(true);
   });
 
   it("選單以 /api/txo/contracts 全鏈為主:props 子集仍列全鏈;鏈上無估價合約鎖市價", async () => {

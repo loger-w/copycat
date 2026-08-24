@@ -1187,6 +1187,37 @@ describe("WatchlistSidebar 拖曳(SC-12)", () => {
     fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
+  // 🔴 N014-4:作廢態(側欄外 / 作廢帶 / 零 zone)高亮回到來源組後,畫面與「停在來源組
+  // 上方」**完全同形** —— 使用者看到的是實線 accent 框,讀成「放開會放回這一組」,
+  // 而實際語意是「整個作廢」。兩者都不寫資料,但一個是「回到原位」一個是「什麼都沒發生」,
+  // 差別在使用者要不要重來一次。作廢態改虛線 + 被拖的列再淡一階。
+  it("拖曳中移入作廢帶 → 高亮改虛線且被拖的列更淡(與『停在來源組』可分辨)", async () => {
+    sidebar();
+    await waitGroups();
+    stubRects({ "wl-sticky": [0, 20] });
+    const handle = within(screen.getByTestId("wl-group-觀察")).getByTestId("wl-handle-3231");
+    fireEvent(handle, ptr("pointerdown", 10, 200));
+
+    // 前提:停在**真的可放**的組上時是實線 accent、列是既有的 opacity-50
+    fireEvent(window, ptr("pointermove", 100, 60));
+    const src = screen.getByTestId("wl-group-主力");
+    expect(src.className).toContain("border-accent");
+    expect(src.className).not.toContain("border-dashed");
+    expect(screen.getByTestId("wl-row-3231").className).toContain("opacity-50");
+
+    fireEvent(window, ptr("pointermove", 100, 10)); // 作廢帶
+    const back = screen.getByTestId("wl-group-觀察");
+    expect(back.className).toContain("border-dashed");
+    expect(back.className).not.toContain("border-accent");
+    expect(screen.getByTestId("wl-row-3231").className).toContain("opacity-30");
+
+    // 回到可放的落點 → 視覺復原(作廢旗標不是單向的)
+    fireEvent(window, ptr("pointermove", 100, 60));
+    expect(screen.getByTestId("wl-group-主力").className).toContain("border-accent");
+    expect(screen.getByTestId("wl-group-主力").className).not.toContain("border-dashed");
+    fireEvent(window, new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+
   it("空群組顯示「拖曳股票到此」(否則沒有高度 = 拖不進去的死組)", async () => {
     mockWatchlist([{ name: "空組", codes: [] }], []);
     sidebar();
@@ -1638,5 +1669,33 @@ describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
     const chips = await renderWithPositions();
     expect(chips[0]?.textContent).toBe(expectedSec(3, 3));
     expect(chips[0]?.textContent).not.toBe(expectedSec(3, FEE_DISCOUNT_DEFAULT));
+  });
+});
+
+
+// 🔴 N065:`code` 反查不到的個股期倉位(除權息調整碼 / 新上市未 refresh)在自選 chip、
+// 單檔 header、群組卡三處**靜默不顯示**,畫面上零提示 —— 使用者以為那筆部位不存在。
+// 跳過本身是對的(猜股號會把部位掛到別檔頭上),缺的只是「說一聲」。
+describe("WatchlistSidebar 無法對映的個股期倉位提示(N065)", () => {
+  it("有反查不到的 fut 倉位 → 側欄底一行計數", async () => {
+    positions = [
+      { market: "fut", stock_no: "EE1I6", qty: 2, name: "", avg_price: null, kind: "cash",
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: null },
+      { market: "fut", stock_no: "CD1I6", qty: -1, name: "", avg_price: null, kind: "cash",
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: null },
+    ];
+    sidebar();
+    await waitGroups();
+    await waitFor(() => expect(screen.getByText("2 筆個股期倉位無法對映")).toBeTruthy());
+  });
+
+  it("全部對映得到 → 不渲染那一行(零倉位時不留空殼)", async () => {
+    positions = [
+      { market: "fut", stock_no: "CDFI6", qty: 2, name: "", avg_price: null, kind: "cash",
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: "2330" },
+    ];
+    sidebar();
+    await waitGroups();
+    expect(screen.queryByText(/筆個股期倉位無法對映/)).toBeNull();
   });
 });
