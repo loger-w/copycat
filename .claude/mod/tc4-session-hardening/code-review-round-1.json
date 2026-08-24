@@ -1,0 +1,109 @@
+{
+ "fixed_point": "master (4fab4992)",
+ "reviewed_head": "ef79cde0",
+ "standards": [
+  {
+   "id": "ST1",
+   "severity": "P1(判斷→真 bug)",
+   "summary": "N111 逐項取鎖:removed 由已被覆寫的 _watchlist 算,舊發 superseded 早退跳過退訂 → watchlist ref 永久洩漏",
+   "location": "stock_engine.py:485-501",
+   "disposition": "accepted → removed 以 _refs 實況為準、早退改 break、removed 迴圈不早退;紅先行"
+  },
+  {
+   "id": "ST2",
+   "severity": "P2(判斷)",
+   "summary": "_ensure_connected 持 _api_lock 跨 Connect(),close() 先取鎖 → 關機最壞多等 10 s 吃掉 graceful 窗",
+   "location": "tc4.py:354-381 / 878-880",
+   "disposition": "accepted → 在途 Connect 完成後看 _stop 就地 Disconnect 不發布;run.ps1 graceful 15 s;change-spec 補關機路徑代價"
+  },
+  {
+   "id": "ST3",
+   "severity": "P2(判斷)",
+   "summary": "_settle 的 or seq is None 把 changed 卻沒帶號改成靜默丟棄",
+   "location": "watchlist_service.py:451",
+   "disposition": "accepted → logger.error"
+  },
+  {
+   "id": "ST4",
+   "severity": "P3(硬)",
+   "summary": "N092 兩處自標 🔵 併進 🔴 334c9578;run.ps1 尾行空白",
+   "location": "commit 1 / 3",
+   "disposition": "記錄偏離(不重寫歷史);收修波兩顆 🔴 內無純 🔵"
+  },
+  {
+   "id": "ST5",
+   "severity": "P3(判斷)",
+   "summary": "corr / futures _handle_reconnect 逐字同形",
+   "location": "corr_engine.py:154-172",
+   "disposition": "留尾(對帳單位不同,/refactor Why gate 未過)"
+  },
+  {
+   "id": "ST6",
+   "severity": "P3(判斷)",
+   "summary": "river_backfill warning 與 exception message 重複",
+   "location": "river_backfill.py:89-90",
+   "disposition": "accepted → 刪 warning"
+  },
+  {
+   "id": "ST7",
+   "severity": "P3(判斷)",
+   "summary": "_apply_variant k=offset+variant 疊同階梯,offset 逼近 start>end",
+   "location": "tc4.py:485-495",
+   "disposition": "accepted(同 SP2)"
+  }
+ ],
+ "spec": [
+  {
+   "id": "SP1",
+   "severity": "P1",
+   "summary": "N052 舊窗 UNSUB 是同步 ZMQ REQ 跑在 event loop(50 檔最壞各 10 s),破 _resubscribe_all 自己的 to_thread 紀律",
+   "location": "stock_source.py::_unsub_stale_window",
+   "disposition": "accepted → stock 側併進 _resubscribe_all worker(順序不變),index 側 to_thread;test_rollover_stage1_does_not_block_event_loop"
+  },
+  {
+   "id": "SP2",
+   "severity": "P2",
+   "summary": "N050 offset 只在雙方 variant 0 時互異;futures 自癒到 variant 1 即撞 TXO 窗",
+   "location": "tc4.py::_apply_variant",
+   "disposition": "accepted → offset = _HEAL_VARIANT_CYCLE + 1,兩條階梯不相交;全組合測試"
+  },
+  {
+   "id": "SP3",
+   "severity": "P2",
+   "summary": "N111 IO 仍在鎖內(誠實記帳)+ superseded 早退跳過 removed(同 ST1)",
+   "location": "stock_engine.py",
+   "disposition": "accepted(同 ST1);IO 移出鎖外留尾"
+  },
+  {
+   "id": "SP4",
+   "severity": "P3",
+   "summary": "N260 清 p 造成畫面空一格",
+   "location": "futures_engine.py",
+   "disposition": "accepted → _leaf_rearm 集合,不清 p"
+  },
+  {
+   "id": "SP5",
+   "severity": "P3",
+   "summary": "N094 orphan worker 仍執行 subscribe_symbol 副作用",
+   "location": "index_engine.py",
+   "disposition": "accepted → _retry_epoch 副作用前比對"
+  },
+  {
+   "id": "SP6",
+   "severity": "P3",
+   "summary": "N049 run.ps1 frontend 先退那條路白等 10 s 再硬殺",
+   "location": "run.ps1",
+   "disposition": "半做:frontend 先退不再白等;PowerShell 5.1 無安全送 Ctrl+C 給子行程、backend 無關機端點 → 留尾"
+  },
+  {
+   "id": "SP7",
+   "severity": "P3",
+   "summary": "N051 只收 SXF,個股冷門檔 / 收盤段 IX0001 churn 留尾",
+   "location": "verification §5",
+   "disposition": "如實(不動)"
+  }
+ ],
+ "whitelist": "兩軸皆核 §0 七條:refcount key 語意不變鬆;_api_lock 範圍變寬是 N259 本體(已列);R7 pending 合併序一行未動;名單先指派再訂閱加強;TXO 資料源語意未動;既有斷言改動全在該變清單(收修波新增 3 條該變記 §7.5)",
+ "commit_note": "沒有獨立 🟢 紅測試 commit —— 08-24 起 tag 配對機驗退役,只要求三類不混;紅態證據(verification §2 逐條 failed 數 + N092/N111 mutation)成立",
+ "disposition": "Standards 7:接受 5、記錄偏離 1(ST4)、留尾 1(ST5)。Spec 7:接受 5、半做 1(SP6)、如實 1(SP7)。收修後 pytest 3031 / ruff / pyright 0 / validate 42(主 session 獨立重跑);未動 frontend。"
+}
