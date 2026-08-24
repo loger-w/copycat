@@ -219,7 +219,15 @@ def to_stockorder_fields(req: StockOrderRequest, full_account: str) -> dict[str,
         "bstrFullAccount": full_account,
         "bstrStockNo": req.stock_no,
         "sBuySell": _BUYSELL[req.buy_sell],
-        "bstrPrice": f"{req.price:.2f}",
+        # 市價單委託價必須為 0(SKCOM 1068 SK_ERROR_SPECIAL_TRADE_TYPE_IS_MARKETPRICE_
+        # AND_ORDERPRICE_SHOULD_BE_ZERO;2026-08-24 prod 實錄:帶估價 → 7 筆全數拒單)。
+        # 「必須為 0」已實證(SKCOM 回文原文);**字面 "0"(非 "0.00")是推定未實測**
+        # (typelib 無展開、treading-king 上游同帶此 bug 不構成佐證)—— 同期貨 "M" 的
+        # 「未實測」慣例;安全首單若仍 1068 → 改試 "0.00"(1068 是 client-side 同步驗證,
+        # 單未到交易所,猜錯只會再被拒不會錯價成交)。
+        # `req.price` 不是多餘欄位 —— safety 金額閘(_check_qty_amount)靠它估名目金額,
+        # 只有映射到 SKCOM 的這一欄要歸零。期貨端同題已有特判(bstrPrice="M",下方)。
+        "bstrPrice": "0" if req.price_type == "market" else f"{req.price:.2f}",
         "nQty": req.qty,
         "nSpecialTradeType": _SPECIAL[req.price_type],
         "nTradeType": _TIF[req.time_in_force],
