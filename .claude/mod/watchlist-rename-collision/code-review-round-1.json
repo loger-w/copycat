@@ -1,0 +1,29 @@
+{
+  "skill": "code-review-two-axis",
+  "fixed_point": "ae44ed23",
+  "reviewed_commits": ["fe9c7b09 🟢 test [red]", "8a51400c 🔴 fix"],
+  "reviewers": {"standards": "opus", "spec": "opus"},
+  "standards": [
+    {"id": "ST1", "severity": "P3", "kind": "judgement", "summary": "renameBusy 解除點放共用 onError:別的動作在途成功會提前解除,同一改名可重送", "disposition": "accepted → per-action onSettled + 綁 from key"},
+    {"id": "ST2", "severity": "P3", "kind": "judgement", "summary": "Escape 取消不清 renameBusy → 在途 Esc 後改別組 Enter 被靜默吞掉", "disposition": "accepted(變形)→ 守門綁 from key,別組不擋;不在 Escape 清(同一組會重送)"},
+    {"id": "ST3", "severity": "P3", "kind": "judgement", "smell": "Duplicated Code", "summary": "gatePuts / releaseOk 同檔第三份", "disposition": "申報留尾 → 抽共用要動既有兩個 describe,本輪不擴 scope"},
+    {"id": "ST4", "severity": "P3", "kind": "judgement", "summary": "守門無 UI 反映,在途 Enter 純靜默", "disposition": "申報 → 窗口 ≤ 一趟 PUT;a11y 不做"},
+    {"id": "ST-commit", "summary": "🟢 純測試 / 🔴 純實作,無混類", "disposition": "核過無問題"}
+  ],
+  "spec": [
+    {"id": "SP1", "severity": "P1", "summary": "renameBusy 三條零回呼解除漏洞(isSameWatchlist / gen 作廢 / base null)→ 永久卡死;最實 = 刪組在途改名 from 消失", "disposition": "accepted(機制)→ hook commit 加 onSettled(.finally 必呼),守門由該發解除;hook 層三案釘。誠實記帳:具體序列在首版下綠(刪組成功的 onError(null) 巧合解除),卡死條件 = 零回呼早退且期間無其他 settle"},
+    {"id": "SP2", "severity": "P2", "summary": "[auto-default] 1 的理由不成立(會漏擋),改 hook 契約屬方向性抉擇建議 user 拍板", "disposition": "理由 accepted;不停下 → optional 參數的向後相容內部擴充,不動對外契約,/auto 推進並改寫 auto-default"},
+    {"id": "SP3", "severity": "P2", "summary": "測試缺「守門一定解除」那一半", "disposition": "accepted → 新增刪組在途改名後仍能改別組 + hook 三案"},
+    {"id": "SP-esc", "severity": "P3", "summary": "在途 Escape 換組被吞", "disposition": "同 ST2"},
+    {"id": "SP-ok", "summary": "撞名零 PUT + 文案、成功才關框 / setSelected、開窗重置、getByDisplayValue 不混淆、白名單外零改動", "disposition": "核過無問題"}
+  ],
+  "post_review_increment": {
+    "range": "commits 3–4(🟢 [red] 守門解除三案 + hook 三案;🔴 onSettled + renameInFlight),main agent 機械快篩",
+    "checks": [
+      "紅態:Escape 改 B 案 1 failed(全窗旗標);hook 三案在無 onSettled 參數下恆不呼 → 紅",
+      "hook 簽名向後相容:WatchlistSidebar / StockPage / Dialog 既有 caller 零改動,npm test 全量綠",
+      "gate 重跑:vitest 全量 / tsc / eslint / react-doctor(見 verification §3)"
+    ]
+  },
+  "disposition": "Standards 4 條:接受 2(其中 1 變形)、申報 2;Spec 3+1 條:接受 2(SP1 機制、SP3)、理由接受但 /auto 推進 1(SP2)、同根因 1。收修 🟢 + 🔴 各一筆。"
+}

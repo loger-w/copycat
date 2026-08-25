@@ -1,3 +1,14 @@
+## 2026-08-26(mod/watchlist-rename-collision A4 改名保留編輯框 留尾)
+
+- [ ] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時
+  文案出來、字已清(#101 verification §5.3 舊留尾;A4 只收改名)。改成留著要另設守門(清空同時是它的重送防護),
+  可照 `renameInFlight` + `onSettled` 的形狀做。
+- [ ] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
+  抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。
+- [ ] **`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
+  1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
+  修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。
+
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
 - [ ] **signals 段(`bot.close()` + hub drain)無上限**,只算進 `LIFESPAN_SLACK_SECS`(5 s);
