@@ -79,7 +79,7 @@ const LEFT_STORES: PaneStores = {
 };
 
 // cdp / ma 全關:分時態不打 `/api/index/overlay`,本檔只關心 viewBox 幾何
-const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: true };
+const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: true, idxTwse: false, idxOtc: false };
 
 /** ResizeObserver 的最小替身:`observe` 當下就同步餵一筆 contentRect。
  *

@@ -149,6 +149,9 @@ export default function App() {
   useTradingCalendar();
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
   const { twse, otc, txf } = useIndexStream();
+  // 個股頁指數疊線的資料源(F1):兩個序列包成一個物件往下傳;useMemo 讓 identity 只在
+  // 任一序列真的換時才換(StockPage → 圖牆 → 卡片的 memo 邊界靠它)。
+  const indexOverlay = useMemo(() => ({ twse, otc }), [twse, otc]);
   // 家數 / 騰落流同樣常駐 App 層(design R8):IndexPage 維持純展示,tab 切走也不斷線
   // —— 序列是「當日累積」,切回來時要是完整的一整天,不是重新開始那一刻起。
   const breadth = useBreadth();
@@ -325,6 +328,7 @@ export default function App() {
                   contract={stkfutContract}
                   onContract={setStkfutContract}
                   onViewChange={setStockView}
+                  index={indexOverlay}
                 />
               </Suspense>
             </div>

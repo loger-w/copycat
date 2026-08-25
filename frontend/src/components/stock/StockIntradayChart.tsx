@@ -24,6 +24,12 @@ import { chgPct, fmt, fmtIndexPts, fmtPct } from "@/lib/format";
 // index 態限定:對稱域讓 CDP 常態落在域外,線畫不出來 → 右緣掛牌是唯一訊號(KR-1)。
 // 判定與 `overlayLines` 互補(同一組 yDomain,一個值只會進其中一邊),所以共用那支。
 import { outOfDomainLevels } from "@/lib/index-chart-svg";
+import {
+  buildIndexOverlayLines,
+  INDEX_OVERLAY_LABEL,
+  type IndexOverlayLine,
+  type IndexOverlaySeries,
+} from "@/lib/index-overlay-lines";
 import { fmtTickPrice, snapDown } from "@/lib/stock-tick";
 import { pts } from "@/lib/svg-points";
 import { hhmm, hourTicksOf, type HourTick } from "@/lib/time-labels";
@@ -126,6 +132,17 @@ function levelText(
 /** 域外掛牌的空集合。**模組層常數**(identity 穩定)—— 行內 `[]` 會打穿 ChartStatic 的
  *  memo,而症狀只是 hover 掉幀,沒有任何測試會紅(同 `EMPTY_MARKS` 的理由)。 */
 const EMPTY_PEGS: readonly PegInput[] = [];
+/** 指數疊線關著 / 不可得時的**模組層**空陣列(identity 穩定,不打穿 ChartStatic memo) */
+const EMPTY_IDX_LINES: readonly IndexOverlayLine[] = [];
+/** 指數疊線配色(F1):避開價線紅綠、均價白、CDP/MA;class 字面值供 Tailwind 掃描 */
+const IDX_LINE_CLASS: Record<IndexOverlayLine["key"], string> = {
+  twse: "stroke-river-2",
+  otc: "stroke-river-4",
+};
+const IDX_TEXT_CLASS: Record<IndexOverlayLine["key"], string> = {
+  twse: "fill-river-2",
+  otc: "fill-river-4",
+};
 
 /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
 const EMPTY_ENERGY: { bars: EnergyBar[]; maxTotal: number } = { bars: [], maxTotal: 1 };
@@ -166,6 +183,7 @@ const ChartStatic = memo(function ChartStatic({
   vwapText = fmt,
   pegs = EMPTY_PEGS,
   hlines = EMPTY_HLINES,
+  idxLines = EMPTY_IDX_LINES,
 }: {
   g: IntradayGeometry;
   /** viewBox 寬 / 高。**必須是純量不是物件** —— 物件每次 render 新 identity 會打穿本 memo */
@@ -213,6 +231,8 @@ const ChartStatic = memo(function ChartStatic({
   /** 任意水平參考線(futures 態:持倉均價 / OI 撐壓;stock / index 態恆為 `EMPTY_HLINES`)。
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fillMarks`。 */
   hlines?: readonly ChartHLine[];
+  /** 指數疊線(F1;stock 態限定)。**必經呼叫端 useMemo 或模組常數**(identity 穩定) */
+  idxLines?: readonly IndexOverlayLine[];
 }) {
   // 走廊 B 的右錨點:MA 價位標 / 掛牌 / hline label 三者同 x、同 anchor=end。
   const edgeLabelRight = w - R_AXIS_W - 2;
@@ -519,6 +539,31 @@ const ChartStatic = memo(function ChartStatic({
       ) : (
         <polyline points={pts(g.priceLine)} fill="none" className="stroke-accent" strokeWidth={1.6} />
       )}
+      {/* 指數疊線(F1):相對昨收 % 映到個股價格軸,細線 + 右緣末點小標。畫在主價線之後
+          (svg 圖層 = 文件順序;排前面會被 1.6 的價線壓過),極值標記之前。 */}
+      {idxLines.map((line) => {
+        const end = line.pts[line.pts.length - 1]!;
+        return (
+          <g key={line.key} data-testid={`index-line-${line.key}`} pointerEvents="none">
+            <polyline
+              points={pts(line.pts)}
+              fill="none"
+              className={IDX_LINE_CLASS[line.key]}
+              strokeWidth={1}
+              strokeDasharray={line.key === "otc" ? "3 2" : undefined}
+            />
+            <text
+              x={end.x}
+              y={end.y - 3}
+              textAnchor="end"
+              fontSize="0.625rem"
+              className={IDX_TEXT_CLASS[line.key]}
+            >
+              {`${INDEX_OVERLAY_LABEL[line.key]} ${fmtPct(line.lastPct)}`}
+            </text>
+          </g>
+        );
+      })}
       {/* 任意水平參考線(futures 態:持倉均價 / OI 撐壓)。與 `CandleChart` 同一套語意
           (`<title>` 承載證據、**超出 y 域不畫**)—— clamp 到邊緣會把「圖外的價位」
           講成「圖緣的價位」,是完全靜默的假陳述。
@@ -859,6 +904,8 @@ interface Props {
    *  不必為此加路由)。identity 必須穩定(caller 的 useMemo,零筆一律 `EMPTY_FILLS`)
    *  —— 每 render 新陣列會打穿 `ChartStatic` 與 `GroupCard` 兩層 memo。 */
   fills?: readonly FillPoint[];
+  /** 加權 / 櫃買即時序列(F1);見 `CoreProps.indexSeries` */
+  index?: IndexOverlaySeries | null;
 }
 
 export type ChartVariant = "page" | "card";
@@ -909,6 +956,9 @@ interface CoreProps extends Props {
   /** svg aria-label;預設 `"分時走勢圖"`(index 態 caller 傳 `${name}分時走勢`,
    *  兩個 pane 同頁時要指認得出是哪一檔)。 */
   ariaLabel?: string;
+  /** 加權 / 櫃買即時序列(F1;App 的 `useIndexStream` 持有,一路以 prop 傳到這裡)。
+   *  null / 未傳 = 沒資料源:兩顆指數鈕反灰。只在 stock 態(現貨 / 個股期)生效。 */
+  indexSeries?: IndexOverlaySeries | null;
 }
 
 export function IntradayChartCore({
@@ -931,6 +981,7 @@ export function IntradayChartCore({
   overlaySupported = true,
   overlayOffTitle = "無日線資料",
   ariaLabel,
+  indexSeries = null,
 }: CoreProps) {
   const card = variant === "card";
   // index 態的**唯一**判別子。一處求值、下面各分支共用 —— 各處各寫一次 `mode === "index"`
@@ -1102,6 +1153,27 @@ export function IntradayChartCore({
   // 靜默塗成紅色。歸一在這裡而不是各判色點各補一次 `> 0`,是為了不讓三處各漂各的。
   const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
   const plotBottom = mainH - X_LABEL_H;
+  // 指數疊線(F1)。**必經 useMemo**(理由同 `vpBars`:hover 每個 mousemove 都 re-render,
+  // 新陣列會打穿 ChartStatic 的 memo);關著 / index / futures 態回**模組層常數**。
+  const idxOn = !index && !futures && (toggles.idxTwse || toggles.idxOtc);
+  const idxTwse = toggles.idxTwse;
+  const idxOtc = toggles.idxOtc;
+  const idxTwseSeries = indexSeries?.twse ?? null;
+  const idxOtcSeries = indexSeries?.otc ?? null;
+  const idxLines = useMemo(
+    () =>
+      idxOn
+        ? buildIndexOverlayLines(
+            { twse: idxTwseSeries, otc: idxOtcSeries },
+            { twse: idxTwse, otc: idxOtc },
+            ref,
+            g,
+            w,
+            xw,
+          )
+        : EMPTY_IDX_LINES,
+    [idxOn, idxTwseSeries, idxOtcSeries, idxTwse, idxOtc, ref, g, w, xw],
+  );
 
   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
   const lastPt = lastPoint(g);
@@ -1231,10 +1303,12 @@ export function IntradayChartCore({
   // 均價鈕帶 `hint`(可用時仍顯示的 tooltip):指數的「均價」是**分鐘收盤算術平均**
   // 不是 VWAP,不講清楚會被當成加權均價讀。
   const toggleDefs: {
-    key: "vwap" | "cdp" | "ma" | "vp" | "fills";
+    key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc";
     label: string;
     available: boolean;
     hint?: string;
+    /** 反灰時的 tooltip(有給就蓋掉下面依 mode 推的通用文案;指數鈕的「無指數資料 / 無昨收」用) */
+    offTitle?: string;
   }[] = index
     ? [
         { key: "vwap", label: "均價", available: true, hint: "分鐘收盤均價(指數無成交量)" },
@@ -1269,6 +1343,27 @@ export function IntradayChartCore({
         // futures(近全軸)態自 R2 起同樣不反灰:日期界改由 `alldayFillPoints` 以錨定日
         // 相等判定(夜盤 00:00–05:00 的成交屬前一交易日),caller 折好後由 `fills` 傳入。
         { key: "fills", label: "成交點", available: true },
+        // 指數疊線(F1):兩個閘 —— 資料源在不在手上(`indexSeries`)、個股有沒有昨收
+        // (相對 % 沒基準就是假線)。期貨(近全軸)態**連鈕都不給**:指數是 09:01–13:30 的尺,
+        // 近全軸窗是 08:45–05:00,兩把尺對不上;反灰鈕只會讓人以為「哪天會亮」。
+        ...(futures
+          ? []
+          : ([
+              {
+                key: "idxTwse",
+                label: "加權",
+                available: indexSeries !== null && ref !== null,
+                hint: "加權指數相對昨收 %,映到本檔價格軸",
+                offTitle: indexSeries === null ? "無指數資料" : "無昨收",
+              },
+              {
+                key: "idxOtc",
+                label: "櫃買",
+                available: indexSeries !== null && ref !== null,
+                hint: "櫃買指數相對昨收 %,映到本檔價格軸",
+                offTitle: indexSeries === null ? "無指數資料" : "無昨收",
+              },
+            ] as const)),
       ];
 
   const body = (
@@ -1280,7 +1375,7 @@ export function IntradayChartCore({
             內層再放按鈕會讓點 toggle 同時切主檔,而且巢狀互動元素不合法 */}
         {card ? null : (
         <div className="flex shrink-0 gap-1">
-        {toggleDefs.map(({ key, label, available, hint }) => (
+        {toggleDefs.map(({ key, label, available, hint, offTitle }) => (
           <button
             key={key}
             type="button"
@@ -1289,7 +1384,9 @@ export function IntradayChartCore({
             title={
               available
                 ? hint
-                : index || futures
+                : offTitle !== undefined
+                  ? offTitle
+                  : index || futures
                   ? overlayOffTitle
                   : stkfut
                     ? "期貨合約本輪不提供"
@@ -1342,6 +1439,7 @@ export function IntradayChartCore({
           vwapText={ptsPrice ? fmtIndexPts : undefined}
           pegs={pegs}
           hlines={hlines}
+          idxLines={idxLines}
         />
         <XAxisLabels w={w} h={mainH} tagSpan={timeTagSpan} xw={xw} hourTicks={hourTicks} />
         {/* 現價圈(round4 項 2:價位文字已移除)。文字畫在圓點右上,走勢走到右側時
@@ -1550,6 +1648,7 @@ export function StockIntradayChart({
   subHeight,
   stkfut = false,
   fills,
+  index = null,
 }: Props) {
   const { toggles, set } = useChartToggles();
   return (
@@ -1562,6 +1661,7 @@ export function StockIntradayChart({
       subHeight={subHeight}
       stkfut={stkfut}
       fills={fills}
+      indexSeries={index}
     />
   );
 }
