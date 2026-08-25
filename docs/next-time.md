@@ -1,3 +1,23 @@
+## 2026-08-26(08-25 盤中觀察對帳 + fix/tc4-logout-and-cancel-reply-warning 留尾)
+
+- [ ] **加權分時 minutes 盤中整天沒長(每個交易日都在發生,非 08-25 批回歸)**:`index 分時自癒`
+  08-20 73 / 08-21 67 / 08-24 91 / 08-25 133 行,形狀 = 09:04 以「空 minutes 09:00 起算」首發、之後每 7 分一發、
+  每發「無進展:零新分鐘鍵」、variant 一路爬到封頂;同期 IX0001 REALTIME 在 source 層 30 s 靜默閘 09:00–13:25
+  **零觸發**(推播有進來)。兩條路同時失效:1K 回補這半是 TC4 凍結 stub(08-14 已知);推播→`_handle_quote`→
+  `s.minutes[key]` 這半未定位(`minute_key(FilledTime, utc=True)` 回 None?`_pending_date` 沒 swap?)。
+  user 症狀:「加權分時線中間又卡住」。**下一步 = 交易日 09:10 打 `/api/index/state` 看 `twse.minutes` 筆數與最大鍵**
+  (n≈10、max≈0910 = 推播路徑正常 → 自癒判準另有問題;n=0 = 推播寫入壞),再開 /bug。晚間重啟的 1K 回補 270 分鐘
+  正常,所以只有盤中能量。
+- [ ] **期貨 1K 落後 / 中段缺格沒有後端量測**:user 08-25 盤中看到「K 棒沒更新 → 分時不連貫」,後端 log 零筆
+  (落後判定在前端 gate 5;後端只記 timeout / 回空,當日 TXF 零筆;17:16 重啟後當日序列完整 → 屬 H1 暫時落後或
+  H3 memo 釘住二者之一,事後不可分辨)。候選 = `futures_engine` 每分鐘記「bars 尾 vs 最後成交時戳」差 > N 根的 WARNING
+  (固定前綴供 grep),讓 H1/H3 事後可分。
+- [x] 處置股 badge(FinMind `TaiwanStockDispositionSecuritiesPeriod` 名單已在 breadth 引擎)—— **user 08-26 拍板不做**,
+  視覺自評即可;2455 08-25 的 TradeStatus 每 2 分鐘 1→0→1 共 133 次即處置分盤形狀,留作 N100 蒐證樣本。
+- [ ] **現股當沖 / 信用當沖資格顯示**(user 08-26 提問,未拍板):現股當沖 = FinMind `TaiwanStockDayTrading`
+  (`BuyAfterSale` Y/＊ = 僅先買後賣;回測 `backfill_daytrade.py` 已用),信用當沖 = `TaiwanStockMarginPurchaseShortSale`
+  資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。
+
 ## 2026-08-25(fix/futures-intraday-lag-bridge 期貨分時 live 點架橋 留尾)
 
 - [ ] **歷史段永久 memo 會把「分頁靜默截斷的非空日」永久釘住**(bug H3;`bars.py::put_hist_range` 只對「截斷後面的日子」不寫負向快取,截斷**當日本身**的非空殘段照樣 `_hist[(code,day)] = got` 永久化):症狀 = 前一交易日序列中間 / 尾巴缺一段,一直到 server 重啟才消失,零 log。候選 = 對 allday 1K 以「該日應有分鐘數 / 尾根時刻」做覆蓋度判定,不足者不入 memo(同 `_possible_data_days` 的日曆判定可算出期望尾根)。本輪 gate 5 只擋「live 點架橋」,中間缺格仍會被 core 單條 polyline 直線相連。
