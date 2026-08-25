@@ -28,7 +28,7 @@ interface Props {
    *  無成交的卡每秒都會因為新陣列而打穿 `GroupCard` 的 memo(W-5)。 */
   fills: readonly FillPoint[];
   /** 加權 / 櫃買即時序列(F1);圖牆層只在指數 toggle 開著時才傳(關著恆 null,memo 不被打穿) */
-  index: IndexOverlaySeries | null;
+  indexSeries: IndexOverlaySeries | null;
   /** 同步十字線(F3):圖牆層的共同 hover 分鐘 / 回報口(關著時恆 null / 模組層 noop) */
   syncHoverMin: number | null;
   onHoverMinute: (minute: number | null) => void;
@@ -40,7 +40,7 @@ export function CardIntradayChart({
   liveP,
   toggles,
   fills,
-  index,
+  indexSeries,
   syncHoverMin,
   onHoverMinute,
 }: Props) {
@@ -67,7 +67,7 @@ export function CardIntradayChart({
           mainHeight={box.mainH}
           subHeight={box.subH}
           fills={fills}
-          indexSeries={index}
+          indexSeries={indexSeries}
           syncHoverMin={syncHoverMin}
           onHoverMinute={onHoverMinute}
         />

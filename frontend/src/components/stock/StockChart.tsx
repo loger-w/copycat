@@ -49,7 +49,7 @@ export function StockChart({
   accum,
   code,
   contract = null,
-  index = null,
+  indexSeries = null,
 }: {
   accum: StockAccum;
   /** 恆為**股號**(期貨態也一樣)—— K 線 endpoint 與 CandleChart 的 key 都吃它 */
@@ -57,7 +57,7 @@ export function StockChart({
   /** 選中的個股期合約;null = 現貨態(既有行為逐項不變) */
   contract?: { prod: string; ym: string } | null;
   /** 加權 / 櫃買即時序列(F1);分時態往下傳,K 線態不吃 */
-  index?: IndexOverlaySeries | null;
+  indexSeries?: IndexOverlaySeries | null;
 }) {
   const [mode, setMode] = useState<ChartMode>(initialMode);
   const isFut = contract !== null;
@@ -199,7 +199,7 @@ export function StockChart({
           subHeight={subH}
           stkfut={isFut}
           fills={fills}
-          index={index}
+          indexSeries={indexSeries}
         />
       ) : isPending ? (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-line bg-surface">

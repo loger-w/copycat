@@ -5,7 +5,6 @@ import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
-import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
@@ -48,12 +47,12 @@ interface Props {
   wlError?: boolean;
   /** 加權 / 櫃買即時序列(F1;App 持有)。只在指數 toggle 開著時往卡片傳 —— 序列每秒換
    *  identity,關著也傳的話 50 張卡每秒全部重畫,memo 形同虛設。 */
-  index?: IndexOverlaySeries | null;
-  /** 受控的「現在看哪一組」(F2):`StockPage` 以 `useStockGroup` 持有,側欄點列才切得到這裡。
-   *  兩個都不傳 = 非受控(本元件自持,既有測試與別的呼叫端零改動);傳了就以 prop 為準。
-   *  記住的名字不在 `groups` 內時仍由本元件 fallback 第一個(edge 5),與非受控同一條。 */
-  selectedGroup?: string | null;
-  onSelectGroup?: (name: string) => void;
+  indexSeries?: IndexOverlaySeries | null;
+  /** 「現在看哪一組」(F2)**受控、唯一持有者是 `StockPage`**(`useStockGroup`,含 localStorage
+   *  記憶);側欄點列與圖牆 pill 兩個入口都寫那一份。本元件不自持第二份(review R1:雙模式
+   *  = 死狀態 + 兩個持有者)。記住的名字不在 `groups` 內時由本元件 fallback 第一個(edge 5)。 */
+  selectedGroup: string | null;
+  onSelectGroup: (name: string) => void;
 }
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
@@ -125,7 +124,7 @@ const GroupCard = memo(function GroupCard({
   quote,
   active,
   toggles,
-  index,
+  indexSeries,
   syncHoverMin,
   onHoverMinute,
   fills,
@@ -143,7 +142,7 @@ const GroupCard = memo(function GroupCard({
    *  「每 render 新 identity 打穿 memo」不再成立,但「卡片只讀」仍然成立) */
   toggles: ChartToggles;
   /** 加權 / 櫃買即時序列(F1);toggle 關著時恆 null(identity 穩定) */
-  index: IndexOverlaySeries | null;
+  indexSeries: IndexOverlaySeries | null;
   /** 同步十字線(F3):圖牆共同 hover 分鐘;toggle 關著時恆 null + 模組層 noop(identity 穩定) */
   syncHoverMin: number | null;
   onHoverMinute: (minute: number | null) => void;
@@ -244,7 +243,7 @@ const GroupCard = memo(function GroupCard({
           liveP={quote?.p ?? null}
           toggles={toggles}
           fills={fills}
-          index={index}
+          indexSeries={indexSeries}
           syncHoverMin={syncHoverMin}
           onHoverMinute={onHoverMinute}
         />
@@ -281,24 +280,20 @@ export function GroupGridView({
   active,
   wlPending,
   wlError,
-  index = null,
+  indexSeries = null,
   selectedGroup,
   onSelectGroup,
 }: Props) {
-  // 非受控 fallback(hook 不可條件化:受控時也掛著,只是不讀它)
-  const own = useStockGroup();
   // 同步十字線(F3):所有卡片共同的 hover 分鐘。被 hover 的卡只在**分鐘變化**時回報,
   // 所以這裡的 setState 頻率 = 游標跨分鐘的頻率,不是 mousemove 頻率。
   const [syncMin, setSyncMin] = useState<number | null>(null);
-  const picked = selectedGroup !== undefined ? selectedGroup : own.picked;
-  const selectGroup = onSelectGroup ?? own.select;
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
   // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
   const { toggles, set } = useChartToggles();
   // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
   // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
   // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
-  const selected = groups.find((g) => g.name === picked) ?? groups[0] ?? null;
+  const selected = groups.find((g) => g.name === selectedGroup) ?? groups[0] ?? null;
   const codes = selected?.codes ?? [];
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
   // 給卡片的**穩定** onPick(review A6-1)。`quotes` 每秒換一次 → 本元件每秒 render,
@@ -359,7 +354,7 @@ export function GroupGridView({
         className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
         leading={<span>群組</span>}
         value={selected?.name ?? ""}
-        onChange={selectGroup}
+        onChange={onSelectGroup}
         items={groups.map((g) => ({ value: g.name, label: g.name }))}
         pillClass={(_item, checked) =>
           cn(
@@ -424,7 +419,7 @@ export function GroupGridView({
               quote={quotes[code]}
               active={code === active}
               toggles={toggles}
-              index={toggles.idxTwse || toggles.idxOtc ? index : null}
+              indexSeries={toggles.idxTwse || toggles.idxOtc ? indexSeries : null}
               // 關著時兩者都是穩定 identity(null / 模組層 noop),memo 不被打穿
               syncHoverMin={toggles.syncHover ? syncMin : null}
               onHoverMinute={toggles.syncHover ? setSyncMin : NOOP_HOVER}

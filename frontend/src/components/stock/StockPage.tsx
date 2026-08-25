@@ -50,7 +50,7 @@ interface Props {
   onViewChange?: (next: StockView) => void;
   /** 加權 / 櫃買即時序列(F1;App 的 `useIndexStream`)。主圖與群組卡片的指數疊線資料源;
    *  optional:既有測試與別的呼叫端零改動(不傳 = 指數鈕反灰)。 */
-  index?: IndexOverlaySeries | null;
+  indexSeries?: IndexOverlaySeries | null;
 }
 
 const VIEW_LABELS: [StockView, string][] = [
@@ -75,7 +75,7 @@ export function StockPage({
   contract = null,
   onContract,
   onViewChange,
-  index = null,
+  indexSeries = null,
 }: Props) {
   const { accum, watchlist, status, stkfut, wsStatus } = stream;
   // 訊號欄的三條資料線都在本層接:feed(WS + 當日 jsonl)/ 規則(後端 signal_rules.json)/
@@ -297,7 +297,7 @@ export function StockPage({
             // 選中框的真相源(AD-6):檢視停在群組後,「閃電梯瞄的是哪一檔」在畫面上
             // 沒有別的指認方式 —— 與主圖 / 右欄同一個 `code`,不另存一份。
             active={code}
-            index={index}
+            indexSeries={indexSeries}
             selectedGroup={pickedGroup}
             onSelectGroup={selectGroup}
             // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
@@ -460,7 +460,7 @@ export function StockPage({
             </header>
             {accum ? (
               <>
-                <StockChart accum={accum} code={code} contract={contract} index={index} />
+                <StockChart accum={accum} code={code} contract={contract} indexSeries={indexSeries} />
                 {/* 下半:左五檔、右明細(round3 SC-6)。
 
                     h-56 shrink-0 = **確定高度**,不吃剩餘空間 —— 剩餘全歸圖表。
