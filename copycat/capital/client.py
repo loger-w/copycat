@@ -390,8 +390,15 @@ class CapitalClient:
             "Capital reply: seq=%s stock=%s status=%s qty=%s",
             rec.seq_no, rec.stock_no, rec.status_label, rec.qty,
         )
-        if rec.alt_seq_no and rec.seq_no and rec.alt_seq_no != rec.seq_no:
+        if (
+            rec.status_raw != "C"
+            and rec.alt_seq_no
+            and rec.seq_no
+            and rec.alt_seq_no != rec.seq_no
+        ):
             # 真實樣本:預約單 KeyNo(idx0)≠ 尾欄序號(idx47),盤中單兩者相同。
+            # 刪單回報(C)除外:尾欄是**刪單自己**的序號、KeyNo 是原委託,必定不同 ——
+            # 2026-08-25 實錄 16 筆全是盤中單的刪單,沒有一筆是預約單(fix/tc4-logout…)。
             logger.warning("Capital reply: KeyNo=%s 尾欄序號=%s 不同(預約單?)", rec.seq_no, rec.alt_seq_no)
         self.store.apply_reply(rec)
         if rec.status_raw == "D":  # 成交 → debounce 重查(連續成交只查尾端一次)
