@@ -91,9 +91,11 @@ class FakeApi:
         self.sub_history_calls: list[str] = []
         self.sub_history_windows: list[tuple[str, str]] = []
         self.rt_requests: list[dict] = []
+        self.requests: list[dict] = []  # 全部 REQ 依序(收工序:UNSUB → LOGOUT)
         self.disconnected = False
 
     def _handle(self, req: dict) -> bytes:
+        self.requests.append(req)
         kind = req.get("Request")
         if kind == "GETHISDATA":
             param = req["Param"]
@@ -1386,3 +1388,35 @@ class TestEnsureConnectedShutdownRace:
         assert api_cls.created[0].disconnected is True, "在途連線建成後沒被收掉(KeepAlive 洩漏)"
         assert src._api is None, "收工中仍把連線發布出去"
         assert errors and isinstance(errors[0], ConnectionError)
+
+
+class TestCloseLogout:
+    """fix/tc4-logout:收工要對 TC4 送 LOGOUT,不能只退訂 + 關 socket。
+
+    2026-08-25 17:15:29 Ctrl+C 實證:708 筆 UNSUBQUOTE 貼秒,但五個 session 的
+    `RemoveLoginInfo` 全在 17:16:31 由 `ExecuteCheckPingTime` reap —— wrapper 的
+    `Disconnect()` 只關 KeepAlive + socket,送 LOGOUT 的是 `Logout()`,從沒被呼叫。
+    """
+
+    def test_close_sends_logout_for_the_live_session_after_unsub(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        src._subscribed = {SPOT_SYMBOL}
+        src.close()
+        kinds = [r.get("Request") for r in api.requests]
+        assert "LOGOUT" in kinds, f"收工沒送 LOGOUT:{kinds}"
+        assert [r for r in api.requests if r.get("Request") == "LOGOUT"] == [
+            {"Request": "LOGOUT", "SessionKey": "sess-1"}
+        ]
+        # 退訂要在票還有效時做:UNSUB 全部在 LOGOUT 之前
+        assert max(i for i, k in enumerate(kinds) if k == "UNSUBQUOTE") < kinds.index("LOGOUT")
+        assert api.disconnected is True
+
+    def test_close_without_live_connection_sends_nothing(self) -> None:
+        # dispose 後(_api None)收工:不可為了 LOGOUT 重建連線
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        src._dispose(api)
+        api.requests.clear()
+        src.close()
+        assert api.requests == []
