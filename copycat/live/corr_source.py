@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import time
 from typing import Any, Callable
 
 from copycat.live.river_backfill import collect_1k_minutes
+from copycat.live.stock_source import stock_window
 from copycat.live.tc4 import TC4QuoteSource, always_symbol_active
 from copycat.tc4common import TC4_DEFAULT_PORT
 
@@ -114,6 +116,14 @@ class CorrQuoteSource(TC4QuoteSource):
     # ---- 訂閱窗覆寫(本類別存在的主要理由)----
 
     def _rt_window(self, symbol: str) -> tuple[str, str]:
+        # TWS 現貨腿(台積電)**必須**與個股引擎同一把訂閱窗(PR #111 review F-01):TC4 refcount
+        # 以 symbol|DataType|Start|End 為 key、但上游 feed 以 symbol 為單位 —— 兩引擎各持一把不同
+        # key 時,任一把歸零(自選移除 2330 / rollover / corr 收工)上游就退訂整個 symbol,另一邊
+        # 靜默零推播只能等自癒(tc4-market-facts (b))。同一把 key 兩邊各持一份,count 2→1 永不歸零。
+        # 日期用本機當日(與 stock_source 無日曆時的預設同式);非交易日兩邊可能不同日 → 兩把 key,
+        # 但非交易日本來就沒推播,無害。
+        if symbol.startswith(TWS_PREFIX):
+            return stock_window(f"{_dt.date.today():%Y-%m-%d}")
         return all_day_window()
 
     # ---- 泛化 symbol 訂閱(UNSUB→SUB 冪等;失敗 raise 供引擎降級)----

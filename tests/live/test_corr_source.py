@@ -10,6 +10,7 @@ from typing import Callable
 import pytest
 
 from copycat.live.corr_source import CorrQuoteSource, all_day_window, segment_leg_gate
+from copycat.live.stock_source import stock_window
 from copycat.live.session import session_key, session_window
 from copycat.live.stock_source import in_trading_hours_now
 from tests.helpers.tc4_fakes import FakeApi, ok
@@ -194,6 +195,7 @@ class TestTwsLegClock:
             (10, 0, True),  # 盤中
             (8, 30, True),  # 試撮開始(現貨這段有推播,閘要開著才救得到)
             (13, 35, True),  # 收盤後補正的最後一分
+            (13, 36, False),  # 夾到分鐘精度:_TRADING_END 改成 13:45「對齊期貨」會紅(review F-08)
             (14, 0, False),  # 收盤後:整個下午 + 夜盤不得 churn
             (8, 29, False),
             (2, 0, False),  # 凌晨(台期交夜盤仍開,現貨腿必須關)
@@ -201,3 +203,20 @@ class TestTwsLegClock:
     )
     def test_stock_cash_session_only(self, hh: int, mm: int, expected: bool) -> None:
         assert in_trading_hours_now(datetime.time(hh, mm)) is expected
+
+
+class TestTwsLegWindow:
+    """review F-01:TWS 現貨腿必須與個股引擎同一把訂閱窗 key(refcount 兩邊各持一份,永不歸零);
+    海外腿維持全天窗。"""
+
+    def test_tws_leg_uses_stock_window_same_as_stock_engine(self) -> None:
+        import datetime as _dt
+
+        src = CorrQuoteSource(port="0")
+        assert src._rt_window("TC.S.TWS.2330") == stock_window(f"{_dt.date.today():%Y-%m-%d}")
+        assert src._rt_window("TC.S.TWS.2330") != all_day_window()
+
+    def test_overseas_and_taifex_legs_keep_all_day_window(self) -> None:
+        src = CorrQuoteSource(port="0")
+        for sym in ("TC.F.CME.CL.HOT", "TC.F.CFE.VX.HOT", "TC.F.TWF.SXF.HOT", "TC.F.OSE.NK225M.HOT"):
+            assert src._rt_window(sym) == all_day_window(), sym

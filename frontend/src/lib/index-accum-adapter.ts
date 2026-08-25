@@ -65,7 +65,7 @@ export function indexSeriesToAccum(series: IndexSeries, code: string, name: stri
 
 /** `HHMM` → 分鐘數;非四位數字 / 分鐘 ≥ 60 → null(略過)。時間窗過濾在呼叫端
  *  (`SPOT_WINDOW`,與幾何同源),這裡只擋「解不出來」的鍵。 */
-function minuteOf(key: string): number | null {
+export function minuteOf(key: string): number | null {
   if (!/^\d{4}$/.test(key)) return null;
   const hh = Number(key.slice(0, 2));
   const mm = Number(key.slice(2));

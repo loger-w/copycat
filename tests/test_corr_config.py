@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import re
-
 import json
+import re
 from pathlib import Path
 
 from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
@@ -172,16 +171,13 @@ def test_river_palette_covers_every_leg() -> None:
     """跨檔契約(CLAUDE.md §4 精神):江波圖顏色**依腿序位**指派,腿數 > 調色盤色數時
     `RIVER_STROKES[i % n]` 會靜默撞回 base 近白色(river-colors.ts 自述的失效樣態)。
     後端是腿數的產生點,前端是讀者 → 在這裡以原始碼字面鎖住 色數 >= 腿數。"""
-    from pathlib import Path
-
-    from copycat.corr_config import DEFAULT_CONFIG, load_config
-
     src = Path(__file__).resolve().parents[1] / "frontend/src/components/corr/river-colors.ts"
     text = src.read_text(encoding="utf-8")
     strokes = re.findall(r'"stroke-river-(\d+)"', text)
     assert strokes == [str(i) for i in range(1, len(strokes) + 1)], strokes
     css = (src.parents[2] / "index.css").read_text(encoding="utf-8")
     tokens = re.findall(r"--color-river-(\d+):", css)
-    assert len(tokens) >= len(strokes), (tokens, strokes)
+    # 序位包含而不是個數(review F-18):少 8 多 12 個數相等照過,而少的那格 Tailwind 不產 utility
+    assert set(tokens) >= set(strokes), (tokens, strokes)
     for cfg in (DEFAULT_CONFIG, load_config()):
         assert len(cfg.legs) <= len(strokes), (len(cfg.legs), len(strokes))

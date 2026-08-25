@@ -16,7 +16,7 @@ from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
 from tests.capital.fake_com import FakeCom
 
-_SIM_RTT_S = 0.15
+_SIM_RTT_S = 0.02  # 因果順序與「鏈會落地」都與 RTT 大小無關;150 ms 只是敘事(review F-15)
 _BAL_ROW = "3357,T,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
 _PROFIT_ROW = (
     "臺慶科,3357,新台幣,現股,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
@@ -88,6 +88,7 @@ def test_fill_reaches_positions_before_broker_chain_starts(tmp_path: Path) -> No
                 order.append("balance-query-was-already-sent")
 
     client.set_broadcast(broadcast)
+    client.store.set_positions([])  # 開機首次快照已落地(樂觀套用只在其後開,review F-02)
     t_fill = time.monotonic()
     client._handle_reply(_fill_evt_raw())
     _run_chain(client, com, until=lambda: "position" in stamps, budget_s=3.0)
@@ -110,6 +111,7 @@ def test_broker_chain_still_overrides_optimistic_fill(tmp_path: Path) -> None:
             finalized.append(1)
 
     client.set_broadcast(broadcast)
+    client.store.set_positions([])
     client._handle_reply(_fill_evt_raw())
     _run_chain(client, com, until=lambda: bool(finalized), budget_s=3.0)
 

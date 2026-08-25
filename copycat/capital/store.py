@@ -100,6 +100,11 @@ class CapitalStore:
         self._positions: dict[tuple[str, str], Position] = {}
         # 委託序號 → 回報 idx33 YYYYMM(期貨樂觀套用組契約碼用;F5)
         self._contract_ym: dict[str, str] = {}
+        # 樂觀套用只在「券商快照已落地一次」之後才開(PR #111 review F-02):開機時 _positions
+        # 是空的,ConnectByID 的當日 backlog 重播若照套,昨日庫存 10 張今日賣 3 張的檔會變成
+        # qty=-3 的幻影空單、可按平倉。每次 set_positions 落地後把所有委託標成「已套用到目前」,
+        # 之後只套快照之後的成交;clear()(重連重播前)把旗標關回去。
+        self._positions_seeded = False
 
     def _set_status(self, a: _Agg, label: str) -> None:
         if _RANK.get(label, 0) >= _RANK.get(a.status_label or "", 0):
@@ -160,7 +165,8 @@ class CapitalStore:
                     a.filled_qty += rec.qty
                     a.fill_value += rec.price * rec.qty
                 self._refresh_fill_status(a)
-                return self._apply_fill_locked(a)
+                # 快照未落地(開機 / 重連重播中)只累計不套 —— 見 __init__ 的 _positions_seeded 註解
+                return self._apply_fill_locked(a) if self._positions_seeded else False
             elif t == "C":
                 # C 的 qty=原委託剩量,order/filled 不動
                 self._set_status(a, "已刪單")
@@ -195,8 +201,9 @@ class CapitalStore:
         - 證券:整股市場 + 種類對得到 `_FILL_KIND`;張數 = 累計成交股 // 1000。
         - 期貨:純期貨(選擇權不套);契約碼由回報組(`contract_from_fill`)。
         - 買 +、賣 −(融券空單本來就是負張,與 `parse_balance_line` 同號)。
-        - 均價:新倉 = 這張單成交均價;同向加碼且舊均價已知 = 加權;減碼不動;舊均價未知留 None;
-          反向翻倉 = 這張單均價。損益基底(`pnl_*`)一律清 None —— 舊快照對新張數是假的。
+        - 均價:新倉 = 這張單成交均價;同向加碼且舊均價已知 = 加權;減碼(同號)不動;舊均價未知留 None;
+          反向翻倉(換號,不論幅度)= 這張單均價。損益基底(`pnl_*`)一律清 None —— 舊快照對新張數是假的。
+        - 只在 `_positions_seeded`(券商快照落地過)之後套;重播 / 開機前的成交只累計。
         - 歸零 → 移除該列。
         """
         if a.buy_sell not in ("B", "S") or a.filled_qty <= 0 or not a.stock_no:
@@ -248,9 +255,12 @@ class CapitalStore:
                 if prev.avg_price is not None and prev.avg_price > 0
                 else None
             )
-        elif abs(new_qty) < abs(prev.qty):
+        elif (new_qty > 0) == (prev.qty > 0):
+            # 同號 = 減碼(幅度不重要),均價不動
             avg = prev.avg_price
         else:
+            # 換號 = 反手翻倉:+3 口賣 5 口 → -2 口,均價是這張單的(review F-03:舊寫法用幅度判,
+            # |new| < |prev| 的翻倉會沿用舊方向均價)
             avg = fill_avg
         self._positions[key] = dataclasses.replace(
             prev, qty=new_qty, avg_price=avg, pnl_base=None, pnl_base_price=None, pnl_cost=None
@@ -395,6 +405,8 @@ class CapitalStore:
             self._orders.clear()
             self._order_seq.clear()
             self._contract_ym.clear()
+            # 重播會把當日成交再送一輪:關掉樂觀套用直到下一次快照落地(review F-02)
+            self._positions_seeded = False
 
     def set_positions(self, positions: list[Position]) -> None:
         """全量替換。同 (股號, 種類) 重複列 = 後到者勝並留 warning:
@@ -424,6 +436,14 @@ class CapitalStore:
                     )
                 new[key] = p
             self._positions = new
+            # 快照涵蓋到此刻的所有成交:把每張單標成「已套用到目前」,之後只套快照之後的增量
+            # (同一筆成交既在快照裡又再樂觀套一次 = 重複計)。
+            for a in self._orders.values():
+                unit = 1000 if a.market in _SEC_LOT_MARKETS else 1
+                a.applied_qty = a.filled_qty // unit
+                a.applied_shares = a.applied_qty * unit
+                a.applied_value = a.fill_value * (a.applied_shares / a.filled_qty) if a.filled_qty else 0.0
+            self._positions_seeded = True
 
     def apply_profit_rows(self, rows: list[ProfitRow]) -> None:
         """損益試算回填(均價+含費稅息損益基底);查無 (股號, 種類) 忽略

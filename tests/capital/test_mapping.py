@@ -480,3 +480,7 @@ def test_contract_from_fill_returns_none_when_any_piece_is_missing() -> None:
     assert contract_from_fill("QEF06", None) is None
     assert contract_from_fill("QEF06", "HOT") is None
     assert contract_from_fill("QEF06", "202613") is None
+    # review F-04:調整碼 / 未白名單選擇權 / 兩碼月與 idx33 不合 → None(不捏契約碼)
+    assert contract_from_fill("EE106", "202606") is None
+    assert contract_from_fill("TE122000", "202606") is None
+    assert contract_from_fill("QEF06", "202609") is None

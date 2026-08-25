@@ -561,7 +561,9 @@ const ChartStatic = memo(function ChartStatic({
               fontSize="0.625rem"
               className={IDX_TEXT_CLASS[line.key]}
             >
-              {`${INDEX_OVERLAY_LABEL[line.key]} ${fmtPct(line.lastPct)}`}
+              {/* 串流中斷時標籤加註(review F-09):數字是最後一格不是「現在」,與 IndexBar / MarketPane
+                  拿 stale 當閘同一語意;歷史分鐘仍為真,線照畫 */}
+              {`${INDEX_OVERLAY_LABEL[line.key]}${line.stale ? "(中斷)" : ""} ${fmtPct(line.lastPct)}`}
             </text>
           </g>
         );
@@ -1035,7 +1037,14 @@ export function IntradayChartCore({
   const [localHover, setHover] = useState<{ min: number | null; y: number } | null>(null);
   // 分鐘變化才往外報(F3):同一分鐘內的亞像素 mousemove 不該讓整面圖牆重 render。
   const emittedMinRef = useRef<number | null>(null);
+  // 回呼換人(圖牆的十字線 toggle 由 NOOP 切回真回呼)時要重新補發一次(review F-10):否則
+  // 滑鼠停在同一分鐘上切回開,後續 mousemove 全被「同分鐘」早退,其他卡要等跨分鐘才出十字線。
+  const lastHoverCbRef = useRef(onHoverMinute);
   function emitHoverMinute(min: number | null): void {
+    if (lastHoverCbRef.current !== onHoverMinute) {
+      lastHoverCbRef.current = onHoverMinute;
+      emittedMinRef.current = null;
+    }
     if (onHoverMinute === undefined || emittedMinRef.current === min) return;
     emittedMinRef.current = min;
     onHoverMinute(min);

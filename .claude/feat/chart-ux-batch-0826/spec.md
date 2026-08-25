@@ -85,8 +85,9 @@ grilling 逐題以建議解推進,每題標 `[auto-default]`;**方向性抉擇(S
 - 2330 現貨腿夜間全靜默 → 既有 `taifex_leg_gate` 對非 TWF 前綴恆 True = 整晚每 300 s 一發 UNSUB+SUB。
   補 `TC.S.TWS.` 前綴的**個股日盤閘**(沿用 `stock_source.in_trading_hours_now` = 08:30–13:35,含試撮與
   收盤 5 分 pad —— 08:30 起 2330 真的有推播,閘該開;不另建第二張時段表,與 stock / index 引擎同源;
-  spec 初稿寫 09:00–13:30,實作審後改為沿用既有;交易日曆 AND);key 與
-  stock_engine 的訂閱不同窗(corr 全天窗 vs 個股日盤窗)→ refcount key 不同,退訂不互殺(tc4-market-facts (b))。
+  spec 初稿寫 09:00–13:30,實作審後改為沿用既有;交易日曆 AND)。**訂閱窗必須與 stock_engine 同一把**
+  (`stock_window(當日)`,PR #111 review F-01):tc4-market-facts (b) 是「任一把 key 歸零 → 上游退訂整個 symbol」,
+  兩引擎各持不同 key 正是引信而非保險;同一把 key 兩邊各持一份 count 2→1 永不歸零。初稿此處把 (b) 讀反。
 - 改動面(沿 NK225M 第七腿 `4d1f550d` 三檔 + 閘):`configs/correlation.json` +4 腿;`copycat/corr_config.py`
   `DEFAULT_CONFIG` 同步(load 失敗 fallback 用);`river-colors.ts` / `index.css` 調色盤 7→11(第 8–11 色避開紅綠與
   既有 7 色);`corr_source.py` 新增 TWS 閘;測試鎖:`tests/test_corr_config.py`、`tests/server/test_corr_routes.py`、
@@ -107,7 +108,7 @@ grilling 逐題以建議解推進,每題標 `[auto-default]`;**方向性抉擇(S
   任一段丟 `##` 再 +1 s,連續成交時後一筆要等前一輪鏈跑完(守門不重發)。
 - 修法(🔴 行為改動):成交 `D` 到達當下 `store.apply_fill(rec)` 樂觀套用 + 立即 emit `capital_position`,
   回查鏈照跑、落地時全量覆蓋(真相仍是券商)。套用規則:
-  - 證券(`market ∈ SEC_MARKETS`):kind 由 `flag_label` 對映(現股/零股/拍賣現股→cash、融資/代資→margin、
+  - 證券(整股市場 TS/TA/TP;零股 TL/TC 整個不套,review F-21 修正):kind 由 `flag_label` 對映(現股/拍賣現股→cash、融資/代資→margin、
     融券/代券→short;無券 / 未知 → 不套,log);張數 = 該單累計成交股數 // 1000 的**增量**(`_Agg` 記已套用張數,
     部分成交正確);買 +、賣 −(融券空單本來就是負張);均價:新倉 = 成交價;同向加碼且舊均價已知 = 加權;
     減碼不動;舊均價未知 → 留 None(寧缺勿錯);`pnl_*` 清 None(舊快照對新張數是假的)。
@@ -116,6 +117,8 @@ grilling 逐題以建議解推進,每題標 `[auto-default]`;**方向性抉擇(S
     `mapping._month_year_codes` 組(`QEFF6`);**假設**只有 2026-06-10 一筆真樣本 → 首筆真期貨成交後核對
     log「樂觀契約碼 vs OI 契約碼」(chain 落地時若鍵不同會 warning 一行);口數 買 +、賣 −,kind cash。
   - 部位歸零(qty 0)→ 從 map 移除。
+  - **只在券商快照落地過之後才套**(review F-02):開機 / `clear()` 重播期間的成交只累計,`set_positions` 落地時
+    把所有委託標成已套用,之後才套增量;反手翻倉判號不判幅度(review F-03);契約碼守門 `order_code == prod + MM`(F-04)。
 - `[auto-default: 前端 200 ms debounce 不動 | reason: 合併連發用;修後 fill → 畫面 ≈ 0.3 s,瓶頸已不在此]`
 - 觀測補強:`_handle_reply(D)` / 三段 complete / `_finalize_positions` 各加一行 ms 級 log(含自成交起的
   耗時),讓 user 下一筆真成交就能報實測數字(現狀 `_finalize_positions` 成功路徑零 log,無法量)。
