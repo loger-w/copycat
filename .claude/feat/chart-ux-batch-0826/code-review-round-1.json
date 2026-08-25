@@ -1,0 +1,27 @@
+{
+  "fixed_point": "e01a083b (merge-base master..feat/chart-ux-batch-0826)",
+  "reviewed_head": "b407471e",
+  "standards": [
+    {"id": "S1", "severity": "P2", "file": "frontend/src/components/stock/{StockPage,StockChart,GroupGridView,CardIntradayChart}.tsx / App.tsx", "finding": "Mysterious Name:上游 prop 叫 `index`(指數序列物件),core 內 `index` 是布林「指數態」,相鄰檔同字兩義。"},
+    {"id": "S2", "severity": "P2", "file": "configs/correlation.json ↔ river-colors.ts / index.css", "finding": "跨檔契約未機械釘住:腿數 > 調色盤色數會取模撞回 base 近白色,零錯誤訊號;`_comment`「不必改引擎程式碼」已失真。"},
+    {"id": "S3", "severity": "P2", "file": "frontend/src/components/stock/GroupGridView.tsx", "finding": "Speculative Generality:受控 / 非受控雙模式只為既有測試存在,受控時仍 mount 一份 useStockGroup(死狀態、兩個持有者)。"},
+    {"id": "S4", "severity": "P2", "file": "tests/capital/test_fill_latency.py:92", "finding": "`latency_ms < 50` 牆鐘門檻體質性 flaky;不變量可用「推播早於回查鏈出手」的因果順序斷言。"},
+    {"id": "S5", "severity": "P3", "file": "copycat/capital/client.py:402", "finding": "`_fill_seen_at` 取 handler 進入時刻,log「自成交起」略超譯。"},
+    {"id": "S6", "severity": "P3", "file": "copycat/capital/client.py:502,521,594", "finding": "`_log_chain_stage(\"… %d\" % n)` eager 格式化,與檔內 lazy %-args 不一致(三處同形)。"},
+    {"id": "S7", "severity": "P3", "file": "copycat/capital/client.py:410", "finding": "`capital_position` payload 新增 `source: fill`,前端不讀;應註明讀者=無。"}
+  ],
+  "spec": [
+    {"id": "P1", "severity": "P2", "file": "copycat/capital/client.py:403-415", "finding": "F5 觀測補強:未樂觀套用的成交(零股 / 無券 / 選擇權 / 契約碼 None)零 log;OI 段 complete 無自己一行。"},
+    {"id": "P2", "severity": "P3", "file": "frontend/src/components/stock/WatchlistSidebar.test.tsx", "finding": "F2 seam「onSelect 第二參 = 群組名 / null」只斷了群組名,未分組列的 null 未在 sidebar 層斷。"},
+    {"id": "P3", "severity": "P3", "file": "verification", "finding": "F5「反向驗證(revert → 紅)」diff 內無佐證。"},
+    {"id": "P4", "severity": "P2", "file": "frontend/src/components/stock/StockIntradayChart.tsx:139-146", "finding": "F1 線型與 spec(ink-muted / ink-dim)不同,且 river-2 = 綜合頁櫃買識別藍卻畫加權,同色兩義。"},
+    {"id": "P5", "severity": "P3", "file": "copycat/live/corr_source.py:40 / stock_source.py:445", "finding": "改名 taifex_leg_gate → segment_leg_gate、in_trading_hours_now 加 now 參數,spec 未提。"},
+    {"id": "P6", "severity": "P3", "file": "frontend/src/components/stock/GroupGridView.tsx:275-291", "finding": "保留非受控 fallback,spec 說的是上提成受控單一份。"},
+    {"id": "P7", "severity": "P3", "file": "copycat/capital/client.py:405", "finding": "`source: fill` spec 未提。"},
+    {"id": "P8", "severity": "P2", "file": "copycat/capital/reply.py:129 / spec.md", "finding": "spec 寫 idx38,code 取 idx33;真樣本只有一筆,取錯的樣態是期貨成交靜默不套。"},
+    {"id": "P9", "severity": "P2", "file": "copycat/live/corr_source.py / spec.md", "finding": "TWS 閘窗口 spec 09:00–13:30,實作 08:30–13:35(沿用 in_trading_hours_now)。"},
+    {"id": "P10", "severity": "P2", "file": "copycat/capital/store.py::_apply_fill_locked", "finding": "零股殘量:1500 股套 1 張時把全部價金消化,殘 500 股價金消失,下一張均價偏移。"},
+    {"id": "P11", "severity": "P3", "file": "copycat/capital/models.py Position.name", "finding": "樂觀部位 name 空白約 1 s。"}
+  ],
+  "disposition": "S1 accepted → 上游五處 prop 改 indexSeries(26ca1a41)。S2 accepted → tests/test_corr_config.py::test_river_palette_covers_every_leg 以原始碼字面鎖 色數 >= 腿數 + index.css token 數,correlation.json _comment 改寫。S3 + P6 accepted → GroupGridView 收成受控必傳、移除內部 useStockGroup;四個測試檔以 `Grid` 外殼(同一支 hook)扮演 StockPage,既有 localStorage 語意測試一字不改。S4 accepted → 主斷言改「第一則 capital_position 早於第一次 get_real_balance」(修前實跑 464 ms 且順序反過來,反向驗證見 verification.md),毫秒只進失敗訊息。S5 accepted → 文案「自成交回報到達起」+ docstring 說明量的是 handler 進入時刻。S6 accepted → _log_chain_stage(what, *args)。S7 + P7 accepted → 註解註明讀者=無、測試在用。P1 accepted → D 事件未套用也印 INFO(含原因集合)、_on_oi_complete 加一行。P2 accepted → sidebar 補「點未分組列 → onSelect(code, null)」。P3 accepted → 反向驗證實跑(主線 code 1 failed:順序反、464 ms)落 verification.md。P4 accepted → 加權 stroke-profit / 櫃買 stroke-idx-otc,與 MarketPane.OVERLAY_LINES 同色;spec 同步改。P5 rejected(有理由):保留舊名 taifex_leg_gate 而它也閘 TWS = 名字說謊;`now` 參數預設 None 行為逐字不變、只為時鐘可測 — 記入 spec 備註即可,不回滾。P8 accepted → spec 改 idx33(code 是對的:真樣本 idx33=202606)。P9 accepted → spec 改為沿用 08:30–13:35(含試撮,2330 08:30 起真有推播,閘該開;不建第二張時段表)。P10 accepted → 只消化整張的量(applied_shares += delta×unit、applied_value += 增量均價×該量),補 test_partial_lot_residue_is_carried_to_next_lot。P11 rejected:parse_balance_line 的部位列 name 也是空字串(名稱由前端 stock names 補),樂觀列與券商列同形,不是新缺口。"
+}
