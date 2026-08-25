@@ -1,0 +1,11 @@
+{
+  "scope": "增量 diff b407471e..26ca1a41(round 1 收修),主 agent 機械快篩(branch-lifecycle 收尾節 3:補齊缺口不重跑)",
+  "standards": [
+    {"id": "R2-S1", "severity": "P3", "file": "copycat/capital/client.py::_log_chain_stage", "finding": "`\"balance 鏈: \" + what` 字串拼接後再交 logger(仍是 lazy %-args,what 只來自檔內字面值,無外部 % 風險)— 可接受。"},
+    {"id": "R2-S2", "severity": "P3", "file": "frontend/src/components/stock/GroupGridView*.test.tsx", "finding": "四個測試檔各自定義同形 `Grid` 外殼(Duplicated Code,判斷題):測試檔慣例是每檔自足、不共享治具(frontend-testing 樣板);不抽。"}
+  ],
+  "spec": [
+    {"id": "R2-P1", "severity": "P3", "file": "copycat/capital/store.py::_apply_fill_locked", "finding": "殘量規則核算:applied_shares ≤ filled_qty 恆成立(applied_qty×unit ≤ filled),分母 filled−applied 在 delta>0 時 > 0;新測 1500@80 + 500@90 → 82.5 = 165000/2000 真實均價。合規。"}
+  ],
+  "disposition": "R2-S1 / R2-S2 / R2-P1 皆 no-change(判斷題,理由如上)。增量無 P1 / P2。"
+}
