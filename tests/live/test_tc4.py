@@ -1110,6 +1110,9 @@ class _SlowQuoteAPI:
         self.socket = _JsonSocket(lambda _req: b'{"Success": "OK"}\x00')
         self.lock = threading.Lock()
         self.disconnected = False
+        #: Disconnect 當下 `lock` 是否被持有 —— wrapper 的 KeepAlive `Pong` 取同一把鎖用同一顆
+        #: socket,不持鎖 close socket 就是兩條執行緒同時碰 ZMQ socket(review A6 / #105 S2)
+        self.disconnect_locked: bool | None = None
         self._delay = delay
         _SlowQuoteAPI.created.append(self)
 
@@ -1118,6 +1121,7 @@ class _SlowQuoteAPI:
         return {"Success": "OK", "SessionKey": "sess-race", "SubPort": "54322"}
 
     def Disconnect(self) -> None:  # noqa: N802 - wrapper 介面
+        self.disconnect_locked = self.lock.locked()
         self.disconnected = True
 
 
@@ -1394,6 +1398,9 @@ class TestEnsureConnectedShutdownRace:
         t.join(timeout=5.0)
         assert len(api_cls.created) == 1
         assert api_cls.created[0].disconnected is True, "在途連線建成後沒被收掉(KeepAlive 洩漏)"
+        # review A6(#105 §2.6 S2):`_dispose` 明訂先取 `api.lock` 再 Disconnect —— 這條收工分支
+        # 也得一樣,KeepAlive 執行緒在 `Connect()` 內就起來了,Pong 隨時會拿同一把鎖用同一顆 socket
+        assert api_cls.created[0].disconnect_locked is True, "收工分支的 Disconnect 沒取 api.lock"
         assert src._api is None, "收工中仍把連線發布出去"
         assert errors and isinstance(errors[0], ConnectionError)
 
