@@ -25,13 +25,18 @@ _RUN_PS1 = Path(__file__).resolve().parents[2] / "run.ps1"
 
 
 class TestSingleSessionBound:
-    """`tc4.close_worst_secs()`:單條 session `close()` 的上界 = 等 `_api_lock`(在途
-    `Connect()` 吃滿一個 REQ timeout)+ 一發 REQ 撞 RCVTIMEO(UNSUB 或 LOGOUT,之後即
-    break / dispose)+ `_dispose` 等 `api.lock`。"""
+    """`tc4.close_worst_secs()`:單條 session `close()` 可計段的上界 = 等 `_api_lock`(在途
+    `Connect()` 吃滿一個 REQ timeout)+ max(REQ 路徑 send+recv 各撞一次 timeout, 毒鎖路徑
+    `_req` 等鎖 + `_dispose` 再等鎖)。兩條路互斥(review round-1 SP1 修正:首版漏了
+    `_req` 進門那把 `api.lock`)。"""
 
-    def test_close_worst_covers_lock_wait_one_req_timeout_and_dispose(self) -> None:
+    def test_close_worst_covers_the_req_path(self) -> None:
         req = tc4_mod._REQ_TIMEOUT_MS / 1000
-        assert close_worst_secs() >= 2 * req + DEFAULT_LOCK_TIMEOUT_SECS
+        assert close_worst_secs() >= req + 2 * req
+
+    def test_close_worst_covers_the_poisoned_lock_path(self) -> None:
+        req = tc4_mod._REQ_TIMEOUT_MS / 1000
+        assert close_worst_secs() >= req + 2 * DEFAULT_LOCK_TIMEOUT_SECS
 
     def test_default_lock_timeout_is_the_budget_input(self) -> None:
         """建構子預設值必須就是預算吃的那個常數 —— 兩處各寫一個 12.0 就會靜默漂開。"""

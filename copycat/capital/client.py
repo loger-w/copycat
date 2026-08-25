@@ -79,7 +79,7 @@ logger = logging.getLogger(__name__)
 
 #: 關機時 COM 執行緒 join 的上限(秒)。關機預算(`server/shutdown_budget.py`)的輸入之一:
 #: lifespan 把 capital 排在 TC4 全部收完之後(N049),這個數字是預算表裡 TC4 之外的唯一一段。
-COM_JOIN_TIMEOUT_SECS = 5.0
+COM_JOIN_TIMEOUT_SECS: float = 5.0
 
 # 寫入命令等 COM 結果的上限:SendStockOrder 是同步呼叫,群益端掛起時 future 永不
 # resolve → HTTP 請求永久懸掛,使用者不知道單送出沒、最容易誘發重送

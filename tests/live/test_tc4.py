@@ -1488,6 +1488,7 @@ class TestCloseTiming:
         src._subscribed = {SPOT_SYMBOL, "TC.O.TWF.TXO.202608.C.44550"}
         with caplog.at_level(logging.INFO):
             src.close()
+        # 兩行:進場(等鎖 + 檔數)與收尾(n/m + 秒數)—— 卡在 REQ 上被硬殺時只剩前一行
+        assert "等 api 鎖" in caplog.text and "開始 UNSUBQUOTE 2 檔" in caplog.text
         assert "UNSUBQUOTE 2/2" in caplog.text
-        assert "等 api 鎖" in caplog.text
         assert api.disconnected is True

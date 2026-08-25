@@ -493,6 +493,73 @@ class TestShutdownLanes:
             f"index session 排在卡住的 stock 後面等:{order}"
         )
 
+    def test_lane_depth_matches_the_real_shutdown_shape(self, tmp_path: Path) -> None:
+        """`shutdown_budget.TC4_LANE_DEPTH` 不能只是自證的 `== 2`(review SP4):五條 session
+        全部卡住時,**同時進場**的條數 = 5 − depth + 1(串鏈裡只有頭一條進得來)。第三個引擎
+        被串進 corr lane、或串鏈被拆掉,這裡都會紅。"""
+        from copycat.server.shutdown_budget import TC4_LANE_DEPTH
+
+        gates = {name: threading.Event() for name in ("corr", "futures", "index", "stock", "txo")}
+        entered = {name: threading.Event() for name in gates}
+
+        def _block(name: str) -> None:
+            entered[name].set()
+            gates[name].wait(_GATE_CAP)
+
+        class _Txo(FakeTxoSource):
+            def close(self) -> None:
+                _block("txo")
+
+        class _Stock(FakeStockSource):
+            def close(self) -> None:
+                _block("stock")
+
+        class _Index(FakeIndexSource):
+            def close(self) -> None:
+                _block("index")
+
+        class _Futures(FakeFuturesSource):
+            def close(self) -> None:
+                _block("futures")
+
+        class _Corr(FakeCorrSource):
+            def close(self) -> None:
+                _block("corr")
+
+        app = create_app(
+            source=_Txo(),
+            stock_source=_Stock(),
+            index_source=_Index(),
+            futures_source=_Futures(),
+            corr_source=_Corr(),
+            stock_watchlist_path=tmp_path / "stock_watchlist.json",
+            throttle_secs=0.01,
+        )
+        seen: dict[str, object] = {}
+
+        def _observe() -> None:
+            # 只等四條 lane 頭;對 futures 也 wait 的話會吃滿 _GATE_CAP,那時 corr 的 gate 同樣
+            # 到期放行,futures 就真的進場了 —— 首版正是這樣假紅
+            heads = [n for n in gates if n != "futures" and entered[n].wait(_GATE_CAP)]
+            seen["heads"] = len(heads)
+            time.sleep(0.2)  # 給 futures「不該進場」一段可被證偽的時間
+            seen["futures_before_corr_released"] = entered["futures"].is_set()
+            gates["corr"].set()
+            seen["futures_after_corr_released"] = entered["futures"].wait(_GATE_CAP)
+            for name in gates:
+                gates[name].set()
+
+        observer = threading.Thread(target=_observe, daemon=True)
+        with TestClient(app):
+            wait_boot(app)
+            observer.start()
+        observer.join(_GATE_CAP)
+
+        sessions = len(gates)
+        assert seen["heads"] == sessions - TC4_LANE_DEPTH + 1, seen
+        assert seen["futures_before_corr_released"] is False, "futures 沒等 corr 就進場(串鏈被拆)"
+        assert seen["futures_after_corr_released"] is True, "corr 放行後 futures 沒進場"
+
     def test_corr_still_closes_before_futures(self, tmp_path: Path) -> None:
         """並行 lane 內唯一保留的串鏈:corr 讀 `futures.state()`,必須先於 futures 收
         (app.py 既有不變式;並行化不得把它拆掉)。"""

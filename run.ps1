@@ -87,8 +87,10 @@ if ($LASTEXITCODE -ne 0) {
 # copycat/server/shutdown_budget.py 依 TC4 REQ / 鎖 timeout、lane 深度、群益 COM join 推導,
 # 本檔 / uvicorn timeout_graceful_shutdown / lifespan 三個讀者同一個來源。
 $graceSecs = & $python -c "from copycat.server.shutdown_budget import run_grace_secs; print(run_grace_secs())"
-if ($LASTEXITCODE -ne 0 -or -not $graceSecs) {
-    Fail '取不到關機預算(copycat.server.shutdown_budget 匯入失敗,見上方錯誤)'
+# 只取 stdout 最後一行再驗是純數字:python 多印一行時 [int] 的轉型例外不是可讀的 Fail 訊息(review ST5)
+$graceSecs = [string](@($graceSecs)[-1])
+if ($LASTEXITCODE -ne 0 -or $graceSecs -notmatch '^\d+$') {
+    Fail "取不到關機預算(copycat.server.shutdown_budget 匯入失敗或輸出不是整數:'$graceSecs',見上方錯誤)"
 }
 $graceSecs = [int]$graceSecs
 
