@@ -233,6 +233,12 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   零錯誤訊號(只在 TC4 log `RemoveLoginInfo` 晚 60 s 才看得到)。不等式由
   `tests/server/test_shutdown_budget.py` 釘住(含 run.ps1 字面 parity 與 UTF-8 BOM)。
 
+- **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
+  DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
+  三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
+  **靜默撞回 base 近白色**,零錯誤訊號。`tests/test_corr_config.py::test_river_palette_covers_every_leg` 以原始碼字面鎖住;
+  加腿 = JSON + DEFAULT_CONFIG + 三組 class + token 同步。
+
 ## 5. 資料源
 
 - **主資料源 = Touchance 4.0**:國內外期貨即時行情 + 歷史(分 K/日 K)+ 帳務。**無下單功能

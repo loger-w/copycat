@@ -41,6 +41,34 @@ verification;這裡回填成 backlog。
   1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
   修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。
 
+## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)
+
+- [ ] **F1 指數疊線右緣標籤與現價泡泡 / CDP 標籤互疊**(1568 寬截圖可見「加權 +0.9x%」壓在 2400 現價標旁):
+  末點標籤目前只做 `textAnchor=end` 上移 3px,沒進 `bandLabels` 的避讓;候選 = 把兩顆指數標當 obstacle 餵進既有
+  右緣避讓(R1 CDP 七顆那套),或 toggle 開時把標籤改畫在 readout 列。user 過目後決定。
+- [ ] **F1「台指」語意**:本輪解讀為加權指數 IX0001;若 user 原意是台指期(TXF),`useIndexStream.txf` 只有最新價無
+  逐分鐘序列,要從 `/api/market/bars/TXF tf=1` 另接一條(期指 08:45 起、窗與現貨不同尺)。
+- [ ] **F4 台積電現貨腿 `TC.S.TWS.2330` 與個股引擎共用 symbol 的 refcount 風險**(實作 agent 指出):corr session
+  的全天窗 key 與 stock_engine 日盤窗 key 不同,但 tc4-market-facts (b) 說上游 feed 以 symbol 為單位,任一把 key 歸零
+  會退訂整個 symbol → corr 腿的 UNSUB(自癒 / 收工)可能帶走自選 2330 的推播,靠 source 層零推播自癒補回。
+  盤中驗:2330 在自選時看 stock log 有沒有「REALTIME 零推播自癒」與 corr 自癒同時刻出現;若有,改用個股期 CDF 腿
+  或讓 corr 對 TWS 段不自癒。
+- [ ] **F4 台幣匯率達錢不提供**(全樹掃 TWD 只命中 SGX TWN;現貨段只有 TWS;CME / TAIFEX 匯率期貨皆無 TWD):
+  要做只能接非即時源(FinMind / 央行)當日線腿,不合相關係數的秒級口徑;若 user 仍要,另案。
+- [ ] **F4 江波圖 11 色是否分得開**待 user 過目(river-8..11 天藍 / 靛紫 / 鋼灰藍 / 棕褐,後兩色靠低飽和區分);
+  `RiverOverlay.tsx` / `RiverPanel.tsx` 註解仍寫「七腿」(成本例證,論點更強不影響正確性)。
+- [ ] **F5 期貨成交契約碼組法只有一筆真樣本**(`QEF06` + idx33 `202606` → `QEFF6`):首筆真期貨成交後看 log
+  「期貨部位鍵差異(樂觀 vs 券商)」;不同就改 `mapping.contract_from_fill`。另 **無券當沖(flag 無券)/ 零股不套**,
+  仍走回查鏈;無券的部位狀態與 balance.py 負股數校準同一條(08-20 待實錄)。
+- [ ] **F5 真成交耗時數字**:三段 log「balance 鏈: … 自成交回報到達起 N ms」已備,下一筆真成交後把數字記回
+  `.claude/feat/chart-ux-batch-0826/verification.md`(現在只有 FakeCom 模擬:修前 463 ms、修後推播早於回查鏈)。
+- [ ] **F5 成交到達時回查鏈若在途,該輪落地會短暫覆蓋回成交前快照**(與現狀等長的空窗,不擴大);
+  若盤中觀察到「部位閃一下回舊值再回來」就是這條,候選 = 鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次。
+- [ ] **worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
+  `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。
+- [ ] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
+  (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。
+
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
 - [ ] **signals 段(`bot.close()` + hub drain)無上限**,只算進 `LIFESPAN_SLACK_SECS`(5 s);
