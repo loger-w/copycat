@@ -1,5 +1,5 @@
 {
-  "_note": "訊號規則 per-kind 參數的閉區間值域。產生點 = copycat/signal_rules.py::PARAM_SPECS;前端鏡像 = frontend/src/lib/signal-params.ts::PARAM_FIELDS(min/max)。兩邊各自對本檔斷言(tests/test_signal_rules.py::test_param_specs_parity_with_frontend + frontend/src/lib/signal-param-parity.test.ts),改壞任一邊只有那一邊紅。值是 [min, max],閉區間。",
+  "_note": "訊號規則參數的跨語言契約。產生點 = copycat/signal_rules.py(PARAM_SPECS / INT_PARAM_KEYS / COOLDOWN_MIN,MAX);前端鏡像 = frontend/src/lib/signal-params.ts(PARAM_FIELDS 的 min/max/integer/default + COOLDOWN_MIN,MAX)。兩邊各自對本檔斷言(tests/test_signal_rules.py::test_param_specs_parity_with_frontend + frontend/src/lib/signal-param-parity.test.ts),改壞任一邊只有那一邊紅。specs 值是 [min, max] 閉區間;int_keys = 後端拒非整數的鍵(前端要在送出前擋並指出欄位);cooldown = cooldown_secs 的閉區間。前端「新規則」表單預設值不在本檔(後端沒有對應概念),由前端 parity 測試釘「預設值落在值域內、整數鍵為整數」。",
   "specs": {
     "cdp_cross": {
       "rearm_ticks": [0, 50],
@@ -17,5 +17,7 @@
       "min_day_lots": [0, 10000000]
     },
     "limit_lock": {}
-  }
+  },
+  "int_keys": ["rearm_ticks", "min_window_lots", "min_day_lots"],
+  "cooldown": [60, 86400]
 }
