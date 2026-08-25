@@ -42,3 +42,13 @@ F5 真成交(需盤中真下單;log 已備:`成交樂觀套用部位` / `balance
 
 - worktree `frontend/npm ci` 失敗:`package-lock.json` 與 `package.json` 不同步(@emnapi/*),主 tree 是 `npm install` 裝的;本輪以 robocopy 複製主 tree node_modules(ops-discipline 三險:不可用 junction)。
 - 全量 vitest 在 dev 頁截圖時 CDP `Page.captureScreenshot` 偶發 30 s timeout(dev build 重),重試即過,不是頁面卡死。
+
+## Rebase 後重跑(origin/master 移動:fix/tc4-logout + mod/shutdown-budget;衝突僅 GroupGridView.tsx 兩個 commit,取分支側 + master 的 readLocal 內聯)
+
+| gate | 結果 | exit |
+|---|---|---|
+| `python -m pytest -q` | 3083 passed, 3 skipped(本次 ws_disconnect 亦綠) | 0 |
+| `python -m ruff check copycat tests` | All checks passed | 0 |
+| `python -m pyright` | 0 errors | 0 |
+| `npx vitest run` | 150 files / 2799 passed | 0 |
+| `npx tsc -b` / `npx eslint src` | 0 / 0 | 0 |
