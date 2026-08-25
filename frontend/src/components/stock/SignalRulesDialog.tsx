@@ -16,7 +16,13 @@ import {
   type RuleKind,
   type SignalRule,
 } from "@/hooks/useSignalRules";
-import { COOLDOWN_MAX, COOLDOWN_MIN, PARAM_FIELDS, paramDefaults } from "@/lib/signal-params";
+import {
+  COOLDOWN_DEFAULT,
+  COOLDOWN_MAX,
+  COOLDOWN_MIN,
+  PARAM_FIELDS,
+  paramDefaults,
+} from "@/lib/signal-params";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleKind, string> = {
@@ -57,7 +63,7 @@ function blankForm(): FormState {
     kind: "cdp_cross",
     enabled: true,
     notify_discord: true,
-    cooldown: "300",
+    cooldown: COOLDOWN_DEFAULT,
     params: paramDefaults("cdp_cross"),
     levels: [...CDP_LEVELS],
   };
@@ -235,7 +241,11 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
 
     const cooldown = Number(form.cooldown);
     if (form.cooldown.trim() === "" || !Number.isFinite(cooldown)) bad = true;
-    else if (cooldown < COOLDOWN_MIN || cooldown > COOLDOWN_MAX) {
+    else if (!Number.isInteger(cooldown)) {
+      // 後端 `_as_int(cooldown_secs)` 同樣拒非整數(review A8 round-1 SP1)
+      setLocalError("冷卻秒數須為整數");
+      return;
+    } else if (cooldown < COOLDOWN_MIN || cooldown > COOLDOWN_MAX) {
       setLocalError(`冷卻秒數須在 ${COOLDOWN_MIN}–${COOLDOWN_MAX} 之間`);
       return;
     }

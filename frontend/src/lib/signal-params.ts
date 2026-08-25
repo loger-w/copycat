@@ -14,6 +14,8 @@ import type { RuleKind } from "@/hooks/useSignalRules";
  *  由 `tests/fixtures/signal_param_specs.json` 的 `cooldown` 釘住(兩邊 parity 各一條)。 */
 export const COOLDOWN_MIN = 60;
 export const COOLDOWN_MAX = 86_400;
+/** 「新規則」表單的冷卻初值(字串,同表單慣例);parity 測試釘「落在界內的整數」。 */
+export const COOLDOWN_DEFAULT = "300";
 
 export interface ParamField {
   key: string;
