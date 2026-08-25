@@ -1,0 +1,26 @@
+{
+  "skill": "code-review-two-axis",
+  "fixed_point": "44bb3fe8",
+  "reviewed_commits": ["06582cb4 🟢 test [red]", "288bad13 🔴 fix"],
+  "reviewers": {"standards": "opus", "spec": "opus"},
+  "standards": [
+    {"id": "ST1", "severity": "P2", "kind": "hard", "summary": "test_index_engine 新案手刻 for/sleep 輪詢,同檔已 import wait_until(helpers/wait.py 明訂唯一寫法)", "disposition": "accepted → wait_until"},
+    {"id": "ST2", "severity": "P3", "kind": "hard", "summary": "🔴 288bad13 內含 _disconnect_locked 抽出(🔵)", "disposition": "accepted(記錄偏離)"},
+    {"id": "ST3", "severity": "P2", "kind": "judgement", "smell": "Mysterious Name", "summary": "WARNING 仍寫「dispose: api.lock busy」,收工分支現也走這條", "disposition": "accepted → 「Disconnect: api.lock busy」"},
+    {"id": "ST4", "severity": "P2", "kind": "judgement", "summary": "close_worst_secs docstring 第 1 項與碼不符(收工分支持 _api_lock 內再等 api.lock ≤ 22 s)", "disposition": "accepted → docstring 補;總上界 34 不變(互斥)"},
+    {"id": "ST5", "severity": "P3", "kind": "judgement", "summary": "_disconnect_locked docstring 未寫鎖序", "disposition": "accepted → 補「_api_lock → api.lock 不得反轉」"},
+    {"id": "ST-ok", "summary": "死鎖掃描無反向路徑;_schedule_reconnect_retry 承重非 Middle Man;backend-conventions / tc4-market-facts 相符;白名單相符", "disposition": "核過無問題"}
+  ],
+  "spec": [
+    {"id": "SP1", "severity": "P2", "summary": "clear_stale=True 分支不判進展 → 新 session N 號窗仍 stub 時 stale=False、variant 不 bump;auto-default 只在「N 號窗健康」前提下成立", "disposition": "accepted(變形)→ variant > 0 且零新鍵才 bump + WARNING;variant 0 路徑不動(盤外零新鍵 ≠ 毒化);stale 維持樂觀清(watchdog 職權)→ 列 user 知情"},
+    {"id": "SP2", "severity": "P2", "summary": "verification §4 判準「重抓的 window_variant 應是 N」無對應 log", "disposition": "accepted → _schedule_reconnect_retry 印 log;判準改指"},
+    {"id": "SP3", "severity": "P3", "summary": "§2.6 S2 後半「不 Disconnect 則 process 不退」錯句未處置,本輪 hunk 照抄", "disposition": "accepted(本 hunk 改)+ 申報(tc4.py 另兩處 / futures_engine 三處 → B 類 docs chore)"},
+    {"id": "SP4", "severity": "P3", "summary": "change-spec §2「毒鎖路徑同一發、不另加」事實錯(兩分支互斥)", "disposition": "accepted → §2 改寫;docstring 同 ST4"},
+    {"id": "SP-ok", "summary": "目標表逐字相符;測試可分辨用了 2 / 用了 0;cancel 在飛 heal 的退避不重複不跳過;無 scope creep", "disposition": "核過無問題"}
+  ],
+  "post_review_increment": {
+    "range": "commits 3–4(🟢 [red] 無進展 bump 案;🔴 bump + log + 字面 + docstring)",
+    "checks": ["紅態 1 failed(wait_until 逾時,variant 停 2)", "target 兩檔 + ruff + pyright + 全量 pytest 重跑(verification §3)"]
+  },
+  "disposition": "Standards 5 條:接受 4、偏離記錄 1;Spec 4 條:接受 3(1 變形)、接受+申報 1。"
+}
