@@ -771,4 +771,47 @@ describe("WatchlistManagerDialog 改名被拒時保留編輯框(review A4)", () 
     expect(putBodies).toHaveLength(1);
     expect(screen.queryByText("群組名稱不合法")).toBeNull();
   });
+
+  /** review round-1 SP1:守門的解除不能只掛在 `onError` / `onDone` —— 佇列有零回呼的早退
+   *  (`isSameWatchlist` 深比對 / 世代作廢 / 基底未載入)。最實的一條 = 刪組在途改名(N118 情境):
+   *  輪到時 `from` 已不在,`renameGroup` 回同內容新物件 → 零 PUT 零回呼 → 守門永久卡死,之後
+   *  每次 ✎ + Enter 全無反應、零訊號。守門必須在**這一發 settle**(不論哪條路)時解除。 */
+  it("刪組在途改名(from 已消失)→ 零 PUT,之後改別組仍送得出去(守門一定解除)", async () => {
+    gatePuts();
+    open();
+    fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.click(screen.getByLabelText("改名 觀察")); // 列還在(wl prop 未更新),排隊在刪組後面
+    const doomed = screen.getByDisplayValue("觀察");
+    fireEvent.change(doomed, { target: { value: "舊組新名" } });
+    fireEvent.keyDown(doomed, { key: "Enter" });
+    releaseOk(); // 刪組落地 → 改名輪到時 from 已不在 → 深比對早退,零 PUT 零回呼
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    // 使用者放棄那個框,改去改另一組:守門若沒解除,這一發被靜默吞掉
+    fireEvent.keyDown(doomed, { key: "Escape" });
+    fireEvent.click(screen.getByLabelText("改名 主力"));
+    const next = screen.getByDisplayValue("主力");
+    fireEvent.change(next, { target: { value: "強勢" } });
+    fireEvent.keyDown(next, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]!.groups.map((g) => g.name)).toEqual(["強勢"]);
+    releaseOk();
+  });
+
+  it("A 組改名在途,Escape 後改 B 組 → B 那一發照送(守門綁單一動作,不是全窗)", async () => {
+    gatePuts();
+    open();
+    const a = startRename("強勢"); // 主力 → 強勢,在途
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.keyDown(a, { key: "Escape" });
+    fireEvent.click(screen.getByLabelText("改名 觀察"));
+    const b = screen.getByDisplayValue("觀察");
+    fireEvent.change(b, { target: { value: "追蹤" } });
+    fireEvent.keyDown(b, { key: "Enter" });
+    releaseOk();
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+    expect(putBodies[1]!.groups.map((g) => g.name)).toEqual(["強勢", "追蹤"]);
+    releaseOk();
+  });
 });
