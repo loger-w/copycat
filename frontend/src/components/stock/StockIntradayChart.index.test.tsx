@@ -55,7 +55,7 @@ const OVERLAY_IDX: StockOverlay = {
  *  掛牌是 KR-1 的唯一訊號不可被推,所以該讓位的是 MA。 */
 const OVERLAY_MA_TOP: StockOverlay = { ...OVERLAY_IDX, ma5: 23_250_000 };
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false };
 
 let fetchMock: Mock;
 
@@ -262,9 +262,9 @@ describe("W-1:mode 預設 = stock,個股路徑零變化", () => {
     expect(container.querySelector("figcaption")).toBeTruthy();
     expect(container.querySelector("figure")).toBeTruthy();
     expect(container.querySelectorAll('[data-testid^="overlay-peg-"]').length).toBe(0);
-    // toggle 列五顆(均價 / CDP / MA / 量分佈 / 成交點)
+    // toggle 列七顆(均價 / CDP / MA / 量分佈 / 成交點 + F1 加權 / 櫃買)
     expect([...container.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-      "均價", "CDP", "MA", "量分佈", "成交點",
+      "均價", "CDP", "MA", "量分佈", "成交點", "加權", "櫃買",
     ]);
   });
 

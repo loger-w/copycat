@@ -628,7 +628,7 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
 
 // 🟢 SC-2 / D4:toggle 五鈕上提到圖牆頂(R2 SC-6 加入「成交點」)(卡片內不得有 button —— 點它會連帶切主檔)。
 describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
-  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 五鈕", async () => {
+  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 / 加權 / 櫃買 七鈕", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     for (const [key, label] of [
@@ -638,6 +638,9 @@ describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
       ["vp", "量分佈"],
       // 🟢 R2 SC-5:label 與單檔頁逐字相同(同一個圖層兩個畫面不同名字要使用者自己對照)
       ["fills", "成交點"],
+      // 🟢 F1(chart-ux-batch-0826):指數疊線兩鈕,label 與單檔頁逐字相同
+      ["idxTwse", "加權"],
+      ["idxOtc", "櫃買"],
     ] as const) {
       const btn = screen.getByTestId(`grid-toggle-${key}`);
       expect(btn.textContent).toBe(label);

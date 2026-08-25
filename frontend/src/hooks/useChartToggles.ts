@@ -13,6 +13,10 @@ export interface ChartToggles {
   vp: boolean;
   /** 分時圖上「我當日有成交的委託」▲/▼ 標記(個股 / 個股期單檔頁 + 群組圖牆) */
   fills: boolean;
+  /** 個股分時圖疊加權指數即時走勢(相對昨收 % 映到個股價格軸;F1) */
+  idxTwse: boolean;
+  /** 同上,櫃買指數 */
+  idxOtc: boolean;
 }
 
 /** 存檔 schema 版本。**storage-only,不屬 `ChartToggles`** —— 洩進 toggles 物件會讓
@@ -43,6 +47,10 @@ const DEFAULTS: ChartToggles = {
   bb: true,
   vp: true,
   fills: true,
+  // 指數疊線預設**關**(F1,auto-default):疊線是加在價線上的視覺噪音,user 要的是
+  // 「可以開關」不是常駐;新鍵同樣不 bump TOGGLES_VERSION(理由與 `vp` 逐字相同)。
+  idxTwse: false,
+  idxOtc: false,
 };
 
 interface Stored extends Partial<ChartToggles> {

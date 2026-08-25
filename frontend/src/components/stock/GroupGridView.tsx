@@ -10,6 +10,7 @@ import { STOCK_GROUP_KEY } from "@/lib/constants";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
+import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
 import { ymdOf } from "@/lib/ladder-lots";
 import {
   cardText,
@@ -46,6 +47,9 @@ interface Props {
   /** 自選 query 失敗(同上)。**手上還有舊資料時不採用**:群組結構是慢變數,上一份
    *  仍然有用,拿一句錯誤訊息換掉它是拿走使用者唯一看得到的東西。 */
   wlError?: boolean;
+  /** 加權 / 櫃買即時序列(F1;App 持有)。只在指數 toggle 開著時往卡片傳 —— 序列每秒換
+   *  identity,關著也傳的話 50 張卡每秒全部重畫,memo 形同虛設。 */
+  index?: IndexOverlaySeries | null;
 }
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
@@ -117,6 +121,7 @@ const GroupCard = memo(function GroupCard({
   quote,
   active,
   toggles,
+  index,
   fills,
   positions,
   discount,
@@ -131,6 +136,8 @@ const GroupCard = memo(function GroupCard({
    *  穿進 memo 邊界。註:`set` 自 2026-08-24 起已包 useCallback 身分穩定,舊理由
    *  「每 render 新 identity 打穿 memo」不再成立,但「卡片只讀」仍然成立) */
   toggles: ChartToggles;
+  /** 加權 / 櫃買即時序列(F1);toggle 關著時恆 null(identity 穩定) */
+  index: IndexOverlaySeries | null;
   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
    *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
   fills: readonly FillPoint[];
@@ -228,6 +235,7 @@ const GroupCard = memo(function GroupCard({
           liveP={quote?.p ?? null}
           toggles={toggles}
           fills={fills}
+          index={index}
         />
       )}
     </div>
@@ -237,15 +245,20 @@ const GroupCard = memo(function GroupCard({
 /** 圖牆頂 toggle 列的五鈕(SC-2;成交點於 R2 SC-6 加入)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
  *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
  *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
-const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp" | "fills"; label: string }[] = [
+const GRID_TOGGLES: {
+  key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc";
+  label: string;
+}[] = [
   { key: "vwap", label: "均價" },
   { key: "cdp", label: "CDP" },
   { key: "ma", label: "MA" },
   { key: "vp", label: "量分佈" },
   { key: "fills", label: "成交點" },
+  { key: "idxTwse", label: "加權" },
+  { key: "idxOtc", label: "櫃買" },
 ];
 
-export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError }: Props) {
+export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError, index = null }: Props) {
   const [picked, setPicked] = useState<string | null>(() => readLocal(STOCK_GROUP_KEY));
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
   // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
@@ -383,6 +396,7 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
               quote={quotes[code]}
               active={code === active}
               toggles={toggles}
+              index={toggles.idxTwse || toggles.idxOtc ? index : null}
               // 零筆的 code 不入 map → 一律回同一個 `EMPTY_FILLS`(identity 穩定)
               fills={fillsMap.get(code) ?? EMPTY_FILLS}
               // 無倉的 code 不入 map → 一律回同一個 `EMPTY_POSITIONS`(identity 穩定)
