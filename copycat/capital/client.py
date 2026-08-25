@@ -216,6 +216,9 @@ class CapitalClient:
         self._futures_account: str | None = None  # _init_com 自動發現(TF 市場)
         self.store = CapitalStore()  # 委託/部位快取:回報事件寫入、REST 讀
         self._broadcast: Callable[[dict[str, object]], None] | None = None
+        # 最近一筆成交到達的 monotonic(F5 觀測):回查鏈三段收尾各印「自成交起 N ms」,
+        # 讓真成交的耗時有數字可報;鏈落地即清,60s 定時輪詢那些輪不印(避免洗版)。
+        self._fill_seen_at: float | None = None
         self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
         self._profit = BalanceCollector(
             on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
@@ -404,9 +407,23 @@ class CapitalClient:
             # 刪單回報(C)除外:尾欄是**刪單自己**的序號、KeyNo 是原委託,必定不同 ——
             # 2026-08-25 實錄 16 筆全是盤中單的刪單,沒有一筆是預約單(fix/tc4-logout…)。
             logger.warning("Capital reply: KeyNo=%s 尾欄序號=%s 不同(預約單?)", rec.seq_no, rec.alt_seq_no)
-        self.store.apply_reply(rec)
+        t0 = time.monotonic()
+        changed = self.store.apply_reply(rec)
         if rec.status_raw == "D":  # 成交 → debounce 重查(連續成交只查尾端一次)
+            self._fill_seen_at = t0
             self._mark_balance_dirty()
+            if changed:
+                # 成交當下就把部位推出去(F5):回查鏈 0.5 s debounce + 三段串行往返是使用者
+                # 「下單後倉位 / 均價很慢」的結構性來源;先推樂觀套用的部位,鏈落地再全量覆蓋。
+                # `source: fill` 讓讀者分得出這是先到的還是券商確認的(前端目前一律 invalidate)。
+                self._emit({"event": "capital_position", "data": {
+                    "count": len(self.store.positions()),
+                    "source": "fill",
+                }})
+                logger.info(
+                    "成交樂觀套用部位: seq=%s stock=%s (%.1f ms)",
+                    rec.seq_no, rec.stock_no, (time.monotonic() - t0) * 1000,
+                )
         if rec.seq_no:
             self._emit({"event": "capital_order", "data": {
                 "seq_no": rec.seq_no,
@@ -493,6 +510,7 @@ class CapitalClient:
         """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
         同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
         self._pending_sec = positions
+        self._log_chain_stage("庫存段收齊 %d 列" % len(positions))
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()
@@ -511,6 +529,7 @@ class CapitalClient:
         if pending is None:
             logger.warning("損益報告遲到(本輪 pending 已發布),丟棄 %d 列", len(rows))
             return
+        self._log_chain_stage("損益段收齊 %d 列" % len(rows))
         by_key = {(p.stock_no, p.kind): p for p in pending}
         for r in rows:
             # 兩段判別:查無股號 = 靜默(部位清單以即時庫存為權威,且 balance 側丟掉的列
@@ -576,8 +595,26 @@ class CapitalClient:
         self._pending_deadline = None
         self._balance_inflight_until = None  # 三個旗標同組清,且在 emit 前(例外不得滯留守門)
         merged = sec + fut_rows
+        # 樂觀套用的期貨契約碼(`contract_from_fill`,真樣本僅一筆)與券商 OI 鍵對不對得上,
+        # 只有真成交那一輪看得出來:落地前比一次鍵集合,不同就留一行(校準素材,F5)。
+        opt_fut = {p.stock_no for p in self.store.positions() if p.market == "fut"}
+        truth_fut = {p.stock_no for p in fut_rows}
+        if self._fill_seen_at is not None and opt_fut != truth_fut:
+            logger.info("期貨部位鍵差異(樂觀 vs 券商): %s vs %s", sorted(opt_fut), sorted(truth_fut))
         self.store.set_positions(merged)
+        self._log_chain_stage("部位落地 %d 列" % len(merged))
+        self._fill_seen_at = None
         self._emit({"event": "capital_position", "data": {"count": len(merged)}})
+
+    def _log_chain_stage(self, what: str) -> None:
+        """回查鏈進度(F5 觀測)。成交觸發的輪印 INFO 並附「自成交起 N ms」;
+        60s 定時輪詢的輪降 DEBUG —— 現狀成功路徑零 log,真成交的耗時無從量起。"""
+        if self._fill_seen_at is None:
+            logger.debug("balance 鏈: %s", what)
+            return
+        logger.info(
+            "balance 鏈: %s(自成交起 %.0f ms)", what, (time.monotonic() - self._fill_seen_at) * 1000
+        )
 
     def _poll_pending(self) -> None:
         """幫浦圈 watchdog:損益/期貨查詢零事件卡死時,pending 逾時以已收資料寫入。

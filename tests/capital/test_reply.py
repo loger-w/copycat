@@ -135,3 +135,10 @@ def test_reply_record_is_dataclass() -> None:
     r = parse_onnewdata(RAW_N_PREORDER)
     r2 = dataclasses.replace(r, order_err="Y", error_msg="x")
     assert r2.order_err == "Y" and r2.seq_no == r.seq_no
+
+
+def test_parse_contract_ym_only_for_six_digit_field() -> None:
+    assert parse_onnewdata(RAW_TF_NEW).contract_ym == "202606"
+    arr = RAW_TF_NEW.split(",")
+    arr[33] = ""
+    assert parse_onnewdata(",".join(arr)).contract_ym is None

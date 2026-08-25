@@ -9,6 +9,7 @@ import dataclasses
 import pytest
 
 from copycat.capital.reply import ReplyRecord, parse_onnewdata
+from copycat.capital.models import Position
 from copycat.capital.store import CapitalStore
 
 SEQ_A = "2313091378319"
@@ -576,3 +577,113 @@ def test_note_price_type_prune_keeps_overlapping_candidates() -> None:
     by_seq = {o.seq_no: o for o in s.orders()}
     assert by_seq[SEQ_A].price_type == "market"
     assert by_seq[SEQ_B].price_type == "market"
+
+
+# ---------------------------------------------------------------------------
+# 成交樂觀套用(F5):apply_reply 回傳「部位有沒有變」,規則見 CapitalStore._apply_fill_locked
+# ---------------------------------------------------------------------------
+
+
+def _fut_evt(seq: str, typ: str, bs: str = "BN", qty: str = "1", price: str = "873.0") -> ReplyRecord:
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = seq, "TF", typ, "N"
+    arr[6], arr[8], arr[11], arr[20] = bs, "QEF06", price, qty
+    arr[32], arr[33] = "FIQEF", "202606"
+    return parse_onnewdata(",".join(arr))
+
+
+def test_fill_opens_position_immediately_with_fill_price() -> None:
+    s = CapitalStore()
+    assert s.apply_reply(_evt(typ="N", qty="2000")) is False  # 委託不動部位
+    assert s.apply_reply(_evt(typ="D", qty="2000", price="83.5000")) is True
+    p = s.position_for("4989")
+    assert p is not None and (p.market, p.qty, p.kind, p.avg_price) == ("sec", 2, "cash", 83.5)
+
+
+def test_partial_fills_apply_only_whole_lot_increments() -> None:
+    s = CapitalStore()
+    assert s.apply_reply(_evt(typ="D", qty="500", price="80.0000")) is False  # 半張不套
+    assert s.apply_reply(_evt(typ="D", qty="500", price="82.0000")) is True  # 湊滿 1 張
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 1 and p.avg_price == 81.0  # 這張單的成交均價
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0000")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 2 and p.avg_price == pytest.approx(82.5)
+
+
+def test_fill_adds_to_existing_position_weighted_and_clears_pnl_snapshot() -> None:
+    s = CapitalStore()
+    s.set_positions(
+        [
+            Position(
+                market="sec", stock_no="4989", qty=1, avg_price=80.0, pnl_base=100.0,
+                pnl_base_price=81.0, pnl_cost=80000.0,
+            )
+        ]
+    )
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0000")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 2 and p.avg_price == 82.0
+    assert (p.pnl_base, p.pnl_base_price, p.pnl_cost) == (None, None, None)
+
+
+def test_fill_reducing_position_keeps_avg_and_zero_removes_row() -> None:
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=80.0)])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S00R2", qty="1000", price="90.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 1 and p.avg_price == 80.0
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="S00R2", qty="1000", price="91.0")) is True
+    assert s.position_for("4989") is None
+
+
+def test_fill_with_unknown_prior_avg_leaves_avg_none() -> None:
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 4 and p.avg_price is None
+
+
+def test_short_sell_fill_is_negative_lots_under_short_kind() -> None:
+    s = CapitalStore()
+    assert s.apply_reply(_evt(typ="D", bs="S04R2", qty="1000", price="84.0")) is True
+    p = s.position_for("4989", "short")
+    assert p is not None and p.qty == -1 and p.kind == "short"
+    assert s.position_for("4989", "cash") is None
+
+
+def test_unknown_or_odd_lot_fills_are_not_applied() -> None:
+    s = CapitalStore()
+    assert s.apply_reply(_evt(typ="D", bs="B08R2", qty="1000")) is False  # 無券:不在對映表
+    assert s.apply_reply(_evt(typ="D", market="TL", qty="1000")) is False  # 零股市場
+    assert s.positions() == []
+
+
+def test_future_fill_applies_under_exchange_contract_code() -> None:
+    s = CapitalStore()
+    assert s.apply_reply(_fut_evt("F1", "N")) is False
+    assert s.apply_reply(_fut_evt("F1", "D", qty="2", price="873.0")) is True
+    p = s.position_for("QEFF6")
+    assert p is not None and (p.market, p.qty, p.kind, p.avg_price) == ("fut", 2, "cash", 873.0)
+    assert s.apply_reply(_fut_evt("F2", "D", bs="SO", qty="1", price="880.0")) is True
+    p = s.position_for("QEFF6")
+    assert p is not None and p.qty == 1 and p.avg_price == 873.0
+
+
+def test_option_fill_is_not_applied() -> None:
+    s = CapitalStore()
+    arr = [""] * 48
+    arr[0], arr[1], arr[2], arr[3] = "O1", "TO", "D", "N"
+    arr[6], arr[8], arr[11], arr[20] = "SY", "TXO2200006", "50.0", "1"
+    arr[33] = "202606"
+    assert s.apply_reply(parse_onnewdata(",".join(arr))) is False
+    assert s.positions() == []
+
+
+def test_broker_snapshot_overrides_optimistic_fill() -> None:
+    s = CapitalStore()
+    s.apply_reply(_evt(typ="D", qty="1000", price="84.0"))
+    s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 3 and p.avg_price == 84.0  # 均價沿用既有語意(損益回填前)
