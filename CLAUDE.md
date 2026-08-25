@@ -186,12 +186,15 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   後端改成別的語意(訊息計數 / 每次 snapshot 自增)= 改契約要同時改兩邊;漂掉的症狀是
   **成交明細 tbody 靜默整片重掛**(畫面只是閃一下,零錯誤訊號)。
   例外已知且刻意:`apply_backfill` 的 seq 跳增會讓號整段平移一次(回補當下重掛一次)。
-- **訊號規則參數值域前後端同表**(2026-08-25 起,N055):產生點 `copycat/signal_rules.py::PARAM_SPECS`
-  (唯一擋人的地方:出界 → `INVALID_RULE`),前端鏡像 `frontend/src/lib/signal-params.ts::PARAM_FIELDS`
-  的 `min`/`max`(規則窗的即時值域提示與 input 屬性)。漂掉的症狀:前端寬於後端 → 使用者拿回泛用
-  INVALID_RULE;前端窄於後端 → 合法值被擋、說明還寫著錯的界 —— 兩邊都零錯誤訊號。以共用 golden
-  fixture `tests/fixtures/signal_param_specs.json` 釘住:`tests/test_signal_rules.py::
-  test_param_specs_parity_with_frontend` + `frontend/src/lib/signal-param-parity.test.ts` 各一條。
+- **訊號規則參數契約前後端同表**(2026-08-25 起,N055;08-26 A8 補齊):產生點 `copycat/signal_rules.py`
+  的 `PARAM_SPECS`(值域;出界 → `INVALID_RULE`)、`INT_PARAM_KEYS`(非整數拒收)、`COOLDOWN_MIN/MAX`
+  —— 唯一擋人的地方;前端鏡像 `frontend/src/lib/signal-params.ts`:`PARAM_FIELDS` 的 `min`/`max`/`integer`
+  (規則窗即時提示與 input 屬性、送出前「<欄名>須為整數」)+ `COOLDOWN_MIN/MAX`。漂掉的症狀:前端寬於
+  後端 → 使用者拿回泛用 INVALID_RULE;前端窄於後端 → 合法值被擋、說明還寫著錯的界 —— 兩邊都零錯誤訊號。
+  以共用 golden fixture `tests/fixtures/signal_param_specs.json`(`specs` / `int_keys` / `cooldown`)釘住:
+  `tests/test_signal_rules.py::test_param_specs_parity_with_frontend` + `frontend/src/lib/
+  signal-param-parity.test.ts` 各自斷言。**前端「新規則」預設值(`ParamField.default`)不在 fixture**(後端沒有
+  對應概念,種子走 `SignalsConfig`),由前端 parity 測試釘「落在值域內、整數鍵為整數」。
 - **期貨 CDP/MA 前後端同式**(2026-08-24 起):產生點 `copycat/server/overlay.py::compute_cdp/compute_ma`
   (+ `build_overlay` 的 `date < today` 界),前端鏡像 `frontend/src/lib/futures-overlay.ts`
   (期貨分時不打 `/api/stock/overlay` —— 那支吃股號,拿現股 CDP 疊期貨價是假陳述)。

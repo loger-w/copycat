@@ -1,0 +1,24 @@
+{
+  "skill": "code-review-two-axis",
+  "fixed_point": "7d50c948",
+  "reviewed_commits": ["379d08c2 🟢 test [red]", "b5fcc88a 🔴 fix"],
+  "reviewers": {"standards": "opus", "spec": "opus"},
+  "standards": [
+    {"id": "ST1", "severity": "P2", "kind": "judgement", "summary": "九個預設值搬進 lib 只有 cdp_cross 兩值有字面鎖;parity 的 ∈[min,max] 擋不住 3→30", "disposition": "accepted → parity 加字面 golden(四 kind + COOLDOWN_DEFAULT)"},
+    {"id": "ST2", "severity": "P3", "kind": "judgement", "summary": "整數鍵集合 actual 未去重,同鍵兩 kind 都標 integer 會假紅", "disposition": "accepted → 兩邊 Set"},
+    {"id": "ST3", "severity": "P3", "kind": "hard", "summary": "CLAUDE.md §4 已改但未 commit;artifact 未追蹤", "disposition": "隨 chore commit"},
+    {"id": "ST4", "severity": "P3", "kind": "judgement", "summary": "🔴 b5fcc88a 含純搬移(PARAM_DEFAULTS / COOLDOWN → lib)", "disposition": "accepted(記錄偏離):紅測試已 import 自 lib,拆開留壞 commit"},
+    {"id": "ST-ok", "summary": "frontend-testing 字面量原則不適用「同物件兩欄位不變量」;paramDefaults 是真轉換;integer:false 顯式;無 max-len;整數檢查與後端同序;測試慣例合", "disposition": "核過無問題"}
+  ],
+  "spec": [
+    {"id": "SP1", "severity": "P2", "summary": "cooldown_secs 後端 _as_int 拒非整數,前端未擋 → 填 300.5 拿泛用 INVALID_RULE(Spec 4 樣態漏一半)", "disposition": "accepted → submit 加 Number.isInteger + 「冷卻秒數須為整數」+ Dialog 一案"},
+    {"id": "SP2", "severity": "P2", "summary": "契約擴張(int_keys / cooldown / default)未同步 CLAUDE.md §4", "disposition": "review 期間已改寫;隨 chore commit"},
+    {"id": "SP3", "severity": "P3", "summary": "blankForm.cooldown \"300\" 未進 lib、無落界斷言", "disposition": "accepted → COOLDOWN_DEFAULT 進 lib + parity 釘"},
+    {"id": "SP-ok", "summary": "整數檢查與 _normalize_params 逐字對齊(2.0 / 1e3 / 空 / NaN);integer 旗標集 = INT_PARAM_KEYS = SignalsConfig 三個 int 欄;toForm 等價;default 不進 fixture 理由成立(後端種子與前端初值本就分歧,既存);parity mutation 推演三案皆真抓;fixture 鍵名打錯兩邊都紅;auto-default 無方向性抉擇;白名單外零改動", "disposition": "核過無問題"}
+  ],
+  "post_review_increment": {
+    "range": "commits 3–4(🟢 [red] 四案;🔴 冷卻整數 + COOLDOWN_DEFAULT)",
+    "checks": ["紅態 2 failed(冷卻非整數 / COOLDOWN_DEFAULT)→ 實作後 33 passed", "tsc / eslint / react-doctor 重跑", "全量 vitest 重跑(verification §3)"]
+  },
+  "disposition": "Standards 4 條:接受 3(1 記錄偏離)、事實 1;Spec 3 條:接受 2、已改待 commit 1。"
+}
