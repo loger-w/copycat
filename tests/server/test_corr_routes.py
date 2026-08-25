@@ -32,10 +32,34 @@ class TestCorrStateRoute:
             body = r.json()
             assert body["base"] == "TXF"
             assert body["type"] == "corr"
-            # 腿集合 = repo configs/correlation.json(2026-08-17 起七腿含小日經 NK225M)
-            assert set(body["legs"]) == {"TXF", "TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
+            # 腿集合 = repo configs/correlation.json(2026-08-26 F4 起十一腿;逐字契約鎖在
+            # tests/test_corr_config.py,這裡鎖的是 route 有把設定檔那組原封不動吐出來)
+            assert set(body["legs"]) == {
+                "TXF",
+                "TWN",
+                "YM",
+                "ES",
+                "NQ",
+                "SXF",
+                "NK225M",
+                "VX",
+                "CL",
+                "GC",
+                "TSMC",
+            }
             # 配對 = 各腿 vs 台指(base 不與自己配對)
-            assert set(body["pairs"]) == {"TWN", "YM", "ES", "NQ", "SXF", "NK225M"}
+            assert set(body["pairs"]) == {
+                "TWN",
+                "YM",
+                "ES",
+                "NQ",
+                "SXF",
+                "NK225M",
+                "VX",
+                "CL",
+                "GC",
+                "TSMC",
+            }
 
     def test_leg_labels_are_traditional_chinese(self) -> None:
         """前端不寫死對照表 → label 必須由後端帶(SC-7)。"""
@@ -44,14 +68,19 @@ class TestCorrStateRoute:
             assert legs["SXF"]["label"] == "費半"
             assert legs["TWN"]["label"] == "富台"
 
-    def test_engine_subscribes_six_tc4_legs_not_the_base(self) -> None:
-        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(七腿 → 本引擎訂六)。"""
+    def test_engine_subscribes_every_tc4_leg_but_not_the_base(self) -> None:
+        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(十一腿 → 本引擎訂十)。"""
         src = FakeCorrSource()
         with _client(src) as client:
             client.get("/api/corr/state")
             assert "TC.F.TWF.TXF.HOT" not in src.subscribed
             assert "TC.F.OSE.NK225M.HOT" in src.subscribed
-            assert len(src.subscribed) == 6
+            # F4 四腿(台積電是**現貨** TC.S.TWS. 段,不是個股期)
+            assert "TC.F.CFE.VX.HOT" in src.subscribed
+            assert "TC.F.CME.CL.HOT" in src.subscribed
+            assert "TC.F.CME.GC.HOT" in src.subscribed
+            assert "TC.S.TWS.2330" in src.subscribed
+            assert len(src.subscribed) == 10
 
 
 class TestCorrWebSocket:

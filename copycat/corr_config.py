@@ -67,6 +67,17 @@ DEFAULT_CONFIG = CorrConfig(
         # 早就有它,預設卻沒有 —— 設定檔壞掉退回這裡時,江波圖 / 相關係數會**真的少一腿**,
         # 而畫面上只是少一條線,零錯誤訊號。預設必須與 repo 真檔逐腿相同。
         Leg("NK225M", "小日經", "TC.F.OSE.NK225M.HOT", SOURCE_TC4),
+        # 第 8–11 腿(2026-08-26 F4;`spikes/corr_legs_probe.py` 01:02 實測:VX 45 s 推 19 則、
+        # CL 163、GC 172,1K 首頁各 50 列)。VIX 用標準 VX 不用 VXM(45 s 零推播、1K 零列);
+        # 原油 / 黃金用標準 CL / GC 不用微型 MCL / MGC(相關係數看價格方向,標準合約流動性更高)。
+        Leg("VX", "VIX", "TC.F.CFE.VX.HOT", SOURCE_TC4),
+        Leg("CL", "原油", "TC.F.CME.CL.HOT", SOURCE_TC4),
+        Leg("GC", "黃金", "TC.F.CME.GC.HOT", SOURCE_TC4),
+        # 台積電走**現貨**不走個股期 CDF:CDF 的 `TC.F.TWF.` 前綴會吃台期交日夜盤閘,而現貨
+        # 13:30 收盤、無夜盤,不是同一把尺。現貨段自己的閘見 `corr_source.segment_leg_gate`。
+        # 台幣匯率**不加**:全樹掃 TWD / TW* 只命中 SGX 富台(既有腿)—— 達錢 4 現貨段只有
+        # TWS、CME 與台期交的匯率期貨都沒有 TWD。
+        Leg("TSMC", "台積電", "TC.S.TWS.2330", SOURCE_TC4),
     ),
     base="TXF",
 )

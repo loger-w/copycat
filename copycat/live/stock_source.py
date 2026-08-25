@@ -442,9 +442,18 @@ def stock_window(trade_date: str) -> tuple[str, str]:
     return f"{day}00", f"{day}06"
 
 
-def in_trading_hours_now() -> bool:
-    now = _dt.datetime.now().time()
-    return _TRADING_START <= now <= _TRADING_END
+def in_trading_hours_now(now: _dt.time | None = None) -> bool:
+    """台股現貨盤中(08:30 試撮起 – 13:35 收盤補正止)。
+
+    個股 / 指數 session 的健檢與自癒共用這一把;2026-08-26 F4 起 corr 的台積電現貨腿
+    也吃它(`corr_source.segment_leg_gate` 的 `tws` 那半邊)—— 現貨時段只有一張表,
+    第二張表的失效樣態是兩邊悄悄漂開,而畫面上兩邊都「看起來對」。
+
+    `now` 只給測試注入(簽名比照 `futures_source.in_futures_session_now`);預設 None
+    = 讀牆鐘,逐字等於改動前。
+    """
+    t = _dt.datetime.now().time() if now is None else now
+    return _TRADING_START <= t <= _TRADING_END
 
 
 class StockQuoteSource(TC4QuoteSource):
