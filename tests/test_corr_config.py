@@ -8,23 +8,32 @@ from pathlib import Path
 from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
 
 
+#: 腿的**逐字**契約(key / label / symbol / source),順序 = `configs/correlation.json`。
+#: 順序本身是契約:江波圖顏色依腿**序位**指派(`river-colors.ts`),插腿會整組換色。
+_EXPECTED_LEGS: tuple[tuple[str, str, str, str], ...] = (
+    ("TXF", "台指", "TC.F.TWF.TXF.HOT", "futures_engine"),
+    ("TWN", "富台", "TC.F.SGX.TWN.HOT", "tc4"),
+    ("YM", "道瓊", "TC.F.CBOT.YM.HOT", "tc4"),
+    ("ES", "標普", "TC.F.CME.ES.HOT", "tc4"),
+    ("NQ", "納指", "TC.F.CME.NQ.HOT", "tc4"),
+    ("SXF", "費半", "TC.F.TWF.SXF.HOT", "tc4"),
+    ("NK225M", "小日經", "TC.F.OSE.NK225M.HOT", "tc4"),
+    ("VX", "VIX", "TC.F.CFE.VX.HOT", "tc4"),
+    ("CL", "原油", "TC.F.CME.CL.HOT", "tc4"),
+    ("GC", "黃金", "TC.F.CME.GC.HOT", "tc4"),
+    ("TSMC", "台積電", "TC.S.TWS.2330", "tc4"),
+)
+
+
 class TestDefaultConfig:
-    def test_has_seven_legs_matching_the_repo_config(self) -> None:
+    def test_has_eleven_legs_matching_the_repo_config(self) -> None:
         """N021:預設腿必須與 `configs/correlation.json` 同一組。
 
         缺一腿的失效樣態不是「少一條線」而已 —— 設定檔壞掉時 `load_config` 降級回
         DEFAULT_CONFIG,江波圖 / 相關係數會**真的少一腿**,而畫面上沒有任何錯誤訊號。
         """
-        assert len(DEFAULT_CONFIG.legs) == 7
-        assert [leg.key for leg in DEFAULT_CONFIG.legs] == [
-            "TXF",
-            "TWN",
-            "YM",
-            "ES",
-            "NQ",
-            "SXF",
-            "NK225M",
-        ]
+        assert len(DEFAULT_CONFIG.legs) == 11
+        assert [leg.key for leg in DEFAULT_CONFIG.legs] == [key for key, *_rest in _EXPECTED_LEGS]
 
     def test_base_is_txf_and_present_in_legs(self) -> None:
         assert DEFAULT_CONFIG.base == "TXF"
@@ -38,7 +47,7 @@ class TestDefaultConfig:
     def test_non_base_legs_are_tc4_subscriptions(self) -> None:
         others = [leg for leg in DEFAULT_CONFIG.legs if leg.key != DEFAULT_CONFIG.base]
         assert all(leg.source == "tc4" for leg in others)
-        assert len(others) == 6
+        assert len(others) == 10
 
     def test_windows_and_per_window_min_samples(self) -> None:
         assert DEFAULT_CONFIG.windows == (60, 300, 1800)
@@ -48,6 +57,21 @@ class TestDefaultConfig:
         labels = {leg.key: leg.label for leg in DEFAULT_CONFIG.legs}
         assert labels["SXF"] == "費半"
         assert labels["TWN"] == "富台"
+        # 2026-08-26 F4 四腿:VIX 是專有名詞維持原文,其餘一律繁中
+        assert labels["VX"] == "VIX"
+        assert labels["CL"] == "原油"
+        assert labels["GC"] == "黃金"
+        assert labels["TSMC"] == "台積電"
+
+    def test_the_tsmc_leg_is_the_cash_stock_not_a_stock_future(self) -> None:
+        """台積電腿走現貨 `TC.S.TWS.2330`(自癒閘 = 個股日盤窗)。
+
+        改成個股期 `TC.F.TWF.` 前綴的失效樣態不是報錯,而是**閘語意悄悄換人**:
+        那個前綴會落進台期交日夜盤閘(收 13:45 / 有夜盤),與現貨 13:30 收盤不同尺,
+        於是整個夜盤都在對一條收盤了的現貨腿 churn UNSUB+SUB。
+        """
+        tsmc = next(leg for leg in DEFAULT_CONFIG.legs if leg.key == "TSMC")
+        assert tsmc.symbol == "TC.S.TWS.2330"
 
 
 class TestLoadConfig:
@@ -117,20 +141,19 @@ class TestRepoConfigFile:
     2026-08-17 R5:第七腿小日經 `TC.F.OSE.NK225M.HOT`(D13 拍板;OSE 夜盤實測 175 則/60s,
     高於 NK225 102 / SGX NK 78)。**2026-08-25 N021 起 DEFAULT_CONFIG 同步補到七腿** ——
     降級路徑不得比真檔少一腿。
+
+    2026-08-26 F4:第 8–11 腿 VIX / 原油 / 黃金 / 台積電(2026-08-26 01:02 `corr_legs_probe`
+    實測:VX 45 s 推 19 則、CL 163、GC 172,1K 首頁各 50 列;台幣匯率全樹無 TWD 標的,不加)。
     """
 
-    def test_repo_config_has_seven_legs_with_nk225m(self) -> None:
+    def test_repo_config_has_eleven_legs_ending_with_the_f4_four(self) -> None:
         cfg = load_config(CONFIG_PATH)
 
         assert cfg is not DEFAULT_CONFIG, "真檔應成功載入,不得落回預設腿"
-        assert len(cfg.legs) == 7
-        nk = cfg.legs[-1]
-        assert (nk.key, nk.label, nk.symbol, nk.source) == (
-            "NK225M",
-            "小日經",
-            "TC.F.OSE.NK225M.HOT",
-            "tc4",
-        )
+        assert len(cfg.legs) == 11
+        assert [(leg.key, leg.label, leg.symbol, leg.source) for leg in cfg.legs] == [
+            *_EXPECTED_LEGS
+        ]
 
     def test_repo_config_matches_default_leg_for_leg(self) -> None:
         """白名單 W1:現有腿的 key/label/symbol/source 與順序不動,base 仍 TXF。

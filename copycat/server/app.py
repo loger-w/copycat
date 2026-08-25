@@ -388,17 +388,22 @@ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesS
 
 def _default_corr_source(calendar: TradingCalendar | None = None) -> CorrSource:
     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
-    from copycat.live.corr_source import CorrQuoteSource, taifex_leg_gate
+    from copycat.live import stock_source as stock_mod
+    from copycat.live.corr_source import CorrQuoteSource, segment_leg_gate
 
-    # **逐腿**閘(N051),不是 session 級:corr 這條 session 上同時掛著台期交段與
-    # SGX/CME/CBOT/OSE 段的腿,時段各不相同。session 級的閘全開時,台期交段的國外
+    # **逐腿**閘(N051),不是 session 級:corr 這條 session 上同時掛著台期交段、台股現貨段
+    # 與 SGX/CME/CBOT/CFE/OSE 段的腿,時段各不相同。session 級的閘全開時,台期交段的國外
     # 指數腿(SXF/UDF/SPF/UNF,與台指同時段同結算)在自己的休市段整晚每 240s 一發
     # UNSUB+SUB(2026-08-21 M0:SXF 三小時 8 發);全關則會把在自己盤中的海外腿一起
-    # 關掉(台灣連假 SGX / CME 照開)。日曆也只 AND 在台期交那半邊,理由同上。
+    # 關掉(台灣連假 SGX / CME 照開)。日曆也只 AND 在有閘的那兩段,理由同上。
+    #
+    # 現貨腿(F4 台積電)吃**個股** session 那把 `in_trading_hours_now`,不是期貨那把:
+    # 現貨 13:30 收盤且無夜盤,套期貨閘 = 整個夜盤都在對一條收盤了的腿空 churn。
     return CorrQuoteSource(
         port=_tc4_port(),
-        heal_symbol_active=taifex_leg_gate(
-            _heal_gate(calendar, futures_mod.in_futures_session_now)
+        heal_symbol_active=segment_leg_gate(
+            taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
+            tws=_heal_gate(calendar, stock_mod.in_trading_hours_now),
         ),
     )
 

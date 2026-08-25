@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import time
+from typing import Callable
 
 import pytest
 
-from copycat.live.corr_source import CorrQuoteSource, all_day_window
+from copycat.live.corr_source import CorrQuoteSource, all_day_window, segment_leg_gate
 from copycat.live.session import session_key, session_window
+from copycat.live.stock_source import in_trading_hours_now
 from tests.helpers.tc4_fakes import FakeApi, ok
 
 
@@ -132,3 +135,69 @@ class TestHandleRaw:
         src.handle_raw("TOPIC:{not json")
 
         assert got == []
+
+
+class TestSegmentLegGate:
+    """逐腿自癒閘的**前綴分派**(N051 + 2026-08-26 F4 台積電現貨腿)。
+
+    corr 是唯一一條 session 上掛著時段各不相同的腿的:台期交段(TXF/SXF)、台股現貨段
+    (2330)、以及 SGX / CME / CBOT / CFE / OSE 各段。閘分派錯的失效樣態沒有錯誤訊號 ——
+    要嘛整晚對一條收盤的腿發 UNSUB+SUB(churn),要嘛該救的腿整場不救(永久零推播)。
+    """
+
+    @staticmethod
+    def _gate(*, taifex: bool, tws: bool) -> Callable[[str], bool]:
+        return segment_leg_gate(taifex=lambda: taifex, tws=lambda: tws)
+
+    @pytest.mark.parametrize("clock", [True, False])
+    def test_taifex_segment_follows_the_futures_gate(self, clock: bool) -> None:
+        gate = self._gate(taifex=clock, tws=not clock)
+        assert gate("TC.F.TWF.SXF.HOT") is clock
+        assert gate("TC.F.TWF.TXF.HOT") is clock
+
+    @pytest.mark.parametrize("clock", [True, False])
+    def test_tws_segment_follows_the_stock_gate(self, clock: bool) -> None:
+        """台積電現貨腿吃**個股日盤**閘,不是台期交閘(兩者收盤 13:30 vs 13:45 不同尺)。"""
+        gate = self._gate(taifex=not clock, tws=clock)
+        assert gate("TC.S.TWS.2330") is clock
+
+    def test_overseas_segments_stay_ungated(self) -> None:
+        """SGX / CME / CBOT / CFE / OSE 段恆 True:時段未實測,猜錯 = 該救的腿整場不救。"""
+        gate = self._gate(taifex=False, tws=False)
+        for symbol in (
+            "TC.F.SGX.TWN.HOT",
+            "TC.F.CBOT.YM.HOT",
+            "TC.F.CME.ES.HOT",
+            "TC.F.CME.CL.HOT",
+            "TC.F.CME.GC.HOT",
+            "TC.F.CFE.VX.HOT",
+            "TC.F.OSE.NK225M.HOT",
+        ):
+            assert gate(symbol) is True, symbol
+
+    def test_the_two_clocks_are_independent(self) -> None:
+        """台股現貨 09:00–13:30 收盤後、台期交夜盤仍開的那一段:一關一開,不得互相牽動。"""
+        gate = self._gate(taifex=True, tws=False)
+        assert gate("TC.F.TWF.SXF.HOT") is True
+        assert gate("TC.S.TWS.2330") is False
+
+
+class TestTwsLegClock:
+    """台積電腿吃的那把牆鐘 = 個股 session 既有的 `in_trading_hours_now`(不另立第二張表)。
+
+    日曆 AND 那一半在 `app._default_corr_source`(見 tests/server/test_main_wiring.py)。
+    """
+
+    @pytest.mark.parametrize(
+        ("hh", "mm", "expected"),
+        [
+            (10, 0, True),  # 盤中
+            (8, 30, True),  # 試撮開始(現貨這段有推播,閘要開著才救得到)
+            (13, 35, True),  # 收盤後補正的最後一分
+            (14, 0, False),  # 收盤後:整個下午 + 夜盤不得 churn
+            (8, 29, False),
+            (2, 0, False),  # 凌晨(台期交夜盤仍開,現貨腿必須關)
+        ],
+    )
+    def test_stock_cash_session_only(self, hh: int, mm: int, expected: bool) -> None:
+        assert in_trading_hours_now(datetime.time(hh, mm)) is expected

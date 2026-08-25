@@ -20,10 +20,14 @@
   --color-ma20: #b794f4; /* MA20 紫 */
   --color-idx-otc: #3b82f6; /* 櫃買指數識別藍(重疊圖固定色,不隨漲跌) */
 
-  /* 江波圖腿色:依腿**序位**指派(腿清單走設定檔,顏色不綁 leg key;2026-08-17 起七腿)。
-     序位 0 = base 腿(台指)用最亮的近白色 + 粗線,其餘六色相互可辨且都不是紅/綠
+  /* 江波圖腿色:依腿**序位**指派(腿清單走設定檔,顏色不綁 leg key;2026-08-26 起十一腿)。
+     序位 0 = base 腿(台指)用最亮的近白色 + 粗線,其餘十色相互可辨且都不是紅/綠
      (紅綠在本專案是漲跌語意,拿來當腿識別色會誤讀);river-7 fuchsia 與 river-4 薰衣草紫
-     以飽和度區分、與 accent 桃紅以色相區分。 */
+     以飽和度區分、與 accent 桃紅以色相區分。
+     F4 補的 8–11(VIX / 原油 / 黃金 / 台積電):扣掉紅綠兩段色相後剩的空位已不多,故 8/9
+     取藍紫區僅存的兩個空檔(river-8 天藍與 river-2 靛藍以亮度分、與 river-5 青綠以色相分;
+     river-9 靛紫比 river-4 薰衣草深且飽和),10/11 改以**飽和度**開新軸(全盤僅此二色低飽和:
+     river-10 鋼灰藍、river-11 棕褐),不再硬擠色相。 */
   --color-river-1: #e8edf5;
   --color-river-2: #3b82f6;
   --color-river-3: #f0b429;
@@ -31,6 +35,10 @@
   --color-river-5: #2dd4bf;
   --color-river-6: #fb923c;
   --color-river-7: #e879f9;
+  --color-river-8: #38bdf8;
+  --color-river-9: #6366f1;
+  --color-river-10: #94a3b8;
+  --color-river-11: #b08968;
 
   --font-sans: "IBM Plex Sans TC", "Noto Sans TC", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;

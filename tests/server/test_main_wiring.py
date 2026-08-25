@@ -484,6 +484,37 @@ def test_corr_leg_gate_only_applies_to_the_taifex_segment(
     assert gate("TC.F.SGX.TWN.HOT") is True
 
 
+@pytest.mark.parametrize("clock", [True, False])
+def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
+    monkeypatch: pytest.MonkeyPatch, clock: bool
+) -> None:
+    """F4:台積電現貨腿 `TC.S.TWS.2330` 吃「交易日曆 AND **個股日盤**」。
+
+    沿用個股 session 那把 `in_trading_hours_now`(不另立第二張時段表)。不接閘的失效
+    樣態是整個夜盤每 240 s 一發 UNSUB+SUB —— 現貨 13:30 就收盤了,那些重掛救不到任何
+    推播,只是把 TC4 上游的 refcount 反覆掀一遍。
+    """
+    import copycat.live.corr_source as corr_mod
+    import copycat.live.futures_source as futures_mod
+    import copycat.live.stock_source as stock_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
+    # 台期交那把恆開 → 證明兩把閘各走各的,不是共用同一個 callable
+    monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: True)
+
+    app_mod._default_corr_source(_CAL)
+    gate = seen["kwargs"]["heal_symbol_active"]
+
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
+    assert gate("TC.S.TWS.2330") is False, "非交易日的現貨腿不得 churn"
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
+    assert gate("TC.S.TWS.2330") is clock, "交易日仍要 AND 個股日盤時段"
+    assert gate("TC.F.TWF.SXF.HOT") is True, "台期交腿不受個股閘影響"
+    assert gate("TC.F.CME.CL.HOT") is True, "海外段仍恆 True"
+
+
 def test_create_app_passes_the_calendar_into_every_default_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
