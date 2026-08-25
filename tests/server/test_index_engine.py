@@ -224,13 +224,35 @@ async def test_reconnect_retry_keeps_the_heal_variant() -> None:
         assert fake.window_variants == [0]
         eng._heal_variant = 2  # type: ignore[attr-defined]  # 自癒已爬到 2
         eng._on_reconnect_threadsafe()  # type: ignore[attr-defined]
-        for _ in range(100):
-            if len(fake.window_variants) >= 2 and eng.state()["twse"]["minutes"]:
-                break
-            await asyncio.sleep(0.02)
+        await wait_until(
+            lambda: len(fake.window_variants) >= 2 and bool(eng.state()["twse"]["minutes"])
+        )
         assert fake.window_variants[-1] == 2, f"重連重抓退回 0 號毒窗:{fake.window_variants}"
         assert eng.state()["twse"]["minutes"] == {"0959": 2_000}
         assert eng._heal_variant == 2  # type: ignore[attr-defined]  # 仍黏住
+    finally:
+        await eng.close()
+
+
+async def test_reconnect_retry_without_progress_advances_the_variant(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """review A6 round-1 SP1:重連那一發沿用 variant N,但新 session 的 N 號窗也可能是凍結 stub ——
+    `clear_stale=True` 分支原本不判進展,拿回 stub 照樣 `stale=False`、variant 不動,下一發自癒
+    又用 N 號窗。**只在 variant > 0(重連時本就在自癒中)** 且零新鍵時 bump:boot / rollover 的
+    variant 0 路徑不動(盤外重抓「零新鍵」是資料已完整,不是毒化,不能當失敗)。
+    stale 語意維持樂觀清(推播死活由 watchdog 判)。"""
+    fake = FakeIndexSource()  # 所有窗口恆空
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        eng._heal_variant = 2  # type: ignore[attr-defined]
+        with caplog.at_level(logging.WARNING):
+            eng._on_reconnect_threadsafe()  # type: ignore[attr-defined]
+            await wait_until(lambda: eng._heal_variant == 3)  # type: ignore[attr-defined]
+        assert fake.window_variants[-1] == 2
+        assert "index 重連重抓無進展" in caplog.text
+        assert eng.state()["twse"]["stale"] is False  # 既有語意:重連成功仍樂觀清
     finally:
         await eng.close()
 
