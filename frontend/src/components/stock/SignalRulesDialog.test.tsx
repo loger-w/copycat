@@ -241,6 +241,17 @@ describe("SignalRulesDialog 編輯表單", () => {
     expect(body.params).toEqual({ rearm_ticks: 2, rearm_dwell_secs: 300.5 });
   });
 
+  /** review A8 round-1 SP1:`cooldown_secs` 後端同樣走 `_as_int` 拒非整數,前端原本只擋有限 + 值域。 */
+  it("冷卻秒數填非整數 → 零送出並指出須為整數(A8 round-1)", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
+    fireEvent.change(screen.getByLabelText("冷卻秒數"), { target: { value: "300.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("冷卻秒數須為整數")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(writes()).toHaveLength(0);
+  });
+
   it("值域邊界值(恰等於 min / max)照樣送得出去(閉區間,與後端同)", async () => {
     open();
     fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
