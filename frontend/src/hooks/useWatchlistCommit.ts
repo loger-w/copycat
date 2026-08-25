@@ -69,8 +69,11 @@ export interface WatchlistCommitOptions {
 }
 
 export interface WatchlistCommit {
-  /** 排入一個動作。`onDone` 在該發 PUT 成功後執行(逐發,不會被後續動作覆蓋)。 */
-  commit: (make: WatchlistTransform, onDone?: () => void) => void;
+  /** 排入一個動作。`onDone` 在該發 PUT 成功後執行(逐發,不會被後續動作覆蓋)。
+   *  `onSettled` 在**這一發結束時必呼**,不論走哪條路 —— 成功 / 被拒(transform 回 null)/
+   *  PUT 失敗 / 世代作廢 / 基底未載入 / 深比對零 PUT。後三條**沒有任何其他回呼**,呼叫端
+   *  的「在途」旗標若只掛在 onDone / onError 上就會永久卡死(review A4 SP1)。 */
+  commit: (make: WatchlistTransform, onDone?: () => void, onSettled?: () => void) => void;
   /** 本實例送出的 PUT 是否在途(建議列 / 按鈕停用用)。 */
   isPending: boolean;
 }
@@ -106,7 +109,7 @@ export function useWatchlistCommit(opts: WatchlistCommitOptions = {}): Watchlist
   }, [data, seed]);
 
   const commit = useCallback(
-    (make: WatchlistTransform, onDone?: () => void): void => {
+    (make: WatchlistTransform, onDone?: () => void, onSettled?: () => void): void => {
       const q = queue; // 重置後飛在半空的動作只改舊物件
       const gen = q.gen;
       q.pending += 1;
@@ -138,6 +141,7 @@ export function useWatchlistCommit(opts: WatchlistCommitOptions = {}): Watchlist
         })
         .finally(() => {
           q.pending -= 1;
+          onSettled?.(); // 唯一保證會跑的逐發回呼(見 WatchlistCommit.commit 的說明)
         });
     },
     [mutateAsync],
