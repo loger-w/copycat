@@ -1,5 +1,7 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
@@ -100,5 +102,26 @@ describe("IntradayChartCore 同步十字線(F3)", () => {
     fireEvent.mouseMove(svg, { clientX: minuteToX(542, W, SPOT_WINDOW), clientY: 40 });
     fireEvent.mouseLeave(svg);
     expect(onHoverMinute.mock.calls).toEqual([[541], [542], [null]]);
+  });
+
+  it("onHoverMinute 換人(toggle 由關切回開)→ 同一分鐘也要再補發一次(review F-10)", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    // RTL 的 rerender 會換掉整棵樹(含 wrap 的 QueryClientProvider)→ 用 wrapper 選項讓 provider 隨 rerender 保留
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const Providers = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { container, rerender } = render(
+      <IntradayChartCore accum={ACCUM} toggles={TOGGLES} variant="card" width={W} onHoverMinute={first} />,
+      { wrapper: Providers },
+    );
+    const svg = container.querySelector('svg[role="img"]')!;
+    const x541 = minuteToX(541, W, SPOT_WINDOW);
+    fireEvent.mouseMove(svg, { clientX: x541, clientY: 20 });
+    expect(first.mock.calls).toEqual([[541]]);
+    rerender(<IntradayChartCore accum={ACCUM} toggles={TOGGLES} variant="card" width={W} onHoverMinute={second} />);
+    fireEvent.mouseMove(svg, { clientX: x541 + 0.2, clientY: 25 });
+    expect(second.mock.calls).toEqual([[541]]);
   });
 });

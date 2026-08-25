@@ -142,3 +142,6 @@ def test_parse_contract_ym_only_for_six_digit_field() -> None:
     arr = RAW_TF_NEW.split(",")
     arr[33] = ""
     assert parse_onnewdata(",".join(arr)).contract_ym is None
+    for bad in ("20260A", "2026", "2026060"):  # review F-14:非六位純數字一律 None
+        arr[33] = bad
+        assert parse_onnewdata(",".join(arr)).contract_ym is None, bad

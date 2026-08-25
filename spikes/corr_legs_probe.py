@@ -184,6 +184,11 @@ def main() -> int:
     }
 
     api = QuoteAPI(APPID, SKEY)
+    # 收工序資源(review F-07):全部在 finally 收,中途拋錯也不留殭屍 session / 訂閱
+    session: str | None = None
+    sock = None
+    listener_ctx = None
+    subscribed: list[str] = []
     api.context.setsockopt(zmq.RCVTIMEO, _REQ_TIMEOUT_MS)
     api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
     api.context.setsockopt(zmq.LINGER, 0)
@@ -272,6 +277,7 @@ def main() -> int:
         for sym in syms:
             rt("UNSUBQUOTE", sym)
             sub_resp[sym] = str(rt("SUBQUOTE", sym).get("Success"))
+            subscribed.append(sym)
         counts: dict[str, int] = {s: 0 for s in syms}
         trade_counts: dict[str, int] = {s: 0 for s in syms}
         sample: dict[str, dict] = {}
@@ -279,8 +285,8 @@ def main() -> int:
         while time.time() - t0 < args.listen_secs:
             try:
                 raw = (sock.recv()[:-1]).decode("utf-8")
-            except zmq.ZMQError:
-                continue
+            except zmq.Again:
+                continue  # RCVTIMEO 到期才續等;ETERM / ENOTSOCK 等其餘錯誤照拋(review F-13)
             idx = raw.find(":")
             if idx < 0:
                 continue
@@ -323,10 +329,6 @@ def main() -> int:
                         str(quote.get("FilledTime", ""))
                     ),
                 }
-        for sym in syms:
-            rt("UNSUBQUOTE", sym)
-        sock.close(linger=0)
-        listener_ctx.term()
         out["realtime"] = {
             "listen_secs": args.listen_secs,
             "sub_resp": sub_resp,
@@ -347,6 +349,28 @@ def main() -> int:
             ),
         )
     finally:
+        # 收工序 = UNSUB 全部 → 關 listener → LOGOUT → Disconnect,各自 best-effort(review F-07;
+        # 沿 copycat/data/backfill_tc4.py 同款):沒送 LOGOUT 的 session 60 s 後被 reap,reap 時它獨持的
+        # key 歸零 → 上游退訂整個 symbol,連 prod 同 symbol 的活 key 一起斷(tc4-market-facts (b)(c))。
+        if session is not None:
+            for sym in subscribed:
+                try:
+                    req(api, {"Request": "UNSUBQUOTE", "SessionKey": session, "Param": {
+                        "Symbol": sym, "SubDataType": "REALTIME",
+                        "StartTime": f"{time.strftime('%Y%m%d', time.gmtime())}00",
+                        "EndTime": f"{time.strftime('%Y%m%d', time.gmtime())}23",
+                    }})
+                except (zmq.ZMQError, OSError, ValueError) as exc:
+                    print("UNSUB 失敗(略過):", sym, exc)
+        if sock is not None:
+            sock.close(linger=0)
+        if listener_ctx is not None:
+            listener_ctx.term()
+        if session is not None:
+            try:
+                api.Logout(session)
+            except (zmq.ZMQError, OSError, ValueError) as exc:
+                print("LOGOUT 失敗(略過):", exc)
         api.Disconnect()
         print("disconnected")
 

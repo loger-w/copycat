@@ -192,7 +192,10 @@ def contract_from_fill(order_code: str | None, ym: str | None) -> str | None:
         prod = exchange_product_of(order_code)
     except ValueError:
         return None
-    if not prod or not order_code.startswith(prod):
+    # 等值比對而不是 startswith(review F-04):除權息調整碼 `EE106`(啟發式截成 `EE`)、未白名單
+    # 選擇權 `TE122000`(履約價被剝掉後 is_option_contract 判不出)、idx8 兩碼月與 idx33 不合
+    # (`QEF06` + 202609)三種樣態都會捏出一個券商永遠不會回的契約碼 —— 全部落 None 走回查鏈。
+    if not prod or order_code != prod + ym[4:6]:
         return None
     try:
         return prod + _month_year_codes(ym)

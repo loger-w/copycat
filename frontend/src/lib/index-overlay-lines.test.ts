@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { IndexSeries } from "@/hooks/useIndexStream";
 import { buildIndexOverlayLines } from "@/lib/index-overlay-lines";
-import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
+import { minuteToX, SPOT_WINDOW, STKFUT_WINDOW } from "@/lib/stock-intraday-svg";
 
 function series(minutes: Record<string, number>, ref: number | null = 20_000_000): IndexSeries {
   return { p: null, ref, high: null, low: null, stale: false, minutes };
 }
 
-/** toY 取恆等(y = 毫元),斷言直接讀「映射到個股軸的價格」 */
-const g = { toY: (priceMilli: number) => priceMilli };
+/** toY 取恆等(y = 毫元),斷言直接讀「映射到個股軸的價格」;域給得很寬,域外案例另開 */
+const g = { toY: (priceMilli: number) => priceMilli, yDomain: [0, 1_000_000_000] as [number, number] };
 const W = 640;
 
 describe("buildIndexOverlayLines(指數相對昨收 % → 個股價格軸)", () => {
@@ -53,6 +53,43 @@ describe("buildIndexOverlayLines(指數相對昨收 % → 個股價格軸)", () 
       SPOT_WINDOW,
     );
     expect(lines[0]!.pts.map((p) => p.y)).toEqual([100_500, 101_500]);
+  });
+
+  it("域外點剔除(review F-05):對稱域 ±1.1% 時 +2% 的指數點不畫、末點 % 取最後一個域內點", () => {
+    const narrow = { toY: (p: number) => p, yDomain: [98_900, 101_100] as [number, number] };
+    const lines = buildIndexOverlayLines(
+      { twse: series({ "0901": 20_100_000, "0902": 20_400_000, "0903": 20_200_000 }), otc: null },
+      { twse: true, otc: false },
+      100_000,
+      narrow,
+      W,
+      SPOT_WINDOW,
+    );
+    expect(lines[0]!.pts.map((p) => p.y)).toEqual([100_500, 101_000]); // 102_000 域外剔除
+    expect(lines[0]!.lastPct).toBeCloseTo(1, 6); // 末點 = 0903 的 +1%,不是被剔掉的 0902
+    // 全部域外 → 整條不畫
+    expect(
+      buildIndexOverlayLines({ twse: series({ "0902": 20_400_000 }), otc: null }, { twse: true, otc: false }, 100_000, narrow, W, SPOT_WINDOW),
+    ).toEqual([]);
+  });
+
+  it("x 隨 xw 走(review F-16):同一分鐘在 STKFUT_WINDOW 下 x 不同於 SPOT_WINDOW", () => {
+    const s = { twse: series({ "0901": 20_100_000 }), otc: null };
+    const spot = buildIndexOverlayLines(s, { twse: true, otc: false }, 100_000, g, W, SPOT_WINDOW)[0]!.pts[0]!.x;
+    const stkfut = buildIndexOverlayLines(s, { twse: true, otc: false }, 100_000, g, W, STKFUT_WINDOW)[0]!.pts[0]!.x;
+    expect(stkfut).toBe(minuteToX(9 * 60 + 1, W, STKFUT_WINDOW));
+    expect(stkfut).not.toBe(spot);
+  });
+
+  it("NaN 昨收當作沒有基準(review F-16):個股 NaN → 全不畫;指數 NaN → 該線不畫", () => {
+    const both = { twse: series({ "0901": 20_100_000 }, Number.NaN), otc: series({ "0901": 251_000 }, 250_000) };
+    expect(buildIndexOverlayLines(both, { twse: true, otc: true }, Number.NaN, g, W, SPOT_WINDOW)).toEqual([]);
+    expect(buildIndexOverlayLines(both, { twse: true, otc: true }, 100_000, g, W, SPOT_WINDOW).map((l) => l.key)).toEqual(["otc"]);
+  });
+
+  it("stale 旗標帶到線上(review F-09)", () => {
+    const st: IndexSeries = { ...series({ "0901": 20_100_000 }), stale: true };
+    expect(buildIndexOverlayLines({ twse: st, otc: null }, { twse: true, otc: false }, 100_000, g, W, SPOT_WINDOW)[0]!.stale).toBe(true);
   });
 
   it("series 為 null 或該指數全無分鐘 → 空", () => {

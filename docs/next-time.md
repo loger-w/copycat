@@ -43,16 +43,14 @@ verification;這裡回填成 backlog。
 
 ## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)
 
+- [ ] **/pr-review #111 兩條 ask-user**(報告 `docs/superpowers/specs/pr-111-review.md`):F-12 圖牆 toggle 列 5→8 顆在窄寬度會不會換行成兩列 chrome(prod build 分割畫面目視;真換行再收成下拉);F-20 corr / river route 測試的 11 腿 key 字面集合 4 處複製,要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `_EXPECTED_LEGS`。其餘 20 條已於收修 commit 處理。
+- [ ] **F5 樂觀套用改為「券商快照落地過才開」**(review F-02 收修):開機第一輪鏈落地前的成交只累計;若 prod 觀察到開機後首筆成交沒即時出現,就是這條(鏈通常 1–2 s 內落地)。
 - [ ] **F1 指數疊線右緣標籤與現價泡泡 / CDP 標籤互疊**(1568 寬截圖可見「加權 +0.9x%」壓在 2400 現價標旁):
   末點標籤目前只做 `textAnchor=end` 上移 3px,沒進 `bandLabels` 的避讓;候選 = 把兩顆指數標當 obstacle 餵進既有
   右緣避讓(R1 CDP 七顆那套),或 toggle 開時把標籤改畫在 readout 列。user 過目後決定。
 - [ ] **F1「台指」語意**:本輪解讀為加權指數 IX0001;若 user 原意是台指期(TXF),`useIndexStream.txf` 只有最新價無
   逐分鐘序列,要從 `/api/market/bars/TXF tf=1` 另接一條(期指 08:45 起、窗與現貨不同尺)。
-- [ ] **F4 台積電現貨腿 `TC.S.TWS.2330` 與個股引擎共用 symbol 的 refcount 風險**(實作 agent 指出):corr session
-  的全天窗 key 與 stock_engine 日盤窗 key 不同,但 tc4-market-facts (b) 說上游 feed 以 symbol 為單位,任一把 key 歸零
-  會退訂整個 symbol → corr 腿的 UNSUB(自癒 / 收工)可能帶走自選 2330 的推播,靠 source 層零推播自癒補回。
-  盤中驗:2330 在自選時看 stock log 有沒有「REALTIME 零推播自癒」與 corr 自癒同時刻出現;若有,改用個股期 CDF 腿
-  或讓 corr 對 TWS 段不自癒。
+- [x] ~~**F4 台積電現貨腿 `TC.S.TWS.2330` 與個股引擎共用 symbol 的 refcount 風險**~~ → /pr-review #111 F-01 升 Must Fix,已收修:corr 的 TWS 腿改用與個股引擎**同一把**訂閱窗 key(`stock_window(當日)`),兩邊各持一份 count 2→1 永不歸零(`tests/live/test_corr_source.py::TestTwsLegWindow`)。盤中仍看一次:自選移除 2330 後 corr 台積電腿要照常有值。
 - [ ] **F4 台幣匯率達錢不提供**(全樹掃 TWD 只命中 SGX TWN;現貨段只有 TWS;CME / TAIFEX 匯率期貨皆無 TWD):
   要做只能接非即時源(FinMind / 央行)當日線腿,不合相關係數的秒級口徑;若 user 仍要,另案。
 - [ ] **F4 江波圖 11 色是否分得開**待 user 過目(river-8..11 天藍 / 靛紫 / 鋼灰藍 / 棕褐,後兩色靠低飽和區分);

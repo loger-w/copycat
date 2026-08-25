@@ -594,6 +594,7 @@ def _fut_evt(seq: str, typ: str, bs: str = "BN", qty: str = "1", price: str = "8
 
 def test_fill_opens_position_immediately_with_fill_price() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_evt(typ="N", qty="2000")) is False  # 委託不動部位
     assert s.apply_reply(_evt(typ="D", qty="2000", price="83.5000")) is True
     p = s.position_for("4989")
@@ -602,6 +603,7 @@ def test_fill_opens_position_immediately_with_fill_price() -> None:
 
 def test_partial_fills_apply_only_whole_lot_increments() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_evt(typ="D", qty="500", price="80.0000")) is False  # 半張不套
     assert s.apply_reply(_evt(typ="D", qty="500", price="82.0000")) is True  # 湊滿 1 張
     p = s.position_for("4989")
@@ -613,6 +615,7 @@ def test_partial_fills_apply_only_whole_lot_increments() -> None:
 
 def test_fill_adds_to_existing_position_weighted_and_clears_pnl_snapshot() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     s.set_positions(
         [
             Position(
@@ -629,6 +632,7 @@ def test_fill_adds_to_existing_position_weighted_and_clears_pnl_snapshot() -> No
 
 def test_fill_reducing_position_keeps_avg_and_zero_removes_row() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=80.0)])
     assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S00R2", qty="1000", price="90.0")) is True
     p = s.position_for("4989")
@@ -639,6 +643,7 @@ def test_fill_reducing_position_keeps_avg_and_zero_removes_row() -> None:
 
 def test_fill_with_unknown_prior_avg_leaves_avg_none() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
     assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0")) is True
     p = s.position_for("4989")
@@ -647,6 +652,7 @@ def test_fill_with_unknown_prior_avg_leaves_avg_none() -> None:
 
 def test_short_sell_fill_is_negative_lots_under_short_kind() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_evt(typ="D", bs="S04R2", qty="1000", price="84.0")) is True
     p = s.position_for("4989", "short")
     assert p is not None and p.qty == -1 and p.kind == "short"
@@ -655,6 +661,7 @@ def test_short_sell_fill_is_negative_lots_under_short_kind() -> None:
 
 def test_unknown_or_odd_lot_fills_are_not_applied() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_evt(typ="D", bs="B08R2", qty="1000")) is False  # 無券:不在對映表
     assert s.apply_reply(_evt(typ="D", market="TL", qty="1000")) is False  # 零股市場
     assert s.positions() == []
@@ -662,6 +669,7 @@ def test_unknown_or_odd_lot_fills_are_not_applied() -> None:
 
 def test_future_fill_applies_under_exchange_contract_code() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_fut_evt("F1", "N")) is False
     assert s.apply_reply(_fut_evt("F1", "D", qty="2", price="873.0")) is True
     p = s.position_for("QEFF6")
@@ -673,6 +681,7 @@ def test_future_fill_applies_under_exchange_contract_code() -> None:
 
 def test_option_fill_is_not_applied() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     arr = [""] * 48
     arr[0], arr[1], arr[2], arr[3] = "O1", "TO", "D", "N"
     arr[6], arr[8], arr[11], arr[20] = "SY", "TXO2200006", "50.0", "1"
@@ -683,6 +692,7 @@ def test_option_fill_is_not_applied() -> None:
 
 def test_broker_snapshot_overrides_optimistic_fill() -> None:
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     s.apply_reply(_evt(typ="D", qty="1000", price="84.0"))
     s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
     p = s.position_for("4989")
@@ -693,9 +703,56 @@ def test_partial_lot_residue_is_carried_to_next_lot() -> None:
     """1500 股 @80 → 只套 1 張、只消化 1000 股價金;再 500 股 @90 → 第 2 張 = 殘 500@80 + 500@90 = 85,
     部位均價 = 165000 / 2000 = 82.5(與整張單真實均價一致)。"""
     s = CapitalStore()
+    s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
     assert s.apply_reply(_evt(typ="D", qty="1500", price="80.0000")) is True
     p = s.position_for("4989")
     assert p is not None and p.qty == 1 and p.avg_price == 80.0
     assert s.apply_reply(_evt(typ="D", qty="500", price="90.0000")) is True
     p = s.position_for("4989")
     assert p is not None and p.qty == 2 and p.avg_price == pytest.approx(82.5)
+
+
+def test_fill_before_first_snapshot_is_not_applied_but_counted_after(cap: None = None) -> None:
+    """開機 / 重播:快照落地前的成交只累計不套(review F-02);快照落地時把它們標成已套用,
+    之後的成交才套增量 —— 昨日庫存 10 張、今日賣 3 張重播不會變成 -3 張幻影空單。"""
+    s = CapitalStore()
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S00R2", qty="3000", price="80.0")) is False
+    assert s.positions() == []
+    s.set_positions([Position(market="sec", stock_no="4989", qty=7, avg_price=80.0)])  # 券商:10 − 3
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S00R2", qty="1000", price="81.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 6  # 只套快照之後的 1 張
+
+
+def test_clear_then_replay_does_not_double_apply() -> None:
+    """重連重播:clear() 關掉樂觀套用,同一批 D 重播不會把部位翻倍(review F-02)。"""
+    s = CapitalStore()
+    s.set_positions([])
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0")) is True
+    assert s.position_for("4989") is not None
+    s.clear()
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="84.0")) is False
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 1
+
+
+def test_flip_position_takes_fill_avg_regardless_of_magnitude() -> None:
+    """反手翻倉看號不看幅度(review F-03):+3 口 @900 賣 5 口 @800 → -2 口 @800。"""
+    s = CapitalStore()
+    s.set_positions([Position(market="fut", stock_no="QEFF6", qty=3, avg_price=900.0)])
+    assert s.apply_reply(_fut_evt("F9", "D", bs="SO", qty="5", price="800.0")) is True
+    p = s.position_for("QEFF6")
+    assert p is not None and p.qty == -2 and p.avg_price == 800.0
+
+
+def test_unknown_option_family_and_adjusted_codes_are_not_applied() -> None:
+    """契約碼守門等值比對(review F-04):`TE122000`(未白名單選擇權)與 `EE106`(調整碼)不套。"""
+    s = CapitalStore()
+    s.set_positions([])
+    for code, market in (("TE122000", "TO"), ("EE106", "TF")):
+        arr = [""] * 48
+        arr[0], arr[1], arr[2], arr[3] = f"X{code}", market, "D", "N"
+        arr[6], arr[8], arr[11], arr[20] = "BN", code, "50.0", "1"
+        arr[33] = "202606"
+        assert s.apply_reply(parse_onnewdata(",".join(arr))) is False, code
+    assert s.positions() == []

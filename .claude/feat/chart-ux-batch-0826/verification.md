@@ -52,3 +52,15 @@ F5 真成交(需盤中真下單;log 已備:`成交樂觀套用部位` / `balance
 | `python -m pyright` | 0 errors | 0 |
 | `npx vitest run` | 150 files / 2799 passed | 0 |
 | `npx tsc -b` / `npx eslint src` | 0 / 0 | 0 |
+
+## /pr-review #111 收修後重跑(報告 `docs/superpowers/specs/pr-111-review{,.audit}.md`;22 條:Must 2 / Should 5 / Nice 15,F-12 / F-20 ask-user 留 next-time,其餘 20 條已修)
+
+| gate | 結果 | exit |
+|---|---|---|
+| `python -m pytest -q` | 3090 passed, 3 skipped | 0 |
+| `python -m ruff check copycat tests spikes/corr_legs_probe.py` | All checks passed | 0 |
+| `python -m pyright` | 0 errors | 0 |
+| `npx vitest run` | 150 files / 2804 passed | 0 |
+| `npx tsc -b` / `npx eslint src` | 0 / 0 | 0 |
+
+新增 seams:`tests/live/test_corr_source.py::TestTwsLegWindow`(F-01)、`tests/capital/test_store.py` 四條(F-02 seeded / clear 重播、F-03 翻倉判號、F-04 調整碼與未白名單選擇權)、`test_mapping` / `test_reply` 反例、`index-overlay-lines.test.ts` 域外 / STKFUT / NaN / stale 四條、`synchover` 回呼換人補發一條。
