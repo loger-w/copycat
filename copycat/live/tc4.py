@@ -118,9 +118,10 @@ _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
 
 #: LOGOUT 專用 recv 上界(fix/tc4-logout review SP3):TC4 對 LOGOUT 會回 reply(零訂閱 probe 實證),
-#: 但 prod 是 UNSUB 幾百筆之後才送,若那個情境 TC4 不回、每條 session 各吃 `_REQ_TIMEOUT_MS` 10 s,
-#: 五條 ≈50 s 會撞破 run.ps1 的 15 s graceful 窗 → 後面的 session 連 Disconnect 都跑不到,比修前更糟。
-#: 2 s × 5 = 10 s 仍在窗內;socket 反正緊接著 close,改它的 RCVTIMEO 沒有後遺症。
+#: 但 prod 是 UNSUB 幾百筆之後才送,若那個情境 TC4 不回,每條 session 會各吃 `_REQ_TIMEOUT_MS` 10 s。
+#: 縮到 2 s 讓這一發遠小於 `close_worst_secs()` 已算進的「一發 REQ 逾時」(10 s),關機預算
+#: (`server/shutdown_budget.py`,run.ps1 / uvicorn / lifespan 同源)不必為 LOGOUT 另加一項;
+#: socket 反正緊接著 close,改它的 RCVTIMEO 沒有後遺症。**必須 < `_REQ_TIMEOUT_MS`**,否則預算低估。
 _LOGOUT_TIMEOUT_MS = 2_000
 
 
@@ -135,9 +136,9 @@ def close_worst_secs() -> float:
          接著的 `_dispose` 立刻拿到 `api.lock`,Disconnect 不再等。
        - 毒鎖路徑(KeepAlive `Pong` 帶著鎖死掉):`_req` 等鎖 + `_dispose` 再等鎖 = 2 × lock,
          `_dispose` 拿不到就**跳過** Disconnect。
-       UNSUBQUOTE 迴圈第一發失敗即 break(`_req` 內已 `_dispose`,之後 `_connection()` 拋
-       ConnectionError 直接 return —— **收尾那一發 REQ(如 LOGOUT)不會再送**);退訂全過才輪到
-       收尾 REQ 逾時。所以不論退訂 / 收尾哪一發撞到,只付**一次**。
+       UNSUBQUOTE 迴圈第一發失敗即 break(`_req` 內已 `_dispose`、`_api` 歸 None,`close()` 尾段
+       看到 None 直接 return —— **LOGOUT 不會再送**);退訂全過才輪到 LOGOUT 逾時,而它的 recv
+       上界 `_LOGOUT_TIMEOUT_MS`(2 s)< REQ。所以不論退訂 / LOGOUT 哪一發撞到,只付**一次** REQ。
 
     **不計的段(無上界可計)**:`Disconnect()` → KeepAlive `_ctx.term()` 要等 KeepAlive 執行緒
     自己關 SUB socket;wrapper 的 `ThreadProcess` 只 catch ZMQError,decode 類例外殺掉執行緒時
@@ -959,10 +960,14 @@ class TC4QuoteSource:
             api, session = self._api, self._session
         if api is None:
             return
+        t_tail = time.monotonic()
         # 只注入 api 沒 session 的建構路徑:跳過 LOGOUT,Disconnect 照走(review SP4)
         if session is not None:
             self._logout(api, session)
         self._dispose(api)
+        # 第三行計時:LOGOUT(≤ `_LOGOUT_TIMEOUT_MS`)+ Disconnect(KeepAlive term,無上界)——
+        # 這一行**沒印出來**就是卡在 term() 上(`close_worst_secs` 說明的不計段)
+        logger.info("TC4 quote close:LOGOUT + Disconnect %.2fs", time.monotonic() - t_tail)
 
     def _logout(self, api: Any, session: str) -> None:
         """退訂後、Disconnect 前對 TC4 送 LOGOUT(fix/tc4-logout)。

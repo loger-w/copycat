@@ -1420,9 +1420,11 @@ class TestCloseLogout:
         assert max(i for i, k in enumerate(kinds) if k == "UNSUBQUOTE") < kinds.index("LOGOUT")
         assert kinds.index("LOGOUT") < kinds.index("<Disconnect>")
         assert api.disconnected is True
-        # LOGOUT 的 recv 上界獨立縮短(review SP3):五條 session 串行也撞不破 run.ps1 15 s
+        # LOGOUT 的 recv 上界獨立縮短(review SP3)。mod/shutdown-budget 之後 run.ps1 的窗不再是
+        # 寫死的 15 s,而是 `close_worst_secs()` 推導 —— 那條算式只算「一發 REQ 逾時」(10 s),
+        # LOGOUT 必須嚴格小於它才不用另加一項(`_LOGOUT_TIMEOUT_MS` 註解)
         assert api.socket.sockopts == [(zmq.RCVTIMEO, tc4_mod._LOGOUT_TIMEOUT_MS)]
-        assert tc4_mod._LOGOUT_TIMEOUT_MS * 5 < 15_000
+        assert tc4_mod._LOGOUT_TIMEOUT_MS < tc4_mod._REQ_TIMEOUT_MS
 
     def test_close_without_live_connection_sends_nothing(self) -> None:
         # dispose 後(_api None)收工:不可為了 LOGOUT 重建連線
@@ -1488,7 +1490,9 @@ class TestCloseTiming:
         src._subscribed = {SPOT_SYMBOL, "TC.O.TWF.TXO.202608.C.44550"}
         with caplog.at_level(logging.INFO):
             src.close()
-        # 兩行:進場(等鎖 + 檔數)與收尾(n/m + 秒數)—— 卡在 REQ 上被硬殺時只剩前一行
+        # 三行:進場(等鎖 + 檔數)、退訂收尾(n/m + 秒數)、LOGOUT + Disconnect —— 卡在 REQ 上
+        # 被硬殺時只剩第一行;卡在 KeepAlive term() 上時只剩前兩行
         assert "等 api 鎖" in caplog.text and "開始 UNSUBQUOTE 2 檔" in caplog.text
         assert "UNSUBQUOTE 2/2" in caplog.text
+        assert "LOGOUT + Disconnect" in caplog.text
         assert api.disconnected is True
