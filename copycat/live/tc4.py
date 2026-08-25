@@ -130,7 +130,10 @@ def close_worst_secs() -> float:
 
     = 等 `_api_lock` + max(REQ 路徑, 毒鎖路徑),每一項都是本檔既有 timeout 的直接後果:
 
-    1. 等 `_api_lock`:在途的 `_ensure_connected` 持鎖跨 `Connect()`,最壞吃滿一個 REQ timeout。
+    1. 等 `_api_lock`:在途的 `_ensure_connected` 持鎖跨 `Connect()`,最壞吃滿一個 REQ timeout;
+       收工分支(`_stop` 已 set)在鎖內再等 `api.lock` 收掉在途連線,最壞再一個 lock timeout
+       (10 + 12 = 22 s)—— 但那條路 `_api` 恆 None,`close()` 拿到鎖就早退,22 < 下面的 34,
+       總上界不變。
     2. 之後兩條路**互斥**(`_req` 進門先 `api.lock.acquire(timeout=lock_timeout)`):
        - REQ 路徑(拿到鎖):send + recv 各撞一次 SNDTIMEO / RCVTIMEO = 2 × REQ;finally 釋鎖,
          接著的 `_dispose` 立刻拿到 `api.lock`,Disconnect 不再等。
@@ -420,7 +423,8 @@ class TC4QuoteSource:
                 # 收工在 `Connect()` 期間發生(`close()` 第一步就 set `_stop`,接著才
                 # 排隊等這把鎖)—— **不得發布**:發布出去的是一條 `close()` 已經看不到
                 # 的連線(它拿到鎖時 `_api` 才被填,但那時 UNSUB 迴圈已經跑完),
-                # KeepAlive 執行緒續跑到 process 不退(review ST2)。就地收掉 —— 持 `api.lock`
+                # KeepAlive 續跑、TC4 端那張票不 LOGOUT 留到 reap(wrapper 已 daemon=True,
+                # process 會退;真代價是殭屍 session 帶走 feed)(review ST2)。就地收掉 —— 持 `api.lock`
                 # 收(review A6):KeepAlive 在 `Connect()` 內就起來了,`Pong` 隨時會拿同一把鎖
                 # 用同一顆 socket。
                 self._disconnect_locked(api)
@@ -449,6 +453,10 @@ class TC4QuoteSource:
         wrapper 的 KeepAlive `Pong` 取同一把鎖、用同一顆 REQ socket —— 不持鎖就 close socket
         等於兩條執行緒同時碰 ZMQ socket(未定義行為)。取不到鎖(`Pong` 毒鎖)→ 跳過實體 close,
         洩漏優於 crash(同 `_dispose` 既有判定)。
+
+        **鎖序**:本函式只取 `api.lock`。`_dispose` 在 `_api_lock` **外**呼、收工分支在 `_api_lock`
+        **內**呼 —— 兩者都是 `_api_lock → api.lock` 的方向;全檔沒有先持 `api.lock` 再取 `_api_lock`
+        的路徑(`_req` 的兩處 `_dispose` 都在 finally 釋鎖之後),不得反轉。
         """
         if api.lock.acquire(timeout=self._lock_timeout):
             try:
@@ -458,7 +466,7 @@ class TC4QuoteSource:
             finally:
                 api.lock.release()
         else:
-            logger.warning("TC4 quote dispose: api.lock busy,跳過實體 close(洩漏優於 crash)")
+            logger.warning("TC4 quote Disconnect: api.lock busy,跳過實體 close(洩漏優於 crash)")
 
     def _connection(self) -> tuple[Any, str]:
         """_api/_session 一致快照(_api_lock,與 _dispose/_ensure_connected 寫側對齊):
