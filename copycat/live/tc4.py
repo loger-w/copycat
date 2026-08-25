@@ -918,10 +918,14 @@ class TC4QuoteSource:
                 self._subscribed.discard(contract.symbol)
 
     def close(self) -> None:
+        t0 = time.monotonic()
         self._stop.set()
         with self._api_lock:
             connected = self._api is not None
+        lock_wait = time.monotonic() - t0
         if connected:
+            total, done = len(self._subscribed), 0
+            t_unsub = time.monotonic()
             for sym in list(self._subscribed):
                 try:
                     self._rt_request("UNSUBQUOTE", sym)
@@ -930,6 +934,17 @@ class TC4QuoteSource:
                     # 停止嘗試但仍必須收尾 Disconnect(§0a)
                     logger.exception("UNSUBQUOTE failed during close: %s", sym)
                     break
+                done += 1
+            # 關機預算的可觀測面(review A1):lifespan 那頭只看得到「這條 session 花了 n 秒」,
+            # 分不出是等鎖(在途 `Connect()`)還是 REQ 逾時(TC4 半死)—— 處置不同,前者等
+            # 它自己走完,後者要去看 TC4;上界推導見 `close_worst_secs`。
+            logger.info(
+                "TC4 quote close:等 api 鎖 %.2fs,UNSUBQUOTE %d/%d 檔 %.2fs",
+                lock_wait,
+                done,
+                total,
+                time.monotonic() - t_unsub,
+            )
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
         # 生命週期:不關則 process 不退出)
