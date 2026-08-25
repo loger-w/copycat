@@ -58,6 +58,7 @@ from copycat.server.bars import (
 from copycat.notify import notify_discord
 from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
+from copycat.server.shutdown_budget import SLOW_CLOSE_WARN_SECS
 from copycat.server.signal_hub import SignalHub
 from copycat.server.stkfut_catalog import StkfutCatalog
 from copycat.server.stock_engine import (
@@ -1005,12 +1006,43 @@ def create_app(
                 # 就地重拋 → 六段 close + runtime.close 全部不執行,TC4 session /
                 # COM 執行緒 / hub worker 一次全洩漏(同白名單「各自 try/except 續行」)
                 logger.exception("boot task 以例外結束(關機續行)")
-            # 關機反序:breadth → signals → corr → futures → index → stock → runtime,
-            # **capital 最後**(N049,見該段註解)。順序即依賴:corr 讀 futures.state(),
-            # 必須排在 futures 之前收;signals 段的 `_close_signals` 會呼
-            # `stock.detach_signal_hub()`,也必須排在 stock 之前收(stock engine 還活著
-            # 才解得掉掛點)。其餘各段無此類依賴,一律照建立的反序收,新增引擎時才有
-            # 一條唯一的規則可循 —— capital 是**唯一**的例外,理由是關機時間預算不是依賴。
+            # 關機反序:crosscheck → breadth → signals(序列)→ **TC4 session 並行 lane**
+            # (corr → futures 串鏈 ‖ index ‖ stock ‖ runtime)→ **capital 最後**(N049)。
+            # 順序即依賴:corr 讀 futures.state(),必須排在 futures 之前收;signals 段的
+            # `_close_signals` 會呼 `stock.detach_signal_hub()`,也必須排在 stock 之前收
+            # (stock engine 還活著才解得掉掛點)。其餘各段無此類依賴。
+            #
+            # TC4 那幾段為什麼並行(review A1 / #105 §2.6 S1):每條 session 的 `close()`
+            # 在 TC4 半死時各自最壞 `tc4.close_worst_secs()`(等在途 Connect 的鎖 + 一發
+            # REQ 撞 RCVTIMEO + dispose 等 api.lock ≈ 32 s),序列排下去一條卡住、後面**健康**
+            # 的 session 連 UNSUB 都輪不到就被 run.ps1 硬殺 —— 健康的也被還原成殭屍。並行
+            # 之後硬殺只落在真的卡住的那一條;上界 = lane 深度 × 單條(`shutdown_budget`)。
+            # capital 是「照建立反序收」的**唯一**例外,理由是關機時間預算不是依賴。
+            #
+            # 每段計時(review A1「console 印哪段吃掉時間」):run.ps1 超時訊息指向的就是
+            # 收尾那一行彙總。`_close_segment` 同時是「各自 try/except 續行」的唯一定義點 ——
+            # 改動前 runtime.close() 是裸 await,拋了就跳過 capital 的 COM join。
+            timings: dict[str, float] = {}
+            shutdown_t0 = time.monotonic()
+
+            async def _close_segment(name: str, close: Callable[[], Awaitable[None]]) -> None:
+                t0 = time.monotonic()
+                try:
+                    await close()
+                except Exception:
+                    logger.exception("%s close 失敗(關機續行)", name)
+                finally:
+                    elapsed = time.monotonic() - t0
+                    timings[name] = elapsed
+                    if elapsed > SLOW_CLOSE_WARN_SECS:
+                        logger.warning(
+                            "關機 %s 段耗時 %.1fs(> %.0fs):在途 Connect 持鎖或 TC4 REQ 逾時,"
+                            "細節看該 source 的「TC4 quote close」行",
+                            name,
+                            elapsed,
+                            SLOW_CLOSE_WARN_SECS,
+                        )
+
             if booted.crosscheck_task is not None:
                 # 引擎之前先收:它只讀 index 的歷史,關機時沒有任何理由讓它跑完
                 booted.crosscheck_task.cancel()
@@ -1025,49 +1057,43 @@ def create_app(
                     # 這條旁支是「只讀 index 歷史的 log 任務」,更沒有資格擋關機。
                     logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
             if booted.breadth is not None:
-                try:
-                    await booted.breadth.close()
-                except Exception:
-                    logger.exception("breadth close 失敗(關機續行)")
+                await _close_segment("breadth", booted.breadth.close)
             if booted.signals is not None and booted.signals_close is not None:
-                try:
-                    # bot 先於 hub(hub 的 sender 指向 bot)—— 順序封在 `_close_signals` 內
-                    await booted.signals_close(booted.signals)
-                except Exception:
-                    logger.exception("signals close 失敗(關機續行)")
-            if booted.corr is not None:
-                try:
-                    await booted.corr.close()
-                except Exception:
-                    logger.exception("corr close 失敗(關機續行)")
-            if booted.futures is not None:
-                try:
-                    await booted.futures.close()
-                except Exception:
-                    logger.exception("futures close 失敗(關機續行)")
+                signals, signals_close = booted.signals, booted.signals_close
+                # bot 先於 hub(hub 的 sender 指向 bot)—— 順序封在 `_close_signals` 內
+                await _close_segment("signals", lambda: signals_close(signals))
+
+            async def _corr_then_futures() -> None:
+                if booted.corr is not None:
+                    await _close_segment("corr", booted.corr.close)
+                if booted.futures is not None:
+                    await _close_segment("futures", booted.futures.close)
+
+            lanes: list[Awaitable[None]] = [_corr_then_futures()]
             if booted.index is not None:
-                try:
-                    await booted.index.close()
-                except Exception:
-                    logger.exception("index close 失敗(關機續行)")
+                lanes.append(_close_segment("index", booted.index.close))
             if booted.stock is not None:
-                try:
-                    await booted.stock.close()
-                except Exception:
-                    logger.exception("stock close 失敗(關機續行)")
-            await runtime.close()
+                lanes.append(_close_segment("stock", booted.stock.close))
+            lanes.append(_close_segment("txo", runtime.close))
+            # `_close_segment` 只吞 Exception:lane 內唯一逃得出來的是 CancelledError(lifespan
+            # 自身被二次 cancel),gather 就地重拋、其餘 lane 續跑到底 —— 與改動前「反序 close
+            # 可能不完整」同一種結局,只是 log 會多幾行
+            await asyncio.gather(*lanes)
             # **capital 刻意排在 TC4 全部收完之後**(N049,唯一違反「照建立反序收」的一段):
-            # `capital.close()` 是同步的 COM 執行緒 join(prod ≤5 s),而 TC4 那四條 session
-            # 的 UNSUB + LOGOUT + `Disconnect()` 是關機路徑上真正有**時間預算**的一段 —— 沒跑到就
-            # 是一條殭屍 session,TC4 要 ~60 s 後 `ExecuteCheckPingTime` reap 才 `RemoveLoginInfo`,
-            # 而 reap 會把它獨持的 key 歸零、連帶把 symbol 的上游 feed 帶走(下一台 server
-            # 開頭 ~60 s 零推播,2026-08-18 實證)。capital 與 index / stock / runtime 之間
-            # 沒有依賴(有依賴的是 corr→futures 與 signals→stock 那兩條),重排安全。
+            # `capital.close()` 是同步的 COM 執行緒 join(`COM_JOIN_TIMEOUT_SECS`),而 TC4 那
+            # 幾條 session 的 UNSUB + LOGOUT + `Disconnect()` 是關機路徑上真正有**時間預算**的一段
+            # —— 沒跑到就是一條殭屍 session,TC4 要 ~60 s 後 `ExecuteCheckPingTime` reap 才
+            # `RemoveLoginInfo`,而 reap 會把它獨持的 key 歸零、連帶把 symbol 的上游 feed 帶走
+            # (下一台 server 開頭 ~60 s 零推播,2026-08-18 實證)。capital 與 index / stock /
+            # runtime 之間沒有依賴(有依賴的是 corr→futures 與 signals→stock 那兩條),重排安全。
             if booted.capital is not None:
-                try:
-                    await asyncio.to_thread(booted.capital.close)  # join COM 執行緒(≤5s)
-                except Exception:
-                    logger.exception("capital close 失敗(關機續行)")
+                capital = booted.capital
+                await _close_segment("capital", lambda: asyncio.to_thread(capital.close))
+            logger.info(
+                "關機收尾 %.2fs:%s",
+                time.monotonic() - shutdown_t0,
+                " / ".join(f"{name} {secs:.2f}s" for name, secs in timings.items()),
+            )
 
     app = FastAPI(lifespan=lifespan)
     origin = os.environ.get("FRONTEND_ORIGIN")

@@ -57,17 +57,18 @@ function Wait-GracefulExit {
     # ~60s 的 ExecuteCheckPingTime 才被 reap,而 reap 會把它獨持的 refcount key 歸零、
     # 連帶把 symbol 的上游 feed 帶走 —— 下一台 server 開頭 ~60s 零推播(2026-08-18 實證,
     # 見 .claude/skills/tc4-market-facts/SKILL.md)。這裡先等它自己收乾淨,超時才硬殺。
-    # 上限 15s 不是 10s:`_ensure_connected` 持 api 鎖跨 Connect()(最壞 _REQ_TIMEOUT_MS
-    # = 10s),close() 開頭要拿同一把鎖 → 關機最壞先被那一發吃掉整整 10 秒,10s 的窗會
-    # 剛好在 TC4 還沒退訂完時到期(review ST2)。
-    param([System.Diagnostics.Process]$Proc, [int]$TimeoutSecs = 15)
+    # 上限不寫死(review A1):由 $graceSecs 帶入,數字來自 Python 端 shutdown_budget.py
+    # (uvicorn WS 收攤上限 + 最深 lane 的 TC4 session close 上界 + 群益 COM join),與
+    # lifespan / uvicorn 同一個來源;正常收尾 1–3 s,上限只在 TC4 半死時才會被吃滿。
+    param([System.Diagnostics.Process]$Proc, [int]$TimeoutSecs)
     if ($null -eq $Proc -or $Proc.HasExited) { return }
-    Write-Host "[run] 等 backend 自行收尾(TC4 退訂 + Disconnect,最多 ${TimeoutSecs}s) ..." -ForegroundColor DarkGray
+    Write-Host "[run] 等 backend 自行收尾(TC4 退訂 + LOGOUT + Disconnect;正常 1–3s,上限 ${TimeoutSecs}s = 關機預算) ..." -ForegroundColor DarkGray
     if ($Proc.WaitForExit($TimeoutSecs * 1000)) {
         Write-Host '[run] backend 已自行結束(TC4 session 已 LOGOUT)' -ForegroundColor DarkGray
     }
     else {
-        Write-Host "[run] backend ${TimeoutSecs}s 內未結束,改為強制收掉(TC4 session 會留到 reap)" -ForegroundColor Yellow
+        Write-Host "[run] backend ${TimeoutSecs}s 內未結束(超過關機預算上界),改為強制收掉;TC4 session 會留到 reap" -ForegroundColor Yellow
+        Write-Host '[run]   哪一段吃掉時間:看 logs\server-*.log 的「關機 <段> 段耗時」WARNING 與「TC4 quote close」行' -ForegroundColor Yellow
     }
 }
 
@@ -81,6 +82,15 @@ if (-not (Test-Path $python)) {
 if ($LASTEXITCODE -ne 0) {
     Fail "backend 缺 live extras`n     補裝:$python -m pip install -e `".[live]`""
 }
+
+# 關機預算同源(review A1):Ctrl+C 後等 backend 自行收尾的上限不再寫死 —— 由
+# copycat/server/shutdown_budget.py 依 TC4 REQ / 鎖 timeout、lane 深度、群益 COM join 推導,
+# 本檔 / uvicorn timeout_graceful_shutdown / lifespan 三個讀者同一個來源。
+$graceSecs = & $python -c "from copycat.server.shutdown_budget import run_grace_secs; print(run_grace_secs())"
+if ($LASTEXITCODE -ne 0 -or -not $graceSecs) {
+    Fail '取不到關機預算(copycat.server.shutdown_budget 匯入失敗,見上方錯誤)'
+}
+$graceSecs = [int]$graceSecs
 
 $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
 if (-not $npm) { Fail '找不到 npm.cmd,請先裝 Node.js' }
@@ -158,7 +168,7 @@ try {
     # backend 先給 graceful 窗再硬殺(理由見 Wait-GracefulExit);沒收到 Ctrl+C 的那條
     # 路不等 —— 等了也不會有人叫它收尾(review SP6)
     if ($backendGotCtrlC) {
-        Wait-GracefulExit -Proc $backend
+        Wait-GracefulExit -Proc $backend -TimeoutSecs $graceSecs
     }
     else {
         Write-Host '[run] backend 未收到 Ctrl+C(frontend 先退),直接強制收掉;TC4 session 會留到 reap' -ForegroundColor Yellow

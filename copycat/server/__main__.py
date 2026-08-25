@@ -31,6 +31,7 @@ from copycat.server.app import (
     DEFAULT_STOCK,
     create_app,
 )
+from copycat.server.shutdown_budget import WS_DRAIN_SECS
 from copycat.server.verify import (
     FAIL_ENV_KEY,
     FakeTxoSource,
@@ -187,7 +188,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
         if log_path is not None:
             logger.info("stdout/stderr 轉存 %s", log_path)
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    # 關機預算同源(review A1):uvicorn 收到 Ctrl+C 先等既有 WS 收完才進 lifespan,預設
+    # **無上限** —— 那段吃掉整個 graceful 窗的話,TC4 session 的 UNSUB / LOGOUT 一步都輪不到
+    uvicorn.run(app, host="127.0.0.1", port=port, timeout_graceful_shutdown=WS_DRAIN_SECS)
 
 
 if __name__ == "__main__":
