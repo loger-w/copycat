@@ -917,7 +917,8 @@ class TC4QuoteSource:
             api, session = self._api, self._session
         if api is None:
             return
-        if session is not None:  # 只注入 api 沒 session 的建構路徑:跳過 LOGOUT,Disconnect 照走(review SP4)
+        # 只注入 api 沒 session 的建構路徑:跳過 LOGOUT,Disconnect 照走(review SP4)
+        if session is not None:
             self._logout(api, session)
         self._dispose(api)
 
