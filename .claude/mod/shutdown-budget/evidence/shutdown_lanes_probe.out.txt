@@ -1,0 +1,31 @@
+INFO:     Started server process [10208]
+INFO:     Waiting for application startup.
+2026-08-26 01:29:44,765 copycat.server.app INFO copycat server build edefafaa +dirty started_at=2026-08-26T01:29:44
+INFO:     Application startup complete.
+2026-08-26 01:29:44,766 copycat.live.handover INFO handover done: backfill=0 symbols=0 buffered=0
+2026-08-26 01:29:44,768 copycat.server.signal_hub INFO 訊號規則檔不存在,已由現行設定生成 4 條預設規則
+2026-08-26 01:29:44,768 copycat.server.discord_bot INFO DISCORD_BOT_TOKEN 未設,Discord bot 不啟用
+INFO:     Uvicorn running on http://127.0.0.1:62027 (Press CTRL+C to quit)
+2026-08-26 01:29:44,769 copycat.server.stkfut_catalog INFO stkfut catalog 更新:0 檔(2026-08-26)
+2026-08-26 01:29:44,769 copycat.server.app INFO boot 序列結束(0.0s)
+INFO:     127.0.0.1:62028 - "GET /api/ready HTTP/1.1" 200 OK
+[probe] ready on :62027; sending should_exit
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-08-26 01:29:44,985 copycat.server.app INFO 關機 signals 段開始
+2026-08-26 01:29:44,985 copycat.server.app INFO 關機 index 段開始
+2026-08-26 01:29:44,985 copycat.server.app INFO 關機 stock 段開始
+2026-08-26 01:29:44,985 copycat.server.app INFO 關機 txo 段開始
+[probe] txo close t=0.19s
+[probe] index close enter t=0.19s
+[probe] stock close enter t=0.19s
+[probe] stock close exit  t=2.19s
+[probe] index close exit  t=2.19s
+2026-08-26 01:29:46,986 copycat.server.app WARNING 關機 stock 段耗時 2.0s(> 2s):在途 Connect 持鎖或 TC4 REQ 逾時,細節看該 source 的「TC4 quote close」行
+2026-08-26 01:29:46,986 copycat.server.app WARNING 關機 index 段耗時 2.0s(> 2s):在途 Connect 持鎖或 TC4 REQ 逾時,細節看該 source 的「TC4 quote close」行
+2026-08-26 01:29:46,986 copycat.server.app INFO 關機收尾 2.00s:signals 0.00s / index 2.00s / stock 2.00s / txo 0.00s
+INFO:     Application shutdown complete.
+INFO:     Finished server process [10208]
+[probe] shutdown wall = 2.19s (SLOW=2.0s; 序列版 >= 4.0s, 並行版 ≈ 2.0s)
+[probe] thread alive after join = False
+[probe] RESULT = PASS
