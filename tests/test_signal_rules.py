@@ -10,6 +10,7 @@ from copycat.signal_rules import (
     CDP_LEVELS,
     COOLDOWN_MAX,
     COOLDOWN_MIN,
+    INT_PARAM_KEYS,
     MAX_RULES,
     PARAM_SPECS,
     RULE_KINDS,
@@ -104,6 +105,13 @@ class TestConstants:
             for kind, fields in raw["specs"].items()
         }
         assert PARAM_SPECS == expected
+        # review A8(#101 parity 補完):整數鍵與冷卻界也是同一張契約 —— 前端沒擋整數時
+        # 使用者填 2.9 只拿到泛用 INVALID_RULE;冷卻界前端硬抄一份會漂(60/86400)。
+        assert INT_PARAM_KEYS == frozenset(raw["int_keys"])
+        assert (COOLDOWN_MIN, COOLDOWN_MAX) == tuple(raw["cooldown"])
+        # fixture 自身健檢:int_keys 必須是 specs 裡真的存在的鍵(打錯字會讓契約悄悄變空)
+        all_keys = {key for fields in raw["specs"].values() for key in fields}
+        assert set(raw["int_keys"]) <= all_keys
 
 
 class TestNormalizeHappyPath:

@@ -222,6 +222,25 @@ describe("SignalRulesDialog 編輯表單", () => {
     expect(writes()).toHaveLength(0);
   });
 
+  /** 🔴 review A8:後端 `INT_PARAM_KEYS` 拒非整數(2.5 個 tick / 半張不存在),前端原本沒有
+   *  對應檢查 —— 填 `2.9` 送出去只拿到泛用「規則設定不合法」,不知道是哪一格、也不知道為什麼。 */
+  it("整數欄填非整數 → 零送出並指出是哪一格須為整數(A8)", async () => {
+    open();
+    fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
+    fireEvent.change(screen.getByLabelText("重新武裝 tick 數"), { target: { value: "2.9" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    expect(screen.getByText("重新武裝 tick 數須為整數")).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(writes()).toHaveLength(0);
+    // 非整數鍵(駐留秒數)填小數照樣可送:後端只對 INT_PARAM_KEYS 拒
+    fireEvent.change(screen.getByLabelText("重新武裝 tick 數"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("線外駐留秒數"), { target: { value: "300.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "儲存" }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    const body = JSON.parse(String(writes()[0]!.init.body)) as Record<string, unknown>;
+    expect(body.params).toEqual({ rearm_ticks: 2, rearm_dwell_secs: 300.5 });
+  });
+
   it("值域邊界值(恰等於 min / max)照樣送得出去(閉區間,與後端同)", async () => {
     open();
     fireEvent.click(screen.getByLabelText("編輯 我的 CDP"));
