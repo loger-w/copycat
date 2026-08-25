@@ -1,0 +1,94 @@
+{
+  "fixed_point": "892135aa (merge-base master..fix/tc4-logout-and-cancel-reply-warning)",
+  "reviewed_head": "e7daa79d",
+  "model": "opus × 2(standards / spec 平行 sub-agent)",
+  "standards": [
+    {
+      "id": "ST1",
+      "severity": "硬違規(申報)",
+      "file": "commit cf9787cf 訊息",
+      "finding": "CLAUDE.md §6 type ∈ feat/fix/chore/refactor/perf,用了 test(tc4,capital)",
+      "disposition": "反駁:repo 有 478 筆 `test(` 型 commit(含 🟢 紅先行既例 b034be9e / d9554b2b / 6c94e2de),既例壓過列舉;scope 逗號雙值同既例。不改。"
+    },
+    {
+      "id": "ST2",
+      "severity": "硬違規",
+      "file": ".claude/skills/tc4-market-facts/SKILL.md:37-45",
+      "finding": "新 bullet 插在 refcount bullet 的 Trigger 行之前,兩行連續 Trigger",
+      "disposition": "接受:bullet 整段移到 `(Trigger:重啟後零推播 …)` 之後 — commit 7fe4598e"
+    },
+    {
+      "id": "ST3",
+      "severity": "判斷題 Duplicated Code",
+      "file": "copycat/live/tc4.py close()",
+      "finding": "兩次 _api_lock 快照(connected 旗標 + _connection())",
+      "disposition": "反駁:第二次快照是刻意的 — UNSUB 失敗會 `_dispose` 清 _api,要用迴圈後的狀態決定要不要 LOGOUT;單一快照會對已 dispose 的 api 送 LOGOUT。SP4 收修後末段改為一次 `_api/_session` 快照(不再呼叫 `_connection()`),重複度已降。"
+    },
+    {
+      "id": "ST4",
+      "severity": "判斷題 Duplicated Code",
+      "file": "copycat/live/tc4.py:925",
+      "finding": "帶 SessionKey 的 REQ 已有 `_session_req`",
+      "disposition": "反駁:close() 另需同一把 api 做 `_dispose`,`_session_req` 內部自行快照拿不到 api;reviewer 自評「可辯護」。不改。"
+    },
+    {
+      "id": "ST5",
+      "severity": "判斷題 一致性",
+      "file": "copycat/live/tc4.py _logout",
+      "finding": "ConnectionError → logger.exception vs Success≠OK → warning,同一結果兩種嚴重度",
+      "disposition": "接受:兩路同為 warning、同前綴 \"TC4 quote LOGOUT\" — commit 15e7406c"
+    },
+    {
+      "id": "ST6",
+      "severity": "判斷題 Duplicated Code",
+      "file": "tests/live/test_tc4.py FakeApi",
+      "finding": "requests 與 rt_requests 平行記錄",
+      "disposition": "先接受再反駁:改成推導後 TestHealVariantReleasesOldKey / TestHealRecoveryCycle 兩條既有測試紅 — 它們把 `rt_requests` 當 clear 後的分段視窗,推導版 clear 不了。還原為兩把 list,註解寫明理由 — commit a5f4bab3"
+    }
+  ],
+  "spec": [
+    {
+      "id": "SP1",
+      "severity": "缺漏",
+      "file": "tests/live/test_tc4.py",
+      "finding": "A.3 兩個 best-effort 分支(ConnectionError / Success≠OK)零測試;close() 末段不二次 Disconnect 沒紅可變",
+      "disposition": "接受:`_Rejects` / `_Raises` 兩案,\"<Disconnect>\" 標記入 requests 計數 == 1 — commit a5f4bab3"
+    },
+    {
+      "id": "SP2",
+      "severity": "缺漏(低)",
+      "file": "tests/capital/test_client.py",
+      "finding": "B.3 WS 推送 / 排程未斷言",
+      "disposition": "接受(WS 推送一行斷言);成交排程屬 D 分支未動,不加 — commit a5f4bab3"
+    },
+    {
+      "id": "SP3",
+      "severity": "可能做錯(高)",
+      "file": "copycat/live/tc4.py _logout",
+      "finding": "官方 Logout() send-only;若 prod 情境 TC4 不回,五條 session 各吃 RCVTIMEO 10 s ≈ 50 s > run.ps1 15 s,後面的 session 連 Disconnect 都跑不到",
+      "disposition": "接受:LOGOUT 專用 `_LOGOUT_TIMEOUT_MS = 2_000`,`_logout` 先縮 socket RCVTIMEO 再 `_req`(socket 緊接著 close,無後遺症);測試釘 ×5 < 15 s — commit 15e7406c。仍走 send+recv:00:56 probe 證實 TC4 回 reply,recv 讓 REQ 狀態機與 log 都乾淨。"
+    },
+    {
+      "id": "SP4",
+      "severity": "可能做錯",
+      "file": "copycat/live/tc4.py close()",
+      "finding": "仍在線判準從 `_api is not None` 換成 `_connection()`(api 與 session 都要在),只注入 api 的建構路徑會漏 Disconnect",
+      "disposition": "接受:末段一次快照 `_api/_session`,`api is None` 才 return,缺 session 只跳過 LOGOUT — commit 15e7406c;測試 test_close_with_api_but_no_session_skips_logout_and_still_disconnects"
+    },
+    {
+      "id": "SP5",
+      "severity": "可能做錯",
+      "file": "tests/live/test_tc4.py",
+      "finding": "沒驗 LOGOUT 在 Disconnect 之前",
+      "disposition": "接受:FakeApi.Disconnect 以 \"<Disconnect>\" 入 requests,斷言 index(LOGOUT) < index(<Disconnect>) — commit a5f4bab3"
+    },
+    {
+      "id": "SP6",
+      "severity": "doc-code drift",
+      "file": "copycat/server/app.py:1061;copycat/data/backfill_tc4.py:160",
+      "finding": "收工註解仍寫 UNSUB + Disconnect;一次性回補腳本裸 Disconnect 與 skill 新事實不一致",
+      "disposition": "接受:註解補 LOGOUT(7fe4598e);backfill_tc4 finally 改 Logout → Disconnect,zmq 與 tcoreapi_mq 同點 lazy import(15e7406c)"
+    }
+  ],
+  "disposition": "Standards 6:接受 2(ST2/ST5)、先接受後反駁 1(ST6,既有測試證明推導版不可行)、反駁 3(ST1 既例 / ST3 第二次快照刻意 / ST4 需同把 api)。Spec 6:全數接受(SP1–SP6),其中 SP3 為本輪最重要 finding(收工時間預算)。收修 commits a5f4bab3 / 15e7406c / 7fe4598e;收修後 gate:pytest 目標 255 passed、ruff PASS、pyright 0、全套見 verification §7。"
+}

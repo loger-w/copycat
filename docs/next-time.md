@@ -14,6 +14,10 @@
   (固定前綴供 grep),讓 H1/H3 事後可分。
 - [x] 處置股 badge(FinMind `TaiwanStockDispositionSecuritiesPeriod` 名單已在 breadth 引擎)—— **user 08-26 拍板不做**,
   視覺自評即可;2455 08-25 的 TradeStatus 每 2 分鐘 1→0→1 共 133 次即處置分盤形狀,留作 N100 蒐證樣本。
+- [ ] **flake 候選:`tests/server/test_stock_engine.py::TestStreamAndStatus::test_stream_receives_tick_and_book`**
+  (08-26 全套三輪中一輪紅:`tick_msg["seq"]` 拿到 1002 而非 1,像是別的測試灌了 1000 筆 tick 的狀態漏進來;
+  單跑 3/3 綠、其餘兩輪全套綠、當輪 diff 只動 tc4 close / capital reply log)。候選 = 找共用 StockState /
+  engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。
 - [ ] **現股當沖 / 信用當沖資格顯示**(user 08-26 提問,未拍板):現股當沖 = FinMind `TaiwanStockDayTrading`
   (`BuyAfterSale` Y/＊ = 僅先買後賣;回測 `backfill_daytrade.py` 已用),信用當沖 = `TaiwanStockMarginPurchaseShortSale`
   資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。
