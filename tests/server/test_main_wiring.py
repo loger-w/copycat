@@ -22,6 +22,7 @@ import pytest
 import uvicorn
 
 import copycat.server.__main__ as main_mod
+from copycat.server import shutdown_budget
 from copycat.server.app import (
     DEFAULT_BREADTH,
     DEFAULT_CORR,
@@ -97,6 +98,9 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
     assert cap.prod_log_calls == 1
     assert cap.neutralized is False
     assert cap.run_kwargs is not None and cap.run_kwargs["port"] == 8721
+    # 關機預算同源(A1):uvicorn 先等 WS 收攤才進 lifespan,那段要有上限,否則 run.ps1
+    # 的 graceful 窗再怎麼算都可能整段被 WS drain 吃掉、lifespan 一步都輪不到
+    assert cap.run_kwargs["timeout_graceful_shutdown"] == shutdown_budget.WS_DRAIN_SECS
 
 
 def test_main_argv_defaults_to_sys_argv_prod(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,6 +151,7 @@ def test_verify_mode_fake_source_and_neutralize(monkeypatch: pytest.MonkeyPatch)
     assert cap.neutralized is True
     assert cap.prod_log_calls == 0
     assert cap.run_kwargs is not None and cap.run_kwargs["port"] == 8722
+    assert cap.run_kwargs["timeout_graceful_shutdown"] == shutdown_budget.WS_DRAIN_SECS
 
 
 def test_verify_fail_injection_keeps_default_dir_and_clears_nothing(
