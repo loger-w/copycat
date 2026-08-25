@@ -405,7 +405,7 @@ class TestBreadthWebSocket:
     def test_before_boot_rejects_handshake(self, tmp_path: Path) -> None:
         """boot 未完成:握手前就拒(R4 N036,由「先送載入中 scalar 再關」翻轉)。
 
-        載入中語意由 REST `/api/breadth/state` 承擔(前端對該 WS frame 的處理與 REST 同形,
+        載入中語意由 REST `/api/market/breadth` 承擔(前端對該 WS frame 的處理與 REST 同形,
         無獨立讀者);client 退避重連時 boot 已完成。
         """
         client = TestClient(

@@ -206,7 +206,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `frontend/src/lib/overlay-parity.test.ts` 各一條,改壞任一邊只有那一邊紅。
 - **`/api/market/bars` 的 `meta.status` 三態**(2026-08-25 起,N104):產生點
   `copycat/live/futures_source.py::fetch_bars_range`(raise `HistoryTimeoutError`)→
-  `copycat/server/futures_engine.py::bars_range`(`BarsResult`:timeout / disconnected)→
+  `copycat/server/futures_engine.py::bars_range`(裸 tuple `(bars, status)`;值域持有者
+  `copycat/live/stock_source.py::BarsStatus`,`BarsResult` 到 `app.py` 才組 —— 08-25 review 回校)→
   `copycat/server/bars.py::build_minute`(兩段取最壞)→ `app.py::_market_payload(status=…)`。
   值域 `ok | timeout | disconnected`,沿 `/api/stock/bars` 既有三態語意。**這一格只在期指
   `tf=1` 出現;其餘路徑(加權 / 櫃買 / 日週月 K)連鍵都不給** —— 缺欄 = 該路徑尚未三態化。
@@ -247,8 +248,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 
 ## 6. 提交慣例
 
-- `<type>(<scope>): <subject>`,type ∈ feat/fix/chore/refactor/perf,scope 多用 dq4/warrant/
-  frontend/backend;subject 描述「為何」> 「做了什麼」;三類分開(🔴 行為 / 🟢 新功能 / 🔵 重構)。
+- `<type>(<scope>): <subject>`,type ∈ feat/fix/chore/refactor/perf/test(`test` = 純測試 commit,
+  紅先行那一筆;08-25 review 補列,既有 83 筆),scope 多用 dq4/warrant/frontend/backend;subject
+  描述「為何」> 「做了什麼」;三類分開(🔴 行為 / 🟢 新功能或測試 / 🔵 重構)。
 - 驗證截圖放 `docs/specs/<feature>/screenshots/`。
 
 ## 7. 高 blast radius 動作:下單

@@ -456,9 +456,11 @@ class StockEngine:
         **逐項取鎖,不是整段一鎖**(N111,照同檔 `_retry_round`):TC4 故障時單檔
         SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10 s)才失敗,整段持鎖會讓第二個寫入者
         (PUT / Discord `/watch` 的 `_settle`、切主圖)等**整段**迴圈走完 —— 50 檔
-        就是 500 s,Discord 的 interaction token(3 s)必逾時。逐項取鎖之後,等待上界
-        降到「當下這一檔」。ZMQ IO 仍在鎖內(per-code in-flight 狀態才能把 IO 完全
-        移出鎖,那是新的不變式,見 verification.md 留尾)。
+        就是 500 s —— Discord `/watch` 已 defer(token 15 分鐘,見 `watchlist_service.py` /
+        `discord_bot.py`)未必逾時,但前端 PUT / 切主圖的使用者就是等整段。逐項取鎖之後,
+        等待上界降到「當下這一檔」(≈ `_api_lock` 等待 + `_REQ_TIMEOUT_MS` ≈ 20 s)。ZMQ IO
+        仍在鎖內(per-code in-flight 狀態才能把 IO 完全移出鎖,那是新的不變式;**N111 的
+        退訂正確性依賴 IO 在鎖內**,移出時 ST1 洩漏會原樣復發 —— 見 next-time 08-26 節)。
 
         逐項取鎖打開了一條舊碼結構上不可能發生的窗:**較舊**的那一發可能在較新的名單
         套用之後才跑完剩下的檔。`_superseded` 因此在每一項重驗一次,過期即整段放棄

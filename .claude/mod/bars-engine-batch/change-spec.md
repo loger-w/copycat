@@ -135,7 +135,9 @@ heal 窗 `_in_watch_window() or _WATCH_END <= now < _HEAL_TAIL_END` →
 - `_minutes_lag_exceeded` 的 `min(now, _HEAL_TARGET_MIN)` 封頂**已經**是條文要的
   「窗外以 min(now, 13:30) 為期望覆蓋終點」,detector 一行不改。
 - **休市日恆空的輪詢噪音**(條文明寫)由新增的 `_is_trading_day` 閘處理:假日 / 週末
-  minutes 恆空 → 舊碼在 09:04 之後整個 watch 窗每 60s→900s 空打,新碼一發都不打。
+  minutes 恆空 → 舊碼在 09:04 之後整個 watch 窗每 60s→900s 空打;新碼**盤外段零筆**,但
+  **09:04–13:25 的 watch 窗內仍照舊空打**(SP1 收修後窗內段不吃日曆,`in_watch_window_now`
+  純看牆鐘 —— 08-25 review 改口;補窗內閘會帶回「日曆誤標整天不自癒」,待 user 拍板)。
 - 09:00 之前不觸發:空 minutes 以 09:00 起算,`now_min - 540 > 3` 在 09:04 之前恆偽,
   gate 那半邊也還沒開(`now >= 13:25` 偽、`_in_watch_window()` 偽)。
 - 代價:交易日晚間若 TC4 整晚拿不到當日 1K,heal 會以退避(60s 起、封頂 900s)持續到隔日

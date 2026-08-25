@@ -1,3 +1,35 @@
+## 2026-08-26(「做」批 review §5 D 回填:#105 勾銷過頭的留尾 + 跨 PR 留尾)
+
+review `docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.3 點名 #105 那輪 next-time −66/+0 行,七項留尾只活在單輪
+verification;這裡回填成 backlog。
+
+- [ ] **N111 深修剩下的一半:ZMQ IO 移出 `_pool_lock`**(`stock_engine.set_watchlist`,#105 verification §5.3):要 per-code
+  in-flight 狀態(`owners.add` 先佔位 → IO 鎖外 → 失敗回滾 + 第二個 acquirer 的等待)。**耦合**:N111 現行的退訂正確性
+  (`removed` 以 `_refs` 為準)**依賴 IO 在鎖內**,一移出 ST1 洩漏原樣復發 —— 兩件事要同一輪做。
+- [ ] **N092 `stock_source.backfill` 真三態化**(§5.4):先把 `parse_hist_tick` 的「試撮窗濾掉」與「解析不出」分流(現在
+  兩者都回 None),否則 08:30–09:00 盤前回補會被判成 stub 無限重排。改回傳契約,獨立輪。
+- [ ] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發(index source 自己的閘上界
+  13:25 —— 會連帶關掉 13:30 最後一筆,**要 user 拍板**);個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
+  退避上限 60 s 拉到 300 s。另:N051 逐腿閘的真環境待核項(SXF 休市段自癒發數)#105 §6 沒列,prod 重啟後盤中
+  `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。
+- [ ] **`corr_source.taifex_leg_gate` 對 SGX / CME / CBOT / OSE 段恆 True**(§5.6):要收得先用 `QUERYINSTRUMENTINFO` 的
+  `OpenCloseTime` 把各段時段落成事實(skill 只有 OSE 一組)。
+- [ ] **`tests/live/test_river_state.py` UTF-8 BOM(N059)**(§5.6)未處理。
+- [ ] **corr / futures `_handle_reconnect` 逐字同形**(§7.8 ST5;review 也列 Duplicated Code):對帳單位不同(product vs
+  leg.symbol),第三個引擎接同款時再抽;注意兩處**順序已漂**(futures 先 update pending 再 bump epoch,corr 相反),今天等價。
+- [ ] **rollover stage1 → worker `set_trade_date` 之間的次毫秒窗**(§7.8 SP1):source 日窗仍舊,靠 `_generation` guard 丟掉
+  回補結果 —— 「靠別人擋」不是「結構上不可能」,真要收得把日窗語意納入 generation。
+- [ ] **N039 route 層首則 seed send 仍只 catch `WebSocketDisconnect`**(`app.py` 四處),close_sent traceback 噪音仍在。
+- [ ] **N038 jitter 對背景分頁無效**(Chrome timer 1 s 對齊),#99 E5 判 PASS 偏寬。
+- [ ] **#106 私密視窗偏好靜默不落檔畫面零訊號**(`storage.ts` 四旗標唯一讀者是自己去重)。
+- [ ] **/bug H3 昨日段中段缺格 gate 5 不涵蓋**(只比尾根;core 單條 polyline 對任何缺格架橋)+ **切回 tab 最多 60 s 印
+  「TC4 回補中」歸因錯**(inactive 停輪詢)。
+- [ ] **`futures_engine._leaf_rearm` 不自驅**(只在 `_handle_quote` 消化,`_handle_reconnect` 不自排 → 靠別品推播觸發)。
+- [ ] **Duplicated Code 抽取候選**(review §5 D):`capital_api.py` tick 閘尾段六行 ×2;`futExchangeContract` try/catch→null
+  第 5 份(`FuturesLadder.tsx`);`flash-locked` 三個產生點(`flash-send.ts` / `FuturesLadder.tsx` / `close-order.ts`);
+  `list-drag.ts` 六位置參數 Data Clump(`WatchlistSidebar.tsx` ×2)。
+- [ ] **「不 Disconnect 則 process 不退」錯句**:`tc4.py` 兩處已改;`futures_engine.py:221/245/258` 三處本輪一併改。
+
 ## 2026-08-26(mod/watchlist-rename-collision A4 改名保留編輯框 留尾)
 
 - [ ] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時

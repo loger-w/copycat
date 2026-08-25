@@ -306,18 +306,21 @@ reviewer 重跑後端 68 / 前端 35 passed。
 
 **A. 該修 code(候選下一輪,依真錢 / 盤中影響排序)**
 - A1 #105 關機預算:run.ps1 15 s → 依「source 數 × `_REQ_TIMEOUT_MS` + capital 5 s」同源推導(或 close 改並行 + 總上限),
-  console 印哪段吃掉時間(§2.6 S1)。
+  console 印哪段吃掉時間(§2.6 S1)。**已出貨 PR #109(2026-08-26,並行 lane + `shutdown_budget.py` 83 s)**。
 - A2 #103 N075 誤標窗:同檔同方向撞同 seq 仍誤標 —— 要嘛加「送單時刻 ± 窗」或 seq 單調性檢查,要嘛改口 docstring 承認窗
   未封並釘測試(§2.4);`_note_price_type` 移到 `_audit` 之後或包 try(§2.4 Spec 7)。
 - A3 /bug gate 5:`tailIndex` 套 `c <= 0` 跳過(§2.2 Spec 2);門檻 3 → 4 或 60 s 覆量(Spec 1)。
-- A4 #101 N115:撞名時保留編輯框(`setRenaming(null)` 移到成功回呼)+ 鎖(§2.3 Spec 1)。
+- A4 #101 N115:撞名時保留編輯框(`setRenaming(null)` 移到成功回呼)+ 鎖(§2.3 Spec 1)。**已出貨 PR #110(2026-08-26)**。
 - A5 #104 N105:休市日窗內閘 —— 需 user 拍板(補閘 vs 改口)(§2.5 Spec 1);rollover 設 pending 時 bump `_retry_epoch`
   (§2.5 Spec 2 親核那條)。
 - A6 #105 重連 → `_schedule_retry(variant=self._heal_variant)` 或不清 stale(§3.4);`tc4.py:389` Disconnect 取鎖(§2.6 S2)。
+  **已出貨 PR #113(2026-08-26;沿用 variant + 無進展推階梯,stale 維持樂觀清)**。
 - A7 #99 N037 補「節流 tick 真跑」案 + grace 改「只在偵測到凍結時」(§2.1)。
-- A8 #101 `PARAM_DEFAULTS` 進 parity + `COOLDOWN` + 整數檢查(§2.3)。
+- A8 #101 `PARAM_DEFAULTS` 進 parity + `COOLDOWN` + 整數檢查(§2.3)。**已出貨 PR #112(2026-08-26)**。
 
-**B. 文件改口(不動行為)**
+**B. 文件改口(不動行為)** —— **2026-08-26 chore 一次做完(`chore/do-batch-review-docs`),除 `ops-discipline:67`
+(他 session 未提交修改仍在,未動)與 `storage.ts` / `storage-consolidation/verification.md`(他 session 於 PR #106
+review 後已改,3a8d4b67 / e01a083b)**;D 類七項 + 其餘留尾同輪回填 `docs/next-time.md` 08-26 節。
 - CLAUDE.md:206 `BarsResult` → 裸 tuple + 值域持有者;§6 補 `test(` type。
 - `storage.ts:27-28` 「唯一一處」刪;`stock_source.py:546` ZMQError 註解改正;`store.py:196` 「回到只缺標籤不誤標」改口;
   `stock_engine.py:459` 3 s 改 15 min;`test_breadth_routes.py:408` 端點;`index_engine.py:266` docstring。
