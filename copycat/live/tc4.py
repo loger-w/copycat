@@ -112,7 +112,7 @@ _REQ_TIMEOUT_MS = 10_000
 #: `TC4QuoteSource(lock_timeout_secs=)` 的預設(理由見該參數的註解)。獨立成常數是為了讓
 #: `close_worst_secs()` 與建構子吃**同一個值** —— 它是關機預算(`server/shutdown_budget.py`)
 #: 的輸入之一,兩處各寫一個 12.0 就會靜默漂開。
-DEFAULT_LOCK_TIMEOUT_SECS = 12.0
+DEFAULT_LOCK_TIMEOUT_SECS: float = 12.0
 # 回補收割輪數上限與零進展早停(fetch_backfill round 制;空頁無法區分未備妥/無資料)
 _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
@@ -124,20 +124,29 @@ _HARVEST_DRY_LIMIT = 3
 _LOGOUT_TIMEOUT_MS = 2_000
 
 
-def close_worst_secs(lock_timeout_secs: float = DEFAULT_LOCK_TIMEOUT_SECS) -> float:
-    """單條 session `close()` 的最壞耗時上界(秒)—— 關機預算的產生點之一(review A1)。
+def close_worst_secs() -> float:
+    """單條 session `close()` **可計段**的最壞耗時上界(秒)—— 關機預算的產生點之一(review A1)。
 
-    三段相加,每段都是本檔既有 timeout 的直接後果:
-    1. 等 `_api_lock`:在途的 `_ensure_connected` 持鎖跨 `Connect()`,最壞吃滿一個 REQ timeout;
-    2. 一發 REQ 撞 RCVTIMEO:UNSUBQUOTE 迴圈第一發失敗即 break(其餘 symbol 也會失敗),
-       或退訂全過、收尾那一發 REQ 逾時 —— 兩條路都只付**一次**;
-    3. `_dispose` 等 `api.lock`(KeepAlive Pong 可能持著)。
+    = 等 `_api_lock` + max(REQ 路徑, 毒鎖路徑),每一項都是本檔既有 timeout 的直接後果:
 
-    `Disconnect()` 本身(LINGER=0 的 socket close + context term)毫秒級,不計。
+    1. 等 `_api_lock`:在途的 `_ensure_connected` 持鎖跨 `Connect()`,最壞吃滿一個 REQ timeout。
+    2. 之後兩條路**互斥**(`_req` 進門先 `api.lock.acquire(timeout=lock_timeout)`):
+       - REQ 路徑(拿到鎖):send + recv 各撞一次 SNDTIMEO / RCVTIMEO = 2 × REQ;finally 釋鎖,
+         接著的 `_dispose` 立刻拿到 `api.lock`,Disconnect 不再等。
+       - 毒鎖路徑(KeepAlive `Pong` 帶著鎖死掉):`_req` 等鎖 + `_dispose` 再等鎖 = 2 × lock,
+         `_dispose` 拿不到就**跳過** Disconnect。
+       UNSUBQUOTE 迴圈第一發失敗即 break(`_req` 內已 `_dispose`,之後 `_connection()` 拋
+       ConnectionError 直接 return —— **收尾那一發 REQ(如 LOGOUT)不會再送**);退訂全過才輪到
+       收尾 REQ 逾時。所以不論退訂 / 收尾哪一發撞到,只付**一次**。
+
+    **不計的段(無上界可計)**:`Disconnect()` → KeepAlive `_ctx.term()` 要等 KeepAlive 執行緒
+    自己關 SUB socket;wrapper 的 `ThreadProcess` 只 catch ZMQError,decode 類例外殺掉執行緒時
+    socket 永不關 → `term()` 無界。那條 lane 卡住正是 run.ps1 到期硬殺要落的對象;並行 lane
+    讓它只拖自己一條(改動前它拖後面全部)。
     健康路徑實測 < 1 s;這個數字只在 TC4 半死時才會被吃到,而那正是關機預算要蓋住的情境。
     """
     req_secs = _REQ_TIMEOUT_MS / 1000
-    return req_secs + req_secs + lock_timeout_secs
+    return req_secs + max(2 * req_secs, 2 * DEFAULT_LOCK_TIMEOUT_SECS)
 
 
 def always_active() -> bool:
@@ -925,6 +934,11 @@ class TC4QuoteSource:
         lock_wait = time.monotonic() - t0
         if connected:
             total, done = len(self._subscribed), 0
+            # 關機預算的可觀測面(review A1):lifespan 那頭只看得到「這條 session 花了 n 秒」,
+            # 分不出是等鎖(在途 `Connect()`)還是 REQ 逾時(TC4 半死)—— 處置不同,前者等
+            # 它自己走完,後者要去看 TC4;上界推導見 `close_worst_secs`。**進場先印一行**:
+            # 卡在 REQ 上被硬殺時,事後只剩這行能指認是哪條 session(review SP3)。
+            logger.info("TC4 quote close:等 api 鎖 %.2fs,開始 UNSUBQUOTE %d 檔", lock_wait, total)
             t_unsub = time.monotonic()
             for sym in list(self._subscribed):
                 try:
@@ -935,15 +949,8 @@ class TC4QuoteSource:
                     logger.exception("UNSUBQUOTE failed during close: %s", sym)
                     break
                 done += 1
-            # 關機預算的可觀測面(review A1):lifespan 那頭只看得到「這條 session 花了 n 秒」,
-            # 分不出是等鎖(在途 `Connect()`)還是 REQ 逾時(TC4 半死)—— 處置不同,前者等
-            # 它自己走完,後者要去看 TC4;上界推導見 `close_worst_secs`。
             logger.info(
-                "TC4 quote close:等 api 鎖 %.2fs,UNSUBQUOTE %d/%d 檔 %.2fs",
-                lock_wait,
-                done,
-                total,
-                time.monotonic() - t_unsub,
+                "TC4 quote close:UNSUBQUOTE %d/%d 檔 %.2fs", done, total, time.monotonic() - t_unsub
             )
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive

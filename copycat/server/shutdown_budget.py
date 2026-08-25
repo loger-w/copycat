@@ -15,7 +15,8 @@ TC4 session **序列** close;TC4 半死時硬殺落在退訂中途,健康的 ses
 而漂掉的症狀零錯誤訊號。`tests/server/test_shutdown_budget.py` 釘的是**不等式**,改任一邊
 的常數、別的邊沒跟上就紅。
 
-上界是「TC4 半死」情境的數字;健康路徑整段收尾實測 1–3 s。
+上界是「TC4 半死」情境**可計段**的數字(`tc4.close_worst_secs` 註明哪一段無上界);健康路徑
+整段收尾實測 1–3 s。
 """
 
 from __future__ import annotations
@@ -28,19 +29,22 @@ from copycat.live.tc4 import close_worst_secs
 #: uvicorn `timeout_graceful_shutdown`:WS 收攤上限(int:uvicorn 的型別是 `int | None`)。
 #: 正常情況瀏覽器毫秒級回 close frame;到期後 uvicorn 自己 cancel 剩餘 WS task,relay 的
 #: CancelledError 路徑既有。
-WS_DRAIN_SECS = 5
+WS_DRAIN_SECS: int = 5
 
 #: lifespan 反序 close 最深的 lane:corr → futures 串鏈(corr 讀 `futures.state()`,
 #: `app.py` 的既有不變式);其餘 lane(index / stock / txo)各一條 session。
-TC4_LANE_DEPTH = 2
+#: 與 lifespan 真實形狀的綁定由 `tests/server/test_boot_window.py::TestShutdownLanes::
+#: test_lane_depth_matches_the_real_shutdown_shape` 釘住(五條 session 同時卡住時同時進場
+#: 的條數 = 5 − depth + 1)。
+TC4_LANE_DEPTH: int = 2
 
 #: TC4 之外的段(crosscheck cancel / breadth / signals 的 bot.close + hub drain)+ 執行緒排程。
 #: 全是既有上限內的小段,合計給一個固定裕度,不逐段列(列了也是猜的數字)。
-LIFESPAN_SLACK_SECS = 5.0
+LIFESPAN_SLACK_SECS: float = 5.0
 
 #: 單段 close 超過這個秒數就印 WARNING 點名(健康路徑整段 1–3 s,單段 > 2 s 幾乎只有
 #: 「等在途 Connect 的鎖」或「REQ 撞 RCVTIMEO」兩種)。
-SLOW_CLOSE_WARN_SECS = 2.0
+SLOW_CLOSE_WARN_SECS: float = 2.0
 
 
 def lifespan_close_worst_secs() -> float:

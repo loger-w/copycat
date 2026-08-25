@@ -97,6 +97,10 @@ MARKET_KEYS = ("TWSE", "OTC") + FUTURES_MARKET_KEYS
 #: `?session=` 的值域。
 MARKET_SESSIONS = ("day", "allday")
 
+#: lifespan 關機各段的**輸出序**(彙總行用;不是執行序 —— 執行序見 lifespan finally 的註解:
+#: 前三段序列、中間四條 TC4 lane 並行、capital 最後)。
+_SHUTDOWN_SEGMENTS: Final = ("breadth", "signals", "corr", "futures", "index", "stock", "txo", "capital")
+
 #: `/api/stock/overlay/{code}` 單檔取數的時間上界(group-grid review B2)。
 #: TC4 對「查無此檔」不是快速失敗 —— `fetch_daily_bars` 內部兩段 deadline 各
 #: `BARS_POLL_DEADLINE` = **10s**(bug/history-timeout-propagation 起兩段皆顯式帶;
@@ -1026,6 +1030,9 @@ def create_app(
             shutdown_t0 = time.monotonic()
 
             async def _close_segment(name: str, close: Callable[[], Awaitable[None]]) -> None:
+                # 進場先印:卡住被 run.ps1 硬殺時,完成後才印的 WARNING / 彙總行一行都不會有,
+                # 事後只能由「誰有開始沒結束」指認那一段(review SP3)
+                logger.info("關機 %s 段開始", name)
                 t0 = time.monotonic()
                 try:
                     await close()
@@ -1089,10 +1096,15 @@ def create_app(
             if booted.capital is not None:
                 capital = booted.capital
                 await _close_segment("capital", lambda: asyncio.to_thread(capital.close))
+            # 固定段序輸出(並行 lane 下 `timings` 的插入序是完成序,每次不同 —— review ST4)
             logger.info(
                 "關機收尾 %.2fs:%s",
                 time.monotonic() - shutdown_t0,
-                " / ".join(f"{name} {secs:.2f}s" for name, secs in timings.items()),
+                " / ".join(
+                    f"{name} {timings[name]:.2f}s"
+                    for name in _SHUTDOWN_SEGMENTS
+                    if name in timings
+                ),
             )
 
     app = FastAPI(lifespan=lifespan)
