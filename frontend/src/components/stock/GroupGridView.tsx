@@ -48,15 +48,6 @@ interface Props {
   wlError?: boolean;
 }
 
-function loadGroupName(): string | null {
-  return readLocal(STOCK_GROUP_KEY);
-}
-
-/** 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉(`writeLocal` 不拋)。 */
-function persistGroupName(name: string): void {
-  writeLocal(STOCK_GROUP_KEY, name);
-}
-
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
  *  同一群組每次打開都是同一個版面,眼睛才記得住哪張卡片在哪。
  *
@@ -255,7 +246,7 @@ const GRID_TOGGLES: { key: "vwap" | "cdp" | "ma" | "vp" | "fills"; label: string
 ];
 
 export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError }: Props) {
-  const [picked, setPicked] = useState<string | null>(loadGroupName);
+  const [picked, setPicked] = useState<string | null>(() => readLocal(STOCK_GROUP_KEY));
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
   // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
   const { toggles, set } = useChartToggles();
@@ -325,7 +316,8 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
         value={selected?.name ?? ""}
         onChange={(name) => {
           setPicked(name);
-          persistGroupName(name);
+          // 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉(`writeLocal` 不拋)
+          writeLocal(STOCK_GROUP_KEY, name);
         }}
         items={groups.map((g) => ({ value: g.name, label: g.name }))}
         pillClass={(_item, checked) =>

@@ -83,7 +83,7 @@
 | W1 | **`useState` lazy initializer 只讀一次**的語意 | 讀取一律仍在 initializer 內同步呼叫;`WatchlistSidebar.test.tsx` 的 StrictMode 自檢(`loadCollapsed` 讀 **2** 次)不改仍綠 |
 | W2 | **App 舊 key 遷移:`setItem` 成功才 `removeItem`** | `writeLocal` 回傳布林,`if (writeLocal(...)) removeLocal(...)`。寫失敗還刪舊 key = 弄丟使用者的主圖標的;三條既有遷移測試不改 |
 | W3 | **`fee-discount::persistDiscount` 寫失敗不通知訂閱者** | 同上布林:`if (!writeLocal(...)) return;`。通知了只會讓訂閱者再讀一次舊值 |
-| W4 | **`useSignalSound::setSoundOn` 寫失敗仍通知**(與 W3 刻意相反) | 刻意忽略回傳值,註解互相指名 |
+| W4 | **`useSignalSound::setSoundOn` 寫失敗仍通知**(與 W3 寫法相反) | 刻意忽略回傳值。可觀察行為上與 W3 零差異:`getSoundOn` 每次快照重讀 storage,通知只讓訂閱者讀回舊值 —— 留著通知只是少一個分支,不是「真相在記憶體」(PR #106 review F-05 更正) |
 | W5 | `fee-discount` 的 `storage` 事件監聽 + module 級 listener 集合 | 完全不碰(`subscribe` / `listeners` 逐字未動) |
 | W6 | `MarketPane::selectKey` 的「**寫入不可條件化**」(任何標的切換都沖成當下有效值) | `setItem`→`writeLocal` 一對一,順序與條件零改 |
 | W7 | `useChartToggles::set` 的「merge 基底是**重讀的 localStorage**」 | `load()` 內部換讀法,呼叫序不變 |

@@ -22,9 +22,10 @@ export function getSoundOn(): boolean {
 }
 
 export function setSoundOn(next: boolean): void {
-  // 寫入結果**刻意不看**:存不進去就算了,但仍要通知訂閱者,本次 session 照設定走
-  // (與 `lib/fee-discount.ts::persistDiscount` 的「寫失敗就不通知」刻意相反 ——
-  // 那邊的真相在 storage、這邊的真相是使用者剛按下的那個開關)。
+  // 寫入結果不看:`getSoundOn` 每次快照都重讀 storage,所以兩種失效態下(配額滿 / 政策鎖)
+  // 通知都只會讓訂閱者讀回舊值、開關自己彈回去 —— 留著通知只是省一個分支,
+  // 與 `lib/fee-discount.ts::persistDiscount` 早退的差別僅止於此,不是「真相在別的地方」。
+  // 要讓開關在寫失敗時照使用者按的走得補 in-memory 覆寫,那是 change-spec §1 決定 6 的非目標。
   writeLocal(SOUND_KEY, next ? "on" : "off");
   for (const notify of [...subscribers]) notify();
 }

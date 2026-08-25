@@ -245,7 +245,7 @@ describe("GroupGridView 群組切換 pill", () => {
     fireEvent.click(screen.getByRole("radio", { name: "金融" }));
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
     expect(groupCalls().some((u) => u.includes("codes=2881"))).toBe(true);
-    // 寫入側也要鎖(review B-1):刪掉 persistGroupName 整條路徑,其餘測試照樣全綠,
+    // 寫入側也要鎖(review B-1):刪掉 onChange 內那行 writeLocal(STOCK_GROUP_KEY),其餘測試照樣全綠,
     // 而使用者下次開頁會靜默回到第一個群組
     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
   });
