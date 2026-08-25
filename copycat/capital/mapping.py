@@ -177,6 +177,29 @@ def _month_year_codes(ym: str, *, put: bool = False) -> str:
     return chr(ord(base) + month - 1) + str(year % 10)
 
 
+def contract_from_fill(order_code: str | None, ym: str | None) -> str | None:
+    """成交回報 → 期交所契約碼(部位樂觀套用用;F5)。
+
+    回報 idx8 是群益的「產品 + 兩碼月」(真樣本 `QEF06`),idx33 是 `YYYYMM`(`202606`);
+    期交所契約碼 = 產品碼 + 月碼 + 年末碼(`QEFF6`),與 OI 回報 / `to_exchange_symbol` 同一把尺,
+    store 的 (stock_no, kind) 鍵才對得上。產品碼沿 `exchange_product_of`(已知前綴優先、否則去尾
+    兩碼);任一環節不成立 → None(樂觀套用寧缺勿錯,回查鏈照樣會補真相)。
+    **真樣本只有 2026-06-10 一筆**:首筆真期貨成交後看 client 的「期貨部位鍵差異」log 校準。
+    """
+    if not order_code or ym is None or _YM_RE.match(ym) is None:
+        return None
+    try:
+        prod = exchange_product_of(order_code)
+    except ValueError:
+        return None
+    if not prod or not order_code.startswith(prod):
+        return None
+    try:
+        return prod + _month_year_codes(ym)
+    except ValueError:
+        return None
+
+
 def _resolve_ym(ym: str, resolved_ym: str | None, tc4_symbol: str) -> str:
     if ym != "HOT":
         return ym

@@ -57,6 +57,9 @@ class ReplyRecord:
     pre_order: bool = False  # idx31 == "B"(預約單)
     error_msg: str | None = None  # idx44(OrderErr=Y 時)
     alt_seq_no: str | None = None  # idx47 尾欄 13 碼(官方欄名待對 docx;預約單與 KeyNo 不同)
+    # idx33 YYYYMM(期權;2026-06-10 真樣本 QEF06 配 202606)。成交樂觀套用部位時與 idx8
+    # 產品月碼一起組期交所契約碼(`mapping.contract_from_fill`);非 6 位數字一律 None。
+    contract_ym: str | None = None
     raw: str = ""
 
 
@@ -91,6 +94,10 @@ def _parse_buysell(market: str | None, bs: str | None) -> tuple[str | None, str 
     return side, flag
 
 
+def _ym_or_none(s: str | None) -> str | None:
+    return s if s is not None and len(s) == 6 and s.isdigit() else None
+
+
 def parse_onnewdata(bstr_data: str) -> ReplyRecord:
     arr = bstr_data.split(",")
     market = _at(arr, 1)
@@ -119,5 +126,6 @@ def parse_onnewdata(bstr_data: str) -> ReplyRecord:
         pre_order=_at(arr, 31) == "B",
         error_msg=_at(arr, 44),
         alt_seq_no=_at(arr, 47),
+        contract_ym=_ym_or_none(_at(arr, 33)),
         raw=bstr_data,
     )

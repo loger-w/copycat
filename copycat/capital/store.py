@@ -20,6 +20,7 @@ import threading
 from dataclasses import dataclass
 
 from copycat.capital.balance import ProfitRow
+from copycat.capital.mapping import contract_from_fill, is_option_contract
 from copycat.capital.models import Market, OrderRecord, Position, PositionKind
 from copycat.capital.reply import ReplyRecord
 
@@ -27,6 +28,18 @@ logger = logging.getLogger(__name__)
 
 _SEC_LOT_MARKETS = {"TS", "TA", "TP"}  # 整股:股 → 張(÷1000)
 _FUT_MARKETS = {"TF", "TO", "OF", "OO"}  # 口
+
+# 成交樂觀套用(F5)的證券種類對映:回報 idx6 資券別 → 部位種類。**只列確定的**:「無券」
+# (無券當沖賣)的部位狀態與回補單種待首筆實錄校準(balance.py 負股數同一條),不在表內
+# = 不套(回查鏈仍會補),寧缺勿錯。零股不在此表 —— 零股市場(TL/TC)整個不套。
+_FILL_KIND: dict[str, PositionKind] = {
+    "現股": "cash",
+    "拍賣現股": "cash",
+    "融資": "margin",
+    "代資": "margin",
+    "融券": "short",
+    "代券": "short",
+}
 
 # 狀態只進不退(防 backlog 重播亂序降級)
 _RANK = {
@@ -62,6 +75,9 @@ class _Agg:
     order_qty: int = 0  # 原始單位(股/口)
     filled_qty: int = 0
     fill_value: float = 0.0  # Σ(成交價×量),算均價用
+    applied_qty: int = 0  # 已樂觀套進部位的成交量(張 / 口;F5 部分成交只套增量)
+    applied_shares: int = 0  # 套用當下的累計成交量(股 / 口),算增量均價用
+    applied_value: float = 0.0  # 套用當下的累計成交價金,算增量均價用
     date: str | None = None  # 委託建立日 YYYYMMDD
     time: str | None = None
     pre_order: bool = False
@@ -82,6 +98,8 @@ class CapitalStore:
         self._price_types: dict[str, tuple[str, tuple[str, ...], str | None, str | None]] = {}
         # 鍵 = (stock_no, kind):同檔資+集保並存各佔一列,兩種類都平倉鍵得到
         self._positions: dict[tuple[str, str], Position] = {}
+        # 委託序號 → 回報 idx33 YYYYMM(期貨樂觀套用組契約碼用;F5)
+        self._contract_ym: dict[str, str] = {}
 
     def _set_status(self, a: _Agg, label: str) -> None:
         if _RANK.get(label, 0) >= _RANK.get(a.status_label or "", 0):
@@ -98,9 +116,11 @@ class CapitalStore:
         else:
             self._set_status(a, "部分成交")
 
-    def apply_reply(self, rec: ReplyRecord) -> None:
+    def apply_reply(self, rec: ReplyRecord) -> bool:
+        """回報事件 → 委託聚合;成交(D)另樂觀套進部位。回傳「部位有沒有變」
+        (caller 據此推 `capital_position`;其他事件恆 False)。"""
         if not rec.seq_no:
-            return
+            return False
         with self._lock:
             a = self._orders.get(rec.seq_no)
             if a is None:
@@ -115,6 +135,8 @@ class CapitalStore:
                     setattr(a, f, v)
             if rec.pre_order:
                 a.pre_order = True
+            if rec.contract_ym is not None:
+                self._contract_ym[rec.seq_no] = rec.contract_ym
             if rec.time:
                 a.time = rec.time
             a.status_raw = rec.status_raw
@@ -138,6 +160,7 @@ class CapitalStore:
                     a.filled_qty += rec.qty
                     a.fill_value += rec.price * rec.qty
                 self._refresh_fill_status(a)
+                return self._apply_fill_locked(a)
             elif t == "C":
                 # C 的 qty=原委託剩量,order/filled 不動
                 self._set_status(a, "已刪單")
@@ -160,6 +183,76 @@ class CapitalStore:
                 self._refresh_fill_status(a)
             elif t == "S":
                 self._set_status(a, "退單")
+            return False
+
+    def _apply_fill_locked(self, a: _Agg) -> bool:
+        """成交樂觀套用(F5):成交回報帶價 / 量 / 方向 / 種類,不必等券商三段回查鏈
+        (0.5 s debounce + 庫存 → 損益 → 期貨部位串行)才讓部位出現。回查鏈照跑、落地時
+        `set_positions` 全量覆蓋 —— 真相仍是券商,這裡只是先到。
+
+        規則(寧缺勿錯,任一環節不確定就不套、回傳 False):
+        - 只套「這張單」尚未套過的增量(`applied_qty`):部分成交 500 + 500 股 → 湊滿 1 張才套 1。
+        - 證券:整股市場 + 種類對得到 `_FILL_KIND`;張數 = 累計成交股 // 1000。
+        - 期貨:純期貨(選擇權不套);契約碼由回報組(`contract_from_fill`)。
+        - 買 +、賣 −(融券空單本來就是負張,與 `parse_balance_line` 同號)。
+        - 均價:新倉 = 這張單成交均價;同向加碼且舊均價已知 = 加權;減碼不動;舊均價未知留 None;
+          反向翻倉 = 這張單均價。損益基底(`pnl_*`)一律清 None —— 舊快照對新張數是假的。
+        - 歸零 → 移除該列。
+        """
+        if a.buy_sell not in ("B", "S") or a.filled_qty <= 0 or not a.stock_no:
+            return False
+        market: Market
+        kind: PositionKind
+        if a.market in _SEC_LOT_MARKETS:
+            k = _FILL_KIND.get(a.flag_label or "")
+            if k is None:
+                logger.info("成交種類 %r 不在樂觀套用表,等回查鏈: %s", a.flag_label, a.stock_no)
+                return False
+            market, kind, key_no = "sec", k, a.stock_no
+            total = a.filled_qty // 1000
+        elif a.market in _FUT_MARKETS:
+            contract = contract_from_fill(a.stock_no, self._contract_ym.get(a.seq_no))
+            if contract is None or is_option_contract(contract):
+                return False
+            market, kind, key_no = "fut", "cash", contract
+            total = a.filled_qty
+        else:
+            return False
+        delta = total - a.applied_qty
+        if delta <= 0:
+            return False
+        # 增量均價 = 上次套用之後成交的那些量的均價(不是整張單的累計均價 —— 第二次套用時
+        # 把第一批的價格再算進去,加碼均價會被拉回舊價)。
+        fill_avg = (a.fill_value - a.applied_value) / (a.filled_qty - a.applied_shares)
+        a.applied_qty = total
+        a.applied_shares = a.filled_qty
+        a.applied_value = a.fill_value
+        signed = delta if a.buy_sell == "B" else -delta
+        key = (key_no, kind)
+        prev = self._positions.get(key)
+        if prev is None:
+            self._positions[key] = Position(
+                market=market, stock_no=key_no, qty=signed, avg_price=fill_avg, kind=kind
+            )
+            return True
+        new_qty = prev.qty + signed
+        if new_qty == 0:
+            del self._positions[key]
+            return True
+        if prev.qty == 0 or (prev.qty > 0) == (signed > 0):
+            avg = (
+                (prev.avg_price * abs(prev.qty) + fill_avg * abs(signed)) / abs(new_qty)
+                if prev.avg_price is not None and prev.avg_price > 0
+                else None
+            )
+        elif abs(new_qty) < abs(prev.qty):
+            avg = prev.avg_price
+        else:
+            avg = fill_avg
+        self._positions[key] = dataclasses.replace(
+            prev, qty=new_qty, avg_price=avg, pnl_base=None, pnl_base_price=None, pnl_cost=None
+        )
+        return True
 
     def note_price_type(
         self,
@@ -298,6 +391,7 @@ class CapitalStore:
         with self._lock:
             self._orders.clear()
             self._order_seq.clear()
+            self._contract_ym.clear()
 
     def set_positions(self, positions: list[Position]) -> None:
         """全量替換。同 (股號, 種類) 重複列 = 後到者勝並留 warning:

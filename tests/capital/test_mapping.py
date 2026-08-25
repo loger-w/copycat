@@ -14,6 +14,7 @@ import pytest
 import copycat.stkfut_map as stkfut_map
 from copycat.stkfut_map import lookup_product, write_map
 from copycat.capital.mapping import (
+    contract_from_fill,
     exchange_product_of,
     is_option_contract,
     multiplier_of,
@@ -466,3 +467,16 @@ def test_stock_market_order_price_field_must_be_zero() -> None:
 def test_stock_limit_order_price_field_unchanged() -> None:
     f = to_stockorder_fields(_stock(), full_account="x")
     assert f["bstrPrice"] == "590.00"  # 對照組:限價路徑不受市價歸零影響
+
+
+def test_contract_from_fill_builds_exchange_code_from_reply_fields() -> None:
+    assert contract_from_fill("QEF06", "202606") == "QEFF6"
+    assert contract_from_fill("TXF09", "202609") == "TXFI6"
+    assert contract_from_fill("CDF12", "202612") == "CDFL6"
+
+
+def test_contract_from_fill_returns_none_when_any_piece_is_missing() -> None:
+    assert contract_from_fill(None, "202606") is None
+    assert contract_from_fill("QEF06", None) is None
+    assert contract_from_fill("QEF06", "HOT") is None
+    assert contract_from_fill("QEF06", "202613") is None
