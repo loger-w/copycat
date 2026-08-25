@@ -2014,3 +2014,39 @@ async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: p
     assert client.store._price_types[result.seq_no][1] == ("20260824", "20260825")
     # review R6 ST1:候選日多開一天的誤標窗由標的 + 方向綁定封住("buy" → 回報口徑 "B")
     assert client.store._price_types[result.seq_no][2:] == ("2330", "B")
+
+
+# ---------------------------------------------------------------------------
+# fix/tc4-logout-and-cancel-reply-warning:刪單回報的尾欄序號是刪單自己的序號
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_reply_tail_seq_differs_is_not_flagged_as_preorder(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """2026-08-25 實錄 16 次:盤中單的刪單回報 KeyNo=原委託序號、idx47=刪單自己的序號,
+    兩者**必定**不同 —— 舊碼把「不同」一律當預約單線索印 WARNING,每刪一筆就誤報一次。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_reply(_stock_evt_raw("2313207941838", stock="4979"))  # 盤中委託,idx47 空
+    cancel = _stock_evt_raw("2313207941838", stock="4979").split(",")
+    cancel[2], cancel[31], cancel[47] = "C", "A", "2313208386829"  # 刪單、非預約、尾欄=刪單序號
+    with caplog.at_level("WARNING"):
+        client._handle_reply(",".join(cancel))
+    assert not [r for r in caplog.records if "預約單" in r.message]
+    assert client.store.orders()[0].status_label == "已刪單"  # 回報本身照常入 store
+
+
+def test_preorder_new_reply_tail_seq_differs_still_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """白名單:預約單的 N 委託回報(idx31=B)KeyNo≠尾欄 → 線索 WARNING 照舊(既有行為)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    new = _stock_evt_raw("2313091595225").split(",")
+    new[31], new[47] = "B", "2313092917892"
+    with caplog.at_level("WARNING"):
+        client._handle_reply(",".join(new))
+    assert [r for r in caplog.records if "預約單" in r.message]
