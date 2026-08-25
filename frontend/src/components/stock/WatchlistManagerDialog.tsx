@@ -44,21 +44,15 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
    *  兩份 state 併存時,eager 錯誤在下一發成功後不會被清掉(文案留在畫面上,而使用者
    *  剛剛才成功做完一件事)。 */
   const [localError, setLocalError] = useState<string | null>(null);
-  /** 改名那一發在佇列裡(排隊 / 在途)—— 編輯框在結果回來前不關(review A4),所以要擋
-   *  不耐煩的重送:第二發輪到時 `from` 已改名,transform 看不到原組,不是假 BAD_GROUP
-   *  就是靜默 no-op。結果一回來(成功 / 被拒 / PUT 失敗)就解除,失敗時使用者可直接重試。 */
-  const [renameBusy, setRenameBusy] = useState(false);
+  /** 哪一組的改名在佇列裡(排隊 / 在途;值 = `from`)—— 編輯框在結果回來前不關(review A4),
+   *  所以要擋同一組的重送:第二發輪到時 `from` 已改名,transform 看不到原組,不是假 BAD_GROUP
+   *  就是靜默 no-op。**綁單一動作**(記 key、由該發的 `onSettled` 解除)而不是全窗旗標:
+   *  佇列有零回呼的早退(深比對 / 世代作廢 / 基底未載入),掛在 onError / onDone 上的旗標會
+   *  永久卡死;綁 key 也讓「A 在途、Escape 後改 B」照送(review round-1 SP1 / ST-P3)。 */
+  const [renameInFlight, setRenameInFlight] = useState<string | null>(null);
   // 寫入一律走跨元件共用佇列(N117):側欄拖曳與本窗的動作序列化在**同一條** chain 上,
   // 基底也是同一份 —— 兩個寫者各持一顆 observer 時可以互相覆寫(見 hook 檔頭)。
-  const { commit, isPending } = useWatchlistCommit({
-    seed: wl,
-    onError: (code) => {
-      setLocalError(code);
-      // 任一發的結果都解除守門(不只改名那發):守門只防重送,放寬解除不會漏擋 —— 同一時間
-      // 只會有一個編輯框,而它的下一次 Enter 仍會重新武裝
-      setRenameBusy(false);
-    },
-  });
+  const { commit, isPending } = useWatchlistCommit({ seed: wl, onError: setLocalError });
   const { data: names = [] } = useStockNames();
   const dlgRef = useRef<HTMLDialogElement | null>(null);
   const [groupInput, setGroupInput] = useState("");
@@ -97,7 +91,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
     if (open) {
       setSelected(null);
       setRenaming(null);
-      setRenameBusy(false);
+      setRenameInFlight(null);
       setStockInput("");
       setLocalError(null);
     }
@@ -126,18 +120,18 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setLocalError("BAD_GROUP"); // 保留名 / 空白(與基底無關)→ 保留輸入框讓使用者改
       return;
     }
-    if (renameBusy) return; // 在途重送:見 renameBusy 宣告處
-    setRenameBusy(true);
+    if (renameInFlight === from) return; // 同一組在途重送:見 renameInFlight 宣告處
+    setRenameInFlight(from);
     // 編輯框**只在成功後**關(review A4):撞名(transform 回 null)與 PUT 失敗都是非同步
     // 從佇列冒出來的,在這裡先關框等於把使用者打的字連同錯誤的脈絡一起丟掉 —— 那是最常見
     // 的路徑(改成既有名)。改名成功前也不動 selected —— 樂觀更新在 PUT 失敗時會留下懸空的選取
     commit(
       (base) => rejectIfUnchanged(renameGroup(base, from, to), base),
       () => {
-        setRenameBusy(false);
         setRenaming(null);
         setSelected(to);
       },
+      () => setRenameInFlight((cur) => (cur === from ? null : cur)),
     );
   }
 
