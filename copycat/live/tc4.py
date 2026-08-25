@@ -420,11 +420,10 @@ class TC4QuoteSource:
                 # 收工在 `Connect()` 期間發生(`close()` 第一步就 set `_stop`,接著才
                 # 排隊等這把鎖)—— **不得發布**:發布出去的是一條 `close()` 已經看不到
                 # 的連線(它拿到鎖時 `_api` 才被填,但那時 UNSUB 迴圈已經跑完),
-                # KeepAlive 執行緒續跑到 process 不退(review ST2)。就地收掉。
-                try:
-                    api.Disconnect()
-                except (zmq.ZMQError, OSError):
-                    logger.exception("TC4 quote 收工中的在途連線 Disconnect 失敗(best-effort)")
+                # KeepAlive 執行緒續跑到 process 不退(review ST2)。就地收掉 —— 持 `api.lock`
+                # 收(review A6):KeepAlive 在 `Connect()` 內就起來了,`Pong` 隨時會拿同一把鎖
+                # 用同一顆 socket。
+                self._disconnect_locked(api)
                 raise ConnectionError("TC4 quote source 已收工,棄置在途連線")
             self._api = api
             self._session = q["SessionKey"]
@@ -442,6 +441,15 @@ class TC4QuoteSource:
                 return
             self._api = None
             self._session = None
+        self._disconnect_locked(api)
+
+    def _disconnect_locked(self, api: Any) -> None:
+        """持 `api.lock` 才 `Disconnect()`;`_dispose` 與 `_ensure_connected` 的收工分支共用。
+
+        wrapper 的 KeepAlive `Pong` 取同一把鎖、用同一顆 REQ socket —— 不持鎖就 close socket
+        等於兩條執行緒同時碰 ZMQ socket(未定義行為)。取不到鎖(`Pong` 毒鎖)→ 跳過實體 close,
+        洩漏優於 crash(同 `_dispose` 既有判定)。
+        """
         if api.lock.acquire(timeout=self._lock_timeout):
             try:
                 api.Disconnect()

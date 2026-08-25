@@ -385,7 +385,20 @@ class IndexEngine:
     def _on_reconnect_threadsafe(self) -> None:
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._schedule_retry)
+            loop.call_soon_threadsafe(self._schedule_reconnect_retry)
+
+    def _schedule_reconnect_retry(self) -> None:
+        """TC4 重連後的重掛 + 重抓(loop 執行緒)—— **沿用當前自癒 variant**(review A6 / §3.4)。
+
+        改動前走 `_schedule_retry()` 預設 variant 0:盤後分時自癒已把窗口階梯爬到 N(0..N-1 已證明
+        毒化,L1-P1-3「variant 黏在成功值」)時,重連那一發用 0 號窗重抓只會拿回凍結 stub,而
+        `clear_stale=True` 把 stale 樂觀清掉、`_heal_variant` / `_heal_interval` 都不動 → 下次自癒
+        最遠等 900 s;畫面 = 徽章健康、加權分時凍結。`clear_stale` 維持 True:重連 + 重掛成功
+        後推播是否活著由 watchdog 再判,那是與窗口無關的既有語意。「variant 0 在新 session 是否
+        仍毒化」未實證 —— 新 session 的 0 號窗若其實健康,N 號窗同樣拿得到資料(只是窗字串位移),
+        兩種情況都對。
+        """
+        self._schedule_retry(variant=self._heal_variant)
 
     def _handle_quote(self, quote: dict) -> None:
         if str(quote.get("Security", "")) != _SYMBOL:
