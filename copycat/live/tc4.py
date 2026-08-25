@@ -907,10 +907,34 @@ class TC4QuoteSource:
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
         # 生命週期:不關則 process 不退出)
-        with self._api_lock:
-            api = self._api
-        if api is not None:
-            self._dispose(api)
+        try:
+            api, session = self._connection()
+        except ConnectionError:
+            return
+        self._logout(api, session)
+        self._dispose(api)
+
+    def _logout(self, api: Any, session: str) -> None:
+        """退訂後、Disconnect 前對 TC4 送 LOGOUT(fix/tc4-logout)。
+
+        wrapper 的 `Disconnect()` 只關 KeepAlive 執行緒 + socket,**不送 LOGOUT**;
+        TC4 端那張 session 票要等 ~60 s 的 `ExecuteCheckPingTime` 才被 reap
+        (2026-08-25 17:15:29 Ctrl+C:708 筆 UNSUB 貼秒,`RemoveLoginInfo` 全在
+        17:16:31)。reap 會把該 session 獨持的 refcount key 歸零、連帶帶走 symbol 的
+        上游 feed(tc4-market-facts)—— 退訂先做完就沒有東西可帶走,但票留著等 reap
+        仍是一個 60 s 的髒窗,run.ps1 的 graceful 判準也對不上。
+
+        TC4 對 LOGOUT 回 `{"Reply":"LOGOUT","Success":"OK"}`(2026-08-26 00:56 零訂閱
+        probe 實證),所以走 `_req`(send + recv;lock timeout / 失敗棄連線同其他 REQ)。
+        best-effort:失敗只 log,後續 dispose 照走(`_req` 失敗路徑已 `_dispose`)。
+        """
+        try:
+            reply = self._req({"Request": "LOGOUT", "SessionKey": session}, api=api)
+        except ConnectionError:
+            logger.exception("TC4 quote LOGOUT 失敗(best-effort,session 留到 TC4 reap)")
+            return
+        if reply.get("Success") != "OK":
+            logger.warning("TC4 quote LOGOUT 未被接受:%s(session 留到 TC4 reap)", reply)
 
     # ---- REALTIME 監聽(thread)----
 
