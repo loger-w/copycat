@@ -94,7 +94,9 @@ function loadUngroupedCollapsed(): boolean {
 
 interface Props {
   active: string | null;
-  onSelect: (code: string) => void;
+  /** 第二參 = 被點那一列所在的群組(F2):群組區段的列帶群組名、未分組列帶 null、
+   *  搜尋預覽不帶(undefined)。一檔可多組,以「點的是哪一區段」消歧義,不猜。 */
+  onSelect: (code: string, group?: string | null) => void;
   quotes: Record<string, WatchlistQuote>;
 }
 
@@ -495,7 +497,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                計算 = 代號 / 名稱 / 價 / 漲跌幅(或「無資料」)全在。 */
             aria-current={active === code ? "true" : undefined}
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
-            onClick={() => onSelect(code)}
+            onClick={() => onSelect(code, group)}
           >
             {/* 兩行式(round4 項 4 / 項 5):240px 側欄同一行塞不下「名稱 + 放大代號 +
                 放大價位 + 漲幅」(約需 250px)。左上代號 ↔ 右上價位同一條 baseline 都是

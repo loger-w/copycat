@@ -1,12 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
+import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
-import { STOCK_GROUP_KEY } from "@/lib/constants";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
@@ -22,7 +22,6 @@ import {
   secSummary,
 } from "@/lib/position-summary";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
-import { readLocal, writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
 import type { CapitalPosition } from "@/types";
@@ -50,6 +49,11 @@ interface Props {
   /** 加權 / 櫃買即時序列(F1;App 持有)。只在指數 toggle 開著時往卡片傳 —— 序列每秒換
    *  identity,關著也傳的話 50 張卡每秒全部重畫,memo 形同虛設。 */
   index?: IndexOverlaySeries | null;
+  /** 受控的「現在看哪一組」(F2):`StockPage` 以 `useStockGroup` 持有,側欄點列才切得到這裡。
+   *  兩個都不傳 = 非受控(本元件自持,既有測試與別的呼叫端零改動);傳了就以 prop 為準。
+   *  記住的名字不在 `groups` 內時仍由本元件 fallback 第一個(edge 5),與非受控同一條。 */
+  selectedGroup?: string | null;
+  onSelectGroup?: (name: string) => void;
 }
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
@@ -258,8 +262,21 @@ const GRID_TOGGLES: {
   { key: "idxOtc", label: "櫃買" },
 ];
 
-export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlError, index = null }: Props) {
-  const [picked, setPicked] = useState<string | null>(() => readLocal(STOCK_GROUP_KEY));
+export function GroupGridView({
+  groups,
+  quotes,
+  onPick,
+  active,
+  wlPending,
+  wlError,
+  index = null,
+  selectedGroup,
+  onSelectGroup,
+}: Props) {
+  // 非受控 fallback(hook 不可條件化:受控時也掛著,只是不讀它)
+  const own = useStockGroup();
+  const picked = selectedGroup !== undefined ? selectedGroup : own.picked;
+  const selectGroup = onSelectGroup ?? own.select;
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
   // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
   const { toggles, set } = useChartToggles();
@@ -327,11 +344,7 @@ export function GroupGridView({ groups, quotes, onPick, active, wlPending, wlErr
         className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
         leading={<span>群組</span>}
         value={selected?.name ?? ""}
-        onChange={(name) => {
-          setPicked(name);
-          // 存不進去就算了 —— 下次開回第一個群組,不值得為此讓整頁掛掉(`writeLocal` 不拋)
-          writeLocal(STOCK_GROUP_KEY, name);
-        }}
+        onChange={selectGroup}
         items={groups.map((g) => ({ value: g.name, label: g.name }))}
         pillClass={(_item, checked) =>
           cn(

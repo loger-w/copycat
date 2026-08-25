@@ -283,6 +283,44 @@ describe("GroupGridView 群組切換 pill", () => {
     expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
     await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
   });
+
+  // 🟢 F2(chart-ux-batch-0826):受控模式 —— StockPage 持有「現在看哪一組」,側欄點列才切得到。
+  it("受控:selectedGroup 蓋過 localStorage;點 pill 只回呼 onSelectGroup,不自己改", async () => {
+    window.localStorage.setItem(STOCK_GROUP_KEY, "半導體");
+    const onSelectGroup = vi.fn();
+    wrap(
+      <GroupGridView
+        groups={GROUPS}
+        quotes={{}}
+        onPick={vi.fn()}
+        active={null}
+        selectedGroup="金融"
+        onSelectGroup={onSelectGroup}
+      />,
+    );
+    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(screen.getByTestId("group-card-2881")).toBeTruthy());
+    fireEvent.click(screen.getByRole("radio", { name: "半導體" }));
+    expect(onSelectGroup).toHaveBeenCalledWith("半導體");
+    // 受控:父層沒換 prop 就不換組(localStorage 也不由本元件寫)
+    expect((screen.getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("半導體");
+  });
+
+  it("受控:記住的名字已被刪 → 仍 fallback 第一個群組(與非受控同一條)", async () => {
+    wrap(
+      <GroupGridView
+        groups={GROUPS}
+        quotes={{}}
+        onPick={vi.fn()}
+        active={null}
+        selectedGroup="已刪掉的組"
+        onSelectGroup={vi.fn()}
+      />,
+    );
+    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(screen.getByTestId("group-card-2330")).toBeTruthy());
+  });
 });
 
 // SC-1:欄數不再由容器寬 ÷ 15rem 決定,而是由檔數選「最小可容納矩陣」——

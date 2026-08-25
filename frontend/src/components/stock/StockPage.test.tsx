@@ -10,7 +10,7 @@ import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
-import { FEE_DISCOUNT_KEY, STOCK_VIEW_KEY } from "@/lib/constants";
+import { FEE_DISCOUNT_KEY, STOCK_GROUP_KEY, STOCK_VIEW_KEY } from "@/lib/constants";
 import type { StockView } from "@/lib/stock-view";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
@@ -726,6 +726,50 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   // 分時圖 —— 要看的細節就在圖牆上,點下去是「把右欄閃電梯的標的換成這一檔」,不是
   // 「離開圖牆去看單檔頁」。自動切走的舊行為會讓每次換標的都得再點一次「群組」回來,
   // 而盯盤時圖牆本身就是主畫面。進單檔的路徑只剩檢視 pill(D3)。
+  // 🟢 F2(chart-ux-batch-0826):群組檢視下點側欄「某群組區段」的列 → 圖牆切到那一組;
+  // 點未分組列不切;單檔檢視下側欄行為不變(只換主檔)。
+  it("群組檢視下點側欄群組列 → 圖牆切到該組;未分組列不切;單檔檢視不動群組", async () => {
+    const TWO = {
+      codes: ["2330", "2317", "2881", "3231"],
+      groups: [
+        { name: "半導體", codes: ["2330", "2317"] },
+        { name: "金融", codes: ["2881"] },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/watchlist")) return new Response(JSON.stringify(TWO));
+        if (String(url).includes("/api/stock/group-state")) {
+          return new Response(JSON.stringify({ states: {} }));
+        }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [] }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+    const onSelect = vi.fn();
+    wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+    await waitFor(() => expect(screen.getByTestId("wl-group-金融")).toBeTruthy());
+    // 單檔檢視:點金融區段的 2881 → 只換主檔
+    fireEvent.click(within(screen.getByTestId("wl-group-金融")).getByTestId("wl-select-2881"));
+    expect(onSelect).toHaveBeenLastCalledWith("2881");
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+    const rail = await screen.findByLabelText("選擇群組");
+    expect((within(rail).getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(screen.getByTestId("wl-group-金融")).getByTestId("wl-select-2881"));
+    expect((within(rail).getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
+    expect(onSelect).toHaveBeenLastCalledWith("2881");
+    // 未分組列(3231 不屬任何組)→ 群組不動
+    fireEvent.click(screen.getByTestId("wl-select-3231"));
+    expect((within(rail).getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+    expect(onSelect).toHaveBeenLastCalledWith("3231");
+  });
+
   it("點卡片 → onSelect 該股,檢視仍停在群組", async () => {
     mockGroupApi();
     const onSelect = vi.fn();
