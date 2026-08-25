@@ -1136,6 +1136,34 @@ export function IntradayChartCore({
     [index, overlay, g, toggles.cdp, toggles.ma, cdpAvailable, maAvailable],
   );
 
+  // `ref` 與指數疊線的 useMemo 必須在下面 `priceLine.length === 0` 早退**之前**:hook 不可條件化
+  //(react-doctor rules-of-hooks 實抓到;盤前空圖 → 有資料的那一次 render 會撞 hook 順序)。
+  // **一次歸一,三處共用**(lastTone / hover 時間標籤 / shownChg)。TC4 送 "0" 時後端
+  // 原樣轉 0 不轉 null,而毫元恆 > 0 → 拿 0 當平盤比較永遠是「高於」,三處會一起
+  // 靜默塗成紅色。歸一在這裡而不是各判色點各補一次 `> 0`,是為了不讓三處各漂各的。
+  const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
+  // 指數疊線(F1)。**必經 useMemo**(理由同 `vpBars`:hover 每個 mousemove 都 re-render,
+  // 新陣列會打穿 ChartStatic 的 memo);關著 / index / futures 態回**模組層常數**。
+  const idxOn = !index && !futures && (toggles.idxTwse || toggles.idxOtc);
+  const idxTwse = toggles.idxTwse;
+  const idxOtc = toggles.idxOtc;
+  const idxTwseSeries = indexSeries?.twse ?? null;
+  const idxOtcSeries = indexSeries?.otc ?? null;
+  const idxLines = useMemo(
+    () =>
+      idxOn
+        ? buildIndexOverlayLines(
+            { twse: idxTwseSeries, otc: idxOtcSeries },
+            { twse: idxTwse, otc: idxOtc },
+            ref,
+            g,
+            w,
+            xw,
+          )
+        : EMPTY_IDX_LINES,
+    [idxOn, idxTwseSeries, idxOtcSeries, idxTwse, idxOtc, ref, g, w, xw],
+  );
+
   if (g.priceLine.length === 0) {
     return (
       // index 態**去框**:MarketPane 的 figure 已經是外框,再套一層就是盤前每個 pane
@@ -1168,32 +1196,7 @@ export function IntradayChartCore({
     localHover ?? (syncAgg !== undefined ? { min: syncHoverMin, y: Math.round(g.toY(syncAgg.c)) } : null);
   const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
-  // **一次歸一,三處共用**(lastTone / hover 時間標籤 / shownChg)。TC4 送 "0" 時後端
-  // 原樣轉 0 不轉 null,而毫元恆 > 0 → 拿 0 當平盤比較永遠是「高於」,三處會一起
-  // 靜默塗成紅色。歸一在這裡而不是各判色點各補一次 `> 0`,是為了不讓三處各漂各的。
-  const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
   const plotBottom = mainH - X_LABEL_H;
-  // 指數疊線(F1)。**必經 useMemo**(理由同 `vpBars`:hover 每個 mousemove 都 re-render,
-  // 新陣列會打穿 ChartStatic 的 memo);關著 / index / futures 態回**模組層常數**。
-  const idxOn = !index && !futures && (toggles.idxTwse || toggles.idxOtc);
-  const idxTwse = toggles.idxTwse;
-  const idxOtc = toggles.idxOtc;
-  const idxTwseSeries = indexSeries?.twse ?? null;
-  const idxOtcSeries = indexSeries?.otc ?? null;
-  const idxLines = useMemo(
-    () =>
-      idxOn
-        ? buildIndexOverlayLines(
-            { twse: idxTwseSeries, otc: idxOtcSeries },
-            { twse: idxTwse, otc: idxOtc },
-            ref,
-            g,
-            w,
-            xw,
-          )
-        : EMPTY_IDX_LINES,
-    [idxOn, idxTwseSeries, idxOtcSeries, idxTwse, idxOtc, ref, g, w, xw],
-  );
 
   // 資訊列:沒 hover 顯示最新分鐘(即時態),不是空白
   const lastPt = lastPoint(g);
