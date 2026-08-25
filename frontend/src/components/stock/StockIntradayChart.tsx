@@ -1,4 +1,4 @@
-import { memo, useId, useMemo, useState } from "react";
+import { memo, useId, useMemo, useRef, useState } from "react";
 
 import { ChartReadout, type ReadoutField } from "@/components/chart/ChartReadout";
 // 水平 overlay 的單一出處 = `lib/chart-hlines`(K 線圖與分時圖畫的是同一組語意:持倉均價 /
@@ -959,6 +959,12 @@ interface CoreProps extends Props {
   /** 加權 / 櫃買即時序列(F1;App 的 `useIndexStream` 持有,一路以 prop 傳到這裡)。
    *  null / 未傳 = 沒資料源:兩顆指數鈕反灰。只在 stock 態(現貨 / 個股期)生效。 */
   indexSeries?: IndexOverlaySeries | null;
+  /** 同步十字線(F3;群組圖牆):別張卡 hover 到的分鐘。本圖沒有自己的 hover 時,拿這一分鐘
+   *  畫十字線,y 錨在**本圖該分鐘的收盤**(跨卡的像素 y 沒有共同意義);該分鐘本圖沒資料 →
+   *  不畫。自己的滑鼠 hover 永遠優先(y 跟滑鼠,自由量尺)。null / 未傳 = 無同步。 */
+  syncHoverMin?: number | null;
+  /** 本圖 hover 的分鐘變了(含移出 → null)就回呼;**只在分鐘變化時**呼叫,不是每個 mousemove。 */
+  onHoverMinute?: (minute: number | null) => void;
 }
 
 export function IntradayChartCore({
@@ -982,6 +988,8 @@ export function IntradayChartCore({
   overlayOffTitle = "無日線資料",
   ariaLabel,
   indexSeries = null,
+  syncHoverMin = null,
+  onHoverMinute,
 }: CoreProps) {
   const card = variant === "card";
   // index 態的**唯一**判別子。一處求值、下面各分支共用 —— 各處各寫一次 `mode === "index"`
@@ -1022,7 +1030,14 @@ export function IntradayChartCore({
   );
   // hover 帶 y:水平線是「自由量尺」(跟滑鼠),不再鎖該分鐘收盤價 —— 鎖收盤價的水平線
   // 與價格線重合、資訊冗餘,且量不到「現價到 CDP 線差幾%」這種盤中最常做的事。
-  const [hover, setHover] = useState<{ min: number | null; y: number } | null>(null);
+  const [localHover, setHover] = useState<{ min: number | null; y: number } | null>(null);
+  // 分鐘變化才往外報(F3):同一分鐘內的亞像素 mousemove 不該讓整面圖牆重 render。
+  const emittedMinRef = useRef<number | null>(null);
+  function emitHoverMinute(min: number | null): void {
+    if (onHoverMinute === undefined || emittedMinRef.current === min) return;
+    emittedMinRef.current = min;
+    onHoverMinute(min);
+  }
   // useId 產出含非識別字元(React 19 為 «r0»),過濾後才拼進 url(#…)
   const uid = safeIdToken(useId());
   const clipAbove = `${uid}-above`;
@@ -1146,6 +1161,11 @@ export function IntradayChartCore({
   const side = card || index ? null : sideSummary(accum.minutes, xw);
   const lowDecided = side !== null && side.decidedPct !== null && side.decidedPct < LOW_DECIDED_PCT;
 
+  // 有效 hover = 自己的滑鼠優先;沒有才吃同步分鐘(F3),y 錨在本圖該分鐘收盤。
+  // 每 render 算一次是常數成本(一個 Map.get),不值得 useMemo。
+  const syncAgg = localHover === null && syncHoverMin !== null ? accum.minutes.get(syncHoverMin) : undefined;
+  const hover =
+    localHover ?? (syncAgg !== undefined ? { min: syncHoverMin, y: Math.round(g.toY(syncAgg.c)) } : null);
   const hoverMin = hover?.min ?? null;
   const hoverAgg = hoverMin !== null ? accum.minutes.get(hoverMin) : undefined;
   // **一次歸一,三處共用**(lastTone / hover 時間標籤 / shownChg)。TC4 送 "0" 時後端
@@ -1290,6 +1310,7 @@ export function IntradayChartCore({
     const ry = Math.round(y);
     // 值相同就回 prev 讓 React bail out:亞像素抖動不該觸發 re-render
     setHover((p) => (p !== null && p.min === min && p.y === ry ? p : { min, y: ry }));
+    emitHoverMinute(min);
   }
 
   // 期貨(近全軸)態自 R2 起五顆全開:CDP/MA 由 caller 以**期貨日 K** 前端算好注入
@@ -1414,7 +1435,10 @@ export function IntradayChartCore({
         role="img"
         aria-label={ariaLabel ?? "分時走勢圖"}
         onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onMouseLeave={() => {
+          setHover(null);
+          emitHoverMinute(null);
+        }}
       >
         <ChartStatic
           g={g}

@@ -58,7 +58,7 @@ function series(minutes: Record<string, number>): IndexSeries {
 const INDEX = { twse: series({ "0901": 20_100_000, "0902": 20_200_000 }), otc: series({ "0901": 20_000_000 }) };
 
 function toggles(over: Partial<ChartToggles> = {}): ChartToggles {
-  return { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, ...over };
+  return { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, syncHover: true, ...over };
 }
 
 describe("IntradayChartCore 指數疊線(F1)", () => {

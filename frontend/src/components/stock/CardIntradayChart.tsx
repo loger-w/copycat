@@ -29,9 +29,21 @@ interface Props {
   fills: readonly FillPoint[];
   /** 加權 / 櫃買即時序列(F1);圖牆層只在指數 toggle 開著時才傳(關著恆 null,memo 不被打穿) */
   index: IndexOverlaySeries | null;
+  /** 同步十字線(F3):圖牆層的共同 hover 分鐘 / 回報口(關著時恆 null / 模組層 noop) */
+  syncHoverMin: number | null;
+  onHoverMinute: (minute: number | null) => void;
 }
 
-export function CardIntradayChart({ code, snap, liveP, toggles, fills, index }: Props) {
+export function CardIntradayChart({
+  code,
+  snap,
+  liveP,
+  toggles,
+  fills,
+  index,
+  syncHoverMin,
+  onHoverMinute,
+}: Props) {
   const [ref, size] = useContainerSize<HTMLDivElement>();
   const box = cardSvgBox(size);
   // **必經 useMemo**(review R4):就地建一個 accum 的話,父層每秒隨報價 re-render 時
@@ -56,6 +68,8 @@ export function CardIntradayChart({ code, snap, liveP, toggles, fills, index }: 
           subHeight={box.subH}
           fills={fills}
           indexSeries={index}
+          syncHoverMin={syncHoverMin}
+          onHoverMinute={onHoverMinute}
         />
       ) : null}
     </div>

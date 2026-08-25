@@ -47,7 +47,7 @@ const TOGGLES: ChartToggles = {
   ma: false,
   bb: false,
   vp: false,
-  fills: false, idxTwse: false, idxOtc: false, // ← 本檔的重點:**關態**
+  fills: false, idxTwse: false, idxOtc: false, syncHover: true, // ← 本檔的重點:**關態**
 };
 
 beforeEach(() => {
