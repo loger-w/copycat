@@ -210,6 +210,31 @@ async def test_schedule_retry_single_flight() -> None:
         await eng.close()
 
 
+async def test_reconnect_retry_keeps_the_heal_variant() -> None:
+    """review §3.4(A6):`_on_reconnect_threadsafe` 原本走 `_schedule_retry()` 預設 —— variant 0。
+    盤後分時自癒已把窗口階梯爬到 N(0..N-1 已證明毒化,L1-P1-3「variant 黏在成功值」)時,
+    TC4 重連(`_check_stale`)那一發用 0 號窗重抓 → 拿回凍結 stub、`clear_stale=True` 卻把
+    stale 樂觀清掉,`_heal_variant` / `_heal_interval` 不動 → 下次自癒最遠等 900 s;畫面 =
+    徽章健康、加權分時凍結。重連的那一發要沿用當前 variant。"""
+    fake = FakeIndexSource()
+    fake.variant_minutes = {2: {"0959": 2_000}}  # 0 / 1 號窗恆空(毒化),2 號窗才有資料
+    eng = make_engine(fake)
+    await eng.start()
+    try:
+        assert fake.window_variants == [0]
+        eng._heal_variant = 2  # type: ignore[attr-defined]  # 自癒已爬到 2
+        eng._on_reconnect_threadsafe()  # type: ignore[attr-defined]
+        for _ in range(100):
+            if len(fake.window_variants) >= 2 and eng.state()["twse"]["minutes"]:
+                break
+            await asyncio.sleep(0.02)
+        assert fake.window_variants[-1] == 2, f"重連重抓退回 0 號毒窗:{fake.window_variants}"
+        assert eng.state()["twse"]["minutes"] == {"0959": 2_000}
+        assert eng._heal_variant == 2  # type: ignore[attr-defined]  # 仍黏住
+    finally:
+        await eng.close()
+
+
 async def test_minutes_lag_self_heal_refetches_backfill() -> None:
     """分時自癒(fix/index-chart-empty-minutes):開機 1K 回補 timeout 被靜默降級成空
     + 當日推播整段靜默(TC4 已知間歇失效)→ minutes 全日空白,而 TC4 端 1K 資料
