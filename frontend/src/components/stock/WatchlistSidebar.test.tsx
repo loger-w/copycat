@@ -204,7 +204,10 @@ describe("WatchlistSidebar(round4 項 2:群組全列出)", () => {
     await waitGroups();
     // 2330 同屬兩組 → 必須指定組別,不能用 getByText(review R3)
     fireEvent.click(within(screen.getByTestId("wl-group-主力")).getByText("2330"));
-    expect(onSelect).toHaveBeenCalledWith("2330");
+    // 🟢 F2(chart-ux-batch-0826):第二參 = 被點那一列所在的群組(群組檢視下圖牆據此切組)
+    expect(onSelect).toHaveBeenCalledWith("2330", "主力");
+    fireEvent.click(within(screen.getByTestId("wl-group-觀察")).getByText("2330"));
+    expect(onSelect).toHaveBeenLastCalledWith("2330", "觀察");
   });
 
   it("每組每列都有拖拉握把(不再有「全部」停用拖拉的狀態)", async () => {
@@ -1259,7 +1262,7 @@ describe("WatchlistSidebar 列選取 button(SC-4')", () => {
     // 🔴 A11Y-7:button 內不得有 div(HTML content model:button 只吃 phrasing content)
     expect(btn.querySelector("div")).toBeNull();
     fireEvent.click(btn);
-    expect(onSelect.mock.calls).toEqual([["2330"]]);
+    expect(onSelect.mock.calls).toEqual([["2330", "主力"]]);
   });
 
   it("名冊查無名稱 → 可及名稱只帶代號與狀態(不留一個空詞)", async () => {

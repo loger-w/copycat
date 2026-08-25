@@ -13,6 +13,7 @@ import { useSignalFeed } from "@/hooks/useSignalFeed";
 import { useSaveRule, useSignalRules, type SignalRule } from "@/hooks/useSignalRules";
 import { useSignalSound } from "@/hooks/useSignalSound";
 import { useStkfutContracts } from "@/hooks/useStkfutContracts";
+import { useStockGroup } from "@/hooks/useStockGroup";
 import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
@@ -89,6 +90,8 @@ export function StockPage({
   const { soundOn, setSoundOn } = useSignalSound();
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(currentPermission);
   const [view, setView] = useState<StockView>(readStockView);
+  // 群組圖牆現在看哪一組(F2):由本層持有,側欄點列與圖牆 pill 兩個入口寫同一份。
+  const { picked: pickedGroup, select: selectGroup } = useStockGroup();
   // 掛載時把**實際**檢視通知上層一次(review F1)。`view` 有兩份初值 —— 本元件與 App
   // 各自 `readStockView()`。同一個分頁內兩者相等,但另一個視窗改過 localStorage 之後,
   // App 讀到的是它自己掛載當下那一份:本元件掛在「群組」而 App 以為「單檔」,那趟
@@ -239,7 +242,16 @@ export function StockPage({
         rulesError={rulesError}
         onClose={() => setRulesOpen(false)}
       />
-      <WatchlistSidebar active={code} onSelect={onSelect} quotes={watchlist} />
+      <WatchlistSidebar
+        active={code}
+        // F2:群組檢視下點群組區段的列 → 圖牆同時切到那一組(未分組列 / 搜尋預覽不切);
+        // 單檔檢視行為不變。右欄標的照舊換成該檔。
+        onSelect={(next, group) => {
+          onSelect(next);
+          if (view === "group" && group !== undefined && group !== null) selectGroup(group);
+        }}
+        quotes={watchlist}
+      />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto">
         {status.tc4 === "down" || wsStatus === "closed" ? (
           <p className="rounded border border-bear bg-bear/10 px-3 py-1 text-sm text-bear">
@@ -286,6 +298,8 @@ export function StockPage({
             // 沒有別的指認方式 —— 與主圖 / 右欄同一個 `code`,不另存一份。
             active={code}
             index={index}
+            selectedGroup={pickedGroup}
+            onSelectGroup={selectGroup}
             // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
             // 單檔同款的完整分時圖,細節就在圖牆上看得完;自動切回單檔的舊行為會讓每次
             // 換標的都得再點一次「群組」回來,而盯盤時圖牆本身就是主畫面。
