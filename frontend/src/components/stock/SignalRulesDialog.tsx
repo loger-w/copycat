@@ -16,7 +16,7 @@ import {
   type RuleKind,
   type SignalRule,
 } from "@/hooks/useSignalRules";
-import { PARAM_FIELDS } from "@/lib/signal-params";
+import { COOLDOWN_MAX, COOLDOWN_MIN, PARAM_FIELDS, paramDefaults } from "@/lib/signal-params";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleKind, string> = {
@@ -35,21 +35,8 @@ const LEVEL_LABEL: Record<string, string> = {
   al: "AL",
 };
 
-const PARAM_DEFAULTS: Record<RuleKind, Record<string, string>> = {
-  cdp_cross: { rearm_ticks: "2", rearm_dwell_secs: "300" },
-  surge_crash: { pct: "1.5", window_secs: "60" },
-  vol_burst: {
-    ratio: "3",
-    window_secs: "60",
-    min_elapsed_min: "5",
-    min_window_lots: "100",
-    min_day_lots: "500",
-  },
-  limit_lock: {},
-};
-
-const COOLDOWN_MIN = 60;
-const COOLDOWN_MAX = 86_400;
+// 預設值 / 冷卻界 / 值域 / 整數鍵全部住 `lib/signal-params.ts`(review A8):同一個物件,
+// 鍵集相同是型別事實;parity 測試釘「預設值落在值域內、整數鍵為整數」與後端契約。
 
 /** 數字欄位一律以**字串**存在表單裡:存 number 的話「清空欄位重打」會在中途變成
  *  0 或 NaN,使用者看到的值跳來跳去;轉型與值域檢查全收在送出那一刻。 */
@@ -71,7 +58,7 @@ function blankForm(): FormState {
     enabled: true,
     notify_discord: true,
     cooldown: "300",
-    params: { ...PARAM_DEFAULTS.cdp_cross },
+    params: paramDefaults("cdp_cross"),
     levels: [...CDP_LEVELS],
   };
 }
@@ -79,7 +66,7 @@ function blankForm(): FormState {
 function toForm(rule: SignalRule): FormState {
   const params: Record<string, string> = {};
   for (const field of PARAM_FIELDS[rule.kind]) {
-    params[field.key] = String(rule.params[field.key] ?? PARAM_DEFAULTS[rule.kind][field.key] ?? "");
+    params[field.key] = String(rule.params[field.key] ?? field.default);
   }
   return {
     id: rule.id,
@@ -208,7 +195,7 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
   function changeKind(kind: RuleKind): void {
     patch({
       kind,
-      params: { ...PARAM_DEFAULTS[kind] },
+      params: paramDefaults(kind),
       levels: kind === "cdp_cross" ? [...CDP_LEVELS] : [],
     });
   }
@@ -256,7 +243,12 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
       const raw = form.params[field.key] ?? "";
       const value = Number(raw);
       if (raw.trim() === "" || !Number.isFinite(value)) bad = true;
-      else if (value < field.min || value > field.max) {
+      else if (field.integer && !Number.isInteger(value)) {
+        // 整數鍵(後端 INT_PARAM_KEYS)先於出界:非整數多半也在界內,先講「須為整數」
+        // 使用者才知道要改的是小數點不是大小(review A8)
+        setLocalError(`${field.label}須為整數`);
+        return;
+      } else if (value < field.min || value > field.max) {
         // 出界先於「哪一格空著」回報:值域訊息更精確,而 `bad` 只給得出泛用文案
         setLocalError(`${field.label}須在 ${field.min}–${field.max} 之間`);
         return;
