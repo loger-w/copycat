@@ -109,6 +109,10 @@ TXO_HEAL_SILENCE_SECS = 60.0
 # 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
 # GetHistory 分頁實測 max 1.1ms(3,482 次、10.7 萬 rows)不受影響(2026-07-20 probe)。
 _REQ_TIMEOUT_MS = 10_000
+#: `TC4QuoteSource(lock_timeout_secs=)` 的預設(理由見該參數的註解)。獨立成常數是為了讓
+#: `close_worst_secs()` 與建構子吃**同一個值** —— 它是關機預算(`server/shutdown_budget.py`)
+#: 的輸入之一,兩處各寫一個 12.0 就會靜默漂開。
+DEFAULT_LOCK_TIMEOUT_SECS = 12.0
 # 回補收割輪數上限與零進展早停(fetch_backfill round 制;空頁無法區分未備妥/無資料)
 _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
@@ -118,6 +122,22 @@ _HARVEST_DRY_LIMIT = 3
 #: 五條 ≈50 s 會撞破 run.ps1 的 15 s graceful 窗 → 後面的 session 連 Disconnect 都跑不到,比修前更糟。
 #: 2 s × 5 = 10 s 仍在窗內;socket 反正緊接著 close,改它的 RCVTIMEO 沒有後遺症。
 _LOGOUT_TIMEOUT_MS = 2_000
+
+
+def close_worst_secs(lock_timeout_secs: float = DEFAULT_LOCK_TIMEOUT_SECS) -> float:
+    """單條 session `close()` 的最壞耗時上界(秒)—— 關機預算的產生點之一(review A1)。
+
+    三段相加,每段都是本檔既有 timeout 的直接後果:
+    1. 等 `_api_lock`:在途的 `_ensure_connected` 持鎖跨 `Connect()`,最壞吃滿一個 REQ timeout;
+    2. 一發 REQ 撞 RCVTIMEO:UNSUBQUOTE 迴圈第一發失敗即 break(其餘 symbol 也會失敗),
+       或退訂全過、收尾那一發 REQ 逾時 —— 兩條路都只付**一次**;
+    3. `_dispose` 等 `api.lock`(KeepAlive Pong 可能持著)。
+
+    `Disconnect()` 本身(LINGER=0 的 socket close + context term)毫秒級,不計。
+    健康路徑實測 < 1 s;這個數字只在 TC4 半死時才會被吃到,而那正是關機預算要蓋住的情境。
+    """
+    req_secs = _REQ_TIMEOUT_MS / 1000
+    return req_secs + req_secs + lock_timeout_secs
 
 
 def always_active() -> bool:
@@ -290,7 +310,7 @@ class TC4QuoteSource:
         # 生產者(群組回補 / basis sweep / Fut2 目錄)在 boot 必然重疊,級聯是常態。
         # 取捨:毒鎖(KeepAlive Pong 無 try/finally)的偵測延遲從 5s 拉長到 12s ——
         # 那條路本來就要重建連線,晚 7 秒發現可接受;而誤殺健康連線是每次都發生。
-        lock_timeout_secs: float = 12.0,
+        lock_timeout_secs: float = DEFAULT_LOCK_TIMEOUT_SECS,
         # ---- REALTIME 零推播自癒(預設全關;門檻由各子類建構子帶)----
         #: R1「整條 session 靜默」門檻(秒);None = 自癒整體關閉
         heal_silence_secs: float | None = None,
