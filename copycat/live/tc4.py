@@ -113,6 +113,12 @@ _REQ_TIMEOUT_MS = 10_000
 _HARVEST_ROUNDS = 16
 _HARVEST_DRY_LIMIT = 3
 
+#: LOGOUT 專用 recv 上界(fix/tc4-logout review SP3):TC4 對 LOGOUT 會回 reply(零訂閱 probe 實證),
+#: 但 prod 是 UNSUB 幾百筆之後才送,若那個情境 TC4 不回、每條 session 各吃 `_REQ_TIMEOUT_MS` 10 s,
+#: 五條 ≈50 s 會撞破 run.ps1 的 15 s graceful 窗 → 後面的 session 連 Disconnect 都跑不到,比修前更糟。
+#: 2 s × 5 = 10 s 仍在窗內;socket 反正緊接著 close,改它的 RCVTIMEO 沒有後遺症。
+_LOGOUT_TIMEOUT_MS = 2_000
+
 
 def always_active() -> bool:
     """`heal_active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
@@ -907,11 +913,12 @@ class TC4QuoteSource:
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
         # 生命週期:不關則 process 不退出)
-        try:
-            api, session = self._connection()
-        except ConnectionError:
+        with self._api_lock:
+            api, session = self._api, self._session
+        if api is None:
             return
-        self._logout(api, session)
+        if session is not None:  # 只注入 api 沒 session 的建構路徑:跳過 LOGOUT,Disconnect 照走(review SP4)
+            self._logout(api, session)
         self._dispose(api)
 
     def _logout(self, api: Any, session: str) -> None:
@@ -925,13 +932,19 @@ class TC4QuoteSource:
         仍是一個 60 s 的髒窗,run.ps1 的 graceful 判準也對不上。
 
         TC4 對 LOGOUT 回 `{"Reply":"LOGOUT","Success":"OK"}`(2026-08-26 00:56 零訂閱
-        probe 實證),所以走 `_req`(send + recv;lock timeout / 失敗棄連線同其他 REQ)。
+        probe 實證),所以走 `_req`(send + recv;lock timeout / 失敗棄連線同其他 REQ),
+        但 recv 上界縮到 `_LOGOUT_TIMEOUT_MS`(理由見常數)。
         best-effort:失敗只 log,後續 dispose 照走(`_req` 失敗路徑已 `_dispose`)。
         """
+        setsockopt = getattr(api.socket, "setsockopt", None)
+        if setsockopt is not None:
+            setsockopt(zmq.RCVTIMEO, _LOGOUT_TIMEOUT_MS)
         try:
             reply = self._req({"Request": "LOGOUT", "SessionKey": session}, api=api)
-        except ConnectionError:
-            logger.exception("TC4 quote LOGOUT 失敗(best-effort,session 留到 TC4 reap)")
+        except ConnectionError as exc:
+            # `_req` 失敗路徑已 _dispose(含 Disconnect),這裡只剩告知;與下一分支同嚴重度、
+            # 同前綴 "TC4 quote LOGOUT" 供 grep 對帳(review ST5)
+            logger.warning("TC4 quote LOGOUT 失敗:%s(session 留到 TC4 reap)", exc)
             return
         if reply.get("Success") != "OK":
             logger.warning("TC4 quote LOGOUT 未被接受:%s(session 留到 TC4 reap)", reply)
