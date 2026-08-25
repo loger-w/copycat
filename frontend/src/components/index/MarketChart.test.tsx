@@ -47,7 +47,7 @@ const OVERLAY_OUT = {
   date: "2026-08-13",
 };
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
 
 function toggles(over: Partial<ChartToggles> = {}): ChartToggles {
   return { ...TOGGLES, ...over };

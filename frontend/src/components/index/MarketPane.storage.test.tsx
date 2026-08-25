@@ -39,7 +39,7 @@ const OTC: IndexSeries = {
   stale: false,
   minutes: { "1017": 359_800 },
 };
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true, idxTwse: false, idxOtc: false };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
 const STORES: PaneStores = {
   key: MARKET_KEY_STORE,
   mode: MARKET_MODE_STORE,

@@ -55,7 +55,7 @@ const OVERLAY_IDX: StockOverlay = {
  *  掛牌是 KR-1 的唯一訊號不可被推,所以該讓位的是 MA。 */
 const OVERLAY_MA_TOP: StockOverlay = { ...OVERLAY_IDX, ma5: 23_250_000 };
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
 
 let fetchMock: Mock;
 

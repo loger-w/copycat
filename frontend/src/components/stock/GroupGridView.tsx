@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
@@ -126,6 +126,8 @@ const GroupCard = memo(function GroupCard({
   active,
   toggles,
   index,
+  syncHoverMin,
+  onHoverMinute,
   fills,
   positions,
   discount,
@@ -142,6 +144,9 @@ const GroupCard = memo(function GroupCard({
   toggles: ChartToggles;
   /** 加權 / 櫃買即時序列(F1);toggle 關著時恆 null(identity 穩定) */
   index: IndexOverlaySeries | null;
+  /** 同步十字線(F3):圖牆共同 hover 分鐘;toggle 關著時恆 null + 模組層 noop(identity 穩定) */
+  syncHoverMin: number | null;
+  onHoverMinute: (minute: number | null) => void;
   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
    *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
   fills: readonly FillPoint[];
@@ -240,6 +245,8 @@ const GroupCard = memo(function GroupCard({
           toggles={toggles}
           fills={fills}
           index={index}
+          syncHoverMin={syncHoverMin}
+          onHoverMinute={onHoverMinute}
         />
       )}
     </div>
@@ -249,8 +256,11 @@ const GroupCard = memo(function GroupCard({
 /** 圖牆頂 toggle 列的五鈕(SC-2;成交點於 R2 SC-6 加入)。label 與單檔頁逐字相同 —— 同一個圖層在兩個畫面上
  *  叫不同名字,使用者得自己對照。**恆可按**(AD-5):可用性是 per-code 的(某一檔沒
  *  日線 ≠ 整列該反灰),個別卡片取不到 overlay 時該卡不畫,整列不動。 */
+/** toggle 關著時餵給卡片的 hover 回報口:模組層常數,identity 穩定(memo 不被打穿) */
+const NOOP_HOVER = (): void => {};
+
 const GRID_TOGGLES: {
-  key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc";
+  key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc" | "syncHover";
   label: string;
 }[] = [
   { key: "vwap", label: "均價" },
@@ -260,6 +270,8 @@ const GRID_TOGGLES: {
   { key: "fills", label: "成交點" },
   { key: "idxTwse", label: "加權" },
   { key: "idxOtc", label: "櫃買" },
+  // 十字線(F3):只在圖牆有(單檔頁沒有「別張卡」可同步)
+  { key: "syncHover", label: "十字線" },
 ];
 
 export function GroupGridView({
@@ -275,6 +287,9 @@ export function GroupGridView({
 }: Props) {
   // 非受控 fallback(hook 不可條件化:受控時也掛著,只是不讀它)
   const own = useStockGroup();
+  // 同步十字線(F3):所有卡片共同的 hover 分鐘。被 hover 的卡只在**分鐘變化**時回報,
+  // 所以這裡的 setState 頻率 = 游標跨分鐘的頻率,不是 mousemove 頻率。
+  const [syncMin, setSyncMin] = useState<number | null>(null);
   const picked = selectedGroup !== undefined ? selectedGroup : own.picked;
   const selectGroup = onSelectGroup ?? own.select;
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
@@ -410,6 +425,9 @@ export function GroupGridView({
               active={code === active}
               toggles={toggles}
               index={toggles.idxTwse || toggles.idxOtc ? index : null}
+              // 關著時兩者都是穩定 identity(null / 模組層 noop),memo 不被打穿
+              syncHoverMin={toggles.syncHover ? syncMin : null}
+              onHoverMinute={toggles.syncHover ? setSyncMin : NOOP_HOVER}
               // 零筆的 code 不入 map → 一律回同一個 `EMPTY_FILLS`(identity 穩定)
               fills={fillsMap.get(code) ?? EMPTY_FILLS}
               // 無倉的 code 不入 map → 一律回同一個 `EMPTY_POSITIONS`(identity 穩定)

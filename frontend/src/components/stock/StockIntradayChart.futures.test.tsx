@@ -70,7 +70,7 @@ const HLINES: readonly ChartHLine[] = [
   { priceMilli: 23_900_000, label: "壓 23900", className: "stroke-bear" },
 ];
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: true, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
 
 let fetchMock: Mock;
 

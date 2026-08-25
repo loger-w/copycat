@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroupGridView, gridShape } from "@/components/stock/GroupGridView";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
@@ -666,7 +667,7 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
 
 // 🟢 SC-2 / D4:toggle 五鈕上提到圖牆頂(R2 SC-6 加入「成交點」)(卡片內不得有 button —— 點它會連帶切主檔)。
 describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
-  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 / 加權 / 櫃買 七鈕", async () => {
+  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 / 加權 / 櫃買 / 十字線 八鈕", async () => {
     wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     for (const [key, label] of [
@@ -679,12 +680,42 @@ describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
       // 🟢 F1(chart-ux-batch-0826):指數疊線兩鈕,label 與單檔頁逐字相同
       ["idxTwse", "加權"],
       ["idxOtc", "櫃買"],
+      // 🟢 F3:同步十字線,只在圖牆有(單檔頁沒有別張卡可同步)
+      ["syncHover", "十字線"],
     ] as const) {
       const btn = screen.getByTestId(`grid-toggle-${key}`);
       expect(btn.textContent).toBe(label);
       // AD-5:可用性是 per-code 的(某一檔沒日線 ≠ 整列不能按),整列一律可按
       expect(btn.hasAttribute("disabled")).toBe(false);
     }
+  });
+
+  // 🟢 F3(chart-ux-batch-0826):hover 一張卡 → 其他卡同一分鐘同步出十字線;toggle 可關。
+  it("hover 2330 卡的 09:00 → 2317 卡同步出十字線(x 同分鐘、y 錨在它自己的收盤);關十字線 → 不同步", async () => {
+    // 卡片 viewBox 寬 = RO 餵的 300;rect 也給 300 → svg 座標 1:1,clientX 直接用 minuteToX
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    const a = await screen.findByTestId("group-card-2330");
+    const b = await screen.findByTestId("group-card-2317");
+    await waitFor(() => expect(b.querySelector('svg[role="img"]')).toBeTruthy());
+    const x = minuteToX(540, 300, SPOT_WINDOW);
+    fireEvent.mouseMove(a.querySelector('svg[role="img"]')!, { clientX: x, clientY: 30 });
+    expect(a.querySelector('[data-testid="crosshair-v"]')?.getAttribute("x1")).toBe(String(x));
+    const bv = b.querySelector('[data-testid="crosshair-v"]');
+    expect(bv).toBeTruthy();
+    expect(bv!.getAttribute("x1")).toBe(String(x));
+    // b 的水平線錨在 b 自己該分鐘的收盤,不是 a 的滑鼠 y(30)
+    expect(b.querySelector('[data-testid="crosshair-h"]')?.getAttribute("y1")).not.toBe("30");
+    fireEvent.mouseLeave(a.querySelector('svg[role="img"]')!);
+    expect(b.querySelector('[data-testid="crosshair-v"]')).toBeNull();
+
+    fireEvent.click(screen.getByTestId("grid-toggle-syncHover"));
+    expect(screen.getByTestId("grid-toggle-syncHover").getAttribute("aria-pressed")).toBe("false");
+    fireEvent.mouseMove(a.querySelector('svg[role="img"]')!, { clientX: x, clientY: 30 });
+    expect(a.querySelector('[data-testid="crosshair-v"]')).toBeTruthy();
+    expect(b.querySelector('[data-testid="crosshair-v"]')).toBeNull();
   });
 
   it("卡片內不得有 button(巢狀互動元素 + 點 toggle 會連帶切主檔)", async () => {
