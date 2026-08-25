@@ -13,7 +13,7 @@
 | `6f2a59ee` | 🔴 mod | review 收修:`warnRemove` 自己的文案與旗標、壞 JSON 旗標 per-key、空字串不算壞資料 |
 | `9245c21d` | 🔵 refactor | review 收修:`loadFilter` 縮排 + `@/lib/storage` import 歸位(ST4) |
 
-三類不混:🟢 只動 `*.test.*`;🔴 只動實作且只碰裸奔處;🔵 只動實作且只碰已包 try/catch 處。
+三類不混:🟢 只動 `*.test.*`;🔴 動實作,含裸奔 27 處與 RiverPanel / App 內同函式的已包處(改寫後同樣會產生 console 輸出,依 §8.4 判準歸 🔴;`fa0003d9` 的 commit message 寫「只搬裸奔」是漏記);🔵 其餘 21 處已包 try/catch 的逐字搬家。
 分支內 `36e8d78e` 與 `fa0003d9` 之間為**刻意的紅態**(TDD 紅先行),分支尾端全綠。
 `.claude/skills/ops-discipline/SKILL.md` 有他 session 的未提交修改,全程未碰(收工時仍是 ` M`)。
 
@@ -116,12 +116,12 @@ $ grep -rn "localStorage\.\(get\|set\|remove\)Item" frontend/src --include=*.ts 
 
 ## 5. 申報:本輪唯一的可觀察差異(review 請看這三條)
 
-1. **失敗時多一則 dev console 警告**(讀 / 寫 / 壞 JSON 各一次,module 級旗標)。
+1. **失敗時多一則 console 警告**(讀 / 寫 / 壞 JSON 各一次,module 級旗標;無 DEV 閘、vite 未設 drop_console,prod build 亦會印 —— §7 的真環境檢查靠它)。
    舊行為 = 已包 try/catch 的 21 處完全靜默、裸奔的 27 處白屏。這是刻意的(鐵則 E:
    不吞成完全靜默),但確實是新的 console 輸出 —— 正常瀏覽器下永不觸發。
 2. **`purgeOrphanKeys` 由「整迴圈一個 try」改為逐鍵各自吞**:舊版第一鍵拋就跳過其餘六鍵。
    storage 壞掉時七鍵一樣都清不掉,差別只在多試六次會拋的 no-op,無可觀察後果。
-3. **react-doctor 的 inline disable 是全 repo 唯一一處**(`App.tsx` 的 `MAIN_CODE_KEY` effect)。
+3. **react-doctor 的 inline disable 本輪是 repo 內第三處**(`App.tsx` 的 `MAIN_CODE_KEY` effect;既有兩處 `StockPage.tsx:109` / `useStockStream.ts:325` 在 base 即存在,沿用同款語法)。
    選 inline 而不是 `doctor.config.json` 的理由:規則在別處抓得到真東西,關整條會丟掉真訊號。
    選 disable 而不是照規則建議重構的理由:`stockCode` 有多個寫者(自選列 / 圖牆點卡 /
    漲跌停跳轉 / 搜尋),把寫入逐一搬進每個事件處理器**正是 N022 的病灶本身**,而且掛載時
@@ -149,9 +149,11 @@ $ grep -rn "localStorage\.\(get\|set\|remove\)Item" frontend/src --include=*.ts 
 
 - **Safari 私密視窗**:本輪的主要動機。開站後應該**看得到畫面**(而不是白屏),偏好設定
   一律走預設值(tab = 台股綜合、標的 = 加權、週期 = 分時、圖表模式 = 江波圖、提示音 = 開),
-  console 有 `storage: localStorage 讀取失敗…` 一則(**只有一則**)。
+  console 依序**三則**(各一則):`storage: localStorage 刪除失敗…`(`purgeOrphanKeys` 在 App module scope,
+  比任何 render 都早跑,所以第一則在畫面出來之前)→ `storage: localStorage 讀取失敗…` → `storage: localStorage 寫入失敗…`。
   切 tab / 切標的 / 切週期都要能動,只是重開回到預設。
-- **企業政策鎖 storage**(Chrome/Edge 的 `DefaultLocalStorageSetting=2` 之類):同上。
+- **企業政策鎖 storage**(Chrome/Edge 的 `DefaultLocalStorageSetting=2` 之類):同上(存取即拋 = 三則)。
+- **只有寫入拋**(配額 0 / 滿):`readLocal` 成功,**不會**有「讀取失敗」;只有 `storage: localStorage 寫入失敗…` 一則。
 - **配額滿**(較難人為構造):寫入失敗時操作本身要照常生效,console 有
   `storage: localStorage 寫入失敗…` 一則。
 - **正常瀏覽器的回歸抽查**(最重要的一條):既有偏好設定必須**照舊還原** —— 舊瀏覽器裡
@@ -219,5 +221,5 @@ ST1 ×2 / ST3 ×1 走**直接紅**(先寫測試跑給自己看再改實作):
 
 §5.1 說「失敗時多一則 dev console 警告(讀 / 寫 / 壞 JSON 各一次)」—— 收修後為
 **讀 / 寫 / 刪各一次 + 壞 JSON 每把鍵各一次**,且空字串 / 未設不再算壞資料(零警告)。
-§7(需要 user 過目)的真環境清單不變:私密視窗下 console 仍應只有一則
-`storage: localStorage 讀取失敗…`。
+§7(需要 user 過目)的真環境清單已同步更新:依失效形狀分述 —— 存取即拋(私密視窗 / 政策鎖)
+三則、第一則是刪除失敗;只有寫入拋(配額)一則寫入失敗、零則讀取失敗(PR #106 事後 review F-01)。

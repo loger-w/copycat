@@ -5,7 +5,7 @@
 「C8 storage 移出升 /mod」兩條舊帳,一併帶走。
 
 **前置 grep(2026-08-25 重跑)**:`grep -rn "localStorage\." frontend/src`(去掉測試檔)
-= **48 個呼叫點 / 14 個檔**(spec 記 45 處,差在多行 `setItem` 與 `removeItem` 的計法)。
+= **48 個呼叫點 / 15 個檔**(spec 記 45 處,差在多行 `setItem` 與 `removeItem` 的計法)。
 其中 **27 處裸奔**(沒有任何 try/catch)、21 處各自抄了一份語意相同的 try/catch。
 `lib/storage.ts` **grep 過不存在**(R10 那條只是記在 next-time,沒實作)→ 本輪新建。
 
@@ -160,7 +160,7 @@ finding 立刻消失 → 規則把「字面上的 localStorage 成員呼叫」�
   一次性遷移仍在,只是條件從 try/catch 改成布林。
 - **零 API 契約改動**、零後端改動(本輪不動 `copycat/`)。
 - 唯一的可觀察差異(申報,見 §3 verification):
-  1. 失敗時多一則 **dev console 警告**(每種故障一次)。舊行為是完全靜默(已包的 21 處)或白屏(裸奔的 27 處)。
+  1. 失敗時多一則 **console 警告**(每種故障一次;無 DEV 閘,prod build 亦會印 —— verification §7 的真環境檢查靠它)。舊行為是完全靜默(已包的 21 處)或白屏(裸奔的 27 處)。
   2. `purgeOrphanKeys` 由「整迴圈一個 try」改為**逐鍵各自吞** —— 舊版第一鍵拋就跳過其餘六鍵。
      storage 壞掉時七鍵一樣都清不掉,差別只在多試六次會拋的 no-op,無可觀察後果。
 - 可逆 = revert 本分支;`lib/storage.ts` 是新檔,48 個呼叫點的舊寫法都在 git 歷史內。
