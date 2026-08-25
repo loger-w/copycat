@@ -24,7 +24,13 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { COOLDOWN_MAX, COOLDOWN_MIN, PARAM_FIELDS } from "@/lib/signal-params";
+import {
+  COOLDOWN_DEFAULT,
+  COOLDOWN_MAX,
+  COOLDOWN_MIN,
+  PARAM_FIELDS,
+  paramDefaults,
+} from "@/lib/signal-params";
 
 interface Fixture {
   specs: Record<string, Record<string, [number, number]>>;
@@ -61,14 +67,36 @@ describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一�
   });
 
   it("整數鍵集合 === fixture.int_keys(後端拒非整數的鍵,前端要在送出前擋)", () => {
-    const actual = Object.values(PARAM_FIELDS)
-      .flatMap((fields) => fields.filter((f) => f.integer).map((f) => f.key))
-      .sort();
-    expect(actual).toEqual([...new Set(fixture.int_keys)].sort());
+    // 後端 INT_PARAM_KEYS 是不分 kind 的扁平集合,前端旗標是 per-(kind, key) —— 兩邊都去重再比
+    // (同一鍵在兩個 kind 都標 integer 不是漂移;review round-1 ST2)
+    const actual = new Set(
+      Object.values(PARAM_FIELDS).flatMap((fields) =>
+        fields.filter((f) => f.integer).map((f) => f.key),
+      ),
+    );
+    expect([...actual].sort()).toEqual([...new Set(fixture.int_keys)].sort());
   });
 
-  it("冷卻界 === fixture.cooldown", () => {
+  it("「新規則」預設值字面 golden(review round-1 ST1:∈ [min,max] 擋不住 3 → 30 這種漂)", () => {
+    expect(paramDefaults("cdp_cross")).toEqual({ rearm_ticks: "2", rearm_dwell_secs: "300" });
+    expect(paramDefaults("surge_crash")).toEqual({ pct: "1.5", window_secs: "60" });
+    expect(paramDefaults("vol_burst")).toEqual({
+      ratio: "3",
+      window_secs: "60",
+      min_elapsed_min: "5",
+      min_window_lots: "100",
+      min_day_lots: "500",
+    });
+    expect(paramDefaults("limit_lock")).toEqual({});
+    expect(COOLDOWN_DEFAULT).toBe("300");
+  });
+
+  it("冷卻界 === fixture.cooldown;「新規則」冷卻預設值是落在界內的整數", () => {
     expect([COOLDOWN_MIN, COOLDOWN_MAX]).toEqual(fixture.cooldown);
+    // review A8 round-1 SP3:預設值住 Dialog 內時,COOLDOWN_MIN 一升就是「按新增直接被自己擋」零訊號
+    const v = Number(COOLDOWN_DEFAULT);
+    expect(Number.isInteger(v)).toBe(true);
+    expect(v >= COOLDOWN_MIN && v <= COOLDOWN_MAX).toBe(true);
   });
 
   it("每個欄位的預設值落在自己的 [min, max] 內;整數鍵的預設值是整數", () => {
