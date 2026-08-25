@@ -692,3 +692,83 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
     expect(screen.queryByText("群組名稱不合法")).toBeNull();
   });
 });
+
+// 🔴 review A4(#101 §2.3 Spec 1):N115 收修把撞名判定搬進 transform 之後,`submitRename` 仍在
+// commit **之前**無條件 `setRenaming(null)` —— 撞名時文案是非同步從佇列冒出來的,而編輯框已經關了、
+// 使用者打的字消失。change-spec 說 eager「降級為純 UX(決定要不要清輸入框)」,那一半沒留下。
+describe("WatchlistManagerDialog 改名被拒時保留編輯框(review A4)", () => {
+  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
+  function gatePuts(): void {
+    gated = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+  }
+  function releaseOk(): void {
+    const g = gated.shift()!;
+    g.resolve(new Response(JSON.stringify(g.body)));
+  }
+  function startRename(to: string): HTMLInputElement {
+    fireEvent.click(screen.getByLabelText("改名 主力"));
+    const input = screen.getByDisplayValue("主力") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: to } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    return input;
+  }
+
+  it("改名撞既有名 → 文案出來時編輯框仍在、輸入不消失", async () => {
+    open();
+    startRename("觀察");
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    // 最常見的路徑:使用者看得到錯誤,也看得到自己剛打的字,直接改就好
+    expect((screen.getByDisplayValue("觀察") as HTMLInputElement).value).toBe("觀察");
+    expect(putBodies).toEqual([]);
+  });
+
+  it("改名 PUT 失敗(4xx)→ 編輯框保留可重試", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
+        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+    open();
+    startRename("強勢");
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    expect(screen.getByDisplayValue("強勢")).toBeTruthy();
+    // 重試:同一個編輯框再按 Enter 要能再送一發(守門在結果回來後解除)
+    fireEvent.keyDown(screen.getByDisplayValue("強勢"), { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(2));
+  });
+
+  it("改名成功 → 編輯框才關閉(既有行為,鎖住「不是永遠不關」)", async () => {
+    open();
+    startRename("強勢");
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByDisplayValue("強勢")).toBeNull());
+  });
+
+  /** 編輯框在途仍開著之後的新失效樣態:不耐煩連按 Enter,第二發輪到時 `from` 已改名 →
+   *  transform 看不到原組 → 不是假 BAD_GROUP 就是靜默 no-op。守門:在途期間忽略重送。 */
+  it("改名在途連按 Enter → 只送一筆 PUT、無錯誤文案、成功後關框", async () => {
+    gatePuts();
+    open();
+    const input = startRename("強勢");
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.keyDown(input, { key: "Enter" }); // 第一發在途,框還開著
+    fireEvent.keyDown(input, { key: "Enter" });
+    releaseOk();
+    await waitFor(() => expect(screen.queryByDisplayValue("強勢")).toBeNull());
+    await new Promise((r) => setTimeout(r, 30));
+    expect(putBodies).toHaveLength(1);
+    expect(screen.queryByText("群組名稱不合法")).toBeNull();
+  });
+});
