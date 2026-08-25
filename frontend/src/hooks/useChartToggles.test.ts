@@ -17,7 +17,11 @@ afterEach(cleanup);
 // 新增欄位屬預期變更(事前標記),不是把失敗的斷言改綠 —— 6 處 toEqual(DEFAULTS)
 // 與下方一處硬列鍵集連動。
 // 🟢 intraday-fill-marks SC-2:新增 fills(成交點)預設開 —— 同款事前標記的 schema 擴充。
-const DEFAULTS = { vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true };
+const DEFAULTS = {
+  vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true,
+  // 🟢 chart-ux-batch-0826:F1 指數疊線兩鍵預設關、F3 同步十字線預設開(皆免 bump)
+  idxTwse: false, idxOtc: false, syncHover: true,
+};
 /** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
 const V = 2;
 
@@ -160,6 +164,9 @@ describe("useChartToggles", () => {
       bb: false,
       vp: true, // 🟢 SC-3:整包寫回會含新欄位(事前標記的預期變更)
       fills: true, // 🟢 intraday-fill-marks SC-2:同款
+      idxTwse: false, // 🟢 chart-ux-batch-0826 F1 / F3:同款
+      idxOtc: false,
+      syncHover: true,
       v: V,
     });
   });
