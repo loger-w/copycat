@@ -24,7 +24,7 @@
  *
  *  ---
  *  **react-doctor `no-event-handler` 對本層是誤報**(`App.tsx` 的 `MAIN_CODE_KEY` effect
- *  掛了一行 disable,是全 repo 唯一一處)。實測證據:同一個 effect 把 `writeLocal(...)`
+ *  掛了一行 disable,是 repo 內第三處 —— 既有 `StockPage.tsx` / `useStockStream.ts` 各一處同款)。實測證據:同一個 effect 把 `writeLocal(...)`
  *  換回字面的 `window.localStorage.setItem(...)`,finding 就消失 —— 規則把「字面上的
  *  localStorage 成員呼叫」認成合法的 external-store 同步,卻看不穿一層具名函式。
  *  規則建議的「搬進觸發它的事件處理器」在那裡是反向的:`stockCode` 有多個寫者(自選列 /

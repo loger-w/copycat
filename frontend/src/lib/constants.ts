@@ -1,5 +1,3 @@
-import { removeLocal } from "@/lib/storage";
-
 /** localStorage key 的唯一宣告處。
  *
  *  **為什麼集中**:key 原本散在 8 個元件 / hook 各自 `const`,每輪 UI 功能都在長新 key,
@@ -8,6 +6,8 @@ import { removeLocal } from "@/lib/storage";
  *
  *  命名前綴一律 `copycat-`:localStorage 是 origin 級共用空間,無前綴的 key 與他站撞名
  *  且清 site data 時難對照。 */
+
+import { removeLocal } from "@/lib/storage";
 
 /** 主 tab(txo / stock / futures / index)— App.tsx */
 export const TAB_KEY = "copycat-tab";
