@@ -76,8 +76,8 @@ class _Agg:
     filled_qty: int = 0
     fill_value: float = 0.0  # Σ(成交價×量),算均價用
     applied_qty: int = 0  # 已樂觀套進部位的成交量(張 / 口;F5 部分成交只套增量)
-    applied_shares: int = 0  # 套用當下的累計成交量(股 / 口),算增量均價用
-    applied_value: float = 0.0  # 套用當下的累計成交價金,算增量均價用
+    applied_shares: int = 0  # 已被套用消化的成交量(股 / 口;證券 = 已套張數 × 1000),算增量均價用
+    applied_value: float = 0.0  # 已被套用消化的價金(以增量均價計),殘量(不足 1 張)留給下一張
     date: str | None = None  # 委託建立日 YYYYMMDD
     time: str | None = None
     pre_order: bool = False
@@ -221,12 +221,15 @@ class CapitalStore:
         delta = total - a.applied_qty
         if delta <= 0:
             return False
-        # 增量均價 = 上次套用之後成交的那些量的均價(不是整張單的累計均價 —— 第二次套用時
-        # 把第一批的價格再算進去,加碼均價會被拉回舊價)。
+        # 增量均價 = 尚未被消化的成交量的均價(不是整張單的累計均價 —— 第二次套用時把第一批
+        # 的價格再算進去,加碼均價會被拉回舊價)。**只消化整張的量**(review Spec c):1500 股
+        # 套 1 張時只吃 1000 股的價金,殘 500 股留給下一張與後續成交一起算 —— 全吃掉的話那 500
+        # 股的價金憑空消失,下一張均價偏移。unit = 一張 / 一口對應的原始量。
+        unit = 1000 if market == "sec" else 1
         fill_avg = (a.fill_value - a.applied_value) / (a.filled_qty - a.applied_shares)
         a.applied_qty = total
-        a.applied_shares = a.filled_qty
-        a.applied_value = a.fill_value
+        a.applied_shares += delta * unit
+        a.applied_value += fill_avg * delta * unit
         signed = delta if a.buy_sell == "B" else -delta
         key = (key_no, kind)
         prev = self._positions.get(key)

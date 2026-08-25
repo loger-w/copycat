@@ -11,12 +11,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type React from "react";
 import { GroupGridView } from "@/components/stock/GroupGridView";
+import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { buildIntradayGeometry } from "@/lib/stock-intraday-svg";
 import type { Group } from "@/lib/watchlist-model";
 import { wrap } from "@/test-utils";
 
+
+/** 測試用外殼:圖牆自 F2 起受控(「現在看哪一組」唯一持有者是 StockPage 的 `useStockGroup`),
+ *  這裡以同一支 hook 扮演 StockPage,既有「記住的群組」語意(localStorage)一字不改。 */
+function Grid(props: Omit<React.ComponentProps<typeof GroupGridView>, "selectedGroup" | "onSelectGroup">) {
+  const { picked, select } = useStockGroup();
+  return <GroupGridView {...props} selectedGroup={picked} onSelectGroup={select} />;
+}
 vi.mock("@/lib/stock-intraday-svg", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/stock-intraday-svg")>();
   return { ...actual, buildIntradayGeometry: vi.fn(actual.buildIntradayGeometry) };
@@ -99,7 +108,7 @@ function renderGrid(quotes: Record<string, WatchlistQuote>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (q: Record<string, WatchlistQuote>) => (
     <QueryClientProvider client={client}>
-      <GroupGridView groups={GROUPS} quotes={q} onPick={vi.fn()} active={null} />
+      <Grid groups={GROUPS} quotes={q} onPick={vi.fn()} active={null} />
     </QueryClientProvider>
   );
   const { rerender } = render(ui(quotes));
@@ -108,7 +117,7 @@ function renderGrid(quotes: Record<string, WatchlistQuote>) {
 
 describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
   it("4 張卡掛好後,對其中一張連發 3 個 mousemove → 幾何重算次數不變", async () => {
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     for (const code of CODES) {
       const card = await screen.findByTestId(`group-card-${code}`);
       // 錨點:卡片上真的是**單檔同款**那張圖(有 role=img 的主圖),不是舊 mini 圖 ——

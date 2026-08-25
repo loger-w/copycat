@@ -10,7 +10,9 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type React from "react";
 import { GroupGridView } from "@/components/stock/GroupGridView";
+import { useStockGroup } from "@/hooks/useStockGroup";
 import { CHART_TOGGLES_KEY } from "@/lib/constants";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { MinuteAgg, VpCell } from "@/lib/stock-accum";
@@ -18,6 +20,13 @@ import type { Group } from "@/lib/watchlist-model";
 import type { CapitalOrder } from "@/types";
 import { wrap } from "@/test-utils";
 
+
+/** 測試用外殼:圖牆自 F2 起受控(「現在看哪一組」唯一持有者是 StockPage 的 `useStockGroup`),
+ *  這裡以同一支 hook 扮演 StockPage,既有「記住的群組」語意(localStorage)一字不改。 */
+function Grid(props: Omit<React.ComponentProps<typeof GroupGridView>, "selectedGroup" | "onSelectGroup">) {
+  const { picked, select } = useStockGroup();
+  return <GroupGridView {...props} selectedGroup={picked} onSelectGroup={select} />;
+}
 const GROUPS: Group[] = [{ name: "半導體", codes: ["2330", "2317"] }];
 
 function snap() {
@@ -121,7 +130,7 @@ describe("GroupGridView toggle 列同步每張卡(SC-2)", () => {
       CHART_TOGGLES_KEY,
       JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: false, v: 2 }),
     );
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     // 存檔優先於預設(vp 預設是開的)—— 這條同時鎖住「重整後狀態保留」
     expect(vpBarCount()).toBe(0);
@@ -148,7 +157,7 @@ describe("GroupGridView toggle 列同步每張卡(SC-2)", () => {
       CHART_TOGGLES_KEY,
       JSON.stringify({ vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, v: 2 }),
     );
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const cards = [
       await screen.findByTestId("group-card-2330"),
       screen.getByTestId("group-card-2317"),
@@ -174,7 +183,7 @@ describe("GroupGridView toggle 列同步每張卡(SC-2)", () => {
       CHART_TOGGLES_KEY,
       JSON.stringify({ vwap: false, cdp: false, ma: false, bb: true, vp: false, v: 2 }),
     );
-    wrap(<GroupGridView groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
+    wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     expect(document.querySelectorAll('[data-testid="edge-price-vwap"]').length).toBe(0);
 

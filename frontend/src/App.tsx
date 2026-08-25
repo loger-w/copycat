@@ -328,7 +328,7 @@ export default function App() {
                   contract={stkfutContract}
                   onContract={setStkfutContract}
                   onViewChange={setStockView}
-                  index={indexOverlay}
+                  indexSeries={indexOverlay}
                 />
               </Suspense>
             </div>

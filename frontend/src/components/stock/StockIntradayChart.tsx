@@ -134,14 +134,16 @@ function levelText(
 const EMPTY_PEGS: readonly PegInput[] = [];
 /** 指數疊線關著 / 不可得時的**模組層**空陣列(identity 穩定,不打穿 ChartStatic memo) */
 const EMPTY_IDX_LINES: readonly IndexOverlayLine[] = [];
-/** 指數疊線配色(F1):避開價線紅綠、均價白、CDP/MA;class 字面值供 Tailwind 掃描 */
+/** 指數疊線配色(F1):**與台股綜合頁 `MarketPane.OVERLAY_LINES` 同一組識別色**(加權 profit 金 /
+ *  櫃買 idx-otc 藍)—— 同一個指數在兩頁必須同色,否則使用者要自己對照;也避開價線紅綠與均價白。
+ *  class 字面值供 Tailwind 掃描。 */
 const IDX_LINE_CLASS: Record<IndexOverlayLine["key"], string> = {
-  twse: "stroke-river-2",
-  otc: "stroke-river-4",
+  twse: "stroke-profit",
+  otc: "stroke-idx-otc",
 };
 const IDX_TEXT_CLASS: Record<IndexOverlayLine["key"], string> = {
-  twse: "fill-river-2",
-  otc: "fill-river-4",
+  twse: "fill-profit",
+  otc: "fill-idx-otc",
 };
 
 /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
@@ -905,7 +907,7 @@ interface Props {
    *  —— 每 render 新陣列會打穿 `ChartStatic` 與 `GroupCard` 兩層 memo。 */
   fills?: readonly FillPoint[];
   /** 加權 / 櫃買即時序列(F1);見 `CoreProps.indexSeries` */
-  index?: IndexOverlaySeries | null;
+  indexSeries?: IndexOverlaySeries | null;
 }
 
 export type ChartVariant = "page" | "card";
@@ -1675,7 +1677,7 @@ export function StockIntradayChart({
   subHeight,
   stkfut = false,
   fills,
-  index = null,
+  indexSeries = null,
 }: Props) {
   const { toggles, set } = useChartToggles();
   return (
@@ -1688,7 +1690,7 @@ export function StockIntradayChart({
       subHeight={subHeight}
       stkfut={stkfut}
       fills={fills}
-      indexSeries={index}
+      indexSeries={indexSeries}
     />
   );
 }

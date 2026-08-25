@@ -415,7 +415,9 @@ class CapitalClient:
             if changed:
                 # 成交當下就把部位推出去(F5):回查鏈 0.5 s debounce + 三段串行往返是使用者
                 # 「下單後倉位 / 均價很慢」的結構性來源;先推樂觀套用的部位,鏈落地再全量覆蓋。
-                # `source: fill` 讓讀者分得出這是先到的還是券商確認的(前端目前一律 invalidate)。
+                # `source: fill` 讓讀者分得出這是先到的還是券商確認的。**讀者目前 = 無**(前端
+                # `useCapitalStream` 對 capital_position 一律 invalidate,不看 data);只有
+                # `tests/capital/test_fill_latency.py` 用它分辨兩種推播。日後要拿掉就一併改測試。
                 self._emit({"event": "capital_position", "data": {
                     "count": len(self.store.positions()),
                     "source": "fill",
@@ -423,6 +425,13 @@ class CapitalClient:
                 logger.info(
                     "成交樂觀套用部位: seq=%s stock=%s (%.1f ms)",
                     rec.seq_no, rec.stock_no, (time.monotonic() - t0) * 1000,
+                )
+            else:
+                # 沒套的成交也要留痕(review Spec a):零股 / 無券 / 選擇權 / 期貨契約碼不明 /
+                # 增量未滿張 / 無價 —— 正是最需要量「等回查鏈多久」的那些;不印就與現狀一樣看不見。
+                logger.info(
+                    "成交未樂觀套用(零股 / 無券 / 選擇權 / 契約碼不明 / 未滿張),等回查鏈: seq=%s stock=%s market=%s",
+                    rec.seq_no, rec.stock_no, rec.market,
                 )
         if rec.seq_no:
             self._emit({"event": "capital_order", "data": {
@@ -510,7 +519,7 @@ class CapitalClient:
         """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
         同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
         self._pending_sec = positions
-        self._log_chain_stage("庫存段收齊 %d 列" % len(positions))
+        self._log_chain_stage("庫存段收齊 %d 列", len(positions))
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()
@@ -529,7 +538,7 @@ class CapitalClient:
         if pending is None:
             logger.warning("損益報告遲到(本輪 pending 已發布),丟棄 %d 列", len(rows))
             return
-        self._log_chain_stage("損益段收齊 %d 列" % len(rows))
+        self._log_chain_stage("損益段收齊 %d 列", len(rows))
         by_key = {(p.stock_no, p.kind): p for p in pending}
         for r in rows:
             # 兩段判別:查無股號 = 靜默(部位清單以即時庫存為權威,且 balance 側丟掉的列
@@ -582,6 +591,7 @@ class CapitalClient:
         return stale
 
     def _on_oi_complete(self, rows: list[Position]) -> None:
+        self._log_chain_stage("期貨部位段收齊 %d 列", len(rows))
         self._finalize_positions(merge_fut_positions(rows))
 
     def _finalize_positions(self, fut_rows: list[Position]) -> None:
@@ -602,18 +612,21 @@ class CapitalClient:
         if self._fill_seen_at is not None and opt_fut != truth_fut:
             logger.info("期貨部位鍵差異(樂觀 vs 券商): %s vs %s", sorted(opt_fut), sorted(truth_fut))
         self.store.set_positions(merged)
-        self._log_chain_stage("部位落地 %d 列" % len(merged))
+        self._log_chain_stage("部位落地 %d 列", len(merged))
         self._fill_seen_at = None
         self._emit({"event": "capital_position", "data": {"count": len(merged)}})
 
-    def _log_chain_stage(self, what: str) -> None:
-        """回查鏈進度(F5 觀測)。成交觸發的輪印 INFO 並附「自成交起 N ms」;
-        60s 定時輪詢的輪降 DEBUG —— 現狀成功路徑零 log,真成交的耗時無從量起。"""
+    def _log_chain_stage(self, what: str, *args: object) -> None:
+        """回查鏈進度(F5 觀測)。成交觸發的輪印 INFO 並附「自成交回報到達起 N ms」
+        (量的是回報進 handler 的時刻,不是券商撮合時刻);60s 定時輪詢的輪降 DEBUG ——
+        現狀成功路徑零 log,真成交的耗時無從量起。`what` 走 lazy %-args,與檔內其餘 log 同款。"""
         if self._fill_seen_at is None:
-            logger.debug("balance 鏈: %s", what)
+            logger.debug("balance 鏈: " + what, *args)
             return
         logger.info(
-            "balance 鏈: %s(自成交起 %.0f ms)", what, (time.monotonic() - self._fill_seen_at) * 1000
+            "balance 鏈: " + what + "(自成交回報到達起 %.0f ms)",
+            *args,
+            (time.monotonic() - self._fill_seen_at) * 1000,
         )
 
     def _poll_pending(self) -> None:

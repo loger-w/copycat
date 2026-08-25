@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type React from "react";
 import { GroupGridView } from "@/components/stock/GroupGridView";
+import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
@@ -18,6 +20,13 @@ import type { CapitalOrder, CapitalPosition } from "@/types";
  *  量法 = 把卡片內的圖換成計次替身。**獨立檔**:`vi.mock` 是檔案級 + hoisted,
  *  與同目錄那份「要看到真 svg」的測試不能共存(frontend-testing skill 的 lazy 三坑同理)。 */
 
+
+/** 測試用外殼:圖牆自 F2 起受控(「現在看哪一組」唯一持有者是 StockPage 的 `useStockGroup`),
+ *  這裡以同一支 hook 扮演 StockPage,既有「記住的群組」語意(localStorage)一字不改。 */
+function Grid(props: Omit<React.ComponentProps<typeof GroupGridView>, "selectedGroup" | "onSelectGroup">) {
+  const { picked, select } = useStockGroup();
+  return <GroupGridView {...props} selectedGroup={picked} onSelectGroup={select} />;
+}
 const hoisted = vi.hoisted(() => ({
   renders: [] as (number | null)[],
   /** per-code 的 render 記錄(cr1 B-p2-5 用):`renders` 只留 `liveP`,量不出「哪一張卡
@@ -135,7 +144,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     // 每次都現做一個 inline arrow —— 正是 StockPage 的寫法,也是 memo 最容易破功的地方
     const ui = (quotes: Record<string, WatchlistQuote>) => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+        <Grid groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
 
@@ -155,7 +164,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
     const ui = () => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={q1} onPick={() => {}} active={null} />
+        <Grid groups={GROUPS} quotes={q1} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui());
@@ -176,7 +185,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
     const ui = (quotes: Record<string, WatchlistQuote>) => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+        <Grid groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui(q1));
@@ -217,7 +226,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
     const ui = (quotes: Record<string, WatchlistQuote>) => (
       <QueryClientProvider client={client}>
-        <GroupGridView groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+        <Grid groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
       </QueryClientProvider>
     );
     const { rerender } = render(ui(q1));

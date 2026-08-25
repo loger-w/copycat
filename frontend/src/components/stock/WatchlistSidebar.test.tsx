@@ -301,6 +301,16 @@ describe("WatchlistSidebar 未分組桶(SC-8~11)", () => {
     expect(within(ung).queryByText("2330")).toBeNull(); // 已屬群組 → 不在未分組
   });
 
+  // 🟢 F2(chart-ux-batch-0826):未分組列的 onSelect 第二參 = null(圖牆據此**不**切組)
+  it("點未分組列 → onSelect(code, null)", async () => {
+    mockWatchlist(GROUPS, [...CODES, "2317"]);
+    const onSelect = vi.fn();
+    wrap(<WatchlistSidebar active={null} onSelect={onSelect} quotes={QUOTES} />);
+    await waitGroups();
+    fireEvent.click(within(screen.getByTestId("wl-list-ungrouped")).getByTestId("wl-select-2317"));
+    expect(onSelect).toHaveBeenCalledWith("2317", null);
+  });
+
   it("零群組時未分組列的 + 為停用(SC-9)", async () => {
     mockWatchlist([], ["2317"]);
     sidebar();

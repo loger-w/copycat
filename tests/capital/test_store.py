@@ -687,3 +687,15 @@ def test_broker_snapshot_overrides_optimistic_fill() -> None:
     s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
     p = s.position_for("4989")
     assert p is not None and p.qty == 3 and p.avg_price == 84.0  # 均價沿用既有語意(損益回填前)
+
+
+def test_partial_lot_residue_is_carried_to_next_lot() -> None:
+    """1500 股 @80 → 只套 1 張、只消化 1000 股價金;再 500 股 @90 → 第 2 張 = 殘 500@80 + 500@90 = 85,
+    部位均價 = 165000 / 2000 = 82.5(與整張單真實均價一致)。"""
+    s = CapitalStore()
+    assert s.apply_reply(_evt(typ="D", qty="1500", price="80.0000")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 1 and p.avg_price == 80.0
+    assert s.apply_reply(_evt(typ="D", qty="500", price="90.0000")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 2 and p.avg_price == pytest.approx(82.5)

@@ -71,16 +71,21 @@ def _run_chain(client: CapitalClient, com: FakeCom, *, until: Callable[[], bool]
         time.sleep(0.01)
 
 
-def test_fill_reaches_positions_within_50ms(tmp_path: Path) -> None:
+def test_fill_reaches_positions_before_broker_chain_starts(tmp_path: Path) -> None:
+    """不變量以**因果順序**釘(review Std 4):第一則 `capital_position` 必須早於第一次
+    `GetRealBalanceReport` 查詢出手 —— 這正是「不等回查鏈」的定義;牆鐘毫秒只進失敗訊息,
+    不當門檻(負載機 / CI 上體質性 flaky)。修前這裡是 463 ms、且順序反過來。"""
     com = FakeCom()
     client = _client(com, tmp_path)
     stamps: dict[str, float] = {}
-    pushed: list[dict[str, object]] = []
+    order: list[str] = []
 
     def broadcast(payload: dict[str, object]) -> None:
-        pushed.append(payload)
-        if payload["event"] == "capital_position":
-            stamps.setdefault("position", time.monotonic())
+        if payload["event"] == "capital_position" and "position" not in stamps:
+            stamps["position"] = time.monotonic()
+            order.append("position")
+            if any(entry[0] == "get_real_balance" for entry in com.sent):
+                order.append("balance-query-was-already-sent")
 
     client.set_broadcast(broadcast)
     t_fill = time.monotonic()
@@ -89,7 +94,7 @@ def test_fill_reaches_positions_within_50ms(tmp_path: Path) -> None:
 
     assert "position" in stamps, "成交後 3 s 內沒有任何 capital_position 推播"
     latency_ms = (stamps["position"] - t_fill) * 1000
-    assert latency_ms < 50, f"fill → capital_position 花了 {latency_ms:.0f} ms(> 50 ms)"
+    assert order == ["position"], f"部位推播晚於回查鏈出手(fill → 推播 {latency_ms:.0f} ms):{order}"
     pos = client.store.position_for("3357")
     assert pos is not None and pos.qty == 1 and pos.kind == "cash" and pos.avg_price == 90.0
 
