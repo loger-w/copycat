@@ -218,9 +218,10 @@ class FuturesEngine:
 
         cancel 正 await `to_thread` 的 task 時 asyncio 側立即回(executor future
         無法中斷),已排入未啟動的工作項可能跨過 `source.close()` 才跑 subscribe →
-        `_ensure_connected` 重建 TC4 連線,KeepAlive 洩漏 process 不退
-        (照 stock_engine._retry_acquire 縮窗語意;殘餘 race 的根治 =
-        tc4 `_ensure_connected` 原子化,獨立 /mod)。
+        `_ensure_connected` 重建 TC4 連線,KeepAlive 洩漏、TC4 端那張票不 LOGOUT 留到 reap
+        帶走 feed(wrapper 已 daemon=True,process 會退 —— 08-25 review 改口)
+        (照 stock_engine._retry_acquire 縮窗語意;殘餘 race 已由 #105 N259
+        `_ensure_connected` 原子化 + `_stop` 早退根治)。
         """
         if self._loop is None:
             raise _EngineClosing
@@ -241,8 +242,9 @@ class FuturesEngine:
         if resub is not None:
             resub.cancel()
             # 放寬到 Exception:task 若已死於非連線例外,只吞 CancelledError 會讓
-            # await 重拋 → 之後的 leaf gather 與 source.close() 全跳過,KeepAlive
-            # 洩漏 process 不退(回溯審 P1-1)。吞但留紀錄(stock close 同語意;
+            # await 重拋 → 之後的 leaf gather 與 source.close() 全跳過,session 不
+            # LOGOUT 留到 TC4 reap 帶走 feed(回溯審 P1-1;「process 不退」是 daemon=True
+            # 之前的舊敘述)。吞但留紀錄(stock close 同語意;
             # review C-5)—— 落到這裡 = 連迴圈自身的例外圍籬都沒接住
             try:
                 await resub
@@ -255,7 +257,8 @@ class FuturesEngine:
             self._leaf_timer = None
         if self._leaf_tasks:
             # in-flight leaf 訂閱先收完再關 source:close 後 subscribe_leaf 的
-            # _ensure_connected 會重連 TC4 → session/KeepAlive 洩漏,process 不退(review I1)
+            # _ensure_connected 會重連 TC4 → session 洩漏、不 LOGOUT 留到 reap(review I1;
+            # #105 之後 `_stop` 早退已擋,這裡是第二道)
             await asyncio.gather(*self._leaf_tasks, return_exceptions=True)
         source, self._source = self._source, None
         if source is not None:

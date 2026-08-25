@@ -543,8 +543,10 @@ class StockQuoteSource(TC4QuoteSource):
         for sym in sorted(self._subscribed):
             try:
                 self._rt_request("UNSUBQUOTE", sym)
-            # OSError 涵蓋 ConnectionError(`_req` 的收斂型別)與 zmq.ZMQError;
-            # ValueError 涵蓋壞電文的 json.JSONDecodeError
+            # OSError 涵蓋 ConnectionError(`_req` 的收斂型別);**zmq.ZMQError 不是 OSError
+            # 子類**(08-25 review 親驗 issubclass=False)—— 但 `_rt_request` 路徑的 Connect /
+            # send / recv 都已收斂成 ConnectionError,鎖外裸拋只剩 setsockopt(新 context 不拋),
+            # 今天不可達,屬 latent;ValueError 涵蓋壞電文的 json.JSONDecodeError
             except (OSError, ValueError) as exc:
                 logger.warning("換日清舊窗 UNSUBQUOTE 失敗(略過其餘):%s: %s", sym, exc)
                 return

@@ -263,7 +263,9 @@ class IndexEngine:
         await asyncio.to_thread(self._source.close)
 
     def _subscribe_and_backfill(self, variant: int = 0, epoch: int | None = None) -> dict[str, int]:
-        """**worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,不碰任何共享狀態。
+        """**worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,**不寫**任何共享狀態
+        (只讀 `_loop` / `_retry_epoch` 當世代閘;`subscribe_symbol` 是對 TC4 的副作用,不是
+        引擎狀態 —— 08-25 review 回校)。
 
         **副作用前先看世代**(review SP5):合併雖然搬到了 loop 端,`subscribe_symbol`
         仍是**副作用**(而且帶著這一發的 window variant)—— cancel 攔不到已排入 executor

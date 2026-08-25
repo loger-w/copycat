@@ -21,7 +21,7 @@
 | B | `server/app.py` god-file | 1,8xx 行;33 條 route 全在 `create_app` 內;`lifespan` 單函式 542–1068 行 | 🔵,拆 router / boot 模組 | 找 endpoint 翻不到、或 route 測試要 mock 整個 lifespan | §4.B |
 | C | 前端三座梯 | `PriceLadder` 469 / `FuturesLadder` 514 / `StkfutLadder` 348;container 內約 350–400 行同構 | 🔵,有 `IntradayChartCore` 前例 | 第四座梯(權證)要出現、或 `clickPrice`/`marketOrder` 要改一次三處 | §3 |
 | D | `StockIntradayChart.tsx` 1,518 行 | 只 7 個 hook 呼叫,肥在 JSX;`IntradayChartCore` 就定義在此檔 :914 | 🔵,拆 renderer;J1 mode 四態分歧已記 next-time | 動 core 任一 mode 打壞另一 mode(已發生過:08-24 J1) | §4.D |
-| E | `localStorage` 45 處散落 14 檔 | `next-time.md` 08-21 R10 條 | **/mod 不是 refactor**(要補「存取即拋」行為) | 見該條 | §4.E |
+| E | `localStorage` 45 處散落 14 檔 | **已出貨 PR #106**(`lib/storage.ts`) | — | — | §4.E(勾銷) |
 | F | `WsStatus` 7 份同值型別 | `useCapital/useCorrelation/useFuturesStream/useIndexStream/useRiver/useStockStream/useTxoSnapshot` 各宣告一次 | 🔵 微,順手批 | 下次動任一 stream hook | §4.F |
 | G | backtest `fade_*` 家族 | `fade_cells.py` 1,824 行;registry / evaluator factory 已記 next-time 08-0x | 🔵,研究碼不影響看盤 | 下次動 fade 回測 | §4.G |
 | H | 每個 Source Protocol 活著兩份 fake | engine-seam 各檔自刻 `FakeSource` + `tests/helpers/fake_sources.py` 共用四支;只 index 一份 | 🔵 測試層 | 做 A 之前**必先**收成一份(否則骨架改動要改兩套 fake) | §2.4 |
@@ -245,10 +245,10 @@ ws),自然切點 = 每群一個 `APIRouter` 檔 + `request.app.state` 取 engine
 renderer 純函式。切點 = `IntradayChartCore` 移獨立檔 + J1 的 capability 表。J1/J2 已在
 `next-time.md` 08-24 節,動 core 時一併。測試 207 案分四檔已鎖三 mode。
 
-### 4.E `localStorage` 45 處 14 檔
+### 4.E `localStorage` 45 處 14 檔 — **已出貨(PR #106,2026-08-25 R9a `mod/storage-consolidation`)**
 
-已記 `next-time.md` 08-21 R10 條,**升 /mod**(要加「存取即拋 → 退預設 / setItem 拋不炸」行為,
-紅測先行)。本盤點不重述。
+新出口 `frontend/src/lib/storage.ts`(讀拋退預設 / 寫拋不炸;grep 裸 `localStorage.` 判準 0 要維持)。
+本條勾銷,不再是候選;原 `next-time.md` 08-21 R10 條同步已刪。
 
 ### 4.F `WsStatus` 7 份
 

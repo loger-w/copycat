@@ -386,7 +386,8 @@ class TC4QuoteSource:
         舊碼的 check(指標為 None)在鎖外,只有發布在鎖內 —— `_check_stale` 的重連與
         任何 REQ 生產者同時進來時,兩邊各自看到 None、各自 `QuoteAPI(...)`,後發布的
         那個蓋掉先發布的:**落敗者永遠不會被 `Disconnect()`**,它的 KeepAlive 執行緒
-        續跑到 process 結束(§0a:不 Disconnect 則 process 不退),而兩條 session 都
+        續跑到 process 結束(wrapper 已 daemon=True 所以 process 會退;真代價是 TC4 端那張票
+        不 LOGOUT、留到 ~60 s reap 帶走 feed —— 08-25 review 改口),而兩條 session 都
         對同一批 symbol 持著 refcount key,零錯誤訊號。
 
         持鎖跨越 `Connect()`(最壞 = `_REQ_TIMEOUT_MS`)的代價:同期的 `_connection()`
@@ -971,7 +972,7 @@ class TC4QuoteSource:
             )
         # 失敗路徑 _req 內已 _dispose(含 best-effort Disconnect)→ _api 可能已是
         # None,不可無條件 Disconnect(round-2 P0);仍在線才由此關(§0a KeepAlive
-        # 生命週期:不關則 process 不退出)
+        # 生命週期:wrapper daemon=True 後 process 會退,不關的真代價是 TC4 端不 LOGOUT 留到 reap)
         with self._api_lock:
             api, session = self._api, self._session
         if api is None:
