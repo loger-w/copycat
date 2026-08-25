@@ -341,6 +341,17 @@ class IndexEngine:
             # 合併點在 cancel 之後(N094):被取消的 retry 走不到這裡,orphan 的
             # executor 工作項就再也碰不到 `_twse.minutes` / `_pending_backfill`
             progressed = self._merge_backfill(fetched)
+            if clear_stale and variant > 0 and not progressed:
+                # 重連時本就在自癒中(variant > 0 只來自 `_schedule_reconnect_retry`):新 session 的
+                # N 號窗也可能是凍結 stub —— 零新鍵就把階梯往前推一格,下一發自癒不再撞同一把窗
+                # (review A6 round-1 SP1)。**variant 0 的路徑不動**:boot / rollover 失敗的重試在
+                # 盤外重抓「零新鍵」是資料已完整,不是毒化。stale 仍照下面樂觀清 —— 推播死活由
+                # watchdog 判,回補進展不是它的判準(反過來也一樣,見 `not clear_stale` 分支)。
+                logger.warning(
+                    "index 重連重抓無進展(window_variant=%d):零新分鐘鍵,下一發自癒換窗口",
+                    variant,
+                )
+                self._heal_variant += 1
             if not clear_stale and not progressed:
                 # heal 型的「成功」判準是**產出面的差量**:fetch 沒丟例外不等於 minutes
                 # 前進(TC4 對毒化訂閱回的是凍結 stub),而「有沒有追上牆鐘」也不是判準
@@ -396,8 +407,10 @@ class IndexEngine:
         最遠等 900 s;畫面 = 徽章健康、加權分時凍結。`clear_stale` 維持 True:重連 + 重掛成功
         後推播是否活著由 watchdog 再判,那是與窗口無關的既有語意。「variant 0 在新 session 是否
         仍毒化」未實證 —— 新 session 的 0 號窗若其實健康,N 號窗同樣拿得到資料(只是窗字串位移),
-        兩種情況都對。
+        兩種情況都對。這一發若零新鍵且 variant > 0,`_retry_loop` 會把階梯推前一格(round-1 SP1)。
         """
+        # 真環境判準的唯一 log 點(round-1 SP2):重連那一發用的是哪一把窗
+        logger.info("index 重連重掛 + 重抓(window_variant=%d)", self._heal_variant)
         self._schedule_retry(variant=self._heal_variant)
 
     def _handle_quote(self, quote: dict) -> None:
