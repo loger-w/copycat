@@ -77,6 +77,10 @@ from copycat.trading_calendar import WEEKEND_ONLY, TradingCalendar, load_trading
 
 logger = logging.getLogger(__name__)
 
+#: 關機時 COM 執行緒 join 的上限(秒)。關機預算(`server/shutdown_budget.py`)的輸入之一:
+#: lifespan 把 capital 排在 TC4 全部收完之後(N049),這個數字是預算表裡 TC4 之外的唯一一段。
+COM_JOIN_TIMEOUT_SECS = 5.0
+
 # 寫入命令等 COM 結果的上限:SendStockOrder 是同步呼叫,群益端掛起時 future 永不
 # resolve → HTTP 請求永久懸掛,使用者不知道單送出沒、最容易誘發重送
 _WRITE_TIMEOUT_S = 10.0
@@ -601,13 +605,13 @@ class CapitalClient:
         self._thread.start()
 
     def close(self) -> None:
-        """關機:投終止訊號 + join(timeout=5)。執行緒側 finally 會降 status 並 drain。
-        join 逾時不 raise(review B5):COM 呼叫卡死時執行緒可能還活著,
+        """關機:投終止訊號 + join(`COM_JOIN_TIMEOUT_SECS`)。執行緒側 finally 會降 status
+        並 drain。join 逾時不 raise(review B5):COM 呼叫卡死時執行緒可能還活著,
         daemon 執行緒隨行程結束回收 — 不為等它阻塞關機。"""
         self._cmd_q.put(None)
         t = self._thread
         if t is not None:
-            t.join(timeout=5)
+            t.join(timeout=COM_JOIN_TIMEOUT_SECS)
 
     def _init_com(self) -> bool:
         """登入 + 憑證 + 連回報 + 帳號發現。成功回 True(ok/degraded);失敗 False(error)。"""
