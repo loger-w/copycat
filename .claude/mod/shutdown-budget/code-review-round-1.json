@@ -1,0 +1,34 @@
+{
+  "skill": "code-review-two-axis",
+  "fixed_point": "93f8c303",
+  "reviewed_commits": ["f34ad222 🔵 refactor", "9ed91221 🟢 test [red]", "edefafaa 🔴 fix"],
+  "reviewers": {"standards": "opus", "spec": "opus"},
+  "standards": [
+    {"id": "ST1", "severity": "P3", "kind": "hard", "summary": "shutdown_budget 四常數與 DEFAULT_LOCK_TIMEOUT_SECS / COM_JOIN_TIMEOUT_SECS 無型別註記(backend-conventions:module-level globals)", "disposition": "accepted → 全加註記"},
+    {"id": "ST2", "severity": "P2", "kind": "judgement", "smell": "Speculative Generality", "summary": "close_worst_secs(lock_timeout_secs=) 參數零 caller", "disposition": "accepted → 改無參數"},
+    {"id": "ST3", "severity": "P2", "summary": "0392f4f1 merge 後 close() 多一發 LOGOUT,最壞 42 s > 32 s,docstring「只付一次」失真", "disposition": "rejected → UNSUB 失敗即 _dispose、尾段看到 _api None 直接 return 不送 LOGOUT,兩路互斥仍只付一發;docstring 補互斥說明。該分支 merge 後(rebase)親核合併結果成立,且 LOGOUT 上界 2 s < REQ,加不等式測試釘住"},
+    {"id": "ST4", "severity": "P3", "kind": "judgement", "summary": "timings 為完成序,彙總行段序每次不同", "disposition": "accepted → _SHUTDOWN_SEGMENTS 固定序"},
+    {"id": "ST5", "severity": "P3", "kind": "judgement", "summary": "run.ps1 [int]$graceSecs 在 python 多印一行時是轉型例外不是 Fail", "disposition": "accepted → 取末行 + ^\\d+$ 檢查"},
+    {"id": "ST-commit", "severity": "P3", "summary": "🔵 f34ad222 含新函式 close_worst_secs(當時零 caller),嚴格屬 🟢", "disposition": "accepted(記錄偏離,不重寫歷史)"}
+  ],
+  "spec": [
+    {"id": "SP1", "severity": "P2", "summary": "close_worst_secs 算漏 _req 進門的 api.lock(12 s);reviewer 算 44 s", "disposition": "accepted(變形)→ 44 s 為重複計;正確 = req + max(2·req, 2·lock) = 34;run.ps1 83"},
+    {"id": "SP2", "severity": "P2", "summary": "Disconnect() 的 KeepAlive _ctx.term() 可無界阻塞,「毫秒級不計」不成立", "disposition": "accepted(變形)→ 親核 wrapper:Pong 逾時帶鎖死 → _dispose 跳過 Disconnect 不卡;decode 類例外才無界。改口為「可計段上界」+ Disconnect 標無上界;wrapper 修法入 next-time"},
+    {"id": "SP3", "severity": "P2", "summary": "硬殺那一刻零正向訊號(WARNING / 彙總 / tc4 close log 全在完成後才印)", "disposition": "accepted → 段進場印「關機 <段> 段開始」;tc4.close() 取到鎖即印一行;rebase 後再加第三行(LOGOUT + Disconnect)"},
+    {"id": "SP4", "severity": "P3", "summary": "TC4_LANE_DEPTH 只 assert == 2 自證,與 lifespan 形狀無綁定", "disposition": "accepted → test_lane_depth_matches_the_real_shutdown_shape(5 條全卡,同時進場 = 5 − depth + 1;mutation depth 2→3 紅)"},
+    {"id": "SP-auto", "severity": "info", "summary": "[auto-default] 三項皆不動 SC / 契約 / 資料源;Ctrl+C 最壞等待 15→83 s 是手感改變", "disposition": "accepted → 升為收尾「需 user 知情」項"},
+    {"id": "SP-verify", "severity": "info", "summary": "verification §3 gate 未核;§1 第 4 列 docs 尚未 commit", "disposition": "收修後全套 gate 重跑更新;docs 隨 chore commit"}
+  ],
+  "post_review_increment": {
+    "range": "commits 4–5(收修 + rebase 後 tc4 延伸),main agent 機械快篩(branch-lifecycle 收尾節 3「補齊缺口不重跑」)",
+    "files": ["copycat/live/tc4.py", "copycat/capital/client.py", "copycat/server/shutdown_budget.py", "copycat/server/app.py", "run.ps1", "tests/live/test_tc4.py", "tests/server/test_boot_window.py", "tests/server/test_shutdown_budget.py"],
+    "checks": [
+      "每條 finding 的處置逐字對 diff:ST1 六常數皆有註記;ST2 簽名無參數;ST4 `_SHUTDOWN_SEGMENTS` Final tuple + 彙總行用它;ST5 run.ps1 末行 + regex;SP1 算式 `req + max(2·req, 2·lock)`;SP3 三處進場 log;SP4 新測試 + mutation 紅",
+      "rebase 衝突解法核:app.py 只是註解合併(加 LOGOUT 字樣);test_tc4.py 兩個類都在;tc4.py close() 本體由 git 自動合併,親讀合併後 :929-965 形狀正確(UNSUB → 讀 api/session → None 早退 → _logout → _dispose)",
+      "commit 邊界:#5 首版誤含 stash pop 後仍在 index 的 CLAUDE.md / next-time.md,未 push 前 soft reset 重打為純 code",
+      "白名單:crosscheck/breadth/signals 序列、corr→futures 串鏈、capital 最後、例外 log 字面皆未動;另一分支 TestCloseLogout 五條綠,唯一改的斷言列入該變清單"
+    ],
+    "gate": "見 verification.md §3(rebase 後全量重跑)"
+  },
+  "disposition": "Standards 5+1 條:接受 4、反駁 1(ST3 互斥推演,rebase 後親核成立)、偏離記錄 1;Spec 4+2 條:接受 2、接受(變形)2(SP1 上界 32→34、SP2 改口可計段)、知情 2。收修 🔴 一筆 + rebase 後延伸 🔴 一筆 + chore docs 一筆。"
+}

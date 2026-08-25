@@ -215,6 +215,19 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   零錯誤訊號。**與 `FuturesChart` 的 gate 5「分時資料落後 N 根(TC4 回補中)」是兩件事**:
   `status` = 這一趟回補請求的結果(bars **空**時才讀得到);gate 5 = 資料尾 vs WS 最後成交
   (bars **非空**時才成立)。兩者並存不合併 —— 處置不同(等重試 vs 看當日段完整性)。
+- **關機預算三方同源**(2026-08-26 起,A1):產生點 `copycat/server/shutdown_budget.py`
+  (`run_grace_secs()` = `WS_DRAIN_SECS` + `TC4_LANE_DEPTH` × `tc4.close_worst_secs()` +
+  `COM_JOIN_TIMEOUT_SECS` + slack;現值 83 s = TC4 半死**可計段**的上界,`Disconnect()` 的 KeepAlive
+  `term()` 無上界不計;健康路徑實測 1–3 s)。讀者 =
+  `run.ps1`(啟動時 `python -c` 讀 `run_grace_secs()` 當 Ctrl+C 後的 graceful 上限,超時才
+  `taskkill /T /F`)、`copycat/server/__main__.py`(uvicorn `timeout_graceful_shutdown=WS_DRAIN_SECS`)、
+  `app.py` lifespan(TC4 session **並行 lane**:corr→futures 串鏈 ‖ index ‖ stock ‖ txo,capital 最後;
+  每段進場印「關機 <段> 段開始」、收尾印「關機收尾 …」彙總行,單段 > 2 s 印 WARNING 點名)。改任一邊的 timeout
+  (`_REQ_TIMEOUT_MS` / `DEFAULT_LOCK_TIMEOUT_SECS` / COM join)**不需要**改 run.ps1 —— 那正是同源的
+  意義;**改 lane 形狀(串鏈加深 / 把 capital 搬回中間)= 改契約**,要同步改 `TC4_LANE_DEPTH`。
+  漂掉的症狀:run.ps1 在 lifespan 還在退訂時硬殺,健康 session 也變殭屍,下一台開頭 ~60 s 零推播,
+  零錯誤訊號(只在 TC4 log `RemoveLoginInfo` 晚 60 s 才看得到)。不等式由
+  `tests/server/test_shutdown_budget.py` 釘住(含 run.ps1 字面 parity 與 UTF-8 BOM)。
 
 ## 5. 資料源
 

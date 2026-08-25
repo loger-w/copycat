@@ -1,3 +1,21 @@
+## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
+
+- [ ] **signals 段(`bot.close()` + hub drain)無上限**,只算進 `LIFESPAN_SLACK_SECS`(5 s);
+  Discord 端網路壞掉時 `discord.py` 自己的 timeout 才是上界,超過就擠掉 TC4 的預算。候選 =
+  `asyncio.wait_for(signals_close, LIFESPAN_SLACK_SECS)`,但要先確認 hub 落檔在 timeout 內完成
+  (jsonl 是真相源,不能被 cancel 半途)。
+- [ ] **run.ps1 finally 內第二次 Ctrl+C 未驗**:PowerShell 5.1 的 finally 在 `WaitForExit` 阻塞時再按
+  Ctrl+C 是否中斷、中斷後 `Stop-Tree` 還跑不跑 —— 跑不到的話 backend 就留著。上限拉到 83 s 之後
+  這條路比 15 s 時代更可能被人踩到。盤後用 --verify server 走一次即可驗。
+- [ ] **上界 83 s 是「TC4 半死」可計段的數字,不是承諾**:半死時 LOGOUT 自己也送不出去,等待只是給
+  **健康** session 收尾的機會;真要縮短得在 `close()` 進場時把 socket 的 RCVTIMEO 調短(`api.lock`
+  持有下 setsockopt 才安全,而 KeepAlive Pong 共用同一把鎖)—— 動到 wrapper 共用 socket,獨立一輪。
+- [ ] **wrapper `KeepAliveHelper.ThreadProcess` 只 catch ZMQError**(`spikes/TCPY/tcoreapi_mq.py:292-303`,
+  本地 patch 版):`Pong` 在 try 外,recv 撞 RCVTIMEO 會帶著 `api.lock` 死掉(= 既知的毒鎖,`_dispose`
+  取不到鎖會跳過 Disconnect,無害);但 decode 類例外殺掉執行緒時鎖已釋放、SUB socket 永不關 →
+  `Disconnect()` 的 `_ctx.term()` **無界阻塞**,那條 lane 只能靠 run.ps1 硬殺。修法 = try 包住整個迴圈體 +
+  finally 關 socket(wrapper 是 gitignored 本地檔,改了要同步 `docs/research/2026-07-06-tc4-stock-tick-1k-api-report.md` §11)。
+
 ## 2026-08-26(08-25 盤中觀察對帳 + fix/tc4-logout-and-cancel-reply-warning 留尾)
 
 - [ ] **加權分時 minutes 盤中整天沒長(每個交易日都在發生,非 08-25 批回歸)**:`index 分時自癒`
