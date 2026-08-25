@@ -25,3 +25,6 @@ frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
 /logs/
+
+# /pr-review 臨時 worktree(claude-pr-review,review 結束自動移除)
+.worktrees/
