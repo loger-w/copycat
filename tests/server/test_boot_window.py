@@ -11,6 +11,8 @@ WS close),不是新狀態。
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import threading
 import time
 from pathlib import Path
@@ -22,7 +24,12 @@ import copycat.server.app as app_mod
 from copycat.live.models import SeriesInfo
 from copycat.server.app import create_app
 from tests.helpers.boot import wait_boot
-from tests.helpers.fake_sources import FakeStockSource
+from tests.helpers.fake_sources import (
+    FakeCorrSource,
+    FakeFuturesSource,
+    FakeIndexSource,
+    FakeStockSource,
+)
 from tests.helpers.fake_txo import SERIES, FakeTxoSource
 
 #: fake 的阻塞上限。測試一律自己放行,這只是「忘了放行」時不要把整套測試掛死的保險。
@@ -387,3 +394,157 @@ def test_capital_com_teardown_runs_after_the_tc4_sources(
         wait_boot(app)
     assert order.index("capital") > order.index("stock"), "群益 COM join 擋在 stock 前面"
     assert order.index("capital") > order.index("txo"), "群益 COM join 擋在 TXO runtime 前面"
+
+
+class _GatedCloseStockSource(FakeStockSource):
+    """`close()` 卡在 gate 上 —— TC4 半死時那條 session 的 UNSUB / LOGOUT 撞 RCVTIMEO
+    (10 s)的替身。`entered` 是同步點:放行必須落在「它真的卡住之後」,否則別的 lane
+    在它進門前就收完,並行與序列在 order 上長得一樣。"""
+
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def close(self) -> None:
+        self._order.append("stock:enter")
+        self.entered.set()
+        self.gate.wait(_GATE_CAP)
+        self._order.append("stock:exit")
+
+
+class _OrderedCloseIndexSource(FakeIndexSource):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("index")
+
+
+class _OrderedCloseFuturesSource(FakeFuturesSource):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("futures")
+
+
+class _OrderedCloseCorrSource(FakeCorrSource):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("corr")
+
+
+class _RaisingCloseTxoSource(FakeTxoSource):
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    def close(self) -> None:
+        self._order.append("txo:raise")
+        raise RuntimeError("TXO source close 炸了")
+
+
+class TestShutdownLanes:
+    """A1(review #105 §2.6 S1):TC4 session 的 close 走**並行 lane**,不再序列。
+
+    序列版的失效樣態:一條 session 卡在 REQ timeout(10 s)上,排在它後面的健康 session
+    連 UNSUB 都輪不到就被 run.ps1 硬殺 —— 健康的也被還原成殭屍(下一台開頭 ~60 s
+    零推播)。並行之後硬殺只落在真的卡住的那一條。
+    """
+
+    def test_stuck_stock_close_does_not_delay_the_txo_and_index_sessions(
+        self, tmp_path: Path
+    ) -> None:
+        order: list[str] = []
+        stock = _GatedCloseStockSource(order)
+        app = create_app(
+            source=_OrderedCloseTxoSource(order),
+            stock_source=stock,
+            index_source=_OrderedCloseIndexSource(order),
+            stock_watchlist_path=tmp_path / "stock_watchlist.json",
+            throttle_secs=0.01,
+        )
+
+        def _release() -> None:
+            # 放行必須落在 `__exit__` 阻塞期間(同檔 TestShutdownDuringBoot 的協定),且
+            # 要在 stock 真的卡住**之後**再給其他 lane 一段時間 —— 序列版在這段時間內
+            # 什麼都不會發生,並行版的 txo / index 早就收完了
+            assert stock.entered.wait(_GATE_CAP), "stock close 沒進門"
+            time.sleep(0.3)
+            stock.gate.set()
+
+        releaser = threading.Thread(target=_release, daemon=True)
+        with TestClient(app):
+            wait_boot(app)
+            releaser.start()
+        releaser.join(_GATE_CAP)
+
+        assert "stock:exit" in order, "stock close 沒跑完(gate 沒放行?)"
+        assert order.index("txo") < order.index("stock:exit"), (
+            f"TXO session 排在卡住的 stock 後面等(序列 close):{order}"
+        )
+        assert order.index("index") < order.index("stock:exit"), (
+            f"index session 排在卡住的 stock 後面等:{order}"
+        )
+
+    def test_corr_still_closes_before_futures(self, tmp_path: Path) -> None:
+        """並行 lane 內唯一保留的串鏈:corr 讀 `futures.state()`,必須先於 futures 收
+        (app.py 既有不變式;並行化不得把它拆掉)。"""
+        order: list[str] = []
+        app = create_app(
+            FakeTxoSource(),
+            futures_source=_OrderedCloseFuturesSource(order),
+            corr_source=_OrderedCloseCorrSource(order),
+            stock_watchlist_path=tmp_path / "stock_watchlist.json",
+            throttle_secs=0.01,
+        )
+        with TestClient(app):
+            wait_boot(app)
+        assert order.index("corr") < order.index("futures"), order
+
+    def test_txo_close_failure_does_not_skip_capital(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """`runtime.close()` 原本是反序 close 裡**唯一裸 await** 的一段:拋了就跳過 capital
+        (COM 執行緒不 join)。lifespan 註解宣稱的「各自 try/except 續行」白名單本來就該
+        涵蓋它。"""
+        order: list[str] = []
+        monkeypatch.setattr(app_mod.capital_factory, "get_capital", lambda: _FakeCapital(order))
+        app = create_app(
+            source=_RaisingCloseTxoSource(order),
+            stock_watchlist_path=tmp_path / "stock_watchlist.json",
+            throttle_secs=0.01,
+        )
+        # 改動前 lifespan 把 TXO close 的例外整個拋出來 —— 這條要紅的正是那件事,
+        # 所以例外本身不是斷言對象(capital 有沒有收才是)
+        with contextlib.suppress(Exception):
+            with TestClient(app, raise_server_exceptions=False):
+                wait_boot(app)
+        assert "txo:raise" in order
+        assert "capital" in order, "TXO close 拋例外讓 capital 的 COM join 被跳過"
+
+    def test_shutdown_summary_names_every_segment(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    ) -> None:
+        """「console 印哪段吃掉時間」(review A1):收尾一行彙總各段耗時。run.ps1 超時
+        訊息指的就是這一行 —— 少了它,「15 s 內未結束」永遠零指向。"""
+        order: list[str] = []
+        app = create_app(
+            source=_OrderedCloseTxoSource(order),
+            stock_source=_OrderedCloseStockSource(order),
+            stock_watchlist_path=tmp_path / "stock_watchlist.json",
+            throttle_secs=0.01,
+        )
+        with caplog.at_level(logging.INFO, logger="copycat.server.app"):
+            with TestClient(app):
+                wait_boot(app)
+        summaries = [r.getMessage() for r in caplog.records if "關機收尾" in r.getMessage()]
+        assert len(summaries) == 1, summaries
+        for segment in ("stock", "txo"):
+            assert segment in summaries[0], f"彙總行漏了 {segment} 段:{summaries[0]}"

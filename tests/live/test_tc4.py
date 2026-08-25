@@ -1475,4 +1475,19 @@ class TestCloseLogout:
         src = TC4QuoteSource(port="0", api=api, session=None, lock_timeout_secs=0.5)
         src.close()
         assert "LOGOUT" not in [r["Request"] for r in api.requests]
+
+
+class TestCloseTiming:
+    """A1(review #105 §2.6 S1):`close()` 要自己交代時間花在哪 —— 等 `_api_lock`(在途
+    `Connect()`)還是逐檔 UNSUBQUOTE。lifespan 的彙總只看得到「這條 session 花了 12 s」,
+    分不出是鎖還是 REQ;而處置不同(前者等它、後者 TC4 半死)。"""
+
+    def test_close_logs_lock_wait_and_unsub_count(self, caplog: pytest.LogCaptureFixture) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        src._subscribed = {SPOT_SYMBOL, "TC.O.TWF.TXO.202608.C.44550"}
+        with caplog.at_level(logging.INFO):
+            src.close()
+        assert "UNSUBQUOTE 2/2" in caplog.text
+        assert "等 api 鎖" in caplog.text
         assert api.disconnected is True
