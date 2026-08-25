@@ -103,6 +103,7 @@ def run_backfill_tc4(
 ) -> dict[str, int]:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "spikes" / "TCPY"))
     from tcoreapi_mq import QuoteAPI  # type: ignore[import-untyped]
+    import zmq  # live extra,與 tcoreapi_mq 同點 lazy import
 
     missing = _find_missing(data_dir, events_path)
     logger.info("missing 1K stock-days: %d", len(missing))
@@ -157,6 +158,12 @@ def run_backfill_tc4(
                 )
             time.sleep(0.5)
     finally:
+        # 拋棄式收工序同 TC4QuoteSource.close():LOGOUT → Disconnect。wrapper `Disconnect()`
+        # 不送 LOGOUT,沒送的 session 要等 TC4 ~60 s reap(tc4-market-facts「Disconnect 不等於登出」)
+        try:
+            api.Logout(session)
+        except (zmq.ZMQError, OSError):
+            logger.exception("TC4 LOGOUT 失敗(best-effort,session 留到 TC4 reap)")
         api.Disconnect()
 
     return {"total_missing": len(missing), "fetched": fetched, "failed": failed}
