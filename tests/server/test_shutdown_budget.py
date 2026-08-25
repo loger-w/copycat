@@ -38,6 +38,11 @@ class TestSingleSessionBound:
         req = tc4_mod._REQ_TIMEOUT_MS / 1000
         assert close_worst_secs() >= req + 2 * DEFAULT_LOCK_TIMEOUT_SECS
 
+    def test_logout_timeout_stays_inside_the_one_req_allowance(self) -> None:
+        """LOGOUT 那一發有自己的 recv 上界(fix/tc4-logout);算式只算「一發 REQ 逾時」,
+        LOGOUT 必須嚴格小於它才不用另加一項 —— 有人把它調回 10 s 以上,預算就靜默低估。"""
+        assert tc4_mod._LOGOUT_TIMEOUT_MS < tc4_mod._REQ_TIMEOUT_MS
+
     def test_default_lock_timeout_is_the_budget_input(self) -> None:
         """建構子預設值必須就是預算吃的那個常數 —— 兩處各寫一個 12.0 就會靜默漂開。"""
         src = TC4QuoteSource(port="0", api=object(), session="sess-1")
