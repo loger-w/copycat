@@ -34,6 +34,7 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   修法 = source 層零推播自癒(R1 session 靜默 / R2 symbol 靜默 / 個股 R3 health-check 重掛 + 第 3 次起 window variant),
   見 `.claude/bug/tc4-realtime-refcount-kill/`。**probe 腳本收工必 UNSUB + Disconnect,且不要用 prod 的窗訂 prod 的 symbol**
   (退訂時會把 prod 的 feed 一起帶走)。leaf fallback(futures_engine)仍保留:leaf 是不同 symbol,天然新 key。
+  (Trigger:重啟後零推播 / 新引擎訂既有模組已訂的 symbol / 寫任何 TC4 probe)
 - **`Disconnect()` 不等於登出**(2026-08-26 fix/tc4-logout 實證):wrapper `tcoreapi_mq.Disconnect()` 只關 KeepAlive 執行緒
   + socket,**不送 LOGOUT 電文**;送 LOGOUT 的是 `Logout(sessionKey)`。沒送 LOGOUT 的 session 走上面 (c) 的 60 s reap
   (08-25 17:15:29 Ctrl+C:708 筆 UNSUBQUOTE 貼秒,五個 `RemoveLoginInfo` 全在 17:16:31)。LOGOUT 電文 TC4 會回
@@ -41,7 +42,6 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   probe)。`TC4QuoteSource.close()` 自此 = UNSUB 全部 → LOGOUT(`_req`)→ Disconnect;拋棄式 probe 收工同序。
   判 prod 收工乾不乾淨:`grep RemoveLoginInfo QuoteZMQService-*.log` 時戳貼著 Ctrl+C,而非 60 s 後由 `ExecuteCheckPingTime` 帶出。
   (Trigger:寫 TC4 client 收工路徑 / probe 腳本 / 對帳 TC4 session log)
-  (Trigger:重啟後零推播 / 新引擎訂既有模組已訂的 symbol / 寫任何 TC4 probe)
 - **同 symbol 的歷史一律從「持有該 symbol REALTIME 訂閱的那條 session」問**(2026-07-30 通則):
   加權 `IX0001` 的 REALTIME 與當日 1K 回補都在 index session(`app.py` `_default_index_source()`
   獨立 session),從個股 session 問同一檔有把推播搶走的風險,失效樣態是「訂閱成功但零推播」
