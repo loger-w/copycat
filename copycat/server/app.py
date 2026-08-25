@@ -1058,7 +1058,7 @@ def create_app(
             await runtime.close()
             # **capital 刻意排在 TC4 全部收完之後**(N049,唯一違反「照建立反序收」的一段):
             # `capital.close()` 是同步的 COM 執行緒 join(prod ≤5 s),而 TC4 那四條 session
-            # 的 UNSUB + `Disconnect()` 是關機路徑上真正有**時間預算**的一段 —— 沒跑到就
+            # 的 UNSUB + LOGOUT + `Disconnect()` 是關機路徑上真正有**時間預算**的一段 —— 沒跑到就
             # 是一條殭屍 session,TC4 要 ~60 s 後 `ExecuteCheckPingTime` reap 才 `RemoveLoginInfo`,
             # 而 reap 會把它獨持的 key 歸零、連帶把 symbol 的上游 feed 帶走(下一台 server
             # 開頭 ~60 s 零推播,2026-08-18 實證)。capital 與 index / stock / runtime 之間
