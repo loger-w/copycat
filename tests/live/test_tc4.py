@@ -73,6 +73,10 @@ class _JsonSocket:
     def __init__(self, handler: Any) -> None:
         self._handler = handler
         self._resp = b""
+        self.sockopts: list[tuple[int, int]] = []
+
+    def setsockopt(self, opt: int, value: int) -> None:
+        self.sockopts.append((opt, value))
 
     def send_string(self, payload: str) -> None:
         self._resp = self._handler(json.loads(payload))
@@ -90,8 +94,11 @@ class FakeApi:
         self.pages = pages
         self.sub_history_calls: list[str] = []
         self.sub_history_windows: list[tuple[str, str]] = []
+        # rt_requests = REALTIME 子集,既有測試拿它當分段視窗(clear 後看下一段),不可改成推導;
+        # requests = 全部 REQ 依序,Disconnect 以 "<Disconnect>" 標記入列,收工序
+        # UNSUB → LOGOUT → Disconnect 才在同一把尺上可斷言(review SP5;ST6 反駁見 JSON)
         self.rt_requests: list[dict] = []
-        self.requests: list[dict] = []  # 全部 REQ 依序(收工序:UNSUB → LOGOUT)
+        self.requests: list[dict] = []
         self.disconnected = False
 
     def _handle(self, req: dict) -> bytes:
@@ -119,6 +126,7 @@ class FakeApi:
         return {"HisData": remaining[:100]}
 
     def Disconnect(self) -> None:  # noqa: N802
+        self.requests.append({"Request": "<Disconnect>"})
         self.disconnected = True
 
 
@@ -1408,9 +1416,13 @@ class TestCloseLogout:
         assert [r for r in api.requests if r.get("Request") == "LOGOUT"] == [
             {"Request": "LOGOUT", "SessionKey": "sess-1"}
         ]
-        # 退訂要在票還有效時做:UNSUB 全部在 LOGOUT 之前
+        # 退訂要在票還有效時做:UNSUB 全部在 LOGOUT 之前;LOGOUT 要在 socket 關掉之前(review SP5)
         assert max(i for i, k in enumerate(kinds) if k == "UNSUBQUOTE") < kinds.index("LOGOUT")
+        assert kinds.index("LOGOUT") < kinds.index("<Disconnect>")
         assert api.disconnected is True
+        # LOGOUT 的 recv 上界獨立縮短(review SP3):五條 session 串行也撞不破 run.ps1 15 s
+        assert api.socket.sockopts == [(zmq.RCVTIMEO, tc4_mod._LOGOUT_TIMEOUT_MS)]
+        assert tc4_mod._LOGOUT_TIMEOUT_MS * 5 < 15_000
 
     def test_close_without_live_connection_sends_nothing(self) -> None:
         # dispose 後(_api None)收工:不可為了 LOGOUT 重建連線
@@ -1420,3 +1432,47 @@ class TestCloseLogout:
         api.requests.clear()
         src.close()
         assert api.requests == []
+
+    def test_logout_rejected_by_tc4_still_disconnects(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class _Rejects(FakeApi):
+            def _handle(self, req: dict) -> bytes:
+                if req.get("Request") == "LOGOUT":
+                    self.requests.append(req)
+                    return json.dumps({"Reply": "LOGOUT", "Success": "FAIL"}).encode() + b"\x00"
+                return super()._handle(req)
+
+        api = _Rejects({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with caplog.at_level("WARNING"):
+            src.close()
+        assert any("TC4 quote LOGOUT 未被接受" in r.message for r in caplog.records)
+        assert api.disconnected is True
+
+    def test_logout_send_failure_disconnects_exactly_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # `_req` 失敗路徑自己 _dispose(Disconnect);close() 末段不得再 Disconnect 一次(review SP1)
+        class _Raises(FakeApi):
+            def _handle(self, req: dict) -> bytes:
+                if req.get("Request") == "LOGOUT":
+                    raise zmq.ZMQError()
+                return super()._handle(req)
+
+        api = _Raises({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", lock_timeout_secs=0.5)
+        with caplog.at_level("WARNING"):
+            src.close()
+        assert any("TC4 quote LOGOUT 失敗" in r.message for r in caplog.records)
+        assert [r["Request"] for r in api.requests].count("<Disconnect>") == 1
+        assert src._api is None
+
+    def test_close_with_api_but_no_session_skips_logout_and_still_disconnects(self) -> None:
+        # 「仍在線」判準維持 `_api is not None`(review SP4):只注入 api 的建構路徑
+        # 不可因為缺 session 就漏掉 Disconnect(KeepAlive 洩漏)
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session=None, lock_timeout_secs=0.5)
+        src.close()
+        assert "LOGOUT" not in [r["Request"] for r in api.requests]
+        assert api.disconnected is True

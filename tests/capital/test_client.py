@@ -2032,10 +2032,13 @@ def test_cancel_reply_tail_seq_differs_is_not_flagged_as_preorder(
     client._handle_reply(_stock_evt_raw("2313207941838", stock="4979"))  # 盤中委託,idx47 空
     cancel = _stock_evt_raw("2313207941838", stock="4979").split(",")
     cancel[2], cancel[31], cancel[47] = "C", "A", "2313208386829"  # 刪單、非預約、尾欄=刪單序號
+    pushed: list[dict[str, object]] = []
+    client.set_broadcast(pushed.append)
     with caplog.at_level("WARNING"):
         client._handle_reply(",".join(cancel))
     assert not [r for r in caplog.records if "預約單" in r.message]
     assert client.store.orders()[0].status_label == "已刪單"  # 回報本身照常入 store
+    assert pushed and pushed[-1]["event"] == "capital_order"  # 照常推 WS(review SP2)
 
 
 def test_preorder_new_reply_tail_seq_differs_still_warns(
