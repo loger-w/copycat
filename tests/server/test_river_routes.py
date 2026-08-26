@@ -33,7 +33,7 @@ class TestRiverStateRoute:
             assert r.json()["detail"]["error"] == "RIVER_NOT_READY"
 
     def test_returns_window_and_every_leg(self) -> None:
-        """腿集合 = repo `configs/correlation.json`(2026-08-26 F4 起十一腿)。"""
+        """腿集合 = repo `configs/correlation.json`(腿數隨設定檔,不寫死)。"""
         with _client(FakeCorrSource()) as client:
             r = client.get("/api/river/state")
 

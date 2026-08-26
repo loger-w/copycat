@@ -52,7 +52,7 @@ class TestCorrStateRoute:
             assert legs["TWN"]["label"] == "富台"
 
     def test_engine_subscribes_every_tc4_leg_but_not_the_base(self) -> None:
-        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(十一腿 → 本引擎訂十)。"""
+        """SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(本引擎只訂 source=tc4 的腿)。"""
         src = FakeCorrSource()
         with _client(src) as client:
             client.get("/api/corr/state")
@@ -63,7 +63,7 @@ class TestCorrStateRoute:
             assert "TC.F.CME.CL.HOT" in src.subscribed
             assert "TC.F.CME.GC.HOT" in src.subscribed
             assert "TC.S.TWS.2330" in src.subscribed
-            assert len(src.subscribed) == 10
+            assert len(src.subscribed) == len(_CFG.tc4_legs())
 
 
 class TestCorrWebSocket:
