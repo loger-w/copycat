@@ -1,3 +1,15 @@
+## 2026-08-26(fix/breakeven-avg-source-daytrade-tax 打平線均價語意 + 當沖稅 留尾)
+
+- [ ] **空方(融券 / 無券 daytrade_sell)均價語意無真樣本**:群益損益試算的空方「均價」是純賣價、還是扣掉賣費稅後的淨收?
+  `positionEcon` 空方分支沿舊式當純價;無券當沖(先賣後買)照法規也是現股當沖 0.15%,但 `today_qty` 減半目前**只套 kind === "cash"**,
+  `daytrade_sell` 未套 —— 等 08-27 user 無券當沖實錄(balance.py 負股數整列)一併校準兩件事。
+- [ ] **樂觀加碼時 broker 均價(含費)與純成交價加權**:`_apply_fill_locked` 同向加碼沿用舊來源,新增那幾張少算一次買費
+  (0.026%),鏈落地 1–2 s 即消;要精確得讓後端知道折數(= 被否決的修法 B)或前端拆兩段。撞到再說。
+- [ ] **`today_qty` 依賴「聚合只有當日 backlog」**:群益 ConnectByID 只重播當日;若哪天重播含前一日(跨日未重啟、
+  或 API 行為變),today_qty 會把昨天的張數算進當沖段。判準 = `_Agg.date` 非今日仍被計入;可加 WARNING 蒐證。
+- [ ] **群益 APP 損益試算不做當沖減半**(08-26 反推 4991 pnl_base 用 0.3%):今天的部位我們會比 APP 多顯示減半的稅,刻意;
+  若 user 日後要「與 APP 一模一樣」模式,加 toggle 把 `SELL_TAX_DAYTRADE` 關成 0.3% 即可。
+
 ## 2026-08-26(「做」批 review §5 D 回填:#105 勾銷過頭的留尾 + 跨 PR 留尾)
 
 review `docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.3 點名 #105 那輪 next-time −66/+0 行,七項留尾只活在單輪
