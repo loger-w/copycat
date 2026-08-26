@@ -426,7 +426,17 @@ class IndexEngine:
         s.ref = _millipt(str(quote.get("ReferencePrice", ""))) or s.ref
         s.high = _millipt(str(quote.get("HighPrice", ""))) or s.high
         s.low = _millipt(str(quote.get("LowPrice", ""))) or s.low
-        key = minute_key(str(quote.get("FilledTime", "")), utc=True)
+        filled = str(quote.get("FilledTime", ""))
+        if filled.strip("0") == "":
+            # TC4 對 IX0001 的 REALTIME quote **沒有時間欄位**:`FilledTime` / `PreciseTime` 恆 `'0'`
+            # (2026-08-26 12:23 只聽不訂 probe 實證,fix/index-quote-no-filledtime)。舊碼把 `'0'`
+            # 當 UTC 00:00 → 0801 域外 → None → 分鐘永遠不由推播寫、只更新現價,分時線全靠
+            # 1K 自癒每 7 分鐘補一段,窗口階梯封頂後就停在那一分鐘。指數本來就是 5 秒一筆的
+            # 快照,收到當下的台北牆鐘是誠實的時戳(櫃買 MIS 走的就是快照自帶時戳);`_now_fn`
+            # 可注入,測試釘鍵值。域外(試撮前 / 收盤後的快照)照舊不寫分鐘。
+            key = minute_key(self._now_fn().strftime("%H%M%S"), utc=False)
+        else:
+            key = minute_key(filled, utc=True)
         if key is not None:
             if self._pending_date is not None:
                 self._pending_minutes[key] = p
