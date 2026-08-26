@@ -17,11 +17,13 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from copycat.capital.balance import ProfitRow
 from copycat.capital.mapping import contract_from_fill, is_option_contract
-from copycat.capital.models import AvgSource, Market, OrderRecord, Position, PositionKind
+from copycat.capital.models import AvgSource, Market, OrderRecord, Position, PositionKind, TradeKind
 from copycat.capital.reply import ReplyRecord
 
 logger = logging.getLogger(__name__)
@@ -79,14 +81,21 @@ class _Agg:
     applied_shares: int = 0  # 已被套用消化的成交量(股 / 口;證券 = 已套張數 × 1000),算增量均價用
     applied_value: float = 0.0  # 已被套用消化的價金(以增量均價計),殘量(不足 1 張)留給下一張
     date: str | None = None  # 委託建立日 YYYYMMDD
+    fill_date: str | None = None  # 最後一筆成交**到達**的本機日 YYYYMMDD(today_qty 只算今天的)
     time: str | None = None
     pre_order: bool = False
     error_msg: str | None = None
     raw: str = ""
 
 
+def _local_yyyymmdd() -> str:
+    return time.strftime("%Y%m%d")
+
+
 class CapitalStore:
-    def __init__(self) -> None:
+    def __init__(self, *, today: Callable[[], str] | None = None) -> None:
+        # 「今天」的來源可注入(測試跨日);prod = 本機日曆日。證券無夜盤,00:00 切日即交易日切日。
+        self._today = today or _local_yyyymmdd
         self._lock = threading.Lock()
         self._orders: dict[str, _Agg] = {}
         self._order_seq: list[str] = []  # 到達順序
@@ -164,6 +173,7 @@ class CapitalStore:
                 if rec.price is not None:
                     a.filled_qty += rec.qty
                     a.fill_value += rec.price * rec.qty
+                    a.fill_date = self._today()
                 self._refresh_fill_status(a)
                 # 快照未落地(開機 / 重連重播中)只累計不套 —— 見 __init__ 的 _positions_seeded 註解
                 return self._apply_fill_locked(a) if self._positions_seeded else False
@@ -191,12 +201,17 @@ class CapitalStore:
                 self._set_status(a, "退單")
             return False
 
-    def _today_net_lots_locked(self, stock_no: str, kind: str) -> int:
-        """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。聚合只有當日 backlog,
-        所以不看日期欄(idx23 是委託建立日,昨晚預約單今早成交仍是昨日)。"""
+    def _today_net_lots_locked(self, stock_no: str, kind: TradeKind) -> int:
+        """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。「今天」看成交**到達日**
+        `fill_date`,不看 idx23(委託建立日:昨晚預約單今早成交仍是昨日),也不能假設聚合
+        只有當日 —— prod 8721 跨日長跑、`_orders` 沒有 caller 會清(review 2026-08-26 P1),
+        隔夜庫存若被算成今天進來的,前端稅減半 = 少收稅、打平線偏低,零錯誤訊號。"""
+        today = self._today()
         net = 0
         for a in self._orders.values():
             if a.stock_no != stock_no or a.market not in _SEC_LOT_MARKETS or a.filled_qty <= 0:
+                continue
+            if a.fill_date != today:
                 continue
             if _FILL_KIND.get(a.flag_label or "") != kind:
                 continue
@@ -297,8 +312,6 @@ class CapitalStore:
             source = "fill"
         if avg is None:
             source = None
-        elif prev.avg_price is None:
-            source = "fill"
         self._positions[key] = self._with_today_qty_locked(
             dataclasses.replace(
                 prev,

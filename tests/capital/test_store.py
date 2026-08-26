@@ -793,7 +793,7 @@ def test_snapshot_carries_avg_source_with_avg_and_recounts_today_qty() -> None:
     s.set_positions([Position(market="sec", stock_no="4989", qty=5, avg_price=None)])
     p = s.position_for("4989")
     assert p is not None and p.qty == 5
-    assert p.avg_source is not None  # 沿用均價 → 來源跟著沿用,不會退成 None
+    assert p.avg_source == "broker"  # 沿用均價 → 來源跟著沿用(損益回填標的 broker),不退成 None / fill
     assert p.today_qty == 3
 
 
@@ -822,3 +822,32 @@ def test_today_qty_is_per_kind_and_zero_for_futures() -> None:
     s.set_positions([Position(market="fut", stock_no="QEFF6", qty=1, avg_price=100.0)])
     fut = s.position_for("QEFF6", market="fut")
     assert fut is not None and fut.today_qty == 0
+
+
+def test_today_qty_excludes_fills_that_arrived_on_a_previous_day() -> None:
+    """跨日長跑(review 2026-08-26 P1):昨天成交的 3 張到了今天不再是「今天進來的」,
+    即使 _orders 沒被清 —— today_qty 看成交到達日,不看聚合有沒有清。"""
+    clock = ["20260826"]
+    s = CapitalStore(today=lambda: clock[0])
+    s.set_positions([])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="3000", price="81.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.today_qty == 3
+    clock[0] = "20260827"
+    s.set_positions([Position(market="sec", stock_no="4989", qty=3, avg_price=None)])
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 3 and p.today_qty == 0
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", qty="1000", price="82.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 4 and p.today_qty == 1
+
+
+def test_today_qty_net_at_or_below_zero_with_inventory_is_zero() -> None:
+    """昨庫存 10、今買 5、今賣 6 → 券商把今天的 5 買 6 賣先互抵成當沖,剩 1 張賣的是庫存 →
+    今天「還在手上」的當沖段 = 0(review P3:語意 = 今日淨買進,不是今日買進總量)。"""
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4989", qty=10, avg_price=80.0)])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="5000", price="81.0")) is True
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="S00R2", qty="6000", price="82.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 9 and p.today_qty == 0
