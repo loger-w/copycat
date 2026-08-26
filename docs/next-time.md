@@ -37,33 +37,33 @@ verification;這裡回填成 backlog。
   可照 `renameInFlight` + `onSettled` 的形狀做。
 - [ ] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
   抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。
-- [ ] **`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
+- [x] ~~**`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
   1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
   修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。
 
-## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)
-
-- [ ] **/pr-review #111 兩條 ask-user**(報告 `docs/superpowers/specs/pr-111-review.md`):F-12 圖牆 toggle 列 5→8 顆在窄寬度會不會換行成兩列 chrome(prod build 分割畫面目視;真換行再收成下拉);F-20 corr / river route 測試的 11 腿 key 字面集合 4 處複製,要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `_EXPECTED_LEGS`。其餘 20 條已於收修 commit 處理。
-- [ ] **F5 樂觀套用改為「券商快照落地過才開」**(review F-02 收修):開機第一輪鏈落地前的成交只累計;若 prod 觀察到開機後首筆成交沒即時出現,就是這條(鏈通常 1–2 s 內落地)。
-- [ ] **F1 指數疊線右緣標籤與現價泡泡 / CDP 標籤互疊**(1568 寬截圖可見「加權 +0.9x%」壓在 2400 現價標旁):
+## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)~~ → 同上,08-26 chore/frontend-lockfile-sync 已修。
+- [ ] **F-20 corr / river route 測試 11 腿 key 字面集合 4 處複製**:要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `tests/test_corr_config.py::_EXPECTED_LEGS`(user 08-26 問「11 腿名單是什麼」,已解釋,待拍板)。
+- [x] ~~**/pr-review #111 兩條 ask-user**(報告 `docs/superpowers/specs/pr-111-review.md`):F-12 圖牆 toggle 列 5→8 顆在窄寬度會不會換行成兩列 chrome(prod build 分割畫面目視;真換行再收成下拉);F-20 corr / river route 測試的 11 腿 key 字面集合 4 處複製,要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `_EXPECTED_LEGS`。其餘 20 條已於收修 commit 處理。~~ → user 08-26 過目:F-12 螢幕寬度足、不換行,不做;F-20 見下方獨立條。
+- [x] ~~**F5 樂觀套用改為「券商快照落地過才開」**(review F-02 收修):開機第一輪鏈落地前的成交只累計;若 prod 觀察到開機後首筆成交沒即時出現,就是這條(鏈通常 1–2 s 內落地)。~~ → 08-26 真環境:13 筆成交全套用、體感變快;鏈 624–5538 ms 落地,無開機首筆延遲觀察。
+- [x] ~~**F1 指數疊線右緣標籤與現價泡泡 / CDP 標籤互疊**(1568 寬截圖可見「加權 +0.9x%」壓在 2400 現價標旁):
   末點標籤目前只做 `textAnchor=end` 上移 3px,沒進 `bandLabels` 的避讓;候選 = 把兩顆指數標當 obstacle 餵進既有
-  右緣避讓(R1 CDP 七顆那套),或 toggle 開時把標籤改畫在 readout 列。user 過目後決定。
-- [ ] **F1「台指」語意**:本輪解讀為加權指數 IX0001;若 user 原意是台指期(TXF),`useIndexStream.txf` 只有最新價無
-  逐分鐘序列,要從 `/api/market/bars/TXF tf=1` 另接一條(期指 08:45 起、窗與現貨不同尺)。
+  右緣避讓(R1 CDP 七顆那套),或 toggle 開時把標籤改畫在 readout 列。user 過目後決定。~~ → user 08-26 過目「不會」,不做。
+- [x] ~~**F1「台指」語意**:本輪解讀為加權指數 IX0001;若 user 原意是台指期(TXF),`useIndexStream.txf` 只有最新價無
+  逐分鐘序列,要從 `/api/market/bars/TXF tf=1` 另接一條(期指 08:45 起、窗與現貨不同尺)。~~ → user 08-26 拍板:要的是**台指期**(TXF)→ 另案 /feat(從 `/api/market/bars/TXF tf=1` 接逐分鐘序列)。
 - [x] ~~**F4 台積電現貨腿 `TC.S.TWS.2330` 與個股引擎共用 symbol 的 refcount 風險**~~ → /pr-review #111 F-01 升 Must Fix,已收修:corr 的 TWS 腿改用與個股引擎**同一把**訂閱窗 key(`stock_window(當日)`),兩邊各持一份 count 2→1 永不歸零(`tests/live/test_corr_source.py::TestTwsLegWindow`)。盤中仍看一次:自選移除 2330 後 corr 台積電腿要照常有值。
-- [ ] **F4 台幣匯率達錢不提供**(全樹掃 TWD 只命中 SGX TWN;現貨段只有 TWS;CME / TAIFEX 匯率期貨皆無 TWD):
-  要做只能接非即時源(FinMind / 央行)當日線腿,不合相關係數的秒級口徑;若 user 仍要,另案。
-- [ ] **F4 江波圖 11 色是否分得開**待 user 過目(river-8..11 天藍 / 靛紫 / 鋼灰藍 / 棕褐,後兩色靠低飽和區分);
-  `RiverOverlay.tsx` / `RiverPanel.tsx` 註解仍寫「七腿」(成本例證,論點更強不影響正確性)。
-- [ ] **F5 期貨成交契約碼組法只有一筆真樣本**(`QEF06` + idx33 `202606` → `QEFF6`):首筆真期貨成交後看 log
+- [x] ~~**F4 台幣匯率達錢不提供**(全樹掃 TWD 只命中 SGX TWN;現貨段只有 TWS;CME / TAIFEX 匯率期貨皆無 TWD):
+  要做只能接非即時源(FinMind / 央行)當日線腿,不合相關係數的秒級口徑;若 user 仍要,另案。~~ → user 08-26 拍板:達錢沒有就不做。
+- [x] ~~**F4 江波圖 11 色是否分得開**待 user 過目(river-8..11 天藍 / 靛紫 / 鋼灰藍 / 棕褐,後兩色靠低飽和區分);
+  `RiverOverlay.tsx` / `RiverPanel.tsx` 註解仍寫「七腿」(成本例證,論點更強不影響正確性)。~~ → user 08-26 過目「分得開」。
+- [ ] **F5 期貨成交契約碼組法只有一筆真樣本**(08-26 整天無期貨成交,仍未驗)(`QEF06` + idx33 `202606` → `QEFF6`):首筆真期貨成交後看 log
   「期貨部位鍵差異(樂觀 vs 券商)」;不同就改 `mapping.contract_from_fill`。另 **無券當沖(flag 無券)/ 零股不套**,
   仍走回查鏈;無券的部位狀態與 balance.py 負股數校準同一條(08-20 待實錄)。
-- [ ] **F5 真成交耗時數字**:三段 log「balance 鏈: … 自成交回報到達起 N ms」已備,下一筆真成交後把數字記回
-  `.claude/feat/chart-ux-batch-0826/verification.md`(現在只有 FakeCom 模擬:修前 463 ms、修後推播早於回查鏈)。
+- [x] ~~**F5 真成交耗時數字**:三段 log「balance 鏈: … 自成交回報到達起 N ms」已備,下一筆真成交後把數字記回
+  `.claude/feat/chart-ux-batch-0826/verification.md`(現在只有 FakeCom 模擬:修前 463 ms、修後推播早於回查鏈)。~~ → 08-26 已記回 verification.md:樂觀 0.0–0.7 ms、鏈落地 624–5538 ms(13 筆)。
 - [ ] **F5 成交到達時回查鏈若在途,該輪落地會短暫覆蓋回成交前快照**(與現狀等長的空窗,不擴大);
   若盤中觀察到「部位閃一下回舊值再回來」就是這條,候選 = 鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次。
-- [ ] **worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
-  `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。
+- [x] ~~**worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
+  `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。~~ → 08-26 chore/frontend-lockfile-sync `npm install` 更新 lock(diff = @emnapi/* + wasm32-wasi optional 平台包 bundled 項 + yaml peer 旗標)。
 - [ ] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
   (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。
 
