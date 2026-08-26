@@ -45,10 +45,14 @@ source 層靜默閘 0 次);1K 回補壞(部分:同窗口重抓回同一份是 08
 
 | commit | 類 | 內容 |
 |---|---|---|
-| `f893d02b` | 🟢 | `TestQuoteWithoutFilledTime` 三條(1 紅 + 2 白名單) |
-| `0fc698d9` | 🔴 | `_handle_quote`:`FilledTime` 去零為空 → `minute_key(self._now_fn().strftime("%H%M%S"), utc=False)`;有值照舊 UTC+8 |
+| `f893d02b` | 🟢 | `TestQuoteWithoutFilledTime` 三條(1 紅 + 2 白名單;commit 訊息寫「三條紅先行」不精確 — review SP3 申報) |
+| `0fc698d9` | 🔴 | `_handle_quote`:`FilledTime` 全零 → `minute_key(self._now_fn().strftime("%H%M%S"), utc=False)`;有值照舊 UTC+8 |
 | `a8ec7b54` | chore | tc4-market-facts「IX0001 quote 無時間欄位 + 只聽不訂 probe 寫法」;river_models docstring 更正 |
-| `2afb5a1d` | chore | spec artifact |
+| `2afb5a1d` / `d0e35041` | chore | spec / verification 草稿 |
+| `607b2518` | 🔵 | 缺時間欄位判準抽 `_is_blank_time`(review ST2) |
+| `86fb85e4` | chore | skill PreciseTime bullet 改述(ST1)、river_models docstring 校準「全零」(ST3) |
+| `eed2e270` | 🟢 | pending 換日期首筆入域推播即 swap 的語意鎖(review SP1 / SP2) |
+| `7c42dacd` | chore | review round 1 JSON |
 
 ## 5. 反向驗證(PASS)
 
@@ -65,13 +69,19 @@ source 層靜默閘 0 次);1K 回補壞(部分:同窗口重抓回同一份是 08
 
 | gate | 指令 | 結果 |
 |---|---|---|
-| 目標 | `pytest tests/server/test_index_engine.py tests/live` | 658 passed, 2 skipped(exit 0) |
-| 全套 | `pytest -q` | FULL_SUITE_PLACEHOLDER |
+| 目標 | `pytest tests/server/test_index_engine.py`(收修後) | 59 passed(exit 0);`tests/live` 另 600 passed |
+| 全套 | `pytest -q` | 3096 passed, 3 skipped, 2 warnings in 180.61s (0:03:00)(exit 0;收修後最終 HEAD) |
 | lint | `ruff check copycat tests` | All checks passed! |
 | format(非 gate) | `ruff format --check` index_engine.py / test_index_engine.py | 與 master 基線相同(存量未格式化) |
 | 型別 | `pyright` | 0 errors, 0 warnings |
-| golden | `python -m copycat validate`(主 tree) | VALIDATE_PLACEHOLDER |
+| golden | `python -m copycat validate`(主 tree) | 42/42 PASS(exit 0) |
 | 前端 | 未動 | n/a |
+
+## 7a. two-axis review round 1
+
+Standards 3 / Spec 4,處置在 `code-review-round-1.json`。全數接受(ST1 skill 自相矛盾 / ST2 helper / ST3 docstring 校準 /
+SP1+SP2 pending 期測試與語意確認 / SP3 申報 / SP4 確認不改)。SP2 的判讀:`_maybe_swap_day` 本就是設計給「推播先到就換日」
+的路徑,對指數從未可達;修後換日改由 09:00 首筆入域推播觸發,1K 由自癒接手。
 
 ## 8. 真實環境(user 拍板:prod 收盤後才重啟)
 
