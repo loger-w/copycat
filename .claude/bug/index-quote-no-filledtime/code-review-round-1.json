@@ -1,0 +1,59 @@
+{
+  "fixed_point": "9869b01b (merge-base origin/master..fix/index-quote-no-filledtime)",
+  "reviewed_head": "2afb5a1d",
+  "model": "opus × 2(standards / spec 平行 sub-agent)",
+  "standards": [
+    {
+      "id": "ST1",
+      "severity": "硬違規",
+      "file": ".claude/skills/tc4-market-facts/SKILL.md:69",
+      "finding": "同檔 PreciseTime bullet 仍寫「index_engine 對 IX0001 也是用它」,與新 bullet 自相矛盾",
+      "disposition": "接受:改述為「不能用它,指數 quote FilledTime 恆 '0',走牆鐘」— commit 86fb85e4"
+    },
+    {
+      "id": "ST2",
+      "severity": "判斷題 Mysterious Name",
+      "file": "copycat/server/index_engine.py:431",
+      "finding": "`filled.strip(\"0\") == \"\"` 是形狀比對,意圖「沒給時間欄位」靠註解撐",
+      "disposition": "接受:抽 `_is_blank_time(raw)`,docstring 寫明全零 vs 壞格式的界 — commit 607b2518"
+    },
+    {
+      "id": "ST3",
+      "severity": "判斷題 Duplicated Code(建議不抽)",
+      "file": "copycat/live/river_models.py:144",
+      "finding": "與 corr 的牆鐘 fallback 觸發條件不同、回傳型別不同,硬抽是 Speculative Generality;docstring「缺值」比實作寬",
+      "disposition": "接受 docstring 校準為「時間欄位全零」並註明比 corr 窄;不抽共用 — commit 86fb85e4"
+    }
+  ],
+  "spec": [
+    {
+      "id": "SP1",
+      "severity": "缺漏",
+      "file": "tests/server/test_index_engine.py",
+      "finding": "沒有一條覆蓋 pending(換日)期的新路徑",
+      "disposition": "接受:test_first_in_domain_quote_swaps_pending_day_before_any_1k(見 SP2)"
+    },
+    {
+      "id": "SP2",
+      "severity": "可能做錯 P1",
+      "file": "copycat/server/index_engine.py _handle_quote pending 分支 / _maybe_swap_day",
+      "finding": "修後 09:00 首筆入域推播即寫 _pending_minutes 並立刻 _swap_day(backfill={}),搶在 rollover 1K 之前;swap 後 new_date <= trade_date → 該趟 1K 不再抓",
+      "disposition": "接受為「語意確認 + 釘測試」,不改 code:`_maybe_swap_day` / `if minutes or self._pending_minutes` 本就是設計給推播先到的路徑(_swap_day docstring 三層疊法把 live 推播列最高可信度),只是對指數從未可達;swap 後 1K 由自癒(lag >3)接手,推播活著就不需要 rollover 那趟。新測試釘:pending 期首筆入域推播 → trade_date 切、minutes 只有推播鍵、otc 清空。留尾:若日後想在 swap 後仍補一趟 1K(拿 09:00 前的試撮後首根),另開。"
+    },
+    {
+      "id": "SP3",
+      "severity": "可能做錯 P2(證據宣稱)",
+      "file": "commit f893d02b 訊息 / verification §1",
+      "finding": "「三條紅先行」只有一條修前是紅,另兩條本來就綠(白名單)",
+      "disposition": "接受(申報):verification §1 已寫明 1 紅 + 2 白名單;commit 訊息不重寫(已含在分支歷史,JSON 申報)。白名單案有效性 reviewer 亦確認(now_fn=12:00 被牆鐘搶走會得 1201≠0931)"
+    },
+    {
+      "id": "SP4",
+      "severity": "可能做錯 P2(非回歸)",
+      "file": "copycat/server/index_engine.py _is_blank_time",
+      "finding": "半壞值 '100' 不命中 → 走 UTC → 域外 None(等同舊行為);刻意比 corr 窄是對的",
+      "disposition": "確認不改;ST2 的 helper docstring 把這條界寫明"
+    }
+  ],
+  "disposition": "Standards 3 全接受(ST1 skill 矛盾 / ST2 helper / ST3 docstring 校準)。Spec 4:SP1+SP2 接受為補 pending 期測試 + 語意確認(不改 code)、SP3 申報、SP4 確認不改。收修 commits 607b2518 / 86fb85e4 / (SP1 測試 commit 見 verification §4)。"
+}
