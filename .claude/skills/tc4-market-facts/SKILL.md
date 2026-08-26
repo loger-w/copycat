@@ -66,7 +66,7 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   是 `HHMMSSffffff`(11–12 位),**CME/CBOT/SGX 是 `HHMMSS`**。`stock_models._taipei_time` 的
   `zfill(12)` 對海外段會把 6 位值左補 → 恆為台北 08:00:00.0xx 的假時刻,tick 照樣解析成功只有
   時刻是假的(極安靜)。任何跨段用 tick 時刻的功能一律走 `FilledTime`(UTC HHMMSS,zfill(6);`index_engine` 對
-  IX0001 也是用它;實例:MES 的 PreciseTime 與 FilledTime 同值 `"41256"` = 04:12:56 UTC),
+  IX0001 **不能**用它 —— 指數 quote 的 FilledTime 恆 `'0'`,走牆鐘,見下方 08-26 bullet;實例:MES 的 PreciseTime 與 FilledTime 同值 `"41256"` = 04:12:56 UTC),
   缺值才退回本機時鐘。(Trigger:跨段 tick 時刻 / 分鐘聚合 / 時序去重)
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
