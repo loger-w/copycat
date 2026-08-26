@@ -1696,9 +1696,11 @@ describe("WatchlistSidebar 無法對映的個股期倉位提示(N065)", () => {
   it("有反查不到的 fut 倉位 → 側欄底一行計數", async () => {
     positions = [
       { market: "fut", stock_no: "EE1I6", qty: 2, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: null },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null,
+        avg_source: null, today_qty: 0, code: null },
       { market: "fut", stock_no: "CD1I6", qty: -1, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: null },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null,
+        avg_source: null, today_qty: 0, code: null },
     ];
     sidebar();
     await waitGroups();
@@ -1708,7 +1710,8 @@ describe("WatchlistSidebar 無法對映的個股期倉位提示(N065)", () => {
   it("全部對映得到 → 不渲染那一行(零倉位時不留空殼)", async () => {
     positions = [
       { market: "fut", stock_no: "CDFI6", qty: 2, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: "2330" },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null,
+        avg_source: null, today_qty: 0, code: "2330" },
     ];
     sidebar();
     await waitGroups();

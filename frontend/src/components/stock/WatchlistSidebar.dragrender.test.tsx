@@ -50,7 +50,8 @@ beforeEach(() => {
           JSON.stringify({
             positions: [
               { market: "sec", stock_no: "2330", qty: 3, name: "台積電", avg_price: 985.2,
-                kind: "cash", pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: "2330" },
+                kind: "cash", pnl_base: null, pnl_base_price: null, pnl_cost: null,
+        avg_source: null, today_qty: 0, code: "2330" },
             ],
           }),
         );
