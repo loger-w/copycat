@@ -57,3 +57,27 @@ user 拍板:修法 A(avg_source);今天成交進來的張數賣出稅用當沖 0
 - 打平線 / 損益公式以 prod 真資料(4991 / 6715)手算對照:broker 來源 pnl 18,286 vs 群益 18,285(券商均價四捨五入到分);打平線 fill 469.50 vs broker 469.62 差 0.4 毫元(< 一檔 500 毫元)。
 - **真成交過目(prod 重啟後下一筆整股成交)**:打平線在券商快照落地時不再跳格;今天買的部位損益 = 群益 APP + 稅減半差額(4991 例 +734)。
 - 空方(融券 / 無券)均價語意無真樣本,沿舊式(當純價);明天 user 無券當沖實錄一併校準。
+
+## Review round 1 收修後重跑(3554a18a)
+
+| gate | 結果 |
+|---|---|
+| `pytest -q tests/capital/test_store.py` | 65 passed(新測 9 條:含跨日 fill_date、net ≤ 0) |
+| `ruff check copycat tests` / `pyright copycat/capital tests/capital` | All checks passed / 0 errors |
+| `npx vitest run src/lib/ladder-position.test.ts src/lib/position-summary.test.ts` | 70 passed |
+| `npx tsc -b` / `npx eslint src` | exit 0 / exit 0 |
+| 全套 pytest / 全套 vitest / react-doctor | 見下方追記 |
+
+## 反向驗證(3554a18a)
+
+`git checkout 733d772e -- copycat/capital/store.py copycat/capital/models.py frontend/src/lib/ladder-position.ts`(生產檔回修前、測試留新)
+→ `pytest -k "avg_source or today_qty"` **7 failed**;`vitest ladder-position.test.ts` **8 failed**(pnl 18165≠18286、BE 差 120 毫元、當沖、混合、NaN…)
+→ `git checkout HEAD -- <同三檔>` → 7 passed / 37 passed。紅 → 綠 → 紅 → 綠成立。
+(`git revert --no-commit d0b058ea 3554a18a` 兩筆互撞衝突,故改用生產檔 checkout 法。)
+
+## 真實環境對帳規則(明天)
+
+- 與群益 APP 對損益:**只拿 `today_qty = 0` 的部位**(APP 不做當沖減半 —— 實證 = 4991 當日 10:07 買進,收盤 pnl_base 18,285 以 0.3% 反算吻合到 1 元)。
+- 今天買的部位:我們 = APP + 減半差額(4991 例 +734)。
+- 打平線:成交後 1–2 s 券商快照落地時不再跳格(prod 重啟後首筆整股成交過目)。
+- 期貨 OI 列 `avg_source` 恆 null(產生點不標),前端 `secPositionsOf` 濾掉不進 positionEcon。

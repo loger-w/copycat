@@ -1,0 +1,22 @@
+{
+  "scope": "git diff 733d772e..d0b058ea(test 6692ca7d + fix d0b058ea);兩軸各一 opus sub-agent(code-review-two-axis)",
+  "standards": [
+    {"id": "S1", "severity": "P2", "file": "frontend/src/lib/ladder-position.ts::positionEcon", "finding": "avg_source null 被吞進 else 當 fill;fut OI 列在 wire 上真的是「avg 已知 + source null」,今天沒事只因 secPositionsOf 濾掉。"},
+    {"id": "S2", "severity": "P2", "file": "frontend/src/lib/ladder-position.test.ts", "finding": "新測試期望值由 import 的 feeRate 反算(同義反覆),違反 frontend-testing 字面量紀律。"},
+    {"id": "S3", "severity": "P2", "file": "frontend/src/lib/ladder-position.test.ts::avg_source 為 null", "finding": "傳 avgPrice null 早退,avgSource 判斷未執行 → vacuous。"},
+    {"id": "S4", "severity": "P3", "file": "copycat/capital/store.py::_apply_fill_locked", "finding": "`elif prev.avg_price is None: source = \"fill\"` 三條路徑都打不到,死分支。"},
+    {"id": "S5", "severity": "P3", "file": "tests/capital/test_store.py::test_snapshot_carries_avg_source…", "finding": "`is not None` 比精確期望 `== \"broker\"` 鬆一級。"},
+    {"id": "S6", "severity": "P3", "file": "frontend/src/types.ts / lib/ladder-position.ts::AvgSource", "finding": "字面值散三處;慣例是 types.ts 命名匯出、lib import。"},
+    {"id": "S7", "severity": "P3", "file": "frontend 測試檔", "finding": "簽名遷移直接接行尾,>100 字元行增加(無自動化規則)。"},
+    {"id": "S8", "severity": "P3", "file": "copycat/capital/store.py::_today_net_lots_locked", "finding": "kind 用裸 str,應收 TradeKind。"},
+    {"id": "S9", "severity": "P3", "file": "frontend/src/lib/ladder-position.ts::todayQty", "finding": "兩側各 clamp 一次未註明刻意。"}
+  ],
+  "spec": [
+    {"id": "P1", "severity": "P1", "file": "copycat/capital/store.py::_today_net_lots_locked", "finding": "「聚合只有當日 backlog」前提在跨日長跑 prod 不成立(store.clear() 無 caller、斷線不重連)→ 隔夜庫存算成今天、稅少收一半、打平線偏低,零錯誤訊號。"},
+    {"id": "P2", "severity": "P2", "file": "frontend/src/lib/ladder-position.ts::positionEcon", "finding": "todayQty undefined(新前端配舊後端窗口)→ NaN 毒化 pnl / BE,四處印「NaN」、打平線消失。"},
+    {"id": "P3", "severity": "P3", "file": "copycat/capital/store.py::_with_today_qty_locked", "finding": "淨額語意在「有庫存 + 今日雙向」低估今日張數(保守方向);缺 net ≤ 0 測試。"},
+    {"id": "P4", "severity": "P3", "file": "frontend/src/lib/ladder-position.ts::positionEcon", "finding": "現股空方 today_qty 會讓空方分支稅率減半(法規上對,但無測試、未描述)。"},
+    {"id": "P5", "severity": "P3", "file": "frontend/src/lib/ladder-position.ts docstring", "finding": "「群益 APP 不做當沖減半」的斷言在 diff 內無實證;明天對帳只拿 today_qty = 0 的部位對 APP。"}
+  ],
+  "disposition": "收修 commit 3554a18a:P1 → D 回報到達時蓋 fill_date(本機日,ctor 可注入),只算 fill_date == 今天(+ 跨日測試);P2 → Number.isFinite 守門退 0(+ 測試);S1/S3 → switch 明確分支 + 均價已知的 null 測試;S2 → 期望值全改字面量手算;S4 刪;S5 收成 == \"broker\";S6 AvgSource 命名匯出 types.ts;S8 TradeKind;S9 註解;P3 → net ≤ 0 測試(語意 = 今日淨買進,與券商當沖互抵一致,保守);P4 → 現股空方測試 + docstring 註明。S7 部分:呼叫改 FILL / BROKER 常數、fixture 折行;剩餘 >100 者為 CJK 註解(awk 以 byte 計)。P5 → 實證已在 verification Phase 2(4991 當日買、pnl_base 以 0.3% 反算吻合),對帳規則寫進 verification 真實環境節。"
+}
