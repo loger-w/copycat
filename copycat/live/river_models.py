@@ -142,7 +142,8 @@ def minute_end_from_utc_hhmmss(raw: str) -> int | None:
     `stock_models._taipei_time` 的 `zfill(12)` 對後者會算出恆為台北 08:00:00.0xx 的假時刻,
     分鐘落在盤別窗外 → 該腿永遠不進點(相關係數只用五檔中價,所以沒被這個問題咬到)。
     `FilledTime` 兩段同寬。`index_engine` 對 IX0001 **不能**靠它:指數 quote 的 `FilledTime` /
-    `PreciseTime` 恆 `'0'`(2026-08-26 probe),那邊缺值時退回台北牆鐘(同 corr 台指腿的缺值處理)。
+    `PreciseTime` 恆 `'0'`(2026-08-26 probe),那邊**時間欄位全零**時退回台北牆鐘(比本函式的
+    「壞格式 None → corr 退回本機時鐘」窄:非全零的壞格式在 index 仍靜默不寫分鐘)。
     """
     text = str(raw).strip()
     if not text:
