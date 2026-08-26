@@ -42,7 +42,7 @@ verification;這裡回填成 backlog。
   修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。
 
 ## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)~~ → 同上,08-26 chore/frontend-lockfile-sync 已修。
-- [ ] **F-20 corr / river route 測試 11 腿 key 字面集合 4 處複製**:要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `tests/test_corr_config.py::_EXPECTED_LEGS`(user 08-26 問「11 腿名單是什麼」,已解釋,待拍板)。
+- [x] ~~**F-20 corr / river route 測試 11 腿 key 字面集合 4 處複製**:要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `tests/test_corr_config.py::_EXPECTED_LEGS`(user 08-26 問「11 腿名單是什麼」,已解釋,待拍板)。~~ → user 08-26 拍板「改」,refactor/f20-corr-leg-keys-from-config:兩檔改讀 `load_config(CONFIG_PATH)`,逐字只留 `_EXPECTED_LEGS`。
 - [x] ~~**/pr-review #111 兩條 ask-user**(報告 `docs/superpowers/specs/pr-111-review.md`):F-12 圖牆 toggle 列 5→8 顆在窄寬度會不會換行成兩列 chrome(prod build 分割畫面目視;真換行再收成下拉);F-20 corr / river route 測試的 11 腿 key 字面集合 4 處複製,要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `_EXPECTED_LEGS`。其餘 20 條已於收修 commit 處理。~~ → user 08-26 過目:F-12 螢幕寬度足、不換行,不做;F-20 見下方獨立條。
 - [x] ~~**F5 樂觀套用改為「券商快照落地過才開」**(review F-02 收修):開機第一輪鏈落地前的成交只累計;若 prod 觀察到開機後首筆成交沒即時出現,就是這條(鏈通常 1–2 s 內落地)。~~ → 08-26 真環境:13 筆成交全套用、體感變快;鏈 624–5538 ms 落地,無開機首筆延遲觀察。
 - [x] ~~**F1 指數疊線右緣標籤與現價泡泡 / CDP 標籤互疊**(1568 寬截圖可見「加權 +0.9x%」壓在 2400 現價標旁):
