@@ -6,18 +6,12 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
-from copycat.corr_config import CONFIG_PATH, load_config
 from copycat.server.app import create_app
 from tests.helpers.boot import BootedClient
+from tests.helpers.corr_legs import CFG, LEG_KEYS, PAIR_KEYS
 from tests.helpers.fake_sources import FakeCorrSource
 from tests.helpers.fake_txo import FakeTxoSource
 
-
-# 腿集合來自 repo configs/correlation.json(F-20:逐字契約只鎖在 tests/test_corr_config.py::
-# _EXPECTED_LEGS;這裡鎖的是 route 有把設定檔那組原封不動吐出來、配對 = 各腿 vs base)
-_CFG = load_config(CONFIG_PATH)
-_LEG_KEYS = {leg.key for leg in _CFG.legs}
-_PAIR_KEYS = _LEG_KEYS - {_CFG.base}
 
 
 def _client(corr_source: object | None) -> TestClient:
@@ -40,9 +34,9 @@ class TestCorrStateRoute:
             body = r.json()
             assert body["base"] == "TXF"
             assert body["type"] == "corr"
-            assert set(body["legs"]) == _LEG_KEYS
+            assert set(body["legs"]) == LEG_KEYS
             # 配對 = 各腿 vs 台指(base 不與自己配對)
-            assert set(body["pairs"]) == _PAIR_KEYS
+            assert set(body["pairs"]) == PAIR_KEYS
 
     def test_leg_labels_are_traditional_chinese(self) -> None:
         """前端不寫死對照表 → label 必須由後端帶(SC-7)。"""
@@ -63,7 +57,7 @@ class TestCorrStateRoute:
             assert "TC.F.CME.CL.HOT" in src.subscribed
             assert "TC.F.CME.GC.HOT" in src.subscribed
             assert "TC.S.TWS.2330" in src.subscribed
-            assert len(src.subscribed) == len(_CFG.tc4_legs())
+            assert len(src.subscribed) == len(CFG.tc4_legs())
 
 
 class TestCorrWebSocket:

@@ -6,18 +6,12 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
-from copycat.corr_config import CONFIG_PATH, load_config
 from copycat.server.app import create_app
 from tests.helpers.boot import BootedClient
+from tests.helpers.corr_legs import LEG_KEYS, PAIR_KEYS
 from tests.helpers.fake_sources import FakeCorrSource
 from tests.helpers.fake_txo import FakeTxoSource
 
-
-# 腿集合來自 repo configs/correlation.json(F-20:逐字契約只鎖在 tests/test_corr_config.py::
-# _EXPECTED_LEGS;這裡鎖的是 route 有把設定檔那組原封不動吐出來、配對 = 各腿 vs base)
-_CFG = load_config(CONFIG_PATH)
-_LEG_KEYS = {leg.key for leg in _CFG.legs}
-_PAIR_KEYS = _LEG_KEYS - {_CFG.base}
 
 
 def _client(corr_source: object | None) -> TestClient:
@@ -41,7 +35,7 @@ class TestRiverStateRoute:
             body = r.json()
             assert body["type"] == "river"
             assert body["base"] == "TXF"
-            assert set(body["legs"]) == _LEG_KEYS
+            assert set(body["legs"]) == LEG_KEYS
             assert set(body["window"]) == {"start_min", "end_min"}
             assert body["session"] in ("day", "night")
 
@@ -89,4 +83,4 @@ class TestExistingCorrRouteUnaffected:
         with _client(FakeCorrSource()) as client:
             body = client.get("/api/corr/state").json()
             assert body["type"] == "corr"
-            assert set(body["pairs"]) == _PAIR_KEYS
+            assert set(body["pairs"]) == PAIR_KEYS
