@@ -54,6 +54,14 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   歷史 TICKS 的 `TradeVolume` 全為 0(無累積量,排序靠微秒級 `PreciseTime` + `QryIndex`);
   REALTIME 才有累積 `TradeVolume`(去重主鍵)。`PreciseTime`/`FilledTime` 是 **UTC**,顯示要 +8。
   REALTIME 五檔命名有位移:`Bid`=最佳、`Bid1`=第二檔。(Trigger:live tick 解析 / 現價源 / 時間欄位顯示)
+- **加權 IX0001 的 REALTIME quote 沒有時間欄位**(2026-08-26 12:23 只聽不訂 probe 實證):`FilledTime` / `PreciseTime`
+  恆 `'0'`,只有 `TradeDate`、`TradingPrice`、`ReferencePrice`、`HighPrice`、`LowPrice`。任何「用 FilledTime 算分鐘鍵」的
+  路徑對指數都是 None → 分鐘永遠不由推播寫(08-20 起每個交易日的「加權分時線卡住」根因;分時線其實全靠 1K 自癒
+  一段段補、階梯封頂後就停)。指數是 5 秒一筆快照,分鐘鍵用**收到當下的台北牆鐘**(`index_engine._handle_quote`,
+  fix/index-quote-no-filledtime)。期貨 / 個股 quote 的 `FilledTime` 正常。**只聽不訂 probe 寫法**:LOGIN → SUB 連
+  SubPort、topic `""` → 讀 PUB 廣播(所有 session 收得到所有 symbol)→ LOGOUT → Disconnect,零 refcount 影響,
+  盤中安全 —— 要看任何 symbol 的原始 quote 欄位一律用這招,不要為了看欄位去 SUBQUOTE。
+  (Trigger:指數分鐘 / 任何 quote 缺欄位 / 想看原始推播欄位)
 - **`PreciseTime` 欄寬跨交易所段不同,`FilledTime` 才是通用的**(2026-07-30 實證):台期交(TWF)
   是 `HHMMSSffffff`(11–12 位),**CME/CBOT/SGX 是 `HHMMSS`**。`stock_models._taipei_time` 的
   `zfill(12)` 對海外段會把 6 位值左補 → 恆為台北 08:00:00.0xx 的假時刻,tick 照樣解析成功只有
