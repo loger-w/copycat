@@ -8,6 +8,7 @@ import dataclasses
 
 import pytest
 
+from copycat.capital.balance import ProfitRow
 from copycat.capital.reply import ReplyRecord, parse_onnewdata
 from copycat.capital.models import Position
 from copycat.capital.store import CapitalStore
@@ -756,3 +757,68 @@ def test_unknown_option_family_and_adjusted_codes_are_not_applied() -> None:
         arr[33] = "202606"
         assert s.apply_reply(parse_onnewdata(",".join(arr))) is False, code
     assert s.positions() == []
+
+
+# ---- fix/breakeven-avg-source-daytrade-tax(2026-08-26)----
+# 群益損益試算「均價」= 成交價 + 買進手續費(prod 4991:469.50 → 469.62),樂觀套用的均價是純成交價;
+# 前端要分得出來源才能算同一條打平線 → Position.avg_source;當沖稅減半要知道「今天進來幾張」→ today_qty。
+
+
+def test_optimistic_fill_marks_avg_source_fill_and_counts_today_qty() -> None:
+    s = CapitalStore()
+    s.set_positions([])
+    assert s.apply_reply(_evt(typ="D", qty="1000", price="469.5")) is True
+    p = s.position_for("4989")
+    assert p is not None
+    assert p.avg_source == "fill"
+    assert p.today_qty == 1
+
+
+def test_profit_rows_mark_avg_source_broker() -> None:
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4991", qty=1, avg_price=None)])
+    s.apply_profit_rows([ProfitRow("4991", 469.62, 18285.0, 489.5, 469500.0, kind="cash")])
+    p = s.position_for("4991")
+    assert p is not None
+    assert p.avg_price == 469.62 and p.avg_source == "broker"
+
+
+def test_snapshot_carries_avg_source_with_avg_and_recounts_today_qty() -> None:
+    """快照落地:均價沿用時來源一起沿用;today_qty 由當日成交(_orders = 當日 backlog)重算:
+    今天買 3 張、券商說共 5 張 → today_qty 3(其餘 2 張是過往庫存)。"""
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=None)])
+    s.apply_profit_rows([ProfitRow("4989", 80.02, 0.0, 80.0, 160000.0, kind="cash")])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="3000", price="81.0")) is True
+    s.set_positions([Position(market="sec", stock_no="4989", qty=5, avg_price=None)])
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 5
+    assert p.avg_source is not None  # 沿用均價 → 來源跟著沿用,不會退成 None
+    assert p.today_qty == 3
+
+
+def test_today_qty_nets_same_day_sells_and_clamps_to_holding() -> None:
+    """今天買 3 賣 1 → 今天淨進 2;券商持有 1(其餘已出)→ clamp 到 1。"""
+    s = CapitalStore()
+    s.set_positions([])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="3000", price="81.0")) is True
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="S00R2", qty="1000", price="82.0")) is True
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 2 and p.today_qty == 2
+    s.set_positions([Position(market="sec", stock_no="4989", qty=1, avg_price=None)])
+    p = s.position_for("4989")
+    assert p is not None and p.today_qty == 1
+
+
+def test_today_qty_is_per_kind_and_zero_for_futures() -> None:
+    """融資今天買 1 張不算進現股列的 today_qty;期貨列恆 0(當沖稅制不同,前端不吃)。"""
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=None)])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="B03R2", qty="1000", price="81.0")) is True
+    cash = s.position_for("4989", "cash")
+    margin = s.position_for("4989", "margin")
+    assert cash is not None and cash.today_qty == 0
+    assert margin is not None and margin.today_qty == 1
+    s.set_positions([Position(market="fut", stock_no="QEFF6", qty=1, avg_price=100.0)])
+    fut = s.position_for("QEFF6", market="fut")
+    assert fut is not None and fut.today_qty == 0

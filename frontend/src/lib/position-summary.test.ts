@@ -35,6 +35,8 @@ function pos(over: Partial<CapitalPosition> = {}): CapitalPosition {
     pnl_base: null,
     pnl_base_price: null,
     pnl_cost: null,
+    avg_source: null,
+    today_qty: 0,
     code: "2330",
     ...over,
   };
@@ -94,7 +96,7 @@ describe("positionsByCode", () => {
 describe("secSummary(SC-5:與 positionEcon 同一把尺)", () => {
   it("單列的 pnl 逐字等於 positionEcon 直算", () => {
     const sec = secOf([pos()]);
-    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
+    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash", { avgSource: "fill", todayQty: 0 });
     expect(sec.pnl).toBe(econ.pnl);
     expect(sec.kinds).toHaveLength(1);
     expect(sec.kinds[0]?.pnl).toBe(econ.pnl);
@@ -103,21 +105,21 @@ describe("secSummary(SC-5:與 positionEcon 同一把尺)", () => {
 
   it("折數換一個值 → pnl 跟著 positionEcon 換(折數不是寫死的)", () => {
     const sec = secOf([pos()], LAST, 3);
-    expect(sec.pnl).toBe(positionEcon(3, 985.2, LAST, 3, "cash").pnl);
-    expect(sec.pnl).not.toBe(positionEcon(3, 985.2, LAST, DISCOUNT, "cash").pnl);
+    expect(sec.pnl).toBe(positionEcon(3, 985.2, LAST, 3, "cash", { avgSource: "fill", todayQty: 0 }).pnl);
+    expect(sec.pnl).not.toBe(positionEcon(3, 985.2, LAST, DISCOUNT, "cash", { avgSource: "fill", todayQty: 0 }).pnl);
   });
 
   it("pct = pnl / (均價 × |張數| × 1000) × 100(成本基準)", () => {
     const sec = secOf([pos()]);
-    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
+    const econ = positionEcon(3, 985.2, LAST, DISCOUNT, "cash", { avgSource: "fill", todayQty: 0 });
     expect(sec.pct).toBeCloseTo(((econ.pnl ?? 0) / (985.2 * 3 * 1000)) * 100, 10);
   });
 
   it("同股號多 kind → qty 帶號和、pnl 逐列和、依 KIND_ORDER 排序", () => {
     const rows = [pos({ kind: "short", qty: -2 }), pos({ kind: "cash", qty: 3 })];
     const sec = secOf(rows);
-    const cash = positionEcon(3, 985.2, LAST, DISCOUNT, "cash");
-    const short = positionEcon(-2, 985.2, LAST, DISCOUNT, "short");
+    const cash = positionEcon(3, 985.2, LAST, DISCOUNT, "cash", { avgSource: "fill", todayQty: 0 });
+    const short = positionEcon(-2, 985.2, LAST, DISCOUNT, "short", { avgSource: "fill", todayQty: 0 });
     expect(sec.kinds.map((k) => k.label)).toEqual(["現股", "融券"]);
     expect(sec.qty).toBe(1);
     expect(sec.pnl).toBe((cash.pnl ?? 0) + (short.pnl ?? 0));
