@@ -1173,3 +1173,37 @@ class TestQuoteWithoutFilledTime:
             assert eng.state()["twse"]["minutes"] == {"0931": 42_039_920}
         finally:
             await eng.close()
+
+    async def test_first_in_domain_quote_swaps_pending_day_before_any_1k(self) -> None:
+        """review SP2:修前 IX0001 的 key 恆 None,`_handle_quote` 的 pending 分支與 `_maybe_swap_day`
+        在 prod 是死碼;修後 09:00 起第一筆入域推播就寫 `_pending_minutes` 並**立刻換日**(backfill={}),
+        搶在 rollover loop 那趟 1K 之前 —— 這是 `_swap_day` 三層疊法本來就允許的路徑(live 推播最新),
+        1K 之後由自癒(lag >3)接手。這條把該語意釘住,換日不再靠 1K 有料才發生。"""
+        fake = FakeIndexSource()
+        today = [_dt.date(2026, 7, 28)]
+        now = [_dt.time(10, 5, 30)]
+        eng = make_engine(fake, rollover=True, today_fn=lambda: today[0], now_fn=lambda: now[0])
+        eng._rollover_check_secs = 0.03  # type: ignore[attr-defined]
+        await eng.start()
+        try:
+            assert fake.on_message is not None
+            fake.on_message(_quote(filled="0"))
+            await asyncio.sleep(0.05)
+            assert eng.state()["twse"]["minutes"] == {"1006": 42_039_920}
+            # 換日:新日 1K 還沒有料(08:3x–09:00 真實形狀)→ 進 pending,舊分鐘不清
+            fake.day_minutes = {}
+            today[0] = _dt.date(2026, 7, 29)
+            await asyncio.sleep(0.1)
+            assert "2026-07-29" in fake.trade_dates
+            assert eng.state()["trade_date"] == "2026-07-28"
+            assert "1006" in eng.state()["twse"]["minutes"]
+            # 09:00:05 第一筆入域推播 → 立刻 swap,新日 minutes 只有這一鍵、櫃買清空
+            now[0] = _dt.time(9, 0, 5)
+            fake.on_message(_quote(price="43000.00", filled="0"))
+            await asyncio.sleep(0.05)
+            state = eng.state()
+            assert state["trade_date"] == "2026-07-29"
+            assert state["twse"]["minutes"] == {"0901": 43_000_000}
+            assert state["otc"]["minutes"] == {}
+        finally:
+            await eng.close()
