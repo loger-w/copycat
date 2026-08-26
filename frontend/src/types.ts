@@ -115,6 +115,12 @@ export interface CapitalPosition {
   pnl_base: number | null;
   pnl_base_price: number | null;
   pnl_cost: number | null;
+  /** `avg_price` 的語意來源(後端 `Position.avg_source`):`broker` = 群益損益試算均價,
+   *  **已含買進手續費**;`fill` = 成交回報樂觀套用的純成交價;均價未知時 null。
+   *  打平線 / 損益依此決定要不要再加買費(`ladder-position::positionEcon`)。 */
+  avg_source: "broker" | "fill" | null;
+  /** 今天成交淨進來的張數(clamp 到 [0, |qty|];fut 恆 0)—— 現股當沖賣出稅 0.15% 只套這一段。 */
+  today_qty: number;
   /** 後端在 API 邊界附的衍生欄(非 Position dataclass 欄位):sec = stock_no;
    *  fut = 契約碼反查到的股號,反查不到(未知產品 / 除權息調整碼)= null。
    *  前端沒有契約碼→股號的反查,以股號為鍵的顯示只能靠這欄。 */

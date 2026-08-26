@@ -1087,6 +1087,8 @@ describe("StockPage header 倉位(SC-3)", () => {
       pnl_base: null,
       pnl_base_price: null,
       pnl_cost: null,
+      avg_source: null,
+      today_qty: 0,
       code: "2330",
       ...over,
     };
@@ -1101,7 +1103,7 @@ describe("StockPage header 倉位(SC-3)", () => {
   it("現股段 = 交易別 + 張數 + 均價 + 含費稅損益(與 positionEcon 同折數)", async () => {
     positions = [pos()];
     const segs = await segments();
-    const econ = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
+    const econ = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash", { avgSource: null, todayQty: 0 });
     const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
     expect(segs).toHaveLength(1);
     expect(segs[0]?.textContent).toBe(`現股 3張 · 均價 2350 · 損益 ${pnlText(econ.pnl)} (${fmtPct(pct)})`);
@@ -1129,8 +1131,8 @@ describe("StockPage header 倉位(SC-3)", () => {
     window.localStorage.setItem(FEE_DISCOUNT_KEY, "3");
     positions = [pos()];
     const segs = await segments();
-    const at3 = positionEcon(3, AVG, LAST, 3, "cash");
-    const at18 = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash");
+    const at3 = positionEcon(3, AVG, LAST, 3, "cash", { avgSource: null, todayQty: 0 });
+    const at18 = positionEcon(3, AVG, LAST, FEE_DISCOUNT_DEFAULT, "cash", { avgSource: null, todayQty: 0 });
     expect(segs[0]?.textContent).toContain(`損益 ${pnlText(at3.pnl)}`);
     expect(segs[0]?.textContent).not.toContain(`損益 ${pnlText(at18.pnl)}`);
   });
@@ -1159,7 +1161,7 @@ describe("StockPage header 倉位(SC-3)", () => {
       },
     });
     const pnlAt = (lastMilli: number) =>
-      pnlText(positionEcon(3, AVG_SEC, lastMilli, FEE_DISCOUNT_DEFAULT, "cash").pnl);
+      pnlText(positionEcon(3, AVG_SEC, lastMilli, FEE_DISCOUNT_DEFAULT, "cash", { avgSource: null, todayQty: 0 }).pnl);
     async function secText(contract: StkfutSelection | null): Promise<string> {
       wrap(
         <StockPage

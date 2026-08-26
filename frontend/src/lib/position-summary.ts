@@ -144,7 +144,10 @@ export function secSummary(
   let pnl: number | null = 0;
   let cost = 0;
   const kinds = secRows.map((p) => {
-    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind);
+    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind, {
+      avgSource: p.avg_source,
+      todayQty: p.today_qty,
+    });
     const avg = px(p.avg_price);
     const rowCost = avg === null ? null : avg * Math.abs(p.qty) * 1000;
     qty += p.qty;

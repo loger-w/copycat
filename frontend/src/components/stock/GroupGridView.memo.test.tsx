@@ -219,6 +219,8 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
         pnl_base: null,
         pnl_base_price: null,
         pnl_cost: null,
+        avg_source: null,
+        today_qty: 0,
         code: "2330",
       },
     ];

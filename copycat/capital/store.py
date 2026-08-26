@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from copycat.capital.balance import ProfitRow
 from copycat.capital.mapping import contract_from_fill, is_option_contract
-from copycat.capital.models import Market, OrderRecord, Position, PositionKind
+from copycat.capital.models import AvgSource, Market, OrderRecord, Position, PositionKind
 from copycat.capital.reply import ReplyRecord
 
 logger = logging.getLogger(__name__)
@@ -191,6 +191,28 @@ class CapitalStore:
                 self._set_status(a, "退單")
             return False
 
+    def _today_net_lots_locked(self, stock_no: str, kind: str) -> int:
+        """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。聚合只有當日 backlog,
+        所以不看日期欄(idx23 是委託建立日,昨晚預約單今早成交仍是昨日)。"""
+        net = 0
+        for a in self._orders.values():
+            if a.stock_no != stock_no or a.market not in _SEC_LOT_MARKETS or a.filled_qty <= 0:
+                continue
+            if _FILL_KIND.get(a.flag_label or "") != kind:
+                continue
+            lots = a.filled_qty // 1000
+            net += lots if a.buy_sell == "B" else -lots
+        return net
+
+    def _with_today_qty_locked(self, p: Position) -> Position:
+        """today_qty 重算:多方取淨買進、空方取淨賣出,clamp 到 [0, |qty|];fut 恆 0。"""
+        if p.market != "sec" or p.qty == 0:
+            today = 0
+        else:
+            net = self._today_net_lots_locked(p.stock_no, p.kind)
+            today = max(0, min(abs(p.qty), net if p.qty > 0 else -net))
+        return p if p.today_qty == today else dataclasses.replace(p, today_qty=today)
+
     def _apply_fill_locked(self, a: _Agg) -> bool:
         """成交樂觀套用(F5):成交回報帶價 / 量 / 方向 / 種類,不必等券商三段回查鏈
         (0.5 s debounce + 庫存 → 損益 → 期貨部位串行)才讓部位出現。回查鏈照跑、落地時
@@ -203,6 +225,8 @@ class CapitalStore:
         - 買 +、賣 −(融券空單本來就是負張,與 `parse_balance_line` 同號)。
         - 均價:新倉 = 這張單成交均價;同向加碼且舊均價已知 = 加權;減碼(同號)不動;舊均價未知留 None;
           反向翻倉(換號,不論幅度)= 這張單均價。損益基底(`pnl_*`)一律清 None —— 舊快照對新張數是假的。
+        - avg_source:新倉 / 翻倉 = "fill"(純成交價);加碼沿用舊來源(broker 含費均價與純價加權,
+          誤差只在新增那幾張的買費、鏈落地即消);減碼沿用;均價 None 時 None。today_qty 每次重算。
         - 只在 `_positions_seeded`(券商快照落地過)之後套;重播 / 開機前的成交只累計。
         - 歸零 → 移除該列。
         """
@@ -241,14 +265,22 @@ class CapitalStore:
         key = (key_no, kind)
         prev = self._positions.get(key)
         if prev is None:
-            self._positions[key] = Position(
-                market=market, stock_no=key_no, qty=signed, avg_price=fill_avg, kind=kind
+            self._positions[key] = self._with_today_qty_locked(
+                Position(
+                    market=market,
+                    stock_no=key_no,
+                    qty=signed,
+                    avg_price=fill_avg,
+                    kind=kind,
+                    avg_source="fill",
+                )
             )
             return True
         new_qty = prev.qty + signed
         if new_qty == 0:
             del self._positions[key]
             return True
+        source: AvgSource | None = prev.avg_source
         if prev.qty == 0 or (prev.qty > 0) == (signed > 0):
             avg = (
                 (prev.avg_price * abs(prev.qty) + fill_avg * abs(signed)) / abs(new_qty)
@@ -262,8 +294,21 @@ class CapitalStore:
             # 換號 = 反手翻倉:+3 口賣 5 口 → -2 口,均價是這張單的(review F-03:舊寫法用幅度判,
             # |new| < |prev| 的翻倉會沿用舊方向均價)
             avg = fill_avg
-        self._positions[key] = dataclasses.replace(
-            prev, qty=new_qty, avg_price=avg, pnl_base=None, pnl_base_price=None, pnl_cost=None
+            source = "fill"
+        if avg is None:
+            source = None
+        elif prev.avg_price is None:
+            source = "fill"
+        self._positions[key] = self._with_today_qty_locked(
+            dataclasses.replace(
+                prev,
+                qty=new_qty,
+                avg_price=avg,
+                avg_source=source,
+                pnl_base=None,
+                pnl_base_price=None,
+                pnl_cost=None,
+            )
         )
         return True
 
@@ -422,6 +467,7 @@ class CapitalStore:
                 # 資/券成本基礎不同,異種類是另一列不是同一列的續命)
                 if p.avg_price is None and prev is not None:
                     p.avg_price = prev.avg_price
+                    p.avg_source = prev.avg_source
                     p.pnl_base = prev.pnl_base
                     p.pnl_base_price = prev.pnl_base_price
                     p.pnl_cost = prev.pnl_cost
@@ -434,7 +480,7 @@ class CapitalStore:
                         dup.qty,
                         p.qty,
                     )
-                new[key] = p
+                new[key] = self._with_today_qty_locked(p)
             self._positions = new
             # 快照涵蓋到此刻的所有成交:把每張單標成「已套用到目前」,之後只套快照之後的增量
             # (同一筆成交既在快照裡又再樂觀套一次 = 重複計)。
@@ -461,6 +507,7 @@ class CapitalStore:
                     self._positions[key] = dataclasses.replace(
                         p,
                         avg_price=r.avg_price,
+                        avg_source="broker",
                         pnl_base=r.pnl,
                         pnl_base_price=r.price,
                         pnl_cost=r.cost,

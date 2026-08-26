@@ -12,8 +12,10 @@ import type { CapitalPosition } from "@/types";
 
 /** 牌告手續費率(買賣各收一次)。 */
 export const FEE_BASE = 0.001425;
-/** 證交稅(賣出價金;user 拍板固定 0.3%,不分現股 / 當沖減半)。 */
+/** 證交稅(賣出價金 0.3%)。 */
 export const SELL_TAX = 0.003;
+/** 現股當沖證交稅(減半 0.15%;2026-08-26 user 拍板:今天成交進來的張數用這個,過往庫存 0.3%)。 */
+export const SELL_TAX_DAYTRADE = 0.0015;
 /** 融券借券費(賣出價金 0.08%;只有 kind === "short" 計入)。 */
 export const SHORT_BORROW = 0.0008;
 /** 預設手續費折數(user 實答:1.8 折)。 */
@@ -22,6 +24,16 @@ export const FEE_DISCOUNT_DEFAULT = 1.8;
 /** 折數 → 實際費率。1.8 折 = 牌告 ×0.18。 */
 export function feeRate(discount: number): number {
   return (FEE_BASE * discount) / 10;
+}
+
+/** 均價語意來源(同 `CapitalPosition.avg_source`)。 */
+export type AvgSource = "broker" | "fill" | null;
+
+export interface PositionEconInput {
+  /** broker = 均價已含買進手續費(群益損益試算口徑);fill = 純成交價,要再加買費。 */
+  avgSource: AvgSource;
+  /** 今天成交淨進來的張數;現股(kind === "cash")這一段賣出稅用 `SELL_TAX_DAYTRADE`。 */
+  todayQty: number;
 }
 
 export interface PositionEcon {
@@ -40,16 +52,22 @@ function px(v: number | null): number | null {
 /**
  * 部位經濟。
  *
- * f = feeRate(discount);t = SELL_TAX;b = kind === "short" ? SHORT_BORROW : 0;
- * Q = |qty| × 1000 股。
+ * f = feeRate(discount);b = kind === "short" ? SHORT_BORROW : 0;Q = |qty| × 1000 股。
+ * t = 有效賣出稅率:現股今天進來的 T 張用 SELL_TAX_DAYTRADE、其餘 SELL_TAX,按張數加權
+ *   t = (T·0.0015 + (|qty| − T)·0.003) / |qty|(T clamp 到 [0, |qty|];非現股 T 視為 0)。
+ * cost = 含買進手續費的每股成本:avgSource === "broker" 時 avg 本身就是(群益損益試算
+ *   「平均買進成本」含買費,2026-08-26 prod 實證);"fill" 時 = avg·(1 + f)。
  *
  * - 多方(qty > 0,b 恆 0 — 多方無借券):
- *   pnl = (px − avg)·Q − avg·Q·f − px·Q·(f + t);BE = avg·(1 + f) / (1 − f − t)
+ *   pnl = (px − cost)·Q − px·Q·(f + t);BE = cost / (1 − f − t)
+ *   ("fill" 展開即舊式 avg·(1 + f) / (1 − f − t);"broker" 少乘一次 (1 + f) —— 舊寫法把券商
+ *   均價當純價再加買費,損益比群益 APP 少一筆買費、打平線在快照落地時跳一格)
  * - 空方(qty < 0):
  *   pnl = (avg − px)·Q − avg·Q·(f + t + b) − px·Q·f;BE = avg·(1 − f − t − b) / (1 + f)
+ *   (空方均價語意無真樣本,沿舊式當純價;融券 kind 恆 0.3%)
  *
  * qty = 0 → 全 null(不是部位)。已知簡化:不套低消 NT$20(聚合部位無筆數可還原)、
- * 不計融資利息。
+ * 不計融資利息;群益 APP 損益試算**不做**當沖減半,今天進來的張數我們會比 APP 多顯示減半的稅。
  */
 export function positionEcon(
   qty: number,
@@ -57,6 +75,7 @@ export function positionEcon(
   lastMilli: number | null,
   discount: number,
   kind: string,
+  input: PositionEconInput,
 ): PositionEcon {
   // 「0 不是部位」—— 與 px() 的歸一同一條精神。零張的部位算出來的 pnl 是 -0、
   // 打平價卻是個像模像樣的數字,兩者都在騙人
@@ -65,12 +84,16 @@ export function positionEcon(
   if (avg === null) return { pnl: null, breakEvenMilli: null };
 
   const f = feeRate(discount);
-  const t = SELL_TAX;
+  const lots = Math.abs(qty);
+  const todayLots = kind === "cash" ? Math.min(lots, Math.max(0, input.todayQty)) : 0;
+  const t = (todayLots * SELL_TAX_DAYTRADE + (lots - todayLots) * SELL_TAX) / lots;
   const b = kind === "short" ? SHORT_BORROW : 0;
   const long = qty > 0;
-  const q = Math.abs(qty) * 1000;
+  const q = lots * 1000;
+  // 含買進手續費的每股成本:券商均價已含,純成交價要加
+  const cost = input.avgSource === "broker" ? avg : avg * (1 + f);
 
-  const breakEven = long ? (avg * (1 + f)) / (1 - f - t) : (avg * (1 - f - t - b)) / (1 + f);
+  const breakEven = long ? cost / (1 - f - t) : (avg * (1 - f - t - b)) / (1 + f);
   const breakEvenMilli = breakEven * 1000;
 
   const lastPrice = px(lastMilli);
@@ -78,7 +101,7 @@ export function positionEcon(
   const p = lastPrice / 1000;
 
   const pnl = long
-    ? (p - avg) * q - avg * q * f - p * q * (f + t)
+    ? (p - cost) * q - p * q * (f + t)
     : (avg - p) * q - avg * q * (f + t + b) - p * q * f;
   return { pnl: Math.round(pnl), breakEvenMilli };
 }

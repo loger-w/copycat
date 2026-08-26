@@ -74,7 +74,7 @@ function futOrder(): CapitalOrder {
 function position(over: Partial<CapitalPosition> = {}): CapitalPosition {
   return {
     market: "sec", stock_no: "2330", qty: 2, name: "台積電", avg_price: 100,
-    kind: "cash", pnl_base: 0, pnl_base_price: null, pnl_cost: null, code: null, ...over,
+    kind: "cash", pnl_base: 0, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: null, ...over,
   };
 }
 

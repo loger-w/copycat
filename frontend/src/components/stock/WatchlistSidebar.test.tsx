@@ -1613,6 +1613,8 @@ describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
       pnl_base: null,
       pnl_base_price: null,
       pnl_cost: null,
+      avg_source: null,
+      today_qty: 0,
       code: "2330",
       ...over,
     };
@@ -1621,7 +1623,7 @@ describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
   /** 期望值一律由 `positionEcon` 現算(不寫死字串):寫死的話折數 / 費率口徑改了
    *  測試照樣綠,而那正是「畫面數字與閃電梯對不上」的失效樣態。 */
   function expectedSec(qty: number, discount: number, kind = "cash"): string {
-    const econ = positionEcon(qty, AVG, P, discount, kind);
+    const econ = positionEcon(qty, AVG, P, discount, kind, { avgSource: null, todayQty: 0 });
     const pct = ((econ.pnl ?? 0) / (AVG * Math.abs(qty) * 1000)) * 100;
     return `${qty}張 ${fmtPct(pct)}`;
   }
@@ -1694,9 +1696,9 @@ describe("WatchlistSidebar 無法對映的個股期倉位提示(N065)", () => {
   it("有反查不到的 fut 倉位 → 側欄底一行計數", async () => {
     positions = [
       { market: "fut", stock_no: "EE1I6", qty: 2, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: null },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: null },
       { market: "fut", stock_no: "CD1I6", qty: -1, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: null },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: null },
     ];
     sidebar();
     await waitGroups();
@@ -1706,7 +1708,7 @@ describe("WatchlistSidebar 無法對映的個股期倉位提示(N065)", () => {
   it("全部對映得到 → 不渲染那一行(零倉位時不留空殼)", async () => {
     positions = [
       { market: "fut", stock_no: "CDFI6", qty: 2, name: "", avg_price: null, kind: "cash",
-        pnl_base: null, pnl_base_price: null, pnl_cost: null, code: "2330" },
+        pnl_base: null, pnl_base_price: null, pnl_cost: null, avg_source: null, today_qty: 0, code: "2330" },
     ];
     sidebar();
     await waitGroups();
