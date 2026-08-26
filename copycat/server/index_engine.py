@@ -112,6 +112,16 @@ def minute_key(hhmmss: str, *, utc: bool) -> str | None:
     return key
 
 
+def _is_blank_time(raw: str) -> bool:
+    """TC4 quote「沒給時間欄位」的形狀:`''` / `'0'` / `'000000'`(全零或空)。
+
+    只認全零 —— 真值 `'000000'`(UTC 00:00:00 = 台北 08:00)也會被當缺值,但它本就落在
+    0901–1330 域外、走哪條都不寫分鐘;非全零的壞格式(如 `'abc'`)**不**在此列,交給
+    `minute_key` 回 None(靜默不寫),不退回牆鐘 —— 缺值與壞格式是兩件事。
+    """
+    return raw.strip("0") == ""
+
+
 def _millipt(raw: str) -> int | None:
     try:
         return round(float(raw) * 1000)
@@ -427,7 +437,7 @@ class IndexEngine:
         s.high = _millipt(str(quote.get("HighPrice", ""))) or s.high
         s.low = _millipt(str(quote.get("LowPrice", ""))) or s.low
         filled = str(quote.get("FilledTime", ""))
-        if filled.strip("0") == "":
+        if _is_blank_time(filled):
             # TC4 對 IX0001 的 REALTIME quote **沒有時間欄位**:`FilledTime` / `PreciseTime` 恆 `'0'`
             # (2026-08-26 12:23 只聽不訂 probe 實證,fix/index-quote-no-filledtime)。舊碼把 `'0'`
             # 當 UTC 00:00 → 0801 域外 → None → 分鐘永遠不由推播寫、只更新現價,分時線全靠
