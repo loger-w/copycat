@@ -1119,3 +1119,57 @@ async def test_index_rollover_switches_the_source_date_off_the_loop() -> None:
         )
     finally:
         await eng.close()
+
+
+# ---------------------------------------------------------------------------
+# fix/index-quote-no-filledtime:IX0001 的 REALTIME quote 沒有時間欄位
+# ---------------------------------------------------------------------------
+
+
+class TestQuoteWithoutFilledTime:
+    """2026-08-26 12:23 只聽不訂 probe 實證:TC4 推的 IX0001 quote `FilledTime` / `PreciseTime` 恆 `'0'`
+    (只有 TradeDate)。舊碼 `minute_key('0', utc=True)` → 0801 域外 → None → 分鐘永遠不由推播寫、
+    只更新現價;分鐘全靠 1K 自癒每 7 分鐘補一段,窗口階梯封頂後就停在那一分鐘(08-26 停在 1059)。"""
+
+    async def test_quote_without_filled_time_keys_minute_by_wall_clock(self) -> None:
+        fake = FakeIndexSource()
+        eng = make_engine(fake, now_fn=lambda: _dt.time(10, 5, 30))
+        await eng.start()
+        try:
+            assert fake.on_message is not None
+            fake.on_message(_quote(filled="0"))
+            await asyncio.sleep(0.06)
+            state = eng.state()
+            assert state["twse"]["p"] == 42_039_920
+            # 牆鐘 10:05:30 → 1K 終點標記語意 = floor + 1 → 1006(與 FilledTime 路徑同一把尺)
+            assert state["twse"]["minutes"] == {"1006": 42_039_920}
+        finally:
+            await eng.close()
+
+    async def test_quote_without_filled_time_outside_domain_writes_price_only(self) -> None:
+        # 08:20 試撮前的指數快照:牆鐘落在 0901–1330 域外 → 不寫分鐘、現價照更新、不炸
+        fake = FakeIndexSource()
+        eng = make_engine(fake, now_fn=lambda: _dt.time(8, 20, 0))
+        await eng.start()
+        try:
+            assert fake.on_message is not None
+            fake.on_message(_quote(filled="0"))
+            await asyncio.sleep(0.06)
+            state = eng.state()
+            assert state["twse"]["p"] == 42_039_920
+            assert state["twse"]["minutes"] == {}
+        finally:
+            await eng.close()
+
+    async def test_quote_with_filled_time_still_uses_it_not_wall_clock(self) -> None:
+        # 白名單:有時間欄位的 quote 照舊用 FilledTime(UTC+8),牆鐘不介入
+        fake = FakeIndexSource()
+        eng = make_engine(fake, now_fn=lambda: _dt.time(12, 0, 0))
+        await eng.start()
+        try:
+            assert fake.on_message is not None
+            fake.on_message(_quote(filled="13015"))  # 01:30:15 UTC → 0931
+            await asyncio.sleep(0.06)
+            assert eng.state()["twse"]["minutes"] == {"0931": 42_039_920}
+        finally:
+            await eng.close()
