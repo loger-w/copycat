@@ -1,0 +1,12 @@
+{
+  "scope": "git diff 314a8f2f..61ca1373(tests/server/test_corr_routes.py / test_river_routes.py 四份 11 腿 key 字面集合 → load_config 導出);兩軸各一 opus sub-agent(code-review-two-axis)",
+  "standards": [
+    {"id": "S1", "severity": "P3", "file": "tests/server/test_corr_routes.py::test_engine_subscribes_every_tc4_leg_but_not_the_base", "finding": "第 66 行 `len(src.subscribed) == 10` 仍寫死腿數,加第 12 腿仍要手改;repo 口徑(test_corr_config.py:96)是相對長度。"},
+    {"id": "S2", "severity": "P3", "file": "tests/server/test_river_routes.py:36 / test_corr_routes.py:55", "finding": "docstring 仍寫「十一腿」「訂十」,斷言不再綁腿數後散文成唯一假陳述來源、零訊號。"},
+    {"id": "S3", "severity": "P3", "file": "tests/server/test_river_routes.py::_LEG_KEYS", "finding": "`_CFG/_LEG_KEYS/_PAIR_KEYS` 連註解在兩檔逐字重複;repo 對測試側共用常數已有 tests/helpers 出口(fake_sources.py:3-6 理由)。"}
+  ],
+  "spec": [
+    {"id": "P1", "severity": "P3", "file": "tests/server/test_corr_routes.py:66", "finding": "同 S1:key 集合四處已收斂,計數字面 `== 10` 與兩處「十一腿」docstring 未一併導出;建議 `len(_CFG.tc4_legs())`。四處集合字面確認全數移除(grep NK225M 僅剩 _EXPECTED_LEGS);app.py:886 load_corr_config 走同一份 configs/correlation.json,非同義反覆;mutation drop-GC / add-XX 三條斷言皆翻紅。"}
+  ],
+  "disposition": "S1 / S2 / P1 → f121326f 收修(`len(CFG.tc4_legs())` + docstring 改「隨設定檔」);S3 → 收進 tests/helpers/corr_legs.py(CFG / LEG_KEYS / PAIR_KEYS)。無 P1 / P2。收修後 31 passed / ruff / pyright 0。"
+}
