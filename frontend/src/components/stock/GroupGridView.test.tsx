@@ -828,6 +828,8 @@ describe("GroupGridView 卡片倉位(SC-4)", () => {
       pnl_base: null,
       pnl_base_price: null,
       pnl_cost: null,
+      avg_source: null,
+      today_qty: 0,
       code: "2330",
       ...over,
     };
@@ -836,7 +838,7 @@ describe("GroupGridView 卡片倉位(SC-4)", () => {
   /** 期望值由 `positionEcon` 現算(不寫死):寫死的話折數 / 費率改了測試照樣綠,
    *  而那正是「卡片數字與閃電梯對不上」的失效樣態。 */
   function expectedCard(discount: number): string {
-    const econ = positionEcon(3, AVG, P, discount, "cash");
+    const econ = positionEcon(3, AVG, P, discount, "cash", { avgSource: null, todayQty: 0 });
     const pct = ((econ.pnl ?? 0) / (AVG * 3 * 1000)) * 100;
     return `現 3張 ${pnlText(econ.pnl)} (${fmtPct(pct)})`;
   }

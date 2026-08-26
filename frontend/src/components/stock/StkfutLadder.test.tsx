@@ -105,6 +105,8 @@ function futPos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
     pnl_base: 800,
     pnl_base_price: null,
     pnl_cost: null,
+    avg_source: null,
+    today_qty: 0,
     code: null,
     ...overrides,
   };

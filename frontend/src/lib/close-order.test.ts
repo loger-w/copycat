@@ -14,6 +14,8 @@ function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
     pnl_base: 1500,
     pnl_base_price: 1050,
     pnl_cost: 2_000_000,
+    avg_source: null,
+    today_qty: 0,
     code: null,
     ...overrides,
   };
@@ -30,6 +32,8 @@ describe("closeBodyOf 稽核分流(N082 / review SP3)", () => {
     pnl_base: null,
     pnl_base_price: null,
     pnl_cost: null,
+    avg_source: null,
+    today_qty: 0,
     code: null,
   } as unknown as Parameters<typeof closeBodyOf>[0];
 

@@ -104,6 +104,8 @@ function capitalPosition(overrides: Partial<CapitalPosition> = {}): CapitalPosit
     pnl_base: null,
     pnl_base_price: null,
     pnl_cost: null,
+    avg_source: null,
+    today_qty: 0,
     code: null,
     ...overrides,
   };

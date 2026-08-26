@@ -19,6 +19,11 @@ Market = Literal["sec", "fut"]
 # 比 TradeKind 少 daytrade_sell:那是「無券當沖空單」的部位狀態,平倉映射(_CLOSE_MAP)
 # 支援但沒有任何回報路徑會產生它,使用者也點不到 → 不進 wire。
 PositionKind = Literal["cash", "margin", "short"]
+#: Position.avg_price 的語意來源:broker = 群益損益試算「平均買進成本」(**含買進手續費**;
+#: 2026-08-26 prod 實證 4991 成交 469.50 → 均價 469.62,差 = 價 × 0.1425% × 折數);
+#: fill = 成交回報樂觀套用的**純成交價**。前端打平線 / 損益依來源決定要不要再加買費 ——
+#: 兩邊算同一條線,券商快照落地才不會跳格(fix/breakeven-avg-source-daytrade-tax)。
+AvgSource = Literal["broker", "fill"]
 
 
 class CapitalDisabledError(Exception):
@@ -149,3 +154,8 @@ class Position:
     pnl_base: float | None = None  # 損益試算[9]含費稅息淨損益(報告市價時點)— 前端平移基底
     pnl_base_price: float | None = None  # 損益試算[5]報告市價(平移基準)
     pnl_cost: float | None = None  # 損益試算[12]成交價金(% 分母,同報告[21]口徑)
+    avg_source: AvgSource | None = None  # avg_price 的語意來源;avg_price None 時恆 None
+    # 今天成交淨進來的張數(同 (股號, 種類);buy − sell,clamp 到 [0, |qty|];fut 恆 0)。
+    # 前端現股當沖賣出稅減半(0.15%)只套這一段,其餘張數 0.3%。來源 = 委託聚合(群益
+    # ConnectByID 只重播當日 backlog,所以聚合裡的成交都是今天的)。
+    today_qty: int = 0

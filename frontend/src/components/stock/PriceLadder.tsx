@@ -143,7 +143,10 @@ function positionRows(
   discount: number,
 ): PositionRow[] {
   return positions.map((p) => {
-    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind);
+    const econ = positionEcon(p.qty, p.avg_price, lastMilli, discount, p.kind, {
+      avgSource: p.avg_source,
+      todayQty: p.today_qty,
+    });
     // 均價的缺值判定與 positionEcon 同一條規則(0 不是價格)
     const avg = p.avg_price !== null && p.avg_price > 0 ? p.avg_price : null;
     const label = kindLabel(p.kind);
