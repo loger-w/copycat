@@ -66,7 +66,9 @@ user 拍板:修法 A(avg_source);今天成交進來的張數賣出稅用當沖 0
 | `ruff check copycat tests` / `pyright copycat/capital tests/capital` | All checks passed / 0 errors |
 | `npx vitest run src/lib/ladder-position.test.ts src/lib/position-summary.test.ts` | 70 passed |
 | `npx tsc -b` / `npx eslint src` | exit 0 / exit 0 |
-| 全套 pytest / 全套 vitest / react-doctor | 見下方追記 |
+| 全套 `pytest -q` | 3106 passed |
+| 全套 `npx vitest run` | 151 files passed |
+| `npx react-doctor@latest --scope changed --no-telemetry` | Scanned 19 files, No issues found |
 
 ## 反向驗證(3554a18a)
 
