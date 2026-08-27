@@ -209,18 +209,22 @@ export function fillPoints(
  *  —— 與 `futuresBarsToAccum` 的 key 同一套(core 的幾何對 key 只要求「窗內整數、可排序」)。
  *
  *  **日期界換成「錨定日相等」**,不沿用 `fillPoints` 的「今日 ∨ 昨日活單」:近全軸一格圖
- *  橫跨兩個日曆日(D 08:46 → D+1 05:00),日曆日界在這裡兩頭都錯 —— 夜盤 01:00 的成交
- *  (日曆日 = D+1)本來就屬於 D 這張圖,而 D+1 日盤的成交不該畫在 D 上。錨定日的推導
- *  走與 slice / live gate 同一支 `anchorDateOf`(三處各算一份必漂移)。
+ *  橫跨兩個日曆日(D−1 15:01 → D 13:45;15:00 起算,mod/futures-day-1500),日曆日界在這裡
+ *  兩頭都錯 —— 昨夜 22:00 的成交(日曆日 = D−1)本來就屬於 D 這張圖,而 D 15:01 起的成交屬
+ *  次一交易日、不該畫在 D 上。錨定日的推導走與 slice / live gate 同一支 `anchorDateOf`
+ *  (三處各算一份必漂移)。
  *
- *  死區(13:46–15:00 / 05:01–08:45)成交 → `alldayIndexOf` 回 null → **不畫**,不夾到最近
- *  的段界:夾了就是把成交時間講錯(同 `projectFills` 窗外不畫的既有規則)。
+ *  空檔(05:01–08:45)/ 一天之外(13:46–15:00)的成交 → `alldayIndexOf` 回 null → **不畫**,
+ *  不夾到最近的段界:夾了就是把成交時間講錯(同 `projectFills` 窗外不畫的既有規則)。
  *
- *  `anchorDate` = `YYYY-MM-DD`,由 caller 以圖上最後一根 bar 反推(`anchorDateOf(last.t)`)。 */
+ *  `anchorDate` = `YYYY-MM-DD`,由 caller 以圖上最後一根 bar 反推(`anchorDateOf(last.t)`);
+ *  `holidays` = caller 算 `anchorDate` 用的**同一份**假日集合(選配;缺 = 模組集合)—— 兩邊不同源時
+ *  假日前夜盤的成交會被判成別天而整場不畫。 */
 export function alldayFillPoints(
   orders: readonly CapitalOrder[] | undefined,
   key: string | null,
   anchorDate: string,
+  holidays?: ReadonlySet<string>,
 ): readonly FillPoint[] {
   if (key === null) return EMPTY_FILLS;
   const raws: RawFill[] = [];
@@ -229,7 +233,7 @@ export function alldayFillPoints(
     const b = baseFill(o);
     if (b === null) continue;
     const { stamp, hhmm } = splitCapitalStamp(b.date, b.time);
-    if (anchorDateOf(stamp) !== anchorDate) continue;
+    if (anchorDateOf(stamp, holidays) !== anchorDate) continue;
     const index = alldayIndexOf(hhmm);
     if (index === null) continue;
     raws.push({ code: b.code, minute: index, priceMilli: b.priceMilli, side: b.side, qty: b.qty });

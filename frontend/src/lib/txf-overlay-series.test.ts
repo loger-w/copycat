@@ -30,7 +30,7 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
     expect(s!.stale).toBe(false);
   });
 
-  it("只取錨定日的日盤段:前一日日盤、夜盤前半(15:01–23:59)、夜盤後半(00:00–05:00)全剔除", () => {
+  it("只取最近一個日盤段:前一日日盤、夜盤前半(15:01–23:59)、夜盤後半(00:00–05:00)全剔除", () => {
     const s = txfBarsToSeries(
       [
         bar("2026-08-26 08:46", 1_000_000), // 前一日日盤
@@ -47,7 +47,7 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
     expect(s!.minutes).toEqual({ "0845": 23_100_000, "0859": 23_200_000 });
   });
 
-  it("最後一根落在凌晨(≤05:00)→ 錨定日是前一日,疊的是前一日的日盤段(同 lib/allday.ts::anchorDateOf)", () => {
+  it("最後一根落在凌晨(≤05:00)→ 日盤日 = 最後一根日盤 bar 的日期(前一日),疊前一日的日盤段;不吃 allday 的期交所口徑錨定日(那會指到明天)", () => {
     const s = txfBarsToSeries(
       [bar("2026-08-26 08:46", 23_100_000), bar("2026-08-26 15:01", 2_000_000), bar("2026-08-27 00:30", 3_000_000)],
       null,
@@ -77,7 +77,7 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
     expect(s!.p).toBe(23_300_000);
   });
 
-  it("錨定日與 quote.date(個股頁的交易日)不同 → 不疊(交易日凌晨 05:00–08:46 bars 還錨在前一日)", () => {
+  it("日盤日與 quote.date(個股頁的交易日)不同 → 不疊(交易日凌晨 05:00–08:46 最後一個日盤段還是前一日)", () => {
     const bars = [bar("2026-08-26 08:46", 23_100_000), bar("2026-08-26 15:01", 2_000_000), bar("2026-08-27 05:00", 3_000_000)];
     expect(txfBarsToSeries(bars, { p: null, t: null, date: "2026-08-27" }, REF, false)!.minutes).toEqual({});
     // 日期一致 / quote 未給日期 → 照疊
