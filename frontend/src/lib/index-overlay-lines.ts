@@ -2,7 +2,7 @@ import type { IndexSeries } from "@/hooks/useIndexStream";
 import { minuteOf } from "@/lib/index-accum-adapter";
 import { minuteToX, type IntradayGeometry, type XWindow } from "@/lib/stock-intraday-svg";
 
-/** 個股分時圖上疊「加權 / 櫃買」即時走勢(feat/chart-ux-batch-0826 F1)。
+/** 個股分時圖上疊「加權 / 櫃買 / 台指期」即時走勢(feat/chart-ux-batch-0826 F1;台指期 feat/txf-intraday-overlay)。
  *
  *  疊法 = **相對昨收 %** 映射到個股自己的價格軸:`y = toY(stockRef × p / idxRef)`。
  *  個股的 y 域是 [跌停, 漲停](±10%)時指數日內振幅恆在域內;**沒有漲跌停**(對稱域 fallback,
@@ -20,11 +20,14 @@ import { minuteToX, type IntradayGeometry, type XWindow } from "@/lib/stock-intr
  *  已排序列,per-card 只剩窗過濾 + toY。series 是每則 WS 新物件(`toSeries` 展開),快取隨舊物件
  *  被 GC,沒有洩漏。 */
 
-export type IndexOverlayKey = "twse" | "otc";
+export type IndexOverlayKey = "twse" | "otc" | "txf";
 
 export interface IndexOverlaySeries {
   twse: IndexSeries | null;
   otc: IndexSeries | null;
+  /** 台指期(feat/txf-intraday-overlay):由 `lib/txf-overlay-series.ts` 從期貨 1K + WS 現價組成同形序列;
+   *  null = 期貨引擎未就緒或結算價不可得(鈕反灰) */
+  txf: IndexSeries | null;
 }
 
 export interface IndexOverlayLine {
@@ -40,7 +43,11 @@ export interface IndexOverlayLine {
 export const INDEX_OVERLAY_LABEL: Record<IndexOverlayKey, string> = {
   twse: "加權",
   otc: "櫃買",
+  txf: "台指期",
 };
+
+/** 畫線順序(也是 toggle 列順序):加權、櫃買、台指期 */
+const OVERLAY_KEYS: readonly IndexOverlayKey[] = ["twse", "otc", "txf"];
 
 interface Row {
   minute: number;
@@ -67,7 +74,7 @@ export function sortedIndexRows(s: IndexSeries): readonly Row[] {
 
 export function buildIndexOverlayLines(
   series: IndexOverlaySeries | null,
-  on: { twse: boolean; otc: boolean },
+  on: Record<IndexOverlayKey, boolean>,
   stockRefMilli: number | null,
   g: Pick<IntradayGeometry, "toY" | "yDomain">,
   width: number,
@@ -77,7 +84,7 @@ export function buildIndexOverlayLines(
   if (series === null || !(stockRefMilli !== null && stockRefMilli > 0)) return [];
   const [yBottom, yTop] = g.yDomain;
   const out: IndexOverlayLine[] = [];
-  for (const key of ["twse", "otc"] as const) {
+  for (const key of OVERLAY_KEYS) {
     if (!on[key]) continue;
     const s = series[key];
     if (s === null || !(s.ref !== null && s.ref > 0)) continue;
