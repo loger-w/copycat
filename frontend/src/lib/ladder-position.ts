@@ -8,7 +8,12 @@
  *  `breakEvenMilli` 是**毫元**(本專案價格通貨)。qty 是**張**(1 張 = 1000 股),
  *  費用一律以 `|qty|` 計、方向只由 qty 符號決定。 */
 import { snapDown, snapNearest, snapUp } from "@/lib/stock-tick";
-import type { AvgSource, CapitalPosition } from "@/types";
+import { AVG_SOURCES, type AvgSource, type CapitalPosition } from "@/types";
+
+/** 執行期白名單與 `AvgSource` 型別同源(`AVG_SOURCES`):型別外的值(舊 dist / 舊後端)歸 null,不進 switch。 */
+function isAvgSource(v: unknown): v is AvgSource {
+  return (AVG_SOURCES as readonly unknown[]).includes(v);
+}
 
 /** 牌告手續費率(買賣各收一次)。 */
 export const FEE_BASE = 0.001425;
@@ -97,10 +102,9 @@ export function positionEcon(
   // 含買進手續費的每股成本:券商均價已含;純成交價要加;來源未知(null)明確走修前口徑。
   // 執行期歸一走**白名單**(pr-119 F-02):舊後端整欄缺席是 undefined、後端先加值 / 前端 dist 未重 build
   // 的窗口是值域外字串 —— 兩種都是型別外,`?? null` 只擋前者,後者三個 case 全不中、cost 未賦值 → NaN
-  // (與 #118 症狀同形;上面 todayQty 走 Number.isFinite 同一姿態)。switch 本體仍 exhaustive、不用 default:
-  // AvgSource 日後加值會在這裡 tsc 紅(cost 未賦值),不會靜默落進修前口徑
-  const raw = input.avgSource;
-  const avgSource: AvgSource | null = raw === "broker" || raw === "fill" ? raw : null;
+  // (與 #118 症狀同形;上面 todayQty 走 Number.isFinite 同一姿態)。白名單吃 `AVG_SOURCES`(與型別同源,
+  // 不重抄字面);switch 本體仍 exhaustive、不用 default:AvgSource 加值會在這裡 tsc 紅(cost 未賦值)
+  const avgSource: AvgSource | null = isAvgSource(input.avgSource) ? input.avgSource : null;
   let cost: number;
   switch (avgSource) {
     case "broker":
