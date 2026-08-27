@@ -239,8 +239,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   469.62);`fill` 的產生點是 `copycat/capital/store.py::_apply_fill_locked`(樂觀套用 = 純成交價);
   `set_positions` 只沿用不產生。**`avg_source` 沒有第二個寫入點** —— 08-26 那版把 `broker` 寫在 store 一條零 caller
   的方法上,測試綠、prod 全 null。`today_qty` 產生點 `store.py::_with_today_qty_locked`(當日聚合 buy − sell,
-  clamp 到 [0, |qty|],per (股號, 種類),fut 恆 0)。唯一讀者 `frontend/src/lib/ladder-position.ts::
-  positionEcon`:`broker` 不再加買費、`fill` 加;現股 `today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
+  clamp 到 [0, |qty|],per (股號, 種類),fut 恆 0)。wire 欄名的讀者 = `frontend/src/components/stock/
+  PriceLadder.tsx` 與 `frontend/src/lib/position-summary.ts`(把 `avg_source` / `today_qty` 映成 `avgSource` / `todayQty`
+  餵 `lib/ladder-position.ts::positionEcon`,唯一算式所在):`broker` 不再加買費、`fill` 加;現股 `today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
   漂掉的症狀:後端少送 `avg_source` → 前端當 fill 全加一次買費 → 損益比群益 APP 少一筆買費、打平線在快照落地時
   跳一格(08-26 修、08-27 才真的修到 prod 路徑,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失;前端 switch 無
   default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` 持倉列 `avg_source` 非 null。
