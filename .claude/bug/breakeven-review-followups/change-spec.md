@@ -8,7 +8,7 @@
 | Finding | 現況(PR #119 後) | 目標 |
 |---|---|---|
 | F-01 | 真鏈測試只斷 avg_price / avg_source;pnl_base / pnl_base_price / pnl_cost 映射零覆蓋 | `test_balance_chain_marks_avg_source_broker` 補三行斷言 |
-| F-05 | 25 欄字面複製六份(test_client ×5、test_fill_latency ×1),成交價金落 [11]、無 [25] | 30 欄 `tests/capital/profit_rows.py::PNL_3357_MARGIN` + `pnl_variant` 按欄變異;kind=None 第二輪 [25] 改未對映碼 |
+| F-05 | 25 欄字面複製七份(test_client ×6、test_fill_latency ×1;pr-129 F-04 重數),成交價金落 [11]、無 [25] | 30 欄 `tests/capital/profit_rows.py::PNL_3357_MARGIN` + `pnl_variant` 按欄變異;kind=None 第二輪 [25] 改未對映碼 |
 | F-02 | `?? null` 只擋 nullish;值域外字串 → switch 三 case 全不中 → cost 未賦值 → NaN | 白名單歸一;`AVG_SOURCES as const` 與 `AvgSource` 同源(review S-2) |
 | F-03 | CLAUDE.md §4 紅燈判準「持倉列 avg_source 非 null」對期貨列必誤報 | 「證券列非 null;fut 列恆 null 既知語意」 |
 | F-04 | test_store carry 測試重複斷言 + 函式內冗餘 import | 刪 |

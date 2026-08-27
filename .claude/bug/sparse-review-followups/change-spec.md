@@ -24,7 +24,7 @@
 
 ## 既有行為白名單(不得變)
 
-1. `load_config` 對合法 / 非法 sparse 的回傳值逐字不變(`[False, True, False, False, False]` 斷言保留)。
+1. `load_config` 對合法 / 非法 sparse 的回傳值逐字不變:原五腿的 `sparse` 結果逐字不變,新增案(review S-4 的 null 腿)只准在斷言尾端追加(5 → 6,前五格逐字相同;pr-130 F-08 改不綁長度措辭)。
 2. `_default_corr_source` 對 prod caller 的行為不變(同一份 config 進 source);只有簽名收緊。
 3. `tc4.py` 不在 diff;R1 / R2 行為不動(F-05 是驗證不是改動)。
 4. 測試改名不動本體;caplog 斷言只加不減。

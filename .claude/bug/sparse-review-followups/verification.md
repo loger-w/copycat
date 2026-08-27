@@ -24,12 +24,15 @@
 
 | 突變 | 結果 |
 |---|---|
-| F-04:prod caller `_default_corr_source(trading_calendar)`(漏傳 config) | `pyright` 1 error(還原後 0)—— 型別守住不變量 |
+| F-04:prod caller `_default_corr_source(trading_calendar)`(漏傳 config) | `pyright` 1 error(還原後 0)—— 型別守住「必須傳 config」(漏傳即 pyright 紅);「與 engine 同一份」仍由 `_make_corr` 單一區域變數 `corr_cfg` 分別餵兩處保證,無型別守門(改成 `config=load_corr_config()` 型別 / 測試全綠;pr-130 F-03) |
 | F-05:`tc4._heal_tick` 的 `if sym in self._heal_sparse: continue` 兩行以 `# MUTANT` 取代 | `-k HealSparse`:`2 failed, 2 passed`(`is_exempt_from_r2` + `…while_another_leg_is_alive` 紅;R1 仍救稀疏腿那條綠);`git checkout --` 還原,grep MUTANT = 0 |
 | F-02:拿掉 WARNING(= `e0d751e7` 當下) | caplog 斷言 `AssertionError: []` |
 
 **事故**:F-04 突變腳本在還原前 crash(subprocess 路徑),突變體被接著 commit 進 `2e31a9bc`(f327843b 前身);
-commit 後 `git show HEAD:copycat/server/app.py` 對照發現,`reset --soft` 回 `43608236` 重做兩筆。教訓:mutation 腳本
+commit 後 `git show HEAD:copycat/server/app.py` 對照發現,`reset --soft` 回 `43608236` 重做兩筆。**`2e31a9bc` 已被 `reset --soft`
+丟棄、不在任何 ref 祖先鏈上,僅存本機 reflog(gc 後連作者也查不到),clone 上不可覆核(pr-130 F-04)**;當時差異片段留此:
+`git show 2e31a9bc:copycat/server/app.py` → `:392 def _default_corr_source(calendar: TradingCalendar | None, config: CorrConfig)`
+(config 位置參數、無預設)而 `:888 resolved_corr = _default_corr_source(trading_calendar)`(漏傳 config)—— 就是那個突變體。教訓:mutation 腳本
 `try/finally` 還原、commit 前 `git diff --cached` 對照預期範圍(同 memory「commit 前查 MUTANT 殘留」)。
 
 ## 4. 白名單核對(change-spec §白名單;Standards 軸 4/4 PASS,主 session 復核)

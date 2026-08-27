@@ -20,7 +20,9 @@ SXF 時戳:09:45 09:52 10:14 10:22 10:26 10:39 10:44 10:52 11:04 11:08 13:01 —
 .venv\Scripts\python -m pytest -q tests/live/test_tc4.py -k TestHealSparseSymbol
 → TypeError: TC4QuoteSource.__init__() got an unexpected keyword argument 'heal_sparse_symbols'(3 failed)
 ```
-三條:R2 豁免(只重掛非稀疏腿)/ R1 仍整批含稀疏腿 / 稀疏腿靜默不誤觸 R1(HEAL_A 活著 → 零請求)。
+當時三條:R2 豁免(只重掛非稀疏腿)/ R1 仍整批含稀疏腿 / 稀疏腿靜默不誤觸 R1(HEAL_A 活著 → 零請求);第四條
+`r1_takes_over_when_the_population_is_only_sparse_symbols` 為 PR #120 review 追加,現為 4 條(四條都在建構子帶
+`heal_sparse_symbols=`,今天照原版 stash 手法重跑會是 4 failed —— pr-130 F-06)。
 秒級(0.14 s)、確定性、FakeApi 記全 REQ 序。
 
 ## 2. Phase 2 最小重現
@@ -45,7 +47,8 @@ SXF 時戳:09:45 09:52 10:14 10:22 10:26 10:39 10:44 10:52 11:04 11:08 13:01 —
 
 ## 5. 反向驗證(PASS;pr-120 F-05 校正為 mutation 級,2026-08-27 晚實跑)
 
-原版 `git stash push copycat/live/tc4.py` 把建構子參數與 `_heal_tick` 的 `continue` 一起撤掉,三條全炸在 TypeError ——
+原版 `git stash push copycat/live/tc4.py` 把建構子參數與 `_heal_tick` 的 `continue` 一起撤掉,(當時)三條全炸在 TypeError
+(review 追加第四條後為 4 條,同樣全炸)——
 與 §1 紅先行同一個紅,證不到那行 `continue` 是 load-bearing。改成只註解掉 `_heal_tick` 的
 `if sym in self._heal_sparse: continue` 兩行(簽名不動):
 

@@ -245,7 +245,11 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   漂掉的症狀:後端少送 `avg_source` → 前端當 fill 全加一次買費 → 損益比群益 APP 少一筆買費、打平線在快照落地時
   跳一格(08-26 修、08-27 才真的修到 prod 路徑,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失;前端 switch 無
   default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` **證券**持倉列(`market == "sec"`)`avg_source` 非 null;
-  `market == "fut"` 列恆 null 是既知語意(期貨列走 OI 不經損益回填,見 next-time 2026-08-27),不是契約斷了,也不要替它硬填來源(pr-119 F-03)。
+  `market == "fut"` 列:OI 快照來源的 fut 列 `avg_source` 恆 null(期貨列走 OI 不經損益回填,見 next-time 2026-08-27);唯一非 null
+  是 `_apply_fill_locked` 樂觀套用**新建**的 fut 列(`"fill"`),下一輪 OI 快照落地即覆蓋(OI 連續失敗時 `_stale_fut_positions()` 沿用更久)
+  —— 兩者都不是契約斷了,也不要替 OI 列硬填來源(pr-119 F-03 / pr-129 F-01)。兩邊值域以
+  `tests/capital/test_models.py::test_avg_source_parity_with_frontend` 釘住(後端測試直讀 `types.ts::AVG_SOURCES` 字面比
+  `get_args(AvgSource)`;pr-129 F-05):後端先加值而前端沒跟,白名單會把新值**靜默**歸 null 退回修前口徑,零訊號。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
@@ -268,11 +272,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   兩邊都零錯誤訊號。`sparse` 打成 `"true"` / `1` 一律無效並印 WARNING(pr-120 F-02)。
 - **index session 自癒閘上界 = `index_engine._WATCH_END`**(2026-08-27 起,pr-126 F-01 per-consumer):產生點
   `copycat/live/stock_source.py::_INDEX_HEAL_END`(13:25,end-exclusive;`in_index_heal_window_now` 只給
-  `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(分時 watchdog 凍結點)
-  **同值同語意** —— 兩把都釘在「收盤試撮起指數不更新」這一個事實。個股 / corr 台積電腿走另一把
-  `_TRADING_END` 13:35(試撮期個股仍有簿更新推播),**三個消費者不共用一把閘**。漂掉的症狀:一把還在救、另一把
-  已凍結(REALTIME 重掛 churn 與分時 watchdog 各說各話),零錯誤訊號;`tests/live/test_stock_source.py::
-  TestIndexHealWindowGate::test_end_matches_index_engine_watchdog_window` 鎖住;`tests/server/test_main_wiring.py::
+  `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(**推播靜默(stale)watchdog**
+  的凍結點;分時自癒窗反而從這一點開始 —— 有日曆到午夜、無日曆到 13:40)**同值同語意** —— 兩把都釘在
+  「收盤試撮起指數不更新」這一個事實。個股 / corr 台積電腿走另一把 `_TRADING_END` 13:35(試撮期個股仍有簿更新推播),
+  **三個消費者不共用一把閘**。13:25 後「index_engine 分時自癒還在救、source 層 REALTIME watchdog 已凍結」是**正常態**,
+  不是漂移;漂掉(兩把值不同)的可觀測症狀:值被放寬 → 次一交易日 `grep 零推播自癒 | grep IX0001` 在 13:25 後又出現;
+  值被收緊 → 加權 stale 徽章 13:2x 提早熄滅。`tests/server/test_index_engine.py::
+  test_watch_end_is_the_index_heal_gate_boundary` 鎖住(放依賴方 server 側,pr-128 F-06);`tests/server/test_main_wiring.py::
   test_stock_and_index_heal_gates_are_two_different_clocks` 鎖「兩把不同 callable」。
 
 ## 5. 資料源
