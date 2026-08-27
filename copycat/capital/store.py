@@ -21,7 +21,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from copycat.capital.balance import ProfitRow
 from copycat.capital.mapping import contract_from_fill, is_option_contract
 from copycat.capital.models import AvgSource, Market, OrderRecord, Position, PositionKind, TradeKind
 from copycat.capital.reply import ReplyRecord
@@ -503,28 +502,6 @@ class CapitalStore:
                 a.applied_shares = a.applied_qty * unit
                 a.applied_value = a.fill_value * (a.applied_shares / a.filled_qty) if a.filled_qty else 0.0
             self._positions_seeded = True
-
-    def apply_profit_rows(self, rows: list[ProfitRow]) -> None:
-        """損益試算回填(均價+含費稅息損益基底);查無 (股號, 種類) 忽略
-        (部位清單以即時庫存為權威);kind=None(未知標籤)整列略過 —
-        寧缺均價,不可把不明成本基礎套到任一種類上。
-        用 dataclasses.replace 發布新物件而非就地變更:positions() 回傳的是物件參考,
-        route 在鎖外 asdict,就地改會撕裂讀(新 pnl 配舊基準價)。"""
-        with self._lock:
-            for r in rows:
-                if r.kind is None:
-                    continue
-                key = (r.stock_no, r.kind)
-                p = self._positions.get(key)
-                if p is not None:
-                    self._positions[key] = dataclasses.replace(
-                        p,
-                        avg_price=r.avg_price,
-                        avg_source="broker",
-                        pnl_base=r.pnl,
-                        pnl_base_price=r.price,
-                        pnl_cost=r.cost,
-                    )
 
     def positions(self) -> list[Position]:
         with self._lock:

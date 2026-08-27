@@ -8,7 +8,6 @@ import dataclasses
 
 import pytest
 
-from copycat.capital.balance import ProfitRow
 from copycat.capital.reply import ReplyRecord, parse_onnewdata
 from copycat.capital.models import Position
 from copycat.capital.store import CapitalStore
@@ -288,39 +287,28 @@ def test_set_positions_replaces_not_merges() -> None:
     assert [p.stock_no for p in s.positions()] == ["2317"]
 
 
-def test_apply_profit_rows_fills_existing_only() -> None:
-    """複合鍵回填:同 (股號, 種類) 才落地;kind=None(未知標籤)整列略過,不可覆蓋已知均價。"""
-    from copycat.capital.balance import ProfitRow
-    from copycat.capital.models import Position
-
-    s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
-    s.apply_profit_rows(
-        [
-            ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin"),
-            # 未知標籤:寧缺均價也不可套錯成本基礎 → 整列略過(不得蓋掉上一列的融資均價)
-            ProfitRow("3357", 999.0, 1.0, 2.0, 3.0, kind=None),
-            ProfitRow("9999", 1.0, None, None, None, kind="cash"),  # 查無股號忽略
-        ]
-    )
-    p = s.position_for("3357", "margin")
-    assert p is not None
-    assert p.avg_price == 311.75
-    assert p.pnl_base == -74636.0
-    assert p.pnl_base_price == 288.0
-    assert p.pnl_cost == 935000.0
-    assert len(s.positions()) == 1
-
-
 def test_set_positions_carries_profit_by_composite_key() -> None:
     """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;
     鍵含 kind → 同種類天然沿用、異種類是「另一列」(成本基礎不混用)。"""
-    from copycat.capital.balance import ProfitRow
     from copycat.capital.models import Position
 
     s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="3357", qty=3, kind="margin")])
-    s.apply_profit_rows([ProfitRow("3357", 311.75, -74636.0, 288.0, 935000.0, kind="margin")])
+    # 損益回填後的列由 client._on_profit_complete 就地寫進 pending 再 set_positions(真鏈產物長這樣)
+    s.set_positions(
+        [
+            Position(
+                market="sec",
+                stock_no="3357",
+                qty=3,
+                kind="margin",
+                avg_price=311.75,
+                avg_source="broker",
+                pnl_base=-74636.0,
+                pnl_base_price=288.0,
+                pnl_cost=935000.0,
+            )
+        ]
+    )
     s.set_positions(
         [
             Position(market="sec", stock_no="3357", qty=4, kind="margin"),
@@ -328,6 +316,10 @@ def test_set_positions_carries_profit_by_composite_key() -> None:
         ]
     )
     assert len(s.positions()) == 2  # 同檔資+集保並存各佔一列
+    m = s.position_for("3357", "margin")
+    c = s.position_for("3357", "cash")
+    assert m is not None and m.avg_price == 311.75 and m.avg_source == "broker"
+    assert c is not None and c.avg_price is None and c.avg_source is None  # 異種類是另一列,不沿用
     m = s.position_for("3357", "margin")
     assert m is not None and m.qty == 4
     assert m.avg_price == 311.75
@@ -774,21 +766,11 @@ def test_optimistic_fill_marks_avg_source_fill_and_counts_today_qty() -> None:
     assert p.today_qty == 1
 
 
-def test_profit_rows_mark_avg_source_broker() -> None:
-    s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="4991", qty=1, avg_price=None)])
-    s.apply_profit_rows([ProfitRow("4991", 469.62, 18285.0, 489.5, 469500.0, kind="cash")])
-    p = s.position_for("4991")
-    assert p is not None
-    assert p.avg_price == 469.62 and p.avg_source == "broker"
-
-
 def test_snapshot_carries_avg_source_with_avg_and_recounts_today_qty() -> None:
     """快照落地:均價沿用時來源一起沿用;today_qty 由當日成交(_orders = 當日 backlog)重算:
     今天買 3 張、券商說共 5 張 → today_qty 3(其餘 2 張是過往庫存)。"""
     s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=None)])
-    s.apply_profit_rows([ProfitRow("4989", 80.02, 0.0, 80.0, 160000.0, kind="cash")])
+    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=80.02, avg_source="broker")])
     assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="3000", price="81.0")) is True
     s.set_positions([Position(market="sec", stock_no="4989", qty=5, avg_price=None)])
     p = s.position_for("4989")
