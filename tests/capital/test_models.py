@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -26,6 +25,7 @@ from copycat.capital.models import (
     PositionCloseRequest,
     StockOrderRequest,
 )
+from tests.helpers.frontend_source import read_frontend_source
 
 
 def stock_req(**kw: object) -> StockOrderRequest:
@@ -154,8 +154,8 @@ def test_avg_source_parity_with_frontend() -> None:
     是執行期白名單(`AvgSource` 型別由它推導)。後端先加值而前端沒跟 → 白名單把新值歸 null → **靜默**退回
     修前口徑(損益少一筆買費、打平線跳格),零錯誤訊號 —— 比 #118 的 NaN 更難看到(pr-129 F-05)。
     同 `test_river_palette_covers_every_leg` 姿態:後端測試直接讀前端原始碼字面鎖兩邊集合相等。"""
-    src = Path(__file__).resolve().parents[2] / "frontend/src/types.ts"
-    m = re.search(r"export const AVG_SOURCES = \[([^\]]*)\] as const;", src.read_text(encoding="utf-8"))
+    text = read_frontend_source("types.ts")
+    m = re.search(r"export const AVG_SOURCES = \[([^\]]*)\] as const;", text)
     assert m, "types.ts 找不到 `export const AVG_SOURCES = [...] as const;` 字面"
     frontend = re.findall(r'"([^"]+)"', m.group(1))
     backend = list(get_args(AvgSource))

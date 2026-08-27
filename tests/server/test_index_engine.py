@@ -1212,7 +1212,7 @@ class TestQuoteWithoutFilledTime:
 
 def test_watch_end_is_the_index_heal_gate_boundary() -> None:
     """跨層 parity(CLAUDE.md §4「index session 自癒閘上界 = `_WATCH_END`」):`_WATCH_END` 是推播靜默
-    (stale)watchdog 的凍結點(分時自癒窗反而從這一點開始),`stock_source._INDEX_HEAL_END` 是 TC4
+    (stale)watchdog 的凍結點(分時自癒 09:00 起全程都在,`_WATCH_END` 後只是換尾段判準接手),`stock_source._INDEX_HEAL_END` 是 TC4
     session 層 REALTIME 零推播自癒 / 健檢的上界 —— 兩把都釘在「收盤試撮起指數不更新」這一個事實,
     必須同值。漂掉的可觀測症狀:值被放寬 → 13:25 後 `零推播自癒 … IX0001` 又出現;值被收緊 → 加權
     stale 徽章 13:2x 提早熄滅。放在 server 側是因為依賴方向 server → live(pr-128 F-06)。"""
