@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -2065,9 +2065,10 @@ async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: p
     assert client.store._price_types[result.seq_no][2:] == ("2330", "B")
 
 
-def _calendar_fuse_blown(when: datetime | None = None) -> str:
-    """`_trade_ymd` 的日曆保險絲:`next_trading_day` 往後 60 天找不到交易日 → RuntimeError
-    (`_calendar()` 只降級壞檔 / 讀檔錯,這一種是資料錯,穿得出來)。"""
+def _trade_ymd_blows_fuse(when: datetime | None = None) -> NoReturn:
+    """`_trade_ymd` 的替身:日曆保險絲炸掉(`last_trading_day` / `next_trading_day` 60 天內
+    找不到交易日 → RuntimeError;`_calendar()` 只降級壞檔 / 讀檔錯,資料錯這一種穿得出來)。
+    `when` 只為對齊被換掉的簽名。"""
     raise RuntimeError("往後 60 天仍找不到交易日(起點 2026-08-24),交易日曆資料有誤")
 
 
@@ -2079,7 +2080,7 @@ async def test_late_result_audit_survives_trade_day_fuse(
     標籤是附屬品、審計不是:late 行必須照寫,標籤退回只記本機日(N075 前口徑)+ WARNING。"""
     _freeze_today(monkeypatch)
     monkeypatch.setattr(client_mod, "_WRITE_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(client_mod, "_trade_ymd", _calendar_fuse_blown)
+    monkeypatch.setattr(client_mod, "_trade_ymd", _trade_ymd_blows_fuse)
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
@@ -2109,7 +2110,7 @@ async def test_submit_result_survives_trade_day_fuse(
 ) -> None:
     """同一把保險絲炸在正常送單路徑:單已送出、審計已寫,送單結果必須照回 —— 不能讓 route
     因為標籤算不出交易日而回 500(user 看到錯誤、單卻在市場上)。"""
-    monkeypatch.setattr(client_mod, "_trade_ymd", _calendar_fuse_blown)
+    monkeypatch.setattr(client_mod, "_trade_ymd", _trade_ymd_blows_fuse)
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
@@ -2124,7 +2125,10 @@ async def test_submit_result_survives_trade_day_fuse(
         )
     assert result.ok is True and result.seq_no is not None
     assert client.store._price_types[result.seq_no][1] == (client_mod._today_ymd(),)
-    assert any("交易日推算失敗" in r.getMessage() for r in caplog.records)
+    # 斷等級 + seq,不再綁文案(review S F-4):log 句子不是契約,seq 點名才是
+    assert any(
+        r.levelname == "WARNING" and result.seq_no in r.getMessage() for r in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------
