@@ -44,15 +44,7 @@ from copycat.stkfut_map import write_map
 from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
-
-#: 損益報告(4-2-p)融資列,**30 欄**對齊 prod 實列(欄位形狀同 `tests/capital/test_balance.py::RAW_PNL_MARGIN`):
-#: [1]股號 [3]種類標籤 [5]報告市價 [9]損益 [10]均價 [12]成交價金 [25]種類代碼(標籤亂碼時的備援)。
-#: 舊 25 欄字面把成交價金放在 [11]、沒有 [25] → `_PNL_IDX_COST` 解出 0、[25] 備援永遠走不到,而且本檔複製了四份
-#: (pr-119 F-05)。要變異就 `split(",")` 改對應欄,不要 `.replace` 猜字串。
-PNL_ROW_3357_MARGIN = (
-    "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000.00,464000.00,12345.00,150.55,464000.00,451650.00,"
-    "0.00,665.00,0.00,1404.00,135495,316155,89,0.00,2.73,0,,Y,2,3,150.860000,A123456789,1234567890"
-)
+from tests.capital.profit_rows import PNL_3357_MARGIN, pnl_variant
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -1086,10 +1078,10 @@ def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
     )
     client._handle_balance("3357,T,0,0,0,0,2000,0,0,0,0,2000,0,0,2000,0,0,A123456789,1234567890")
     client._handle_balance("##")
-    profit_margin = PNL_ROW_3357_MARGIN
+    profit_margin = PNL_3357_MARGIN
     client._handle_profit("000,查詢成功")
     client._handle_profit(profit_margin)
-    client._handle_profit(profit_margin.replace(",融資,", ",現股,").replace(",150.55,", ",140.25,"))
+    client._handle_profit(pnl_variant(profit_margin, {3: "現股", 25: "1", 10: "140.25"}))
     client._handle_profit("##,,,,")
     assert len(client.store.positions()) == 2
     m = client.store.position_for("3357", "margin")
@@ -1115,8 +1107,10 @@ def test_profit_row_for_dropped_stock_is_silent(
         )
         client._handle_balance("##")
         client._handle_profit(
-            "台積電,2330,新台幣,現股,500,1000.00,0.27,468000,464000,12345,980.00,451650,"
-            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+            pnl_variant(
+                PNL_3357_MARGIN,
+                {0: "台積電", 1: "2330", 3: "現股", 25: "1", 4: "500", 5: "1000.00", 10: "980.00"},
+            )
         )
         client._handle_profit("##,,,,")
     assert not [r for r in caplog.records if "種類不符" in r.message]
@@ -1130,10 +1124,7 @@ def test_profit_row_for_dropped_stock_is_silent(
             "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
         )
         other._handle_balance("##")
-        other._handle_profit(
-            "臺慶科,3357,新台幣,現股,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-            "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-        )
+        other._handle_profit(pnl_variant(PNL_3357_MARGIN, {3: "現股", 25: "1"}))
         other._handle_profit("##,,,,")
     mismatch = [r for r in caplog.records if "種類不符" in r.message]
     assert mismatch
@@ -1201,7 +1192,7 @@ def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
     assert ("get_profit_loss_gw", "1234567890A") in com.sent
     assert client.store.positions() == []  # 期貨回完才合併寫入,不先落半套
     client._handle_profit("000,查詢成功")
-    client._handle_profit(PNL_ROW_3357_MARGIN)
+    client._handle_profit(PNL_3357_MARGIN)
     client._handle_profit("##,,,,")
     assert ("get_open_interest", "F9999999") in com.sent
     assert client.store.positions() == []
@@ -1227,7 +1218,7 @@ def test_balance_chain_marks_avg_source_broker(tmp_path: Path) -> None:
     )
     client._handle_balance("##")
     client._handle_profit("000,查詢成功")
-    client._handle_profit(PNL_ROW_3357_MARGIN)
+    client._handle_profit(PNL_3357_MARGIN)
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
     sec = client.store.position_for("3357")
@@ -1247,7 +1238,7 @@ def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
     bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    row = PNL_ROW_3357_MARGIN
+    row = PNL_3357_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     client._handle_profit("000,查詢成功")
@@ -1264,9 +1255,8 @@ def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
         client._handle_balance(bal)
         client._handle_balance("##")
         client._handle_profit("000,查詢成功")
-        parts = row.split(",")
-        parts[3], parts[10], parts[25] = "信用", "999.00", "3"  # 標籤未知 + [25] 未對映 → kind=None(pr-119 F-05)
-        client._handle_profit(",".join(parts))
+        # 標籤未知 + [25] 未對映 → kind=None(pr-119 F-05)
+        client._handle_profit(pnl_variant(row, {3: "信用", 25: "3", 10: "999.00"}))
         client._handle_profit("##,,,,")
     p = client.store.position_for("3357", "margin")
     assert p is not None and p.avg_price == 150.55 and p.avg_source == "broker"  # 未被 999 蓋掉
@@ -1473,6 +1463,7 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
 
 _BAL_3357 = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
 _BAL_2493 = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
+#: 2026-06-11 prod 實列(均價 311.75;與 `profit_rows.PNL_3357_MARGIN`(150.55)是兩組值,見該模組註)
 _PNL_3357 = (
     "臺慶科,3357,新台幣,融資,3000,288.00,-7.50,864000.00,301364.00,-74636.00,311.75,"
     "376240.00,935000.00,240.00,221.00,0.00,2592.00,376000,559000,583,0.00,-7.98,0,,Y,2,3,"
