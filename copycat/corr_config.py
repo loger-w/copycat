@@ -97,9 +97,15 @@ def _parse_legs(raw: object) -> tuple[Leg, ...] | None:
             return None
         if any(field not in item for field in _LEG_FIELDS):
             return None
-        legs.append(
-            Leg(*(str(item[field]) for field in _LEG_FIELDS), sparse=item.get("sparse") is True)
-        )
+        raw_sparse = item.get("sparse")
+        if raw_sparse is not None and not isinstance(raw_sparse, bool):
+            # 只認字面 true(fail-safe:少豁免一腿多幾發 churn),但丟掉旗標要有訊號 —— 設定檔是人手改的,
+            # 打成 "true" / 1 / "yes" → 該腿修復靜默不生效、退回每 240 s 一發,只能事後 grep log 才知道
+            # (pr-120 F-02;與 load_config「標在非 tc4 腿」那條 WARNING 同判準)
+            logger.warning(
+                "corr 設定檔 %s 的 sparse 非 true/false(%r),旗標無效", item.get("key"), raw_sparse
+            )
+        legs.append(Leg(*(str(item[field]) for field in _LEG_FIELDS), sparse=raw_sparse is True))
     return tuple(legs)
 
 
