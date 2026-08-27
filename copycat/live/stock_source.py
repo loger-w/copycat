@@ -30,17 +30,25 @@ from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 logger = logging.getLogger(__name__)
 
 _TRADING_START = _dt.time(8, 30)
-#: 上界 = 收盤試撮起點,**end-exclusive**(13:25:00 起關;與 `index_engine._WATCH_END` 同語意)。
-#: 交易所 13:25–13:30 只收單不撮合、指數也不更新,看門狗在這 5 分鐘 + 13:30 後每 30 s 判一次
-#: 「零推播」全是誤判(2026-08-27 IX0001 13:25:46 起 19 發 / 日,每個交易日都在發)。
-#: 閘只管看門狗與健檢,**不退訂**:13:30 收盤那筆推播照收。代價(user 2026-08-27 知情拍板):
-#: 訂閱若剛好在 13:25–13:30 死掉,(a) 加權分時由 index_engine 尾段回補(`_HEAL_TAIL_END` 13:40)
-#: 補齊,但**現價欄不會**(回補只寫 minutes);(b) 個股側**沒有**當日重補路徑(`_backfilled` 當日
-#: 一次),收盤那筆到重啟為止都缺;(c) 13:25 後新加的自選不武裝健檢(舊上界 13:35 亦然,提早
-#: 10 分鐘)。舊值 13:35「收盤補正止」是啟發式不是量測。另三把時窗刻意**不**與本閘對齊:
-#: `signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30(訊號 / 驗證域)、`stock_models`
-#: 試撮窗 13:25–13:30(標示用)。
-_TRADING_END = _dt.time(13, 25)
+#: 個股 session 看門狗 / 健檢與 corr 台積電腿的閘上界,**end-exclusive**(13:35:00 起關)。
+#: 13:35「收盤補正止」是啟發式不是量測;但個股在收盤試撮 13:25–13:30 **仍有簿更新推播**
+#: (tc4-market-facts:TradeStatus=1、`_note_push` 不分成交 / 簿更新),看門狗在那 5 分鐘本來就
+#: 不會誤判(08-26 / 08-27 兩日 log:該窗除整天在發的 6949 外個股零自癒)—— 所以這把**不**跟
+#: index session 一起關 13:25(pr-126 F-01:一起關對個股零收益,純失去收盤集合競價期間
+#: R1 / R2 / 健檢三條救援路)。index session 吃下面另一把 `_INDEX_HEAL_END`。
+#: 另三把時窗刻意**不**與本閘對齊:`signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30
+#: (訊號 / 驗證域)、`stock_models` 試撮窗 13:25–13:30(標示用)。
+_TRADING_END = _dt.time(13, 35)
+#: **只有 index session**(IX0001 / 櫃買)吃的閘上界 = 收盤試撮起點,**end-exclusive**(13:25:00 起關;
+#: 與 `index_engine._WATCH_END` 同值同語意,`tests/live/test_stock_source.py::TestIndexHealWindowGate` 鎖)。
+#: 交易所 13:25–13:30 只收單不撮合、指數不更新,看門狗在這 5 分鐘 + 13:30 後每 30 s 判一次零推播
+#: (2026-08-27 IX0001 13:25:46 起 19 發 / 日,attempt 全 1)。attempt 恆 1 **無法區分**「交易所不更新
+#: (誤判)」與「訂閱真死 + stub snapshot」(重掛 snapshot 會清 attempts,見 next-time),本輪按誤判處理,
+#: 次一交易日 13:36 以 `/api/index/state` 的 twse 最後更新時戳反證。
+#: 閘只管看門狗與健檢,**不退訂**:13:30 收盤那筆推播照收。代價(user 2026-08-27 知情拍板):訂閱若剛好在
+#: 13:25–13:30 死掉,加權分時由 index_engine 尾段回補補齊(有日曆 → 13:25 起到午夜;無日曆退回
+#: `_HEAL_TAIL_END` 13:40),但**現價欄不會**(回補只寫 minutes);13:25 後新加的指數訂閱不武裝健檢。
+_INDEX_HEAL_END = _dt.time(13, 25)
 
 _DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
 #: CDP basis sweep 的 n(`signal_hub._BASIS_BARS`)。**只有它小於這個數**,而它只要
@@ -453,17 +461,29 @@ def stock_window(trade_date: str) -> tuple[str, str]:
 
 
 def in_trading_hours_now(now: _dt.time | None = None) -> bool:
-    """台股現貨盤中(08:30 試撮起,含;– 13:25 收盤試撮起,不含)。
+    """台股現貨盤中(08:30 試撮起,含;– 13:35 收盤補正止,不含)。
 
-    個股 / 指數 session 的健檢與自癒共用這一把;2026-08-26 F4 起 corr 的台積電現貨腿
-    也吃它(`corr_source.segment_leg_gate` 的 `tws` 那半邊)—— 現貨時段只有一張表,
-    第二張表的失效樣態是兩邊悄悄漂開,而畫面上兩邊都「看起來對」。
+    個股 session 的健檢與自癒共用這一把;2026-08-26 F4 起 corr 的台積電現貨腿也吃它
+    (`corr_source.segment_leg_gate` 的 `tws` 那半邊)—— 個股現貨時段只有一張表,第二張表
+    的失效樣態是兩邊悄悄漂開,而畫面上兩邊都「看起來對」。index session **不是**這一把
+    (`in_index_heal_window_now`,13:25 關):指數與個股在收盤試撮期的推播事實不同。
 
     `now` 只給測試注入(簽名比照 `futures_source.in_futures_session_now`);預設 None
-    = 讀牆鐘,逐字等於改動前。
+    = 讀牆鐘。
     """
     t = _dt.datetime.now().time() if now is None else now
     return _TRADING_START <= t < _TRADING_END
+
+
+def in_index_heal_window_now(now: _dt.time | None = None) -> bool:
+    """index session(IX0001 / 櫃買)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。
+
+    與 `in_trading_hours_now` 只差上界:指數 13:25 起不更新(19 發 / 日誤判的症狀所在),個股
+    同一段仍有簿更新推播。注入點 = `app._default_index_source(in_trading_hours=…)`;個股 /
+    corr 現貨腿**不得**接這一把(pr-126 F-01)。
+    """
+    t = _dt.datetime.now().time() if now is None else now
+    return _TRADING_START <= t < _INDEX_HEAL_END
 
 
 class StockQuoteSource(TC4QuoteSource):
