@@ -33,11 +33,11 @@
 
 | 讀者 | 用途 | 影響 |
 |---|---|---|
-| `stock_source.py:482` `heal_active=in_trading_hours` | 個股 session R1/R2 看門狗 | 13:26 起不再重掛 |
-| `stock_source.py:583` / `:639` `_in_trading_hours()` | 個股健檢(R3 no-data 階梯)武裝 / 續排 | 13:26 起不再武裝 / 續排 |
-| `app.py:365` `_default_stock_source` | 個股 session(日曆 AND 牆鐘) | 同上 |
+| `stock_source.py:482` `heal_active=in_trading_hours` | 個股 session R1/R2 看門狗 | 13:26 起不再重掛(per-consumer 收修後不再成立,閘留 13:35) |
+| `stock_source.py:583` / `:639` `_in_trading_hours()` | 個股健檢(R3 no-data 階梯)武裝 / 續排 | 13:26 起不再武裝 / 續排(同上,不再成立) |
+| `app.py:365` `_default_stock_source` | 個股 session(日曆 AND 牆鐘) | 同上(不再成立) |
 | `app.py:374` index session | IX0001 / OTC 看門狗 | 19 發歸零(本案主症狀) |
-| `app.py:413` `segment_leg_gate(tws=)` | corr 台積電現貨腿 | 13:25 起退出 R1 **與** R2 母體(逐 symbol 閘扣在 `tc4._heal_tick:624` 母體形成處,不是 R2 迴圈 `continue`;pr-126 F-04 校正) |
+| `app.py:413` `segment_leg_gate(tws=)` | corr 台積電現貨腿 | 13:25 起退出 R1 **與** R2 母體(逐 symbol 閘扣在 `tc4._heal_tick:624` 母體形成處,不是 R2 迴圈 `continue`;pr-126 F-04 校正;per-consumer 收修後不再成立,2330 留 13:35) |
 | `index_engine._WATCH_END` 13:25 | 分時 watchdog(**另一把**,已是 13:25,`<`) | 不動;本改動改 `<` 後兩把同值同語意 |
 | `signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30、`stock_models` 試撮窗 | 訊號域 / 驗證域 / 標示用 | **刻意不對齊**,不動 |
 

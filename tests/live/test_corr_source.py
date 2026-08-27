@@ -204,10 +204,10 @@ class TestTwsLegClock:
             (8, 30, True),  # 試撮開始(現貨這段有推播,閘要開著才救得到)
             (13, 24, True),
             (13, 25, True),  # 收盤試撮起:個股仍有簿更新推播,看門狗照開(只有 index session 在這裡下班)
-            (13, 26, True),  # 這列與 13:30 那列擋「`_TRADING_END` 被改回 13:25」(value-only revert)
+            (13, 26, True),  # 13:25 / 13:26 / 13:30 三列擋「`_TRADING_END` 被改回 13:25」(value-only revert)
             (13, 30, True),  # 收盤撮合那一分仍開:收盤那筆推播晚到時看門狗還在
             (13, 35, False),  # 上界 end-exclusive:13:35:00 起關。這列只擋 `<` → `<=` 復原,
-            #                   對 value-only revert **不**敏感(pr-126 F-06;擋 13:25 復原的是上面 13:26 / 13:30)
+            #                   對 value-only revert **不**敏感(pr-126 F-06;擋 13:25 復原的是上面 13:25 / 13:26 / 13:30)
             (13, 36, False),
             (14, 0, False),  # 收盤後:整個下午 + 夜盤不得 churn
             (8, 29, False),

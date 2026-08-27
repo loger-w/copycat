@@ -1256,7 +1256,7 @@ class TestIndexHealWindowGate:
             (_dt.time(10, 0), True),
             (_dt.time(13, 24, 59), True),
             (_dt.time(13, 25, 0), False),  # 上界 end-exclusive:收盤試撮起指數不更新
-            (_dt.time(13, 26), False),  # 這列與 13:30 擋「被改回 13:35」(value-only revert)
+            (_dt.time(13, 26), False),  # 13:25 / 13:26 / 13:30 三列擋「被改回 13:35」(value-only revert)
             (_dt.time(13, 30), False),
             (_dt.time(13, 35), False),
             (_dt.time(14, 0), False),

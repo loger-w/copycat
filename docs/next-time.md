@@ -31,9 +31,10 @@
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
   加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。
-- [x] ~~**`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2)~~ → pr-126 F-01 per-consumer 後
-  `_TRADING_END` 回到 13:35(13:25–13:30 交易時段函式回 True,名實相符),index 那把另立具名 `in_index_heal_window_now`;
-  更名需求消解(`tests/live/test_corr_source.py::TestTwsLegClock` 釘住)。
+- [ ] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2;per-consumer review F-S2 重申):pr-126 F-01
+  後 `_TRADING_END` 回 13:35,13:25–13:30 那半段名實相符了,但 **13:30–13:35 已收盤函式仍回 True** —— 它實質是「個股自癒 /
+  健檢閘窗(上界 13:35 是啟發式)」;`corr_source.py:61` / `app.py:416` 讀者只看得到名字,正是 #126 誤共用的同一條失效路。
+  index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。
 - [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
   13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
   pr-126 F-05)但**現價欄停在最後一筆推播**(`_merge_backfill` 只寫 minutes);(b) 13:25–13:35 新加的**指數**訂閱不武裝健檢。

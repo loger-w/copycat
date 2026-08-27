@@ -264,6 +264,14 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `CorrQuoteSource(heal_sparse_symbols=)` → `tc4.TC4QuoteSource._heal_tick` R2 迴圈 `continue`。與時段閘
   `heal_symbol_active` **正交**:sparse 腿仍在 R1 母體。漂掉的症狀:該腿每 240 s 一發「零推播自癒 … attempt 1」
   (漏標)或 session 死時該腿整場不救(誤標),兩邊都零錯誤訊號。
+- **index session 自癒閘上界 = `index_engine._WATCH_END`**(2026-08-27 起,pr-126 F-01 per-consumer):產生點
+  `copycat/live/stock_source.py::_INDEX_HEAL_END`(13:25,end-exclusive;`in_index_heal_window_now` 只給
+  `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(分時 watchdog 凍結點)
+  **同值同語意** —— 兩把都釘在「收盤試撮起指數不更新」這一個事實。個股 / corr 台積電腿走另一把
+  `_TRADING_END` 13:35(試撮期個股仍有簿更新推播),**三個消費者不共用一把閘**。漂掉的症狀:一把還在救、另一把
+  已凍結(REALTIME 重掛 churn 與分時 watchdog 各說各話),零錯誤訊號;`tests/live/test_stock_source.py::
+  TestIndexHealWindowGate::test_end_matches_index_engine_watchdog_window` 鎖住;`tests/server/test_main_wiring.py::
+  test_stock_and_index_heal_gates_are_two_different_clocks` 鎖「兩把不同 callable」。
 
 ## 5. 資料源
 
