@@ -2065,6 +2065,68 @@ async def test_note_price_type_records_trade_date(tmp_path: Path, monkeypatch: p
     assert client.store._price_types[result.seq_no][2:] == ("2330", "B")
 
 
+def _calendar_fuse_blown(when: datetime | None = None) -> str:
+    """`_trade_ymd` 的日曆保險絲:`next_trading_day` 往後 60 天找不到交易日 → RuntimeError
+    (`_calendar()` 只降級壞檔 / 讀檔錯,這一種是資料錯,穿得出來)。"""
+    raise RuntimeError("往後 60 天仍找不到交易日(起點 2026-08-24),交易日曆資料有誤")
+
+
+async def test_late_result_audit_survives_trade_day_fuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """review §2.4 Spec 7:晚到結果補記價格別在 `_audit` 之前且無 try —— 日曆保險絲一炸,
+    late 審計行整行不見(done_callback 內炸掉只剩 asyncio 的「Exception in callback」)。
+    標籤是附屬品、審計不是:late 行必須照寫,標籤退回只記本機日(N075 前口徑)+ WARNING。"""
+    _freeze_today(monkeypatch)
+    monkeypatch.setattr(client_mod, "_WRITE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(client_mod, "_trade_ymd", _calendar_fuse_blown)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._loop = asyncio.get_running_loop()
+    res = await client.submit_stock_order(
+        StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=2, price_type="market")
+    )
+    assert res.ok is False and res.seq_no is None
+    cmd = client._cmd_q.get_nowait()
+    assert cmd is not None
+    fn, fut = cmd
+    with caplog.at_level("WARNING"):
+        fut.set_result(fn())
+        await asyncio.sleep(0)
+    lines = _audit_lines(client)
+    assert lines[-1].get("late") is True
+    assert lines[-1]["result"]["ok"] is True
+    # 退回只比本機日:日盤回報日 = 本機日 → 標籤仍帶得出(夜盤那一天候選才缺)
+    client.store.apply_reply(parse_onnewdata(_dated(_stock_evt_raw("SEQ0001", stock="2330"))))
+    assert client.store.orders()[0].price_type == "market"
+    assert client.store._price_types["SEQ0001"][1] == (_FIXED_YMD,)
+    assert any("交易日推算失敗" in r.getMessage() for r in caplog.records)
+
+
+async def test_submit_result_survives_trade_day_fuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """同一把保險絲炸在正常送單路徑:單已送出、審計已寫,送單結果必須照回 —— 不能讓 route
+    因為標籤算不出交易日而回 500(user 看到錯誤、單卻在市場上)。"""
+    monkeypatch.setattr(client_mod, "_trade_ymd", _calendar_fuse_blown)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    with caplog.at_level("WARNING"):
+        result = await _drive(
+            client,
+            lambda: client.submit_stock_order(
+                StockOrderRequest(
+                    stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market"
+                )
+            ),
+        )
+    assert result.ok is True and result.seq_no is not None
+    assert client.store._price_types[result.seq_no][1] == (client_mod._today_ymd(),)
+    assert any("交易日推算失敗" in r.getMessage() for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # fix/tc4-logout-and-cancel-reply-warning:刪單回報的尾欄序號是刪單自己的序號
 # ---------------------------------------------------------------------------
