@@ -264,7 +264,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   test_only_sxf_is_sparse_and_the_repo_file_agrees` 鎖兩邊集合一致),讀者 = `app._default_corr_source` →
   `CorrQuoteSource(heal_sparse_symbols=)` → `tc4.TC4QuoteSource._heal_tick` R2 迴圈 `continue`。與時段閘
   `heal_symbol_active` **正交**:sparse 腿仍在 R1 母體。漂掉的症狀:該腿每 240 s 一發「零推播自癒 … attempt 1」
-  (漏標)或 session 死時該腿整場不救(誤標),兩邊都零錯誤訊號。
+  (漏標)或**單腿死**(session 其他腿還在推,R1 不成立)時該腿整場不救(誤標;session 整條死掉仍由 R1 整批救),
+  兩邊都零錯誤訊號。`sparse` 打成 `"true"` / `1` 一律無效並印 WARNING(pr-120 F-02)。
 - **index session 自癒閘上界 = `index_engine._WATCH_END`**(2026-08-27 起,pr-126 F-01 per-consumer):產生點
   `copycat/live/stock_source.py::_INDEX_HEAL_END`(13:25,end-exclusive;`in_index_heal_window_now` 只給
   `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(分時 watchdog 凍結點)
