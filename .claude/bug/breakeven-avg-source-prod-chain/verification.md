@@ -42,16 +42,22 @@ cd frontend && npx vitest run src/lib/ladder-position.test.ts
 | # | 假說 | 預測 | 結果 |
 |---|---|---|---|
 | A | `_on_profit_complete` 只寫 `avg_price` 不寫 `avg_source`;`apply_profit_rows` 零 caller | 補一行 `p.avg_source = "broker"` 真鏈測試轉綠 | 成立 |
-| B | `positionEcon` switch 無 default,undefined 落空 | `default` 併 `case null` → 與 null 同值 | 成立 |
+| B | `positionEcon` switch 無 default,undefined 落空 | 先歸一成 null 再進 exhaustive switch(**無 default**;`0375f3aa` 曾用 default,`5ff89742` 拿掉改 `?? null`,pr-119 F-02 後最終為白名單歸一)→ 與 null 同值 | 成立 |
 
 ## 4. 修法與 commit
 
 | commit | 類 | 內容 |
 |---|---|---|
 | `8228aea3` | test | 兩條紅先行 |
-| `0375f3aa` | 🔴 | `client.py::_on_profit_complete` 補 `p.avg_source = "broker"`;`ladder-position.ts` switch `default` 併 null 分支 |
+| `0375f3aa` | 🔴 | `client.py::_on_profit_complete` 補 `p.avg_source = "broker"`;`ladder-position.ts` switch `default` 併 null 分支(**後被 `5ff89742` 拿掉**,出貨形態無 default) |
 | `b27ab8a9` | 🔵 | 刪零 caller 的 `store.apply_profit_rows`(+ 未用 `ProfitRow` import);store 四條測試:兩條刪(語意由 test_client 真鏈測試覆蓋)、兩條 setup 改吃真鏈產物、carry 測試補「同種類沿用 / 異種類不沿用」斷言 |
 | `f3fca9cc` | chore | CLAUDE.md §4 產生點改正(F-03)、next-time 留尾 + #116 F-01 錯位順修、spec.md |
+| `7b7c284f` | test | round 1 收修:真鏈 kind=None 整列略過不蓋 broker 均價(Spec P2,mutation 紅);store carry 測試去重折行 |
+| `5ff89742` | 🔵 | round 1 收修:`positionEcon` 先歸一 undefined→null 再進 exhaustive switch(拿掉 default);`positions()` docstring 回補不可就地改的不變式 |
+| `c28541f9` | chore | round 1 收修:CLAUDE.md §4 讀者改為 wire 映射點、next-time 期貨列 avg_source 語意缺口、spec 措辭 |
+
+pr-119 F-07 校正(2026-08-27 晚):上表原只列到 `f3fca9cc` 且 §3 B / `0375f3aa` 列寫「default」與出貨 code 相反;三列收修補齊。
+最終形態再經 `fix/breakeven-review-followups`(pr-119 F-02)改為白名單歸一 `raw === "broker" || raw === "fill" ? raw : null`。
 
 ## 5. 反向驗證(PASS)
 

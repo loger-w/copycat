@@ -244,7 +244,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   餵 `lib/ladder-position.ts::positionEcon`,唯一算式所在):`broker` 不再加買費、`fill` 加;現股 `today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
   漂掉的症狀:後端少送 `avg_source` → 前端當 fill 全加一次買費 → 損益比群益 APP 少一筆買費、打平線在快照落地時
   跳一格(08-26 修、08-27 才真的修到 prod 路徑,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失;前端 switch 無
-  default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` 持倉列 `avg_source` 非 null。
+  default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` **證券**持倉列(`market == "sec"`)`avg_source` 非 null;
+  `market == "fut"` 列恆 null 是既知語意(期貨列走 OI 不經損益回填,見 next-time 2026-08-27),不是契約斷了,也不要替它硬填來源(pr-119 F-03)。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
