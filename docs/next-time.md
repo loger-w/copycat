@@ -21,21 +21,26 @@
   更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。
 - [ ] **個股冷門檔同型(6949 每分鐘一發 attempt 1)**:個股 source 的 R2 60 s 對零股 / 冷門檔同樣是假警報,但個股是
   自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。
-- [x] ~~**收盤段 `IX0001` 每 30 s 一發**~~ → 08-27 user 拍板 13:25(mod/stock-heal-gate-end-1325):看門狗 13:25 下班、訂閱
-  不退、13:30 收盤推播照收、試撮 5 分鐘內訂閱死掉由 1K 尾段回補兜底。次一交易日驗 `grep 零推播自癒 | grep IX0001` 13:25 後 0 筆。
+- [ ] **收盤段 `IX0001` 每 30 s 一發 —— 已出貨待次一交易日真環境驗**:08-27 user 拍板 13:25(mod/stock-heal-gate-end-1325),
+  pr-126 F-01 收修為 per-consumer(mod/heal-gate-per-consumer):**只有 index session** 吃 `in_index_heal_window_now` 13:25,
+  個股 / corr 台積電腿留 `in_trading_hours_now` 13:35(試撮期個股仍有簿更新推播,一起關是零收益純代價)。看門狗 13:25 下班、
+  訂閱不退、13:30 收盤推播照收。驗法:`grep 零推播自癒 logs/server-<次日>.log | grep IX0001` 13:25 後 0 筆 + 13:36
+  `curl /api/index/state` 記 twse 最後更新時戳(同時反證 F-03「誤判 vs 真死」);**驗過再勾**(pr-126 F-08)。
 - [ ] **重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
   snapshot(tc4-market-facts fresh subscribe 事實)→ `tc4._note_push` 清 `_heal_attempts` / `_heal_next` → 下一輪又從
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
   加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。
-- [ ] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2):13:25–13:30 交易所仍收單、仍是交易時段,
-  函式卻回 False —— 它現在是「現貨自癒 / 健檢閘窗」;`segment_leg_gate(tws=)` 讀者只看得到名字。獨立 🔵 更名
-  `in_stock_heal_window_now` / `_HEAL_GATE_END`,六個讀者一起改。
-- [ ] **閘 13:25 的三條代價**(review Spec P2-2/3/4,user 知情):訂閱在 13:25–13:30 死掉時 (a) 加權分時回補得回但**現價欄
-  停在最後一筆推播**(`index_engine._merge_backfill` 只寫 minutes);(b) 個股**沒有**當日重補路徑(`_backfilled` 當日一次、
-  60 s 入列只由群組檢視觸發),收盤那筆到重啟為止都缺;(c) 13:25–13:35 新加自選不武裝健檢也不發 `_on_no_data`。
-  三條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測。
-- [ ] **IX0001 收盤最後一筆推播幾點到**:閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
+- [x] ~~**`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2)~~ → pr-126 F-01 per-consumer 後
+  `_TRADING_END` 回到 13:35(13:25–13:30 交易時段函式回 True,名實相符),index 那把另立具名 `in_index_heal_window_now`;
+  更名需求消解(`tests/live/test_corr_source.py::TestTwsLegClock` 釘住)。
+- [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
+  13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
+  pr-126 F-05)但**現價欄停在最後一筆推播**(`_merge_backfill` 只寫 minutes);(b) 13:25–13:35 新加的**指數**訂閱不武裝健檢。
+  個股側不再受影響(閘留 13:35)。pr-126 F-02 校正一併記下:個股當日重補路徑**有** —— `set_main_contract`(手動切主圖)
+  與 `_handle_reconnect`(斷線重連)會重補,只有群組成員 60 s 輪詢被 `_backfilled` 擋住;08-27 前那句「個股沒有當日重補」錯。
+  兩條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測。
+- [ ] **IX0001 收盤最後一筆推播幾點到**:index 閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
   (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
   row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`
   看 twse 最後更新時戳 / minutes 最大鍵,或 13:20 起只聽不訂 probe(`ix_listen_probe.py` 樣板)。
@@ -81,9 +86,9 @@ verification;這裡回填成 backlog。
   (`removed` 以 `_refs` 為準)**依賴 IO 在鎖內**,一移出 ST1 洩漏原樣復發 —— 兩件事要同一輪做。
 - [ ] **N092 `stock_source.backfill` 真三態化**(§5.4):先把 `parse_hist_tick` 的「試撮窗濾掉」與「解析不出」分流(現在
   兩者都回 None),否則 08:30–09:00 盤前回補會被判成 stub 無限重排。改回傳契約,獨立輪。
-- [ ] **N051 另外兩個 churn 來源**(§5.5):~~收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發(index source 自己的閘上界
-  13:25 —— 會連帶關掉 13:30 最後一筆,**要 user 拍板**)~~ → 08-27 user 拍板 13:25,mod/stock-heal-gate-end-1325 已改
-  `stock_source._TRADING_END`;個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
+- [ ] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發 → 08-27 user 拍板 index
+  閘 13:25(`in_index_heal_window_now`,pr-126 F-01 per-consumer 收修;`_TRADING_END` 留 13:35),**已出貨待次一交易日驗**
+  (見 08-27 節「收盤段 IX0001」條,pr-126 F-08 不先勾);個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
   退避上限 60 s 拉到 300 s。另:N051 逐腿閘的真環境待核項(SXF 休市段自癒發數)#105 §6 沒列,prod 重啟後盤中
   `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。**08-27 核過:休市段(08:45 前 / 13:45 後)零發 = 逐腿閘
   PASS;日盤 09:45–13:01 另有 11 發是稀疏腿真沒成交的假警報(M0 那 8 發是休市段,不是同一件事),
