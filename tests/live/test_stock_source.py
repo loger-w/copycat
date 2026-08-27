@@ -11,6 +11,7 @@ import pytest
 
 from copycat.live.stock_source import (
     StockQuoteSource,
+    in_index_heal_window_now,
     in_trading_hours_now,
     stock_symbol,
     stock_window,
@@ -1230,12 +1231,49 @@ class TestBackfillStubSignature:
 
 
 class TestTradingHoursGate:
-    """`in_trading_hours_now` 是個股 session 看門狗 / 健檢、index session、corr 台積電腿共用的一把閘
+    """`in_trading_hours_now` 是個股 session 看門狗 / 健檢與 corr 台積電腿共用的一把閘
     (完整邊界表在 tests/live/test_corr_source.py::TestTwsLegClock);這裡只釘本檔常數的兩個端點,
-    讓改 `_TRADING_START` / `_TRADING_END` 時本檔自己會紅(review Standards P3)。"""
+    讓改 `_TRADING_START` / `_TRADING_END` 時本檔自己會紅(review Standards P3)。
+    index session **不吃這把**(見 `TestIndexHealWindowGate`)。"""
 
     def test_start_inclusive_end_exclusive(self) -> None:
         assert in_trading_hours_now(_dt.time(8, 29, 59)) is False
         assert in_trading_hours_now(_dt.time(8, 30, 0)) is True  # 含起點:試撮起有推播
-        assert in_trading_hours_now(_dt.time(13, 24, 59)) is True
-        assert in_trading_hours_now(_dt.time(13, 25, 0)) is False  # 不含終點:收盤試撮起交易所不更新
+        assert in_trading_hours_now(_dt.time(13, 34, 59)) is True
+        assert in_trading_hours_now(_dt.time(13, 35, 0)) is False  # 不含終點:收盤補正止(end-exclusive)
+
+
+class TestIndexHealWindowGate:
+    """`in_index_heal_window_now` = **只有** index session(IX0001 / 櫃買)吃的自癒 / 健檢閘:
+    收盤試撮 13:25 起指數不更新,看門狗每 30 s 誤判 19 發 / 日(pr-126);個股在同一段仍有簿更新
+    推播,所以個股 / corr 現貨腿留 `in_trading_hours_now` 的 13:35(pr-126 F-01 per-consumer)。"""
+
+    @pytest.mark.parametrize(
+        ("t", "expected"),
+        [
+            (_dt.time(8, 29, 59), False),
+            (_dt.time(8, 30, 0), True),  # 起點與個股同 08:30(含)
+            (_dt.time(10, 0), True),
+            (_dt.time(13, 24, 59), True),
+            (_dt.time(13, 25, 0), False),  # 上界 end-exclusive:收盤試撮起指數不更新
+            (_dt.time(13, 26), False),  # 這列與 13:30 擋「被改回 13:35」(value-only revert)
+            (_dt.time(13, 30), False),
+            (_dt.time(13, 35), False),
+            (_dt.time(14, 0), False),
+            (_dt.time(2, 0), False),
+        ],
+    )
+    def test_boundary(self, t: _dt.time, expected: bool) -> None:
+        assert in_index_heal_window_now(t) is expected
+
+    def test_end_matches_index_engine_watchdog_window(self) -> None:
+        """上界與 `index_engine._WATCH_END`(分時 watchdog 凍結點)同值同語意 —— 兩把都釘在
+        「收盤試撮起指數不更新」這一個事實上;漂開的症狀是一把還在救、另一把已凍結,零錯誤訊號。"""
+        from copycat.server import index_engine
+
+        assert in_index_heal_window_now(index_engine._WATCH_END) is False
+        earlier = (
+            _dt.datetime.combine(_dt.date(2026, 1, 1), index_engine._WATCH_END)
+            - _dt.timedelta(seconds=1)
+        ).time()
+        assert in_index_heal_window_now(earlier) is True

@@ -300,16 +300,24 @@ def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock:
 
 
 @pytest.mark.parametrize("clock", [True, False])
-@pytest.mark.parametrize("factory", ["_default_stock_source", "_default_index_source"])
+@pytest.mark.parametrize(
+    ("factory", "clock_fn"),
+    [
+        ("_default_stock_source", "in_trading_hours_now"),  # 個股:13:35(試撮期仍有簿更新推播)
+        ("_default_index_source", "in_index_heal_window_now"),  # 指數:13:25(試撮起指數不更新)
+    ],
+)
 def test_stock_and_index_heal_gate_ands_the_calendar(
-    monkeypatch: pytest.MonkeyPatch, factory: str, clock: bool
+    monkeypatch: pytest.MonkeyPatch, factory: str, clock_fn: str, clock: bool
 ) -> None:
-    """個股 / 指數的閘走既有的 `in_trading_hours` 參數(健檢與自癒同一把)。"""
+    """個股 / 指數的閘都走既有的 `in_trading_hours` 參數(健檢與自癒同一把),但牆鐘那半邊
+    **各拿各的**(pr-126 F-01 per-consumer):只量了 IX0001 就一起關 13:25,個股會失去收盤集合
+    競價期間 R1 / R2 / 健檢三條救援路。"""
     import copycat.live.stock_source as stock_mod
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, stock_mod, "StockQuoteSource")
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
+    monkeypatch.setattr(stock_mod, clock_fn, lambda: clock)
 
     getattr(app_mod, factory)(_CAL)
     gate = seen["kwargs"]["in_trading_hours"]
@@ -318,6 +326,33 @@ def test_stock_and_index_heal_gate_ands_the_calendar(
     assert gate() is False
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
     assert gate() is clock, "交易日仍要 AND 盤中時段(盤外不得 churn)"
+
+
+def test_stock_and_index_heal_gates_are_two_different_clocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """兩把牆鐘互不牽動:index 那把關著時個股那把仍開(13:25–13:35 正是這個形狀),反之亦然。
+    失效樣態 = 有人把 index source 接回 `in_trading_hours_now`(或個股接到 index 那把),
+    測試只 monkeypatch 其中一把就看不出來 —— 所以兩把同時各設相反值。"""
+    import copycat.live.stock_source as stock_mod
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, stock_mod, "StockQuoteSource")
+    monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
+
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: True)
+    monkeypatch.setattr(stock_mod, "in_index_heal_window_now", lambda: False)
+    app_mod._default_stock_source(_CAL)
+    assert seen["kwargs"]["in_trading_hours"]() is True
+    app_mod._default_index_source(_CAL)
+    assert seen["kwargs"]["in_trading_hours"]() is False
+
+    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: False)
+    monkeypatch.setattr(stock_mod, "in_index_heal_window_now", lambda: True)
+    app_mod._default_stock_source(_CAL)
+    assert seen["kwargs"]["in_trading_hours"]() is False
+    app_mod._default_index_source(_CAL)
+    assert seen["kwargs"]["in_trading_hours"]() is True
 
 
 @pytest.mark.parametrize("clock", [True, False])

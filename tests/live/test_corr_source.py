@@ -192,6 +192,8 @@ class TestSegmentLegGate:
 class TestTwsLegClock:
     """台積電腿吃的那把牆鐘 = 個股 session 既有的 `in_trading_hours_now`(不另立第二張表)。
 
+    **不是** index session 那把 `in_index_heal_window_now`(13:25 關):現貨腿在收盤試撮期
+    13:25–13:30 仍有簿更新推播(TradeStatus=1),看門狗留到 13:35 才有意義(pr-126 F-01)。
     日曆 AND 那一半在 `app._default_corr_source`(見 tests/server/test_main_wiring.py)。
     """
 
@@ -200,12 +202,13 @@ class TestTwsLegClock:
         [
             (10, 0, True),  # 盤中
             (8, 30, True),  # 試撮開始(現貨這段有推播,閘要開著才救得到)
-            (13, 24, True),  # 收盤試撮前最後一分仍開
-            (13, 25, False),  # 上界 end-exclusive(與 index_engine._WATCH_END 同語意):13:25:00 起交易所不更新,
-            #                   看門狗誤判 19 發/日全在 13:25:46 之後(2026-08-27 拍板 13:25)
-            (13, 26, False),
-            (13, 30, False),  # 收盤那筆推播照收(閘只管看門狗不管訂閱);訂閱若在試撮 5 分鐘死掉由 1K 尾段回補兜底
-            (13, 35, False),  # 舊上界「收盤補正止」:夾到分鐘精度,改回 13:35 會紅
+            (13, 24, True),
+            (13, 25, True),  # 收盤試撮起:個股仍有簿更新推播,看門狗照開(只有 index session 在這裡下班)
+            (13, 26, True),  # 這列與 13:30 那列擋「`_TRADING_END` 被改回 13:25」(value-only revert)
+            (13, 30, True),  # 收盤撮合那一分仍開:收盤那筆推播晚到時看門狗還在
+            (13, 35, False),  # 上界 end-exclusive:13:35:00 起關。這列只擋 `<` → `<=` 復原,
+            #                   對 value-only revert **不**敏感(pr-126 F-06;擋 13:25 復原的是上面 13:26 / 13:30)
+            (13, 36, False),
             (14, 0, False),  # 收盤後:整個下午 + 夜盤不得 churn
             (8, 29, False),
             (2, 0, False),  # 凌晨(台期交夜盤仍開,現貨腿必須關)
