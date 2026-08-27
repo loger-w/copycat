@@ -24,6 +24,12 @@ from copycat.server.bars import (
 _DAYTIME = _dt.time(9, 0)
 
 
+@pytest.fixture(autouse=True)
+def _daytime_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """全檔凍在 `_DAYTIME`:午夜緩衝窗(TZ-2)只在 `TestMidnightMemoRace` 內自己覆寫。"""
+    monkeypatch.setattr(bars_mod, "_now_time", lambda: _DAYTIME)
+
+
 def bar(t: str, c: int = 100, v: int = 1) -> Bar:
     return {"t": t, "o": c, "h": c, "l": c, "c": c, "v": v}
 
