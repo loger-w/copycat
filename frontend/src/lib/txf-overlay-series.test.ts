@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Bar } from "@/lib/candle";
 import { txfBarsToSeries } from "@/lib/txf-overlay-series";
 
-/** feat/txf-intraday-overlay S1:期貨 allday 1K bars + 期貨 WS 現價 → 與加權 / 櫃買同形的
+/** feat/txf-intraday-overlay S1:期貨 allday 1K bars + index engine 轉供的台指期現價(`useIndexStream().txf`)→ 與加權 / 櫃買同形的
  *  `IndexSeries`(分鐘鍵 = 起點 HHMM),餵既有 `buildIndexOverlayLines` 畫「台指期」疊線。 */
 
 function bar(t: string, c: number): Bar {
@@ -130,7 +130,7 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
     });
   });
 
-  it("stale 原樣透傳(期貨 WS 非 open → 標籤加註「(中斷)」;歷史分鐘仍為真)", () => {
+  it("stale 原樣透傳(index / 期貨 WS 任一非 open → 標籤加註「(中斷)」;歷史分鐘仍為真)", () => {
     expect(txfBarsToSeries([bar("2026-08-27 08:46", 23_100_000)], null, REF, true)!.stale).toBe(true);
   });
 });

@@ -54,7 +54,7 @@ App
 
 ## 3. `txfBarsToSeries` 語意(S1)
 
-輸入:`bars: readonly Bar[]`(allday 5 日,升冪)、`quote: {p, t, date} | null`(期貨 WS)、`ref: number | null`、
+輸入:`bars: readonly Bar[]`(allday 5 日,升冪)、`quote: {p, t, date} | null`(index engine 每拍轉供的 `useIndexStream().txf` + `tradeDate`;**不是**期貨 WS,見 §2)、`ref: number | null`(期貨 WS 結算價)、
 `wsStale: boolean`。輸出 `IndexSeries | null`(`{p, ref, high, low, stale, minutes}`,與加權 / 櫃買同形 →
 `buildIndexOverlayLines` 零改動吃得下)。
 

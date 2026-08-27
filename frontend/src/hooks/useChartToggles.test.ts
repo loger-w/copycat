@@ -2,12 +2,20 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useChartToggles } from "@/hooks/useChartToggles";
+type TogglesMod = typeof import("@/hooks/useChartToggles");
 
 const KEY = "copycat-chart-toggles";
 
-beforeEach(() => {
+// 模組層 store(cached / cachedRaw)跨測試存活,只清 localStorage 不夠:存檔為空時 persist 失敗再 set
+// 會留下 cachedRaw=null,下一條的 removeItem 變 no-op、getSnapshot 靜默回上一條的 toggles。
+// 照 lib/storage.test.ts 的樣板:type-only import + 每條測試 resetModules 後重新 import
+//(純靜態 import 下只呼叫 resetModules 不夠 —— 已綁定的模組不會被換掉)。/pr-review 127 F-04。
+let useChartToggles: TogglesMod["useChartToggles"];
+
+beforeEach(async () => {
   window.localStorage.removeItem(KEY);
+  vi.resetModules();
+  ({ useChartToggles } = await import("@/hooks/useChartToggles"));
 });
 
 afterEach(cleanup);
