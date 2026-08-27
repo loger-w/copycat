@@ -4,6 +4,11 @@
   `avg_source` 字面,沒 grep `avg_price =` 就地寫入 → 真鏈 `client._on_profit_complete` 漏掉,測試綠在一條零 caller 的
   死路徑上。判準:新增欄位時 `grep "<鄰欄>\s*="` 把每個就地寫入點列出來逐一對。待併入 `ops-discipline`(該檔另一 session
   持有未提交修改,先記這裡)。
+- [ ] **期貨列 `avg_source` 恆 null(語意缺口,非本輪 bug)**(two-axis Spec (c)):`balance.py::parse_open_interest_line` 給期貨列
+  `avg_price=` 群益 OI [6] 平均成本、從不寫 `avg_source`;`merge_fut_positions` / `_stale_fut_positions` 沿用同物件。
+  **不會**多加一次買費 —— 期貨列不進 `positionEcon`(`position-summary.ts:116/177` 分開走、`PriceLadder` 是現股梯),
+  reviewer 說的後果不成立;真正的缺口是「群益 OI 平均成本含不含手續費」無實證,期貨梯的打平線若日後要吃它得先量。
+  與 08-26 節「空方均價語意無真樣本」同一類,等首筆期貨真成交順看。
 - [ ] **F-05 `fill_date` 跨日重播復發**(pr-118-review Should):`today_qty` 看成交到達日,群益 ConnectByID 重播含前一日時
   (跨日未重啟)昨天的成交會被算進當沖段 —— 與 08-26 節「`today_qty` 依賴聚合只有當日 backlog」同一條,那條已列。
 - [ ] **pr-review #116 / #117 / #118 三份報告仍在 repo root 未 commit**(`pr-11N-review{,.audit}.md`);上一輪 #111 是搬進
@@ -64,7 +69,6 @@ verification;這裡回填成 backlog。
   1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
   修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。~~
   → 同上,08-26 chore/frontend-lockfile-sync 已修。
-
 
 ## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)
 - [x] ~~**F-20 corr / river route 測試 11 腿 key 字面集合 4 處複製**:要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `tests/test_corr_config.py::_EXPECTED_LEGS`(user 08-26 問「11 腿名單是什麼」,已解釋,待拍板)。~~ → user 08-26 拍板「改」,refactor/f20-corr-leg-keys-from-config:兩檔改讀 `load_config(CONFIG_PATH)`,逐字只留 `_EXPECTED_LEGS`。

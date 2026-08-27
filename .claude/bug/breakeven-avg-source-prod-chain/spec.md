@@ -27,4 +27,4 @@
 ## 非目標
 
 - 不動空方均價語意(仍無真樣本,next-time 08-26 節)。
-- 不處理 pr-118-review 的 Should F-05(fill_date 跨日重播)與 11 條 Nice;#116 F-01 next-time 錯位一併順修(同檔一行)。
+- 不處理 pr-118-review 的 Should F-05(fill_date 跨日重播)與 11 條 Nice;#116 F-01 next-time 錯位一併順修(同檔一處,勾銷尾巴搬回原條目)。
