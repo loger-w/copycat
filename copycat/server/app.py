@@ -409,7 +409,7 @@ def _default_corr_source(
     # 正交 —— 它仍留在 R1 母體。只看 `tc4_legs()`:base 腿不由本 source 訂閱,標了也沒有 R2 可豁免
     # (load_config 會對這種誤標印 WARNING)。`config` **必填**(pr-120 F-04):source 的稀疏腿集合與
     # engine 的腿組必須吃同一份(lifespan 只讀一次再分兩處),不留 fallback 讓「各讀各的」在結構上合法;
-    # keyword-only 讓 `calendar` 的預設值與四個兄弟工廠同形(review S-1)。
+    # keyword-only 讓 `calendar` 的預設值與四個兄弟工廠同形。
     return CorrQuoteSource(
         port=_tc4_port(),
         heal_symbol_active=segment_leg_gate(
