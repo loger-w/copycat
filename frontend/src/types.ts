@@ -104,8 +104,10 @@ export interface CapitalOrder {
 export type PositionKind = "cash" | "margin" | "short";
 
 /** Position asdict(sec=股號;fut=期交所契約碼;空方 qty 為負)。 */
-/** 後端 `AvgSource` 同字彙(models.py):均價語意來源。 */
-export type AvgSource = "broker" | "fill";
+/** 後端 `AvgSource` 同字彙(models.py):均價語意來源。執行期白名單(`ladder-position.ts::isAvgSource`)
+ * 與型別**同源** —— 加值只改這一列;`positionEcon` 的 exhaustive switch 會逼你補 case(pr-119 F-02 / review S2)。 */
+export const AVG_SOURCES = ["broker", "fill"] as const;
+export type AvgSource = (typeof AVG_SOURCES)[number];
 
 export interface CapitalPosition {
   market: string; // sec/fut
