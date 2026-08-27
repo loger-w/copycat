@@ -20,6 +20,10 @@ from copycat.server.bars import (
 )
 
 
+#: 本檔預設時刻(見 `TestModuleClock`)
+_DAYTIME = _dt.time(9, 0)
+
+
 def bar(t: str, c: int = 100, v: int = 1) -> Bar:
     return {"t": t, "o": c, "h": c, "l": c, "c": c, "v": v}
 
@@ -571,6 +575,21 @@ class TestUnknownStatusCoerced:
             [],
             "disconnected",
         )
+
+
+class TestModuleClock:
+    """本檔預設時刻**被凍在 09:00**(模組級 autouse `_daytime_clock`),不讀真牆鐘。
+
+    `build_minute` 的午夜緩衝(`MIDNIGHT_BUFFER_END`,TZ-2)吃 `bars._now_time()`:台北
+    00:00–00:10 內 `yesterday` 不永久化 → 「歷史 memo 一次、當日重抓」那組期望在那 10 分鐘
+    會紅(pr-131 review 00:04 實跑 `5 failed`)。凍結點集中一處,要驗緩衝窗的測試自己覆寫。
+    重現(不用等半夜):plugin 把 `bars._now_time` 釘 00:05 再跑本檔 ——
+    `PYTHONPATH=<dir> pytest tests/server/test_bars.py -p freeze_0005`。
+    """
+
+    def test_default_clock_is_frozen_outside_midnight_buffer(self) -> None:
+        assert bars_mod._now_time() == _DAYTIME
+        assert _DAYTIME >= bars_mod.MIDNIGHT_BUFFER_END
 
 
 class TestMidnightMemoRace:
