@@ -30,7 +30,12 @@ from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
 logger = logging.getLogger(__name__)
 
 _TRADING_START = _dt.time(8, 30)
-_TRADING_END = _dt.time(13, 35)
+#: 上界 = 收盤試撮起點(含 13:25 這一分)。交易所 13:25–13:30 只收單不撮合、指數也不更新,
+#: 看門狗在這 5 分鐘 + 13:30 後每 30 s 判一次「零推播」全是誤判(2026-08-27 IX0001 19 發 /
+#: 日,每個交易日都在發)。閘只管看門狗與健檢,**不退訂**:13:30 收盤那筆推播照收;訂閱
+#: 若剛好在試撮 5 分鐘內死掉,分時由 1K 回補兜底(index_engine `_HEAL_TAIL_END` 13:40、
+#: 個股 60 s 輪詢)。舊值 13:35「收盤補正止」是啟發式不是量測(user 2026-08-27 拍板 13:25)。
+_TRADING_END = _dt.time(13, 25)
 
 _DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
 #: CDP basis sweep 的 n(`signal_hub._BASIS_BARS`)。**只有它小於這個數**,而它只要
@@ -443,7 +448,7 @@ def stock_window(trade_date: str) -> tuple[str, str]:
 
 
 def in_trading_hours_now(now: _dt.time | None = None) -> bool:
-    """台股現貨盤中(08:30 試撮起 – 13:35 收盤補正止)。
+    """台股現貨盤中(08:30 試撮起 – 13:25 收盤試撮起,含端點分)。
 
     個股 / 指數 session 的健檢與自癒共用這一把;2026-08-26 F4 起 corr 的台積電現貨腿
     也吃它(`corr_source.segment_leg_gate` 的 `tws` 那半邊)—— 現貨時段只有一張表,
