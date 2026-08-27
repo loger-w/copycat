@@ -5,8 +5,12 @@
   更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。
 - [ ] **個股冷門檔同型(6949 每分鐘一發 attempt 1)**:個股 source 的 R2 60 s 對零股 / 冷門檔同樣是假警報,但個股是
   自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。
-- [ ] **收盤段 `IX0001` 13:25–13:35 每 30 s 一發(今天 19 發)**:閘上界 `stock_source._TRADING_END` 13:35 vs 交易所
-  13:25 起停推;建議上界改 13:31(保 13:30 收盤最後一筆),待 user 拍板(08-27 已問)。
+- [ ] **收盤段 `IX0001` 每 30 s 一發**:同 08-26 節「N051 另外兩個 churn 來源」第一項(那條記 08-25 的 18 發;08-27
+  實測 13:25:46–13:34:51 共 19 發);閘 = `stock_source._TRADING_END` 13:35 vs 交易所 13:25 起停推。08-27 已向 user
+  提案上界改 13:31(保 13:30 收盤最後一筆而非 13:25),待拍板;拍板後以本條為準、同時勾銷 08-26 那項。
+- [ ] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
+  本輪加一個旗標動了 tc4 簽名 + body、corr_source 簽名 + 轉發、app 兩處、四支測試。候選 = `HealPolicy` frozen dataclass
+  收攏,四個 source 子類一起改,獨立 🔵。
 
 ## 2026-08-27(fix/breakeven-avg-source-prod-chain #118 broker 半邊在 prod 是死的 留尾)
 

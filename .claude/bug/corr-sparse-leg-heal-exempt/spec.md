@@ -30,8 +30,9 @@ SXF 日盤 94.4% 時間沒成交(tc4-market-facts),4 分鐘零推播是常態 �
 - `tests/live/test_tc4.py::TestHealSparseSymbol`(R2 豁免 / R1 仍整批 / 稀疏腿不誤觸 R1)。
 - `tests/live/test_corr_source.py::TestHealDefaults`(透傳)、`tests/test_corr_config.py`(解析 + parity)、
   `tests/server/test_main_wiring.py::test_corr_sparse_legs_come_from_the_config_file`(app 接線)。
-- 真實環境:prod 重啟後次一交易日 `grep "零推播自癒" logs/server-*.log | grep SXF` 日盤段應 0 筆;
-  `grep "零推播自癒" | grep -v SXF` 其他腿行為不變。
+- 真實環境:prod 重啟後次一交易日 `grep "零推播自癒" logs/server-*.log | grep SXF` **全日 0 筆**(休市段本來就被
+  時段閘擋、日盤由 sparse 擋);若非 0,同一秒必須有其他腿一起出現(= R1 整批重掛)才算 PASS,單獨出現 = FAIL
+  (`_heal` 的 log R1 / R2 同一句,只能靠「同秒成批」分辨)。`grep -v SXF` 其他腿行為不變。
 
 ## 非目標
 
