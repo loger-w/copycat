@@ -269,11 +269,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `CorrQuoteSource(heal_sparse_symbols=)` → `tc4.TC4QuoteSource._heal_tick` R2 迴圈 `continue`。與時段閘
   `heal_symbol_active` **正交**:sparse 腿仍在 R1 母體。漂掉的症狀:該腿每 240 s 一發「零推播自癒 … attempt 1」
   (漏標)或**單腿死**(session 其他腿還在推,R1 不成立)時該腿整場不救(誤標;session 整條死掉仍由 R1 整批救),
-  兩邊都零錯誤訊號。`sparse` 打成 `"true"` / `1` 一律無效並印 WARNING(pr-120 F-02)。
+  兩邊都零錯誤訊號。`sparse` 打成 `"true"` / `1` / `null` 一律無效並印 WARNING(pr-120 F-02)—— 但只在該設定檔
+  **被採用**時印;整份因缺欄 / base 不在 legs 被丟棄時只印「改用預設腿」,旗標不另印(pr-130 F-01)。
 - **index session 自癒閘上界 = `index_engine._WATCH_END`**(2026-08-27 起,pr-126 F-01 per-consumer):產生點
   `copycat/live/stock_source.py::_INDEX_HEAL_END`(13:25,end-exclusive;`in_index_heal_window_now` 只給
   `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(**推播靜默(stale)watchdog**
-  的凍結點;分時自癒窗反而從這一點開始 —— 有日曆到午夜、無日曆到 13:40)**同值同語意** —— 兩把都釘在
+  的凍結點;分時自癒 09:00 起全程都在,`_WATCH_END` 後只是換成尾段判準接手 —— 有日曆到午夜、無日曆到 13:40)
+  **同值同語意** —— 兩把都釘在
   「收盤試撮起指數不更新」這一個事實。個股 / corr 台積電腿走另一把 `_TRADING_END` 13:35(試撮期個股仍有簿更新推播),
   **三個消費者不共用一把閘**。13:25 後「index_engine 分時自癒還在救、source 層 REALTIME watchdog 已凍結」是**正常態**,
   不是漂移;漂掉(兩把值不同)的可觀測症狀:值被放寬 → 次一交易日 `grep 零推播自癒 | grep IX0001` 在 13:25 後又出現;

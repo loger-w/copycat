@@ -1,11 +1,11 @@
-## 2026-08-28(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
+## 2026-08-27(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
 
 - [ ] **artifact 引 rebase 前 SHA 在 #129 重演**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.1
   「47/56 dangling」流程 finding 的續集):`.claude/bug/breakeven-review-followups/verification.md` §1/§2 與 review JSON 的 8 個 SHA
   全是 rebase 前的,乾淨 clone 上 `git show` unknown revision。本輪不回改。處置候選 = (a) merge 後補寫最終 SHA(多一個
   收尾步驟,branch-lifecycle 收尾節加一行);(b) artifact 改引「PR 內相對順序 + commit subject」不引 SHA。要拍板一次寫進
   `branch-lifecycle`,不然每個 PR 都會再犯。
-- [ ] **`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake**(08-28 全量 pytest
+- [ ] **`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake**(非本輪 finding,如實揭露;08-27 深夜全量 pytest
   1/3135 紅、單跑 1 紅 5 綠、整檔綠):測試 `websocket_connect` 後立刻 `fake.on_message(quote)` 再 `receive_json()` 斷
   `twse.p == 42_039_920`,但 `/ws/index` 連上時先送**初始快照**(`twse.p` None),quote 廣播若排在快照之後,首則就是快照
   → `assert None == 42039920`。與本輪 diff 無關(index routes / ws / engine 未動)。處置 = 測試改「收到含 p 的那則為止」
@@ -13,6 +13,8 @@
 - [ ] **`tests/capital/test_client.py::_BAL_3357` 12 處內嵌 = `test_balance.RAW_C_MARGIN` 同型重複**(pr-129 F-02 附帶):
   庫存報告列(19 欄)在 test_client 內嵌 12 次、與 test_balance 那份逐字相同;群益改欄形只改到一份、另一份靜默留舊欄形
   —— 與 pr-119 F-05 / pr-129 F-02 同坑。處置 = 比照 `profit_rows.py` 開 `balance_rows.py`(或併同一模組)收成單一定義處。
+
+## 2026-08-27(feat/txf-intraday-overlay 個股分時圖疊台指期 留尾)
 
 
 - [ ] **`src/App.test.tsx`「capital WS 唯一掛載」負載型 flake**(08-27 晚 fix/breakeven-review-followups 三次全量 vitest 與
