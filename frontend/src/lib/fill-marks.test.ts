@@ -375,31 +375,28 @@ function futOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
   });
 }
 
-/** 錨定日 2026-08-21 的近全軸索引(期望值不由 alldayIndexOf 算回來:段長寫死推導)。
- *  日盤段 0846 起 offset 0 → 0930 = 44;夜盤前半 1501 起 offset 300 → 2200 = 300 + 419 = 719;
- *  夜盤後半 0000 起 offset 839 → 0100 = 839 + 60 = 899。 */
-const IDX_0930 = 44;
-const IDX_2200 = 719;
-const IDX_0100 = 899;
+/** 錨定日 2026-08-21(週五)的近全軸索引(期望值不由 alldayIndexOf 算回來:段長寫死推導;
+ *  mod/futures-day-1500 起 15:00 夜盤起算)。
+ *  夜盤前半 1501 起 offset 0 → 08-20 22:00 = 419;夜盤後半 0000 起 offset 539 → 08-21 01:00 = 599;
+ *  空檔 225 格後日盤段 0846 起 offset 1065 → 0930 = 1065 + 44 = 1109。 */
+const IDX_0930 = 1109;
+const IDX_2200 = 419;
+const IDX_0100 = 599;
 const ANCHOR = "2026-08-21";
 
-describe("alldayFillPoints — 近全軸日期界(夜盤成交屬錨定日)", () => {
-  it("日盤成交 → 軸索引 = 段內偏移(09:30 → 44)", () => {
+describe("alldayFillPoints — 近全軸日期界(前一日曆日夜盤的成交屬本錨定日)", () => {
+  it("日盤成交 → 軸索引 = 段內偏移(09:30 → 1109)", () => {
     const r = alldayFillPoints([futOrder()], "TXFH6", ANCHOR);
     expect(r).toEqual([{ minute: IDX_0930, priceMilli: 23_000_000, side: "B", qty: 2 }]);
   });
 
-  it("同日夜盤 22:00 → 索引 719(夜盤前半段)", () => {
-    const r = alldayFillPoints([futOrder({ time: "22:00:00" })], "TXFH6", ANCHOR);
+  it("**前一日曆日夜盤 22:00 的成交屬本錨定日** → 索引 419(夜盤前半段)", () => {
+    const r = alldayFillPoints([futOrder({ date: "20260820", time: "22:00:00" })], "TXFH6", ANCHOR);
     expect(r[0]!.minute).toBe(IDX_2200);
   });
 
-  it("**次一日曆日 01:00 的成交仍屬本錨定日** → 索引 899(夜盤後半),不被日期界丟掉", () => {
-    const r = alldayFillPoints(
-      [futOrder({ date: "20260822", time: "01:00:00" })],
-      "TXFH6",
-      ANCHOR,
-    );
+  it("同日曆日凌晨 01:00 的成交(前一日夜盤後半)→ 索引 599,不被日期界丟掉", () => {
+    const r = alldayFillPoints([futOrder({ time: "01:00:00" })], "TXFH6", ANCHOR);
     expect(r[0]!.minute).toBe(IDX_0100);
   });
 
@@ -412,12 +409,8 @@ describe("alldayFillPoints — 近全軸日期界(夜盤成交屬錨定日)", ()
     expect(r).toBe(EMPTY_FILLS);
   });
 
-  it("前一日夜盤(08-20 22:00,錨定日 08-20)→ 不畫", () => {
-    const r = alldayFillPoints(
-      [futOrder({ date: "20260820", time: "22:00:00" })],
-      "TXFH6",
-      ANCHOR,
-    );
+  it("同日曆日夜盤(08-21 22:00,週五夜 → 錨定週一 08-24)→ 不畫在 08-21 的圖上", () => {
+    const r = alldayFillPoints([futOrder({ time: "22:00:00" })], "TXFH6", ANCHOR);
     expect(r).toBe(EMPTY_FILLS);
   });
 

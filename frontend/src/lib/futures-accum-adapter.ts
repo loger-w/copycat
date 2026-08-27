@@ -1,4 +1,4 @@
-import { alldayIndexOfStamp } from "@/lib/allday";
+import { ALLDAY_GAP, alldayIndexOfStamp } from "@/lib/allday";
 import type { Bar } from "@/lib/candle";
 import type { MinuteAgg, StockAccum, VpCell } from "@/lib/stock-accum";
 import { snapDown, tickOf } from "@/lib/stock-tick";
@@ -16,7 +16,7 @@ import { snapDown, tickOf } from "@/lib/stock-tick";
  *  純函式、零 IO;caller(`FuturesChart`)以 `useMemo` 依 slice / live 純量折。 */
 
 export interface FuturesLive {
-  /** live 點的軸索引(牆上時鐘 +1 分,已過死區 / 錨定日 / 時鐘落後三道 gate) */
+  /** live 點的軸索引(牆上時鐘 +1 分,已過空檔 / 錨定日 / 時鐘落後三道 gate) */
   index: number;
   /** WS 現價(毫元) */
   p: number;
@@ -37,7 +37,7 @@ export function futuresBarsToAccum(input: Input): StockAccum {
   const vp = new Map<number, VpCell>();
 
   for (const b of input.bars) {
-    // 死區(13:46–15:00 / 05:01–08:45)與日 K 時戳:軸上沒有那一格 → 整根略過。
+    // 一天之外(13:46–15:00)/ 空檔(05:01–08:45)與日 K 時戳:軸上沒有那一格 → 整根略過。
     // **minutes 與 vp 同一道閘**:畫不出來的量不該進價位別直方圖,否則 VP 的總張與
     // 說明列的「外 + 內 + 未分類」對不上,而兩個數字都是純數字,沒有測試會紅。
     const index = alldayIndexOfStamp(b.t);
@@ -90,6 +90,22 @@ export function futuresBarsToAccum(input: Input): StockAccum {
     );
   }
 
+  // 空檔水平橋(mod/futures-day-1500 Q9(a)):05:00 → 08:45 無交易,x 軸保留這 225 格,
+  // 線要畫成**水平**(user 平時 APP 的畫法)。core 的單條 polyline 只會直線連相鄰 key,
+  // 所以在空檔末格(08:45,`ALLDAY_GAP.end`)補一格取夜盤末格收盤的橋:05:00 → 08:45 平走、
+  // 08:46 再跳到日盤價。**只在兩側都有格時補**(日盤第一筆 bar 或 live 到了才畫;日盤未開時
+  // 線停在 05:00、右側留白 —— 拍板不跟牆鐘延伸)。橋不是成交:v=0、h/l=null(等值反查
+  // 不會命中它),下面的 Σ / high-low 一律跳過;vp 更早就沒收它。
+  let nightLast: number | null = null;
+  let hasDay = false;
+  for (const k of rows.keys()) {
+    if (k < ALLDAY_GAP.start) nightLast = nightLast === null || k > nightLast ? k : nightLast;
+    else if (k > ALLDAY_GAP.end) hasDay = true;
+  }
+  if (nightLast !== null && hasDay) {
+    rows.set(ALLDAY_GAP.end, { c: rows.get(nightLast)!.c, v: 0, o: 0, i: 0, u: 0, h: null, l: null });
+  }
+
   // 依軸索引升冪:core 的 `windowedEntries` 會自己排序,但 `last` 取的是**序列末格**,
   // 兩處對「末格是誰」的答案必須是同一個(live 補在中間、bars 亂序時才不會岔開)。
   const sorted = [...rows.entries()].sort((a, b) => a[0] - b[0]);
@@ -99,7 +115,8 @@ export function futuresBarsToAccum(input: Input): StockAccum {
   let volume = 0;
   let high: number | null = null;
   let low: number | null = null;
-  for (const [, m] of sorted) {
+  for (const [k, m] of sorted) {
+    if (k === ALLDAY_GAP.end) continue; // 橋:不是成交,不進 Σ 與高低
     amountMilli += m.c * m.v;
     volume += m.v;
     // 高低取 per-minute 的 `h` / `l`(tick 級極值)—— core 的極值標記走等值反查

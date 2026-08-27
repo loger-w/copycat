@@ -36,15 +36,17 @@ const VB = { width: 800, height: 260 };
  *  → 半幅 = max(60, 60, ref×1% = 230) × 1.1 = 253 → y 域 [22747, 23253]。
  *  → hline 23100 在域內(該畫)、23900 在域外(不該畫)。 */
 const BARS: readonly Bar[] = [
+  { t: "2026-08-17 15:01", o: 23_050_000, h: 23_050_000, l: 22_940_000, c: 22_960_000, v: 60, uv: 10, dv: 45 },
   { t: "2026-08-18 08:46", o: 23_000_000, h: 23_010_000, l: 22_990_000, c: 23_000_000, v: 120, uv: 70, dv: 40 },
   { t: "2026-08-18 09:00", o: 23_000_000, h: 23_060_000, l: 23_000_000, c: 23_050_000, v: 80, uv: 50, dv: 20 },
-  { t: "2026-08-18 15:01", o: 23_050_000, h: 23_050_000, l: 22_940_000, c: 22_960_000, v: 60, uv: 10, dv: 45 },
 ];
 
-/** 軸索引:08:46 → 0、09:00 → 14、15:01 → 300(夜盤段起點)。 */
-const IDX_0846 = 0;
-const IDX_0900 = 14;
-const IDX_1501 = 300;
+/** 軸索引(15:00 起算):15:01 → 0(軸起點)、08:46 → 1065、09:00 → 1079;
+ *  夜盤側 + 日盤側都有 → adapter 在 08:45(1064)補一格水平橋(mod/futures-day-1500)。 */
+const IDX_1501 = 0;
+const IDX_BRIDGE = 1064;
+const IDX_0846 = 1065;
+const IDX_0900 = 1079;
 
 const FUT = futuresBarsToAccum({
   bars: BARS,
@@ -54,11 +56,11 @@ const FUT = futuresBarsToAccum({
   code: "TXF.HOT",
 });
 
-/** live 落在**新索引**(15:02 的 1K 尚未回)→ 末格是 v=0 的佔位格。
+/** live 落在**新索引**(09:01 的 1K 尚未回)→ 末格是 v=0 的佔位格。
  *  同一份 accum 在 futures 態印「-」、在 stock 態印「0」(反向 lock:閘只在 futures 態開)。 */
 const FUT_LIVE = futuresBarsToAccum({
   bars: BARS,
-  live: { index: IDX_1501 + 1, p: 22_970_000 },
+  live: { index: IDX_0900 + 1, p: 22_970_000 },
   ref: 23_000_000,
   name: "台指近",
   code: "TXF.HOT",
@@ -124,14 +126,14 @@ function xsOf(el: Element): string[] {
 }
 
 describe("IntradayChartCore mode=\"futures\"", () => {
-  it("readout 六欄,首欄走注入的 timeText(軸索引 300 = 15:01,不是 hhmm 的 05:00)", () => {
+  it("readout 六欄,首欄走注入的 timeText(軸索引 1079 = 09:00,不是 hhmm 的 17:59)", () => {
     renderFut();
     const readout = screen.getByTestId("chart-readout");
     expect(readout.children.length).toBe(6);
-    // 無 hover → 序列末格(索引 300)
-    expect(readout.children[0]!.textContent).toBe("15:01");
+    // 無 hover → 序列末格(索引 1079)
+    expect(readout.children[0]!.textContent).toBe("09:00");
     // 自檢:預設口徑會印別的字(否則本案恆綠)
-    expect(hhmm(IDX_1501)).toBe("05:00");
+    expect(hhmm(IDX_0900)).toBe("17:59");
   });
 
   it("成交量副圖 + 內外盤說明列都在(期貨 1K 帶 uv/dv,語彙同個股)", () => {
@@ -168,7 +170,7 @@ describe("IntradayChartCore mode=\"futures\"", () => {
     const { container } = renderFut();
     const line = container.querySelector("polyline.stroke-bull")!;
     expect(xsOf(line)).toEqual(
-      [IDX_0846, IDX_0900, IDX_1501].map((i) => minuteToX(i, VB.width, ALLDAY_WINDOW).toFixed(1)),
+      [IDX_1501, IDX_BRIDGE, IDX_0846, IDX_0900].map((i) => minuteToX(i, VB.width, ALLDAY_WINDOW).toFixed(1)),
     );
     // 自檢:現貨窗會算出完全不同的 x(否則本案恆綠)
     expect(minuteToX(IDX_1501, VB.width, ALLDAY_WINDOW)).not.toBeCloseTo(
@@ -176,11 +178,11 @@ describe("IntradayChartCore mode=\"futures\"", () => {
     );
   });
 
-  it("注入的 hourTicks:底部九個近全軸標籤(13:45 與 15:01 相鄰,死區不佔 x)", () => {
+  it("注入的 hourTicks:底部九個近全軸標籤(15:00 起算;05:00 → 08:45 空檔保留在軸上)", () => {
     const { container } = renderFut();
     const labels = [...container.querySelectorAll('svg[aria-label="期貨近全時段分時走勢"] text.fill-time')];
     expect(labels.map((t) => t.textContent)).toEqual([
-      "09:00", "11:00", "13:00", "15:00", "18:00", "21:00", "00:00", "03:00", "05:00",
+      "15:00", "18:00", "21:00", "00:00", "03:00", "05:00", "09:00", "11:00", "13:00",
     ]);
     expect(labels.map((t) => t.getAttribute("x"))).toEqual(
       ALLDAY_HOUR_TICKS.map((t) => String(minuteToX(t.minute, VB.width, ALLDAY_WINDOW) + 2)),
@@ -232,14 +234,14 @@ describe("IntradayChartCore mode=\"futures\"", () => {
   it("live 佔位分鐘(v=0)→ readout 量 / 外 / 內 印「-」(bars 尚無 1K,印 0 是假數字)", () => {
     renderFut({ accum: FUT_LIVE });
     const readout = screen.getByTestId("chart-readout");
-    expect(readout.children[0]!.textContent).toBe("15:02");
+    expect(readout.children[0]!.textContent).toBe("09:01");
     expect([3, 4, 5].map((i) => readout.children[i]!.textContent)).toEqual(["量 -", "外 -", "內 -"]);
   });
 
   it("有量的分鐘照印數字(「-」只針對 v=0 的佔位格)", () => {
     renderFut();
     const readout = screen.getByTestId("chart-readout");
-    expect(readout.children[3]!.textContent).toBe("量 60");
+    expect(readout.children[3]!.textContent).toBe("量 80");
   });
 
   it("空序列 → 「無分時資料」(沿用舊自繪版字面)", () => {
@@ -344,13 +346,13 @@ describe("IntradayChartCore mode=\"futures\" 的 VWAP 標籤與 hline label(N045
     expect(container.querySelector('[data-testid="edge-price-vwap"]')!.textContent).toBe("23006");
   });
 
-  /** 近全軸末格(05:00 → 索引 1139)有 bar → VWAP 末點貼繪圖區右界,標籤 x 區間
+  /** 近全軸末格(13:45 → 索引 1364)有 bar → VWAP 末點貼繪圖區右界,標籤 x 區間
    *  [720, 760] 與 hline label(anchor=end,右緣 758)完全重疊。
    *  vwap = (23000×120 + 23050×80 + 22960×60 + 23000×60) / 320 = 23_005(毫點 ×1000)。 */
   const FUT_LATE = futuresBarsToAccum({
     bars: [
       ...BARS,
-      { t: "2026-08-19 05:00", o: 23_000_000, h: 23_010_000, l: 22_990_000, c: 23_000_000, v: 60, uv: 30, dv: 30 },
+      { t: "2026-08-18 13:45", o: 23_000_000, h: 23_010_000, l: 22_990_000, c: 23_000_000, v: 60, uv: 30, dv: 30 },
     ],
     live: null,
     ref: 23_000_000,
@@ -400,7 +402,7 @@ describe("IntradayChartCore mode=\"futures\" 的 VWAP 標籤與 hline label(N045
   const FUT_TOP = futuresBarsToAccum({
     bars: [
       { t: "2026-08-18 08:46", o: 23_230_000, h: 23_240_000, l: 23_230_000, c: 23_230_000, v: 10, uv: 5, dv: 5 },
-      { t: "2026-08-19 05:00", o: 23_240_000, h: 23_240_000, l: 23_235_000, c: 23_240_000, v: 10, uv: 5, dv: 5 },
+      { t: "2026-08-18 13:45", o: 23_240_000, h: 23_240_000, l: 23_235_000, c: 23_240_000, v: 10, uv: 5, dv: 5 },
     ],
     live: null,
     ref: 23_000_000,

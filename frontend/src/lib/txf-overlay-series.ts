@@ -1,5 +1,4 @@
 import type { IndexSeries } from "@/hooks/useIndexStream";
-import { anchorDateOf } from "@/lib/allday";
 import type { Bar } from "@/lib/candle";
 
 /** 個股分時圖疊「台指期」當日走勢(feat/txf-intraday-overlay,spec §3)。
@@ -10,8 +9,10 @@ import type { Bar } from "@/lib/candle";
  *  `buildIndexOverlayLines` 零改動吃得下第三條線。純函式、零 React 依賴;caller 以 useMemo 折。
  *
  *  三個容易靜默錯的口徑,全部在這裡收:
- *  - **只取錨定日的日盤段**(08:46–13:45 的 bar 標記):錨定日 = `anchorDateOf(最後一根)`
- *    (`lib/allday.ts`;凌晨 ≤05:00 屬前一日)。夜盤不疊(現貨無盤);前一日日盤不疊。
+ *  - **只取最近一個日盤段**(08:46–13:45 的 bar 標記):日盤日 = 最後一根**日盤** bar 的日曆日。
+ *    夜盤不疊(現貨無盤);前一日日盤不疊。**刻意不吃 `lib/allday.ts::anchorDateOf`**
+ *    (mod/futures-day-1500 起那把尺是期交所口徑:夜盤屬次一交易日 —— 個股頁夜盤時段要疊的是
+ *    「今天早上」那條,兩把尺不同,共用會讓這條線在 15:00 後消失;user 拍板「個股頁只看日盤」)。
  *  - **分鐘鍵 = bar 終點標記 − 1 分**:期指 1K 是終點標記(08:45 開盤首根標 0846;tc4-market-facts
  *    期指節 (d)),而個股 / 指數的分鐘鍵是起點(09:01 那分鐘的價鍵 `0901`)。不減一,整條線右移
  *    一格 —— 兩張圖都畫得出來、零訊號。
@@ -49,6 +50,15 @@ function splitStamp(t: string): [string, number] | null {
   return Number.isFinite(m) ? [t.slice(0, sp), m] : null;
 }
 
+/** 日盤段的 bar → [date, 起點分鐘](終點標記 −1);夜盤 / 日 K / 壞值 → null。
+ *  「哪些 bar 算日盤」只寫這一份:日盤日的掃描與分鐘鍵的折入都吃它。 */
+function dayMinuteOf(b: Bar): [string, number] | null {
+  const st = splitStamp(b.t);
+  if (st === null) return null;
+  const minute = st[1] - 1;
+  return minute < DAY_FIRST_MIN || minute > DAY_LAST_BAR_MIN ? null : [st[0], minute];
+}
+
 export function txfBarsToSeries(
   bars: readonly Bar[],
   quote: TxfQuoteInput | null,
@@ -60,18 +70,21 @@ export function txfBarsToSeries(
   const minutes: Record<string, number> = {};
   let p: number | null = null;
   let lastMinute = -1;
-  const last = bars[bars.length - 1];
-  let anchor = last === undefined ? null : anchorDateOf(last.t);
-  // 錨定日必須與個股頁正在看的交易日一致(quote.date = index engine 的 trade_date):交易日凌晨
-  // 05:00–08:46 之間 bars 的最後一根還是昨夜的 0500,錨定會落到前一日 —— 個股頁已是今天,
-  // 疊前一日的日盤段是假陳述(review round 1 Spec 5)。quote 沒給日期(WS 未就緒)時不擋。
+  // 日盤日 = 最後一根日盤 bar 的日曆日(bars 升冪;亂序時取日期最大者,與下面 p 的取法同尺)
+  let anchor: string | null = null;
+  for (const b of bars) {
+    const dm = dayMinuteOf(b);
+    if (dm !== null && (anchor === null || dm[0] > anchor)) anchor = dm[0];
+  }
+  // 日盤日必須與個股頁正在看的交易日一致(quote.date = index engine 的 trade_date):交易日凌晨
+  // 05:00–08:46 之間 bars 最後一個日盤段還是昨天的 —— 個股頁已是今天,疊前一日的日盤段是假陳述
+  // (review round 1 Spec 5)。quote 沒給日期(WS 未就緒)時不擋。
   if (anchor !== null && quote !== null && quote.date !== null && quote.date !== anchor) anchor = null;
   if (anchor !== null) {
     for (const b of bars) {
-      const st = splitStamp(b.t);
-      if (st === null || st[0] !== anchor) continue;
-      const minute = st[1] - 1; // 終點標記 → 起點分鐘
-      if (minute < DAY_FIRST_MIN || minute > DAY_LAST_BAR_MIN) continue;
+      const dm = dayMinuteOf(b);
+      if (dm === null || dm[0] !== anchor) continue;
+      const minute = dm[1]; // 終點標記 → 起點分鐘
       // `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫點價恆 > 0 → 0 = 不可得(同 futures-overlay usable)
       if (!(b.c > 0)) continue;
       minutes[hhmm(minute)] = b.c;

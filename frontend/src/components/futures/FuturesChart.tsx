@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
@@ -9,9 +10,11 @@ import { useContainerSize } from "@/hooks/useContainerSize";
 import { useFuturesBars, type FuturesBarsKey } from "@/hooks/useFuturesBars";
 import type { BarsStatus } from "@/hooks/useMarketBars";
 import { useOiLevels } from "@/hooks/useOiLevels";
+import { calendarQueryOptions } from "@/hooks/useTradingCalendar";
 import {
   ALLDAY_HOUR_TICKS,
   ALLDAY_WINDOW,
+  alldayBarsBetween,
   alldayHhmmOf,
   alldayIndexOf,
   alldayIndexOfStamp,
@@ -64,7 +67,8 @@ const MINUTE_INIT_BARS = 240;
  *
  *  判準吃 **WS 最後成交時刻**(`state.t`)不吃牆上時鐘:TMF 夜盤數分鐘零成交是常態,
  *  那種空檔 bars 本來就沒東西可補,拿牆鐘比會把「沒人交易」講成「回補中」。
- *  索引差 = 近全軸上缺的 1K 根數(跨死區時不等於牆鐘分鐘),文案因此講「根」。 */
+ *  差值 = 近全軸上缺的**可交易** 1K 根數(`alldayBarsBetween`;05:01–08:45 空檔佔軸不佔根,
+ *  尾根 05:00 對 08:47 的成交裸差 227、真缺 2),文案因此講「根」。 */
 const FUT_LIVE_LAG_MAX = 3;
 
 /** 空序列時的文案,依 `meta.status`(N104)。
@@ -88,10 +92,14 @@ const EMPTY_TEXT: Record<BarsStatus, string> = {
 /** WS 最後成交(台北 `YYYY-MM-DD` + `HH:MM:SS.fff`)→ 它所屬 1K bar 的近全軸索引與錨定日。
  *
  *  終點標記:`HH:MM:00.000` 整分成交屬 HH:MM 那根,其餘屬 HH:MM+1(review SP4)。
- *  壞格式 / 死區 → null(gate 5 不參與)。回傳 anchor 讓 caller 擋掉「`state.t` 停在前一
- *  場次」(盤前未成交 / WS 零推播時 t 還是昨夜 04:59)—— 那不是回補落後,是 WS 沒新成交,
+ *  壞格式 / 空檔 / 一天之外 → null(gate 5 不參與)。回傳 anchor 讓 caller 擋掉「`state.t` 停在前一
+ *  場次」(15:00 開盤前未成交 / WS 零推播時 t 還是下午 13:4x)—— 那不是回補落後,是 WS 沒新成交,
  *  拿它比索引會把「WS 靜默」講成「TC4 回補中」(review SP2)。 */
-function tradeSlotOf(date: string, t: string): { index: number; anchor: string } | null {
+function tradeSlotOf(
+  date: string,
+  t: string,
+  holidays?: ReadonlySet<string>,
+): { index: number; anchor: string } | null {
   const m = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(t);
   if (m === null || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const onBoundary = Number(m[3]) === 0 && Number(m[4] ?? "0") === 0;
@@ -104,7 +112,7 @@ function tradeSlotOf(date: string, t: string): { index: number; anchor: string }
   const base = new Date(`${date}T00:00:00`);
   base.setDate(base.getDate() + carry);
   const d = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
-  return { index, anchor: anchorDateOf(`${d} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`) };
+  return { index, anchor: anchorDateOf(`${d} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`, holidays) };
 }
 
 function pad2(n: number): string {
@@ -122,15 +130,15 @@ function hhmmOf(totalMinutes: number): string {
  *  10:01 的那根(design §3.2;與 §1.1 的「1K row 不加 1」是不同語意的兩件事 ——
  *  那邊的來源已經是終點標記,這邊的來源是牆上時鐘)。
  *
- *  回傳的 `anchor` 供錨定日 gate 用:開盤瞬間(08:45–08:46,今日首根未回)slice 仍
- *  錨在前一交易日,live 點若照畫會落在 x=0 拉出一條橫貫整圖的假線。 */
-function liveSlotOf(now: Date): { index: number; anchor: string } | null {
+ *  回傳的 `anchor` 供錨定日 gate 用:開盤瞬間(15:00–15:01,今日首根未回)slice 仍
+ *  錨在剛收的那一天,live 點若照畫會落在 x=0 拉出一條橫貫整圖的假線。 */
+function liveSlotOf(now: Date, holidays?: ReadonlySet<string>): { index: number; anchor: string } | null {
   const t = new Date(now.getTime() + 60_000);
   const hhmm = hhmmOf(t.getHours() * 60 + t.getMinutes());
   const index = alldayIndexOf(hhmm);
-  if (index === null) return null; // 死區(13:46–15:00 / 05:01–08:45)
+  if (index === null) return null; // 空檔(05:01–08:45)/ 一天之外(13:46–15:00)
   const date = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
-  return { index, anchor: anchorDateOf(`${date} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`) };
+  return { index, anchor: anchorDateOf(`${date} ${hhmm.slice(0, 2)}:${hhmm.slice(2)}`, holidays) };
 }
 
 interface Props {
@@ -152,6 +160,17 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   // 不掛 `enabled: toggles.cdp || toggles.ma`:那會讓「按下 CDP 才開始抓」多一次空窗閃動,
   // 而這支的成本是每商品每日一發(日 K 模式本來就要抓)。
   const dayQ = useFuturesBars(product, "day", active);
+  // 交易日曆(mod/futures-day-1500):錨定日的「次一交易日」吃假日集合。與 App 的
+  // `useTradingCalendar` 同一把 queryKey → 共用 cache、不多打一發;拿 query data 當 slice 的
+  // memo dep,日曆載入 / 更新後不用等下一輪 bars 才重切(模組級集合的變動對 memo 不可見)。
+  // **同一把尺**:slice / anchorDate / live 落點 / 最後成交 / 成交點全部吃這一份(review round 1 Spec 5)
+  // —— gate 2 拿 `live.anchor` 對 `anchorDate`,兩邊若一邊讀 query data 一邊讀模組集合,假日前夜盤
+  // 在日曆載入的那一個 frame(或模組集合未載時)會整場不畫 live 點與成交點,零錯誤訊號。
+  const holidays = useQuery(calendarQueryOptions).data?.holidays;
+  const holidaySet = useMemo(
+    () => (holidays === undefined ? undefined : new Set(holidays)),
+    [holidays],
+  );
   const { data: oi } = useOiLevels();
   const { data: positionsData } = useCapitalPositions();
   const orders = useCapitalOrders().data?.orders;
@@ -206,13 +225,13 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   }, [positions, contract, oiStrikes, oiDate, spotMilli]);
 
   // ---- 分時序列(近全軸)-------------------------------------------------
-  const slice = useMemo(() => sliceCurrentAllday(bars), [bars]);
-  /** 這張圖的交易日(= 最後一根 bar 的錨定日)。成交點的日期界吃它 —— 近全軸橫跨兩個
-   *  日曆日,拿本機「今天」當界的話夜盤 00:00–05:00 的成交會被判成別天(N043)。 */
+  const slice = useMemo(() => sliceCurrentAllday(bars, holidaySet), [bars, holidaySet]);
+  /** 這張圖的交易日(= 最後一根 bar 的錨定日;15:00 起算,夜盤屬次一交易日)。成交點的
+   *  日期界吃它 —— 近全軸橫跨兩個日曆日,拿本機「今天」當界的話昨夜 15:01 起的成交會被判成別天(N043)。 */
   const anchorDate = useMemo<string | null>(() => {
     const last = slice[slice.length - 1];
-    return last === undefined ? null : anchorDateOf(last.t);
-  }, [slice]);
+    return last === undefined ? null : anchorDateOf(last.t, holidaySet);
+  }, [slice, holidaySet]);
   /** CDP / MA(N042)。**日 K 尚未回 / 錨定日還推不出來 → null**(core 的「未回視為可用」
    *  不預先反灰);回了但無已完成 bar → 全 null 的 overlay → 兩鈕反灰。兩者不可混為一談。
    *
@@ -229,12 +248,15 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   /** 當日成交點(N043/N070)。比對鍵 = 期交所契約碼(群益回報的期貨單 `stock_no` 放的
    *  就是它,與 `hlines` 的持倉比對同一把尺);ym 解不出 → `contract` null → 零標記。 */
   const fills = useMemo(
-    () => (anchorDate === null ? EMPTY_FILLS : alldayFillPoints(orders, contract, anchorDate)),
-    [orders, contract, anchorDate],
+    () =>
+      anchorDate === null
+        ? EMPTY_FILLS
+        : alldayFillPoints(orders, contract, anchorDate, holidaySet),
+    [orders, contract, anchorDate, holidaySet],
   );
   /** slice 尾往前**第一個索引可解**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
    *
-   *  不是「最後一根 bar」:尾巴若是死區分鐘 / 日 K 時戳,那根本來就不進圖,拿它當
+   *  不是「最後一根 bar」:尾巴若是空檔分鐘 / 日 K 時戳,那根本來就不進圖,拿它當
    *  「資料走到哪」會讓時鐘落後守衛比對到一個畫面上不存在的點。 */
   const tailIndex = useMemo<number | null>(() => {
     for (let i = slice.length - 1; i >= 0; i--) {
@@ -253,21 +275,20 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     const last = slice[slice.length - 1];
     const p = state?.p ?? null;
     if (p === null || last === undefined) return none;
-    const live = liveSlotOf(new Date());
-    if (live === null) return none; // 死區
-    if (live.anchor !== anchorDateOf(last.t)) return none; // 錨定日 gate(§3.2)
+    const live = liveSlotOf(new Date(), holidaySet);
+    if (live === null) return none; // 空檔 / 一天之外
+    if (live.anchor !== anchorDate) return none; // 錨定日 gate(§3.2)
     if (tailIndex !== null && tailIndex > live.index) return none; // 時鐘落後資料
     // gate 5:bars 落後**最後成交**超過輪詢節奏 → 當日段回補不完整,不架橋。
     // 成交要與末根同錨定日(SP2):t 停在前一場次 = WS 沒新成交,不是資料落後。
-    const trade = state?.t == null || state.date == null ? null : tradeSlotOf(state.date, state.t);
-    if (
-      tailIndex !== null &&
-      trade !== null &&
-      trade.anchor === anchorDateOf(last.t) &&
-      trade.index - tailIndex > FUT_LIVE_LAG_MAX
-    ) {
-      return { liveIndex: null, lagBehind: trade.index - tailIndex };
-    }
+    // 落後量以**可交易根數**計(空檔不算根):08:46 首根未回時尾根 05:00 不是「落後 227 根」。
+    const trade =
+      state?.t == null || state.date == null ? null : tradeSlotOf(state.date, state.t, holidaySet);
+    const lag =
+      tailIndex !== null && trade !== null && trade.anchor === anchorDate
+        ? alldayBarsBetween(tailIndex, trade.index)
+        : 0;
+    if (lag > FUT_LIVE_LAG_MAX) return { liveIndex: null, lagBehind: lag };
     return { liveIndex: live.index, lagBehind: null };
   })();
   const liveP = state?.p ?? null;
@@ -398,7 +419,7 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
         {modeRow}
         {mode === "intraday" && lagBehind !== null ? (
           // gate 5 擋下 live 點時把原因講出來:圖停在資料尾不是「沒在動」,是當日段還沒補齊。
-          // 「根」= 近全軸缺的 1K 根數(跨死區不等於牆鐘分鐘)
+          // 「根」= 近全軸缺的可交易 1K 根數(空檔 / 一天之外不算根,不等於牆鐘分鐘)
           <span className="text-xs text-ink-muted">分時資料落後 {lagBehind} 根(TC4 回補中)</span>
         ) : null}
       </div>

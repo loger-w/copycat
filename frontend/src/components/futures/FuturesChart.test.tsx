@@ -9,6 +9,7 @@ import { FUT_CHART_MODE_KEY } from "@/lib/constants";
 import { fmtIndexPts } from "@/lib/format";
 import { futuresBarsToAccum } from "@/lib/futures-accum-adapter";
 import { buildIntradayGeometry, minuteToX } from "@/lib/stock-intraday-svg";
+import { clearHolidays } from "@/lib/trading-calendar";
 import { wrap } from "@/test-utils";
 import type { Bar } from "@/lib/candle";
 import type { CapitalPosition, FuturesProductState, OiLevelsResponse } from "@/types";
@@ -73,6 +74,8 @@ let ordersBody: unknown;
 let oiBody: unknown;
 let oiStatus: number;
 let positionsBody: unknown;
+/** `/api/calendar`(FuturesChart 自 mod/futures-day-1500 起讀假日集合當 slice 的 memo dep)。 */
+let calendarBody: unknown;
 
 /** core 的 viewBox(jsdom 無 ResizeObserver → 退回 `IntradayChartCore` 的預設)。 */
 const VB_W = 800;
@@ -135,6 +138,9 @@ beforeEach(() => {
   oiBody = EMPTY_OI;
   oiStatus = 200;
   positionsBody = { positions: [] };
+  calendarBody = { today: "2026-08-05", trade_date: "2026-08-05", calendar_trade_date: "2026-08-05",
+    backfill_env: null, holidays: [], years_loaded: [2026], calendar_loaded: true };
+  clearHolidays();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -151,6 +157,9 @@ beforeEach(() => {
       }
       if (u.includes("/api/capital/positions")) {
         return new Response(JSON.stringify(positionsBody));
+      }
+      if (u.includes("/api/calendar")) {
+        return new Response(JSON.stringify(calendarBody));
       }
       throw new Error(`unexpected fetch: ${u}`);
     }),
@@ -213,17 +222,81 @@ describe("FuturesChart 模式列(SC-2)", () => {
   });
 });
 
-describe("FuturesChart 分時圖(SC-1)", () => {
-  it("13:45 與 15:01 在近全軸上相鄰 —— 死區(13:46–15:00)不佔 x", async () => {
+describe("FuturesChart 分時圖(SC-1;mod/futures-day-1500 15:00 起算)", () => {
+  it("05:00 → 08:46 之間保留空檔:主線多一格 08:45 水平橋(y = 05:00 收盤),x 與 05:00 相距 225 格", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 05:00", 23_000_000), bar("2026-08-05 08:46", 23_020_000)],
+      meta: META,
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
+    await findIntraday();
+    expect(mainLineXs(container)).toEqual([
+      xOf(alldayIndexOf("0500")!),
+      xOf(1064), // 橋 = 空檔末格 08:45(字面,不由 ALLDAY_GAP 算回)
+      xOf(alldayIndexOf("0846")!),
+    ]);
+    // 空檔的定義寫死在斷言裡:0846 與 0500 索引差 226(= 225 格空檔 + 1)
+    expect(alldayIndexOf("0846")! - alldayIndexOf("0500")!).toBe(226);
+    // 橋的 y = 05:00 收盤(水平),不是 08:46 的
+    const line = container.querySelector("polyline.stroke-accent")!;
+    const ys = (line.getAttribute("points") ?? "").trim().split(/\s+/).map((pt) => pt.split(",")[1]);
+    expect(ys[1]).toBe(ys[0]);
+    expect(ys[2]).not.toBe(ys[0]);
+  });
+
+  it("15:01 首根一到就翻頁:剛收的 13:45 那根被切掉,x 軸左起 15:00", async () => {
     barsBody = {
       bars: [bar("2026-08-05 13:45", 23_000_000), bar("2026-08-05 15:01", 23_020_000)],
       meta: META,
     };
     const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
     await findIntraday();
-    expect(mainLineXs(container)).toEqual([xOf(alldayIndexOf("1345")!), xOf(alldayIndexOf("1501")!)]);
-    // 「相鄰」的定義寫死在斷言裡:兩個索引差 1 = 折線上只隔一個 slot
-    expect(alldayIndexOf("1501")! - alldayIndexOf("1345")!).toBe(1);
+    expect(mainLineXs(container)).toEqual([xOf(0)]);
+    expect(alldayIndexOf("1501")).toBe(0);
+  });
+
+  it("13:45–15:00 之間(末根 13:45)→ 看剛收的那一天:昨 15:01 起的夜盤仍在圖上", async () => {
+    barsBody = {
+      bars: [bar("2026-08-04 22:00", 22_990_000), bar("2026-08-05 13:45", 23_000_000)],
+      meta: META,
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
+    await findIntraday();
+    // 兩側都有 → 橋一格;22:00 → 08:45 → 13:45
+    expect(mainLineXs(container)).toEqual([
+      xOf(alldayIndexOf("2200")!),
+      xOf(1064), // 橋 = 空檔末格 08:45(字面,不由 ALLDAY_GAP 算回)
+      xOf(alldayIndexOf("1345")!),
+    ]);
+  });
+
+  it("假日前夜盤:live 點與成交點跟 slice 吃同一份日曆(模組集合未載時仍畫;review round 1 Spec 5)", async () => {
+    // 模組集合在 beforeEach 清空 = 未載;只有 query data 有假日。錨定日 gate 若一邊讀 query、一邊讀模組,
+    // 08-18 22:00 的末根錨定 08-20、live 22:31 錨定 08-19 → 不畫;成交點同理整場不畫。
+    calendarBody = { today: "2026-08-18", trade_date: "2026-08-18", calendar_trade_date: "2026-08-18",
+      backfill_env: null, holidays: ["2026-08-19"], years_loaded: [2026], calendar_loaded: true };
+    barsBody = { bars: [bar("2026-08-18 22:00", 22_990_000), bar("2026-08-18 22:29", 23_000_000)], meta: META };
+    ordersBody = { orders: [futFill({ date: "20260818", time: "22:10:30" })] };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(2026, 7, 18, 22, 30, 30));
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    await waitFor(() => expect(mainLineXs(container).length).toBe(3)); // 22:00 / 22:29 / live 22:31
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("2231")!));
+    await waitFor(() => expect(screen.getByTestId(`fill-B-${alldayIndexOf("2210")!}`)).toBeTruthy());
+  });
+
+  it("假日前夜盤與假日後日盤同一天:日曆載入後 slice 重算(不等下一輪 bars)", async () => {
+    // 2026-08-18 二 22:00 夜盤;08-19 三 休市;08-20 四 日盤。未載日曆時 08-18 夜歸 08-19,與 08-20 不同天
+    calendarBody = { today: "2026-08-20", trade_date: "2026-08-20", calendar_trade_date: "2026-08-20",
+      backfill_env: null, holidays: ["2026-08-19"], years_loaded: [2026], calendar_loaded: true };
+    barsBody = {
+      bars: [bar("2026-08-18 22:00", 22_990_000), bar("2026-08-20 09:00", 23_000_000)],
+      meta: META,
+    };
+    const { container } = wrap(<FuturesChart product="TXF" state={null} resolvedYm={null} />);
+    await findIntraday();
+    await waitFor(() => expect(mainLineXs(container).length).toBe(3)); // 22:00 + 橋 + 09:00
   });
 
   it("前一交易日的 bars 被 slice 掉(錨定日以最後一根反推)", async () => {
@@ -304,11 +377,12 @@ describe("FuturesChart 空態三態文案(N104)", () => {
  *  這一組鎖的是**接線**:軸 / 時間文字 / 價位口徑 / hlines 有沒有真的注進 core。
  *  core 自身的契約在 `StockIntradayChart.futures.test.tsx`,不在這裡重測。 */
 describe("FuturesChart 分時圖 core 語彙", () => {
-  /** 三段都有 bar(日盤兩根 + 夜盤一根),h/l 由 `bar()` 給成 c±1 元 → 高低標記畫得出來。 */
+  /** 夜盤與日盤都有 bar(前一晚 15:01 一根 + 日盤兩根,同錨定日 08-05),h/l 由 `bar()` 給成
+   *  c±1 元 → 高低標記畫得出來;兩側都有 → adapter 補 08:45 水平橋。 */
   const CORE_BARS = [
+    bar("2026-08-04 15:01", 22_980_000),
     bar("2026-08-05 09:00", 22_960_000),
     bar("2026-08-05 09:30", 23_000_000),
-    bar("2026-08-05 15:01", 22_980_000),
   ];
 
   beforeEach(() => {
@@ -336,7 +410,7 @@ describe("FuturesChart 分時圖 core 語彙", () => {
       ...container.querySelectorAll('svg[aria-label="期貨近全時段分時走勢"] text.fill-time'),
     ];
     expect(labels.map((t) => t.textContent)).toEqual([
-      "09:00", "11:00", "13:00", "15:00", "18:00", "21:00", "00:00", "03:00", "05:00",
+      "15:00", "18:00", "21:00", "00:00", "03:00", "05:00", "09:00", "11:00", "13:00",
     ]);
   });
 
@@ -454,34 +528,63 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
-  it("時鐘落後資料:末根 bar = D 05:00(軸尾)、時鐘 D 08:45:30 → 不畫 live 點", async () => {
+  it("日盤開盤第一筆(bars 至 05:00、時鐘 08:45:30)→ live 點落 08:46,05:00→08:45 補水平橋", async () => {
     barsBody = {
       bars: [bar("2026-08-05 04:59", 22_900_000), bar("2026-08-05 05:00", 22_910_000)],
       meta: META,
     };
-    // 05:00 那根屬**前一交易日**(2026-08-04)的夜盤後半;08:46 的 live 點屬 08-05。
-    // 此案 tail.index(1139)> live.index(0),兩道 gate 同時成立 → 只證「有擋」。
+    // 05:00 那根與 08:46 的 live 點同屬 08-05(15:00 起算的一天:08-04 夜盤 → 08-05);
+    // tail.index(839)< live.index(1065)→ 四道 gate 全不成立 → 追加,且日盤側有格 → 橋。
     vi.setSystemTime(new Date(2026, 7, 5, 8, 45, 30));
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
-    // gate 擋下 = 序列不追加 live 分鐘、現價圈落在末根 bar 的 x(不是「圈不見了」)
+    expect(mainLineXs(container)).toEqual([
+      xOf(alldayIndexOf("0459")!),
+      xOf(alldayIndexOf("0500")!),
+      xOf(1064), // 橋 = 空檔末格 08:45(字面,不由 ALLDAY_GAP 算回)
+      xOf(alldayIndexOf("0846")!),
+    ]);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0846")!));
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
+  it("空檔時段(07:00)→ 不畫 live 點、不補橋,線停在 05:00", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 04:59", 22_900_000), bar("2026-08-05 05:00", 22_910_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 7, 0, 0));
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
     expect(mainLineXs(container).length).toBe(2);
     expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0500")!));
   });
 
+  it("15:00 開盤瞬間(末根 = 13:45、時鐘 15:00:30)→ 錨定日不同,不畫 live 點(首根未回時線停在 13:45)", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 13:44", 22_900_000), bar("2026-08-05 13:45", 22_910_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 15, 0, 30));
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(2);
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1345")!));
+  });
+
   it("錨定日 gate 獨立於時鐘落後守衛:末根 = 前一交易日 08:46、時鐘 = 次日 08:47 → 不畫", async () => {
-    // 唯一一根 bar 是**前一交易日**的首根(軸索引 0);live 落 08:48(軸索引 2)。
-    // tail.index(0) > live.index(2) 不成立 → 時鐘落後守衛整條不參與,
+    // 唯一一根 bar 是**前一交易日**的日盤首根(軸索引 1065);live 落 08:48(軸索引 1067)。
+    // tail.index(1065) > live.index(1067) 不成立 → 時鐘落後守衛整條不參與,
     // 擋下 live 點的只剩錨定日不同這一條(短路它 → 假 live 點被畫在今日圖上)。
     barsBody = { bars: [bar("2026-08-04 08:46", 22_900_000)], meta: META };
     vi.setSystemTime(new Date(2026, 7, 5, 8, 47, 0));
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
     // 前置條件寫死在斷言裡:兩個索引的大小關係就是「守衛沒被觸發」的證據
-    expect(alldayIndexOf("0846")).toBe(0);
-    expect(alldayIndexOf("0848")).toBe(2);
+    expect(alldayIndexOf("0846")).toBe(1065);
+    expect(alldayIndexOf("0848")).toBe(1067);
     expect(mainLineXs(container).length).toBe(1);
-    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(0));
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(1065));
   });
 
   it("gate 4 單獨成立:末根 bar 索引 > live 索引(bars 至 D 10:00、時鐘 D 09:30)→ 不追加", async () => {
@@ -575,20 +678,45 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.queryByText(/分時資料落後/)).toBeNull();
   });
 
-  // review SP2:盤前未成交 / WS 零推播時 state.t 還停在昨夜 04:59(前一場次)→ 那是 WS 沒新成交,
-  // 不是資料落後;拿它的索引(軸尾)減日盤頭的末根會誤印「落後 1133 根」。
-  it("gate 5 不吃前一場次的成交時戳:t = 04:59(昨夜)、bars 至 D 08:50、時鐘 08:51 → 照追加 live 點", async () => {
+  // review SP2:15:00 開盤後 WS 零推播時 state.t 還停在下午 13:4x(前一場次 = 剛收的那一天)→ 那是
+  // WS 沒新成交,不是資料落後;拿它的索引(軸尾 1364)減夜盤頭的末根會誤印「落後 1360 根」。
+  it("gate 5 不吃前一場次的成交時戳:t = 13:40(剛收那天)、bars 至 D 15:05、時鐘 15:06 → 照追加 live 點", async () => {
     barsBody = {
-      bars: [bar("2026-08-05 08:46", 22_960_000), bar("2026-08-05 08:50", 23_000_000)],
+      bars: [bar("2026-08-05 15:01", 22_960_000), bar("2026-08-05 15:05", 23_000_000)],
       meta: META,
     };
-    vi.setSystemTime(new Date(2026, 7, 5, 8, 51, 0));
-    const stale: FuturesProductState = { ...STATE, date: "2026-08-05", t: "04:59:20.000" };
+    vi.setSystemTime(new Date(2026, 7, 5, 15, 6, 0));
+    const stale: FuturesProductState = { ...STATE, date: "2026-08-05", t: "13:40:20.000" };
     const { container } = wrap(<FuturesChart product="TXF" state={stale} resolvedYm="202608" />);
     await findIntraday();
     expect(mainLineXs(container).length).toBe(3);
-    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0852")!));
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1507")!));
     expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
+  // mod/futures-day-1500:空檔 05:01–08:45 佔軸不佔根 —— 尾根 05:00 對 08:47 的成交裸差 227,
+  // 真缺的只有 0846 / 0847 兩根。裸差會讓每個交易日 08:46 首根未回那一兩分鐘誤印「落後 227 根」。
+  it("gate 5 跨空檔以可交易根數計:bars 至 05:00、最後成交 08:46:30、時鐘 08:47 → 落後 2 根 ≤ 3,追加 live 點", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 04:59", 22_900_000), bar("2026-08-05 05:00", 22_910_000)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 47, 0));
+    const t2 = { ...STATE, date: "2026-08-05", t: "08:46:30.000" };
+    const a = wrap(<FuturesChart product="TXF" state={t2} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(a.container).length).toBe(4); // 04:59 / 05:00 / 橋 / live 08:48
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("0848")!));
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+    cleanup();
+
+    // 08:48:30 → 終點標記 08:49,可交易距離 4(0846–0849 缺四根)→ 擋,且文案印 4 不印 229
+    const t4 = { ...STATE, date: "2026-08-05", t: "08:48:30.000" };
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 49, 0));
+    const b = wrap(<FuturesChart product="TXF" state={t4} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(b.container).length).toBe(2);
+    expect(screen.getByText("分時資料落後 4 根(TC4 回補中)")).toBeTruthy();
   });
 
   it("牆鐘落後但無成交(TMF 夜盤空檔):bars 至 D 10:00、最後成交 10:00:10、時鐘 11:30 → 照追加 live 點", async () => {
@@ -620,7 +748,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.queryByText(/分時資料落後/)).toBeNull();
   });
 
-  it("live 分鐘落死區(14:30)→ 不畫 live 點", async () => {
+  it("live 分鐘落在一天之外(14:30)→ 不畫 live 點", async () => {
     barsBody = {
       bars: [bar("2026-08-05 13:44", 22_960_000), bar("2026-08-05 13:45", 23_000_000)],
       meta: META,
@@ -779,11 +907,12 @@ const DAY_BARS: Bar[] = [
   { t: "2026-08-21", o: 23_000_000, h: 23_500_000, l: 22_000_000, c: 23_400_000, v: 1 },
 ];
 
-/** 分時 fixture:錨定日 2026-08-21、日盤兩根 + 夜盤一根。 */
+/** 分時 fixture:錨定日 2026-08-21(週五)= 08-20 週四 15:00 起算 → 夜盤兩根 + 週五日盤兩根。 */
 const INTRA_BARS: Bar[] = [
+  bar("2026-08-20 15:01", 22_990_000),
+  bar("2026-08-20 22:00", 22_995_000),
   bar("2026-08-21 09:00", 23_000_000),
   bar("2026-08-21 09:01", 23_010_000),
-  bar("2026-08-21 22:00", 22_990_000),
 ];
 
 function futFill(over: Record<string, unknown> = {}) {
@@ -846,11 +975,11 @@ describe("FuturesChart 疊線 CDP/MA(N042)", () => {
   });
 
   it("TC4 日 K 末根標成次一交易日(夜盤成形)→ 基準仍是圖上錨定日的前一交易日", async () => {
-    // 圖的錨定日 = 08-21(`INTRA_BARS` 末根 22:00)。日 K 末根被 TC4 標成 08-22 且
-    // 後端 `partial_last`(末根日期 == 日曆今日)= false —— 舊判準(信 meta)一根都不剔,
-    // 基準會跳到 08-22 這個**尚未發生的交易日**。基準日判準吃的必須是圖上錨定日。
+    // 圖的錨定日 = 08-21(`INTRA_BARS` 末根 09:01)。週五 15:00 起 TC4 把夜盤成形的日 K 標成
+    // 08-24(週一)且後端 `partial_last`(末根日期 == 日曆今日)= false —— 舊判準(信 meta)
+    // 一根都不剔,基準會跳到 08-24 這個**尚未發生的交易日**。基準日判準吃的必須是圖上錨定日。
     barsDayBody = {
-      bars: [...DAY_BARS, { t: "2026-08-22", o: 1, h: 99_000_000, l: 1, c: 50_000_000, v: 1 }],
+      bars: [...DAY_BARS, { t: "2026-08-24", o: 1, h: 99_000_000, l: 1, c: 50_000_000, v: 1 }],
       meta: { ...META, partial_last: false },
     };
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
@@ -891,19 +1020,30 @@ describe("FuturesChart 近全軸成交點(N043/N070)", () => {
     await findIntraday();
     const btn = await screen.findByRole("button", { name: "成交點" });
     expect(btn.hasAttribute("disabled")).toBe(false);
-    // 09:00 → 軸索引 14(日盤段 0846 起)
+    // 09:00 → 軸索引 1079(日盤段 0846 起 offset 1065)
     await waitFor(() => expect(screen.getByTestId(`fill-B-${alldayIndexOf("0900")!}`)).toBeTruthy());
   });
 
-  it("**次一日曆日凌晨的成交**(01:00)仍畫在本錨定日的夜盤段", async () => {
-    ordersBody = { orders: [futFill({ date: "20260822", time: "01:00:30", buy_sell: "S" })] };
+  it("**前一晚(週四夜盤)與當天凌晨的成交**仍畫在本錨定日的夜盤段", async () => {
+    ordersBody = {
+      orders: [
+        futFill({ date: "20260820", time: "22:00:30", buy_sell: "S" }),
+        futFill({ seq_no: "F2", date: "20260821", time: "01:00:30", buy_sell: "S" }),
+      ],
+    };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
-    await waitFor(() => expect(screen.getByTestId(`fill-S-${alldayIndexOf("0100")!}`)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId(`fill-S-${alldayIndexOf("2200")!}`)).toBeTruthy());
+    expect(screen.getByTestId(`fill-S-${alldayIndexOf("0100")!}`)).toBeTruthy();
   });
 
-  it("別的錨定日(次日日盤)的成交不畫", async () => {
-    ordersBody = { orders: [futFill({ date: "20260822", time: "09:00:30" })] };
+  it("別的錨定日(次一交易日日盤、或本日 15:00 後的夜盤 → 週一)的成交不畫", async () => {
+    ordersBody = {
+      orders: [
+        futFill({ date: "20260824", time: "09:00:30" }),
+        futFill({ seq_no: "F2", date: "20260821", time: "22:00:30" }),
+      ],
+    };
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
     await waitFor(() => expect(screen.getByRole("button", { name: "成交點" })).toBeTruthy());
