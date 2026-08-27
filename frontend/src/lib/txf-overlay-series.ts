@@ -4,7 +4,8 @@ import type { Bar } from "@/lib/candle";
 
 /** 個股分時圖疊「台指期」當日走勢(feat/txf-intraday-overlay,spec §3)。
  *
- *  把期貨 tab 那份 allday 1K bars(`useFuturesBars("TXF")`,5 日近全時段)+ 期貨 WS 現價,
+ *  把期貨 tab 那份 allday 1K bars(`useFuturesBars("TXF")`,5 日近全時段)+ index engine 每拍轉供的
+ *  台指期現價(`useIndexStream().txf`,~1 s;不用期貨 WS 0.1 s coalesce 流,免圖牆 memo 被打穿),
  *  轉成與加權 / 櫃買**同形**的 `IndexSeries`(分鐘鍵 = 起點 HHMM,毫點價)→ 既有
  *  `buildIndexOverlayLines` 零改動吃得下第三條線。純函式、零 React 依賴;caller 以 useMemo 折。
  *
@@ -18,16 +19,20 @@ import type { Bar } from "@/lib/candle";
  *    WS 是瞬時價,兩把尺不混 → 只追加「最後一根之後」的分鐘。 */
 
 export interface TxfQuoteInput {
-  /** 毫點;null / 0 = 不可得 */
+  /** 毫點;null / 0 = 不可得(`TxfQuote.p`) */
   p: number | null;
-  /** 台北 `HH:MM:SS.fff`(期貨 WS `FuturesProductState.t`) */
+  /** 台北 `HH:MM:SS`(`TxfQuote.time`,index engine 於價變動時自記牆鐘);只讀前 5 字 */
   t: string | null;
-  /** `YYYY-MM-DD`(`FuturesProductState.date`) */
+  /** `YYYY-MM-DD` = 個股頁正在看的交易日(`useIndexStream().tradeDate`);與 bars 錨定日不同 → 整條不疊 */
   date: string | null;
 }
 
 /** 日盤段的**起點**分鐘域:bar 標記 0846–1345 → 0845–1344;WS 補尾允許到 1345(收盤撮合那一分鐘,
- *  個股期窗到 13:45)。 */
+ *  個股期窗到 13:45)。
+ *
+ *  `high` / `low` 一律 null:`IndexSeries.high/low` 的口徑是後端「當日最高 / 最低成交」,這裡手上只有
+ *  分鐘收盤價,算出來的極值是另一把尺;`buildIndexOverlayLines` 也不讀它 —— 填一個看起來對的數字
+ *  只會讓日後的讀者拿到靜默錯值(review round 1 S7 / Spec 3)。 */
 const DAY_FIRST_MIN = 8 * 60 + 45;
 const DAY_LAST_BAR_MIN = 13 * 60 + 44;
 const DAY_LAST_TAIL_MIN = 13 * 60 + 45;
@@ -54,11 +59,13 @@ export function txfBarsToSeries(
   if (!(ref !== null && ref > 0)) return null;
   const minutes: Record<string, number> = {};
   let p: number | null = null;
-  let high: number | null = null;
-  let low: number | null = null;
   let lastMinute = -1;
   const last = bars[bars.length - 1];
-  const anchor = last === undefined ? null : anchorDateOf(last.t);
+  let anchor = last === undefined ? null : anchorDateOf(last.t);
+  // 錨定日必須與個股頁正在看的交易日一致(quote.date = index engine 的 trade_date):交易日凌晨
+  // 05:00–08:46 之間 bars 的最後一根還是昨夜的 0500,錨定會落到前一日 —— 個股頁已是今天,
+  // 疊前一日的日盤段是假陳述(review round 1 Spec 5)。quote 沒給日期(WS 未就緒)時不擋。
+  if (anchor !== null && quote !== null && quote.date !== null && quote.date !== anchor) anchor = null;
   if (anchor !== null) {
     for (const b of bars) {
       const st = splitStamp(b.t);
@@ -68,10 +75,12 @@ export function txfBarsToSeries(
       // `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫點價恆 > 0 → 0 = 不可得(同 futures-overlay usable)
       if (!(b.c > 0)) continue;
       minutes[hhmm(minute)] = b.c;
-      p = b.c;
-      high = high === null ? b.c : Math.max(high, b.c);
-      low = low === null ? b.c : Math.min(low, b.c);
-      if (minute > lastMinute) lastMinute = minute;
+      // `p` 與 `lastMinute` 同一把尺(依分鐘最大者),不是「陣列最後一個命中者」——
+      // 輸入亂序時兩者才不會分家(review round 1 S6)
+      if (minute > lastMinute) {
+        lastMinute = minute;
+        p = b.c;
+      }
     }
     // WS 補尾:同錨定日、在最後一根之後、落在日盤段、價可得
     if (quote !== null && quote.date === anchor && quote.t !== null && quote.p !== null && quote.p > 0) {
@@ -79,10 +88,8 @@ export function txfBarsToSeries(
       if (Number.isFinite(qm) && qm > lastMinute && qm >= DAY_FIRST_MIN && qm <= DAY_LAST_TAIL_MIN) {
         minutes[hhmm(qm)] = quote.p;
         p = quote.p;
-        high = high === null ? quote.p : Math.max(high, quote.p);
-        low = low === null ? quote.p : Math.min(low, quote.p);
       }
     }
   }
-  return { p, ref, high, low, stale: wsStale, minutes };
+  return { p, ref, high: null, low: null, stale: wsStale, minutes };
 }

@@ -24,8 +24,9 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
     expect(s!.minutes).toEqual({ "0845": 23_100_000, "0846": 23_200_000, "1344": 23_050_000 });
     expect(s!.ref).toBe(REF);
     expect(s!.p).toBe(23_050_000); // 最後一點
-    expect(s!.high).toBe(23_200_000);
-    expect(s!.low).toBe(23_050_000);
+    // high / low 恆 null:分鐘收盤價的極值與 IndexSeries.high/low(後端當日最高低成交)不同口徑,無讀者不填
+    expect(s!.high).toBeNull();
+    expect(s!.low).toBeNull();
     expect(s!.stale).toBe(false);
   });
 
@@ -64,7 +65,24 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
       false,
     );
     expect(s!.minutes).toEqual({ "0845": 23_100_000, "0847": 23_300_000 });
-    expect(s!.low).toBe(23_100_000); // 0 不進極值
+  });
+
+  it("輸入亂序時 p 仍是分鐘最大那根的收盤(與 lastMinute 同尺,不是陣列末位)", () => {
+    const s = txfBarsToSeries(
+      [bar("2026-08-27 09:00", 23_200_000), bar("2026-08-27 09:30", 23_300_000), bar("2026-08-27 09:10", 23_100_000)],
+      null,
+      REF,
+      false,
+    );
+    expect(s!.p).toBe(23_300_000);
+  });
+
+  it("錨定日與 quote.date(個股頁的交易日)不同 → 不疊(交易日凌晨 05:00–08:46 bars 還錨在前一日)", () => {
+    const bars = [bar("2026-08-26 08:46", 23_100_000), bar("2026-08-26 15:01", 2_000_000), bar("2026-08-27 05:00", 3_000_000)];
+    expect(txfBarsToSeries(bars, { p: null, t: null, date: "2026-08-27" }, REF, false)!.minutes).toEqual({});
+    // 日期一致 / quote 未給日期 → 照疊
+    expect(txfBarsToSeries(bars, { p: null, t: null, date: "2026-08-26" }, REF, false)!.minutes).toEqual({ "0845": 23_100_000 });
+    expect(txfBarsToSeries(bars, { p: null, t: null, date: null }, REF, false)!.minutes).toEqual({ "0845": 23_100_000 });
   });
 
   it("結算價不可得(null / 0 / NaN)→ null(鈕反灰「無台指期資料」;相對 % 沒基準就是假線)", () => {
@@ -86,7 +104,6 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
       const s = txfBarsToSeries(bars, { p: 23_250_000, t: "09:02:15.000", date: "2026-08-27" }, REF, false);
       expect(s!.minutes).toEqual({ "0845": 23_100_000, "0859": 23_200_000, "0902": 23_250_000 });
       expect(s!.p).toBe(23_250_000);
-      expect(s!.high).toBe(23_250_000);
     });
 
     it("分鐘 ≤ 最後一根 → 不追加也不覆寫(bar 是收盤價、WS 是瞬時價,兩把尺不混)", () => {
@@ -96,9 +113,10 @@ describe("txfBarsToSeries(期貨 1K → IndexSeries)", () => {
       expect(earlier!.minutes).toEqual({ "0845": 23_100_000, "0859": 23_200_000 });
     });
 
-    it("日期不同 / 落在盤外(13:46 後、夜盤)/ p 0 / t 缺 / bars 空(沒有錨定日)→ 不追加", () => {
+    it("落在盤外(13:46 後、夜盤)/ p 0 / t 缺 / bars 空(沒有錨定日)→ 不追加;日期不同 → 整條不疊", () => {
       const base = { "0845": 23_100_000, "0859": 23_200_000 };
-      expect(txfBarsToSeries(bars, { p: 23_250_000, t: "09:02:00.000", date: "2026-08-28" }, REF, false)!.minutes).toEqual(base);
+      // quote.date ≠ 錨定日:不只是不補尾,整條都不疊(個股頁看的交易日與 bars 錨定日不同 = 假陳述)
+      expect(txfBarsToSeries(bars, { p: 23_250_000, t: "09:02:00.000", date: "2026-08-28" }, REF, false)!.minutes).toEqual({});
       expect(txfBarsToSeries(bars, { p: 23_250_000, t: "13:46:00.000", date: "2026-08-27" }, REF, false)!.minutes).toEqual(base);
       expect(txfBarsToSeries(bars, { p: 23_250_000, t: "15:00:30.000", date: "2026-08-27" }, REF, false)!.minutes).toEqual(base);
       expect(txfBarsToSeries(bars, { p: 0, t: "09:02:00.000", date: "2026-08-27" }, REF, false)!.minutes).toEqual(base);

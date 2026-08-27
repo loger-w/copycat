@@ -152,5 +152,13 @@ describe("IntradayChartCore 指數疊線(F1)", () => {
     expect(off.getAttribute("title")).toBe("無台指期資料");
     // 加權 / 櫃買仍可按(反灰是 per-線的,不是整組)
     expect([...container.querySelectorAll("button")].find((b) => b.textContent === "加權")!.hasAttribute("disabled")).toBe(false);
+
+    // 個股沒昨收 → 台指期鈕的理由是「無結算價」(基準是結算價,不叫昨收;review round 1 S2)
+    ({ container } = mount(
+      <IntradayChartCore accum={NO_REF} toggles={toggles({ idxTxf: true })} variant="page" indexSeries={WITH_TXF} />,
+    ));
+    const noRef = [...container.querySelectorAll("button")].find((b) => b.textContent === "台指期")!;
+    expect(noRef.hasAttribute("disabled")).toBe(true);
+    expect(noRef.getAttribute("title")).toBe("無結算價");
   });
 });
