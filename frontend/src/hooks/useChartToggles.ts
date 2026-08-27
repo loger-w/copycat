@@ -97,8 +97,11 @@ function load(): ChartToggles {
 // 「台指期鈕開著沒」,無法閘控 TXF bars 的輪詢(鈕關著也每分鐘打 TC4)。
 //
 // **真相源仍是 localStorage,不是這份快取**:`getSnapshot` 以存檔的原始字串為鍵,字串變了
-// (別的分頁 / 測試清空 / 升級寫回)就重載;字串沒變就回同一個物件 —— `useSyncExternalStore`
-// 要求快照 identity 穩定,否則每次 render 都被當成新值而無限重繪。
+// (外部清空 / 升級寫回)就重載;字串沒變就回同一個物件 —— `useSyncExternalStore` 要求快照
+// identity 穩定,否則每次 render 都被當成新值而無限重繪。`getSnapshot` 是**冪等**的(同一字串
+// 第二次呼叫直接回快取),唯一的寫入是 v<2 一次性升級 —— 改動前它就在 `useState(load)` 的
+// initializer 裡、同樣落在 render 期,不是本輪新增的副作用。不掛 `storage` 事件:跨分頁同步
+// 不在需求內,兩個分頁各自 set 時 `setToggle` 重讀存檔再 merge 已足夠不互相覆蓋。
 // 寫入失敗(私密視窗 / 政策鎖)時 `persist` 不拋、存檔不變 → 快取直接換成 next,記憶體內照常生效。
 let cachedRaw: string | null | undefined; // undefined = 尚未載入過
 let cached: ChartToggles = DEFAULTS;

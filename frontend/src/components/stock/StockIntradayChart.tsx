@@ -1410,7 +1410,8 @@ export function IntradayChartCore({
                 label: "台指期",
                 available: indexSeries !== null && indexSeries.txf !== null && ref !== null,
                 hint: "台指期相對結算價 %,映到本檔價格軸(只畫與本檔同時段的交集)",
-                offTitle: indexSeries === null || indexSeries.txf === null ? "無台指期資料" : "無昨收",
+                // 「無結算價」不是「無昨收」:台指期的基準是結算價(CONTEXT.md 台指期條),同一顆鈕的 hint 也這麼寫
+                offTitle: indexSeries === null || indexSeries.txf === null ? "無台指期資料" : "無結算價",
               },
             ] as const)),
       ];

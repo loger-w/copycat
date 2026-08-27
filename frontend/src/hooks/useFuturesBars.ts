@@ -48,7 +48,16 @@ async function fetchFuturesBars(key: FuturesBarsKey, tf: "1" | "D"): Promise<Mar
  *
  *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更(同 FuturesLadder 的
  *  `qtyState` 慣例)。 */
-export function useFuturesBars(key: FuturesBarsKey, mode: FutChartMode, active = true) {
+/** @param enabled **是否要這份資料**(與 `active` 不同尺:`active` 只管輪詢節奏)。預設 true。
+ *  個股頁的台指期疊線(feat/txf-intraday-overlay)在鈕關著時傳 false —— 那是「沒人要看」,
+ *  不是「先抓著等人看」:`enabled: false` 才擋得住掛載即抓與 `refetchOnWindowFocus`,只停
+ *  `refetchInterval` 擋不住。期貨 tab 自己不傳(理由見上:切回不閃 pending)。 */
+export function useFuturesBars(
+  key: FuturesBarsKey,
+  mode: FutChartMode,
+  active = true,
+  enabled = true,
+) {
   const isMinute = mode !== "day";
   const tf: "1" | "D" = isMinute ? "1" : "D";
   return useQuery({
@@ -57,6 +66,7 @@ export function useFuturesBars(key: FuturesBarsKey, mode: FutChartMode, active =
       ? ["futures-bars", key, "1", FUTURES_MINUTE_DAYS, SESSION]
       : ["futures-bars", key, "D"],
     queryFn: () => fetchFuturesBars(key, tf),
+    enabled,
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
     // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render

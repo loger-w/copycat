@@ -184,11 +184,13 @@ export default function App() {
 
   // 台指期疊線的資料源(feat/txf-intraday-overlay Q4,user 拍板):**借期貨 tab 那份** allday 1K
   // (`useFuturesBars("TXF")` 同一把 queryKey → TQ 一份 cache、一支輪詢 timer),不新開後端 cache、
-  // 不多打 TC4。`active` 閘 = 個股 tab + 鈕開著:鈕關著零請求。toggles 走 module store(T1),
-  // 這裡的 instance 與圖表上那顆鈕同步。
+  // 不多打 TC4。閘 = 個股 tab + 鈕開著,**同時**餵給 `active`(輪詢)與 `enabled`(掛載即抓 /
+  // 回焦重抓):只停輪詢擋不住後兩者,鈕關著仍會每次回焦打一發(review round 1 S1/P1)。
+  // toggles 走 module store(T1),這裡的 instance 與圖表上那顆鈕同步。
   const { toggles: chartToggles } = useChartToggles();
   const txfOn = chartToggles.idxTxf;
-  const txfBars = useFuturesBars("TXF", "intraday", tab === "stock" && txfOn);
+  const txfWanted = tab === "stock" && txfOn;
+  const txfBars = useFuturesBars("TXF", "intraday", txfWanted, txfWanted);
   // 補尾的現價取 index engine 每拍(~1 s)轉供的 txf 報價,**不用**期貨 WS 的 0.1 s coalesce 流:
   // 序列 identity 每變一次,圖牆 50 張卡的 memo 就被打穿一次,節奏要與加權線同級。
   // 結算價(`ref`)只期貨 WS 有;它一天只變一次。
@@ -199,7 +201,9 @@ export default function App() {
   const txfP = txfOn ? (txf?.p ?? null) : null;
   const txfTime = txfOn ? (txf?.time ?? null) : null;
   const txfDate = txfOn ? tradeDate : null;
-  const txfStale = indexWs !== "open";
+  // 兩條 WS 任一非 open 都算中斷:補尾現價走 index WS、結算價走期貨 WS,哪一條斷了標籤數字都
+  // 不能當「現在」讀(review round 1 Spec/P2)
+  const txfStale = indexWs !== "open" || futuresStream.wsStatus !== "open";
   const txfSeries = useMemo(
     () => txfBarsToSeries(txfBarsList ?? [], { p: txfP, t: txfTime, date: txfDate }, txfRef, txfStale),
     [txfBarsList, txfP, txfTime, txfDate, txfRef, txfStale],

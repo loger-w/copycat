@@ -143,6 +143,22 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     expect(urls.length).toBe(before);
   });
 
+  // 🟢 feat/txf-intraday-overlay review round 1 S1/P1:個股頁的台指期觀察者在鈕關著時必須**零請求**
+  //(掛載即抓 + refetchOnWindowFocus 都擋住),`active=false` 只停輪詢擋不住這兩條
+  it("enabled=false → 掛載不打、回焦不打;轉 true 才打第一發", async () => {
+    const client = newClient();
+    const hook = renderHook(({ enabled }) => useFuturesBars("TXF", "intraday", false, enabled), {
+      wrapper: wrapper(client),
+      initialProps: { enabled: false },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(urls).toEqual([]);
+    expect(hook.result.current.fetchStatus).toBe("idle");
+    hook.rerender({ enabled: true });
+    await waitFor(() => expect(urls.length).toBe(1));
+    expect(urls[0]).toContain("/api/market/bars/TXF?tf=1&days=5&session=allday");
+  });
+
   it("HTTP 錯誤 → error 帶 detail.error 錯誤碼", async () => {
     vi.stubGlobal(
       "fetch",

@@ -6,6 +6,13 @@
   (段順序 / `anchorDateOf` / `sliceCurrentAllday` / 刻度表)、`copycat/live/futures_source.py::FUTURES_ALLDAY_DOMAIN`
   與回補日窗、`useFuturesBars` 輪詢窗 `inFuturesAllDayHours`、相關係數腿的台期交自癒閘、FuturesChart live 點四道 gate。
   結算價基準不變(15:00→13:45 同一個 ref)。
+- [ ] **加一條指數疊線要改 11 處(review round 1 S4 Shotgun Surgery)**:`ChartToggles` 鍵 + `DEFAULTS` + `IndexOverlayKey`
+  + `INDEX_OVERLAY_LABEL` + `OVERLAY_KEYS` + `IDX_LINE_CLASS`/`IDX_TEXT_CLASS` + `toggleDefs` 字面 union + `GRID_TOGGLES` union
+  + `index.css` token + `GroupGridView` 的 `||` 串;12 個測試檔只為補 `idxTxf: false`。候選 = 收成一張以 `IndexOverlayKey`
+  為鍵的表(label / toggleKey / stroke / fill / hint / offTitle),兩處 union 改 `keyof ChartToggles`,測試改共用
+  `makeToggles()` factory。F1 結構債,本案不動(scope)。
+- [ ] **「HH:MM → 分鐘數」編解碼第三份(review round 1 S5)**:`txf-overlay-series.ts::splitStamp` / `hhmm` 與
+  `allday.ts::anchorDateOf`、`index-accum-adapter.ts::minuteOf` 同形;候選 = minute 編解碼收進 `lib/allday.ts` 一處。
 
 ## 2026-08-27(fix/corr-sparse-leg-heal-exempt SXF 稀疏腿自癒 churn 留尾)
 
