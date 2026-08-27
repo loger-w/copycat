@@ -17,6 +17,13 @@ from copycat.capital.balance import (
     parse_profit_line,
 )
 from copycat.capital.models import Position
+from tests.capital.balance_rows import (
+    RAW_C_MARGIN,
+    RAW_END,
+    RAW_L_SHORT,
+    RAW_T_BOUGHT,
+    RAW_T_FLAT,
+)
 from tests.capital.profit_rows import RAW_PNL_MARGIN, RAW_PNL_ROW
 
 
@@ -59,18 +66,6 @@ def test_merge_fut_positions_zero_net_dropped() -> None:
         Position(market="fut", stock_no="TXFI6", qty=-1),
     ]
     assert merge_fut_positions(rows) == []  # 淨額 0 = 無部位,不佔一列
-
-
-# 今日買進 1 張現股:昨庫 0、今委買/買成 1000、即時庫存[14]=1000
-RAW_T_BOUGHT = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
-# 當沖軋平:買賣各 1000、即時庫存 0 → 不佔一列
-RAW_T_FLAT = "3042,T,0,0,0,0,0,1000,1000,1000,1000,0,0,0,0,0,,A123456789,1234567890"
-# 融資 3 張(昨日庫存):[1]=C、[2][3]=資額度(千元)、[16]=即時維持率(會跳動,不是價格!)
-RAW_C_MARGIN = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-# 融券 2 張(依官方欄位表構造):qty 應為負
-RAW_L_SHORT = "9105,L,0,0,2000,2000,0,0,0,0,0,2000,0,0,2000,0,130.25,A123456789,1234567890"
-# 查詢結束標記
-RAW_END = "##,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
 
 
 def test_parse_cash_position() -> None:

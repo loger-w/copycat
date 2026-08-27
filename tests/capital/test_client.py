@@ -44,6 +44,7 @@ from copycat.stkfut_map import write_map
 from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
+from tests.capital.balance_rows import RAW_C_MARGIN, RAW_T_BOUGHT
 from tests.capital.profit_rows import PNL_3357_MARGIN, RAW_PNL_MARGIN, pnl_variant
 
 # ---------------------------------------------------------------------------
@@ -1073,9 +1074,7 @@ def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
-    client._handle_balance(
-        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    )
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("3357,T,0,0,0,0,2000,0,0,0,0,2000,0,0,2000,0,0,A123456789,1234567890")
     client._handle_balance("##")
     profit_margin = PNL_3357_MARGIN
@@ -1099,9 +1098,7 @@ def test_profit_row_for_dropped_stock_is_silent(
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
     with caplog.at_level("WARNING"):
-        client._handle_balance(
-            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-        )
+        client._handle_balance(RAW_C_MARGIN)
         client._handle_balance(  # 2330 只有 500 股(零股不足 1 張)→ balance 側丟掉
             "2330,T,0,0,0,0,500,0,0,0,0,500,0,0,500,0,0,A123456789,1234567890"
         )
@@ -1120,9 +1117,7 @@ def test_profit_row_for_dropped_stock_is_silent(
     other = _client(FakeCom(), tmp_path / "b")  # 每輪查詢會 reset collector,對照用新 client
     _mark_ready(other, futures_account=None)
     with caplog.at_level("WARNING"):  # 對照:股號在但種類對不上 → 照樣 warning
-        other._handle_balance(
-            "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-        )
+        other._handle_balance(RAW_C_MARGIN)
         other._handle_balance("##")
         other._handle_profit(pnl_variant(PNL_3357_MARGIN, {3: "現股", 25: "1"}))
         other._handle_profit("##,,,,")
@@ -1186,7 +1181,7 @@ def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
     _mark_ready(client)
     pushed: list[dict[str, object]] = []
     client.set_broadcast(pushed.append)
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     assert ("get_profit_loss_gw", "1234567890A") in com.sent
@@ -1213,9 +1208,7 @@ def test_balance_chain_marks_avg_source_broker(tmp_path: Path) -> None:
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
-    client._handle_balance(
-        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    )
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     client._handle_profit("000,查詢成功")
     client._handle_profit(PNL_3357_MARGIN)
@@ -1237,7 +1230,7 @@ def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     row = PNL_3357_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
@@ -1295,7 +1288,7 @@ def test_oi_failure_keeps_previous_fut_positions(
     client.store.set_positions(
         [Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0)]
     )
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     with caplog.at_level("WARNING"):
         client._handle_balance(bal)
         client._handle_balance("##")
@@ -1315,7 +1308,7 @@ def test_oi_pending_timeout_keeps_previous_fut_positions(tmp_path: Path) -> None
     client.store.set_positions(
         [Position(market="fut", stock_no="TXFI6", qty=1, avg_price=23000.0)]
     )
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     client._pending_deadline = 0.0  # 損益/OI 卡死 → 強制逾時
@@ -1328,7 +1321,7 @@ def test_balance_chain_without_futures_account_publishes_sec_only(tmp_path: Path
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     client._handle_profit("##,,,,")
@@ -1342,7 +1335,7 @@ def test_pending_watchdog_publishes_sec_when_chain_stalls(tmp_path: Path) -> Non
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
-    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    bal = RAW_C_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     assert client.store.positions() == []
@@ -1400,9 +1393,7 @@ def test_balance_query_guarded_while_pending_even_if_inflight_expired(tmp_path: 
     _mark_ready(client)
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()
-    client._handle_balance(
-        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    )
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     assert client._pending_sec is not None  # profit 尚未回,鏈掛在 pending 段
     client._balance_due = time.monotonic() - 1.0
@@ -1424,9 +1415,7 @@ def test_balance_complete_hands_guard_over_to_pending(tmp_path: Path) -> None:
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()
     assert client._balance_inflight_until is not None  # balance 段守門已武裝
-    client._handle_balance(
-        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    )
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     assert client._pending_sec is not None
     assert client._balance_inflight_until is None
@@ -1464,10 +1453,6 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
     assert _balance_queries(com) == 2
 
 
-_BAL_3357 = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-_BAL_2493 = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
-
-
 class _FakeClock:
     """collector 專用可注入時鐘:欠帳時間窗要驗「窗內/窗外」兩態,
     真時鐘會逼測試 sleep 20s(且 Windows time.monotonic 解析度 15.6ms,量不準)。"""
@@ -1502,7 +1487,7 @@ def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) ->
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
-    _seed_positions_via_round(client, _BAL_3357)
+    _seed_positions_via_round(client, RAW_C_MARGIN)
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
@@ -1516,7 +1501,7 @@ def test_late_end_marker_from_abandoned_round_keeps_positions(tmp_path: Path) ->
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
     assert client._pending_sec is None  # 鏈不得被空集合啟動
 
-    client._handle_balance(_BAL_2493)  # 第二輪真回應
+    client._handle_balance(RAW_T_BOUGHT)  # 第二輪真回應
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
@@ -1554,7 +1539,7 @@ def test_dead_query_unlock_clears_inflight_and_abandons_once(tmp_path: Path) -> 
     assert client._balance._stale_until is not None  # 欠帳窗開著(擋遲到的零列 ##)
 
     client._balance.abandon = real_abandon  # type: ignore[method-assign]
-    client._handle_balance(_BAL_2493)  # 之後的真回應照常走完鏈
+    client._handle_balance(RAW_T_BOUGHT)  # 之後的真回應照常走完鏈
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
@@ -1573,7 +1558,7 @@ def test_late_end_marker_outside_stale_window_flushes_empty(tmp_path: Path) -> N
     clock = _FakeClock()
     client._balance = BalanceCollector(on_complete=client._on_balance_complete, clock=clock)
     _mark_ready(client)
-    _seed_positions_via_round(client, _BAL_3357)
+    _seed_positions_via_round(client, RAW_C_MARGIN)
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
 
     # 第 1 輪:零事件死查詢 → 逾期解卡放棄 → 遲到的零列 `##`(窗內)必須吞掉
@@ -1607,7 +1592,7 @@ def test_requery_rc_failure_keeps_abandon_debt(tmp_path: Path) -> None:
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
-    _seed_positions_via_round(client, _BAL_3357)
+    _seed_positions_via_round(client, RAW_C_MARGIN)
 
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()  # 查詢 #1 — 零事件死查詢
@@ -1668,7 +1653,7 @@ def test_late_oi_end_marker_after_watchdog_keeps_fut_positions(tmp_path: Path) -
     client.store.set_positions([Position(market="fut", stock_no="TXFI6", qty=2, avg_price=23000.0)])
 
     # 第 1 輪:證券段收齊 → 損益段正常收尾 → OI 查詢發出後零事件卡死 → watchdog 放棄
-    client._handle_balance(_BAL_3357)
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     assert ("get_open_interest", "F9999999") in com.sent
@@ -1682,7 +1667,7 @@ def test_late_oi_end_marker_after_watchdog_keeps_fut_positions(tmp_path: Path) -
     # 第 2 輪:證券+損益照常 → 進 OI 查詢;第 1 輪遲到的零列 OI `##` 必須被吞
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()
-    client._handle_balance(_BAL_3357)
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")  # 第 1 輪遲到的終止符
@@ -1704,7 +1689,7 @@ def test_late_profit_end_marker_after_watchdog_keeps_avg_price(tmp_path: Path) -
     client = _client(com, tmp_path)
     _mark_ready(client)
     # 第 1 輪:證券段收齊 → 損益查詢發出後零事件卡死 → watchdog 放棄
-    client._handle_balance(_BAL_3357)
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     client._pending_deadline = 0.0
     client._pump_once()
@@ -1713,7 +1698,7 @@ def test_late_profit_end_marker_after_watchdog_keeps_avg_price(tmp_path: Path) -
     # 第 2 輪
     client._balance_due = time.monotonic() - 1.0
     client._maybe_query_balance()
-    client._handle_balance(_BAL_3357)
+    client._handle_balance(RAW_C_MARGIN)
     client._handle_balance("##")
     client._handle_profit("##,,,,")  # 第 1 輪遲到的零列終止符 → 吞
     client._handle_profit("000,查詢成功")  # 第 2 輪真回應
@@ -1928,7 +1913,7 @@ def test_two_dead_queries_then_two_late_end_markers_keep_positions(tmp_path: Pat
     clock = _FakeClock()
     client._balance = BalanceCollector(on_complete=client._on_balance_complete, clock=clock)
     _mark_ready(client)
-    _seed_positions_via_round(client, _BAL_3357)
+    _seed_positions_via_round(client, RAW_C_MARGIN)
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
     for n in (1, 2, 3):
         client._balance_due = time.monotonic() - 1.0
@@ -1941,7 +1926,7 @@ def test_two_dead_queries_then_two_late_end_markers_keep_positions(tmp_path: Pat
     client._handle_balance("##")  # 第 2 輪遲到
     assert [(p.stock_no, p.qty) for p in client.store.positions()] == [("3357", 3)]
     assert client._pending_sec is None
-    client._handle_balance(_BAL_2493)  # 第 3 輪真回應
+    client._handle_balance(RAW_T_BOUGHT)  # 第 3 輪真回應
     client._handle_balance("##")
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
