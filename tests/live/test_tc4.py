@@ -1311,6 +1311,26 @@ class TestHealSparseSymbol:
             ]
         )
 
+    def test_r1_takes_over_when_the_population_is_only_sparse_symbols(self) -> None:
+        # 邊界(review Spec 1):母體只剩稀疏腿 → 沒有別的腿可對照,R1 以 t1 接手整批重掛
+        # (churn 從 R2 240 s 搬到 R1 120 s)。corr 有 7 條恆開海外腿所以 prod 不可達;這條釘的是
+        # 「通用類的這個邊界是刻意的」,單腿 session 別用本旗標(tc4.py 參數註解)。
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_symbol_silence_secs=60.0,
+            heal_sparse_symbols=frozenset({HEAL_B}),
+        )
+        src._subscribed = {HEAL_B}
+        src._sub_at = {HEAL_B: 0.0}
+        src._last_push = {HEAL_B: 10.0}
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_B), ("SUBQUOTE", HEAL_B)]
+        assert src._heal_attempts[HEAL_B] == 1  # 走 R1 記帳,退避階梯照常
+
     def test_sparse_symbol_does_not_keep_r1_from_firing(self) -> None:
         # R1 看的是「全部都靜默」(max of last push):稀疏腿本來就常靜默,不能因為它在
         # 母體裡就把其他腿活著時的 R1 誤觸發 —— 這條鎖的是反方向:HEAL_A 活著 → 不整批重掛
