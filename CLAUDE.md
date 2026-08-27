@@ -250,6 +250,12 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
   **靜默撞回 base 近白色**,零錯誤訊號。`tests/test_corr_config.py::test_river_palette_covers_every_leg` 以原始碼字面鎖住;
   加腿 = JSON + DEFAULT_CONFIG + 三組 class + token 同步。
+- **相關係數稀疏腿 `sparse` 旗標**(2026-08-27 起):產生點 `configs/correlation.json` 腿的 `"sparse": true`(只認字面
+  true)與 `copycat/corr_config.py::DEFAULT_CONFIG`(降級時的同一組;`tests/test_corr_config.py::
+  test_only_sxf_is_sparse_and_the_repo_file_agrees` 鎖兩邊集合一致),讀者 = `app._default_corr_source` →
+  `CorrQuoteSource(heal_sparse_symbols=)` → `tc4.TC4QuoteSource._heal_tick` R2 迴圈 `continue`。與時段閘
+  `heal_symbol_active` **正交**:sparse 腿仍在 R1 母體。漂掉的症狀:該腿每 240 s 一發「零推播自癒 … attempt 1」
+  (漏標)或 session 死時該腿整場不救(誤標),兩邊都零錯誤訊號。
 
 ## 5. 資料源
 
