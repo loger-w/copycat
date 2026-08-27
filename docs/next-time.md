@@ -7,7 +7,15 @@
   自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。
 - [ ] **收盤段 `IX0001` 每 30 s 一發**:同 08-26 節「N051 另外兩個 churn 來源」第一項(那條記 08-25 的 18 發;08-27
   實測 13:25:46–13:34:51 共 19 發);閘 = `stock_source._TRADING_END` 13:35 vs 交易所 13:25 起停推。08-27 已向 user
-  提案上界改 13:31(保 13:30 收盤最後一筆而非 13:25),待拍板;拍板後以本條為準、同時勾銷 08-26 那項。
+  提案上界改 13:31(保 13:30 收盤最後一筆而非 13:25);**08-27 盤後改口:先量再改(下兩條),不憑猜的時間改閘**。
+- [ ] **重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
+  snapshot(tc4-market-facts fresh subscribe 事實)→ `tc4._note_push` 清 `_heal_attempts` / `_heal_next` → 下一輪又從
+  attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
+  但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
+  加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。
+- [ ] **IX0001 收盤最後一筆推播幾點到、13:25–13:30 試撮窗有無推播**:決定閘上界(13:31 / 13:34)的事實,今天 log 判不出
+  (上條 snapshot 把訊號蓋掉)。量法 = 交易日 13:36 `curl /api/index/state` 看 twse 最後更新時戳 / minutes 最大鍵,
+  或 13:20 起跑只聽不訂 probe(`ix_listen_probe.py` 樣板)記每則 IX0001 quote 時戳。量到再改 `_TRADING_END`。
 - [ ] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
   本輪加一個旗標動了 tc4 簽名 + body、corr_source 簽名 + 轉發、app 兩處、四支測試。候選 = `HealPolicy` frozen dataclass
   收攏,四個 source 子類一起改,獨立 🔵。

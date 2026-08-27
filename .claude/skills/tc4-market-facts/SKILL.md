@@ -176,8 +176,11 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   合計涵蓋 UTC 00–22,海外近 23 小時交易的時段幾乎都落在其中之一,訂閱當下不會落窗外;
   真正的風險是「跨過窗結束邊界(UTC 06 或 22)推播是否停止」,需跨邊界連續觀察才能驗。
 - SXF 推播密度隨時段差異極大(146 則/60s vs 2 則/40s)。**日盤 4 分鐘零推播是常態**(2026-08-27 09:45–13:01
-  R2 240 s 自癒 11 發全 attempt 1 = 每發之間都有真成交),對它的 symbol 級自癒只會 churn;已以設定檔 `sparse: true`
-  豁免 R2(仍吃 R1)。同類稀疏腿加進 corr 時照標,判準 = log 「零推播自癒」全 attempt 1 且間隔 ≥ 門檻。
+  R2 240 s 自癒 11 發全 attempt 1),對它的 symbol 級自癒只會 churn;已以設定檔 `sparse: true` 豁免 R2(仍吃 R1)。
+  **「attempt 恆 1」不能當「中間有真成交」的證據**:重掛的 SUBQUOTE 本身會回 snapshot(本節 fresh subscribe 事實),
+  `_note_push` 照樣清 attempts —— 08-27 SXF 有兩發間隔剛好 240 s(10:22→10:26、11:04→11:08)就是 snapshot 撐出來的,
+  IX0001 收盤段 13:25–13:35 每 30 s 一發 attempt 全 1 同理。判稀疏腿看「日盤真成交間隔常 ≥ 門檻」(1K 或 tick 密度),
+  不看 attempt。
 - **日經有、韓指無(2026-08-17 重跑 Fut 全量 dump 實證)**:17 個交易所段與 06-30 快照零增減,
   **無 KRX 段、全樹零命中 KOSPI** → 韓指做不到(D14 拍板不做不追蹤)。日經三處:OSE
   `TC.F.OSE.{NK225,NK225M,NK225MC,NK400}.HOT`、SGX `TC.F.SGX.NK.HOT`、CME `NKD`。夜盤 60s 推播
