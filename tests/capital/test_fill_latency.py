@@ -15,13 +15,11 @@ from pathlib import Path
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
 from tests.capital.fake_com import FakeCom
+from tests.capital.profit_rows import PNL_3357_MARGIN, pnl_variant
 
 _SIM_RTT_S = 0.02  # 因果順序與「鏈會落地」都與 RTT 大小無關;150 ms 只是敘事(review F-15)
 _BAL_ROW = "3357,T,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-_PROFIT_ROW = (
-    "臺慶科,3357,新台幣,現股,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-    "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-)
+_PROFIT_ROW = pnl_variant(PNL_3357_MARGIN, {3: "現股", 25: "1"})  # 30 欄 fixture,pr-119 F-05
 _OI_ROW = "TF,F9999999,TXFI6,B,2,0,23000.0"
 
 
