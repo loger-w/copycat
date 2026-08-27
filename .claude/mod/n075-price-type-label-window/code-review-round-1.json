@@ -1,0 +1,21 @@
+{
+  "fixed_point": "master 1ce0c500 (merge-base)",
+  "reviewed_head": "04ca8f47 (after dropping 5792ec68 per Spec F-04; fixes landed in 4f9d6404 + 0fd04dc2)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "S-F1", "severity": "P2", "kind": "judgement", "text": "`_note_price_type` 新 docstring 與 `tests/…::_calendar_fuse_blown` 都把保險絲寫成「`next_trading_day` 往後 60 天找不到交易日」,但 `_trade_ymd` 日盤分支走的是 `last_trading_day`(`trading_calendar.py:65` 同樣 raise RuntimeError(\"往回 60 天…\"))。日盤炸的是另一把,文件只點名一把 → 讀者會以為日盤路徑不受保護。change-spec §4「`next_trading_day` 唯一 raise 型別」同錯。", "disposition": "accepted → 0fd04dc2 / 4f9d6404:client docstring、測試替身 docstring、change-spec §4 三處改「last_trading_day / next_trading_day 兩把,日盤 / 夜盤各走一把」"},
+    {"id": "S-F2", "severity": "P3", "kind": "judgement", "text": "`try` 包住整個 `_trade_ymd()`,涵蓋 `_calendar()` lazy load 等子呼叫;任何非日曆保險絲的 RuntimeError 也會被靜默降級成一行 WARNING。已由 change-spec §4 授權,列為知情項。", "disposition": "knowing → change-spec §6 留尾記錄;不改(WARNING 帶 exc_info,不是靜默)"},
+    {"id": "S-F3", "severity": "P3", "kind": "judgement (Mysterious Name)", "text": "`_calendar_fuse_blown(when) -> str: raise …` 名字像謂詞,實為 `_trade_ymd` 的 raise 替身;回傳標 `str` 而非 `NoReturn`。建議 `_trade_ymd_blows_fuse`。", "disposition": "accepted → 4f9d6404 改名 `_trade_ymd_blows_fuse` + `-> NoReturn`"},
+    {"id": "S-F4", "severity": "P3", "kind": "judgement (Duplicated Code)", "text": "兩條新 client 測試都以字面片語「交易日推算失敗」斷言,等於把 log 文案升成隱性契約;至少一條可改斷 levelname == WARNING + seq。", "disposition": "accepted → 4f9d6404 送單路徑那條改斷 WARNING 等級 + seq 在訊息內;晚到路徑保留文案斷言(兩條各釘一面)"},
+    {"id": "S-F5", "severity": "P3", "kind": "judgement", "text": "commit `bbeb264d` 型別 `chore` 卻含 `copycat/capital/*.py`(純 docstring),三類不混判 PASS;scope `capital/docs` 不在 §6 列舉字彙(軟性)。", "disposition": "no-op(純 docstring 用 chore 符合 pr-131 F-04 慣例)"}
+  ],
+  "spec": [
+    {"id": "P-F01", "severity": "P1", "text": "『`_Agg.date` 語意改口』沒改到宣告點:`store.py:82` `date: str | None = None  # 委託建立日 YYYYMMDD` 仍是舊敘述(正是 tc4-market-facts 點名那一行)。", "disposition": "accepted → 0fd04dc2 改「回報最新事件日 YYYYMMDD(apply_reply 有值就覆寫;不是委託建立日)」"},
+    {"id": "P-F02", "severity": "P3", "text": "`store.py:205` `_today_net_lots_locked` docstring「不看 idx23(委託建立日:昨晚預約單今早成交仍是昨日)」括號推理與 skill 相反(有值就覆寫 → 今早成交後 date 已是今日)。", "disposition": "accepted → 0fd04dc2 改「它是最新事件日不是成交日:昨日建立今日成交 / 刪單的單 date 都已是今日,分不出哪些成交量是今天進來的」(結論不變,理由改對)"},
+    {"id": "P-F03", "severity": "P2", "text": "保險絲 docstring 指錯函式(同 S-F1)。", "disposition": "accepted → 同 S-F1"},
+    {"id": "P-F04", "severity": "P2", "text": "characterization 測試 `test_price_type_same_stock_side_seq_collision_is_the_known_open_window` 與既有 `test_price_type_binding_rejects_same_seq_different_order` s3 案輸入與斷言逐字相同;兩條對同一組資料給相反語意,封窗時 s3 也必須同步改而未被標「事前標該變」。零新覆蓋。", "disposition": "accepted → rebase 掉 5792ec68;改在 s3 docstring 註明「同一組輸入 store 分不出同一張 / 另一張 = N075 未封的窗」(4f9d6404)。連帶發現我原本「只記單一候選日 = 關窗」是無條件句寫錯:要看群益日界與 seq 重置是否同口徑,store / review §5 / next-time / change-spec 四處改條件句(0fd04dc2)"},
+    {"id": "P-F05", "severity": "P3", "text": "期貨路徑的窗更寬(`client.py` 只綁方向,stock_no=None),新 docstring 與新測試只描述現股同檔同方向。", "disposition": "accepted → 0fd04dc2 store docstring + next-time 補「期貨路徑同方向撞同 seq 即誤標,同一實驗一起看」"},
+    {"id": "P-F06", "severity": "P3", "text": "try 只收 RuntimeError 且只包 `_trade_ymd()`,`store.note_price_type` 或未來新增步驟若拋別的錯,late 審計行仍整行不見(原病復發)。spec 明示取捨,非違規。", "disposition": "knowing → change-spec §6 記錄"}
+  ],
+  "disposition": "Standards 5 條(0 P1 / 1 P2 / 4 P3):F1 / F3 / F4 accepted 已修,F2 knowing,F5 no-op。Spec 6 條(1 P1 / 2 P2 / 3 P3):F01–F05 accepted 已修(F04 = 撤掉重複測試 + 四處改條件句),F06 knowing。白名單 §3 六條兩軸皆核過保住;scope creep 無。修後 tests/capital 405 passed、ruff / pyright 綠;mutation(撤 try)2 failed / 5 passed 後還原。"
+}
