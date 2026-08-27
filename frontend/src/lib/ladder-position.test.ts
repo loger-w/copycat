@@ -268,6 +268,16 @@ describe("positionEcon avg_source / today_qty(打平線跳格 + 損益與群益 
 });
 
 describe("positionEcon today_qty 邊界(review round 1)", () => {
+  it("payload 兩欄同缺(avg_source 也 undefined,舊後端)→ 與 null 同口徑,不印 NaN", () => {
+    const input = { avgSource: undefined, todayQty: undefined } as unknown as {
+      avgSource: null;
+      todayQty: number;
+    };
+    const econ = positionEcon(2, 100, 102_000, 1.8, "cash", input);
+    expect(Number.isFinite(econ.pnl)).toBe(true);
+    expect(econ).toEqual(positionEcon(2, 100, 102_000, 1.8, "cash", { avgSource: null, todayQty: 0 }));
+  });
+
   it("payload 缺 today_qty(後端未重啟窗口)→ 退成 0,不印 NaN", () => {
     const input = { avgSource: "broker", todayQty: undefined } as unknown as {
       avgSource: "broker";

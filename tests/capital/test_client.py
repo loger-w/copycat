@@ -1212,6 +1212,29 @@ def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
     assert any(p["event"] == "capital_position" for p in pushed)
 
 
+def test_balance_chain_marks_avg_source_broker(tmp_path: Path) -> None:
+    """真鏈(balance → profit → OI → finalize)落地的證券部位 avg_source 必須是 "broker":
+    群益損益試算均價含買費,前端靠這一格決定不再加買費。#118 只在 store.apply_profit_rows
+    寫(零 caller),真鏈 _on_profit_complete 就地寫 avg_price 漏了 avg_source → prod 全 null。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._handle_balance(
+        "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    )
+    client._handle_balance("##")
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(
+        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
+        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+    )
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    sec = client.store.position_for("3357")
+    assert sec is not None and sec.avg_price == 150.55
+    assert sec.avg_source == "broker"
+
+
 def test_oi_same_contract_rows_netted(tmp_path: Path) -> None:
     # review A5:OI 同契約 B/S 兩列 → 淨額合併,不可兩列同 key 互蓋
     com = FakeCom()
