@@ -504,6 +504,10 @@ class CapitalStore:
             self._positions_seeded = True
 
     def positions(self) -> list[Position]:
+        """回傳的是物件**參考**(route 在鎖外 asdict):已發布的 Position 不可就地變更,
+        要改就 dataclasses.replace 發布新物件(`_apply_fill_locked` 的寫法),否則撕裂讀
+        (新 pnl 配舊基準價)。損益回填(client._on_profit_complete)改的是尚未發布的
+        pending 列,不在此限。"""
         with self._lock:
             return list(self._positions.values())
 
