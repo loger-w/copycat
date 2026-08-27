@@ -1,0 +1,24 @@
+{
+  "round": 1,
+  "fixed_point": "24129d75",
+  "reviewed_head": "d0c06501",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "whitelist": {"items": 6, "pass": 6},
+  "commit_separation": "PASS (test / fix / chore 三筆零混雜)",
+  "standards": [
+    {"id": "F-S1", "severity": "P2", "kind": "hard", "title": "change-spec 引用不存在的 verification.md §4", "disposition": "fixed", "commit": "verification.md 落檔(本 chore)"},
+    {"id": "F-S2", "severity": "P2", "kind": "judgement", "title": "命名條勾銷理由只涵蓋 13:25–13:30;13:30–13:35 仍回 True", "disposition": "fixed", "commit": "8eba5271(next-time 改回 [ ] 改口)"},
+    {"id": "F-S3", "severity": "P3", "kind": "judgement", "title": "_INDEX_HEAL_END == index_engine._WATCH_END 同值契約未登 CLAUDE.md §4", "disposition": "fixed", "commit": "8eba5271"},
+    {"id": "F-S4", "severity": "P3", "kind": "judgement", "title": "Duplicated Code:兩把閘僅差上界常數", "disposition": "accepted-with-note", "commit": "8eba5271(docstring 註記第三把才抽 helper)"},
+    {"id": "F-S5", "severity": "P3", "kind": "judgement", "title": "_INDEX_HEAL_END 無型別註記(同檔既有常數亦無)", "disposition": "rejected", "reason": "對齊既有檔優先;整檔補齊屬獨立 🔵"}
+  ],
+  "spec": [
+    {"id": "S1", "severity": "P2", "title": "verification.md 不存在(同 F-S1)", "disposition": "fixed"},
+    {"id": "S2", "severity": "P3", "title": "F-02 第四處 code comment 是刪除不是改口", "disposition": "fixed", "commit": "8eba5271(_TRADING_END 註解補半句)"},
+    {"id": "S3", "severity": "P3", "title": "擋 value-only revert 的列漏 13:25 列(兩處)", "disposition": "fixed", "commit": "8eba5271"},
+    {"id": "S4", "severity": "P2", "title": "scope creep:新勾銷命名條(同 F-S2)", "disposition": "fixed", "commit": "8eba5271"},
+    {"id": "S5", "severity": "P3", "title": "舊 change-spec caller map 個股三列 + corr 列 per-consumer 後失效未標", "disposition": "fixed", "commit": "8eba5271"}
+  ],
+  "pr126_findings": {"F-01": "PASS", "F-02": "PASS", "F-03": "PASS", "F-04": "PASS(after S5)", "F-05": "PASS", "F-06": "PASS(after S3)", "F-07": "N/A user 不做", "F-08": "PASS(after S4)"},
+  "increment_after_review": {"commits": ["8eba5271"], "scope": "comments / docs only", "check": "main agent 機械快篩:ruff PASS、pyright 0、139 passed"}
+}
