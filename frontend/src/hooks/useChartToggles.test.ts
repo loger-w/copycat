@@ -20,7 +20,7 @@ afterEach(cleanup);
 const DEFAULTS = {
   vwap: true, cdp: true, ma: false, bb: true, vp: true, fills: true,
   // 🟢 chart-ux-batch-0826:F1 指數疊線兩鍵預設關、F3 同步十字線預設開(皆免 bump)
-  idxTwse: false, idxOtc: false, syncHover: true,
+  idxTwse: false, idxOtc: false, idxTxf: false, syncHover: true,
 };
 /** 存檔 schema 版本(storage-only 欄位,不屬 ChartToggles) */
 const V = 2;
@@ -166,6 +166,7 @@ describe("useChartToggles", () => {
       fills: true, // 🟢 intraday-fill-marks SC-2:同款
       idxTwse: false, // 🟢 chart-ux-batch-0826 F1 / F3:同款
       idxOtc: false,
+      idxTxf: false,
       syncHover: true,
       v: V,
     });

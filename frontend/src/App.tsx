@@ -14,6 +14,8 @@ import { VersionDriftBadge } from "@/components/VersionDriftBadge";
 import { useBreadth } from "@/hooks/useBreadth";
 import { useCapitalStream } from "@/hooks/useCapital";
 import { useSignalAlerts } from "@/hooks/useSignalAlerts";
+import { useChartToggles } from "@/hooks/useChartToggles";
+import { useFuturesBars } from "@/hooks/useFuturesBars";
 import { useFuturesStream } from "@/hooks/useFuturesStream";
 import { useIndexStream } from "@/hooks/useIndexStream";
 import { useStockStream } from "@/hooks/useStockStream";
@@ -27,6 +29,7 @@ import {
   TAB_KEY,
 } from "@/lib/constants";
 import { futExchangeContract } from "@/lib/futures-ladder";
+import { txfBarsToSeries } from "@/lib/txf-overlay-series";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import type { StkfutSelection } from "@/lib/stkfut";
 import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
@@ -148,10 +151,7 @@ export default function App() {
   // 取數失敗 / 後端沒載日曆 = 空集合 = 只擋週末 = 改動前行為(W8),不擋 App 起站。
   useTradingCalendar();
   // 指數流常駐 App 層(SC-1:bar 跨 tab 可見)
-  const { twse, otc, txf } = useIndexStream();
-  // 個股頁指數疊線的資料源(F1):兩個序列包成一個物件往下傳;useMemo 讓 identity 只在
-  // 任一序列真的換時才換(StockPage → 圖牆 → 卡片的 memo 邊界靠它)。
-  const indexOverlay = useMemo(() => ({ twse, otc }), [twse, otc]);
+  const { twse, otc, txf, tradeDate, wsStatus: indexWs } = useIndexStream();
   // 家數 / 騰落流同樣常駐 App 層(design R8):IndexPage 維持純展示,tab 切走也不斷線
   // —— 序列是「當日累積」,切回來時要是完整的一整天,不是重新開始那一刻起。
   const breadth = useBreadth();
@@ -181,6 +181,32 @@ export default function App() {
     { tape: stockView !== "group" },
   );
   const futuresStream = useFuturesStream();
+
+  // 台指期疊線的資料源(feat/txf-intraday-overlay Q4,user 拍板):**借期貨 tab 那份** allday 1K
+  // (`useFuturesBars("TXF")` 同一把 queryKey → TQ 一份 cache、一支輪詢 timer),不新開後端 cache、
+  // 不多打 TC4。`active` 閘 = 個股 tab + 鈕開著:鈕關著零請求。toggles 走 module store(T1),
+  // 這裡的 instance 與圖表上那顆鈕同步。
+  const { toggles: chartToggles } = useChartToggles();
+  const txfOn = chartToggles.idxTxf;
+  const txfBars = useFuturesBars("TXF", "intraday", tab === "stock" && txfOn);
+  // 補尾的現價取 index engine 每拍(~1 s)轉供的 txf 報價,**不用**期貨 WS 的 0.1 s coalesce 流:
+  // 序列 identity 每變一次,圖牆 50 張卡的 memo 就被打穿一次,節奏要與加權線同級。
+  // 結算價(`ref`)只期貨 WS 有;它一天只變一次。
+  // 鈕關著時餵空料:series 只隨 ref / stale 換 identity(鈕仍能判「有沒有台指期資料」),
+  // 不因每拍報價重繪整棵樹。
+  const txfRef = futuresStream.state?.products.TXF?.ref ?? null;
+  const txfBarsList = txfOn ? txfBars.data?.bars : undefined;
+  const txfP = txfOn ? (txf?.p ?? null) : null;
+  const txfTime = txfOn ? (txf?.time ?? null) : null;
+  const txfDate = txfOn ? tradeDate : null;
+  const txfStale = indexWs !== "open";
+  const txfSeries = useMemo(
+    () => txfBarsToSeries(txfBarsList ?? [], { p: txfP, t: txfTime, date: txfDate }, txfRef, txfStale),
+    [txfBarsList, txfP, txfTime, txfDate, txfRef, txfStale],
+  );
+  // 個股頁指數疊線的資料源(F1 + 台指期):三個序列包成一個物件往下傳;useMemo 讓 identity 只在
+  // 任一序列真的換時才換(StockPage → 圖牆 → 卡片的 memo 邊界靠它)。
+  const indexOverlay = useMemo(() => ({ twse, otc, txf: txfSeries }), [twse, otc, txfSeries]);
 
   useEffect(() => {
     writeLocal(TAB_KEY, tab);

@@ -43,7 +43,7 @@ const ACCUM = fromSnapshot({
 });
 
 const TOGGLES: ChartToggles = {
-  vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, syncHover: true,
+  vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, idxTxf: false, syncHover: true,
 };
 
 function mount(ui: React.ReactElement) {

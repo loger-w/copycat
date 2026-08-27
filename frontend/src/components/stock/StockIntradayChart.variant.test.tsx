@@ -52,7 +52,7 @@ const ACCUM = fromSnapshot({
   meta: { name: "台積電", ref: 2_320_000, upper: 2_550_000, lower: 2_090_000, y_vol: 100 },
 });
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
+const TOGGLES: ChartToggles = { vwap: true, cdp: false, ma: false, bb: true, vp: true, fills: true, idxTwse: false, idxOtc: false, idxTxf: false, syncHover: true };
 
 const CARD_W = 246;
 
@@ -202,9 +202,10 @@ describe("IntradayChartCore variant=card 右緣帶內標籤(TC-5)", () => {
 describe("IntradayChartCore variant=page(單檔頁 chrome 全在)", () => {
   // 🟢 R2 SC-5:多一顆「成交點」→ 四鈕變**五鈕**(事前標記的該紅:schema 擴充)
   // 🟢 F1(chart-ux-batch-0826):加權 / 櫃買兩顆指數疊線鈕 → **七鈕**(同樣事前標記)
-  it("toggle 七鈕 + figcaption + figure 外層", () => {
+  // 🟢 feat/txf-intraday-overlay:台指期一顆 → **八鈕**(同樣事前標記)
+  it("toggle 八鈕 + figcaption + figure 外層", () => {
     const { container } = wrap(<StockIntradayChart accum={ACCUM} />);
-    expect(container.querySelectorAll("button").length).toBe(7);
+    expect(container.querySelectorAll("button").length).toBe(8);
     expect(container.querySelector("figcaption")).toBeTruthy();
     expect(container.firstElementChild!.tagName).toBe("FIGURE");
   });

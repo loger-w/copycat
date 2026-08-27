@@ -55,10 +55,12 @@ function series(minutes: Record<string, number>): IndexSeries {
   return { p: null, ref: 20_000_000, high: null, low: null, stale: false, minutes };
 }
 
-const INDEX = { twse: series({ "0901": 20_100_000, "0902": 20_200_000 }), otc: series({ "0901": 20_000_000 }) };
+const INDEX = { twse: series({ "0901": 20_100_000, "0902": 20_200_000 }), otc: series({ "0901": 20_000_000 }), txf: null };
+// 🟢 feat/txf-intraday-overlay:台指期序列(結算價 23000 → 0901 −1%)
+const WITH_TXF = { ...INDEX, txf: { ...series({ "0845": 23_230_000, "0901": 22_770_000 }), ref: 23_000_000 } };
 
 function toggles(over: Partial<ChartToggles> = {}): ChartToggles {
-  return { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, syncHover: true, ...over };
+  return { vwap: true, cdp: false, ma: false, bb: true, vp: false, fills: false, idxTwse: false, idxOtc: false, idxTxf: false, syncHover: true, ...over };
 }
 
 describe("IntradayChartCore 指數疊線(F1)", () => {
@@ -89,7 +91,7 @@ describe("IntradayChartCore 指數疊線(F1)", () => {
       <IntradayChartCore accum={ACCUM} toggles={toggles()} variant="page" indexSeries={INDEX} />,
     );
     const labels = [...container.querySelectorAll("button")].map((b) => b.textContent);
-    expect(labels).toEqual(["均價", "CDP", "MA", "量分佈", "成交點", "加權", "櫃買"]);
+    expect(labels).toEqual(["均價", "CDP", "MA", "量分佈", "成交點", "加權", "櫃買", "台指期"]);
     const twseBtn = [...container.querySelectorAll("button")].find((b) => b.textContent === "加權")!;
     expect(twseBtn.hasAttribute("disabled")).toBe(false);
 
@@ -124,5 +126,31 @@ describe("IntradayChartCore 指數疊線(F1)", () => {
     ));
     expect(container.querySelectorAll('[data-testid^="index-line-"]').length).toBe(0);
     expect([...container.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("加權");
+  });
+
+  // 🟢 feat/txf-intraday-overlay:第三條「台指期」線;資料源缺(txf null)→ 鈕反灰「無台指期資料」
+  it("idxTxf 開 → index-line-txf + 右緣「台指期 -1.00%」;txf 序列為 null → 鈕反灰、線不畫", () => {
+    let { container } = wrap(
+      <IntradayChartCore accum={ACCUM} toggles={toggles({ idxTxf: true })} variant="page" indexSeries={WITH_TXF} />,
+    );
+    const txf = container.querySelector('[data-testid="index-line-txf"]');
+    expect(txf).toBeTruthy();
+    expect(txf!.querySelector("polyline")?.getAttribute("class")).toBe("stroke-idx-txf");
+    expect(txf!.querySelector("text")?.textContent).toBe("台指期 -1.00%");
+    // 只開台指期時另外兩條不畫
+    expect(container.querySelectorAll('[data-testid^="index-line-"]').length).toBe(1);
+    const btn = [...container.querySelectorAll("button")].find((b) => b.textContent === "台指期")!;
+    expect(btn.hasAttribute("disabled")).toBe(false);
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+
+    ({ container } = mount(
+      <IntradayChartCore accum={ACCUM} toggles={toggles({ idxTxf: true })} variant="page" indexSeries={INDEX} />,
+    ));
+    expect(container.querySelector('[data-testid="index-line-txf"]')).toBeNull();
+    const off = [...container.querySelectorAll("button")].find((b) => b.textContent === "台指期")!;
+    expect(off.hasAttribute("disabled")).toBe(true);
+    expect(off.getAttribute("title")).toBe("無台指期資料");
+    // 加權 / 櫃買仍可按(反灰是 per-線的,不是整組)
+    expect([...container.querySelectorAll("button")].find((b) => b.textContent === "加權")!.hasAttribute("disabled")).toBe(false);
   });
 });
