@@ -460,6 +460,26 @@ def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.Monkey
     assert "heal_active" not in seen["kwargs"]
 
 
+def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """稀疏腿豁免(R2)由設定檔 `sparse` 帶到 watchdog;與時段閘正交(SXF 兩邊都掛:
+    休市段由閘擋、日盤由 sparse 擋)。未傳 config → 讀 repo 設定檔,SXF 必在。"""
+    import copycat.live.corr_source as corr_mod
+    from copycat.corr_config import DEFAULT_CONFIG, CorrConfig, Leg
+    from copycat.server import app as app_mod
+
+    seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
+    app_mod._default_corr_source()
+    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset({"TC.F.TWF.SXF.HOT"})
+
+    seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
+    no_sparse = CorrConfig(
+        legs=tuple(Leg(leg.key, leg.label, leg.symbol, leg.source) for leg in DEFAULT_CONFIG.legs),
+        base=DEFAULT_CONFIG.base,
+    )
+    app_mod._default_corr_source(_CAL, no_sparse)
+    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset()
+
+
 @pytest.mark.parametrize("clock", [True, False])
 def test_corr_leg_gate_only_applies_to_the_taifex_segment(
     monkeypatch: pytest.MonkeyPatch, clock: bool

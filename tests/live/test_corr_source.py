@@ -106,6 +106,12 @@ class TestHealDefaults:
         assert src._heal_silence == 120.0
         assert src._heal_symbol_silence == 240.0
         assert src._heal_active() is True
+        assert src._heal_sparse == frozenset()  # 預設不豁免任何腿;prod 由 app 從設定檔帶
+
+    def test_sparse_symbols_pass_through_to_the_watchdog(self) -> None:
+        sparse = frozenset({"TC.F.TWF.SXF.HOT"})
+        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1", heal_sparse_symbols=sparse)
+        assert src._heal_sparse == sparse
 
 
 class TestHandleRaw:
