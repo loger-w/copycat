@@ -1235,6 +1235,43 @@ def test_balance_chain_marks_avg_source_broker(tmp_path: Path) -> None:
     assert sec.avg_source == "broker"
 
 
+def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """kind=None(標籤與 [25] 皆對不上)在真鏈回填端整列略過:不蓋掉上一輪已知的 broker 均價
+    (set_positions 沿用 prev 成對帶 avg_price + avg_source),warning 帶群益原文標籤。
+    語意原在 store.apply_profit_rows 的測試上,該死路徑刪除後搬到真鏈。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
+    row = (
+        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
+        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
+    )
+    client._handle_balance(bal)
+    client._handle_balance("##")
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(row)
+    client._handle_profit("##,,,,")
+    first = client.store.position_for("3357", "margin")
+    assert first is not None and first.avg_price == 150.55 and first.avg_source == "broker"
+
+    caplog.clear()
+    # 第二輪要先發查詢(collector 才 reset;收完態的 collector 會丟掉後到的列)
+    client._balance_due = time.monotonic() - 1.0
+    client._maybe_query_balance()
+    with caplog.at_level("WARNING"):
+        client._handle_balance(bal)
+        client._handle_balance("##")
+        client._handle_profit("000,查詢成功")
+        client._handle_profit(row.replace(",融資,", ",信用,").replace(",150.55,", ",999.00,"))
+        client._handle_profit("##,,,,")
+    p = client.store.position_for("3357", "margin")
+    assert p is not None and p.avg_price == 150.55 and p.avg_source == "broker"  # 未被 999 蓋掉
+    assert any("種類不符" in r.message and "信用" in r.message for r in caplog.records)
+
+
 def test_oi_same_contract_rows_netted(tmp_path: Path) -> None:
     # review A5:OI 同契約 B/S 兩列 → 淨額合併,不可兩列同 key 互蓋
     com = FakeCom()
