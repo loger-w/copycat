@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "fixed_point": "59b70213",
+  "head_reviewed": "656ca7f2",
+  "reviewers": { "standards": "opus (general-purpose)", "spec": "opus (general-purpose)" },
+  "standards": [
+    { "id": "S1", "severity": "P1", "file": "frontend/src/App.tsx:186-191", "finding": "「鈕關著零請求」是假陳述:useFuturesBars 只停 refetchInterval 不關 enabled → 掛載即抓 + refetchOnWindowFocus 每次回焦再打一發", "disposition": "accepted", "fix": "useFuturesBars 新增第四參數 enabled(預設 true),App 同時餵 active / enabled = tab==='stock' && idxTxf;useFuturesBars.test 加一條 enabled=false 零 fetch(857feb7a)" },
+    { "id": "S2", "severity": "P2", "file": "frontend/src/components/stock/StockIntradayChart.tsx:1413", "finding": "台指期 offTitle「無昨收」是錯術語,基準是結算價", "disposition": "accepted", "fix": "改「無結算價」;indexlines 測試加 NO_REF 斷言;spec §1 回校(857feb7a)" },
+    { "id": "S3", "severity": "P2", "file": "frontend/src/hooks/useChartToggles.ts:107-113", "finding": "getSnapshot 不純:render 期改 module 快取,load() 的 v<2 升級會 persist;subscribe 未掛 storage 事件卻宣稱跨分頁", "disposition": "rejected (主張) / accepted (註解)", "fix": "反駁:getSnapshot 冪等(同字串第二次直接回快取),identity 穩定;唯一寫入是 v<2 一次性升級,改動前就在 useState(load) initializer、同樣落在 render 期,非本輪新增副作用。接受註解回校:刪「別的分頁」宣稱,明寫不掛 storage 事件的理由(857feb7a)" },
+    { "id": "S4", "severity": "P2", "file": "多檔", "finding": "Shotgun Surgery:加一條疊線要改 11 處 + 12 個測試 fixture", "disposition": "deferred", "fix": "F1 既有結構債,本案 scope 不動;入 docs/next-time.md 2026-08-27 節(表格化 + makeToggles factory 候選)" },
+    { "id": "S5", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:40,78", "finding": "Duplicated Code:HH:MM → 分鐘數第三份(與 allday.ts / index-accum-adapter.ts 同形)", "disposition": "deferred", "fix": "入 next-time(minute 編解碼收進 lib/allday.ts 一處)" },
+    { "id": "S6", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:71", "finding": "p 取陣列末位命中者、lastMinute 取 max,輸入亂序時分家", "disposition": "accepted", "fix": "p 只在 minute > lastMinute 時更新;加亂序測試(857feb7a)" },
+    { "id": "S7", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:72-73,82-83", "finding": "Speculative Generality:high/low 無讀者且與 IndexSeries.high/low 口徑不同", "disposition": "accepted", "fix": "high/low 恆 null + 檔頭註明口徑;測試改斷 null;spec §3.6 回校(857feb7a)" }
+  ],
+  "spec": [
+    { "id": "Spec1", "severity": "P2", "file": "frontend/src/App.tsx:191", "finding": "spec §2「鈕關著時零請求」未達成(同 S1)", "disposition": "accepted", "fix": "同 S1;spec §2 回校為「同時餵 active 與 enabled」" },
+    { "id": "Spec2", "severity": "P2", "file": "frontend/src/App.tsx:202", "finding": "stale 取 index WS,spec §3.6 寫期貨 WS;結算價只期貨 WS 給,最該示警的情境靜默;quote 來源也換了 spec 沒跟", "disposition": "accepted", "fix": "stale = index WS 或期貨 WS 任一非 open;spec §1/§2/§3.6 回校為 index engine 轉供報價 + 雙 WS(857feb7a)" },
+    { "id": "Spec3", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:82-83", "finding": "high/low 把 WS 補尾點算進去,與「兩把尺不混」相衝", "disposition": "accepted", "fix": "同 S7:high/low 恆 null" },
+    { "id": "Spec4", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:54", "finding": "ref 缺時實作回 null、spec §3.5 寫 {ref:null};實作對、spec 錯(回 {ref:null} 鈕可按線不畫 = 零訊號)", "disposition": "accepted (spec 文字)", "fix": "spec §3.5 回校,code 不動" },
+    { "id": "Spec5", "severity": "P3", "file": "frontend/src/lib/txf-overlay-series.ts:66", "finding": "交易日凌晨 05:00–08:46 錨定日落到前一日,個股頁已是今天", "disposition": "accepted", "fix": "錨定日必須等於 quote.date(index engine trade_date),否則整條不疊;加測試;spec §3.1 回校(857feb7a)" }
+  ],
+  "disposition": "Standards 7 條:accepted 4(S1/S2/S6/S7)、rejected 主張 + accepted 註解 1(S3)、deferred 2(S4/S5 → next-time)。Spec 5 條:accepted 4(Spec1/2/3/5 code + spec)、accepted spec 文字 1(Spec4)。收修 commit 857feb7a;收修後 vitest 全套 / tsc / eslint / react-doctor 重跑見 verification.md。"
+}
