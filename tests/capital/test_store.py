@@ -437,8 +437,9 @@ def test_price_type_noted_after_reply_arrives() -> None:
 
 
 def test_price_type_not_applied_across_days() -> None:
-    """server 長跑跨日、seq 重用(review R7):記錄日與委託日不符一律不帶 —
-    今日的限價單被標成「市價」是憑空的假訊息,寧可缺標籤。日期缺(None)同樣不帶。"""
+    """server 長跑跨日、seq 重用(review R7):記錄日與回報日(`_Agg.date` = 最新事件日,
+    有值就覆寫)不符一律不帶 — 今日的限價單被標成「市價」是憑空的假訊息,寧可缺標籤;
+    昨日建立今日成交的單也因此掉標籤,那是 fail-safe 方向。日期缺(None)同樣不帶。"""
     s = CapitalStore()
     s.note_price_type(SEQ_A, "market", "20260610")
     s.apply_reply(_evt(seq=SEQ_A, date="20260611"))

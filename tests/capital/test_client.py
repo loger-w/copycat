@@ -1808,7 +1808,7 @@ def _freeze_today(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _dated(raw: str, date: str = _FIXED_YMD) -> str:
-    """把委託建立日(idx23)塞進回報字串;store 只在日期相符時帶出 price_type。"""
+    """把回報日期(idx23;最新事件日)塞進回報字串;store 只在日期相符時帶出 price_type。"""
     arr = raw.split(",")
     arr[23] = date
     return ",".join(arr)
