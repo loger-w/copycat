@@ -250,6 +250,14 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
   **靜默撞回 base 近白色**,零錯誤訊號。`tests/test_corr_config.py::test_river_palette_covers_every_leg` 以原始碼字面鎖住;
   加腿 = JSON + DEFAULT_CONFIG + 三組 class + token 同步。
+- **個股分時圖「台指期」疊線的分鐘鍵 = 期指 1K 終點標記 −1 分**(2026-08-27 起,feat/txf-intraday-overlay):
+  產生點 `frontend/src/lib/txf-overlay-series.ts::txfBarsToSeries`(吃 `/api/market/bars/TXF?tf=1&session=allday`
+  的 bar,`t` 是**終點標記**:08:45 開盤首根標 08:46,`copycat/live/futures_source.py` 分鐘域 0846–1345),
+  讀者 = `lib/index-overlay-lines.ts::buildIndexOverlayLines`(分鐘鍵與加權 / 櫃買 / 個股 tick 同尺 = **起點**
+  HHMM)。後端若把 1K 標記改成起點(或前端忘了 −1)→ 整條台指期線靜默右移一格,兩張圖都畫得出來零訊號;
+  `lib/txf-overlay-series.test.ts` 釘 `08:46 → "0845"`。結算價 `ref` 取期貨 WS `FuturesProductState.ref`
+  (TC4 `ReferencePrice` = 前一交易日日盤結算價,與期貨 tab 漲跌顏色同一把尺);補尾現價取 index engine 轉供的
+  `txf` 報價(每拍 ~1 s),**不用**期貨 WS 0.1 s coalesce 流(圖牆 50 張卡 memo 會被打穿)。
 - **相關係數稀疏腿 `sparse` 旗標**(2026-08-27 起):產生點 `configs/correlation.json` 腿的 `"sparse": true`(只認字面
   true)與 `copycat/corr_config.py::DEFAULT_CONFIG`(降級時的同一組;`tests/test_corr_config.py::
   test_only_sxf_is_sparse_and_the_repo_file_agrees` 鎖兩邊集合一致),讀者 = `app._default_corr_source` →

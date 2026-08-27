@@ -1,3 +1,12 @@
+## 2026-08-27(feat/txf-intraday-overlay 個股分時圖疊台指期 留尾)
+
+- [ ] **期貨 tab 改「15:00 夜盤起算」的一天定義(user 08-27 拍板另開 /mod)**:現況前後端都把期指一天排成
+  08:45 日盤 → 13:45 → 15:00 夜盤 → 05:00(x 軸左起 08:45;凌晨 ≤05:00 算前一日)。user 要的畫面 = 近全圖左起
+  15:00 夜盤、右至隔天 13:45 日盤收,「今天」= 昨 15:00 起算(交易所交易日口徑)。牽動:`frontend/src/lib/allday.ts`
+  (段順序 / `anchorDateOf` / `sliceCurrentAllday` / 刻度表)、`copycat/live/futures_source.py::FUTURES_ALLDAY_DOMAIN`
+  與回補日窗、`useFuturesBars` 輪詢窗 `inFuturesAllDayHours`、相關係數腿的台期交自癒閘、FuturesChart live 點四道 gate。
+  結算價基準不變(15:00→13:45 同一個 ref)。
+
 ## 2026-08-27(fix/corr-sparse-leg-heal-exempt SXF 稀疏腿自癒 churn 留尾)
 
 - [ ] **`sparse` 是人工標記,不是量出來的**:判準寫在 tc4-market-facts(全 attempt 1 且間隔 ≥ 門檻);若哪天 SXF 真死
