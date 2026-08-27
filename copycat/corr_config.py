@@ -37,6 +37,9 @@ class Leg:
     label: str  # 前端顯示用繁中名(後端帶,前端不寫死對照表)
     symbol: str
     source: str  # SOURCE_TC4 = 本引擎訂閱 / SOURCE_FUTURES_ENGINE = 讀既有引擎狀態
+    #: 稀疏腿:日盤本來就常 4 分鐘沒成交(SXF 費半 94.4% 靜默),豁免 TC4 R2 單 symbol 自癒、
+    #: 仍吃 R1 整批重掛(`tc4.TC4QuoteSource(heal_sparse_symbols=)`)。設定檔選配 `"sparse": true`。
+    sparse: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ DEFAULT_CONFIG = CorrConfig(
         Leg("YM", "道瓊", "TC.F.CBOT.YM.HOT", SOURCE_TC4),
         Leg("ES", "標普", "TC.F.CME.ES.HOT", SOURCE_TC4),
         Leg("NQ", "納指", "TC.F.CME.NQ.HOT", SOURCE_TC4),
-        Leg("SXF", "費半", "TC.F.TWF.SXF.HOT", SOURCE_TC4),
+        Leg("SXF", "費半", "TC.F.TWF.SXF.HOT", SOURCE_TC4, sparse=True),
         # 第七腿(2026-08-17 R5 上線,N021 於 2026-08-25 補進預設):`configs/correlation.json`
         # 早就有它,預設卻沒有 —— 設定檔壞掉退回這裡時,江波圖 / 相關係數會**真的少一腿**,
         # 而畫面上只是少一條線,零錯誤訊號。預設必須與 repo 真檔逐腿相同。
@@ -93,7 +96,9 @@ def _parse_legs(raw: object) -> tuple[Leg, ...] | None:
             return None
         if any(field not in item for field in _LEG_FIELDS):
             return None
-        legs.append(Leg(*(str(item[field]) for field in _LEG_FIELDS)))
+        legs.append(
+            Leg(*(str(item[field]) for field in _LEG_FIELDS), sparse=item.get("sparse") is True)
+        )
     return tuple(legs)
 
 
