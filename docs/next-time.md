@@ -19,14 +19,15 @@
   六處改按欄索引。
 - [ ] **`/ws/index` 首則可能是 ping 或任一 dirty 拍,前端 `useIndexStream` 是否假設首則含完整 payload**(本輪 B 校正前提時順帶看到,未查):
   relay docstring 寫「無 seed 的路(index/capital/futures)首則可能是 ping」;前端 helper 已濾 ping,但首則 `twse.p` None 的 payload
-  會不會讓現價欄閃一下 `—`,要看 `index-accum` 的合併語意。純疑問,不是 finding。
+  會不會讓現價欄閃一下 `—`,要看 `index-accum` 的合併語意。待查,不是本輪 finding。
 
 ## 2026-08-28(/pr-review #131 回溯 review 留尾)
 
-- [x] **`tests/server/test_bars.py` 5 條在台北 00:00–00:10 會紅** —— 08-28 chore/test-hygiene-batch:模組級 autouse `_daytime_clock` 凍 09:00 + `TestModuleClock` 哨兵;00:05 plugin 重跑 52 passed。原文:(pr-131 review 順帶發現;reviewer 00:04 實跑 `5 failed`,
+- [x] ~~**`tests/server/test_bars.py` 5 條在台北 00:00–00:10 會紅**(pr-131 review 順帶發現;reviewer 00:04 實跑 `5 failed`,
   `bars._now_time` 固定 09:00 重跑 51 passed):`copycat/server/bars.py:510` `hold = hi == yesterday and _now_time() < MIDNIGHT_BUFFER_END`
   午夜緩衝窗吃真牆鐘;該檔部分測試已 `monkeypatch.setattr(bars_mod, "_now_time", …)`(:594),這 5 條沒凍結。處置 = 5 條補同一把
-  monkeypatch(或 autouse fixture 凍到 09:00,要驗緩衝窗的測試自己覆寫)。與任何 PR 無關,純測試牆鐘相依。
+  monkeypatch(或 autouse fixture 凍到 09:00,要驗緩衝窗的測試自己覆寫)。與任何 PR 無關,純測試牆鐘相依。~~
+  → 08-28 chore/test-hygiene-batch:模組級 autouse `_daytime_clock` 凍 09:00 + `TestModuleClock` 兩條哨兵(fixture 缺席恆紅 / `build_minute` 真路徑永久化 yesterday);00:05 plugin 重跑 53 passed。
 - [ ] **pr-131 F-04 commit 慣例**(no-op,已 merge 不重寫):純註解 / JSDoc 位移一律 `chore(<scope>)` 不用無 scope 的 `refactor:`;
   測試重組內含新增斷言時另拆 `test` commit。
 
@@ -37,14 +38,16 @@
   `git show` unknown revision。**拍板 = (b) artifact 不引 SHA,改引「第 n 筆 + commit subject」**(rebase 後順序與標題不變);(a) merge 後補寫
   最終 SHA 不採。待做 = harness 改動(`branch-lifecycle` 收尾節 + `harness/refs/closeout.md` artifact 格式一行),依鐵則 B **攢批**、
   不單獨開;在那之前新分支的 verification 直接照 (b) 寫(`chore/test-hygiene-batch` 當首例)。
-- [x] **`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake** —— 08-28 chore/test-hygiene-batch:改「收到含 `p` 的那則為止(上限 5)」。**前提校正**:`/ws/index` 沒有 seed 快照(`index.stream()` 無 seed),搶在 quote 前的是回補完成 / MIS poll 撥 dirty 的 `_broadcast_loop` 拍;所以「先吃一則快照」那個修法在常態(零前置訊息)會把 quote 誤當快照吃掉,不採。plugin 固定 race 3/3 紅 → 修後 3/3 綠。原文:(非本輪 finding,如實揭露;08-27 深夜全量 pytest
+- [x] ~~**`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake**(非本輪 finding,如實揭露;08-27 深夜全量 pytest
   1/3135 紅、單跑 1 紅 5 綠、整檔綠):測試 `websocket_connect` 後立刻 `fake.on_message(quote)` 再 `receive_json()` 斷
   `twse.p == 42_039_920`,但 `/ws/index` 連上時先送**初始快照**(`twse.p` None),quote 廣播若排在快照之後,首則就是快照
   → `assert None == 42039920`。與本輪 diff 無關(index routes / ws / engine 未動)。處置 = 測試改「收到含 p 的那則為止」
-  (`receive_json` 迴圈 ≤ 2 則),或先 `receive_json()` 吃掉初始快照再送 quote。
-- [x] **`tests/capital/test_client.py::_BAL_3357` 12 處內嵌 = `test_balance.RAW_C_MARGIN` 同型重複** —— 08-28 chore/test-hygiene-batch:`tests/capital/balance_rows.py` 五常數單一定義處,test_client 內嵌 12 處 + `_BAL_*` 11 引用全換,逐 byte 相同。原文:(pr-129 F-02 附帶):
+  (`receive_json` 迴圈 ≤ 2 則),或先 `receive_json()` 吃掉初始快照再送 quote。~~
+  → 08-28 chore/test-hygiene-batch:改「收到含 `p` 的那則為止」(ping 不計、上限 5 只防無界等待)。**前提校正**:`/ws/index` 沒有 seed 快照(`index.stream()` 無 seed),搶在 quote 前的是回補完成 / MIS poll 撥 dirty 的 `_broadcast_loop` 拍;「先吃一則快照」那個修法在常態(零前置訊息)會把 quote 誤當快照吃掉,不採。plugin 固定 race 3/3 紅 → 修後 3/3 綠、裸跑 20/20 綠。
+- [x] ~~**`tests/capital/test_client.py::_BAL_3357` 12 處內嵌 = `test_balance.RAW_C_MARGIN` 同型重複**(pr-129 F-02 附帶):
   庫存報告列(19 欄)在 test_client 內嵌 12 次、與 test_balance 那份逐字相同;群益改欄形只改到一份、另一份靜默留舊欄形
-  —— 與 pr-119 F-05 / pr-129 F-02 同坑。處置 = 比照 `profit_rows.py` 開 `balance_rows.py`(或併同一模組)收成單一定義處。
+  —— 與 pr-119 F-05 / pr-129 F-02 同坑。處置 = 比照 `profit_rows.py` 開 `balance_rows.py`(或併同一模組)收成單一定義處。~~
+  → 08-28 chore/test-hygiene-batch:`tests/capital/balance_rows.py` 六常數單一定義處(review 另抓到 `test_fill_latency._BAL_ROW` 第三份 → `RAW_T_HELD`),test_client 內嵌 12 處 + `_BAL_*` 11 引用全換,逐 byte 相同。
 
 ## 2026-08-27(feat/txf-intraday-overlay 個股分時圖疊台指期 留尾)
 
