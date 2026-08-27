@@ -16,8 +16,9 @@ from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeIndexSource, FakeStockSource, dbar
 from tests.helpers.fake_txo import FakeTxoSource
 
-#: `/ws/index` 在 quote 生效前最多容忍幾則 `p` None 的 loop 拍(回補完成 / MIS poll 各一,
-#: 留餘裕;超過 = 推播鏈真的壞了,不是順序問題)
+#: `/ws/index` 在 quote 生效前最多容忍幾則 `p` None 的 loop 拍。**只防無界等待,不是契約**:
+#: 撥 `_dirty` 的點不只回補完成 / MIS poll(watchdog / 分時自癒 / txf 價變 / 換日也會),常態 0–2 則;
+#: 超過這個數仍是 None = 推播鏈真的壞了,不是順序問題
 _WS_PRE_QUOTE_MAX = 5
 
 #: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
@@ -96,13 +97,15 @@ class TestIndexState:
                     }
                 )
                 seen: list[int | None] = []
-                for _ in range(_WS_PRE_QUOTE_MAX + 1):
+                while len(seen) <= _WS_PRE_QUOTE_MAX:
                     msg = ws.receive_json()
+                    if msg["type"] == "ping":  # 心跳直送不經 queue(10 s 一發),不算一則
+                        continue
                     assert msg["type"] == "index"
                     seen.append(msg["twse"]["p"])
-                    if msg["twse"]["p"] is not None:
+                    if seen[-1] is not None:
                         break
-                assert seen[-1] == 42_039_920, f"前 {len(seen)} 則 twse.p = {seen}"
+                assert seen and seen[-1] == 42_039_920, f"前 {len(seen)} 則 twse.p = {seen}"
 
 
 class TestIndexOverlay:
