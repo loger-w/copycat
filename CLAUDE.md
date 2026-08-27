@@ -233,13 +233,17 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   零錯誤訊號(只在 TC4 log `RemoveLoginInfo` 晚 60 s 才看得到)。不等式由
   `tests/server/test_shutdown_budget.py` 釘住(含 run.ps1 字面 parity 與 UTF-8 BOM)。
 
-- **部位均價語意 `avg_source` + 當沖段 `today_qty`**(2026-08-26 起,fix/breakeven-avg-source-daytrade-tax):
-  產生點 `copycat/capital/store.py`(樂觀套用 = `fill` 純成交價;`apply_profit_rows` = `broker`,群益損益試算
-  「平均買進成本」**已含買進手續費**,prod 實證 4991 469.50 → 469.62)與 `_with_today_qty_locked`(當日聚合
-  buy − sell,clamp 到 [0, |qty|],per (股號, 種類),fut 恆 0)。唯一讀者 `frontend/src/lib/ladder-position.ts::
+- **部位均價語意 `avg_source` + 當沖段 `today_qty`**(2026-08-26 起,fix/breakeven-avg-source-daytrade-tax;
+  08-27 fix/breakeven-avg-source-prod-chain 校正產生點):`broker` 的產生點是 `copycat/capital/client.py::
+  _on_profit_complete`(損益試算回填 pending 列,群益「平均買進成本」**已含買進手續費**,prod 實證 4991 469.50 →
+  469.62);`fill` 的產生點是 `copycat/capital/store.py::_apply_fill_locked`(樂觀套用 = 純成交價);
+  `set_positions` 只沿用不產生。**`avg_source` 沒有第二個寫入點** —— 08-26 那版把 `broker` 寫在 store 一條零 caller
+  的方法上,測試綠、prod 全 null。`today_qty` 產生點 `store.py::_with_today_qty_locked`(當日聚合 buy − sell,
+  clamp 到 [0, |qty|],per (股號, 種類),fut 恆 0)。唯一讀者 `frontend/src/lib/ladder-position.ts::
   positionEcon`:`broker` 不再加買費、`fill` 加;現股 `today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
   漂掉的症狀:後端少送 `avg_source` → 前端當 fill 全加一次買費 → 損益比群益 APP 少一筆買費、打平線在快照落地時
-  跳一格(就是本輪修的 bug,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失。
+  跳一格(08-26 修、08-27 才真的修到 prod 路徑,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失;前端 switch 無
+  default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` 持倉列 `avg_source` 非 null。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿

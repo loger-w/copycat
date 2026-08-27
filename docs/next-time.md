@@ -1,3 +1,14 @@
+## 2026-08-27(fix/breakeven-avg-source-prod-chain #118 broker 半邊在 prod 是死的 留尾)
+
+- [ ] **流程教訓:blast radius 要 grep「欄位寫入點」不只「建構點」**:#118 的 blast radius 只 grep `Position(` 建構點與
+  `avg_source` 字面,沒 grep `avg_price =` 就地寫入 → 真鏈 `client._on_profit_complete` 漏掉,測試綠在一條零 caller 的
+  死路徑上。判準:新增欄位時 `grep "<鄰欄>\s*="` 把每個就地寫入點列出來逐一對。待併入 `ops-discipline`(該檔另一 session
+  持有未提交修改,先記這裡)。
+- [ ] **F-05 `fill_date` 跨日重播復發**(pr-118-review Should):`today_qty` 看成交到達日,群益 ConnectByID 重播含前一日時
+  (跨日未重啟)昨天的成交會被算進當沖段 —— 與 08-26 節「`today_qty` 依賴聚合只有當日 backlog」同一條,那條已列。
+- [ ] **pr-review #116 / #117 / #118 三份報告仍在 repo root 未 commit**(`pr-11N-review{,.audit}.md`);上一輪 #111 是搬進
+  `docs/superpowers/specs/` 一起 commit,可比照(單獨 chore)。#117 六條 LOW / #118 十一條 Nice 未動。
+
 ## 2026-08-26(fix/breakeven-avg-source-daytrade-tax 打平線均價語意 + 當沖稅 留尾)
 
 - [ ] **空方(融券 / 無券 daytrade_sell)均價語意無真樣本**:群益損益試算的空方「均價」是純賣價、還是扣掉賣費稅後的淨收?
@@ -51,9 +62,11 @@ verification;這裡回填成 backlog。
   抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。
 - [x] ~~**`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
   1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
-  修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。
+  修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。~~
+  → 同上,08-26 chore/frontend-lockfile-sync 已修。
 
-## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)~~ → 同上,08-26 chore/frontend-lockfile-sync 已修。
+
+## 2026-08-26(feat/chart-ux-batch-0826 看盤 UX 四功能 + 成交樂觀套用 留尾)
 - [x] ~~**F-20 corr / river route 測試 11 腿 key 字面集合 4 處複製**:要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `tests/test_corr_config.py::_EXPECTED_LEGS`(user 08-26 問「11 腿名單是什麼」,已解釋,待拍板)。~~ → user 08-26 拍板「改」,refactor/f20-corr-leg-keys-from-config:兩檔改讀 `load_config(CONFIG_PATH)`,逐字只留 `_EXPECTED_LEGS`。
 - [x] ~~**/pr-review #111 兩條 ask-user**(報告 `docs/superpowers/specs/pr-111-review.md`):F-12 圖牆 toggle 列 5→8 顆在窄寬度會不會換行成兩列 chrome(prod build 分割畫面目視;真換行再收成下拉);F-20 corr / river route 測試的 11 腿 key 字面集合 4 處複製,要不要改由 `load_config(CONFIG_PATH)` 導出、逐字只留 `_EXPECTED_LEGS`。其餘 20 條已於收修 commit 處理。~~ → user 08-26 過目:F-12 螢幕寬度足、不換行,不做;F-20 見下方獨立條。
 - [x] ~~**F5 樂觀套用改為「券商快照落地過才開」**(review F-02 收修):開機第一輪鏈落地前的成交只累計;若 prod 觀察到開機後首筆成交沒即時出現,就是這條(鏈通常 1–2 s 內落地)。~~ → 08-26 真環境:13 筆成交全套用、體感變快;鏈 624–5538 ms 落地,無開機首筆延遲觀察。
