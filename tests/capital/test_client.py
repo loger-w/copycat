@@ -45,6 +45,15 @@ from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 
+#: 損益報告(4-2-p)融資列,**30 欄**對齊 prod 實列(欄位形狀同 `tests/capital/test_balance.py::RAW_PNL_MARGIN`):
+#: [1]股號 [3]種類標籤 [5]報告市價 [9]損益 [10]均價 [12]成交價金 [25]種類代碼(標籤亂碼時的備援)。
+#: 舊 25 欄字面把成交價金放在 [11]、沒有 [25] → `_PNL_IDX_COST` 解出 0、[25] 備援永遠走不到,而且本檔複製了四份
+#: (pr-119 F-05)。要變異就 `split(",")` 改對應欄,不要 `.replace` 猜字串。
+PNL_ROW_3357_MARGIN = (
+    "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000.00,464000.00,12345.00,150.55,464000.00,451650.00,"
+    "0.00,665.00,0.00,1404.00,135495,316155,89,0.00,2.73,0,,Y,2,3,150.860000,A123456789,1234567890"
+)
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -1077,10 +1086,7 @@ def test_balance_chain_keeps_both_kinds_of_same_stock(tmp_path: Path) -> None:
     )
     client._handle_balance("3357,T,0,0,0,0,2000,0,0,0,0,2000,0,0,2000,0,0,A123456789,1234567890")
     client._handle_balance("##")
-    profit_margin = (
-        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-    )
+    profit_margin = PNL_ROW_3357_MARGIN
     client._handle_profit("000,查詢成功")
     client._handle_profit(profit_margin)
     client._handle_profit(profit_margin.replace(",融資,", ",現股,").replace(",150.55,", ",140.25,"))
@@ -1195,10 +1201,7 @@ def test_balance_chain_merges_sec_and_fut_positions(tmp_path: Path) -> None:
     assert ("get_profit_loss_gw", "1234567890A") in com.sent
     assert client.store.positions() == []  # 期貨回完才合併寫入,不先落半套
     client._handle_profit("000,查詢成功")
-    client._handle_profit(
-        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-    )
+    client._handle_profit(PNL_ROW_3357_MARGIN)
     client._handle_profit("##,,,,")
     assert ("get_open_interest", "F9999999") in com.sent
     assert client.store.positions() == []
@@ -1224,31 +1227,27 @@ def test_balance_chain_marks_avg_source_broker(tmp_path: Path) -> None:
     )
     client._handle_balance("##")
     client._handle_profit("000,查詢成功")
-    client._handle_profit(
-        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-    )
+    client._handle_profit(PNL_ROW_3357_MARGIN)
     client._handle_profit("##,,,,")
     client._handle_open_interest("##")
     sec = client.store.position_for("3357")
     assert sec is not None and sec.avg_price == 150.55
     assert sec.avg_source == "broker"
+    # 損益三欄 ProfitRow → Position 映射全 repo 只有這裡守(pr-119 F-01):[9]損益 / [5]報告市價 / [12]成交價金
+    assert sec.pnl_base == 12345.0 and sec.pnl_base_price == 156.0 and sec.pnl_cost == 451650.0
 
 
 def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """kind=None(標籤與 [25] 皆對不上)在真鏈回填端整列略過:不蓋掉上一輪已知的 broker 均價
+    """kind=None(標籤與 [25] 種類代碼**皆**對不上)在真鏈回填端整列略過:不蓋掉上一輪已知的 broker 均價
     (set_positions 沿用 prev 成對帶 avg_price + avg_source),warning 帶群益原文標籤。
     語意原在 store.apply_profit_rows 的測試上,該死路徑刪除後搬到真鏈。"""
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
     bal = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
-    row = (
-        "臺慶科,3357,新台幣,融資,3000,156.00,0.27,468000,464000,12345,150.55,451650,"
-        "0,0,665,0,1404,135495,316155,89,,2.73,0,,Y"
-    )
+    row = PNL_ROW_3357_MARGIN
     client._handle_balance(bal)
     client._handle_balance("##")
     client._handle_profit("000,查詢成功")
@@ -1265,7 +1264,9 @@ def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
         client._handle_balance(bal)
         client._handle_balance("##")
         client._handle_profit("000,查詢成功")
-        client._handle_profit(row.replace(",融資,", ",信用,").replace(",150.55,", ",999.00,"))
+        parts = row.split(",")
+        parts[3], parts[10], parts[25] = "信用", "999.00", "3"  # 標籤未知 + [25] 未對映 → kind=None(pr-119 F-05)
+        client._handle_profit(",".join(parts))
         client._handle_profit("##,,,,")
     p = client.store.position_for("3357", "margin")
     assert p is not None and p.avg_price == 150.55 and p.avg_source == "broker"  # 未被 999 蓋掉

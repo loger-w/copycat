@@ -290,8 +290,6 @@ def test_set_positions_replaces_not_merges() -> None:
 def test_set_positions_carries_profit_by_composite_key() -> None:
     """損益查詢回來前,新一輪庫存覆寫不可閃掉已知均價/損益基底;
     鍵含 kind → 同種類天然沿用、異種類是「另一列」(成本基礎不混用)。"""
-    from copycat.capital.models import Position
-
     s = CapitalStore()
     # 損益回填後的列由 client._on_profit_complete 就地寫進 pending 再 set_positions(真鏈產物長這樣)
     s.set_positions(
@@ -322,8 +320,7 @@ def test_set_positions_carries_profit_by_composite_key() -> None:
     assert m.pnl_base == -74636.0 and m.pnl_base_price == 288.0 and m.pnl_cost == 935000.0
     c = s.position_for("3357", "cash")
     assert c is not None and c.qty == 1
-    assert c.avg_price is None and c.avg_source is None  # 異種類是另一列,不沿用
-    assert c.avg_price is None  # 集保列是另一列,不沿用融資成本
+    assert c.avg_price is None and c.avg_source is None  # 異種類(集保列)是另一列,不沿用融資成本
     assert c.pnl_base is None and c.pnl_base_price is None and c.pnl_cost is None
 
 
