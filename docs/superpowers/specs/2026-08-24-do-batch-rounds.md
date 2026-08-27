@@ -270,7 +270,8 @@ OrderPanel 靜默收斂復原、註解不實修正、欠帳窗逐筆化、市價
   前端 edgeOf 是唯一檔位守門,漏接 = 券商退單零訊號。修法:close route 由 req.key 反查 product,tickable 個股期補 tick 閘。
 
 ### N099
-- [ ] **ETF 期貨 / 除權息調整腿的平倉估價用現股 tick 表**(R4 review F5):`isOrderBlocked` 只擋閃電梯,平倉鍵不擋;現為嚴格改善(0.01 倍數),可比照送單面讓 blocked 腿 closePriceOf 回 null。
+- [x] **ETF 期貨 / 除權息調整腿的平倉估價用現股 tick 表**(R4 review F5):`isOrderBlocked` 只擋閃電梯,平倉鍵不擋;現為嚴格改善(0.01 倍數),可比照送單面讓 blocked 腿 closePriceOf 回 null。
+  → R6 已鎖(`RightRail.tsx` `isOrderBlocked` → `() => null`,08-25 review §2.4 Spec 3);**08-28 user 拍板:不持這兩種倉 → 維持鎖,不再開輪。**
 
 ### N065
 - [ ] **`code` null 的個股期倉位(除權息調整碼 EE1/CD1 形、新上市未 refresh)三處靜默不顯示**,閃電梯照舊;

@@ -1,3 +1,11 @@
+## 2026-08-28(mod/n075-price-type-label-window N075 標籤文件改口 留尾)
+
+- [ ] **N075 夜盤遠價市價單實驗(user 親做)**:某個夜盤用 copycat 送一張離現價很遠的市價單(不成交),看回報 `date`
+  (idx23)是本機日曆日還是所屬交易日,然後刪單。定案後 `store.note_price_type` 改成只記單一候選日 = 關掉「同檔同方向撞同 seq」
+  的誤標窗(08-28 拍板程式先不封洞、不做送單時刻 ± 窗補丁);屆時
+  `tests/capital/test_store.py::test_price_type_same_stock_side_seq_collision_is_the_known_open_window` 事前標該變(→ `is None`)。
+  順帶核群益 seq 是日曆日重置還是交易日重置(同一筆回報看得到)。
+
 ## 2026-08-28(/pr-review #131 回溯 review 留尾)
 
 - [ ] **`tests/server/test_bars.py` 5 條在台北 00:00–00:10 會紅**(pr-131 review 順帶發現;reviewer 00:04 實跑 `5 failed`,

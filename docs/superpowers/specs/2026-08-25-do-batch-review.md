@@ -309,13 +309,19 @@ reviewer 重跑後端 68 / 前端 35 passed。
   console 印哪段吃掉時間(§2.6 S1)。**已出貨 PR #109(2026-08-26,並行 lane + `shutdown_budget.py` 83 s)**。
 - A2 #103 N075 誤標窗:同檔同方向撞同 seq 仍誤標 —— 要嘛加「送單時刻 ± 窗」或 seq 單調性檢查,要嘛改口 docstring 承認窗
   未封並釘測試(§2.4);`_note_price_type` 移到 `_audit` 之後或包 try(§2.4 Spec 7)。
+  **08-28 拍板:程式不封洞 → docstring 改口(`_Agg.date` = 最新事件日、窗未封、關窗正路 = 夜盤實驗後只記單一候選日)+
+  `test_store` 釘現況;`_note_price_type` 保險絲包 try 退回只記本機日(分支 `mod/n075-price-type-label-window`)。
+  夜盤遠價市價單實驗 user 親做(next-time 08-28)。**
 - A3 /bug gate 5:`tailIndex` 套 `c <= 0` 跳過(§2.2 Spec 2);門檻 3 → 4 或 60 s 覆量(Spec 1)。
+  **08-28 拍板:門檻現在不動;先修「夜盤前端不輪詢 K 棒 → 提示永遠亮」(`useMarketBars.ts` 接 `inFuturesAllDayHours`),
+  修完日盤量一次再定 3 → 4;`tailIndex` 0 價閘同輪。**
 - A4 #101 N115:撞名時保留編輯框(`setRenaming(null)` 移到成功回呼)+ 鎖(§2.3 Spec 1)。**已出貨 PR #110(2026-08-26)**。
 - A5 #104 N105:休市日窗內閘 —— 需 user 拍板(補閘 vs 改口)(§2.5 Spec 1);rollover 設 pending 時 bump `_retry_epoch`
-  (§2.5 Spec 2 親核那條)。
+  (§2.5 Spec 2 親核那條)。**08-28 拍板:補閘(休市日整天不自癒;user 原話「休市日就不要抓」);`_retry_epoch` bump 同輪。**
 - A6 #105 重連 → `_schedule_retry(variant=self._heal_variant)` 或不清 stale(§3.4);`tc4.py:389` Disconnect 取鎖(§2.6 S2)。
   **已出貨 PR #113(2026-08-26;沿用 variant + 無進展推階梯,stale 維持樂觀清)**。
 - A7 #99 N037 補「節流 tick 真跑」案 + grace 改「只在偵測到凍結時」(§2.1)。
+  **08-28 拍板:先真環境驗(盤後刻意斷 TC4 / 斷網 30 s,看 8 條 WS 全回來),驗出問題才改 code。**
 - A8 #101 `PARAM_DEFAULTS` 進 parity + `COOLDOWN` + 整數檢查(§2.3)。**已出貨 PR #112(2026-08-26)**。
 
 **B. 文件改口(不動行為)** —— **2026-08-26 chore 一次做完(`chore/do-batch-review-docs`),除 `ops-discipline:67`
@@ -331,6 +337,8 @@ review 後已改,3a8d4b67 / e01a083b)**;D 類七項 + 其餘留尾同輪回填 `
 **C. user 拍板 / 知情**
 - N099 平倉鍵 code 已鎖(非待確認態);N105 補窗內閘 vs 改口;N036 boot 期間載入情境最壞 29 s;N068 240 req/h 兩面代價;
   N037 收益零證據要不要補真環境。
+  **08-28 拍板**:N099 user 不持 ETF 期貨 / 除權息調整腿 → 維持鎖(rounds 文件改口);N105 補閘;N036 知情不改;
+  N068 08-26 已拍板維持 15 s;N037 先驗。
 
 **D. 留尾回填 backlog(next-time)**
 - #105 §5.3–5.6 / 7.8 七項 + 「N111 正確性依賴 IO 在鎖內」耦合;N051 逐腿閘待核項;N039 route 層 seed send;N038 背景分頁
