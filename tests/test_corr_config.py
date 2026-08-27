@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
 
 
@@ -91,7 +93,13 @@ class TestLoadConfig:
         """SC-8:日後 TC4 上架 CME SSF 的 TSM 只需改設定檔。"""
         path = tmp_path / "correlation.json"
         legs = [
-            {"key": leg.key, "label": leg.label, "symbol": leg.symbol, "source": leg.source}
+            {
+                "key": leg.key,
+                "label": leg.label,
+                "symbol": leg.symbol,
+                "source": leg.source,
+                "sparse": leg.sparse,  # 帶著:fixture 才仍等於 DEFAULT_CONFIG(review Spec 8)
+            }
             for leg in DEFAULT_CONFIG.legs
         ]
         legs.append(
@@ -115,12 +123,32 @@ class TestLoadConfig:
             {"key": "SXF", "label": "費半", "symbol": "TC.F.TWF.SXF.HOT", "source": "tc4", "sparse": True},
             {"key": "NQ", "label": "納指", "symbol": "TC.F.CME.NQ.HOT", "source": "tc4", "sparse": "yes"},
             {"key": "ES", "label": "標普", "symbol": "TC.F.CME.ES.HOT", "source": "tc4"},
+            # bool 是 int 子類:`1 == True` 但 `1 is True` 為 False —— 這行正是 `is True` 存在的理由
+            {"key": "YM", "label": "道瓊", "symbol": "TC.F.CBOT.YM.HOT", "source": "tc4", "sparse": 1},
         ]
         path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
 
         cfg = load_config(path)
 
-        assert [leg.sparse for leg in cfg.legs] == [False, True, False, False]
+        assert [leg.sparse for leg in cfg.legs] == [False, True, False, False, False]
+
+    def test_sparse_on_a_non_tc4_leg_warns_but_does_not_degrade(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """base 腿不由 corr source 訂閱 → 標 sparse 沒有 R2 可豁免;app 只對 tc4_legs() 算集合,旗標會被
+        丟掉。不降級(腿組仍可用),但要 WARNING 點名 —— 靜默丟掉是零錯誤訊號的漂移。"""
+        path = tmp_path / "correlation.json"
+        legs = [
+            {"key": "TXF", "label": "台指", "symbol": "TC.F.TWF.TXF.HOT", "source": "futures_engine", "sparse": True},
+            {"key": "NQ", "label": "納指", "symbol": "TC.F.CME.NQ.HOT", "source": "tc4"},
+        ]
+        path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            cfg = load_config(path)
+
+        assert cfg is not DEFAULT_CONFIG and len(cfg.legs) == 2
+        assert any("TXF" in r.message and "sparse" in r.message for r in caplog.records)
 
     def test_unknown_fields_are_ignored_not_treated_as_broken(self, tmp_path: Path) -> None:
         """`_comment` 說明欄不得觸發降級(impl review P2)。"""
