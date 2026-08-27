@@ -5,17 +5,17 @@
   更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。
 - [ ] **個股冷門檔同型(6949 每分鐘一發 attempt 1)**:個股 source 的 R2 60 s 對零股 / 冷門檔同樣是假警報,但個股是
   自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。
-- [ ] **收盤段 `IX0001` 每 30 s 一發**:同 08-26 節「N051 另外兩個 churn 來源」第一項(那條記 08-25 的 18 發;08-27
-  實測 13:25:46–13:34:51 共 19 發);閘 = `stock_source._TRADING_END` 13:35 vs 交易所 13:25 起停推。08-27 已向 user
-  提案上界改 13:31(保 13:30 收盤最後一筆而非 13:25);**08-27 盤後改口:先量再改(下兩條),不憑猜的時間改閘**。
+- [x] ~~**收盤段 `IX0001` 每 30 s 一發**~~ → 08-27 user 拍板 13:25(mod/stock-heal-gate-end-1325):看門狗 13:25 下班、訂閱
+  不退、13:30 收盤推播照收、試撮 5 分鐘內訂閱死掉由 1K 尾段回補兜底。次一交易日驗 `grep 零推播自癒 | grep IX0001` 13:25 後 0 筆。
 - [ ] **重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
   snapshot(tc4-market-facts fresh subscribe 事實)→ `tc4._note_push` 清 `_heal_attempts` / `_heal_next` → 下一輪又從
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
   加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。
-- [ ] **IX0001 收盤最後一筆推播幾點到、13:25–13:30 試撮窗有無推播**:決定閘上界(13:31 / 13:34)的事實,今天 log 判不出
-  (上條 snapshot 把訊號蓋掉)。量法 = 交易日 13:36 `curl /api/index/state` 看 twse 最後更新時戳 / minutes 最大鍵,
-  或 13:20 起跑只聽不訂 probe(`ix_listen_probe.py` 樣板)記每則 IX0001 quote 時戳。量到再改 `_TRADING_END`。
+- [ ] **IX0001 收盤最後一筆推播幾點到**:閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
+  (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
+  row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`
+  看 twse 最後更新時戳 / minutes 最大鍵,或 13:20 起只聽不訂 probe(`ix_listen_probe.py` 樣板)。
 - [ ] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
   本輪加一個旗標動了 tc4 簽名 + body、corr_source 簽名 + 轉發、app 兩處、四支測試。候選 = `HealPolicy` frozen dataclass
   收攏,四個 source 子類一起改,獨立 🔵。
@@ -58,8 +58,9 @@ verification;這裡回填成 backlog。
   (`removed` 以 `_refs` 為準)**依賴 IO 在鎖內**,一移出 ST1 洩漏原樣復發 —— 兩件事要同一輪做。
 - [ ] **N092 `stock_source.backfill` 真三態化**(§5.4):先把 `parse_hist_tick` 的「試撮窗濾掉」與「解析不出」分流(現在
   兩者都回 None),否則 08:30–09:00 盤前回補會被判成 stub 無限重排。改回傳契約,獨立輪。
-- [ ] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發(index source 自己的閘上界
-  13:25 —— 會連帶關掉 13:30 最後一筆,**要 user 拍板**);個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
+- [ ] **N051 另外兩個 churn 來源**(§5.5):~~收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發(index source 自己的閘上界
+  13:25 —— 會連帶關掉 13:30 最後一筆,**要 user 拍板**)~~ → 08-27 user 拍板 13:25,mod/stock-heal-gate-end-1325 已改
+  `stock_source._TRADING_END`;個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
   退避上限 60 s 拉到 300 s。另:N051 逐腿閘的真環境待核項(SXF 休市段自癒發數)#105 §6 沒列,prod 重啟後盤中
   `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。**08-27 核過:休市段(08:45 前 / 13:45 後)零發 = 逐腿閘
   PASS;日盤 09:45–13:01 另有 11 發是稀疏腿真沒成交的假警報(M0 那 8 發是休市段,不是同一件事),
