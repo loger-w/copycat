@@ -1,10 +1,11 @@
 ## 2026-08-28(mod/n075-price-type-label-window N075 標籤文件改口 留尾)
 
 - [ ] **N075 夜盤遠價市價單實驗(user 親做)**:某個夜盤用 copycat 送一張離現價很遠的市價單(不成交),看回報 `date`
-  (idx23)是本機日曆日還是所屬交易日,然後刪單。定案後 `store.note_price_type` 改成只記單一候選日 = 關掉「同檔同方向撞同 seq」
-  的誤標窗(08-28 拍板程式先不封洞、不做送單時刻 ± 窗補丁);屆時
-  `tests/capital/test_store.py::test_price_type_same_stock_side_seq_collision_is_the_known_open_window` 事前標該變(→ `is None`)。
-  順帶核群益 seq 是日曆日重置還是交易日重置(同一筆回報看得到)。
+  (idx23)是本機日曆日還是所屬交易日,然後刪單;同一筆回報順帶核群益 seq 是日曆日重置還是交易日重置(隔天日盤第一張單的
+  seq 有沒有從頭編)。兩者**同口徑** → `store.note_price_type` 改成只記單一候選日即關掉「同檔同方向撞同 seq」的誤標窗;
+  **不同口徑**(日界走交易日、seq 走日曆日)→ 日期分不出,才需要送單時刻 ± 窗那類補丁(08-28 拍板程式先不封洞)。
+  期貨路徑只綁方向、窗更寬,同一實驗一起看。窗的現況釘在 `tests/capital/test_store.py::
+  test_price_type_binding_rejects_same_seq_different_order` s3 案 docstring(與「另一張」輸入逐字相同,不另加案)。
 
 ## 2026-08-28(/pr-review #131 回溯 review 留尾)
 

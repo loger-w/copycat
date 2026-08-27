@@ -309,9 +309,9 @@ reviewer 重跑後端 68 / 前端 35 passed。
   console 印哪段吃掉時間(§2.6 S1)。**已出貨 PR #109(2026-08-26,並行 lane + `shutdown_budget.py` 83 s)**。
 - A2 #103 N075 誤標窗:同檔同方向撞同 seq 仍誤標 —— 要嘛加「送單時刻 ± 窗」或 seq 單調性檢查,要嘛改口 docstring 承認窗
   未封並釘測試(§2.4);`_note_price_type` 移到 `_audit` 之後或包 try(§2.4 Spec 7)。
-  **08-28 拍板:程式不封洞 → docstring 改口(`_Agg.date` = 最新事件日、窗未封、關窗正路 = 夜盤實驗後只記單一候選日)+
-  `test_store` 釘現況;`_note_price_type` 保險絲包 try 退回只記本機日(分支 `mod/n075-price-type-label-window`)。
-  夜盤遠價市價單實驗 user 親做(next-time 08-28)。**
+  **08-28 拍板:程式不封洞 → docstring 改口(`_Agg.date` = 最新事件日、窗未封含期貨路徑更寬、關窗條件 = 夜盤實驗定案
+  日界與 seq 重置口徑後才知道只記單一候選日夠不夠)+ 既有 `test_store` s3 案註明它就是窗;`_note_price_type` 保險絲
+  包 try 退回只記本機日(分支 `mod/n075-price-type-label-window`)。夜盤遠價市價單實驗 user 親做(next-time 08-28)。**
 - A3 /bug gate 5:`tailIndex` 套 `c <= 0` 跳過(§2.2 Spec 2);門檻 3 → 4 或 60 s 覆量(Spec 1)。
   **08-28 拍板:門檻現在不動;先修「夜盤前端不輪詢 K 棒 → 提示永遠亮」(`useMarketBars.ts` 接 `inFuturesAllDayHours`),
   修完日盤量一次再定 3 → 4;`tailIndex` 0 價閘同輪。**

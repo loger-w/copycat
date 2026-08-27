@@ -79,7 +79,7 @@ class _Agg:
     applied_qty: int = 0  # 已樂觀套進部位的成交量(張 / 口;F5 部分成交只套增量)
     applied_shares: int = 0  # 已被套用消化的成交量(股 / 口;證券 = 已套張數 × 1000),算增量均價用
     applied_value: float = 0.0  # 已被套用消化的價金(以增量均價計),殘量(不足 1 張)留給下一張
-    date: str | None = None  # 委託建立日 YYYYMMDD
+    date: str | None = None  # 回報**最新事件日** YYYYMMDD(apply_reply 有值就覆寫;不是委託建立日)
     fill_date: str | None = None  # 最後一筆成交**到達**的本機日 YYYYMMDD(today_qty 只算今天的)
     time: str | None = None
     pre_order: bool = False
@@ -202,7 +202,8 @@ class CapitalStore:
 
     def _today_net_lots_locked(self, stock_no: str, kind: TradeKind) -> int:
         """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。「今天」看成交**到達日**
-        `fill_date`,不看 idx23(委託建立日:昨晚預約單今早成交仍是昨日),也不能假設聚合
+        `fill_date`,不看 idx23(它是最新事件日不是成交日:昨日建立今日成交 / 刪單的單 `date`
+        都已是今日,分不出哪些成交量是今天進來的),也不能假設聚合
         只有當日 —— prod 8721 跨日長跑、`_orders` 沒有 caller 會清(review 2026-08-26 P1),
         隔夜庫存若被算成今天進來的,前端稅減半 = 少收稅、打平線偏低,零錯誤訊號。"""
         today = self._today()
@@ -362,12 +363,14 @@ class CapitalStore:
         (群益 seq 是日曆日重置還是交易日重置**未實證**):夜盤 0824 23:50 的市價單記
         (0824, 0825),隔日 0825 日盤若他處(群益 APP)下了同 seq 的限價單,只比日期會把它
         標成市價。綁標的 + 方向後,同 seq 撞到**不同標的或方向**的單就不帶出;**同檔同方向**撞同 seq
-        的窗仍在,所以現況是「大幅縮窗、非零誤標」,不是「只缺標籤、不誤標」。
+        的窗仍在,所以現況是「大幅縮窗、非零誤標」,不是「只缺標籤、不誤標」;期貨路徑
+        (`client.submit_future_order` 只綁方向,stock_no=None)的窗更寬 —— 同方向撞同 seq 即誤標。
         08-25 review N075 的候選處置 = 送單時刻 ± 窗或 seq 單調性檢查;**08-28 user 拍板:程式不封洞**
-        —— 窗只在夜盤送市價單時存在(日盤單只有一個候選日),而關窗的正路是夜盤遠價市價單實驗
-        (user 親做)定案回報日界後改成**只記單一候選日**,不需要補丁。現況由
-        `tests/capital/test_store.py::test_price_type_same_stock_side_seq_collision_is_the_known_open_window`
-        釘住,封窗時該條事前標該變。
+        —— 窗只在夜盤送市價單時存在(日盤單只有一個候選日),先由夜盤遠價市價單實驗(user 親做)
+        定案回報日界 + 群益 seq 重置口徑:兩者同口徑 → 改成只記單一候選日就關窗;不同口徑
+        (日界走交易日、seq 走日曆日)才需要送單時刻 ± 窗那類補丁。現況在
+        `tests/capital/test_store.py::test_price_type_binding_rejects_same_seq_different_order` s3 案
+        釘住 —— 同一組輸入,store 分不出「同一張」與「另一張」,那就是窗。
         `None` = 該路徑沒有可綁的值(期貨單的 `tc4_symbol` 與回報契約碼不同域 → 只綁方向;
         平倉沒有方向 → 只綁 key),不參與比對。"""
         days = (date,) if trade_date is None or trade_date == date else (date, trade_date)
