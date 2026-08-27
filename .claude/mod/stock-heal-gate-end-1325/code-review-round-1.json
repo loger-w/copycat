@@ -1,0 +1,97 @@
+{
+ "fixed_point": "59b70213",
+ "reviewed_head": "cc731a1d",
+ "reviewers": {
+  "standards": "opus general-purpose",
+  "spec": "opus general-purpose"
+ },
+ "standards": [
+  {
+   "id": "S1",
+   "sev": "P3",
+   "where": "stock_source.py:32-37",
+   "finding": "常數是六讀者共用隱性契約但不在 CLAUDE.md §4;判可不入(純後端無前端鏡像)",
+   "disposition": "accept as-is"
+  },
+  {
+   "id": "S2",
+   "sev": "P2",
+   "where": "stock_source.py:38,450",
+   "finding": "Mysterious Name:13:26–13:30 仍是交易時段,函式回 False;實為自癒/健檢閘窗",
+   "disposition": "next-time — 獨立 🔵 更名,六讀者一起改"
+  },
+  {
+   "id": "S3",
+   "sev": "P2",
+   "where": "stock_source vs index_engine.py:50,86",
+   "finding": "「兩把對齊」不齊:index `<` 排除 13:25、stock `<=` 含",
+   "disposition": "accept — 改 `<` end-exclusive 同語意;spec 改口"
+  },
+  {
+   "id": "S4",
+   "sev": "P3",
+   "where": "tests/live/test_stock_source.py",
+   "finding": "邊界表只在 corr 檔,改 stock 常數本檔不紅",
+   "disposition": "accept — 本檔加 TestTradingHoursGate 端點鏡像"
+  },
+  {
+   "id": "S0",
+   "sev": "-",
+   "where": "-",
+   "finding": "白名單 5/5 PASS;鐵則 E 紅先行合法;§6 三類分離",
+   "disposition": "noted"
+  }
+ ],
+ "spec": [
+  {
+   "id": "P1",
+   "sev": "P2",
+   "where": "stock_source.py:461",
+   "finding": "「含 13:25 這一分」是假的:比到秒只有 13:25:00.000 True;Q4 判「0 發」成立不必改 ≤1",
+   "disposition": "accept — 改 `<` 明寫 end-exclusive,測試 13:25 → False / 13:24 → True"
+  },
+  {
+   "id": "P2",
+   "sev": "P2",
+   "where": "change-spec 代價段 / stock_engine.py:719-725",
+   "finding": "「個股 60 s 輪詢」兜底不成立:只由群組檢視觸發且 _backfilled 當日一次",
+   "disposition": "accept — spec / 註解改口:個股側無當日重補路徑,收盤那筆到重啟為止都缺;入 next-time 綁第二段閘"
+  },
+  {
+   "id": "P3",
+   "sev": "P2",
+   "where": "index_engine.py:300-325",
+   "finding": "1K 回補只寫 minutes,現價欄不更新;訂閱死在試撮窗時加權現價停在最後推播值零訊號",
+   "disposition": "accept — spec / 註解補此代價"
+  },
+  {
+   "id": "P4",
+   "sev": "P2",
+   "where": "stock_source.py:588 subscribe_symbol",
+   "finding": "13:25–13:35 新加自選不武裝健檢、不發 _on_no_data(舊 13:35 亦然,提早 10 分鐘),白名單第 2 條沒涵蓋",
+   "disposition": "accept — spec 白名單第 2 條加「已知行為變更」註記 + next-time"
+  },
+  {
+   "id": "P5",
+   "sev": "P3",
+   "where": "signal_state / verify / stock_models",
+   "finding": "另三把 13:30 / 試撮窗時窗未列;本輪未動,建議註明不對齊",
+   "disposition": "accept — spec caller map + 註解列出「刻意不對齊」"
+  },
+  {
+   "id": "P6",
+   "sev": "P3",
+   "where": "index_engine._in_watch_window",
+   "finding": "同 S3",
+   "disposition": "accept — 同 S3"
+  },
+  {
+   "id": "P0",
+   "sev": "-",
+   "where": "-",
+   "finding": "caller map 完整(含注入點);閘關只 return 不碰 _subscribed / _unsub;零 creep",
+   "disposition": "noted"
+  }
+ ],
+ "disposition": "Standards 4 條:S3/S4 收修、S2 next-time、S1 as-is;Spec 6 條:P1/P3/P4/P5/P6 收修(code + spec 改口)、P2 spec 改口 + next-time。收修 commit 見 verification §4。"
+}

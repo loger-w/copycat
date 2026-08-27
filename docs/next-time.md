@@ -12,6 +12,13 @@
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
   加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。
+- [ ] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2):13:25–13:30 交易所仍收單、仍是交易時段,
+  函式卻回 False —— 它現在是「現貨自癒 / 健檢閘窗」;`segment_leg_gate(tws=)` 讀者只看得到名字。獨立 🔵 更名
+  `in_stock_heal_window_now` / `_HEAL_GATE_END`,六個讀者一起改。
+- [ ] **閘 13:25 的三條代價**(review Spec P2-2/3/4,user 知情):訂閱在 13:25–13:30 死掉時 (a) 加權分時回補得回但**現價欄
+  停在最後一筆推播**(`index_engine._merge_backfill` 只寫 minutes);(b) 個股**沒有**當日重補路徑(`_backfilled` 當日一次、
+  60 s 入列只由群組檢視觸發),收盤那筆到重啟為止都缺;(c) 13:25–13:35 新加自選不武裝健檢也不發 `_on_no_data`。
+  三條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測。
 - [ ] **IX0001 收盤最後一筆推播幾點到**:閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
   (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
   row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`
