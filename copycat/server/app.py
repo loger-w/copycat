@@ -369,9 +369,12 @@ def _default_stock_source(calendar: TradingCalendar | None = None) -> StockSourc
 def _default_index_source(calendar: TradingCalendar | None = None) -> IndexSource:
     from copycat.live import stock_source as stock_mod  # 獨立 session(指數專用)
 
+    # 指數拿**自己的**牆鐘(13:25 收盤試撮起指數不更新,看門狗誤判 19 發 / 日),不與個股共用
+    # 13:35 那把:個股在 13:25–13:30 仍有簿更新推播,一起關掉是零收益純代價(pr-126 F-01)。
+    # 注入參數仍是 `in_trading_hours`(健檢與自癒同一把),只換牆鐘不動簽名。
     return stock_mod.StockQuoteSource(
         port=_tc4_port(),
-        in_trading_hours=_heal_gate(calendar, stock_mod.in_trading_hours_now),
+        in_trading_hours=_heal_gate(calendar, stock_mod.in_index_heal_window_now),
     )
 
 
