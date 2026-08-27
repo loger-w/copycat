@@ -336,6 +336,11 @@ class TC4QuoteSource:
         #: 在自己休市段照樣落進 R2「從未推播」母體,每 300s 一發 UNSUB+SUB。
         #: 回 False 的 symbol 整輪不進母體(R1 的全場靜默判定也扣掉它)。
         heal_symbol_active: Callable[[str], bool] = always_symbol_active,
+        #: **稀疏腿**(corr SXF 費半:日盤 94.4% 時間真沒成交)豁免 R2 —— 對它「靜默 240s」
+        #: 是常態不是死亡,每發都是假警報(2026-08-27 日盤 11 發全 attempt 1)。與
+        #: `heal_symbol_active` 的差別:**仍留在 R1 母體**,整條 session 死掉時跟著整批重掛;
+        #: 時段閘那種整輪扣掉的做法會讓它在 session 死時永遠沒人救。
+        heal_sparse_symbols: frozenset[str] = frozenset(),
         heal_poll_secs: float = 5.0,
     ) -> None:
         self._port = port
@@ -362,6 +367,7 @@ class TC4QuoteSource:
         self._heal_symbol_silence = heal_symbol_silence_secs
         self._heal_active = heal_active
         self._heal_symbol_active = heal_symbol_active
+        self._heal_sparse = heal_sparse_symbols
         self._heal_poll = heal_poll_secs
         #: symbol → 最後一則 REALTIME 推播的 monotonic(`_realtime_msg` 單點記錄)
         self._last_push: dict[str, float] = {}
@@ -630,6 +636,8 @@ class TC4QuoteSource:
         if t2 is None:
             return
         for sym in subs:
+            if sym in self._heal_sparse:  # 稀疏腿:靜默是常態,只吃 R1 不吃 R2
+                continue
             silent_since = self._last_push.get(sym, self._sub_at.get(sym))
             if silent_since is None:  # 尚未成功訂閱過 → 沒有可比對的基準
                 continue

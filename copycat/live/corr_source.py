@@ -94,6 +94,7 @@ class CorrQuoteSource(TC4QuoteSource):
         heal_silence_secs: float | None = 120.0,
         heal_symbol_silence_secs: float | None = 240.0,
         heal_symbol_active: Callable[[str], bool] = always_symbol_active,
+        heal_sparse_symbols: frozenset[str] = frozenset(),
     ) -> None:
         # 門檻放寬一倍:海外腿(SGX/CBOT/CME)時段錯開、成交稀疏,台指門檻會把
         # 「這條腿現在本來就沒人交易」誤判成零推播。不設 **session 級**盤別閘 ——
@@ -107,6 +108,7 @@ class CorrQuoteSource(TC4QuoteSource):
             heal_silence_secs=heal_silence_secs,
             heal_symbol_silence_secs=heal_symbol_silence_secs,
             heal_symbol_active=heal_symbol_active,
+            heal_sparse_symbols=heal_sparse_symbols,
         )
         self._on_message: Callable[[dict], None] | None = None
 

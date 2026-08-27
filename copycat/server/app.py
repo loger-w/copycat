@@ -27,6 +27,7 @@ from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
 from copycat.server import build_info, breadth_fetch, finmind_token
 from copycat.server.audit import AuditWriteError
+from copycat.corr_config import CorrConfig
 from copycat.corr_config import load_config as load_corr_config
 from copycat.server.breadth_engine import (
     BreadthEngine,
@@ -386,7 +387,9 @@ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesS
     )
 
 
-def _default_corr_source(calendar: TradingCalendar | None = None) -> CorrSource:
+def _default_corr_source(
+    calendar: TradingCalendar | None = None, config: CorrConfig | None = None
+) -> CorrSource:
     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
     from copycat.live import stock_source as stock_mod
     from copycat.live.corr_source import CorrQuoteSource, segment_leg_gate
@@ -399,12 +402,17 @@ def _default_corr_source(calendar: TradingCalendar | None = None) -> CorrSource:
     #
     # 現貨腿(F4 台積電)吃**個股** session 那把 `in_trading_hours_now`,不是期貨那把:
     # 現貨 13:30 收盤且無夜盤,套期貨閘 = 整個夜盤都在對一條收盤了的腿空 churn。
+    #
+    # 稀疏腿(SXF 費半)豁免 R2:日盤 4 分鐘沒成交是常態(2026-08-27 11 發全 attempt 1),
+    # 旗標來自設定檔 `sparse`,與時段閘正交 —— 它仍留在 R1 母體。
+    cfg = load_corr_config() if config is None else config
     return CorrQuoteSource(
         port=_tc4_port(),
         heal_symbol_active=segment_leg_gate(
             taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
             tws=_heal_gate(calendar, stock_mod.in_trading_hours_now),
         ),
+        heal_sparse_symbols=frozenset(leg.symbol for leg in cfg.tc4_legs() if leg.sparse),
     )
 
 
@@ -873,8 +881,9 @@ def create_app(
             # 一邊,CLAUDE.md §8)。futures 掛掉時 getter 回空 dict,base 腿 None、配對全 None。
             def _make_corr() -> CorrelationEngine | None:
                 # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
+                corr_cfg = load_corr_config()  # source(稀疏腿)與引擎(腿組)同一份,只讀一次
                 if corr_source is DEFAULT_CORR:
-                    resolved_corr: CorrSource | None = _default_corr_source(trading_calendar)
+                    resolved_corr: CorrSource | None = _default_corr_source(trading_calendar, corr_cfg)
                 else:
                     resolved_corr = cast("CorrSource | None", corr_source)
                 if resolved_corr is None:
@@ -883,7 +892,7 @@ def create_app(
                 futures_engine = futures
                 return CorrelationEngine(
                     lambda: corr_src,
-                    config=load_corr_config(),
+                    config=corr_cfg,
                     txf_state_getter=(
                         lambda: futures_engine.state() if futures_engine is not None else {}
                     ),
