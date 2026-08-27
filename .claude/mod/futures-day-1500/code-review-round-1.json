@@ -1,0 +1,29 @@
+{
+  "round": 1,
+  "flow": "mod",
+  "slug": "futures-day-1500",
+  "reviewed_at": "2026-08-28T00:25:00+08:00",
+  "fixed_point": "origin/master c80dbde5",
+  "reviewed_head": "d6f93a12 (pre-fix; history rewritten after fixes → 608b1cfc / 1dbb7775 / 8c09cbaf)",
+  "reviewers": [
+    { "axis": "standards", "model": "opus", "read_only": true },
+    { "axis": "spec", "model": "opus", "read_only": true }
+  ],
+  "findings": [
+    { "id": "S1", "axis": "standards", "severity": "hard", "file": "futures-accum-adapter.test.ts / FuturesChart.test.tsx", "summary": "橋位置期望值由 ALLDAY_GAP.end 自證(frontend-testing:期望值寫字面量)", "disposition": "fixed", "fix": "改字面 1064;移除 ALLDAY_GAP import" },
+    { "id": "S2", "axis": "standards", "severity": "minor", "file": "commit f3400f56", "summary": "refactor type 用在純新增(§6 三類)", "disposition": "fixed", "fix": "reset --soft 重打:feat / fix / chore" },
+    { "id": "S3", "axis": "standards", "severity": "minor", "file": "trading-calendar.ts", "summary": "isTradingDayIso export prod 零 caller(鐵則 B)", "disposition": "fixed", "fix": "改 module-private;測試併入 nextTradingDayIso 顯式集合條" },
+    { "id": "S4", "axis": "standards", "severity": "judgement", "file": "allday.ts", "summary": "Duplicated Code:slice memo 鍵重寫一份 n1/n2/d 三分類(= Spec 3)", "disposition": "fixed", "fix": "抽 anchorClassOf,anchorDateOf 與 slice 共用" },
+    { "id": "S5", "axis": "standards", "severity": "judgement", "file": "allday.ts / trading-calendar.ts", "summary": "Duplicated Code:兩份日期位移 shiftDate / shiftIso", "disposition": "fixed", "fix": "export shiftIso,allday 刪 shiftDate(candle.ts 那份既有、不在 scope)" },
+    { "id": "S6", "axis": "standards", "severity": "judgement", "file": "txf-overlay-series.ts", "summary": "Duplicated Code:日盤 bar 判定寫兩次", "disposition": "fixed", "fix": "抽 dayMinuteOf" },
+    { "id": "S7", "axis": "standards", "severity": "judgement", "file": "allday.ts → trading-calendar.ts", "summary": "Data Clumps(弱):holidays?: ReadonlySet 四層可選穿透、兩個來源", "disposition": "rejected", "reason": "有文件化理由(模組級集合 + query data dep);再多一個消費者再收型別,記 next-time" },
+    { "id": "P1", "axis": "spec", "severity": "minor", "file": "StockIntradayChart.tsx / FuturesChart.tsx / futures-accum-adapter.ts", "summary": "SC-12 註解口徑殘留「死區」/ index 300 例子失效", "disposition": "fixed" },
+    { "id": "P2", "axis": "spec", "severity": "info", "summary": "SC-13 真環境五項待窗口", "disposition": "partial", "note": "(a) 夜盤時段已取證(evidence/SC-13_night_session_2026-08-28_0021.jpg);(b)–(e) 待 15:01 / 08:46 / user 對 APP" },
+    { "id": "P3", "axis": "spec", "severity": "judgement", "summary": "slice memo 是 spec 未要求的效能優化且重寫三分類", "disposition": "fixed", "fix": "同 S4(memo 留著:5,700 根 × 次一交易日查詢;分類共用後無漂移風險)" },
+    { "id": "P4", "axis": "spec", "severity": "minor", "summary": "isTradingDayIso 超出 SC-5", "disposition": "fixed", "fix": "同 S3" },
+    { "id": "P5", "axis": "spec", "severity": "major", "file": "FuturesChart.tsx / fill-marks.ts", "summary": "兩把假日尺:live / trade / fills 讀模組集合,slice 讀 query data;假日前夜盤可能整場不畫 live 點與成交點", "disposition": "fixed", "fix": "liveSlotOf / tradeSlotOf / alldayFillPoints 皆吃同一份 holidaySet(alldayFillPoints 第 4 參數選配,既有 caller 不動);新增測試「假日前夜盤:live 點與成交點跟 slice 吃同一份日曆」,mutation(live 改回模組集合)紅" },
+    { "id": "P6", "axis": "spec", "severity": "minor", "file": "trading-calendar.ts", "summary": "nextTradingDayIso 壞日期 → toISOString RangeError 炸 render", "disposition": "fixed", "fix": "shiftIso 對 Invalid Date 原樣回傳;測試 garbage 不炸" }
+  ],
+  "summary": { "standards": { "total": 7, "fixed": 6, "rejected": 1 }, "spec": { "total": 6, "fixed": 5, "partial": 1 } },
+  "post_fix_verification": "allday 37 / adapter 20 / FuturesChart 54 / txf 14 / trading-calendar 15 / fill-marks / SIC.futures 39 全綠;tsc 0;eslint 0;全量 vitest 見 verification.md"
+}
