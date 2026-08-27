@@ -78,6 +78,7 @@
 - B 修後裸跑 20 次:**20/20 `1 passed`**(0.38–1.07 s)
 - 跑的時段:2026-08-28 01:05–01:08(不在台北 00:00–00:10;A 修後也不再相依)。
 - **收修後(第 9 筆)重跑**:`pytest -q` **`3137 passed`**(188.9 s;3135 + 哨兵 2)exit 0;`pyright` 0 errors exit 0;`ruff check copycat tests` PASS;時段 01:15–01:18。
+- **rebase 後重跑**(origin/master 進了 mod/n075-price-type-label-window 7 筆;`docs/next-time.md` 檔頭兩節並存解衝突、`test_client.py` 乾淨套上、對方新增行無 3357 字面):`pytest -q` **`3139 passed`**(188.95 s;3137 + 對方 2)exit 0;`pyright` 0;`ruff` PASS;生產碼 vs master 零 diff;時段 01:20–01:23。
 
 ## 6. 事故 / 教訓
 
