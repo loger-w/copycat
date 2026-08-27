@@ -35,7 +35,8 @@ _TRADING_START = _dt.time(8, 30)
 #: (tc4-market-facts:TradeStatus=1、`_note_push` 不分成交 / 簿更新),看門狗在那 5 分鐘本來就
 #: 不會誤判(08-26 / 08-27 兩日 log:該窗除整天在發的 6949 外個股零自癒)—— 所以這把**不**跟
 #: index session 一起關 13:25(pr-126 F-01:一起關對個股零收益,純失去收盤集合競價期間
-#: R1 / R2 / 健檢三條救援路)。index session 吃下面另一把 `_INDEX_HEAL_END`。
+#: R1 / R2 / 健檢三條救援路;個股當日重補路徑只剩 `set_main_contract` / `_handle_reconnect`,群組
+#: 60 s 輪詢被 `_backfilled` 擋 —— pr-126 F-02)。index session 吃下面另一把 `_INDEX_HEAL_END`。
 #: 另三把時窗刻意**不**與本閘對齊:`signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30
 #: (訊號 / 驗證域)、`stock_models` 試撮窗 13:25–13:30(標示用)。
 _TRADING_END = _dt.time(13, 35)
@@ -480,7 +481,8 @@ def in_index_heal_window_now(now: _dt.time | None = None) -> bool:
 
     與 `in_trading_hours_now` 只差上界:指數 13:25 起不更新(19 發 / 日誤判的症狀所在),個股
     同一段仍有簿更新推播。注入點 = `app._default_index_source(in_trading_hours=…)`;個股 /
-    corr 現貨腿**不得**接這一把(pr-126 F-01)。
+    corr 現貨腿**不得**接這一把(pr-126 F-01)。兩把刻意各自具名、不參數化(讀者在 wiring 處
+    只看得到名字);第三把時窗出現時再抽 `_in_window(t, end)` 共用。
     """
     t = _dt.datetime.now().time() if now is None else now
     return _TRADING_START <= t < _INDEX_HEAL_END
