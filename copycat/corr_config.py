@@ -19,6 +19,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -87,19 +88,29 @@ DEFAULT_CONFIG = CorrConfig(
 )
 
 
-def _parse_legs(
-    raw: object, bad_sparse: list[tuple[object, object]]
-) -> tuple[Leg, ...] | None:
+class _BadSparse(NamedTuple):
+    """sparse 打成非 bool 的腿:`key` + 原值(原值不進 `Leg`,出了 parser 就拿不到)。"""
+
+    key: object
+    value: object
+
+
+class _ParsedLegs(NamedTuple):
+    legs: tuple[Leg, ...]
+    bad_sparse: tuple[_BadSparse, ...]
+
+
+def _parse_legs(raw: object) -> _ParsedLegs | None:
     """未知欄位一律忽略(`_comment` 說明欄不得觸發降級);必要欄缺一 → None。
 
-    `bad_sparse` 是**輸出參數**:sparse 打成非 bool 的腿以 `(key, 原值)` 收進去,由 `load_config`
-    在確定採用這份 config 之後才印 WARNING。原值不進 `Leg`、出了 parser 就拿不到,但這裡不能直接
-    log:後面任一腿缺欄 / base 不在 legs 都會讓整份被丟掉改用 DEFAULT_CONFIG,先印「旗標無效」
-    再印「改用預設腿」會把讀者導去修旗標而不是修那一腿(pr-130 F-01)。
+    壞 sparse 旗標**只蒐集不 log**,由 `load_config` 在確定採用這份 config 之後才印 WARNING:後面任一腿
+    缺欄 / base 不在 legs 都會讓整份被丟掉改用 DEFAULT_CONFIG,先印「旗標無效」再印「改用預設腿」會把
+    讀者導去修旗標而不是修那一腿(pr-130 F-01)。
     """
     if not isinstance(raw, list) or not raw:
         return None
     legs: list[Leg] = []
+    bad_sparse: list[_BadSparse] = []
     for item in raw:
         if not isinstance(item, dict):
             return None
@@ -107,9 +118,9 @@ def _parse_legs(
             return None
         raw_sparse = item.get("sparse")
         if "sparse" in item and not isinstance(raw_sparse, bool):
-            bad_sparse.append((item.get("key"), raw_sparse))
+            bad_sparse.append(_BadSparse(item.get("key"), raw_sparse))
         legs.append(Leg(*(str(item[field]) for field in _LEG_FIELDS), sparse=raw_sparse is True))
-    return tuple(legs)
+    return _ParsedLegs(tuple(legs), tuple(bad_sparse))
 
 
 def load_config(path: Path | None = None) -> CorrConfig:
@@ -129,17 +140,17 @@ def load_config(path: Path | None = None) -> CorrConfig:
     if not isinstance(raw, dict):
         logger.warning("corr 設定檔頂層非 object,改用預設腿")
         return DEFAULT_CONFIG
-    bad_sparse: list[tuple[object, object]] = []
-    legs = _parse_legs(raw.get("legs"), bad_sparse)
-    if legs is None:
+    parsed = _parse_legs(raw.get("legs"))
+    if parsed is None:
         logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設腿")
         return DEFAULT_CONFIG
+    legs = parsed.legs
     base = str(raw.get("base", DEFAULT_CONFIG.base))
     if base not in {leg.key for leg in legs}:
         logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
         return DEFAULT_CONFIG
     # 走到這裡才確定採用這份 config,旗標類 WARNING(不降級、腿組仍可用)集中在這之後印。
-    for key, raw_sparse in bad_sparse:
+    for key, raw_sparse in parsed.bad_sparse:
         # 只認字面 true(fail-safe:少豁免一腿多幾發 churn),但丟掉旗標要有訊號 —— 設定檔是人手改的,
         # 打成 "true" / 1 / "yes" / null → 該腿修復靜默不生效、退回每 240 s 一發,只能事後 grep log 才知道
         # (pr-120 F-02;判準與下面「標在非 tc4 腿」那條 WARNING 相同)。

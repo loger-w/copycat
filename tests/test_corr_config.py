@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from copycat.corr_config import CONFIG_PATH, DEFAULT_CONFIG, load_config
+from tests.helpers.frontend_source import read_frontend_source
 
 
 #: 腿的**逐字**契約(key / label / symbol / source),順序 = `configs/correlation.json`。
@@ -162,14 +163,14 @@ class TestLoadConfig:
         assert any("TXF" in r.message and "sparse" in r.message for r in caplog.records)
 
     @pytest.mark.parametrize(
-        "tail",
+        ("tail", "base"),
         [
-            pytest.param({"key": "ES"}, id="later-leg-missing-field"),
-            pytest.param(None, id="base-absent-from-legs"),
+            pytest.param({"key": "ES"}, "TXF", id="later-leg-missing-field"),
+            pytest.param(None, "ZZ", id="base-absent-from-legs"),
         ],
     )
     def test_bad_sparse_flag_is_not_reported_when_the_whole_file_is_discarded(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, tail: dict | None
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, tail: dict | None, base: str
     ) -> None:
         """壞 sparse 的 WARNING 語意是「只掉這面旗、其餘生效」;整份設定檔隨後被降級丟掉時
         (後面腿缺必要欄 / base 不在 legs)那句就是誤導 —— 兩行 log 併看會去修旗標而不是去修
@@ -179,11 +180,8 @@ class TestLoadConfig:
             {"key": "TXF", "label": "台指", "symbol": "TC.F.TWF.TXF.HOT", "source": "futures_engine"},
             {"key": "NQ", "label": "納指", "symbol": "TC.F.CME.NQ.HOT", "source": "tc4", "sparse": "yes"},
         ]
-        base = "TXF"
         if tail is not None:
             legs.append(tail)
-        else:
-            base = "ZZ"
         path.write_text(json.dumps({"base": base, "legs": legs}), encoding="utf-8")
 
         with caplog.at_level("WARNING"):
@@ -267,11 +265,10 @@ def test_river_palette_covers_every_leg() -> None:
     """跨檔契約(CLAUDE.md §4 精神):江波圖顏色**依腿序位**指派,腿數 > 調色盤色數時
     `RIVER_STROKES[i % n]` 會靜默撞回 base 近白色(river-colors.ts 自述的失效樣態)。
     後端是腿數的產生點,前端是讀者 → 在這裡以原始碼字面鎖住 色數 >= 腿數。"""
-    src = Path(__file__).resolve().parents[1] / "frontend/src/components/corr/river-colors.ts"
-    text = src.read_text(encoding="utf-8")
+    text = read_frontend_source("components/corr/river-colors.ts")
     strokes = re.findall(r'"stroke-river-(\d+)"', text)
     assert strokes == [str(i) for i in range(1, len(strokes) + 1)], strokes
-    css = (src.parents[2] / "index.css").read_text(encoding="utf-8")
+    css = read_frontend_source("index.css")
     tokens = re.findall(r"--color-river-(\d+):", css)
     # 序位包含而不是個數(review F-18):少 8 多 12 個數相等照過,而少的那格 Tailwind 不產 utility
     assert set(tokens) >= set(strokes), (tokens, strokes)
