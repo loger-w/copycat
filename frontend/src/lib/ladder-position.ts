@@ -102,6 +102,9 @@ export function positionEcon(
       break;
     case "fill":
     case null:
+    default:
+      // default 併進 null 分支:型別上 avgSource 只有三值,但舊後端 payload 整欄不存在時
+      // 執行期是 undefined → 沒有 default 就 cost 未賦值 → NaN 印到四處、打平線消失
       cost = avg * (1 + f);
       break;
   }

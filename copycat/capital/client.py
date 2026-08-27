@@ -558,6 +558,10 @@ class CapitalClient:
                 )
                 continue
             p.avg_price = r.avg_price
+            # 群益損益試算「平均買進成本」已含買進手續費(prod 實證 4991 469.50 → 469.62):
+            # 這一格是前端 positionEcon 不再加一次買費的唯一依據;漏寫 = wire 上 null =
+            # 前端退回修前口徑(#118 在 prod 就是這樣死的)
+            p.avg_source = "broker"
             p.pnl_base = r.pnl
             p.pnl_base_price = r.price
             p.pnl_cost = r.cost
