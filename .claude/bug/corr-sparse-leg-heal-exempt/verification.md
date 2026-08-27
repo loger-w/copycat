@@ -43,12 +43,21 @@ SXF 時戳:09:45 09:52 10:14 10:22 10:26 10:39 10:44 10:52 11:04 11:08 13:01 —
 | `4982f392` | 🔴 | `TC4QuoteSource(heal_sparse_symbols=)` R2 `continue`;`CorrQuoteSource` 透傳;`Leg.sparse` + `_parse_legs` 只認字面 true;DEFAULT_CONFIG / JSON SXF 標;`app._default_corr_source(calendar, config)`、`_make_corr` 同一份 config |
 | `3446f71d` | chore | CLAUDE.md §4 契約條、tc4-market-facts SXF 事實、next-time N051 改口 + 三條留尾、spec |
 
-## 5. 反向驗證(PASS)
+## 5. 反向驗證(PASS;pr-120 F-05 校正為 mutation 級,2026-08-27 晚實跑)
+
+原版 `git stash push copycat/live/tc4.py` 把建構子參數與 `_heal_tick` 的 `continue` 一起撤掉,三條全炸在 TypeError ——
+與 §1 紅先行同一個紅,證不到那行 `continue` 是 load-bearing。改成只註解掉 `_heal_tick` 的
+`if sym in self._heal_sparse: continue` 兩行(簽名不動):
 
 ```
-git stash push copycat/live/tc4.py → TestHealSparseSymbol 3 failed
-git stash pop                       → 3 passed
+pytest tests/live/test_tc4.py -k HealSparse
+FAILED TestHealSparseSymbol::test_sparse_symbol_is_exempt_from_r2
+FAILED TestHealSparseSymbol::test_sparse_symbol_does_not_trigger_r1_while_another_leg_is_alive(原名 …_keep_r1_from_firing)
+2 failed, 2 passed
+git checkout -- copycat/live/tc4.py → 4 passed(grep MUTANT = 0)
 ```
+紅的兩條正是釘 R2 豁免的兩條;R1 仍救稀疏腿那條照綠(R1 路徑不經 `continue`)—— `continue` 是 load-bearing。
+簽名層的紅由 §1 涵蓋不重複計。
 
 ## 9. Blast radius
 
