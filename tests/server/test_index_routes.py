@@ -16,6 +16,10 @@ from tests.helpers.boot import BootedClient
 from tests.helpers.fake_sources import FakeIndexSource, FakeStockSource, dbar
 from tests.helpers.fake_txo import FakeTxoSource
 
+#: `/ws/index` 在 quote 生效前最多容忍幾則 `p` None 的 loop 拍(回補完成 / MIS poll 各一,
+#: 留餘裕;超過 = 推播鏈真的壞了,不是順序問題)
+_WS_PRE_QUOTE_MAX = 5
+
 #: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
 _DAY_MINUTES = {"0901": 43_000_000}
 
@@ -69,6 +73,14 @@ class TestIndexState:
                     raise AssertionError("index 引擎缺席時握手不該成功")
 
     def test_ws_streams_index_payload(self) -> None:
+        """連上後推一則 quote,WS 要收到 `twse.p` 已更新的 payload。
+
+        `/ws/index` **沒有 seed 快照**(`index.stream()` 無 seed;relay 也不補),首則是
+        `_broadcast_loop` 下一個 dirty 拍的 payload —— 但 client queue 註冊到 quote 被
+        `_handle_quote` 處理之間,回補完成 / MIS poll 撥 dirty 的那一拍也會先發一則
+        (`p` None)。首則就斷 `p` 是順序型 flake(08-27 全量 1/3135 紅);改成收到含 `p`
+        的那則為止,quote 保證撥 dirty,所以有界迴圈必收得到。
+        """
         client, fake = make_client(FakeIndexSource(day_minutes=_DAY_MINUTES))
         with client:
             assert fake is not None and fake.on_message is not None
@@ -83,9 +95,14 @@ class TestIndexState:
                         "FilledTime": "13015",
                     }
                 )
-                msg = ws.receive_json()
-                assert msg["type"] == "index"
-                assert msg["twse"]["p"] == 42_039_920
+                seen: list[int | None] = []
+                for _ in range(_WS_PRE_QUOTE_MAX + 1):
+                    msg = ws.receive_json()
+                    assert msg["type"] == "index"
+                    seen.append(msg["twse"]["p"])
+                    if msg["twse"]["p"] is not None:
+                        break
+                assert seen[-1] == 42_039_920, f"前 {len(seen)} 則 twse.p = {seen}"
 
 
 class TestIndexOverlay:
