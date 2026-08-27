@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { CHART_TOGGLES_KEY } from "@/lib/constants";
-import { readLocalJson, writeLocal } from "@/lib/storage";
+import { readLocal, readLocalJson, writeLocal } from "@/lib/storage";
 
 export interface ChartToggles {
   vwap: boolean;
@@ -87,21 +87,48 @@ function load(): ChartToggles {
   return merged;
 }
 
+// ---- 模組層 store(feat/txf-intraday-overlay Q8,user 拍板)----
+//
+// 改動前每個呼叫端各持一份 `useState`,別處按了鈕要到自己下次 `set` 才重讀存檔 —— 三個畫面
+// (K 線 / 江波圖 / 圖牆)之間的 toggle 狀態只在「誰寫入」那一刻對齊。App 層因此拿不到
+// 「台指期鈕開著沒」,無法閘控 TXF bars 的輪詢(鈕關著也每分鐘打 TC4)。
+//
+// **真相源仍是 localStorage,不是這份快取**:`getSnapshot` 以存檔的原始字串為鍵,字串變了
+// (別的分頁 / 測試清空 / 升級寫回)就重載;字串沒變就回同一個物件 —— `useSyncExternalStore`
+// 要求快照 identity 穩定,否則每次 render 都被當成新值而無限重繪。
+// 寫入失敗(私密視窗 / 政策鎖)時 `persist` 不拋、存檔不變 → 快取直接換成 next,記憶體內照常生效。
+let cachedRaw: string | null | undefined; // undefined = 尚未載入過
+let cached: ChartToggles = DEFAULTS;
+const listeners = new Set<() => void>();
+
+function getSnapshot(): ChartToggles {
+  const raw = readLocal(CHART_TOGGLES_KEY);
+  if (cachedRaw === undefined || raw !== cachedRaw) {
+    cached = load();
+    // `load()` 的一次性升級會寫回 → 以寫回後的字串為鍵,下一次才不會再重載一遍
+    cachedRaw = readLocal(CHART_TOGGLES_KEY);
+  }
+  return cached;
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** merge 的基底是**重讀的 localStorage**而不是快取:兩個分頁各自按鈕時,快取可能落後存檔。 */
+function setToggle(key: keyof ChartToggles, value: boolean): void {
+  const next: ChartToggles = { ...load(), [key]: value };
+  persist(next);
+  cached = next;
+  cachedRaw = readLocal(CHART_TOGGLES_KEY);
+  for (const listener of listeners) listener();
+}
+
 export function useChartToggles() {
-  const [toggles, setToggles] = useState<ChartToggles>(load);
-
-  // merge 的基底必須是**重讀的 localStorage**,不是自己那份 prev:本 hook 是純 useState,
-  // 每個呼叫端各持一份。StockChart(管 bb)與 StockIntradayChart(管 vwap/cdp/ma)同時
-  // 存活,用 stale prev 整包寫回會讓後寫的一方回滾對方剛做的變更 ——
-  // 實際症狀是「江波圖把 CDP 關掉、去 K 線按了 BB、切回來 CDP 自己亮回來」。
-  // useCallback:讓 `set` 身分穩定,memo 節點日後收 onToggle 時不會因每 render 新函式
-  // 而被打穿(plan review R9 deferred;2026-08-24 user 拍板直接做)。deps 空陣列成立的
-  // 前提:load/persist 是 module-level、setToggles 由 React 保證穩定。
-  const set = useCallback((key: keyof ChartToggles, value: boolean): void => {
-    const next = { ...load(), [key]: value };
-    persist(next);
-    setToggles(next);
-  }, []);
-
-  return { toggles, set };
+  const toggles = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // `set` 是模組層函式 → 身分天然穩定(memo 節點收 onToggle 不被打穿),不需 useCallback
+  return { toggles, set: setToggle };
 }
