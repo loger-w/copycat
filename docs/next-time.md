@@ -9,11 +9,11 @@
 
 ## 2026-08-27(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
 
-- [ ] **artifact 引 rebase 前 SHA 在 #129 重演**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.1
-  「47/56 dangling」流程 finding 的續集):`.claude/bug/breakeven-review-followups/verification.md` §1/§2 與 review JSON 的 8 個 SHA
-  全是 rebase 前的,乾淨 clone 上 `git show` unknown revision。本輪不回改。處置候選 = (a) merge 後補寫最終 SHA(多一個
-  收尾步驟,branch-lifecycle 收尾節加一行);(b) artifact 改引「PR 內相對順序 + commit subject」不引 SHA。要拍板一次寫進
-  `branch-lifecycle`,不然每個 PR 都會再犯。
+- [ ] **artifact 引 rebase 前 SHA 在 #129 重演 —— user 2026-08-28 拍板 (b)**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md`
+  §4.1「47/56 dangling」流程 finding 的續集):rebase merge 必改寫 SHA,artifact(verification / review JSON)寫的分支 SHA 在乾淨 clone 上
+  `git show` unknown revision。**拍板 = (b) artifact 不引 SHA,改引「第 n 筆 + commit subject」**(rebase 後順序與標題不變);(a) merge 後補寫
+  最終 SHA 不採。待做 = harness 改動(`branch-lifecycle` 收尾節 + `harness/refs/closeout.md` artifact 格式一行),依鐵則 B **攢批**、
+  不單獨開;在那之前新分支的 verification 直接照 (b) 寫(`chore/test-hygiene-batch` 當首例)。
 - [ ] **`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake**(非本輪 finding,如實揭露;08-27 深夜全量 pytest
   1/3135 紅、單跑 1 紅 5 綠、整檔綠):測試 `websocket_connect` 後立刻 `fake.on_message(quote)` 再 `receive_json()` 斷
   `twse.p == 42_039_920`,但 `/ws/index` 連上時先送**初始快照**(`twse.p` None),quote 廣播若排在快照之後,首則就是快照
