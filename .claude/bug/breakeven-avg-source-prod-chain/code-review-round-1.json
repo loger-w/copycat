@@ -1,0 +1,104 @@
+{
+ "fixed_point": "51b93006",
+ "reviewed_head": "f3fca9cc",
+ "reviewers": {
+  "standards": "opus general-purpose",
+  "spec": "opus general-purpose"
+ },
+ "standards": [
+  {
+   "id": "S1",
+   "sev": "P2",
+   "kind": "hard",
+   "where": "CLAUDE.md:236-246",
+   "finding": "§4 契約條「唯一讀者」指 positionEcon,但它讀 camelCase;wire 欄名 avg_source 的讀者是 position-summary.ts:148(與 PriceLadder.tsx:147)",
+   "disposition": "accept — 改寫為 wire 讀者 = PriceLadder / position-summary 映成 avgSource 餵 positionEcon(唯一算式)"
+  },
+  {
+   "id": "S2",
+   "sev": "P3",
+   "kind": "hard",
+   "where": "tests/capital/test_store.py:770",
+   "finding": "112 字元超 line-length 100(E501 未 select)",
+   "disposition": "accept — 手工折行;不跑 ruff format 全檔(會動既有無關行)"
+  },
+  {
+   "id": "S3",
+   "sev": "P2",
+   "kind": "judgement",
+   "where": "copycat/capital/store.py:506-527(刪除處)",
+   "finding": "隨 apply_profit_rows docstring 消失的「positions() 回傳參考、不可就地改」不變式全 repo 無處說明",
+   "disposition": "accept — 搬到 positions() docstring,並註明 pending 列回填不在此限"
+  },
+  {
+   "id": "S4",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "frontend/src/lib/ladder-position.ts:99-110",
+   "finding": "default 使 case fill / null 成裝飾 label 且失去 exhaustiveness;建議三元",
+   "disposition": "accept(改法不同)— input.avgSource ?? null 歸一後 exhaustive switch 不留 default;實證加第三值 tsc TS2454 ×2。不採三元:保留 null 明確分支(修前口徑)的可讀性"
+  },
+  {
+   "id": "S5",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "tests/capital/test_store.py:319-324",
+   "finding": "position_for 連取兩次、avg_price 斷言兩次",
+   "disposition": "accept — 併回既有取值塊"
+  },
+  {
+   "id": "S6",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "f3fca9cc docs/next-time.md",
+   "finding": "鐵則 B 順修 #116 錯位;reviewer 判程度輕不建議拆",
+   "disposition": "accept as-is — 同檔 docs 一處,subject 已列名"
+  },
+  {
+   "id": "S0",
+   "sev": "-",
+   "kind": "verdict",
+   "where": "b27ab8a9",
+   "finding": "鐵則 E 判定 PASS:死路徑隨 code 刪、語意有真鏈覆蓋、setup 改建構方式而斷言加嚴",
+   "disposition": "noted"
+  }
+ ],
+ "spec": [
+  {
+   "id": "P1",
+   "sev": "P2",
+   "where": "tests/capital/test_client.py",
+   "finding": "刪掉的 store 測試三語意中 kind=None 整列略過在真鏈回填端零覆蓋(既有 1095-1138 是 kind=cash 種類不符,不是 None)",
+   "disposition": "accept — 新增 test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(兩輪鏈;mutation:讓 None 也回填 → 紅)"
+  },
+  {
+   "id": "P2",
+   "sev": "P3",
+   "where": "docs/next-time.md",
+   "finding": "#116 順修動 4 行並留多餘空行;spec 非目標寫「同檔一行」",
+   "disposition": "accept — 空行去掉;spec 措辭改「同檔一處」(措辭失準在 spec 不在 diff)"
+  },
+  {
+   "id": "P3",
+   "sev": "P2",
+   "where": "copycat/capital/balance.py:142",
+   "finding": "期貨列 avg_price 恆不寫 avg_source → wire null → positionEcon 多加一次買費",
+   "disposition": "partial reject — 後果不成立:期貨列不進 positionEcon(position-summary.ts:116/177 分開、PriceLadder 為現股梯);語意缺口(群益 OI 平均成本含不含費)真,超出本 spec → next-time"
+  },
+  {
+   "id": "P4",
+   "sev": "P3",
+   "where": "frontend/src/lib/ladder-position.ts:105",
+   "finding": "case null: default: 併寫使 exhaustiveness 永久失效",
+   "disposition": "accept — 同 S4"
+  },
+  {
+   "id": "P0",
+   "sev": "-",
+   "where": "-",
+   "finding": "驗證點 2(損益段 rc≠0 沿用)成對沿用不退 None;§A.4 白名單 store 三函式與 _on_profit_complete 三分支逐字未動",
+   "disposition": "noted"
+  }
+ ],
+ "disposition": "Standards 6 條(1 P2 hard / 1 P2 judgement / 4 P3)全接受,S4 以歸一+exhaustive switch 取代三元;Spec 4 條:P1 補真鏈測試、P2 改空行與措辭、P3 後果反駁但語意缺口入 next-time、P4 同 S4。收修 commit:test 7b7c284f / refactor 5ff89742 / chore c28541f9"
+}
