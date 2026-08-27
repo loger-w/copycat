@@ -94,17 +94,18 @@ export function positionEcon(
   const b = kind === "short" ? SHORT_BORROW : 0;
   const long = qty > 0;
   const q = lots * 1000;
-  // 含買進手續費的每股成本:券商均價已含;純成交價要加;來源未知(null)明確走修前口徑
+  // 含買進手續費的每股成本:券商均價已含;純成交價要加;來源未知(null)明確走修前口徑。
+  // 舊後端 payload 整欄不存在時執行期是 undefined(型別外),先歸一成 null 再進 switch ——
+  // 不用 default 接:switch 保持 exhaustive,AvgSource 日後加值會在這裡 tsc 紅(cost 未賦值),
+  // 不會靜默落進修前口徑
+  const avgSource: AvgSource | null = input.avgSource ?? null;
   let cost: number;
-  switch (input.avgSource) {
+  switch (avgSource) {
     case "broker":
       cost = avg;
       break;
     case "fill":
     case null:
-    default:
-      // default 併進 null 分支:型別上 avgSource 只有三值,但舊後端 payload 整欄不存在時
-      // 執行期是 undefined → 沒有 default 就 cost 未賦值 → NaN 印到四處、打平線消失
       cost = avg * (1 + f);
       break;
   }
