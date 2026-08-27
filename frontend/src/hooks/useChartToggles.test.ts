@@ -171,6 +171,29 @@ describe("useChartToggles", () => {
     });
   });
 
+  // 🔴 feat/txf-intraday-overlay Q8(user 拍板):跨 instance **即時同步**。改動前每個呼叫端各持
+  // 一份 useState,別處按了鈕要到自己下次寫入才重讀 —— App 層拿不到「鈕開著沒」就無法閘控
+  // 台指期 bars 的輪詢。改後任一 instance set → 所有存活 instance 的 toggles 同步換新。
+  it("A set → B 不 rerender 也同步看到(跨 instance 即時同步)", () => {
+    const a = renderHook(() => useChartToggles());
+    const b = renderHook(() => useChartToggles());
+    act(() => a.result.current.set("idxTwse", true));
+    expect(b.result.current.toggles.idxTwse).toBe(true);
+    // 同一份快照:兩邊 identity 相同(memo 邊界靠它,不是逐鍵相等)
+    expect(b.result.current.toggles).toBe(a.result.current.toggles);
+    act(() => b.result.current.set("idxTwse", false));
+    expect(a.result.current.toggles.idxTwse).toBe(false);
+  });
+
+  // 前一個測試的 store 快取不得外溢:beforeEach 清了 localStorage,新 instance 要看到預設
+  it("localStorage 被外部清空後,新 instance 回預設(store 以存檔為真相源,不是模組快取)", () => {
+    const a = renderHook(() => useChartToggles());
+    act(() => a.result.current.set("cdp", false));
+    window.localStorage.removeItem(KEY);
+    const b = renderHook(() => useChartToggles());
+    expect(b.result.current.toggles).toEqual(DEFAULTS);
+  });
+
   // 🟢 intraday-fill-marks SC-2:新增 `fills`(分時圖成交點)預設開。**刻意不 bump
   // TOGGLES_VERSION**(同 vp 的理由:全新鍵,舊存檔沒有它,`{...DEFAULTS, ...flags}`
   // 自然補上;無謂 bump 的代價是所有人的 bb 被再打開一次)。
