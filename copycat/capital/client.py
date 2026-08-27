@@ -896,7 +896,8 @@ class CapitalClient:
         `stock_no` / `buy_sell`(回報口徑 "B"/"S")綁進 note:多開的交易日候選正是 seq 重用
         的誤標窗,綁標的 + 方向後撞到不同單就不帶出(review R6 ST1;規則在 `store`)。
 
-        交易日推算的保險絲(`next_trading_day` 往後 60 天找不到交易日 = 日曆資料錯)炸在這裡
+        交易日推算的保險絲(`last_trading_day` / `next_trading_day` 60 天內找不到交易日 = 日曆
+        資料錯;日盤分支走前者、夜盤分支走後者,兩把都 raise RuntimeError)炸在這裡
         時**只退掉交易日候選**、其餘照記(review §2.4 Spec 7):標籤是附屬品,少標是 fail-safe
         方向;單已在市場上、審計行(晚到路徑在本函式之後才寫)不得因此斷掉。退回只記本機日 =
         N075 前的口徑,日盤單照樣標得出,只有夜盤那一天候選缺。"""
