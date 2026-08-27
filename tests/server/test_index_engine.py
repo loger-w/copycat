@@ -10,7 +10,8 @@ from typing import Any, Callable
 
 import pytest
 
-from copycat.server.index_engine import IndexEngine, minute_key
+from copycat.live.stock_source import in_index_heal_window_now
+from copycat.server.index_engine import _WATCH_END, IndexEngine, minute_key
 from copycat.server.mis import OtcSnap
 from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.wait import wait_until
@@ -1207,3 +1208,16 @@ class TestQuoteWithoutFilledTime:
             assert state["otc"]["minutes"] == {}
         finally:
             await eng.close()
+
+
+def test_watch_end_is_the_index_heal_gate_boundary() -> None:
+    """跨層 parity(CLAUDE.md §4「index session 自癒閘上界 = `_WATCH_END`」):`_WATCH_END` 是推播靜默
+    (stale)watchdog 的凍結點(分時自癒窗反而從這一點開始),`stock_source._INDEX_HEAL_END` 是 TC4
+    session 層 REALTIME 零推播自癒 / 健檢的上界 —— 兩把都釘在「收盤試撮起指數不更新」這一個事實,
+    必須同值。漂掉的可觀測症狀:值被放寬 → 13:25 後 `零推播自癒 … IX0001` 又出現;值被收緊 → 加權
+    stale 徽章 13:2x 提早熄滅。放在 server 側是因為依賴方向 server → live(pr-128 F-06)。"""
+    assert in_index_heal_window_now(_WATCH_END) is False
+    earlier = (
+        _dt.datetime.combine(_dt.date(2026, 1, 1), _WATCH_END) - _dt.timedelta(seconds=1)
+    ).time()
+    assert in_index_heal_window_now(earlier) is True

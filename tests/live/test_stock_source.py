@@ -1266,14 +1266,6 @@ class TestIndexHealWindowGate:
     def test_boundary(self, t: _dt.time, expected: bool) -> None:
         assert in_index_heal_window_now(t) is expected
 
-    def test_end_matches_index_engine_watchdog_window(self) -> None:
-        """上界與 `index_engine._WATCH_END`(分時 watchdog 凍結點)同值同語意 —— 兩把都釘在
-        「收盤試撮起指數不更新」這一個事實上;漂開的症狀是一把還在救、另一把已凍結,零錯誤訊號。"""
-        from copycat.server import index_engine
-
-        assert in_index_heal_window_now(index_engine._WATCH_END) is False
-        earlier = (
-            _dt.datetime.combine(_dt.date(2026, 1, 1), index_engine._WATCH_END)
-            - _dt.timedelta(seconds=1)
-        ).time()
-        assert in_index_heal_window_now(earlier) is True
+    # 與 `index_engine._WATCH_END` 同值的 parity 在依賴方那側:
+    # `tests/server/test_index_engine.py::test_watch_end_is_the_index_heal_gate_boundary`
+    # (server → live 的依賴方向;本檔不 import copycat.server,pr-128 F-06)。
