@@ -43,8 +43,8 @@ from copycat.server.audit import AuditWriteError
 from copycat.stkfut_map import write_map
 from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
-from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 from tests.capital.balance_rows import RAW_C_MARGIN, RAW_T_BOUGHT
+from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
 from tests.capital.profit_rows import PNL_3357_MARGIN, RAW_PNL_MARGIN, pnl_variant
 
 # ---------------------------------------------------------------------------

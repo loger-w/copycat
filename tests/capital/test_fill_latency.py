@@ -14,11 +14,11 @@ from pathlib import Path
 
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
+from tests.capital.balance_rows import RAW_T_HELD
 from tests.capital.fake_com import FakeCom
 from tests.capital.profit_rows import PNL_3357_MARGIN, pnl_variant
 
 _SIM_RTT_S = 0.02  # 因果順序與「鏈會落地」都與 RTT 大小無關;150 ms 只是敘事(review F-15)
-_BAL_ROW = "3357,T,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
 _PROFIT_ROW = pnl_variant(PNL_3357_MARGIN, {3: "現股", 25: "1"})  # 30 欄 fixture,pr-119 F-05
 _OI_ROW = "TF,F9999999,TXFI6,B,2,0,23000.0"
 
@@ -48,7 +48,7 @@ def _fill_evt_raw(seq: str = "S1", qty: str = "1000", price: str = "90.0000") ->
 def _run_chain(client: CapitalClient, com: FakeCom, *, until: Callable[[], bool], budget_s: float) -> None:
     """模擬券商:看到查詢後 `_SIM_RTT_S` 才餵回覆;直到 `until()` 成立或預算用盡。"""
     replies: dict[str, tuple[Callable[[str], None], list[str]]] = {
-        "get_real_balance": (client._handle_balance, [_BAL_ROW, "##"]),
+        "get_real_balance": (client._handle_balance, [RAW_T_HELD, "##"]),
         "get_profit_loss_gw": (client._handle_profit, ["000,查詢成功", _PROFIT_ROW, "##,,,,"]),
         "get_open_interest": (client._handle_open_interest, [_OI_ROW, "##"]),
     }
