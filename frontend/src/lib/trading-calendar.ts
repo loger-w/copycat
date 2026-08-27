@@ -54,3 +54,41 @@ export function isTradingDay(d: Date): boolean {
   if (day === 0 || day === 6) return false;
   return !holidaySet.has(isoLocalDate(d));
 }
+
+/** `YYYY-MM-DD` 是不是交易日(非週末且不在假日集合)。
+ *
+ *  `holidays` 可顯式帶入:元件把 `/api/calendar` 的 query data 當 memo dep 時要用**那一份**
+ *  算,不然日曆載入後 memo 不知道要重算(模組級集合的變動對 React 不可見)。
+ *  未帶 = 讀模組集合(純函式 / `refetchInterval` callback 那條路)。 */
+function isTradingDayIso(iso: string, holidays: ReadonlySet<string> = holidaySet): boolean {
+  return !isWeekendIso(iso) && !holidays.has(iso);
+}
+
+/** `YYYY-MM-DD` ± n 天,以 **UTC 日曆**進位(同 `isWeekendIso`:比的是日期字串本身,與看盤機時區無關)。
+ *  `lib/allday.ts::anchorDateOf` 的「凌晨 → 前一日」也吃這一支(不各留一份日期位移)。 */
+export function shiftIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  // 壞字串(後端 bar `t` 形狀不合)→ Invalid Date,`toISOString` 會 RangeError 炸掉整個 render;
+  // 原樣回傳讓失效方向留在「錨定日是個怪字串、那根 bar 被切掉」(review round 1 Spec 6)。
+  if (Number.isNaN(d.getTime())) return iso;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 上界:連續非交易日最長是春節 ~10 天;30 是「絕不無限迴圈」的護欄,不是業務常數。 */
+const NEXT_TRADING_DAY_MAX_STEPS = 30;
+
+/** `iso` 之後的**第一個交易日**(嚴格大於 `iso`)。
+ *
+ *  期指夜盤的錨定日用它:D 15:00 開的夜盤屬 D 的次一交易日(期交所口徑;`lib/allday.ts`)。
+ *  未載日曆 = 只跳週末 —— 週五夜盤仍正確歸週一,只有假日前夜盤會暫時歸到假日
+ *  (與 `inFuturesAllDayHours` 的退化同向;日曆載入後 caller 以 query data 當 dep 重算)。
+ *  30 步內全非交易日 → 回第 31 天(有界)。 */
+export function nextTradingDayIso(iso: string, holidays: ReadonlySet<string> = holidaySet): string {
+  let cur = iso;
+  for (let i = 0; i < NEXT_TRADING_DAY_MAX_STEPS; i += 1) {
+    cur = shiftIso(cur, 1);
+    if (isTradingDayIso(cur, holidays)) return cur;
+  }
+  return shiftIso(cur, 1);
+}

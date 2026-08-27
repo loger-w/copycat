@@ -9,7 +9,9 @@ import {
   isTradingDay,
   isWeekendIso,
   isoLocalDate,
+  nextTradingDayIso,
   setHolidays,
+  shiftIso,
 } from "@/lib/trading-calendar";
 
 /** 2026-10-08 四 / 10-09 五(國慶調整假)/ 10-10 六 / 10-11 日。 */
@@ -101,5 +103,53 @@ describe("isWeekendIso", () => {
     } finally {
       process.env.TZ = orig;
     }
+  });
+});
+
+describe("nextTradingDayIso / shiftIso(mod/futures-day-1500:錨定日要跳到「次一交易日」)", () => {
+  it("shiftIso:UTC 日曆進位 / 退位,跨月跨年正確;壞字串原樣回傳不炸", () => {
+    expect(shiftIso("2026-08-31", 1)).toBe("2026-09-01");
+    expect(shiftIso("2026-09-01", -1)).toBe("2026-08-31");
+    expect(shiftIso("2027-01-01", -1)).toBe("2026-12-31");
+    expect(shiftIso("garbage", 1)).toBe("garbage");
+    expect(nextTradingDayIso("garbage")).toBe("garbage");
+  });
+
+  it("nextTradingDayIso:顯式集合優先於模組集合(caller 把 query data 當 memo dep 時走這條)", () => {
+    setHolidays(["2026-10-09"]);
+    expect(nextTradingDayIso("2026-10-08", new Set())).toBe("2026-10-09");
+    clearHolidays();
+    expect(nextTradingDayIso("2026-10-08", new Set(["2026-10-09"]))).toBe("2026-10-12");
+  });
+
+  it("nextTradingDayIso:週一→週二;週五→週一;週六 / 週日→週一(跳週末)", () => {
+    // 2026-08-24 一 … 08-28 五 / 08-29 六 / 08-30 日 / 08-31 一
+    expect(nextTradingDayIso("2026-08-24")).toBe("2026-08-25");
+    expect(nextTradingDayIso("2026-08-28")).toBe("2026-08-31");
+    expect(nextTradingDayIso("2026-08-29")).toBe("2026-08-31");
+    expect(nextTradingDayIso("2026-08-30")).toBe("2026-08-31");
+  });
+
+  it("nextTradingDayIso:假日前一日 → 假日後首個交易日(10-08 四 → 10-09 假 → 10-10/11 週末 → 10-12 一)", () => {
+    expect(nextTradingDayIso("2026-10-08")).toBe("2026-10-09"); // 未載日曆:只跳週末
+    setHolidays(["2026-10-09"]);
+    expect(nextTradingDayIso("2026-10-08")).toBe("2026-10-12");
+    clearHolidays();
+    expect(nextTradingDayIso("2026-10-08")).toBe("2026-10-09");
+  });
+
+  it("nextTradingDayIso:跨月 / 跨年進位以 UTC 日曆算(不受本機時區影響)", () => {
+    expect(nextTradingDayIso("2026-08-31")).toBe("2026-09-01"); // 一 → 二
+    expect(nextTradingDayIso("2026-12-31")).toBe("2027-01-01"); // 四 → 五(未載日曆)
+  });
+
+  it("nextTradingDayIso:連續 30 天皆非交易日 → 仍回第 31 天(有界,不無限迴圈)", () => {
+    const days: string[] = [];
+    for (let i = 1; i <= 40; i += 1) {
+      const d = new Date(Date.UTC(2026, 7, 24 + i));
+      days.push(d.toISOString().slice(0, 10));
+    }
+    setHolidays(days);
+    expect(nextTradingDayIso("2026-08-24")).toBe("2026-09-24");
   });
 });
