@@ -943,11 +943,11 @@ interface CoreProps extends Props {
    *  行內 `{start, end}` 字面值每次 render 新 identity,兩層 memo 一起被打穿。 */
   xWindow?: XWindow;
   /** 整點刻度覆寫(預設 `hourTicksOf(xw)`);identity 要求同 `xWindow`。
-   *  近全軸的「整點」不是 key 的整點倍數(死區不佔 x),只能由 caller 給。 */
+   *  近全軸的「整點」不是 key 的整點倍數(一天之外的 13:46–15:00 不佔 x、15:00 釘在 index 0),只能由 caller 給。 */
   hourTicks?: readonly HourTick[];
   /** key → 時間文字(readout 首欄 / hover 底部標籤);預設 `hhmm`。**必經模組層函式**
    *  —— 兩處要同一份口徑,注入點只留一個。近全軸的 key 是**軸索引**,拿 `hhmm` 換算
-   *  會印出假時刻(index 300 的真值是 15:01,`hhmm` 會印 05:00)。 */
+   *  會印出假時刻(index 0 的真值是 15:01,`hhmm` 會印 00:00)。 */
   timeText?: (minute: number) => string;
   /** 任意水平參考線(futures 態:持倉均價 / OI 撐壓)。域外不畫;預設 `EMPTY_HLINES`。
    *  **必經呼叫端 useMemo 或模組常數**(identity 穩定),同 `fills`。 */
@@ -1334,7 +1334,7 @@ export function IntradayChartCore({
 
   // 期貨(近全軸)態自 R2 起五顆全開:CDP/MA 由 caller 以**期貨日 K** 前端算好注入
   // (`lib/futures-overlay.ts`;不打 `/api/stock/overlay`,那支吃股號)、成交點的近全軸
-  // 日期界由 `alldayFillPoints` 收(夜盤成交屬前一錨定日)、VP 由 `futuresBarsToAccum`
+  // 日期界由 `alldayFillPoints` 收(夜盤成交屬次一交易日的錨定日)、VP 由 `futuresBarsToAccum`
   // 自折(不經 `foldVp`,所以現貨窗硬編與期貨態無關)。反灰只剩「資料源真的沒有」那條路。
   // 個股期(`stkfut`)態維持三顆反灰:它的 accum 走 `foldVp`,分鐘窗仍是現貨窗。
   // 「按得下去但沒反應」比「按不下去」難懂 —— 反灰 + tooltip 才講得出為什麼。
