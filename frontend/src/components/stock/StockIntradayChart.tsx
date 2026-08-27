@@ -140,10 +140,13 @@ const EMPTY_IDX_LINES: readonly IndexOverlayLine[] = [];
 const IDX_LINE_CLASS: Record<IndexOverlayLine["key"], string> = {
   twse: "stroke-profit",
   otc: "stroke-idx-otc",
+  // 台指期橘(feat/txf-intraday-overlay Q5):江波圖的 TXF 是 base 腿近白色,會與均價白撞 → 不沿用
+  txf: "stroke-idx-txf",
 };
 const IDX_TEXT_CLASS: Record<IndexOverlayLine["key"], string> = {
   twse: "fill-profit",
   otc: "fill-idx-otc",
+  txf: "fill-idx-txf",
 };
 
 /** index 態的成交量副圖不 render,但 hook 不可條件化 → 回這顆常數而不是每 render 新物件。 */
@@ -1155,24 +1158,26 @@ export function IntradayChartCore({
   const ref = (accum.meta?.ref ?? 0) > 0 ? accum.meta!.ref : null;
   // 指數疊線(F1)。**必經 useMemo**(理由同 `vpBars`:hover 每個 mousemove 都 re-render,
   // 新陣列會打穿 ChartStatic 的 memo);關著 / index / futures 態回**模組層常數**。
-  const idxOn = !index && !futures && (toggles.idxTwse || toggles.idxOtc);
+  const idxOn = !index && !futures && (toggles.idxTwse || toggles.idxOtc || toggles.idxTxf);
   const idxTwse = toggles.idxTwse;
   const idxOtc = toggles.idxOtc;
+  const idxTxf = toggles.idxTxf;
   const idxTwseSeries = indexSeries?.twse ?? null;
   const idxOtcSeries = indexSeries?.otc ?? null;
+  const idxTxfSeries = indexSeries?.txf ?? null;
   const idxLines = useMemo(
     () =>
       idxOn
         ? buildIndexOverlayLines(
-            { twse: idxTwseSeries, otc: idxOtcSeries },
-            { twse: idxTwse, otc: idxOtc },
+            { twse: idxTwseSeries, otc: idxOtcSeries, txf: idxTxfSeries },
+            { twse: idxTwse, otc: idxOtc, txf: idxTxf },
             ref,
             g,
             w,
             xw,
           )
         : EMPTY_IDX_LINES,
-    [idxOn, idxTwseSeries, idxOtcSeries, idxTwse, idxOtc, ref, g, w, xw],
+    [idxOn, idxTwseSeries, idxOtcSeries, idxTxfSeries, idxTwse, idxOtc, idxTxf, ref, g, w, xw],
   );
 
   if (g.priceLine.length === 0) {
@@ -1338,7 +1343,7 @@ export function IntradayChartCore({
   // 均價鈕帶 `hint`(可用時仍顯示的 tooltip):指數的「均價」是**分鐘收盤算術平均**
   // 不是 VWAP,不講清楚會被當成加權均價讀。
   const toggleDefs: {
-    key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc";
+    key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc" | "idxTxf";
     label: string;
     available: boolean;
     hint?: string;
@@ -1397,6 +1402,15 @@ export function IntradayChartCore({
                 available: indexSeries !== null && ref !== null,
                 hint: "櫃買指數相對昨收 %,映到本檔價格軸",
                 offTitle: indexSeries === null ? "無指數資料" : "無昨收",
+              },
+              // 台指期(feat/txf-intraday-overlay):資料源閘看的是 `txf` 那一格(期貨引擎未就緒 /
+              // 結算價不可得時 App 給 null),不是整個 indexSeries 物件 —— 加權活著不代表台指期活著。
+              {
+                key: "idxTxf",
+                label: "台指期",
+                available: indexSeries !== null && indexSeries.txf !== null && ref !== null,
+                hint: "台指期相對結算價 %,映到本檔價格軸(只畫與本檔同時段的交集)",
+                offTitle: indexSeries === null || indexSeries.txf === null ? "無台指期資料" : "無昨收",
               },
             ] as const)),
       ];

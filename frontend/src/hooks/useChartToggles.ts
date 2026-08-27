@@ -17,6 +17,8 @@ export interface ChartToggles {
   idxTwse: boolean;
   /** 同上,櫃買指數 */
   idxOtc: boolean;
+  /** 同上,台指期(相對結算價 %;feat/txf-intraday-overlay)。App 層另拿它閘控 TXF bars 的輪詢 */
+  idxTxf: boolean;
   /** 群組圖牆 hover 一張卡 → 全部卡片同步十字線(F3;只在圖牆 toggle 列出現) */
   syncHover: boolean;
 }
@@ -53,6 +55,7 @@ const DEFAULTS: ChartToggles = {
   // 「可以開關」不是常駐;新鍵同樣不 bump TOGGLES_VERSION(理由與 `vp` 逐字相同)。
   idxTwse: false,
   idxOtc: false,
+  idxTxf: false, // 台指期同款(feat/txf-intraday-overlay;新鍵免 bump)
   // 同步十字線預設**開**(F3,auto-default):user 要的功能預設就看得到,可關。同樣不 bump 版本。
   syncHover: true,
 };

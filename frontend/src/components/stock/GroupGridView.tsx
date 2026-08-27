@@ -260,7 +260,7 @@ const NOOP_HOVER = (): void => {};
  *  **恆可按**(AD-5):可用性是 per-code 的(某一檔沒日線 ≠ 整列該反灰),個別卡片取不到
  *  overlay 時該卡不畫,整列不動。 */
 const GRID_TOGGLES: {
-  key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc" | "syncHover";
+  key: "vwap" | "cdp" | "ma" | "vp" | "fills" | "idxTwse" | "idxOtc" | "idxTxf" | "syncHover";
   label: string;
 }[] = [
   { key: "vwap", label: "均價" },
@@ -270,6 +270,7 @@ const GRID_TOGGLES: {
   { key: "fills", label: "成交點" },
   { key: "idxTwse", label: "加權" },
   { key: "idxOtc", label: "櫃買" },
+  { key: "idxTxf", label: "台指期" }, // feat/txf-intraday-overlay,label 與單檔頁逐字相同
   // 十字線(F3):只在圖牆有(單檔頁沒有「別張卡」可同步)
   { key: "syncHover", label: "十字線" },
 ];
@@ -420,7 +421,7 @@ export function GroupGridView({
               quote={quotes[code]}
               active={code === active}
               toggles={toggles}
-              indexSeries={toggles.idxTwse || toggles.idxOtc ? indexSeries : null}
+              indexSeries={toggles.idxTwse || toggles.idxOtc || toggles.idxTxf ? indexSeries : null}
               // 關著時兩者都是穩定 identity(null / 模組層 noop),memo 不被打穿
               syncHoverMin={toggles.syncHover ? syncMin : null}
               onHoverMinute={toggles.syncHover ? setSyncMin : NOOP_HOVER}

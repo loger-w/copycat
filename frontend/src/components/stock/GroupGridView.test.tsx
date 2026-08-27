@@ -676,7 +676,7 @@ describe("GroupGridView 選中態(SC-3 / AD-6)", () => {
 
 // 🟢 SC-2 / D4:toggle 五鈕上提到圖牆頂(R2 SC-6 加入「成交點」)(卡片內不得有 button —— 點它會連帶切主檔)。
 describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
-  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 / 加權 / 櫃買 / 十字線 八鈕", async () => {
+  it("pill 列右側有均價 / CDP / MA / 量分佈 / 成交點 / 加權 / 櫃買 / 台指期 / 十字線 九鈕", async () => {
     wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     await screen.findByTestId("group-card-2330");
     for (const [key, label] of [
@@ -689,6 +689,8 @@ describe("GroupGridView 圖牆頂 toggle 列(SC-2 / AD-5)", () => {
       // 🟢 F1(chart-ux-batch-0826):指數疊線兩鈕,label 與單檔頁逐字相同
       ["idxTwse", "加權"],
       ["idxOtc", "櫃買"],
+      // 🟢 feat/txf-intraday-overlay:台指期,label 與單檔頁逐字相同
+      ["idxTxf", "台指期"],
       // 🟢 F3:同步十字線,只在圖牆有(單檔頁沒有別張卡可同步)
       ["syncHover", "十字線"],
     ] as const) {

@@ -75,7 +75,7 @@ const OTC = series({
   minutes: { "1017": 359_800 },
 });
 
-const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true, idxTwse: false, idxOtc: false, syncHover: true };
+const TOGGLES: ChartToggles = { vwap: true, cdp: true, ma: false, bb: true, vp: false, fills: true, idxTwse: false, idxOtc: false, idxTxf: false, syncHover: true };
 
 const LEFT_STORES: PaneStores = {
   key: MARKET_KEY_STORE,
