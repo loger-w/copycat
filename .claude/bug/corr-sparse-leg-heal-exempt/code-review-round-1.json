@@ -1,0 +1,126 @@
+{
+ "fixed_point": "8200f210",
+ "reviewed_head": "3446f71d",
+ "reviewers": {
+  "standards": "opus general-purpose",
+  "spec": "opus general-purpose"
+ },
+ "standards": [
+  {
+   "id": "S1",
+   "sev": "P3",
+   "kind": "hard",
+   "where": "copycat/server/app.py:886",
+   "finding": "104 字元超 line-length 100(E501 未 select)",
+   "disposition": "accept — 折行"
+  },
+  {
+   "id": "S2",
+   "sev": "P3",
+   "kind": "hard",
+   "where": "copycat/server/app.py:30-31",
+   "finding": "同模組 import 拆兩行、插進 server 群中間",
+   "disposition": "accept — 併一行"
+  },
+  {
+   "id": "S3",
+   "sev": "P2",
+   "kind": "judgement",
+   "where": "tc4.py:329-344 / corr_source.py:92-111",
+   "finding": "Data Clumps + Shotgun Surgery:heal_* 六參數被逐字轉發,加一旗標動七處;建議 HealPolicy dataclass、不在本 PR 做",
+   "disposition": "accept as next-time — 記 docs/next-time.md 08-27 節,獨立 🔵"
+  },
+  {
+   "id": "S4",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "tc4.py:338 vs :343",
+   "finding": "heal_symbol_active(述詞、扣 R1)與 heal_sparse_symbols(集合、只扣 R2)同概念兩機制;註解已寫差異",
+   "disposition": "accept as-is"
+  },
+  {
+   "id": "S5",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "corr_config.py:40 / tc4.py:339-342 / app.py:405-406",
+   "finding": "94.4% / 11 發 attempt 1 量測值在三處 code 註解逐字重述;單一真相源應是 tc4-market-facts",
+   "disposition": "accept — 三處改引 skill 不抄數字(CLAUDE.md §4 / JSON _comment / skill 三處各有讀者,符合慣例,保留)"
+  },
+  {
+   "id": "S6",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "app.py:415",
+   "finding": "base 腿標 sparse 被 tc4_legs() 過濾靜默丟掉,零錯誤訊號;_comment 未寫僅 source: tc4 有效",
+   "disposition": "accept — load_config 對 sparse 且 source≠tc4 印 WARNING(不降級)+ 測試 + _comment 補句"
+  },
+  {
+   "id": "S7",
+   "sev": "P3",
+   "kind": "judgement",
+   "where": "tests/live/test_corr_source.py:110-114",
+   "finding": "斷言私有 _heal_sparse;沿同檔既有慣例",
+   "disposition": "accept as-is"
+  },
+  {
+   "id": "S0",
+   "sev": "-",
+   "kind": "verdict",
+   "where": "-",
+   "finding": "Speculative Generality 判「不是」(現行 bug 驅動、既有兩開關語意皆不可用);鐵則 C / E / §6 三類 commit 全過",
+   "disposition": "noted"
+  }
+ ],
+ "spec": [
+  {
+   "id": "P1",
+   "sev": "P2",
+   "where": "copycat/live/tc4.py:628-635",
+   "finding": "母體只剩稀疏腿時 R1 以 120 s 接手,churn 搬到 R1;corr 現況 7 條恆開腿故 prod 不可達,但通用類此邊界無註解無測試",
+   "disposition": "accept — 參數註解補邊界句「單腿 session 別用本旗標」+ test_r1_takes_over_when_the_population_is_only_sparse_symbols 釘住現行(刻意)行為"
+  },
+  {
+   "id": "P2",
+   "sev": "P2",
+   "where": "spec.md 驗證 seam",
+   "finding": "「日盤段 0 筆」不可機械判定:_heal log R1/R2 同一句;休市段本來就被閘擋",
+   "disposition": "accept — 判準改「全日 0 筆;非 0 須同秒有其他腿成批(R1)才 PASS」"
+  },
+  {
+   "id": "P3",
+   "sev": "P3",
+   "where": "tests/test_corr_config.py:109",
+   "finding": "只認字面 true 的測試沒測 1(bool 是 int 子類正是 is True 的理由)",
+   "disposition": "accept — 補 sparse: 1 案"
+  },
+  {
+   "id": "P4",
+   "sev": "P3",
+   "where": "docs/next-time.md",
+   "finding": "IX0001 收盤段新條與 08-26 N051 條記同一件事,數字互斥(19 / 18、13:31 / 13:25)",
+   "disposition": "accept — 新條改為指回 08-26 條並註明兩日數字與提案,拍板後以新條為準勾銷舊項"
+  },
+  {
+   "id": "P5",
+   "sev": "P3",
+   "where": "copycat/server/app.py:884",
+   "finding": "load_corr_config() 上提到 _make_corr 頂端,resolved_corr is None 的早退路徑(測試)也多讀一次檔",
+   "disposition": "reject — 該路徑只有測試走(prod 恆建 source),多讀 4 KB JSON 一次;為它多一個分支不值得,且「同一份 config 只讀一次」的不變量更重要"
+  },
+  {
+   "id": "P6",
+   "sev": "-",
+   "where": "-",
+   "finding": "要求 4 白名單逐項 grep 全守住;dataclass 相等性含 sparse 方向正確、無靜默變寬變窄;測試對 CONFIG_PATH 的依賴非新增",
+   "disposition": "noted"
+  },
+  {
+   "id": "P8",
+   "sev": "P3",
+   "where": "tests/test_corr_config.py:90",
+   "finding": "test_seventh_leg fixture 以 dict 重建腿未帶 sparse → 不再等於 DEFAULT_CONFIG,日後比較會假紅",
+   "disposition": "accept — fixture 帶 sparse"
+  }
+ ],
+ "disposition": "Standards 7 條:S1/S2/S5/S6 收修、S3 入 next-time、S4/S7 as-is;Spec 7 條:P1/P2/P3/P4/P8 收修、P5 反駁、P6 noted。收修 commit:test ffade4c8 / fix a95a8e3d / chore a8473ef2。"
+}
