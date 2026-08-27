@@ -18,6 +18,7 @@ from copycat.stock_watchlist import (
     union,
     validate_code,
 )
+from tests.helpers.frontend_source import read_frontend_source
 
 
 class TestValidateCode:
@@ -265,13 +266,10 @@ class TestFrontendParity:
     """
 
     def test_frontend_constant_matches_backend(self) -> None:
-        path = (
-            Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib" / "constants.ts"
-        )
-        # 檔案不見 / 常數改名 → **fail 不 skip**:契約 lock 靜默消失就等於沒有 lock
-        assert path.is_file(), f"前端常數檔不存在:{path}"
-        m = re.search(r"WATCHLIST_LIMIT\s*=\s*(\d+)", path.read_text(encoding="utf-8"))
-        assert m is not None, f"{path} 找不到 WATCHLIST_LIMIT 宣告(改名了?契約需同步)"
+        # 檔案不見(helper raise)/ 常數改名 → **fail 不 skip**:契約 lock 靜默消失就等於沒有 lock
+        text = read_frontend_source("lib/constants.ts")
+        m = re.search(r"WATCHLIST_LIMIT\s*=\s*(\d+)", text)
+        assert m is not None, "constants.ts 找不到 WATCHLIST_LIMIT 宣告(改名了?契約需同步)"
         assert int(m.group(1)) == WATCHLIST_LIMIT
 
 
