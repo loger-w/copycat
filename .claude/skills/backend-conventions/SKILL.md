@@ -24,6 +24,7 @@ description: Python / FastAPI 後端風格慣例(專案特化)。寫或改 copyc
 - **錯誤處理**:catch 要具體(`httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException`,以及 DQ4 SDK 特有 exception),不裸 `except`。`except Exception` 只在 route 邊界 + 一定要 `logger.exception` + 轉 502。
 - **測試**:pytest + `asyncio_mode = "auto"`,async test 不用 `@pytest.mark.asyncio`。Mock 走 `monkeypatch`,不 `unittest.mock`。
 - **Ruff**:line-length 100。Format 跟既有檔對齊,不順手重排既存格式。
+  判「既有檔是否已 formatted」用 `git show master:<file> > tmp.py && ruff format --check tmp.py`,**不要用 stdin `ruff format --check -`**(2026-08-28 真踩:stdin 模式對未 format 的 test_client.py 靜默回「已 format」,隨後整檔 format 把不相干既有行一起重排;還原 = checkout master 版重跑確定性替換腳本)。只對**新檔** format 最省事。
 - **pyright basic**(從第一天就開)— type hint 已寫齊,加 checker 拿免費 invariant check。
 
 
