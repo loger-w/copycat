@@ -278,6 +278,14 @@ describe("positionEcon today_qty 邊界(review round 1)", () => {
     expect(econ).toEqual(positionEcon(2, 100, 102_000, 1.8, "cash", { avgSource: null, todayQty: 0 }));
   });
 
+  it("avg_source 值域外字串(後端先加值、前端 dist 未重 build 的窗口)→ 白名單歸一成 null,不印 NaN", () => {
+    // `?? null` 只擋 nullish;wire 送 "oi" 之類三個 case 全不中、無 default → cost 未賦值 → NaN(pr-119 F-02)
+    const input = { avgSource: "oi", todayQty: 0 } as unknown as Parameters<typeof positionEcon>[5];
+    const econ = positionEcon(2, 100, 102_000, 1.8, "cash", input);
+    expect(Number.isFinite(econ.pnl)).toBe(true);
+    expect(econ).toEqual(positionEcon(2, 100, 102_000, 1.8, "cash", { avgSource: null, todayQty: 0 }));
+  });
+
   it("payload 缺 today_qty(後端未重啟窗口)→ 退成 0,不印 NaN", () => {
     const input = { avgSource: "broker", todayQty: undefined } as unknown as {
       avgSource: "broker";
