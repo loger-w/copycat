@@ -389,7 +389,9 @@ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesS
     )
 
 
-def _default_corr_source(calendar: TradingCalendar | None, config: CorrConfig) -> CorrSource:
+def _default_corr_source(
+    calendar: TradingCalendar | None = None, *, config: CorrConfig
+) -> CorrSource:
     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
     from copycat.live import stock_source as stock_mod
     from copycat.live.corr_source import CorrQuoteSource, segment_leg_gate
@@ -406,15 +408,15 @@ def _default_corr_source(calendar: TradingCalendar | None, config: CorrConfig) -
     # 稀疏腿(SXF 費半,事實見 tc4-market-facts)豁免 R2:旗標來自設定檔 `sparse`,與時段閘
     # 正交 —— 它仍留在 R1 母體。只看 `tc4_legs()`:base 腿不由本 source 訂閱,標了也沒有 R2 可豁免
     # (load_config 會對這種誤標印 WARNING)。`config` **必填**(pr-120 F-04):source 的稀疏腿集合與
-    # engine 的腿組必須吃同一份(lifespan 只讀一次再分兩處),不留 fallback 讓「各讀各的」在結構上合法。
-    cfg = config
+    # engine 的腿組必須吃同一份(lifespan 只讀一次再分兩處),不留 fallback 讓「各讀各的」在結構上合法;
+    # keyword-only 讓 `calendar` 的預設值與四個兄弟工廠同形(review S-1)。
     return CorrQuoteSource(
         port=_tc4_port(),
         heal_symbol_active=segment_leg_gate(
             taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
             tws=_heal_gate(calendar, stock_mod.in_trading_hours_now),
         ),
-        heal_sparse_symbols=frozenset(leg.symbol for leg in cfg.tc4_legs() if leg.sparse),
+        heal_sparse_symbols=frozenset(leg.symbol for leg in config.tc4_legs() if leg.sparse),
     )
 
 
@@ -886,7 +888,7 @@ def create_app(
                 corr_cfg = load_corr_config()  # source(稀疏腿)與引擎(腿組)同一份,只讀一次
                 if corr_source is DEFAULT_CORR:
                     resolved_corr: CorrSource | None = _default_corr_source(
-                        trading_calendar, corr_cfg
+                        trading_calendar, config=corr_cfg
                     )
                 else:
                     resolved_corr = cast("CorrSource | None", corr_source)

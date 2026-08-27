@@ -486,13 +486,12 @@ def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.Monkey
     """海外腿(SGX/CBOT/CME)在台灣假日照開 → corr 的 **session 級**閘不接日曆
     (接了等於整天不自癒)。逐腿的閘走 `heal_symbol_active`,見下一條。"""
     import copycat.live.corr_source as corr_mod
-    from copycat.server import app as app_mod
-
     from copycat.corr_config import load_config
+    from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
 
-    app_mod._default_corr_source(None, load_config())
+    app_mod._default_corr_source(config=load_config())
 
     assert "heal_active" not in seen["kwargs"]
 
@@ -506,7 +505,7 @@ def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPa
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
-    app_mod._default_corr_source(None, load_config())
+    app_mod._default_corr_source(config=load_config())
     assert seen["kwargs"]["heal_sparse_symbols"] == frozenset({"TC.F.TWF.SXF.HOT"})
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
@@ -514,7 +513,7 @@ def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPa
         legs=tuple(Leg(leg.key, leg.label, leg.symbol, leg.source) for leg in DEFAULT_CONFIG.legs),
         base=DEFAULT_CONFIG.base,
     )
-    app_mod._default_corr_source(_CAL, no_sparse)
+    app_mod._default_corr_source(_CAL, config=no_sparse)
     assert seen["kwargs"]["heal_sparse_symbols"] == frozenset()
 
 
@@ -526,14 +525,13 @@ def test_corr_leg_gate_only_applies_to_the_taifex_segment(
     盤別」;SGX / CME / CBOT / OSE 段恆 True(時段未實測,猜錯 = 該救的腿整場不救)。"""
     import copycat.live.corr_source as corr_mod
     import copycat.live.futures_source as futures_mod
-    from copycat.server import app as app_mod
-
     from copycat.corr_config import load_config
+    from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
 
-    app_mod._default_corr_source(_CAL, load_config())
+    app_mod._default_corr_source(_CAL, config=load_config())
     gate = seen["kwargs"]["heal_symbol_active"]
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
@@ -557,16 +555,15 @@ def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
     import copycat.live.corr_source as corr_mod
     import copycat.live.futures_source as futures_mod
     import copycat.live.stock_source as stock_mod
-    from copycat.server import app as app_mod
-
     from copycat.corr_config import load_config
+    from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
     # 台期交那把恆開 → 證明兩把閘各走各的,不是共用同一個 callable
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: True)
 
-    app_mod._default_corr_source(_CAL, load_config())
+    app_mod._default_corr_source(_CAL, config=load_config())
     gate = seen["kwargs"]["heal_symbol_active"]
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
