@@ -597,6 +597,17 @@ class TestModuleClock:
         assert bars_mod._now_time() == _DAYTIME
         assert _DAYTIME >= bars_mod.MIDNIGHT_BUFFER_END
 
+    async def test_default_clock_persists_yesterday(self) -> None:
+        """走真路徑:預設時刻下 `build_minute` 把 yesterday 永久化(緩衝窗內會留洞,見
+        `TestMidnightMemoRace.test_inside_buffer_yesterday_not_persisted`)。哨兵第一條擋
+        「fixture 被刪」,這一條擋「時刻被凍到窗內 / 別的測試把 `_now_time` 改回真牆鐘」。"""
+        today, yesterday = _dt.date(2026, 7, 29), _dt.date(2026, 7, 28)
+        cache = BarsCache(ttl=999.0)
+        await build_minute(
+            _Fetcher([[bar("2026-07-28 23:59")], []]), cache, "F:TXF", 2, today, session="allday"
+        )
+        assert cache.hist_missing("F:TXF:allday", yesterday, yesterday) == []
+
 
 class TestMidnightMemoRace:
     """TZ-2:台北剛過午夜的第一個請求會把「昨日」永久化(近全模式最痛)。
