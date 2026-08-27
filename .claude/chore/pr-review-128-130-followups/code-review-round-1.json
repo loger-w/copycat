@@ -1,0 +1,30 @@
+{
+  "round": 1,
+  "fixed_point": "c37e0401",
+  "reviewed_head": "a58e37ee",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "spec_source": ".claude/chore/pr-review-128-130-followups/change-spec.md(handoff)+ docs/superpowers/specs/pr-128/129/130-review.md",
+  "whitelist": {"items": 5, "pass": 5, "note": "三 PR 行為逐 bit 不變,除 #130 F-01;Spec 軸白名單選集 593 passed"},
+  "commit_separation": "PASS(test 紅先行在最前 → fix → refactor ×3 → test → chore ×2;S-7 指 1f3fe386 內含新增斷言屬 🟢 混 🔵 —— 判斷題,CLAUDE.md §6 只禁三類混,不重寫歷史)",
+  "standards": [
+    {"id": "S-1", "severity": "P2", "kind": "hard", "title": "next-time 新增章節時把 `## 2026-08-27(feat/txf-intraday-overlay …)` 標題整行蓋掉,原 5 筆歸屬遺失", "disposition": "fixed", "commit": "1e3dfcbf(標題還原在本輪章節之後)"},
+    {"id": "S-2", "severity": "P3", "title": "章節標 2026-08-28,但事實發生在 08-27 深夜", "disposition": "fixed", "commit": "1e3dfcbf(章節 / 內文 / verification 全改 08-27)"},
+    {"id": "S-3", "severity": "P3", "title": "test_models.py:158 104 字元超 line-length 100(E501 未選);_parse_legs 簽名手動折三行", "disposition": "fixed", "commit": "2bd63ccc(helper 後該行 < 100;簽名回單行)。整檔 ruff format 不套:三檔 master 版本來就未 format,新 hunk 與既有行同形"},
+    {"id": "S-4", "severity": "P3", "kind": "judgement", "title": "兩條 parity 測試各自 parents[N] + regex 讀前端原始碼(Duplicated Code)", "disposition": "fixed", "commit": "2bd63ccc(tests/helpers/frontend_source.py::read_frontend_source,REPO_ROOT 只算一次)"},
+    {"id": "S-5", "severity": "P3", "kind": "judgement", "title": "_parse_legs 輸出參數 + tuple[object, object] 裸奔(Primitive Obsession)", "disposition": "fixed", "commit": "2bd63ccc(_BadSparse / _ParsedLegs NamedTuple 回傳;同 Spec P-3)"},
+    {"id": "S-6", "severity": "P3", "kind": "judgement", "title": "tail=None 身兼「不追加腿」與「base 改 ZZ」(Mysterious Name)", "disposition": "fixed", "commit": "2bd63ccc(parametrize 改 (tail, base))"},
+    {"id": "S-7", "severity": "P3", "kind": "judgement", "title": "純註解 .py 編輯一筆歸 refactor 一筆歸 chore;1f3fe386 refactor(tests) 內含新增斷言", "disposition": "accepted", "note": "不重寫本地歷史;下輪分 commit 時純註解一律歸 chore、新增斷言另拆 test commit"}
+  ],
+  "spec": [
+    {"id": "P-1", "severity": "P2", "title": "CLAUDE.md §4 sparse 句仍寫「一律無效並印 WARNING」,F-01 後只在設定檔被採用時印 —— 契約條與 code 又漂一次", "disposition": "fixed", "commit": "1e3dfcbf"},
+    {"id": "P-2", "severity": "P3", "title": "「分時自癒窗反而從這一點開始」不精確:_broadcast_loop 在 watch 窗內 heal_window 亦 True,自癒 09:00 起全程,_WATCH_END 只是換判準(承襲 review 原句)", "disposition": "fixed", "commit": "1e3dfcbf(CLAUDE.md)+ 2bd63ccc(test_index_engine docstring)"},
+    {"id": "P-3", "severity": "P3", "title": "_parse_legs 可變 out-param,review 建議的是蒐集後回傳", "disposition": "fixed", "commit": "2bd63ccc(同 S-5)"},
+    {"id": "P-4", "severity": "P3", "title": "next-time 新增 test_ws_streams_index_payload flake 條目不在 22 條(scope creep,如實揭露)", "disposition": "fixed", "commit": "1e3dfcbf(條目標「非本輪 finding,如實揭露」保留)"}
+  ],
+  "findings_22": {
+    "128": {"F-01": "PASS", "F-02": "PASS", "F-03": "PASS", "F-04": "PASS", "F-05": "PASS", "F-06": "PASS(user 拍板搬 tests/server)"},
+    "129": {"F-01": "PASS", "F-02": "PASS(user 拍板搬 profit_rows;逐 byte 相同)", "F-03": "PASS", "F-04": "PASS(七份於 6f1e6420^ 實數 6+1)", "F-05": "PASS(user 拍板補 parity)", "F-06": "PASS", "F-07": "PASS(no-op + next-time)", "F-08": "PASS"},
+    "130": {"F-01": "PASS(採用設定檔時 WARNING 照印,22 passed)", "F-02": "PASS(prod code 零殘留)", "F-03": "PASS", "F-04": "PASS(2e31a9bc 片段 git show 逐字正確)", "F-05": "PASS", "F-06": "PASS", "F-07": "PASS", "F-08": "PASS"}
+  },
+  "increment_after_review": {"commits": ["2bd63ccc", "1e3dfcbf"], "scope": "NamedTuple 回傳 + helper + parametrize(🔵)/ next-time、CLAUDE.md、docstring、artifact(chore)", "check": "主 agent 機械快篩:130 passed(corr_config / test_models / test_index_engine / test_main_wiring)+ ruff / pyright 0;全量 pytest 見 verification §5"}
+}

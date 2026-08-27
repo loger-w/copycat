@@ -43,9 +43,10 @@
 4. 前端只動 `types.ts` 一行註解位移:`tsc -b` / eslint / vitest 2848 passed / react-doctor 0 issue,PASS。
 5. 測試重組不改斷言語意:`_PNL_3357` → `RAW_PNL_MARGIN` 逐 byte 相同(pr-129 4.3b 已比對);哨兵改值 + 斷言只加不減,PASS。
 
-## 5. 自動化 gate(HEAD `a58e37ee`)
+## 5. 自動化 gate
 
-- `pytest -q`:`1 failed, 3134 passed`(195 s)。紅的是 `tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload`
+- review 收修後 HEAD `1e3dfcbf`:`pytest -q` **`3135 passed`**(192 s);`ruff check` PASS;`pyright` 0。
+- review 前 HEAD `a58e37ee`:`pytest -q`:`1 failed, 3134 passed`(195 s)。紅的是 `tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload`
   —— 單跑 1 紅 5 綠、整檔 11 passed;失敗形狀 `assert None == 42039920`(`/ws/index` 首則是初始快照而非 quote 後狀態),
   index routes / ws / engine 不在 diff → 順序型 flake,依 branch-lifecycle 規則記 next-time(`a58e37ee`)。
 - `ruff check copycat tests` PASS;`pyright` 0 errors;`copycat validate` 42/42 PASS。
@@ -58,9 +59,16 @@
   `git show --stat` 對照發現,`git rm --cached` + amend(commit 未推)還原為 untracked。教訓:多 session 並行時
   `git add` 只點名檔案、不用目錄;commit 後看 `--stat`。
 
-## 7. Two-axis review
+## 7. Two-axis review(round 1,fixed point `c37e0401` → `a58e37ee`;兩軸 opus)
 
-(待 round 1 結果補;JSON 落 `code-review-round-1.json`)
+- Standards 7 條(1 P2 + 6 P3):S-1 next-time 原標題被蓋(P2)/ S-2 日期 / S-3 行長與簽名 / S-4 前端原始碼讀取重複 /
+  S-5 輸出參數 + Primitive Obsession / S-6 `tail=None` 雙語意 / S-7 commit 分類(判斷題)。**6 fixed、1 accepted**。
+- Spec 22/22 PASS(每條有 HEAD 落點,逐 byte / `git show` / 實數核過);另 4 條(1 P2 + 3 P3):P-1 CLAUDE.md sparse 句
+  沒跟上 F-01(P2)/ P-2「分時自癒窗從這一點開始」不精確 / P-3 out-param / P-4 flake 條目超範圍。**4 fixed**。
+- 收修 commit:`2bd63ccc`(🔵 `_ParsedLegs` NamedTuple、`tests/helpers/frontend_source.py`、parametrize 二元組)+
+  `1e3dfcbf`(chore:next-time 標題還原 / 日期、CLAUDE.md 兩句、docstring、artifact)。增量由主 agent 機械快篩
+  (130 passed + ruff / pyright 0)+ 全量 pytest 重跑(§5)。JSON:`code-review-round-1.json`。
+- 教訓:用 `str.replace` 插新章節時 anchor 必須**含在 new 裡**再寫回(S-1 事故:anchor 是原標題,替換後標題消失)。
 
 ## 8. 需 user 過目 / 08-28 待驗
 
