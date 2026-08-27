@@ -11,6 +11,7 @@
   再出「改用預設腿」,正是 finding 描述的誤導組合。
 - `ee916937` fix:`_parse_legs(raw, bad_sparse)` 以輸出參數蒐集 `(key, 原值)`,`load_config` 過完 legs / base 兩道降級檢查
   **確定採用**後才印 WARNING。`test_corr_config.py` 22 passed;`(review S-3)` 尾綴隨「parser 內破例 log」的理由一起消失。
+  (round 1 S-5 / P-3 收修後 `2bd63ccc` 改為 `_parse_legs(raw) -> _ParsedLegs | None` 回傳 NamedTuple,不再用輸出參數;見 §7。pr-131 F-02)
 - 語意界線:採用設定檔的情況(既有 `test_sparse_flag_only_accepts_json_true…` 六腿 / null 腿)WARNING **照印**,訊息字面不變;
   只有整份被丟時不印(那時「改用預設腿」才是對的訊號)。
 

@@ -50,7 +50,7 @@ _TRADING_END = _dt.time(13, 35)
 #: (誤判)」與「訂閱真死 + stub snapshot」(重掛 snapshot 會清 attempts,見 next-time),本輪按誤判處理,
 #: 次一交易日 13:36 以 `/api/index/state` 的 twse 最後更新時戳反證。
 #: 閘只管看門狗與健檢,**不退訂**:13:30 收盤那筆推播照收。代價(user 2026-08-27 知情拍板):訂閱若剛好在
-#: 13:25–13:30 死掉,加權分時由 index_engine 尾段回補補齊(有日曆 → 13:25 起到午夜;無日曆退回
+#: 13:25–13:30 死掉,加權分時由 index_engine 尾段回補補齊(有日曆且為交易日 → 13:25 起到午夜;無日曆退回
 #: `_HEAL_TAIL_END` 13:40),現價欄不靠回補(`_merge_backfill` 只寫 minutes)—— 但同一發自癒會連帶重掛
 #: IX0001(`index_engine._subscribe_and_backfill` 重抓 1K 與 `subscribe_symbol` 是同一發),重掛的 SUBQUOTE
 #: snapshot 即一則推播 → 現價欄**應會**跟著回來(pr-128 F-01;未實測,次一交易日 13:36 以 `/api/index/state`

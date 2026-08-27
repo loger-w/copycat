@@ -1,3 +1,12 @@
+## 2026-08-28(/pr-review #131 回溯 review 留尾)
+
+- [ ] **`tests/server/test_bars.py` 5 條在台北 00:00–00:10 會紅**(pr-131 review 順帶發現;reviewer 00:04 實跑 `5 failed`,
+  `bars._now_time` 固定 09:00 重跑 51 passed):`copycat/server/bars.py:510` `hold = hi == yesterday and _now_time() < MIDNIGHT_BUFFER_END`
+  午夜緩衝窗吃真牆鐘;該檔部分測試已 `monkeypatch.setattr(bars_mod, "_now_time", …)`(:594),這 5 條沒凍結。處置 = 5 條補同一把
+  monkeypatch(或 autouse fixture 凍到 09:00,要驗緩衝窗的測試自己覆寫)。與任何 PR 無關,純測試牆鐘相依。
+- [ ] **pr-131 F-04 commit 慣例**(no-op,已 merge 不重寫):純註解 / JSDoc 位移一律 `chore(<scope>)` 不用無 scope 的 `refactor:`;
+  測試重組內含新增斷言時另拆 `test` commit。
+
 ## 2026-08-27(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
 
 - [ ] **artifact 引 rebase 前 SHA 在 #129 重演**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.1
@@ -65,7 +74,7 @@
   健檢閘窗(上界 13:35 是啟發式)」;`corr_source.py:61` / `app.py:416` 讀者只看得到名字,正是 #126 誤共用的同一條失效路。
   index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。
 - [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
-  13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
+  13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆且為交易日 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
   pr-126 F-05);現價欄不靠回補(`_merge_backfill` 只寫 minutes),但同一發自癒會連帶重掛 IX0001
   (`_subscribe_and_backfill`),重掛的 SUBQUOTE snapshot 即一則推播 → 現價欄**應會**跟著回來(pr-128 F-01,未實測;
   08-28 13:36 `/api/index/state` 現價欄 vs 時戳核);(b) 13:25–13:35 新加的**指數**訂閱不武裝健檢。
