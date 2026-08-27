@@ -114,9 +114,12 @@ class TestLoadConfig:
         assert cfg.legs[-1].key == "TSM"
         assert cfg.legs[-1].symbol == "TC.F.CME.TSM.HOT"
 
-    def test_sparse_flag_is_optional_and_only_literal_true_counts(self, tmp_path: Path) -> None:
+    def test_sparse_flag_is_optional_and_only_literal_true_counts(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """`sparse` 選配:缺 = False;只認 JSON 字面 true(字串 "yes" / 1 不算 —— 寧可少豁免一腿
-        多幾發 churn,也不要把打錯字的腿悄悄從 R2 拿掉)。"""
+        多幾發 churn,也不要把打錯字的腿悄悄從 R2 拿掉)。但「靜默丟掉旗標」要有訊號(pr-120 F-02):
+        設定檔是給人手改的,打成字串 → 該腿修復不生效、退回每 240 s 一發,只能事後 grep log 才知道。"""
         path = tmp_path / "correlation.json"
         legs = [
             {"key": "TXF", "label": "台指", "symbol": "TC.F.TWF.TXF.HOT", "source": "futures_engine"},
@@ -128,9 +131,14 @@ class TestLoadConfig:
         ]
         path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
 
-        cfg = load_config(path)
+        with caplog.at_level("WARNING"):
+            cfg = load_config(path)
 
         assert [leg.sparse for leg in cfg.legs] == [False, True, False, False, False]
+        bad = [r.message for r in caplog.records if "sparse" in r.message]
+        assert any("NQ" in m and "'yes'" in m for m in bad), bad  # 字串 → 點名
+        assert any("YM" in m and "1" in m for m in bad), bad  # 整數 → 點名
+        assert not any("SXF" in m for m in bad), bad  # 合法 true 不吵
 
     def test_sparse_on_a_non_tc4_leg_warns_but_does_not_degrade(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture

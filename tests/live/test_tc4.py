@@ -1331,7 +1331,7 @@ class TestHealSparseSymbol:
         assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_B), ("SUBQUOTE", HEAL_B)]
         assert src._heal_attempts[HEAL_B] == 1  # 走 R1 記帳,退避階梯照常
 
-    def test_sparse_symbol_does_not_keep_r1_from_firing(self) -> None:
+    def test_sparse_symbol_does_not_trigger_r1_while_another_leg_is_alive(self) -> None:
         # R1 看的是「全部都靜默」(max of last push):稀疏腿本來就常靜默,不能因為它在
         # 母體裡就把其他腿活著時的 R1 誤觸發 —— 這條鎖的是反方向:HEAL_A 活著 → 不整批重掛
         api = FakeApi({})
