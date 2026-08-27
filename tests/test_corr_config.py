@@ -161,6 +161,39 @@ class TestLoadConfig:
         assert cfg is not DEFAULT_CONFIG and len(cfg.legs) == 2
         assert any("TXF" in r.message and "sparse" in r.message for r in caplog.records)
 
+    @pytest.mark.parametrize(
+        "tail",
+        [
+            pytest.param({"key": "ES"}, id="later-leg-missing-field"),
+            pytest.param(None, id="base-absent-from-legs"),
+        ],
+    )
+    def test_bad_sparse_flag_is_not_reported_when_the_whole_file_is_discarded(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, tail: dict | None
+    ) -> None:
+        """壞 sparse 的 WARNING 語意是「只掉這面旗、其餘生效」;整份設定檔隨後被降級丟掉時
+        (後面腿缺必要欄 / base 不在 legs)那句就是誤導 —— 兩行 log 併看會去修旗標而不是去修
+        真正讓整份失效的那一腿(pr-130 F-01)。旗標警告只在 load_config 確定採用這份 config 後才印。"""
+        path = tmp_path / "correlation.json"
+        legs: list[dict] = [
+            {"key": "TXF", "label": "台指", "symbol": "TC.F.TWF.TXF.HOT", "source": "futures_engine"},
+            {"key": "NQ", "label": "納指", "symbol": "TC.F.CME.NQ.HOT", "source": "tc4", "sparse": "yes"},
+        ]
+        base = "TXF"
+        if tail is not None:
+            legs.append(tail)
+        else:
+            base = "ZZ"
+        path.write_text(json.dumps({"base": base, "legs": legs}), encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            cfg = load_config(path)
+
+        assert cfg == DEFAULT_CONFIG
+        messages = [r.message for r in caplog.records]
+        assert any("改用預設腿" in m for m in messages), messages
+        assert not any("sparse" in m for m in messages), messages
+
     def test_unknown_fields_are_ignored_not_treated_as_broken(self, tmp_path: Path) -> None:
         """`_comment` 說明欄不得觸發降級(impl review P2)。"""
         path = tmp_path / "correlation.json"
