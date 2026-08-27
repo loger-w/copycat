@@ -454,7 +454,12 @@ def test_price_type_not_applied_across_days() -> None:
 
 def test_price_type_binding_rejects_same_seq_different_order() -> None:
     """review R6 ST1:夜盤市價單記 (0824, 0825),隔日日盤同 seq 的**另一張單**(他處下的
-    限價)不得被標成市價 —— 標的或方向任一不符就不帶出;完全相符才是同一張。"""
+    限價)不得被標成市價 —— 標的或方向任一不符就不帶出;完全相符才是同一張。
+
+    s3 同時也是 N075 **已知未封的誤標窗**(08-28 user 拍板:程式不封洞):隔日他處下的
+    **同檔同方向**限價單若又撞同 seq,輸入與 s3 逐字相同,store 分不出「同一張」與
+    「另一張」→ 照樣標成市價。關窗的路徑與條件見 `store.note_price_type` docstring /
+    next-time 08-28;到時 s3 的語意要重看,不是加一條新案。"""
     s = CapitalStore()
     s.note_price_type(
         SEQ_A, "market", "20260824", trade_date="20260825", stock_no="2330", buy_sell="B"
