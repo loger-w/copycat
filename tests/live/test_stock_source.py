@@ -9,7 +9,12 @@ from typing import Callable
 
 import pytest
 
-from copycat.live.stock_source import StockQuoteSource, stock_symbol, stock_window
+from copycat.live.stock_source import (
+    StockQuoteSource,
+    in_trading_hours_now,
+    stock_symbol,
+    stock_window,
+)
 from copycat.live.tc4 import BARS_POLL_DEADLINE, HistoryTimeoutError
 from tests.helpers.tc4_fakes import FakeApi, ok
 
@@ -1222,3 +1227,15 @@ class TestBackfillStubSignature:
             ticks = src.backfill("2330")
         assert ticks == []
         assert "疑似凍結 stub" in caplog.text
+
+
+class TestTradingHoursGate:
+    """`in_trading_hours_now` 是個股 session 看門狗 / 健檢、index session、corr 台積電腿共用的一把閘
+    (完整邊界表在 tests/live/test_corr_source.py::TestTwsLegClock);這裡只釘本檔常數的兩個端點,
+    讓改 `_TRADING_START` / `_TRADING_END` 時本檔自己會紅(review Standards P3)。"""
+
+    def test_start_inclusive_end_exclusive(self) -> None:
+        assert in_trading_hours_now(_dt.time(8, 29, 59)) is False
+        assert in_trading_hours_now(_dt.time(8, 30, 0)) is True  # 含起點:試撮起有推播
+        assert in_trading_hours_now(_dt.time(13, 24, 59)) is True
+        assert in_trading_hours_now(_dt.time(13, 25, 0)) is False  # 不含終點:收盤試撮起交易所不更新
