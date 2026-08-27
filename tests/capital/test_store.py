@@ -317,15 +317,12 @@ def test_set_positions_carries_profit_by_composite_key() -> None:
     )
     assert len(s.positions()) == 2  # 同檔資+集保並存各佔一列
     m = s.position_for("3357", "margin")
-    c = s.position_for("3357", "cash")
-    assert m is not None and m.avg_price == 311.75 and m.avg_source == "broker"
-    assert c is not None and c.avg_price is None and c.avg_source is None  # 異種類是另一列,不沿用
-    m = s.position_for("3357", "margin")
     assert m is not None and m.qty == 4
-    assert m.avg_price == 311.75
+    assert m.avg_price == 311.75 and m.avg_source == "broker"  # 同種類:均價與來源成對沿用
     assert m.pnl_base == -74636.0 and m.pnl_base_price == 288.0 and m.pnl_cost == 935000.0
     c = s.position_for("3357", "cash")
     assert c is not None and c.qty == 1
+    assert c.avg_price is None and c.avg_source is None  # 異種類是另一列,不沿用
     assert c.avg_price is None  # 集保列是另一列,不沿用融資成本
     assert c.pnl_base is None and c.pnl_base_price is None and c.pnl_cost is None
 
@@ -770,7 +767,9 @@ def test_snapshot_carries_avg_source_with_avg_and_recounts_today_qty() -> None:
     """快照落地:均價沿用時來源一起沿用;today_qty 由當日成交(_orders = 當日 backlog)重算:
     今天買 3 張、券商說共 5 張 → today_qty 3(其餘 2 張是過往庫存)。"""
     s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="4989", qty=2, avg_price=80.02, avg_source="broker")])
+    s.set_positions(
+        [Position(market="sec", stock_no="4989", qty=2, avg_price=80.02, avg_source="broker")]
+    )
     assert s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="3000", price="81.0")) is True
     s.set_positions([Position(market="sec", stock_no="4989", qty=5, avg_price=None)])
     p = s.position_for("4989")
