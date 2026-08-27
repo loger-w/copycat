@@ -95,10 +95,12 @@ export function positionEcon(
   const long = qty > 0;
   const q = lots * 1000;
   // 含買進手續費的每股成本:券商均價已含;純成交價要加;來源未知(null)明確走修前口徑。
-  // 舊後端 payload 整欄不存在時執行期是 undefined(型別外),先歸一成 null 再進 switch ——
-  // 不用 default 接:switch 保持 exhaustive,AvgSource 日後加值會在這裡 tsc 紅(cost 未賦值),
-  // 不會靜默落進修前口徑
-  const avgSource: AvgSource | null = input.avgSource ?? null;
+  // 執行期歸一走**白名單**(pr-119 F-02):舊後端整欄缺席是 undefined、後端先加值 / 前端 dist 未重 build
+  // 的窗口是值域外字串 —— 兩種都是型別外,`?? null` 只擋前者,後者三個 case 全不中、cost 未賦值 → NaN
+  // (與 #118 症狀同形;上面 todayQty 走 Number.isFinite 同一姿態)。switch 本體仍 exhaustive、不用 default:
+  // AvgSource 日後加值會在這裡 tsc 紅(cost 未賦值),不會靜默落進修前口徑
+  const raw = input.avgSource;
+  const avgSource: AvgSource | null = raw === "broker" || raw === "fill" ? raw : null;
   let cost: number;
   switch (avgSource) {
     case "broker":
