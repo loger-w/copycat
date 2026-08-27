@@ -54,9 +54,11 @@ pytest tests/live/test_tc4.py -k HealSparse
 FAILED TestHealSparseSymbol::test_sparse_symbol_is_exempt_from_r2
 FAILED TestHealSparseSymbol::test_sparse_symbol_does_not_trigger_r1_while_another_leg_is_alive(原名 …_keep_r1_from_firing)
 2 failed, 2 passed
-git checkout -- copycat/live/tc4.py → 4 passed(grep MUTANT = 0)
+git checkout -- copycat/live/tc4.py → 4 passed(兩行以 `# MUTANT` 佔位取代,還原後 grep MUTANT = 0)
 ```
-紅的兩條正是釘 R2 豁免的兩條;R1 仍救稀疏腿那條照綠(R1 路徑不經 `continue`)—— `continue` 是 load-bearing。
+紅的兩條:`is_exempt_from_r2` 直接釘 R2 豁免;`…while_another_leg_is_alive` 是另一腿活著 → R1 結構上不成立,
+唯一可能的重掛只剩 R2 —— 撤掉 `continue` 後稀疏腿走 R2 被重掛,所以也紅。R1 仍救稀疏腿那條照綠
+(R1 路徑不經 `continue`)—— `continue` 是 load-bearing。
 簽名層的紅由 §1 涵蓋不重複計。
 
 ## 9. Blast radius
