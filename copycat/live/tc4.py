@@ -336,10 +336,11 @@ class TC4QuoteSource:
         #: 在自己休市段照樣落進 R2「從未推播」母體,每 300s 一發 UNSUB+SUB。
         #: 回 False 的 symbol 整輪不進母體(R1 的全場靜默判定也扣掉它)。
         heal_symbol_active: Callable[[str], bool] = always_symbol_active,
-        #: **稀疏腿**(corr SXF 費半:日盤 94.4% 時間真沒成交)豁免 R2 —— 對它「靜默 240s」
-        #: 是常態不是死亡,每發都是假警報(2026-08-27 日盤 11 發全 attempt 1)。與
-        #: `heal_symbol_active` 的差別:**仍留在 R1 母體**,整條 session 死掉時跟著整批重掛;
-        #: 時段閘那種整輪扣掉的做法會讓它在 session 死時永遠沒人救。
+        #: **稀疏腿**(corr SXF 費半,事實見 tc4-market-facts)豁免 R2 —— 對它「靜默 240s」是
+        #: 常態不是死亡,每發都是假警報。與 `heal_symbol_active` 的差別:**仍留在 R1 母體**,
+        #: 整條 session 死掉時跟著整批重掛;時段閘那種整輪扣掉的做法會讓它在 session 死時
+        #: 永遠沒人救。邊界:母體**只剩**稀疏腿時 R1 會接手(靜默 > t1 就整批重掛,退避階梯
+        #: 照走)—— 這是「沒有別的腿可對照」下的保守選擇,不是 bug;單腿 session 別用本旗標。
         heal_sparse_symbols: frozenset[str] = frozenset(),
         heal_poll_secs: float = 5.0,
     ) -> None:

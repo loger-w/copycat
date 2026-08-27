@@ -27,8 +27,7 @@ from copycat.capital import factory as capital_factory
 from copycat.capital.client import CapitalClient
 from copycat.server import build_info, breadth_fetch, finmind_token
 from copycat.server.audit import AuditWriteError
-from copycat.corr_config import CorrConfig
-from copycat.corr_config import load_config as load_corr_config
+from copycat.corr_config import CorrConfig, load_config as load_corr_config
 from copycat.server.breadth_engine import (
     BreadthEngine,
     DailyPricesFetch,
@@ -403,8 +402,9 @@ def _default_corr_source(
     # 現貨腿(F4 台積電)吃**個股** session 那把 `in_trading_hours_now`,不是期貨那把:
     # 現貨 13:30 收盤且無夜盤,套期貨閘 = 整個夜盤都在對一條收盤了的腿空 churn。
     #
-    # 稀疏腿(SXF 費半)豁免 R2:日盤 4 分鐘沒成交是常態(2026-08-27 11 發全 attempt 1),
-    # 旗標來自設定檔 `sparse`,與時段閘正交 —— 它仍留在 R1 母體。
+    # 稀疏腿(SXF 費半,事實見 tc4-market-facts)豁免 R2:旗標來自設定檔 `sparse`,與時段閘
+    # 正交 —— 它仍留在 R1 母體。只看 `tc4_legs()`:base 腿不由本 source 訂閱,標了也沒有 R2 可豁免
+    # (load_config 會對這種誤標印 WARNING)。
     cfg = load_corr_config() if config is None else config
     return CorrQuoteSource(
         port=_tc4_port(),
@@ -883,7 +883,9 @@ def create_app(
                 # __main__ 顯式傳 DEFAULT_CORR 即建真 source(測試未傳 → None → 零連線)
                 corr_cfg = load_corr_config()  # source(稀疏腿)與引擎(腿組)同一份,只讀一次
                 if corr_source is DEFAULT_CORR:
-                    resolved_corr: CorrSource | None = _default_corr_source(trading_calendar, corr_cfg)
+                    resolved_corr: CorrSource | None = _default_corr_source(
+                        trading_calendar, corr_cfg
+                    )
                 else:
                     resolved_corr = cast("CorrSource | None", corr_source)
                 if resolved_corr is None:

@@ -37,8 +37,9 @@ class Leg:
     label: str  # 前端顯示用繁中名(後端帶,前端不寫死對照表)
     symbol: str
     source: str  # SOURCE_TC4 = 本引擎訂閱 / SOURCE_FUTURES_ENGINE = 讀既有引擎狀態
-    #: 稀疏腿:日盤本來就常 4 分鐘沒成交(SXF 費半 94.4% 靜默),豁免 TC4 R2 單 symbol 自癒、
-    #: 仍吃 R1 整批重掛(`tc4.TC4QuoteSource(heal_sparse_symbols=)`)。設定檔選配 `"sparse": true`。
+    #: 稀疏腿(事實見 tc4-market-facts SXF 節):豁免 TC4 R2 單 symbol 自癒、仍吃 R1 整批重掛
+    #: (`tc4.TC4QuoteSource(heal_sparse_symbols=)`)。設定檔選配 `"sparse": true`,只對 `source: tc4`
+    #: 的腿有意義(base 腿不由 corr source 訂閱)。
     sparse: bool = False
 
 
@@ -127,4 +128,12 @@ def load_config(path: Path | None = None) -> CorrConfig:
     if base not in {leg.key for leg in legs}:
         logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
         return DEFAULT_CONFIG
+    for leg in legs:
+        if leg.sparse and leg.source != SOURCE_TC4:
+            # 不降級(腿組仍可用),但不能靜默:app 只對 tc4_legs() 算豁免集合,這個旗標會被丟掉
+            logger.warning(
+                "corr 設定檔 %s 標了 sparse 但 source=%s(非 tc4,不由本 source 訂閱)—— 旗標無效",
+                leg.key,
+                leg.source,
+            )
     return CorrConfig(legs=legs, base=base)
