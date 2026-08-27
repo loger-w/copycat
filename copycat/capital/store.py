@@ -507,7 +507,10 @@ class CapitalStore:
         """回傳的是物件**參考**(route 在鎖外 asdict):已發布的 Position 不可就地變更,
         要改就 dataclasses.replace 發布新物件(`_apply_fill_locked` 的寫法),否則撕裂讀
         (新 pnl 配舊基準價)。損益回填(client._on_profit_complete)改的是尚未發布的
-        pending 列,不在此限。"""
+        pending 列,不在此限。`set_positions` 的 carry-over 也是就地寫,寫的是尚未發布的新一輪列;
+        唯一例外是 `_finalize_positions(self._stale_fut_positions())` 那條路傳回**已發布**的 fut 物件,
+        此時 `p is prev`、五行皆自我賦值才沒撕裂 —— 改那五行(補別的欄 / 換來源)前先確認這條仍成立
+        (pr-119 F-06)。"""
         with self._lock:
             return list(self._positions.values())
 
