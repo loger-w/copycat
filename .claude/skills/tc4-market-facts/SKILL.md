@@ -159,6 +159,13 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   domain)` 的 domain 參數為此而開(`FUTURES_MINUTE_DOMAIN`);(e) 冷載入耗時 0.02–0.04s,
   不需非同步化。(Trigger:指數/期指歷史 K 線 / 量副圖 / 分鐘域轉換)
 
+- **期指 `ReferencePrice` = 期交所當日結算價,不是日盤收、不是夜盤收**(2026-08-27 實測,/pr-review 127 F-03):
+  16:34(夜盤已開)`/api/futures/state` TXF `ref` = 46064;FinMind `TaiwanFuturesDaily` TX 202609 同日
+  `settlement_price` = 46064、日盤 `close` = 46078、after_market `close` = 45993。故日盤 08:45 起看到的 `ref`
+  = 前一交易日結算價,夜盤 15:00 起換成當日結算價 —— 15:00 起算的一天只有一個基準。個股分時圖「台指期」
+  疊線的相對 % 與期貨 tab 漲跌色都拿這一格。單筆樣本;結算價與收盤價恰好相等的日子分不出來,要再驗挑差異日。
+  (Trigger:任何拿期指 `ref` 當昨收 / 算 % 的地方)
+
 ## 海外商品(2026-07-29/30 實證,realtime-correlation)
 
 - **台期交自己就有美國四大指數期貨**:`UDF` 道瓊 / `SPF` 標普 / `UNF` 那斯達克 / **`SXF` 費半**
