@@ -1,4 +1,14 @@
-## 2026-08-27(feat/txf-intraday-overlay 個股分時圖疊台指期 留尾)
+## 2026-08-28(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
+
+- [ ] **artifact 引 rebase 前 SHA 在 #129 重演**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.1
+  「47/56 dangling」流程 finding 的續集):`.claude/bug/breakeven-review-followups/verification.md` §1/§2 與 review JSON 的 8 個 SHA
+  全是 rebase 前的,乾淨 clone 上 `git show` unknown revision。本輪不回改。處置候選 = (a) merge 後補寫最終 SHA(多一個
+  收尾步驟,branch-lifecycle 收尾節加一行);(b) artifact 改引「PR 內相對順序 + commit subject」不引 SHA。要拍板一次寫進
+  `branch-lifecycle`,不然每個 PR 都會再犯。
+- [ ] **`tests/capital/test_client.py::_BAL_3357` 12 處內嵌 = `test_balance.RAW_C_MARGIN` 同型重複**(pr-129 F-02 附帶):
+  庫存報告列(19 欄)在 test_client 內嵌 12 次、與 test_balance 那份逐字相同;群益改欄形只改到一份、另一份靜默留舊欄形
+  —— 與 pr-119 F-05 / pr-129 F-02 同坑。處置 = 比照 `profit_rows.py` 開 `balance_rows.py`(或併同一模組)收成單一定義處。
+
 
 - [ ] **`src/App.test.tsx`「capital WS 唯一掛載」負載型 flake**(08-27 晚 fix/breakeven-review-followups 三次全量 vitest 與
   全量 pytest **並跑**時 3/3 紅、單獨跑 3/3 綠 2848 passed):該測試 `waitFor` 預設 1 s 等兩個 lazy 頁面掛載,並行負載下 1.8 s。
@@ -40,10 +50,14 @@
   index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。
 - [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
   13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
-  pr-126 F-05)但**現價欄停在最後一筆推播**(`_merge_backfill` 只寫 minutes);(b) 13:25–13:35 新加的**指數**訂閱不武裝健檢。
-  個股側不再受影響(閘留 13:35)。pr-126 F-02 校正一併記下:個股當日重補路徑**有** —— `set_main_contract`(手動切主圖)
-  與 `_handle_reconnect`(斷線重連)會重補,只有群組成員 60 s 輪詢被 `_backfilled` 擋住;08-27 前那句「個股沒有當日重補」錯。
-  兩條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測。
+  pr-126 F-05);現價欄不靠回補(`_merge_backfill` 只寫 minutes),但同一發自癒會連帶重掛 IX0001
+  (`_subscribe_and_backfill`),重掛的 SUBQUOTE snapshot 即一則推播 → 現價欄**應會**跟著回來(pr-128 F-01,未實測;
+  08-28 13:36 `/api/index/state` 現價欄 vs 時戳核);(b) 13:25–13:35 新加的**指數**訂閱不武裝健檢。
+  個股側不再受影響(閘留 13:35)。pr-126 F-02 / pr-128 F-04 校正一併記下:個股當日重補入列點有五個,**在試撮期訂閱死掉
+  這個情境下**會出手的只剩 `set_main_contract`(手動切主圖)與 `_handle_reconnect`(斷線重連);「漲跌停值變」
+  (`stock_engine.py` 收件人含 `_backfilled`,只在 upper / lower 真的變動時)與逾時重排該情境下不觸發,群組成員
+  60 s 輪詢被 `_backfilled` 擋住;08-27 前那句「個股沒有當日重補」錯。
+  兩條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測 —— 現價欄若真的回來,第二段閘的價值只剩 (b)。
 - [ ] **IX0001 收盤最後一筆推播幾點到**:index 閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
   (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
   row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`

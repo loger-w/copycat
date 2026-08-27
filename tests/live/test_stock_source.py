@@ -1244,7 +1244,7 @@ class TestTradingHoursGate:
 
 
 class TestIndexHealWindowGate:
-    """`in_index_heal_window_now` = **只有** index session(IX0001 / 櫃買)吃的自癒 / 健檢閘:
+    """`in_index_heal_window_now` = **只有** index session(IX0001;櫃買走 MIS poll 不吃這把)吃的自癒 / 健檢閘:
     收盤試撮 13:25 起指數不更新,看門狗每 30 s 誤判 19 發 / 日(pr-126);個股在同一段仍有簿更新
     推播,所以個股 / corr 現貨腿留 `in_trading_hours_now` 的 13:35(pr-126 F-01 per-consumer)。"""
 

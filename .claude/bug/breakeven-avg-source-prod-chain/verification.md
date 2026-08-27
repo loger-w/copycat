@@ -57,7 +57,8 @@ cd frontend && npx vitest run src/lib/ladder-position.test.ts
 | `c28541f9` | chore | round 1 收修:CLAUDE.md §4 讀者改為 wire 映射點、next-time 期貨列 avg_source 語意缺口、spec 措辭 |
 
 pr-119 F-07 校正(2026-08-27 晚):上表原只列到 `f3fca9cc` 且 §3 B / `0375f3aa` 列寫「default」與出貨 code 相反;三列收修補齊。
-最終形態再經 `fix/breakeven-review-followups`(pr-119 F-02)改為白名單歸一 `raw === "broker" || raw === "fill" ? raw : null`。
+最終形態再經 `fix/breakeven-review-followups`(pr-119 F-02 + review S-2)成為白名單歸一:`ladder-position.ts::isAvgSource` 吃
+`types.ts::AVG_SOURCES`(`AvgSource` 型別由該陣列推導;pr-129 F-06 校正 —— 不引會被取代的三元字面)。
 
 ## 5. 反向驗證(PASS)
 

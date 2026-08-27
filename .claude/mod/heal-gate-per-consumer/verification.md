@@ -39,7 +39,7 @@
 | M1 `_TRADING_END` 13:35 → 13:25(value-only revert) | `TestTwsLegClock[13-25/13-26/13-30-True]` ×3 + `TestTradingHoursGate` → `4 failed, 135 passed` |
 | M2 `_default_index_source` 接回 `in_trading_hours_now` | `test_stock_and_index_heal_gate_ands_the_calendar[index…-True]` + `…two_different_clocks` → `2 failed, 137 passed` |
 | M3 `_INDEX_HEAL_END` 13:25 → 13:35 | `TestIndexHealWindowGate::test_boundary[t4/t5/t6-False]` ×3 + `test_end_matches_index_engine_watchdog_window` → `4 failed, 135 passed` |
-| M4 `_TRADING_END` 比較 `<` → `<=` | `TestTwsLegClock[13-35-False]` + `TestTradingHoursGate` → `2 failed, 101 passed` |
+| M4 `_TRADING_END` 比較 `<` → `<=` | `TestTwsLegClock[13-35-False]` + `TestTradingHoursGate` → `2 failed, 101 passed`(選集 = 兩個 live 檔 103 tests;M1–M3 是三檔 139,test_main_wiring 不碰時鐘值,139 組下應為 2 failed, 137 passed —— pr-128 F-05) |
 
 M4 正好只由 13:35 列擋住 = pr-126 F-06 的註解現在放對列(13:35 列鎖語意、13:25/26/30 列鎖值)。
 

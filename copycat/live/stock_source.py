@@ -35,20 +35,26 @@ _TRADING_START = _dt.time(8, 30)
 #: (tc4-market-facts:TradeStatus=1、`_note_push` 不分成交 / 簿更新),看門狗在那 5 分鐘本來就
 #: 不會誤判(08-26 / 08-27 兩日 log:該窗除整天在發的 6949 外個股零自癒)—— 所以這把**不**跟
 #: index session 一起關 13:25(pr-126 F-01:一起關對個股零收益,純失去收盤集合競價期間
-#: R1 / R2 / 健檢三條救援路;個股當日重補路徑只剩 `set_main_contract` / `_handle_reconnect`,群組
-#: 60 s 輪詢被 `_backfilled` 擋 —— pr-126 F-02)。index session 吃下面另一把 `_INDEX_HEAL_END`。
+#: R1 / R2 / 健檢三條救援路;**在收盤試撮期訂閱死掉這個情境下**,個股當日重補只剩 `set_main_contract`
+#: / `_handle_reconnect` 會出手 —— 另兩個入列點「漲跌停值變」(`stock_engine.py` 只在 upper / lower
+#: 真的變動時,收件人含 `_backfilled`)與逾時重排該情境下不會觸發,群組 60 s 輪詢被 `_backfilled` 擋
+#: —— pr-126 F-02 / pr-128 F-04)。index session 吃下面另一把 `_INDEX_HEAL_END`。
 #: 另三把時窗刻意**不**與本閘對齊:`signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30
 #: (訊號 / 驗證域)、`stock_models` 試撮窗 13:25–13:30(標示用)。
 _TRADING_END = _dt.time(13, 35)
-#: **只有 index session**(IX0001 / 櫃買)吃的閘上界 = 收盤試撮起點,**end-exclusive**(13:25:00 起關;
-#: 與 `index_engine._WATCH_END` 同值同語意,`tests/live/test_stock_source.py::TestIndexHealWindowGate` 鎖)。
+#: **只有 index session**(IX0001;櫃買走 MIS poll 不吃這把)吃的閘上界 = 收盤試撮起點,**end-exclusive**
+#: (13:25:00 起關;與 `index_engine._WATCH_END` 同值同語意,
+#: `tests/server/test_index_engine.py::test_watch_end_is_the_index_heal_gate_boundary` 鎖)。
 #: 交易所 13:25–13:30 只收單不撮合、指數不更新,看門狗在這 5 分鐘 + 13:30 後每 30 s 判一次零推播
 #: (2026-08-27 IX0001 13:25:46 起 19 發 / 日,attempt 全 1)。attempt 恆 1 **無法區分**「交易所不更新
 #: (誤判)」與「訂閱真死 + stub snapshot」(重掛 snapshot 會清 attempts,見 next-time),本輪按誤判處理,
 #: 次一交易日 13:36 以 `/api/index/state` 的 twse 最後更新時戳反證。
 #: 閘只管看門狗與健檢,**不退訂**:13:30 收盤那筆推播照收。代價(user 2026-08-27 知情拍板):訂閱若剛好在
 #: 13:25–13:30 死掉,加權分時由 index_engine 尾段回補補齊(有日曆 → 13:25 起到午夜;無日曆退回
-#: `_HEAL_TAIL_END` 13:40),但**現價欄不會**(回補只寫 minutes);13:25 後新加的指數訂閱不武裝健檢。
+#: `_HEAL_TAIL_END` 13:40),現價欄不靠回補(`_merge_backfill` 只寫 minutes)—— 但同一發自癒會連帶重掛
+#: IX0001(`index_engine._subscribe_and_backfill` 重抓 1K 與 `subscribe_symbol` 是同一發),重掛的 SUBQUOTE
+#: snapshot 即一則推播 → 現價欄**應會**跟著回來(pr-128 F-01;未實測,次一交易日 13:36 以 `/api/index/state`
+#: 現價欄 vs 時戳核)。13:25 後真正關掉的只有 source 層這條 REALTIME watchdog;新加的指數訂閱不武裝健檢。
 _INDEX_HEAL_END = _dt.time(13, 25)
 
 _DAILY_WINDOW_DAYS = 40  # 日 K 抓取視窗(日曆日;25 交易日 + 假日餘裕)
@@ -477,7 +483,7 @@ def in_trading_hours_now(now: _dt.time | None = None) -> bool:
 
 
 def in_index_heal_window_now(now: _dt.time | None = None) -> bool:
-    """index session(IX0001 / 櫃買)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。
+    """index session(IX0001;櫃買走 MIS poll 不吃這把)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。
 
     與 `in_trading_hours_now` 只差上界:指數 13:25 起不更新(19 發 / 日誤判的症狀所在),個股
     同一段仍有簿更新推播。注入點 = `app._default_index_source(in_trading_hours=…)`;個股 /
