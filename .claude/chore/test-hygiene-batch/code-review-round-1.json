@@ -1,0 +1,31 @@
+{
+  "round": 1,
+  "fixed_point": "merge-base(master 第 0 筆「chore(docs): next-time —— artifact 引 SHA 處置 user 拍板 (b) …」;依拍板 (b) 不引 SHA)",
+  "reviewed_head": "分支第 5 筆「chore(docs): next-time 勾銷測試衛生三條 …」",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "spec_source": ".claude/chore/test-hygiene-batch/change-spec.md(handoff)+ docs/next-time.md 08-28 / 08-27 兩節原文",
+  "whitelist": {"items": 3, "pass": 3, "note": "Spec 軸自跑:copycat/ 零 diff;斷言語意不變(全量 3136 passed);五常數 + _BAL_* + 內嵌 13 處 AST 比對 IDENTICAL"},
+  "commit_separation": "PASS(test 紅先行獨立在最前 → fix ×2 → refactor → chore;S-7 / P-2 指 A/B 用 fix(tests) 而非 handoff 寫的 refactor,兩軸都接受:改的是測試自身的錯誤行為,且未與紅先行混)",
+  "standards": [
+    {"id": "S-1", "severity": "P2", "kind": "hard + Duplicated Code", "title": "tests/capital/test_fill_latency.py:21 仍有第三份 19 欄字面 _BAL_ROW(kind T 卻帶資額度 2000/1944);balance_rows docstring「唯一定義處 / 兩消費者」不實,next-time 提前勾銷", "disposition": "fixed", "commit": "第 6 筆 refactor(tests)(_BAL_ROW → RAW_T_HELD 原樣搬入,逐 byte 相同 78 bytes;不改引 RAW_C_MARGIN —— 那會把 kind T 換成 C,與同檔 pnl_variant(…現股) 種類對不上;docstring 改三消費者)"},
+    {"id": "S-2", "severity": "P3", "kind": "hard(backend-conventions 格式對齊)", "title": "test_client.py 新 import 插在 fake_com 之後(非字母序),同筆 test_balance 卻正序", "disposition": "fixed", "commit": "第 6 筆"},
+    {"id": "S-3", "severity": "P3", "kind": "judgement", "title": "_WS_PRE_QUOTE_MAX = 5 過寬,docstring 只點名兩個來源,handoff 建議 2", "disposition": "declined(註解改寫)", "note": "Spec 軸核 index_engine 撥 _dirty 的點:watchdog stale / 分時自癒 / txf 價變 / MIS poll / 回補 swap(:398/460/494/614/629/688),handoff 的 ≤ 2 是照「初始快照」假前提算的;上限只防無界等待,不是「最多幾則雜訊」的契約 —— 第 7 筆把註解改成這個語意,值不動"},
+    {"id": "S-4", "severity": "P3", "kind": "judgement", "title": "TestModuleClock 兩條 assert 都不碰 build_minute,攔不到「別的測試把 _now_time 改回真牆鐘」", "disposition": "fixed", "commit": "第 8 筆 test(server)(補 test_default_clock_persists_yesterday:預設時刻下 build_minute 永久化 yesterday;第一條保留擋 fixture 被刪)"},
+    {"id": "S-5", "severity": "P3", "kind": "judgement(文件失準)", "title": "balance_rows docstring 欄位語意與 balance.py 檔頭不同源([1] T 現股 vs 集保、[2][3] 千元、缺 [4][5])", "disposition": "fixed", "commit": "第 6 筆(docstring 改引 balance.py 檔頭那幾行為準;各列行內註解保留原作者敘事)"},
+    {"id": "S-6", "severity": "P3", "kind": "judgement(Mysterious Name)", "title": "RAW_<種類>_<狀態> 與 profit_rows 的 PNL_<股號>_<種類> 命名不一致,股號連結隱性", "disposition": "declined", "note": "五個名字是 test_balance 既有(本輪原樣搬移,20+ 使用點不動);改名 = 擴大 diff,違反純 🔵 承諾。新加的 RAW_T_HELD 沿同一族命名求一致"},
+    {"id": "S-7", "severity": "P3", "kind": "judgement(§6 scope)", "title": "紅 / 綠一對動同一檔卻兩個 scope:test(server) → fix(tests)", "disposition": "accepted(不重寫歷史)", "note": "type 選用兩軸皆核合規;scope 字面下輪統一(紅先行與其修同 scope)"},
+    {"id": "S-8", "severity": "P3", "kind": "judgement(文件)", "title": "next-time 三條 [x] 用「結論 … 原文:」行內接續形,與檔內既有 ~~原文~~ → 結論 慣例不同", "disposition": "fixed", "commit": "第 9 筆 chore(docs)"}
+  ],
+  "spec": [
+    {"id": "P-1", "severity": "P2", "title": "spec §3 要求的 verification.md + review JSON 未落檔、兩支重現 plugin 未入版控,紅先行證據無法從 repo 重現", "disposition": "fixed", "commit": "第 10 筆 chore(chore-test-hygiene-batch): artifacts(verification.md / code-review-round-1.json / change-spec.md / evidence/freeze_0005.py + race_index_ws.py)"},
+    {"id": "P-2", "severity": "P3", "title": "A / B 打 fix(tests),spec §3 寫 refactor(tests)", "disposition": "accepted", "note": "reviewer 自判 fix 更誠實且未與紅先行混;verification §4 已註明偏離"},
+    {"id": "P-3", "severity": "P3", "title": "迴圈斷 type == index,但 relay 首則可能是 ping;WS_HEARTBEAT_SECS 調小即成新 flake", "disposition": "fixed", "commit": "第 7 筆 fix(tests)(ping continue 不計入上限)"},
+    {"id": "P-4", "severity": "P3", "title": "next-time 新增兩條留尾非越界;第 2 條自稱「純疑問,不是 finding」卻用 [ ];勾銷行「原文:(…」括號脫離主詞", "disposition": "fixed", "commit": "第 9 筆(措辭改「待查,不是本輪 finding」;括號問題隨 S-8 改形消失)"}
+  ],
+  "deviations_from_handoff_both_axes_agree": [
+    "B 前提校正:/ws/index 無 seed 快照 → 修法 (1) 不採,(2) 有界迴圈(Spec 軸核 app.py:1885 / index_engine.py:767 / ws.py:61 成立)",
+    "A 紅先行形態:哨兵取代「00:05 下五條要綠」parametrize(Spec 軸:_now_time 帶微秒恆不等 → fixture 缺席全天恆紅,比 parametrize 強)"
+  ],
+  "spec_pass_table": {"§2.A": "PASS(plugin 52→53 passed)", "§2.B": "PASS(race plugin 3/3 綠)", "§2.C": "PASS(殘留 0;test_balance 剩的 \"2493,T,0,0\" 是欄位不足負例非 19 欄)", "§3 commit 分組": "PASS(P-1 / P-2 收修後)", "白名單 1–3": "PASS"},
+  "increment_after_review": {"commits": ["第 6 筆 refactor(tests)", "第 7 筆 fix(tests)", "第 8 筆 test(server)", "第 9 筆 chore(docs)"], "check": "主 agent 機械快篩:tests/capital + test_bars + test_index_routes 467 passed、兩支 plugin 重跑 53 / 1 passed、ruff PASS;全量 pytest + pyright 重跑見 verification §5"}
+}
