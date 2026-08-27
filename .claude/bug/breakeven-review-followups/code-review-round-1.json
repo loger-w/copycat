@@ -1,0 +1,22 @@
+{
+  "round": 1,
+  "fixed_point": "7f4bc98d",
+  "reviewed_head": "f8232339 (後拆為 9e8de3a1 test / ce05f592 fix / 11f11923 chore,內容同)",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "whitelist": "N/A(change-spec 於 review 後補;白名單 5 條由 verification §5 主 session 核)",
+  "commit_separation": "Standards P3:f2e2aa28 把紅測試與 🔴 併一筆 → reset --soft 拆成 9e8de3a1 / ce05f592",
+  "standards": [
+    {"id": "P2-a", "severity": "P2", "kind": "hard", "title": "F-05 未清乾淨:test_client :1117 / :1133 仍兩份 25 欄字面", "disposition": "fixed", "commit": "e084b1e2(抽 tests/capital/profit_rows.py 共用;連 test_fill_latency 那份一起)"},
+    {"id": "P2-b", "severity": "P2", "kind": "judgement", "title": "白名單重抄 AvgSource 字面(Duplicated Code + Shotgun Surgery):補 case 後白名單仍靜默歸 null", "disposition": "fixed", "commit": "196b1c89(AVG_SOURCES as const 推導型別 + isAvgSource guard)"},
+    {"id": "P3-a", "severity": "P3", "title": "同檔兩顆同義常數 PNL_ROW_3357_MARGIN / _PNL_3357", "disposition": "fixed", "commit": "e084b1e2(移出本檔、互相加註兩組值)"},
+    {"id": "P3-b", "severity": "P3", "title": "docstring 說不要 .replace,同 commit 仍留 .replace 變異(標籤現股 / 代碼 2 矛盾列)", "disposition": "fixed", "commit": "e084b1e2(pnl_variant 成對改 [3]/[25])"},
+    {"id": "P3-c", "severity": "P3", "title": "fixture 缺 : str 型別註記", "disposition": "fixed", "commit": "e084b1e2"},
+    {"id": "P3-d", "severity": "P3", "title": "鐵則 B:f2e2aa28 紅測試與 🔴 併一筆", "disposition": "fixed", "commit": "reset --soft 拆 9e8de3a1 / ce05f592"}
+  ],
+  "spec": [
+    {"id": "S-1", "severity": "P3", "title": "F-05 PARTIAL:test_client 兩份 + test_fill_latency 一份 25 欄字面殘留;docstring「四份」數字不符", "disposition": "fixed", "commit": "e084b1e2"},
+    {"id": "S-2", "severity": "P2", "title": "F-02 白名單與 types.ts AvgSource 無機械連結", "disposition": "fixed", "commit": "196b1c89(型別由陣列推導,比 reviewer 建議的 Record<AvgSource,true> 少一處要同步)"}
+  ],
+  "pr119_findings": {"F-01": "PASS", "F-02": "PASS(S-2 後同源)", "F-03": "PASS", "F-04": "PASS", "F-05": "PASS(S-1 後零殘留,grep 468000,464000 = none)", "F-06": "PASS", "F-07": "PASS"},
+  "increment_after_review": {"commits": ["e084b1e2", "196b1c89"], "scope": "測試 fixture 重組 + 前端型別同源(行為逐 bit 不變)", "check": "主 agent 機械快篩:pytest capital 402 / ruff / pyright 0 / tsc 0 / eslint 0 / vitest 72 / react-doctor No issues"}
+}
