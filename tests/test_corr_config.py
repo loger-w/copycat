@@ -128,16 +128,19 @@ class TestLoadConfig:
             {"key": "ES", "label": "標普", "symbol": "TC.F.CME.ES.HOT", "source": "tc4"},
             # bool 是 int 子類:`1 == True` 但 `1 is True` 為 False —— 這行正是 `is True` 存在的理由
             {"key": "YM", "label": "道瓊", "symbol": "TC.F.CBOT.YM.HOT", "source": "tc4", "sparse": 1},
+            # null 與「缺欄」對 `is True` 同義,但有人寫了 null 多半是想關 / 想開 → 也要點名(review S-4)
+            {"key": "NK", "label": "日經", "symbol": "TC.F.OSE.NK225M.HOT", "source": "tc4", "sparse": None},
         ]
         path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
 
         with caplog.at_level("WARNING"):
             cfg = load_config(path)
 
-        assert [leg.sparse for leg in cfg.legs] == [False, True, False, False, False]
+        assert [leg.sparse for leg in cfg.legs] == [False, True, False, False, False, False]
         bad = [r.message for r in caplog.records if "sparse" in r.message]
-        assert any("NQ" in m and "'yes'" in m for m in bad), bad  # 字串 → 點名
-        assert any("YM" in m and "1" in m for m in bad), bad  # 整數 → 點名
+        assert any("NQ" in m and "('yes')" in m for m in bad), bad  # 字串 → 點名
+        assert any("YM" in m and "(1)" in m for m in bad), bad  # 整數 → 點名
+        assert any("NK" in m and "(None)" in m for m in bad), bad  # null → 點名
         assert not any("SXF" in m for m in bad), bad  # 合法 true 不吵
 
     def test_sparse_on_a_non_tc4_leg_warns_but_does_not_degrade(
