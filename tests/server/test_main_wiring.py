@@ -488,22 +488,25 @@ def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.Monkey
     import copycat.live.corr_source as corr_mod
     from copycat.server import app as app_mod
 
+    from copycat.corr_config import load_config
+
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
 
-    app_mod._default_corr_source()
+    app_mod._default_corr_source(None, load_config())
 
     assert "heal_active" not in seen["kwargs"]
 
 
 def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPatch) -> None:
     """稀疏腿豁免(R2)由設定檔 `sparse` 帶到 watchdog;與時段閘正交(SXF 兩邊都掛:
-    休市段由閘擋、日盤由 sparse 擋)。未傳 config → 讀 repo 設定檔,SXF 必在。"""
+    休市段由閘擋、日盤由 sparse 擋)。config **必填**(pr-120 F-04):source 的稀疏腿集合與 engine
+    的腿組要吃同一份,由型別守 —— 傳 repo 設定檔則 SXF 必在。"""
     import copycat.live.corr_source as corr_mod
-    from copycat.corr_config import DEFAULT_CONFIG, CorrConfig, Leg
+    from copycat.corr_config import DEFAULT_CONFIG, CorrConfig, Leg, load_config
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
-    app_mod._default_corr_source()
+    app_mod._default_corr_source(None, load_config())
     assert seen["kwargs"]["heal_sparse_symbols"] == frozenset({"TC.F.TWF.SXF.HOT"})
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
@@ -525,10 +528,12 @@ def test_corr_leg_gate_only_applies_to_the_taifex_segment(
     import copycat.live.futures_source as futures_mod
     from copycat.server import app as app_mod
 
+    from copycat.corr_config import load_config
+
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
 
-    app_mod._default_corr_source(_CAL)
+    app_mod._default_corr_source(_CAL, load_config())
     gate = seen["kwargs"]["heal_symbol_active"]
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
@@ -554,12 +559,14 @@ def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
     import copycat.live.stock_source as stock_mod
     from copycat.server import app as app_mod
 
+    from copycat.corr_config import load_config
+
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
     # 台期交那把恆開 → 證明兩把閘各走各的,不是共用同一個 callable
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: True)
 
-    app_mod._default_corr_source(_CAL)
+    app_mod._default_corr_source(_CAL, load_config())
     gate = seen["kwargs"]["heal_symbol_active"]
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
