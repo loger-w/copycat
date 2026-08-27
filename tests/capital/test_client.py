@@ -44,7 +44,7 @@ from copycat.stkfut_map import write_map
 from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
-from tests.capital.profit_rows import PNL_3357_MARGIN, pnl_variant
+from tests.capital.profit_rows import PNL_3357_MARGIN, RAW_PNL_MARGIN, pnl_variant
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -1255,11 +1255,14 @@ def test_profit_row_unknown_kind_skipped_keeps_previous_broker_avg(
         client._handle_balance(bal)
         client._handle_balance("##")
         client._handle_profit("000,查詢成功")
-        # 標籤未知 + [25] 未對映 → kind=None(pr-119 F-05)
-        client._handle_profit(pnl_variant(row, {3: "信用", 25: "3", 10: "999.00"}))
+        # 標籤未知 + [25] 未對映 → kind=None(pr-119 F-05)。哨兵用 "9" 而不是 "3":balance.py 寫著
+        # 「融券疑 3、待實證」,日後補上 "3": "short" 這條會靜默改走「種類不符」路徑而不紅(pr-129 F-03)
+        client._handle_profit(pnl_variant(row, {3: "信用", 25: "9", 10: "999.00"}))
         client._handle_profit("##,,,,")
     p = client.store.position_for("3357", "margin")
     assert p is not None and p.avg_price == 150.55 and p.avg_source == "broker"  # 未被 999 蓋掉
+    # 兩條 log 缺一不可:「種類標籤未知」釘 parse 端 kind=None(與「種類不符」= kind 對映到但不在庫存 分開)
+    assert any("種類標籤未知" in r.message for r in caplog.records)
     assert any("種類不符" in r.message and "信用" in r.message for r in caplog.records)
 
 
@@ -1463,12 +1466,6 @@ def test_balance_inflight_guard_expires_when_chain_never_starts(tmp_path: Path) 
 
 _BAL_3357 = "3357,C,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123456789,1234567890"
 _BAL_2493 = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
-#: 2026-06-11 prod 實列(均價 311.75;與 `profit_rows.PNL_3357_MARGIN`(150.55)是兩組值,見該模組註)
-_PNL_3357 = (
-    "臺慶科,3357,新台幣,融資,3000,288.00,-7.50,864000.00,301364.00,-74636.00,311.75,"
-    "376240.00,935000.00,240.00,221.00,0.00,2592.00,376000,559000,583,0.00,-7.98,0,,Y,2,3,"
-    "312.950000,A123456789,1234567890"
-)
 
 
 class _FakeClock:
@@ -1720,7 +1717,7 @@ def test_late_profit_end_marker_after_watchdog_keeps_avg_price(tmp_path: Path) -
     client._handle_balance("##")
     client._handle_profit("##,,,,")  # 第 1 輪遲到的零列終止符 → 吞
     client._handle_profit("000,查詢成功")  # 第 2 輪真回應
-    client._handle_profit(_PNL_3357)
+    client._handle_profit(RAW_PNL_MARGIN)  # prod 實列(均價 311.75),與 PNL_3357_MARGIN 是兩組值
     client._handle_profit("##,,,,")
     pending = client._pending_sec  # OI 未回,鏈尚未收尾 → 斷言看暫存
     assert pending is not None
