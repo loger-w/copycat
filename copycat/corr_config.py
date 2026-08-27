@@ -87,8 +87,16 @@ DEFAULT_CONFIG = CorrConfig(
 )
 
 
-def _parse_legs(raw: object) -> tuple[Leg, ...] | None:
-    """未知欄位一律忽略(`_comment` 說明欄不得觸發降級);必要欄缺一 → None。"""
+def _parse_legs(
+    raw: object, bad_sparse: list[tuple[object, object]]
+) -> tuple[Leg, ...] | None:
+    """未知欄位一律忽略(`_comment` 說明欄不得觸發降級);必要欄缺一 → None。
+
+    `bad_sparse` 是**輸出參數**:sparse 打成非 bool 的腿以 `(key, 原值)` 收進去,由 `load_config`
+    在確定採用這份 config 之後才印 WARNING。原值不進 `Leg`、出了 parser 就拿不到,但這裡不能直接
+    log:後面任一腿缺欄 / base 不在 legs 都會讓整份被丟掉改用 DEFAULT_CONFIG,先印「旗標無效」
+    再印「改用預設腿」會把讀者導去修旗標而不是修那一腿(pr-130 F-01)。
+    """
     if not isinstance(raw, list) or not raw:
         return None
     legs: list[Leg] = []
@@ -99,13 +107,7 @@ def _parse_legs(raw: object) -> tuple[Leg, ...] | None:
             return None
         raw_sparse = item.get("sparse")
         if "sparse" in item and not isinstance(raw_sparse, bool):
-            # 只認字面 true(fail-safe:少豁免一腿多幾發 churn),但丟掉旗標要有訊號 —— 設定檔是人手改的,
-            # 打成 "true" / 1 / "yes" / null → 該腿修復靜默不生效、退回每 240 s 一發,只能事後 grep log 才知道
-            # (pr-120 F-02;判準與 load_config「標在非 tc4 腿」那條 WARNING 相同)。本模組慣例是 parser 只回
-            # None、log 留給 load_config;這裡破例是因為原值不進 `Leg`,出了 parser 就拿不到(review S-3)。
-            logger.warning(
-                "corr 設定檔 %s 的 sparse 非 true/false(%r),旗標無效", item.get("key"), raw_sparse
-            )
+            bad_sparse.append((item.get("key"), raw_sparse))
         legs.append(Leg(*(str(item[field]) for field in _LEG_FIELDS), sparse=raw_sparse is True))
     return tuple(legs)
 
@@ -127,7 +129,8 @@ def load_config(path: Path | None = None) -> CorrConfig:
     if not isinstance(raw, dict):
         logger.warning("corr 設定檔頂層非 object,改用預設腿")
         return DEFAULT_CONFIG
-    legs = _parse_legs(raw.get("legs"))
+    bad_sparse: list[tuple[object, object]] = []
+    legs = _parse_legs(raw.get("legs"), bad_sparse)
     if legs is None:
         logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設腿")
         return DEFAULT_CONFIG
@@ -135,6 +138,12 @@ def load_config(path: Path | None = None) -> CorrConfig:
     if base not in {leg.key for leg in legs}:
         logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
         return DEFAULT_CONFIG
+    # 走到這裡才確定採用這份 config,旗標類 WARNING(不降級、腿組仍可用)集中在這之後印。
+    for key, raw_sparse in bad_sparse:
+        # 只認字面 true(fail-safe:少豁免一腿多幾發 churn),但丟掉旗標要有訊號 —— 設定檔是人手改的,
+        # 打成 "true" / 1 / "yes" / null → 該腿修復靜默不生效、退回每 240 s 一發,只能事後 grep log 才知道
+        # (pr-120 F-02;判準與下面「標在非 tc4 腿」那條 WARNING 相同)。
+        logger.warning("corr 設定檔 %s 的 sparse 非 true/false(%r),旗標無效", key, raw_sparse)
     for leg in legs:
         if leg.sparse and leg.source != SOURCE_TC4:
             # 不降級(腿組仍可用),但不能靜默:app 只對 tc4_legs() 算豁免集合,這個旗標會被丟掉
