@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "fixed_point": "44722310",
+  "reviewed_head": "e03cf0f8",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "whitelist": {"items": 4, "pass": 4},
+  "commit_separation": "PASS(test / fix / refactor / chore ×2 各單一檔類,紅先行在最前)",
+  "standards": [
+    {"id": "S-1", "severity": "P2", "kind": "judgement", "title": "config 必填連帶拿掉 calendar 預設值,與四個兄弟工廠形狀不同(Divergent Change)", "disposition": "fixed", "commit": "41f45bc4(keyword-only `*, config`)"},
+    {"id": "S-2", "severity": "P3", "title": "cfg = config 死別名(Middle Man)", "disposition": "fixed", "commit": "41f45bc4"},
+    {"id": "S-3", "severity": "P3", "title": "WARNING 放在 _parse_legs 破本模組「parser 不 log」慣例,註解未交代理由", "disposition": "fixed", "commit": "59faa1d7(註解:原值不進 Leg,出了 parser 拿不到)"},
+    {"id": "S-4", "severity": "P3", "title": "\"sparse\": null 靜默且不警告,與缺欄不可分辨", "disposition": "fixed", "commit": "8bbfc50e / 59faa1d7(`\"sparse\" in item` 判)"},
+    {"id": "S-5", "severity": "P3", "title": "三處測試 import 另起區塊(Duplicated Code)", "disposition": "fixed", "commit": "41f45bc4"},
+    {"id": "S-6", "severity": "P3", "title": "§5 把 R1 面向的測試名算進「釘 R2 豁免的兩條」", "disposition": "fixed", "commit": "0692efcb"}
+  ],
+  "spec": [
+    {"id": "P3-1", "severity": "P3", "title": "cfg = config 冗餘(同 S-2)", "disposition": "fixed", "commit": "41f45bc4"},
+    {"id": "P3-2", "severity": "P3", "title": "caplog 斷言 \"1\" 過寬", "disposition": "fixed", "commit": "8bbfc50e(`(1)` / `('yes')` / `(None)`)"},
+    {"id": "P3-3", "severity": "P3", "title": "§5「grep MUTANT = 0」與「註解掉」口徑不合", "disposition": "fixed", "commit": "0692efcb"},
+    {"id": "creep", "severity": "P3", "title": "F-01 那筆順帶在 §4 加 F-02 的 WARNING 一句(內容正確,記錄不改)", "disposition": "accepted"}
+  ],
+  "pr120_findings": {"F-01": "PASS", "F-02": "PASS", "F-03": "PASS", "F-04": "PASS(user 拍板必填;keyword-only)", "F-05": "PASS(Spec 軸以 plugin 置空 _heal_sparse 獨立複現 2 failed / 2 passed)"},
+  "incident": "驗證期間的型別守門突變(prod caller 拿掉 corr_cfg)因腳本 crash 未還原就被 commit 進 f327843b 前身;commit 前 `git show HEAD:` 查到,reset --soft 重做。教訓:mutation 腳本要 try/finally 還原 + commit 前 diff 對照(同 memory mutation-reviewers-serial「commit 前查 MUTANT 殘留」)。",
+  "increment_after_review": {"commits": ["8bbfc50e", "59faa1d7", "41f45bc4", "0692efcb"], "scope": "null 警告(小行為)+ 簽名 keyword-only + 測試 / 文件", "check": "主 agent 機械快篩:155 passed / ruff / pyright 0;全量 pytest 見 verification §6"}
+}
