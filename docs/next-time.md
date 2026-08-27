@@ -1,3 +1,13 @@
+## 2026-08-27(fix/corr-sparse-leg-heal-exempt SXF 稀疏腿自癒 churn 留尾)
+
+- [ ] **`sparse` 是人工標記,不是量出來的**:判準寫在 tc4-market-facts(全 attempt 1 且間隔 ≥ 門檻);若哪天 SXF 真死
+  (stub),R2 不救、只剩 R1(整條 session 靜默 120 s)—— 其他腿活著時 SXF 會整場不救,零訊號。候選 = 稀疏腿改吃
+  更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。
+- [ ] **個股冷門檔同型(6949 每分鐘一發 attempt 1)**:個股 source 的 R2 60 s 對零股 / 冷門檔同樣是假警報,但個股是
+  自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。
+- [ ] **收盤段 `IX0001` 13:25–13:35 每 30 s 一發(今天 19 發)**:閘上界 `stock_source._TRADING_END` 13:35 vs 交易所
+  13:25 起停推;建議上界改 13:31(保 13:30 收盤最後一筆),待 user 拍板(08-27 已問)。
+
 ## 2026-08-27(fix/breakeven-avg-source-prod-chain #118 broker 半邊在 prod 是死的 留尾)
 
 - [ ] **流程教訓:blast radius 要 grep「欄位寫入點」不只「建構點」**:#118 的 blast radius 只 grep `Position(` 建構點與
@@ -39,7 +49,9 @@ verification;這裡回填成 backlog。
 - [ ] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發(index source 自己的閘上界
   13:25 —— 會連帶關掉 13:30 最後一筆,**要 user 拍板**);個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
   退避上限 60 s 拉到 300 s。另:N051 逐腿閘的真環境待核項(SXF 休市段自癒發數)#105 §6 沒列,prod 重啟後盤中
-  `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。
+  `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。**08-27 核過:休市段(08:45 前 / 13:45 後)零發 = 逐腿閘
+  PASS;日盤 09:45–13:01 另有 11 發是稀疏腿真沒成交的假警報(M0 那 8 發是休市段,不是同一件事),
+  已由 fix/corr-sparse-leg-heal-exempt 以 `sparse` 旗標豁免 R2。** 6949 冷門檔 172 發(每分鐘 attempt 1)仍是本條。
 - [ ] **`corr_source.taifex_leg_gate` 對 SGX / CME / CBOT / OSE 段恆 True**(§5.6):要收得先用 `QUERYINSTRUMENTINFO` 的
   `OpenCloseTime` 把各段時段落成事實(skill 只有 OSE 一組)。
 - [ ] **`tests/live/test_river_state.py` UTF-8 BOM(N059)**(§5.6)未處理。
