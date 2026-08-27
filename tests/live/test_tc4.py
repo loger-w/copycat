@@ -1267,6 +1267,69 @@ class TestSpotWindowOffset:
         assert (last["StartTime"], last["EndTime"]) == base._rt_window(SPOT_SYMBOL)
 
 
+class TestHealSparseSymbol:
+    """稀疏腿(corr SXF 費半:日盤 94.4% 時間真沒成交)對 R2「單 symbol 靜默」門檻是假警報 ——
+    2026-08-27 日盤 11 發全 attempt 1(每發之間有真成交把計數清掉),每發 UNSUB+SUB 一對。
+    豁免 R2、**仍留在 R1 母體**:整條 session 死掉時它要跟著整批重掛,不能像時段閘那樣整輪扣掉。
+    """
+
+    def test_sparse_symbol_is_exempt_from_r2(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_symbol_silence_secs=60.0,
+            heal_sparse_symbols=frozenset({HEAL_B}),
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._last_push = {HEAL_A: 10.0, HEAL_B: 10.0}
+        src._heal_tick(100.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
+
+    def test_sparse_symbol_still_rides_r1_batch_heal(self) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_symbol_silence_secs=60.0,
+            heal_sparse_symbols=frozenset({HEAL_B}),
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._last_push = {HEAL_A: 10.0, HEAL_B: 10.0}
+        src._heal_tick(100.0)
+        assert sorted(_rt_pairs(api)) == sorted(
+            [
+                ("UNSUBQUOTE", HEAL_A),
+                ("SUBQUOTE", HEAL_A),
+                ("UNSUBQUOTE", HEAL_B),
+                ("SUBQUOTE", HEAL_B),
+            ]
+        )
+
+    def test_sparse_symbol_does_not_keep_r1_from_firing(self) -> None:
+        # R1 看的是「全部都靜默」(max of last push):稀疏腿本來就常靜默,不能因為它在
+        # 母體裡就把其他腿活著時的 R1 誤觸發 —— 這條鎖的是反方向:HEAL_A 活著 → 不整批重掛
+        api = FakeApi({})
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_symbol_silence_secs=60.0,
+            heal_sparse_symbols=frozenset({HEAL_B}),
+        )
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        src._last_push = {HEAL_A: 95.0, HEAL_B: 10.0}
+        src._heal_tick(100.0)
+        assert api.rt_requests == []
+
+
 class TestHealSymbolGate:
     """N051:R2「從未推播」母體對**自身休市段**的腿一樣每 300s 一發 UNSUB+SUB。
     海外 / 台期交國外指數腿的時段各不相同,session 級的 `heal_active` 表達不了。

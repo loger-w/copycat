@@ -36,6 +36,14 @@ class TestDefaultConfig:
         assert len(DEFAULT_CONFIG.legs) == 11
         assert [leg.key for leg in DEFAULT_CONFIG.legs] == [key for key, *_rest in _EXPECTED_LEGS]
 
+    def test_only_sxf_is_sparse_and_the_repo_file_agrees(self) -> None:
+        """SXF 費半日盤 94.4% 時間沒成交(tc4-market-facts),R2 240 s 對它是假警報。
+        DEFAULT_CONFIG 與 configs/correlation.json 的 sparse 集合要一致 —— 設定檔壞掉降級到
+        預設腿時,豁免不能悄悄消失或多出來。"""
+        assert {leg.key for leg in DEFAULT_CONFIG.legs if leg.sparse} == {"SXF"}
+        repo = load_config(CONFIG_PATH)
+        assert {leg.key for leg in repo.legs if leg.sparse} == {"SXF"}
+
     def test_base_is_txf_and_present_in_legs(self) -> None:
         assert DEFAULT_CONFIG.base == "TXF"
         assert DEFAULT_CONFIG.base in {leg.key for leg in DEFAULT_CONFIG.legs}
@@ -97,6 +105,22 @@ class TestLoadConfig:
         assert len(cfg.legs) == len(DEFAULT_CONFIG.legs) + 1
         assert cfg.legs[-1].key == "TSM"
         assert cfg.legs[-1].symbol == "TC.F.CME.TSM.HOT"
+
+    def test_sparse_flag_is_optional_and_only_literal_true_counts(self, tmp_path: Path) -> None:
+        """`sparse` 選配:缺 = False;只認 JSON 字面 true(字串 "yes" / 1 不算 —— 寧可少豁免一腿
+        多幾發 churn,也不要把打錯字的腿悄悄從 R2 拿掉)。"""
+        path = tmp_path / "correlation.json"
+        legs = [
+            {"key": "TXF", "label": "台指", "symbol": "TC.F.TWF.TXF.HOT", "source": "futures_engine"},
+            {"key": "SXF", "label": "費半", "symbol": "TC.F.TWF.SXF.HOT", "source": "tc4", "sparse": True},
+            {"key": "NQ", "label": "納指", "symbol": "TC.F.CME.NQ.HOT", "source": "tc4", "sparse": "yes"},
+            {"key": "ES", "label": "標普", "symbol": "TC.F.CME.ES.HOT", "source": "tc4"},
+        ]
+        path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
+
+        cfg = load_config(path)
+
+        assert [leg.sparse for leg in cfg.legs] == [False, True, False, False]
 
     def test_unknown_fields_are_ignored_not_treated_as_broken(self, tmp_path: Path) -> None:
         """`_comment` 說明欄不得觸發降級(impl review P2)。"""
