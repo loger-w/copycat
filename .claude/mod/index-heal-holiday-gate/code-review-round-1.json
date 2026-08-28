@@ -1,0 +1,25 @@
+{
+  "fixed_point": "origin/master 「chore(chore-pr-134-review-followups): artifacts」(依 08-28 拍板 (b) 引 subject 不引 SHA)",
+  "reviewed_head": "分支第 4 筆「chore(docs): N105 補窗內閘落文件…」(review 前形態;收修落在第 5–8 筆)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "S-P1", "severity": "P1", "kind": "hard", "text": "翻轉後的 `test_heal_inside_watch_window_skips_a_calendar_holiday` 是否定型斷言配固定 sleep(`sleep(0.3)` → `fetch_minutes_calls == 1`),`tests/helpers/wait.py` 檔頭明禁:迴圈沒跑也綠 = 永久假綠。建議 sleep 後把日曆翻成交易日、`wait_until(calls == 2)` 當活性對照。", "disposition": "accepted → 第 6 筆:同一顆 engine 用 `market_open` 旗標,休市段斷 == 1 後翻交易日 `wait_until(calls == 2)` + minutes 到位"},
+    {"id": "S-P2a", "severity": "P2", "kind": "hard", "text": "`_retry_epoch` 欄位註解「`_schedule_retry` 每次 +1」過期(本 diff 新增第二個寫入點);`_subscribe_and_backfill` docstring 世代閘段沒提 rollover。", "disposition": "accepted → 第 5 筆:抽 `_void_inflight_retry()` 成唯一寫入點,欄位註解與 docstring 改「兩個 caller」"},
+    {"id": "S-P2b", "severity": "P2", "kind": "judgement", "text": "CLAUDE.md §4 同一括號先寫「分時自癒 09:00 起全程都在」再寫「休市日整天一發都不打」,補閘後前句在休市日為偽;結尾「`_is_trading_day` AND」指路詞已不準(窗內是 OR 形)。", "disposition": "accepted → 第 8 筆:改「在**交易日** 09:00 起全程都在」+ 寫出窗內 / 盤外兩種閘形"},
+    {"id": "S-P2c", "severity": "P2", "kind": "judgement", "text": "`test_rollover_pending_cancels_the_inflight_retry` 只斷「pending 可見時已 bump / cancel」,cancel 若被搬到兩個 `to_thread` 之後照樣綠;`sleep(0)` 後直接斷 `cancelled()` 時序敏感。", "disposition": "accepted(部分)→ `cancelled()` 改 `wait_until`;順序由結果面測試(Spec P2-3)覆蓋:在飛 fetch 卡到 rollover 後才放行,cancel 若晚於 to_thread 仍在放行前 → 該測試對「cancel 在 rollover 內的位置」不敏感,記 knowing;code 註解已寫明「要在兩個 to_thread 之前」"},
+    {"id": "S-P3a", "severity": "P3", "kind": "judgement (Duplicated Code)", "text": "`_rollover_loop` 的 epoch +1 + cancel 與 `_schedule_retry` 前三行逐字重複 → 抽 `_void_inflight_retry()`。", "disposition": "accepted → 第 5 筆 refactor"},
+    {"id": "S-P3b", "severity": "P3", "kind": "judgement", "text": "ConnectionError 路徑一拍內 epoch +2,無害但值得一句註解。", "disposition": "accepted → 欄位註解補「單調計數器,一拍 +2 無害」"},
+    {"id": "S-P3c", "severity": "P3", "kind": "judgement", "text": "段 1 標題「有日曆時也吃日曆」涵蓋不了段尾「無日曆 → 逐字舊判準」。", "disposition": "accepted → 標題改「有日曆吃日曆、無日曆逐字舊判準」"},
+    {"id": "S-P3d", "severity": "P3", "kind": "judgement", "text": "兩支新測試 docstring 收尾 `\"\"\"` 與末句同行,與檔內既有多行 docstring 不同款。", "disposition": "accepted → 改獨立一行"}
+  ],
+  "spec": [
+    {"id": "P-OK", "severity": "-", "text": "§1 三列全到位;§4 兩筆皆有紅先行(test 先於兩筆 fix);零 scope creep;白名單六項逐條核過(盤外三段 elif 逐字未動 / 無日曆窗內照救有測試 / boot 一發不受閘管 / 退避與 variant 零 diff / rollover 順序與 swap 三層未動 / stale watchdog 未動);`tests/server/test_index_engine.py` 62 passed。", "disposition": "no-op"},
+    {"id": "P-P2-1", "severity": "P2", "text": "閘影響面三分支窮舉正確:只有「有日曆 ∧ 休市」由 True 翻 False;09:00–09:04 靠 `_minutes_lag_exceeded` 恆偽;13:25 邊界 end-exclusive 由 elif 無縫接手,不重不漏。", "disposition": "no-op(核過無問題)"},
+    {"id": "P-P2-2", "severity": "P2", "text": "cancel 真擋得住:`_merge_backfill` 在 `await to_thread` 之後,cancel 於該 await 拋出;orphan 工作項只回傳不寫狀態;不會誤殺 rollover 自己需要的 retry(`_schedule_retry` 在 cancel 之後才建新 task)。", "disposition": "no-op(核過無問題)"},
+    {"id": "P-P2-3", "severity": "P2", "text": "dummy-task 測試強度不足:只釘「有 bump、有 cancel」,不釘「合併點在 await 之後」;若 `_merge_backfill` 上移到 await 前仍綠。建議給 `FakeIndexSource.fetch_day_minutes` 加 `threading.Event` 閘,斷 rollover 後 `_pending_backfill == {}`。", "disposition": "accepted → 第 6 / 7 筆:`FakeIndexSource.fetch_gate`(一次性,回傳值在卡閘前定案)+ `test_rollover_keeps_old_day_backfill_out_of_pending`;mutation(撤 rollover 的 `_void_inflight_retry()`)兩條皆紅。第一版 fake 先卡閘後讀 `day_minutes`,mutation 下假綠 —— 第 7 筆修正並記入 verification"},
+    {"id": "P-P2-4", "severity": "P2", "text": "翻轉測試確實編碼 user 決定(斷 calls == 1 + minutes {};docstring 逐字寫代價與知情)。", "disposition": "no-op"},
+    {"id": "P-P3-1", "severity": "P3", "text": "`..._without_a_calendar_still_heals` 用固定 `sleep(0.3)`,同檔已有 `wait_until` —— 08-25 review §2.5 Standards #6 點名的 flake 形狀。", "disposition": "accepted → 改 `wait_until(minutes == …)`"},
+    {"id": "P-P3-2", "severity": "P3", "text": "CLAUDE.md「分時自癒 09:00 起全程都在」在有日曆的休市日已不成立,句子自相牴觸。", "disposition": "accepted → 同 S-P2b"}
+  ],
+  "disposition": "Standards 8 條(1 P1 / 3 P2 / 4 P3):7 accepted 已修,S-P2c 部分(順序面 knowing)。Spec 7 條:3 accepted 已修(P2-3 結果面測試、P3-1、P3-2),4 核過無問題。收修後 `tests/server/test_index_engine.py` 63 passed、三檔 171 passed、ruff / pyright 綠;mutation 撤 rollover 作廢 → 兩條 rollover 測試皆紅。"
+}
