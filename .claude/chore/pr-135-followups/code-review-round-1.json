@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "fixed_point": "merge-base(master 第 0 筆「chore(skills): backend-conventions 記 ruff format stdin --check 誤判教訓 …」;依拍板 (b) 不引 SHA)",
+  "reviewed_head": "分支第 4 筆「chore(docs): /pr-review #135 報告落檔 …」",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "spec_source": "docs/superpowers/specs/pr-135-review.md(/pr-review 135 主報告 F-01~F-03 Inline Comments)+ .claude/chore/pr-135-followups/change-spec.md",
+  "whitelist": {"items": 2, "pass": 2, "note": "copycat/ 零 diff;斷言只加 F-01 deadline 一條、未放寬"},
+  "commit_separation": "PASS(fix(tests) F-01 → chore(tests) F-02 → chore(tests) F-03 → chore(docs) 報告落檔 → chore(tests) 收修;倉庫先例 fix(tests) 7 筆 / chore(tests) 2 筆)",
+  "standards": [
+    {"id": "S-1", "severity": "P3", "kind": "judgement", "title": "`import copycat.server.ws as ws_mod` 與同 package test_app.py 的 `from copycat.server import ws as ws_mod` 兩形並存", "disposition": "declined", "note": "兩形倉庫皆有先例;統一 import 形式屬全庫 lint 議題,不在本分支順手改(鐵則 B)"},
+    {"id": "S-2", "severity": "P3", "kind": "judgement", "title": "F-03 新句「兩條都偵測不到」對第一條哨兵嚴格說不成立,真意是「autouse 蓋掉、不需要擋」", "disposition": "fixed", "commit": "第 5 筆 chore(tests)(與 Spec P-1 同句一次改寫:第一條直擋「fixture 被刪 / 凍到窗內」,第二條證明真路徑會紅,外部洩漏不是這兩條要擋的事)"},
+    {"id": "S-3", "severity": "P3", "kind": "judgement", "title": "deadline 檢查在 receive_json 之前,ping 也停仍會 hang;註解已誠實聲明並指向 test_ws_disconnect", "disposition": "accepted", "note": "保護範圍如註解所述;再往下要 thread + timeout 包 receive,代價不成比例"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "PASS", "title": "牆鐘預算:reviewer 自跑迴歸 plugin 1 failed in 3.31s;對照組 deadline=1e9 → timeout 25 砍(exit 124);race plugin ×3 綠;健康路徑 <1 s vs 3 s", "disposition": "PASS"},
+    {"id": "F-02", "severity": "PASS", "title": "例外句與 test_client.py:1078 / :1103 逐字相符(恰 2 筆);體例同 profit_rows", "disposition": "PASS"},
+    {"id": "F-03", "severity": "PASS", "title": "新句無不成立宣稱", "disposition": "PASS(附 P-1)"},
+    {"id": "P-1", "severity": "LOW", "title": "F-03 docstring 分工歸屬不精確:直擋「_DAYTIME 凍到窗內」的是第一條 `_DAYTIME >= MIDNIGHT_BUFFER_END`(reviewer 釘 00:05 實測 2 failed),第二條只是真路徑順帶紅", "disposition": "fixed", "commit": "第 5 筆(同 S-2)"},
+    {"id": "P-2", "severity": "INFO", "title": "3 s 預算 vs 健康路徑 <1 s 餘裕充足;assert 在 receive 之前,單次長阻塞不會被打斷", "disposition": "no-op"}
+  ],
+  "scope_creep": "無(刪註解「10 s 一發」是 F-01 心跳改 0.2 s 的必要連動)",
+  "increment_after_review": {"commits": ["第 5 筆 chore(tests)"], "check": "主 agent 快篩 tests/server/test_bars.py + ruff;純 docstring"}
+}
