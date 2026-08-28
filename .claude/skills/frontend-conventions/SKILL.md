@@ -164,3 +164,15 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   個股(localStorage)**,換場景要帶 `tab=` 明確點回,否則量到別頁全 0。`--virtual-time-budget`
   下 fetch / WS 照常回。Trigger:同上。
 
+
+## 推導數字只留一份(2026-08-28 chore/pr-review-133-followups 沉澱)
+
+- **同一組推導數字(軸長 / px 密度 / snap 半徑由來)只寫在它所屬常數的 doc**,元件側一律
+  「見 `MINUTE_SNAP_RADIUS` doc / `ALLDAY_LEN`」指過去,不重抄數字。近全軸 1140 → 1365 那次,
+  `1139 個 key / 1px ≈ 1.6 key` 散寫在 SIC.tsx 三處 + `stock-intraday-svg.ts`,改軸時只改了三行,
+  剩下的全過期還互相矛盾 —— 漂移根因就是重複,修法是收成一份,不是四處同步改。
+- 回校註解口徑時**對著常數表寫**(`ALLDAY_SEGMENTS` / `FUTURES_ALLDAY_DOMAIN`),不憑印象:
+  pr-133 followups 我新寫「四段軸 = 夜盤 / 空檔 / 日盤 / 收盤撮合」被 review 抓到,實為夜盤前半 /
+  夜盤後半 / 空檔 / 日盤(13:45 在日盤段內)。
+- reviewer 的型別 / 編譯層斷言(「`== null` 改 `=== null`」)先 tsc 實證再改:`noUncheckedIndexedAccess`
+  讓 `arr[i]` 型別含 `undefined`,`== null` 才是對的;且收修的 gate 與 commit 用 `&&` 串接,tsc 紅不進 commit。
