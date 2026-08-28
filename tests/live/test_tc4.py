@@ -876,11 +876,23 @@ class TestHealResilience:
         try:
             src._start_healer()
             deadline = time.monotonic() + 3.0
-            while src._heal_attempts.get(HEAL_A, 0) < 2 and time.monotonic() < deadline:
+            while src._heal_attempts.get(HEAL_A, 0) < 1 and time.monotonic() < deadline:
                 time.sleep(0.02)
-            assert src._heal_attempts.get(HEAL_A, 0) >= 2, "watchdog 未持續重試"
+            assert src._heal_attempts.get(HEAL_A, 0) == 1, "第一發 REQ 例外仍要記帳"
+            # 第一發 ZMQError 走 `_req` → `_dispose` 清掉 api → 之後是「quote 未連線」:
+            # mod/tc4-disconnected-log-flood(D1)起整輪跳過不記帳(舊斷言 `>= 2` 為本案
+            # 事前標該變,見 change-spec §4),watchdog 仍活著等連線回來。
+            time.sleep(0.1)  # ≥ 10 個 poll
             healer = src._healer
             assert healer is not None and healer.is_alive(), "REQ 例外不得殺 watchdog"
+            assert src._heal_attempts.get(HEAL_A) == 1, "未連線期間不得再記帳"
+            with src._api_lock:  # 連線裝回來 → 巡檢恢復重試(仍是壞 socket → 再記一筆)
+                src._api = api
+                src._session = "sess-2"
+            deadline = time.monotonic() + 3.0
+            while src._heal_attempts.get(HEAL_A, 0) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert src._heal_attempts.get(HEAL_A, 0) >= 2, "接回後 watchdog 未恢復重試"
         finally:
             src._stop.set()
             if src._healer is not None:

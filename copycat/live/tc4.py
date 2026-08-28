@@ -384,6 +384,8 @@ class TC4QuoteSource:
         #: 的訂閱窗與 futures session 的盤別窗錯開成兩把 key(見 `subscribe`)。
         self._window_offset: dict[str, int] = {}
         self._healer: threading.Thread | None = None
+        #: watchdog 已印過「quote 未連線,等重連」(整段斷線只印一次;接回後歸位)
+        self._heal_waiting_conn = False
 
     # ---- 連線 ----
 
@@ -475,6 +477,11 @@ class TC4QuoteSource:
                 api.lock.release()
         else:
             logger.warning("TC4 quote Disconnect: api.lock busy,跳過實體 close(洩漏優於 crash)")
+
+    def _is_connected(self) -> bool:
+        """與 `_connection()` 同一把尺(`_api_lock` 下兩個指標都非 None),但不拋。"""
+        with self._api_lock:
+            return self._api is not None and self._session is not None
 
     def _connection(self) -> tuple[Any, str]:
         """_api/_session 一致快照(_api_lock,與 _dispose/_ensure_connected 寫側對齊):
@@ -624,6 +631,20 @@ class TC4QuoteSource:
         subs = sorted(s for s in tuple(self._subscribed) if self._heal_symbol_active(s))
         if not subs:
             return
+        # quote 未連線(`_dispose` 後、`_check_stale` 重連尚未成功):重掛根本送不出去,
+        # 這一輪**整輪跳過、不記帳** —— 記下去會把退避推到 300 s、把窗換掉,接回後第一次
+        # 真自癒落在錯的檔位;接回時 `_check_stale` 會把全部訂閱重掛一遍並刷新 `_sub_at`,
+        # 跳過沒有漏救風險。整段斷線只印一次(08-28 斷達錢 4 11.5 分鐘:逐 symbol 逐輪
+        # 各印「→ 重掛」「重掛失敗: quote not connected」共 2412 行)。
+        if not self._is_connected():
+            if not self._heal_waiting_conn:
+                self._heal_waiting_conn = True
+                logger.warning(
+                    "TC4 REALTIME 自癒:quote 未連線,%d 腿待重連後接手(略過巡檢,不記帳)",
+                    len(subs),
+                )
+            return
+        self._heal_waiting_conn = False
         t1 = self._heal_silence
         if t1 is not None:
             quiet_since = max((self._last_push.get(s, 0.0) for s in subs), default=0.0)
@@ -1107,6 +1128,7 @@ class TC4QuoteSource:
         if time.monotonic() - self._last_msg < _STALE_THRESHOLD_SECS:
             return
         backoff = 1.0
+        failures = 0
         while not self._stop.is_set():
             logger.warning("TC4 stale >%ss, reconnecting...", _STALE_THRESHOLD_SECS)
             try:
@@ -1135,9 +1157,22 @@ class TC4QuoteSource:
                     self.on_reconnect()
                 logger.info("TC4 reconnected (total=%d)", self.reconnects)
                 return
-            except (ConnectionError, OSError, zmq.ZMQError):
+            except (ConnectionError, OSError, zmq.ZMQError) as exc:
                 # zmq.ZMQError:Disconnect / wrapper 路徑仍可能裸拋,漏接會殺 listener
-                logger.exception("reconnect attempt failed, backoff %.0fs", backoff)
+                failures += 1
+                if failures == 1:
+                    # 同一段斷線只有第一發印完整 traceback(不吞不懂的錯);之後每發一行,
+                    # 例外型別 + 訊息在行內。08-28 斷達錢 4 11.5 分鐘:70 發 × ~58 行巢狀
+                    # traceback(內容每發相同)≈ 4100 行,佔整份 log 六成。
+                    logger.exception("reconnect attempt failed, backoff %.0fs", backoff)
+                else:
+                    logger.error(
+                        "reconnect attempt failed (#%d): %s: %s, backoff %.0fs",
+                        failures,
+                        type(exc).__name__,
+                        exc,
+                        backoff,
+                    )
                 if self._stop.wait(backoff):
                     return
                 backoff = min(backoff * 2, _RECONNECT_BACKOFF_CAP)
