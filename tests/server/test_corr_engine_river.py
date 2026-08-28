@@ -360,10 +360,12 @@ class TestBackfillTimeoutRetry:
             await eng.close()
 
     async def test_retry_rounds_are_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """上界從 3 輪放寬到 8 輪(do-batch 第二批題 4 順帶;08-26 08:52 真事件:TSMC 腿開機三輪
-        逾時全落在 08:53–08:54 的 90 秒內就放棄,整天無 seed,而 TC4 的 1K 幾分鐘後就備妥了)。
+        """上界從 3 輪放寬到 8 輪(discussion handoff §1-2;08-26 08:52 真事件:TSMC 腿開機三輪
+        逾時全落在 08:53–08:54 的 90 秒內就放棄,整天無 seed;該日 log 沒有第二個 episode,
+        「拉長就補得到」是推論,真環境判準見 corr_engine 檔頭)。
         退避改遞增(30 s 起翻倍、封頂 10 分),8 輪合計 ≈ 45 分鐘 —— 蓋過開盤 TC4 忙碌窗,
-        仍然有界(真的壞掉的腿不會整天重打)。"""
+        仍然有界(真的壞掉的腿不會整天重打)。**既有斷言 4 → 9 是本案預告的行為改動。**"""
+        assert corr_engine_mod._BACKFILL_RETRY_MAX_ROUNDS == 8
         monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
         monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_MAX_SECS", 0.01)
         src = _FakeSource()
@@ -380,13 +382,42 @@ class TestBackfillTimeoutRetry:
             await eng.close()
 
     def test_retry_delay_ladder_doubles_from_30s_and_caps_at_10min(self) -> None:
-        """退避階梯由三個常數推導(不另寫一份數字):30 → 60 → 120 → 240 → 480 → 600 封頂。
+        """退避階梯的字面值**唯一鎖在這裡**:30 → 60 → 120 → 240 → 480 → 600 封頂。
         第 1 輪是 30 s(與修前逐字同),之後翻倍;超過 `_BACKFILL_RETRY_MAX_SECS` 一律封頂。
         8 輪合計 2730 s ≈ 45.5 分。"""
         ladder = [corr_engine_mod._retry_delay_secs(n) for n in range(1, 9)]
         assert ladder == [30.0, 60.0, 120.0, 240.0, 480.0, 600.0, 600.0, 600.0]
-        assert corr_engine_mod._BACKFILL_RETRY_MAX_ROUNDS == 8
         assert sum(ladder) == 2730.0
+
+    async def test_reconnect_full_round_cancels_sleeping_retry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """沉睡中的逾時重試在 reconnect 整輪起跑時作廢(review round 1 Spec P2-2)。
+
+        重試 task 沒有世代標記:整輪已把該腿補回,舊 task 醒來仍多打一發,並在共享的
+        `_backfill_retry_round` 上 +1 把新 episode 的階梯洗回去。舊 90 秒窗幾乎撞不到
+        reconnect,拉到 45 分後這是常態。斷言 = 整輪起跑後重試集合為空、該腿只被打兩次
+        (首輪逾時 + 整輪),第三發永遠不來。
+        """
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.2)
+        monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_MAX_SECS", 0.2)
+        src = _FakeSource()
+        src.timeout_1k_once.add("TC.F.TWF.SXF.HOT")
+        src.minutes["TC.F.TWF.SXF.HOT"] = [(601, 12_000_000)]
+        eng = _engine(src, futures_minutes_fetch=lambda p: [])
+        await eng.start()
+        try:
+            # 首輪逾時 → 排了一支 0.2 s 後醒的重試
+            await wait_until(lambda: len(eng._backfill_retry_tasks) == 1)
+            eng._on_reconnect_threadsafe()
+            await wait_until(lambda: src.fetched.count("TC.F.TWF.SXF.HOT") == 2)
+            assert eng._backfill_retry_tasks == set(), "整輪起跑沒作廢沉睡的重試"
+            await asyncio.sleep(0.3)  # 若沒取消,舊 task 會在這段醒來打第三發
+            await _drain()
+            assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
+            assert _minutes(eng, "SXF") == {76: 12_000_000}
+        finally:
+            await eng.close()
 
     async def test_close_cancels_pending_retry_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 5.0)
@@ -486,8 +517,9 @@ class TestBackfillTimeoutRetry:
         """`_backfill_retry_round` 是**連續**失敗輪數 —— 放棄那一刻也要歸零。
 
         只在「補齊一輪」歸零的話,放棄後計數永久停在上限:當天稍後的每一次 reconnect
-        回補都會在第一次逾時就直接放棄(零重試),而 log 只有一行「已重試 3 輪」讀起來
+        回補都會在第一次逾時就直接放棄(零重試),而 log 只有一行「已重試 N 輪」讀起來
         像是真的試過。第二個 episode 是新的抖動,該有自己的完整預算。
+        **既有斷言 4 / 8 → 9 / 18 發是本案(上界 3 → 8)預告的行為改動。**
         """
         monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_SECS", 0.01)
         monkeypatch.setattr(corr_engine_mod, "_BACKFILL_RETRY_MAX_SECS", 0.01)
