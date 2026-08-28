@@ -595,7 +595,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
   });
 
   it("gate 4 單獨成立:末根 bar 索引 > live 索引(bars 至 D 10:00、時鐘 D 09:30)→ 不追加", async () => {
-    // 錨定日相同、live 分鐘不在死區 → 前三道 gate 全不成立,擋下的只剩「時鐘落後資料」。
+    // 錨定日相同、live 分鐘非空檔 / 非一天之外 → 前三道 gate 全不成立,擋下的只剩「時鐘落後資料」。
     barsBody = {
       bars: [bar("2026-08-05 09:00", 22_960_000), bar("2026-08-05 10:00", 23_000_000)],
       meta: META,
@@ -652,7 +652,7 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     const live: FuturesProductState = { ...STATE, date: "2026-08-05", t: "11:29:30.000" };
     const { container } = wrap(<FuturesChart product="TXF" state={live} resolvedYm="202608" />);
     await findIntraday();
-    // 前置條件寫死:錨定日相同、非死區、live(11:31)在末根(10:00)之後 → 前四道 gate 全不成立;
+    // 前置條件寫死:錨定日相同、非空檔 / 非一天之外、live(11:31)在末根(10:00)之後 → 前四道 gate 全不成立;
     // 最後成交 11:29:30 → 終點標記 11:30,與末根差 90 格
     expect(alldayIndexOf("1131")! - alldayIndexOf("1000")!).toBe(91);
     expect(alldayIndexOf("1130")! - alldayIndexOf("1000")!).toBe(90);

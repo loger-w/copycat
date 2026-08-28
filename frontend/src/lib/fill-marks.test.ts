@@ -414,7 +414,7 @@ describe("alldayFillPoints — 近全軸日期界(前一日曆日夜盤的成交
     expect(r).toBe(EMPTY_FILLS);
   });
 
-  it("死區成交(14:30,近全軸上沒有那一格)→ 不畫(不夾到最近的段界)", () => {
+  it("一天之外的成交(14:30,13:46–15:00 不在近全軸上)→ 不畫(不夾到最近的段界)", () => {
     const r = alldayFillPoints([futOrder({ time: "14:30:00" })], "TXFH6", ANCHOR);
     expect(r).toBe(EMPTY_FILLS);
   });

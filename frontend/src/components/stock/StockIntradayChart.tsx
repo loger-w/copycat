@@ -935,8 +935,9 @@ interface CoreProps extends Props {
    *
    *  `"futures"` = 期貨近全時段分時:語彙**同 stock**(副圖 / 說明列 / readout 六欄 / VP),
    *  但價位口徑同 index(`fmtIndexPts` —— 期指沒有個股 tick 表)、不打 `/api/stock/overlay`
-   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全三段軸的**索引**當 key),
-   *  且 hover 反演開就近 snap(`MINUTE_SNAP_RADIUS`;1139 個 key 壓一張圖)。 */
+   *  (CDP/MA 由 caller 注入,同 index)、x 軸由 caller 注入(近全四段軸的**索引**當 key:
+   *  夜盤 / 空檔 / 日盤 / 收盤撮合,mod/futures-day-1500),
+   *  且 hover 反演開就近 snap(`MINUTE_SNAP_RADIUS`;1365 個 key 壓一張圖)。 */
   mode?: "stock" | "index" | "futures";
   /** x 軸窗覆寫(key 值域;預設 `stkfut ? STKFUT_WINDOW : SPOT_WINDOW`)。
    *  **必經模組層常數**(identity 穩定)—— 它會一路傳進 `ChartStatic` / `EnergySub` 的 props,
@@ -1057,8 +1058,11 @@ export function IntradayChartCore({
   const clipAbove = `${uid}-above`;
   const clipBelow = `${uid}-below`;
 
-  // 近全軸(1139 個 key 壓 ~724px)才開 hover 命中的就近 snap(N046);現貨 / 個股期 /
+  // 近全軸(1365 個 key 壓 ~724px,1px ≈ 1.9 key;15:00 起算前是 1139 / 1.6,半徑實質縮
+  // ~15%,pr-133 F-08 二選一取「維持 3、回校數字」)才開 hover 命中的就近 snap(N046);現貨 / 個股期 /
   // index 窗的 key 密度本來就一格一格分得開,開了只會讓「這一分鐘沒成交」變得看不出來。
+  // 空檔 225 格(05:01–08:45)裡只有 08:45 一格橋:游標落在空檔中段 ±3 key 必落空 →
+  // 十字與資料點不畫,是刻意的(那裡本來就沒有成交,不夾到 05:00 / 08:46 兩側)。
   // **模組層常數 × 三元式**,不寫魔數也不每 render 造物件(下面 useMemo 的 deps 吃它)。
   const snapRadius = futures ? MINUTE_SNAP_RADIUS : 0;
   const g = useMemo(
@@ -1381,11 +1385,12 @@ export function IntradayChartCore({
         // 成交點同樣零外部資料依賴(orders 已在手上),**個股期態也不反灰**(AD-5):
         // 個股期的委託本來就標得到(比對鍵是契約碼),反灰沒有理由。
         // futures(近全軸)態自 R2 起同樣不反灰:日期界改由 `alldayFillPoints` 以錨定日
-        // 相等判定(夜盤 00:00–05:00 的成交屬前一交易日),caller 折好後由 `fills` 傳入。
+        // 相等判定(夜盤 15:01 → 05:00 的成交屬**次一**交易日,期交所口徑;mod/futures-day-1500),
+        // caller 折好後由 `fills` 傳入。
         { key: "fills", label: "成交點", available: true },
         // 指數疊線(F1):兩個閘 —— 資料源在不在手上(`indexSeries`)、個股有沒有昨收
         // (相對 % 沒基準就是假線)。期貨(近全軸)態**連鈕都不給**:指數是 09:01–13:30 的尺,
-        // 近全軸窗是 08:45–05:00,兩把尺對不上;反灰鈕只會讓人以為「哪天會亮」。
+        // 近全軸窗是 15:00–13:45(夜盤起算),兩把尺對不上;反灰鈕只會讓人以為「哪天會亮」。
         ...(futures
           ? []
           : ([
@@ -1506,7 +1511,7 @@ export function IntradayChartCore({
         {/* hover 十字 + 軸標籤(SC-7)。
             分解退化:水平線 / 左價標 / 右 % 標只依賴滑鼠 y,無成交分鐘照畫;
             垂直線與資料點需要資料,缺就不畫(白名單 2:現貨 / index 窗 `minuteOf` 不 snap
-            最近;近全軸例外,見 `snapRadius` —— 那裡 1px ≈ 1.6 個 key,不 snap 等於整片
+            最近;近全軸例外,見 `snapRadius` —— 那裡 1px ≈ 1.9 個 key,不 snap 等於整片
             退化,而 snap 的位移小於一顆游標熱點)。 */}
         {hover !== null ? (
           <g pointerEvents="none">
