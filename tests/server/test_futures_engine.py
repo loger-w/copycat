@@ -1227,3 +1227,93 @@ class TestReconnectLeafRearmKeepsPrice:
             )
         finally:
             await engine.close()
+
+
+class TestOneKHealthWarnings:
+    """L262(2026-08-28 triage):期貨 1K「落後」/「中段缺格」以前只在前端 gate 5 判,後端零 log,
+    事後分不出 H1(TC4 暫時落後)與 H3(memo 釘住)。`bars_range` tf=1 成功回非空時檢查,固定前綴供 grep;
+    同商品同尾根只印一次(前端每分鐘輪詢不洗版)。"""
+
+    class _Bars(FakeSource):
+        def __init__(self, bars: list[dict]) -> None:
+            super().__init__()
+            self.bars = bars
+
+        def fetch_bars_range(
+            self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+        ) -> list[dict]:
+            return self.bars
+
+    @staticmethod
+    def _bar(t: str) -> dict:
+        return {"t": t, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+
+    @pytest.mark.asyncio
+    async def test_lag_behind_last_trade_warns_once_per_tail(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = self._Bars([self._bar("2026-07-28 09:00"), self._bar("2026-07-28 09:01")])
+        engine = FuturesEngine(lambda: src)
+        await engine.start()
+        try:
+            st = engine._states["TXF"]
+            st.date, st.t = "2026-07-28", "09:10:30.000"  # 最後成交 09:10 vs 尾根 09:01 → 落後 9 分
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+        finally:
+            await engine.close()
+        assert caplog.text.count("期貨 1K 落後 TXF") == 1, "同尾根第二次輪詢不再印"
+        assert "尾根 2026-07-28 09:01" in caplog.text and "落後 9 分" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_lag_warning_within_threshold_daily_or_historical(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 白名單 5:門檻內 / 日 K / 歷史窗(end 早於最後成交日)/ 尚無成交 → 零新 log
+        src = self._Bars([self._bar("2026-07-28 09:00"), self._bar("2026-07-28 09:01")])
+        engine = FuturesEngine(lambda: src)
+        await engine.start()
+        try:
+            st = engine._states["TXF"]
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                await engine.bars_range(
+                    "TXF", "1", "2026-07-28", "2026-07-28", session="allday"
+                )  # st.t None
+                st.date, st.t = "2026-07-28", "09:04:00.000"  # 落後 3 分 = 門檻,不印
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+                st.t = "09:30:00.000"
+                await engine.bars_range("TXF", "D", "2026-07-01", "2026-07-28")  # 日 K 不查
+                await engine.bars_range(
+                    "TXF", "1", "2026-07-20", "2026-07-27", session="allday"
+                )  # 歷史窗
+        finally:
+            await engine.close()
+        assert "期貨 1K" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_mid_gap_warns_but_segment_jumps_do_not(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bars = [
+            self._bar("2026-07-28 13:44"),
+            self._bar("2026-07-28 13:45"),
+            self._bar("2026-07-28 15:01"),  # 日盤尾 → 夜盤首:段界,不是缺格
+            self._bar("2026-07-28 15:02"),
+            self._bar("2026-07-28 15:06"),  # 15:03–15:05 三根缺
+            self._bar("2026-07-28 15:07"),
+            self._bar(
+                "2026-07-29 05:00"
+            ),  # 跨午夜段內(23:59 → 00:00 也是段界)但這裡直接跳到收盤:缺格
+            self._bar("2026-07-29 08:46"),  # 夜盤尾 → 日盤首:段界
+        ]
+        engine = FuturesEngine(lambda: self._Bars(bars))
+        await engine.start()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-29", session="allday")
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-29", session="allday")
+        finally:
+            await engine.close()
+        assert caplog.text.count("期貨 1K 中段缺格 TXF") == 1
+        assert "2 段" in caplog.text and "2026-07-28 15:07→2026-07-29 05:00" in caplog.text
