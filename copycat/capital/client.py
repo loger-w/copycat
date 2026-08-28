@@ -101,7 +101,7 @@ _BALANCE_CHAIN_TIMEOUT_S = 10.0
 _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
 
 def _today_ymd() -> str:
-    """價格別記憶的日界 = 本機日曆日(與回報的委託建立日同時區)。
+    """價格別記憶的日界 = 本機日曆日(與回報 idx23 同時區;idx23 跨日語意未實證,見 `store.note_price_type`)。
     抽成 module 函式讓測試注入固定值 —— 測試自己也算 `time.strftime` 的話,
     等於拿被測程式的實作驗它自己(review r1 IMPL-5)。"""
     return time.strftime("%Y%m%d")
@@ -140,8 +140,8 @@ def _side_code(buy_sell: object) -> str | None:
 def _trade_ymd(when: datetime | None = None) -> str:
     """該時刻**所屬的交易日** YYYYMMDD(N075:價格別標籤的第二個比對候選)。
 
-    夜盤 23:50 送出的單,本機日曆日是今天、交易日是明天;群益回報 `_Agg.date`(最新
-    事件日,非委託建立日)走哪一種日界未實證,所以兩個都記(見 `store.note_price_type`)。
+    夜盤 23:50 送出的單,本機日曆日是今天、交易日是明天;群益回報 idx23 走哪一種日界未實證
+    (跨日事件是否變值亦未實證),所以兩個都記(見 `store.note_price_type`)。
     - ≥15:00 → 次日起算的下一個交易日(週五夜盤 → 下週一);
     - <05:00 → 含今日的下一個交易日(週六凌晨 = 週五夜盤的延續 → 下週一);
     - 其餘(日盤時段)→ 含今日往回的最近交易日 = 今天。
@@ -890,7 +890,7 @@ class CapitalClient:
           會因為一次 timeout 就永久失標。
         `price_type` 為 None = 該請求沒有價格別(刪單 / 改價 / 減量)→ 不記。
         日期記**兩個候選**:本機日曆日 + 該時刻所屬的交易日(N075)。夜盤跨午夜時兩者
-        不同,而群益回報 `_Agg.date`(最新事件日)走哪一種日界未實證 —— 記兩個是舊行為的超集,
+        不同,而群益回報 idx23 走哪一種日界未實證 —— 記兩個是舊行為的超集,
         不會讓現在標得出來的單失標,理由與 prune 規則見 `store.note_price_type`。
         平倉路徑也經過送單函式 → 一併標。
         `stock_no` / `buy_sell`(回報口徑 "B"/"S")綁進 note:多開的交易日候選正是 seq 重用

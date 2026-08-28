@@ -52,7 +52,7 @@ class ReplyRecord:
     price: float | None = None
     qty: int = 0  # 證券=股、期權=口;語意依 Type(N委託量/D成交量/U減量數/C剩量)
     after_qty: int | None = None  # idx22(證券)改量後量
-    date: str | None = None  # idx23 YYYYMMDD(委託建立日;C/D 事件實測仍為原單日期)
+    date: str | None = None  # idx23 YYYYMMDD(同日 C/D 事件實測仍為原單日期;跨日事件是否變值未實證)
     time: str | None = None  # idx24 HH:MM:SS
     pre_order: bool = False  # idx31 == "B"(預約單)
     error_msg: str | None = None  # idx44(OrderErr=Y 時)

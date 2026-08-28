@@ -242,9 +242,12 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   (現股=1/融資=2,06-11 乾淨樣本 + 08-20 亂碼樣本雙源交叉;融券代碼未實證不對映)—
   `balance.py::_PNL_KIND_CODE`。06-11 的乾淨中文 fixture 說明鏈路曾正常,何時壞掉未知;新接任何
   SKCOM 事件欄位一律優先用代碼/數字欄,中文欄當 display-only。(Trigger:解析任何 SKCOM 事件字串)
-- **`OrderRecord.date` / `time` 是最新事件日 / 時,不是委託建立日**(2026-08-17 R2 review 實證:
-  `CapitalStore.apply_reply` 對每筆回報「有值就覆寫」`date`/`time`)。後果:昨日建立今日成交的單
-  `date` 已是今日;昨日部分成交今日刪單的單 `date` 也是今日而 `avg_fill_price` 是昨日的 → 任何
-  以 `date` 當日期界的前端聚合(`ladder-lots.ts` 三梯徽章、`fill-marks.ts` 成交點)擋不住這種跨日
-  均價;要真擋只能後端留逐筆 D 事件(精確版,next-time)。`store.py:65` 註解「委託建立日」是舊敘述。
-  (Trigger:任何吃 CapitalOrder date/time 做日期界或時間定位的功能)
+- **`OrderRecord.date` / `time` 來自回報 idx23 / idx24,`CapitalStore.apply_reply` 對每筆回報「有值就覆寫」
+  —— 但覆寫進來的值在跨日事件會不會變,未實證**(2026-08-17 R2 review 只核了覆寫機制;08-28 pr-134
+  review F-01 撞到 `reply.py` 記「同日 C / D 回報 idx23 / idx24 仍為原單日期」,06-10 真樣本 N / C 逐字相同,
+  repo 內零跨日事件樣本)。兩種可能:idx23 隨事件變 → 昨日建立今日成交的單 `date` 是今日、`avg_fill_price`
+  是昨日的,任何以 `date` 當日期界的前端聚合(`ladder-lots.ts` 三梯徽章、`fill-marks.ts` 成交點)擋不住跨日
+  均價;idx23 不變 → `date` 就是委託建立日,前端日期界成立。要真擋只能後端留逐筆 D 事件(精確版,next-time)。
+  另 06-10 預約單樣本 **idx29**=`20260611`(隔日,= 該單所屬交易日?;idx28 恆 `PI`,pr-134 報告 F-07 寫 idx28 為誤)疑似另有交易日欄,`reply.py` 未解析。
+  **拿到第一筆跨日事件(昨日掛、今日成交 / 刪單)的 raw 回報就能定案** —— 看 idx23 / idx29 各是哪一天。
+  (Trigger:任何吃 CapitalOrder date/time 做日期界或時間定位的功能;任何宣稱 `_Agg.date` 語意的 docstring)
