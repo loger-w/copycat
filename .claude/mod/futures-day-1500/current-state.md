@@ -37,7 +37,7 @@
 
 | # | 行為 | 守門 |
 |---|---|---|
-| W1 | 軸長 1140、三段長 300/539/301、死區(13:46–15:00 / 05:01–08:45)回 null、`alldayHhmmOf` 與 `alldayIndexOf` 互逆 | `allday.test.ts` 對應條(改期望索引值,不改語意) |
+| W1 | 空檔(05:01–08:45)/ 一天之外(13:46–15:00)`alldayIndexOf` 仍回 null;**可交易**索引與 `alldayHhmmOf` 仍互逆(空檔索引反查得到時刻、反向回 null,不再全域互逆);三個可交易段的段界字串與後端 `FUTURES_ALLDAY_DOMAIN` 相同(pr-133 F-05 回校:原句「軸長 1140、全域互逆」正是 SC-1 / SC-3 要改掉的,不是要守的) | `allday.test.ts` 對應條(改期望索引值,不改語意) |
 | W2 | 後端 `/api/market/bars?session=allday` payload、`FUTURES_ALLDAY_DOMAIN`、bars cache 鍵、`meta.status` 三態 | 後端零 diff;`tests/live/test_futures_bars.py` / `tests/server/test_bars*.py` 全綠 |
 | W3 | `inFuturesAllDayHours` 輪詢窗逐字不動 | `trading-hours.test.ts` 零改 |
 | W4 | live 點 gate 1–5 判準逐字不動(死區 / 錨定日 / 時鐘落後資料 / 資料落後成交 ≤3 根);「分時資料落後 N 根」提示不變 | `FuturesChart.test.tsx` live 節(改 fixture 日期 / 時刻,不改判準) |

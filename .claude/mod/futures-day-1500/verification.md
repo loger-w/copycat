@@ -8,7 +8,7 @@
 |---|---|
 | `npx vitest run`(frontend,review 收修前 d6f93a12) | 152 檔 / 2871 tests:2870 passed + 1 紅 = `App.memo.test.tsx`「換主檔」(1.1 s;App 級 lazy 負載 flake,單獨重跑 8/8 綠;與本案零關聯 —— next-time 08-27 已記同型) |
 | `npx vitest run`(review 收修後 5316f857) | 150 檔綠 + 2 檔紅 = `App.test.tsx`「capital WS 唯一掛載」(1.58 s)/ `App.memo.test.tsx`「換主檔」(1.27 s):同一型負載 flake(跑時與後端關機 / preview 收掉重疊);兩檔單獨重跑 **61/61 綠** |
-| `npx vitest run` 本案七檔(allday / adapter / FuturesChart / txf-overlay / trading-calendar / fill-marks / SIC.futures) | 收修後全綠 233 + FuturesChart 54(allday 37、adapter 20、FuturesChart 54、txf 14、trading-calendar 15、SIC.futures 39) |
+| `npx vitest run` 本案七檔(allday / adapter / FuturesChart / txf-overlay / trading-calendar / fill-marks / SIC.futures) | 收修後全綠 233(allday 36、adapter 22、FuturesChart 54、txf 13、trading-calendar 16、fill-marks 53、SIC.futures 39;pr-133 F-04 回校 —— 原分項四檔數字是事後補寫,以 `grep -cE '^\s*it\('` 逐檔實數為準,總和 233 不變) |
 | `npx tsc -b` | exit 0(收修前後各一次) |
 | `npx eslint src` | 0(收修前後各一次) |
 | `npx react-doctor@latest --scope changed --no-telemetry` | No issues found |
@@ -55,7 +55,7 @@ prod 8721 當時未跑(user 08-27 收工後未重起);從 worktree 起一台後�
 ## 4. 白名單核對(W1–W13)
 
 - W2 後端零 diff:`git diff origin/master...HEAD -- copycat/ tests/` 空。
-- W3 `trading-hours.ts` 零 diff;W6 `candle.ts` 零 diff;W12 `alldayFillPoints` 簽名不變(`git diff` 未觸 `fill-marks.ts` 函式體,只改註解)。
+- W3 `trading-hours.ts` 零 diff;W6 `candle.ts` 零 diff;W12 `alldayFillPoints` 簽名加**選配**第 4 參 `holidays`(P5 收修;既有三參呼叫相容),函式體改 `anchorDateOf(stamp, holidays)`;唯一 prod caller `FuturesChart.tsx` 已同步傳 `holidaySet`(pr-133 F-01 回校 —— 原句「函式體未動、只改註解」被 `git diff c80dbde5...HEAD -- fill-marks.ts` 推翻)。
 - W4 gate 1–4:`FuturesChart.test.tsx` live 節既有條(錨定日 gate 獨立 / gate 4 單獨 / 同錨定日追加 / 邊界 4 擋 3 放行 / 無成交空檔 / 常態落後 / 一天之外)全綠。
 - W5 個股頁疊線:`txf-overlay-series.test.ts` 既有 14 條期望值零改(只改 3 條標題),含「bars 空 → 不追加」「日期不同 → 不疊」。
 - W7 ref 來源不動;W9 常數 identity(IIFE)不動;W13 `FUT_LIVE_LAG_MAX`/文案不動。
