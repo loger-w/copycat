@@ -29,8 +29,9 @@
 
 ## 2. Seam(測試只寫在這裡)
 
-`TC4QuoteSource._heal_tick(now)`(可注入 now + caplog)與 `_check_stale()`(monkeypatch `_ensure_connected` + `_stop.wait`)——
-兩者皆為既有測試已用的 seam(TestHealResilience / TestReconnectResubWarning)。
+`TC4QuoteSource._heal_tick(now)`(可注入 now + caplog;TestHealResilience 已用)與 `_check_stale()`(monkeypatch
+`_ensure_connected`;TestReconnectResubWarning 已用)。本案新增 patch `_stop.wait` 讓退避不真睡 —— 這是新做法,既有測試
+用真 thread + `_stop.set()`(review S-8 回校)。
 
 ## 3. 不做
 
@@ -44,3 +45,17 @@
   `assert src._heal_attempts.get(HEAL_A, 0) >= 2, "watchdog 未持續重試"`:該案第一發 ZMQError 經 `_req` → `_dispose`
   把 api 清掉,之後每輪都是「quote 未連線」—— 舊斷言要求未連線也持續 +1,正是 D1 拍板拿掉的行為(洪水 + 錯檔位)。
   改為:第一發記帳 1 → 未連線期間停在 1 且 watchdog 活著 → 連線裝回來後恢復 ≥ 2。測試意圖(REQ 例外不得殺 watchdog)不變。
+
+## 5. Review round 1 處置(two-axis,opus)
+
+| # | 嚴重度 | 處置 |
+|---|---|---|
+| P-1 / S-1 旗標在 heal 窗外接回不復位 | P2 | **修**:連線狀態在兩道早退前先取、看到連線即復位;印仍在 subs 後(S-1 提醒的休市段每 poll 印不會發生)。紅測試 `test_flag_resets_even_when_reconnect_lands_outside_the_heal_window` |
+| P-2 同段換例外形狀吃不到 traceback | P3 | **修**:`(type, str)` 與上次印過 traceback 的形狀不同再印一次。紅測試 |
+| P-3 關機期間假承諾 | P3 | **修**:`_stop` 已設靜默 return。紅測試 |
+| P-4 / S-2 判準第二份字面 | nit / P3 | **修**:`_is_connected` = `_connection()` 的不拋版 |
+| S-3 一行版失去內層類別 | P3 | **修**:帶 `(cause <Type>)` |
+| S-4 多 source `#n` 交錯難讀 | P3 | **部分**:首發也標 `(#1)`(grep 不必 +1);不加 source 前綴 —— 五條 source 同 port、斷線時 session 為 None,沒有既有身分可用,新增 label 參數超出本案 |
+| S-5 sleep 弱測試 | nit | **修**:以 `_is_connected` 呼叫計數等 ≥ 10 輪 |
+| S-6 第三份 `_src` builder | nit | **不做**:合併既有兩個測試類的 builder 是無關重構 |
+| S-7 行長 / S-8 §2 文件 / P-5 「乾淨帳本」口徑 / 執行緒歸屬註解 | nit | **修**(文字) |

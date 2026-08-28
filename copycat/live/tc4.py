@@ -384,7 +384,8 @@ class TC4QuoteSource:
         #: 的訂閱窗與 futures session 的盤別窗錯開成兩把 key(見 `subscribe`)。
         self._window_offset: dict[str, int] = {}
         self._healer: threading.Thread | None = None
-        #: watchdog 已印過「quote 未連線,等重連」(整段斷線只印一次;接回後歸位)
+        #: watchdog 已印過「quote 未連線,等重連」(整段斷線只印一次)。**只由 watchdog thread
+        #: 讀寫**(`_heal_tick`);復位條件 = 任一輪巡檢看到連線在(不論 heal 時窗是否開著)。
         self._heal_waiting_conn = False
 
     # ---- 連線 ----
@@ -479,9 +480,12 @@ class TC4QuoteSource:
             logger.warning("TC4 quote Disconnect: api.lock busy,跳過實體 close(洩漏優於 crash)")
 
     def _is_connected(self) -> bool:
-        """與 `_connection()` 同一把尺(`_api_lock` 下兩個指標都非 None),但不拋。"""
-        with self._api_lock:
-            return self._api is not None and self._session is not None
+        """`_connection()` 的不拋版 —— 判準只有那一份(review S-2:第二份字面會漂)。"""
+        try:
+            self._connection()
+        except ConnectionError:
+            return False
+        return True
 
     def _connection(self) -> tuple[Any, str]:
         """_api/_session 一致快照(_api_lock,與 _dispose/_ensure_connected 寫側對齊):
@@ -620,6 +624,13 @@ class TC4QuoteSource:
         深價外契約那種本來就沒成交的 symbol 由 `heal_symbol_silence_secs=None` 整條
         豁免(TXO session),不靠窄母體擋。
         """
+        # 連線狀態在兩道早退**之前**先看:旗標的復位不能綁在「時窗開著且有腿」那條路 ——
+        # index 源的 heal 窗是 09:00–13:25,斷線 13:2x 印過一次、窗關後才接回,復位若在窗內
+        # 才做就整夜卡 True,次日再斷靜默不印(review P-1 / S-1)。印的位置仍在 subs 之後,
+        # 休市段不會每 poll 印。
+        connected = self._is_connected()
+        if connected:
+            self._heal_waiting_conn = False
         if not self._heal_active():
             return
         # tuple() 先取快照再排序:巡檢期間 engine 可能訂/退訂(集合的單步操作在 GIL
@@ -636,7 +647,13 @@ class TC4QuoteSource:
         # 真自癒落在錯的檔位;接回時 `_check_stale` 會把全部訂閱重掛一遍並刷新 `_sub_at`,
         # 跳過沒有漏救風險。整段斷線只印一次(08-28 斷達錢 4 11.5 分鐘:逐 symbol 逐輪
         # 各印「→ 重掛」「重掛失敗: quote not connected」共 2412 行)。
-        if not self._is_connected():
+        # 斷線期間不推階梯(斷線**前**已有的 attempts / `_heal_next` 照留;接回後
+        # `_check_stale` 刷 `_sub_at`、收到推播 `_note_push` 清帳)。`close()` 後在飛的
+        # 巡檢靜默退場:沒有重連會來,不印「待重連」的假承諾(review P-3)。
+        # 「N 腿」= 本輪巡檢母體(`_heal_symbol_active` 過濾後),不是 `_subscribed` 全量。
+        if not connected:
+            if self._stop.is_set():
+                return
             if not self._heal_waiting_conn:
                 self._heal_waiting_conn = True
                 logger.warning(
@@ -644,7 +661,6 @@ class TC4QuoteSource:
                     len(subs),
                 )
             return
-        self._heal_waiting_conn = False
         t1 = self._heal_silence
         if t1 is not None:
             quiet_since = max((self._last_push.get(s, 0.0) for s in subs), default=0.0)
@@ -1129,6 +1145,9 @@ class TC4QuoteSource:
             return
         backoff = 1.0
         failures = 0
+        #: 這段斷線已印過完整 traceback 的例外形狀 (type, message);沒見過的形狀 = 新的不懂的錯,
+        #: 再印一次(見過的交替出現不重印)
+        traced: set[tuple[type[BaseException], str]] = set()
         while not self._stop.is_set():
             logger.warning("TC4 stale >%ss, reconnecting...", _STALE_THRESHOLD_SECS)
             try:
@@ -1160,17 +1179,24 @@ class TC4QuoteSource:
             except (ConnectionError, OSError, zmq.ZMQError) as exc:
                 # zmq.ZMQError:Disconnect / wrapper 路徑仍可能裸拋,漏接會殺 listener
                 failures += 1
-                if failures == 1:
-                    # 同一段斷線只有第一發印完整 traceback(不吞不懂的錯);之後每發一行,
-                    # 例外型別 + 訊息在行內。08-28 斷達錢 4 11.5 分鐘:70 發 × ~58 行巢狀
-                    # traceback(內容每發相同)≈ 4100 行,佔整份 log 六成。
-                    logger.exception("reconnect attempt failed, backoff %.0fs", backoff)
+                shape = (type(exc), str(exc))
+                if shape not in traced:
+                    # 同一段斷線同一形狀只有第一發印完整 traceback(不吞不懂的錯);之後每發
+                    # 一行,例外型別 + 訊息(+ 內層 cause 類別)在行內。08-28 斷達錢 4 11.5 分鐘:
+                    # 70 發 × ~58 行巢狀 traceback(內容每發相同)≈ 4100 行,佔整份 log 六成。
+                    # 五條 source 各自計數、log 交錯:`#n` 是 per-source 序號,不是全域。
+                    traced.add(shape)
+                    logger.exception(
+                        "reconnect attempt failed (#%d), backoff %.0fs", failures, backoff
+                    )
                 else:
+                    cause = exc.__cause__
                     logger.error(
-                        "reconnect attempt failed (#%d): %s: %s, backoff %.0fs",
+                        "reconnect attempt failed (#%d): %s: %s%s, backoff %.0fs",
                         failures,
                         type(exc).__name__,
                         exc,
+                        f"(cause {type(cause).__name__})" if cause is not None else "",
                         backoff,
                     )
                 if self._stop.wait(backoff):
