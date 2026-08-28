@@ -32,9 +32,10 @@ async function fetchBreadthRows(): Promise<BreadthRowsState> {
  *  (不 unmount),列表又恆掛在右欄 —— 沒有這道 gate,只要開過站台一次,整個盤中每
  *  10 秒都在抓一份全市場 ~2800 列的 payload(review FE-2)。
  *
- *  **只停 `refetchInterval`,不關 `enabled`**(`useFuturesBars` 同慣例):輪詢是這支
- *  query 唯一的背景請求來源,停掉即達成目的;而 `enabled: false` 會讓切回 tab 時
- *  query 退回 pending 態 → 表格閃一次「載入中…」而不是留著舊表等新料。
+ *  **只停 `refetchInterval`,不關 `enabled`**:輪詢是這支 query 唯一的背景請求來源,
+ *  停掉即達成目的;而 `enabled: false` 會讓切回 tab 時 query 退回 pending 態 → 表格閃一次
+ *  「載入中…」而不是留著舊表等新料。(`useFuturesBars` 自 bug/futures-tab-reactivate-refetch 起
+ *  改走 `subscribed`,切回會立即重抓;這裡的 10 s 節奏沒有那個需求,維持只停 interval。)
  *
  *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更。 */
 export function useBreadthRows(active = true) {
