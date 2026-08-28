@@ -39,6 +39,7 @@
 
 - 第 4 筆後:`pytest -q` **`3140 passed`**(206 s;含 master 上 mod/n075 與本分支)exit 0;`pyright` 0;`ruff check copycat tests` PASS;時段 10:54–10:57。
 - 收修第 5 筆後:主 agent 快篩 `tests/server/test_bars.py` **`53 passed`** + ruff;純 docstring 改動。
+- **rebase 後重跑**(origin/master 進了 chore/pr-review-133-followups 10 筆,全 frontend + docs、與本分支零重疊,rebase 乾淨):`pytest -q` **`3140 passed`**(187.7 s)exit 0;`pyright` 0;`ruff` PASS;生產碼 vs master 零 diff;時段 11:00–11:03。
 - `copycat validate` 不需(未動 replay);frontend 未動,vitest 不跑。
 
 ## 6. Two-axis review(round 1,fixed point = merge-base 第 0 筆;兩軸 opus)
