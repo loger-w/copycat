@@ -1248,7 +1248,6 @@ class TestOneKHealthWarnings:
     def _bar(t: str) -> dict:
         return {"t": t, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
 
-    @pytest.mark.asyncio
     async def test_lag_behind_last_trade_warns_once_per_tail(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1266,7 +1265,25 @@ class TestOneKHealthWarnings:
         assert caplog.text.count("期貨 1K 落後 TXF") == 1, "同尾根第二次輪詢不再印"
         assert "尾根 2026-07-28 09:01" in caplog.text and "落後 9 分" in caplog.text
 
-    @pytest.mark.asyncio
+    async def test_session_open_is_not_lag(self, caplog: pytest.LogCaptureFixture) -> None:
+        # review Spec c1:15:01 夜盤剛開,尾根停在 13:45、最後成交 15:00:30 —— 牆鐘差 76 分,但兩者之間
+        # 零可交易分鐘 → 不是落後(每個開盤固定假警報的那條路);08:46 日盤開同理(尾根 05:00)
+        for tail_t, last_date, last_t in (
+            ("2026-07-28 13:45", "2026-07-28", "15:00:30.000"),
+            ("2026-07-29 05:00", "2026-07-29", "08:46:10.000"),
+        ):
+            src = self._Bars([self._bar(tail_t)])
+            engine = FuturesEngine(lambda: src)
+            await engine.start()
+            try:
+                st = engine._states["TXF"]
+                st.date, st.t = last_date, last_t
+                with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                    await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-29", session="allday")
+            finally:
+                await engine.close()
+        assert "期貨 1K 落後" not in caplog.text
+
     async def test_no_lag_warning_within_threshold_daily_or_historical(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1291,14 +1308,13 @@ class TestOneKHealthWarnings:
             await engine.close()
         assert "期貨 1K" not in caplog.text
 
-    @pytest.mark.asyncio
     async def test_mid_gap_warns_but_segment_jumps_do_not(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         bars = [
             self._bar("2026-07-28 13:44"),
             self._bar("2026-07-28 13:45"),
-            self._bar("2026-07-28 15:01"),  # 日盤尾 → 夜盤首:段界,不是缺格
+            self._bar("2026-07-28 15:03"),  # 日盤尾 → 夜盤首:段界;首根延後兩分(冷門開盤)不算缺格(< 3 分)
             self._bar("2026-07-28 15:02"),
             self._bar("2026-07-28 15:06"),  # 15:03–15:05 三根缺
             self._bar("2026-07-28 15:07"),
