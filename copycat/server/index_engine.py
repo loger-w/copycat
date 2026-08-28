@@ -560,6 +560,14 @@ class IndexEngine:
                     self._pending_date = new_date
                     self._pending_minutes = {}
                     self._pending_backfill.clear()  # in-place:worker 可能正握著它
+                    # 在飛的 retry(heal / 連線)是在**舊日窗**起跑的:它返回時 `_pending_date`
+                    # 已設,`_merge_backfill` 會把舊日整天分鐘寫進 `_pending_backfill`,swap 時當
+                    # 最低層疊進新日 → 舊日 09:00–13:30 整段留在新日線上直到逐分被覆寫
+                    # (review 08-25 §2.5 Spec 2)。世代 +1 讓 executor 內還沒起跑的工作項早退,
+                    # cancel 讓已 await 的那發走不到合併點(N094)。
+                    self._retry_epoch += 1
+                    if self._retry_task is not None and not self._retry_task.done():
+                        self._retry_task.cancel()
                     # **to_thread**(review SP1):N052 之後 `set_trade_date` 含一批同步
                     # UNSUBQUOTE(舊窗歸零),留在 loop 上跑等於 TC4 半死時整條 loop
                     # 停擺(廣播 / watchdog / MIS 全卡)。換窗與重掛必須維持這個順序:
