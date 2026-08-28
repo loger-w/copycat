@@ -231,6 +231,8 @@ class CapitalClient:
         self._balance_last_ts: float = 0.0  # 定時重查用(0=啟動後第一圈就查)
         self._close_inflight: dict[str, float] = {}  # key → monotonic 解鎖時刻(只在 loop 上碰)
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
+        #: 損益列回填蒐證去重:(股號, 種類) → 上次印過的均價(每 60 s 一輪同值不洗版)
+        self._avg_logged: dict[tuple[str, str | None], float] = {}
         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
         # 放棄輪旗標:collector.abandon() 已開遲到終止符的時間窗,下一次發查詢的 reset
         # 要保留它(COM 回呼無查詢識別 → 遲到的 `##` 只能靠這個窗擋;見 collector docstring)。
@@ -557,6 +559,21 @@ class CapitalClient:
                     [q.kind for q in same_no],
                 )
                 continue
+            if self._avg_logged.get((r.stock_no, r.kind)) != r.avg_price:
+                # 蒐證(2026-08-28 無券空單校準):群益給空單的「均價」是純賣價還是扣費稅淨收,
+                # 08-28 8358 那筆平掉後查不回來 —— 每次值變動印一行,下一筆實錄就有第一手
+                self._avg_logged[(r.stock_no, r.kind)] = r.avg_price
+                logger.info(
+                    "損益列回填 %s kind=%s avg=%s cost=%s pnl=%s price=%s(原 avg=%s,標籤原文=%r)",
+                    r.stock_no,
+                    r.kind,
+                    r.avg_price,
+                    r.cost,
+                    r.pnl,
+                    r.price,
+                    p.avg_price,
+                    r.kind_raw,
+                )
             p.avg_price = r.avg_price
             # 群益損益試算「平均買進成本」已含買進手續費(prod 實證 4991 469.50 → 469.62):
             # 這一格是前端 positionEcon 不再加一次買費的唯一依據;漏寫 = wire 上 null =
