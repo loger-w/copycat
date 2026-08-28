@@ -82,6 +82,13 @@ _STALE_THRESHOLD_SECS = 30.0
 _RECONNECT_BACKOFF_CAP = 60.0
 #: 自癒重掛的退避上限(秒):同一 symbol 救不回時最慢每 5 分鐘再試一次
 _HEAL_BACKOFF_CAP = 300.0
+#: 重掛後幾秒內收到「與上一則指紋相同」的推播算 SUBQUOTE 回的 snapshot(不是新成交,不清
+#: attempts / 退避;2026-08-28 L106 / L171)。TC4 對 SUBQUOTE 回 snapshot 是毫秒級,10 s 已很寬;
+#: 超過寬限的同指紋推播(五檔簿更新)仍證明 key 活著,照舊清 —— 寬限只圈「SUB 回的那一則」。
+_SNAPSHOT_GRACE_SECS = 10.0
+#: 推播指紋欄位:成交時戳 / 成交日 / 累積量 / 成交價。四欄全同 = 沒有新成交(個股與期貨同構;
+#: IX0001 沒有時戳欄但現價 5 秒一變,靠 TradingPrice 分辨)。
+_PUSH_FP_KEYS = ("PreciseTime", "TradeDate", "TradeVolume", "TradingPrice")
 #: 第幾次重掛起改用新窗(= 新 key)。同一把 key 連兩次沒救回,代表這把 key 還有
 #: 別的持有者(TXF.HOT 由 TXO + futures 雙持、外部 probe 也算)—— 自己 UNSUB→SUB
 #: 永遠到不了 SumSubCount 0,TC4 就不會 ReqSubQuote 重掛上游 feed(repro.md 實驗 G)。
@@ -376,6 +383,8 @@ class TC4QuoteSource:
         self._sub_at: dict[str, float] = {}
         self._heal_attempts: dict[str, int] = {}
         self._heal_next: dict[str, float] = {}
+        #: symbol → 上一則推播的指紋(`_PUSH_FP_KEYS`);見 `_note_push` 的 snapshot 判定
+        self._push_fp: dict[str, tuple[str, ...]] = {}
         #: symbol → 訂閱窗變體序號(0 = 原窗);見 `_apply_variant`
         self._window_variant: dict[str, int] = {}
         #: symbol → **常駐**窗位移(N050)。與 variant 的差別:variant 是自癒的節奏
@@ -698,12 +707,39 @@ class TC4QuoteSource:
         if self._heal_resub(symbol, bump_variant=bump):
             self._sub_at[symbol] = now
 
-    def _note_push(self, symbol: str) -> None:
-        """收到推播 = 這把 key 是活的:清 attempts/退避,**保留 variant**。"""
-        self._last_push[symbol] = time.monotonic()
-        if symbol in self._heal_attempts:
-            self._heal_attempts.pop(symbol, None)
-            self._heal_next.pop(symbol, None)
+    def _note_push(self, symbol: str, quote: dict | None = None) -> None:
+        """收到推播 = 這把 key 是活的:清 attempts/退避,**保留 variant**。
+
+        例外(2026-08-28 L106 / L171):重掛後 `_SNAPSHOT_GRACE_SECS` 內到達、且指紋
+        (`_PUSH_FP_KEYS`)與上一則**相同**的推播 = TC4 對 SUBQUOTE 回的 snapshot,沒有新成交
+        —— `_last_push` 照記(key 有回應),但 attempts / `_heal_next` **不清**。清了的話冷門檔
+        每 60 s 都是 attempt 1(6949 一天 92 發),退避封頂 300 s 與第 3 發換窗都永遠到不了;
+        凍結 stub(08-14)在 REALTIME 側也就沒有逃逸路。
+        """
+        now = time.monotonic()
+        self._last_push[symbol] = now
+        fp = tuple(str(quote.get(k, "")) for k in _PUSH_FP_KEYS) if quote is not None else None
+        prev_fp = self._push_fp.get(symbol)
+        if fp is not None:
+            self._push_fp[symbol] = fp
+        if symbol not in self._heal_attempts:
+            return
+        sub_at = self._sub_at.get(symbol)
+        if (
+            fp is not None
+            and fp == prev_fp
+            and sub_at is not None
+            and now - sub_at <= _SNAPSHOT_GRACE_SECS
+        ):
+            logger.debug(
+                "TC4 自癒:%s 重掛後 %.1fs 收到同指紋 snapshot,attempts 不清(attempt %d)",
+                symbol,
+                now - sub_at,
+                self._heal_attempts[symbol],
+            )
+            return
+        self._heal_attempts.pop(symbol, None)
+        self._heal_next.pop(symbol, None)
 
     # ---- QuoteSource 介面 ----
 
@@ -919,6 +955,7 @@ class TC4QuoteSource:
             self._sub_at,
             self._heal_attempts,
             self._heal_next,
+            self._push_fp,
             self._window_variant,
         ):
             book.pop(sym, None)
@@ -1057,7 +1094,7 @@ class TC4QuoteSource:
         if isinstance(quote, dict):
             symbol = quote.get("Symbol")
             if isinstance(symbol, str) and symbol:
-                self._note_push(symbol)
+                self._note_push(symbol, quote)
         return msg
 
     def handle_raw(self, raw: str) -> None:
