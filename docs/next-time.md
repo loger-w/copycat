@@ -43,7 +43,7 @@
   15:23:24–15:23:52 五條全 `TC4 reconnected`、訂閱重掛 0 失敗、0 ERROR;TXO handover 回補 3493 ticks / 290 symbols;index
   「重連重掛 + 重抓」;corr river 回補 TWN / YM / ES / NQ 11 分鐘、SXF 13 分鐘(= 斷線長度);TMF 1K 尾根 15:24,期貨 tab
   15:25 46430「即時連線中」。
-- [ ] **TC4 斷線期間 log 洪水**:11.5 分鐘長出 6764 行 / 585 KB —— `零推播自癒 … → 重掛` + `自癒重掛失敗 …: TC4 quote not connected`
+- [x] **TC4 斷線期間 log 洪水**(已出貨 PR #146,2026-08-28;判準見 `.claude/mod/tc4-disconnected-log-flood/verification.md` §5):11.5 分鐘長出 6764 行 / 585 KB —— `零推播自癒 … → 重掛` + `自癒重掛失敗 …: TC4 quote not connected`
   每 symbol 每輪各一行(1206 條),reconnect 失敗每次印 4 行 traceback(210 個 `Traceback`)。TC4 整天沒開會長到 ~30 MB,
   且把真訊號淹掉。候選:quote 未連線時零推播自癒整批只印一行(「N 腿等連線」)、reconnect 失敗 traceback 只在第一次與換退避檔時印。
 - [ ] **#142 `bars: 慢請求` 第一筆真事件**:15:13:06 console `bars: 慢請求 /api/market/bars/TMF?tf=D 24.9 s 才回(status 200)`
