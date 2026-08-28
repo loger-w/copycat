@@ -621,6 +621,21 @@ def _push_raw(symbol: str) -> str:
     return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": {"Symbol": symbol}})
 
 
+def _push_raw_quote(quote: dict[str, str]) -> str:
+    """帶成交欄位的 REALTIME 推播(snapshot 指紋測試用;`_push_raw` 只有 Symbol)。"""
+    return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": quote})
+
+
+#: 一則「有成交欄位」的推播:指紋 = PreciseTime / TradeDate / TradeVolume / TradingPrice
+_FP_QUOTE = {
+    "Symbol": "TC.S.TWS.6949",
+    "PreciseTime": "01:23:45.000",
+    "TradeDate": "20260828",
+    "TradeVolume": "6",
+    "TradingPrice": "42.5",
+}
+
+
 #: 四把在跑的 base 窗(stock 日窗 / TXO 日窗 / TXO 夜窗 / corr 全天窗)。
 #: 變體必須對**每一把**都產出互異的新鍵 —— 塌回同一把 key 的失效樣態是
 #: 「自癒照跑、log 照印,但 TC4 refcount 沒歸零 → 上游永遠不重掛」(零錯誤訊號)。
@@ -786,6 +801,85 @@ class TestHealSymbolSilence:
         # T-8:退避也要一起清 —— 只清 attempts 的話,恢復後又靜默的 symbol 要等
         # 上一輪算出的 `_heal_next` 到期(最壞 300s)才救得回
         assert HEAL_A not in src._heal_next
+
+
+class TestHealResubSnapshot:
+    """L106 / L171(2026-08-28 triage):重掛(UNSUB→SUB)後 TC4 對 SUBQUOTE 回一則 snapshot
+    (tc4-market-facts fresh subscribe 事實)。它與上一則推播**指紋相同**(PreciseTime / TradeDate /
+    TradeVolume / TradingPrice 全同)= 沒有新成交,不能當「這把 key 活了」清 attempts —— 否則
+    冷門檔(6949 今日 92 發)每 60 s 都是 attempt 1,`_HEAL_BACKOFF_CAP` 300 s 永遠到不了、
+    凍結 stub 也到不了 `HEAL_VARIANT_AFTER` 的換窗逃逸路。`_last_push` 照記(key 確實有回應)。
+    """
+
+    @staticmethod
+    def _src(api: FakeApi) -> TC4QuoteSource:
+        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src._subscribed = {"TC.S.TWS.6949"}
+        return src
+
+    def test_same_fingerprint_within_grace_keeps_attempts(self) -> None:
+        api = FakeApi({})
+        src = self._src(api)
+        sym = _FP_QUOTE["Symbol"]
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))  # 首則:指紋建檔
+        base = time.monotonic()
+        src._sub_at = {sym: base}
+        src._last_push = {sym: base}
+        src._heal_tick(base + 100.0)  # 靜默 100 s > 60 s → 重掛,_sub_at = base+100
+        assert src._heal_attempts[sym] == 1
+        next_before = src._heal_next[sym]
+
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))  # SUB 回的 snapshot:同指紋、重掛後即刻
+        assert src._heal_attempts[sym] == 1, "同指紋 snapshot 不得清 attempts"
+        assert src._heal_next[sym] == next_before, "退避時刻不得被 snapshot 重設"
+        assert src._last_push[sym] > base, "key 有回應:_last_push 照記"
+
+        # 第二輪:退避到期後再重掛 → attempt 2(階梯在爬),不再是永遠的 attempt 1
+        api.rt_requests.clear()
+        src._heal_tick(next_before + 1.0)
+        assert _rt_pairs(api) == [("UNSUBQUOTE", sym), ("SUBQUOTE", sym)]
+        assert src._heal_attempts[sym] == 2
+
+    def test_changed_fingerprint_clears_attempts(self) -> None:
+        # 白名單 1:真成交(指紋變了)照舊清 attempts + _heal_next —— 與 test_push_resets_attempts 同義
+        api = FakeApi({})
+        src = self._src(api)
+        sym = _FP_QUOTE["Symbol"]
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))
+        base = time.monotonic()
+        src._sub_at = {sym: base}
+        src._last_push = {sym: base}
+        src._heal_tick(base + 100.0)
+        assert src._heal_attempts[sym] == 1
+
+        src.handle_raw(_push_raw_quote({**_FP_QUOTE, "TradeVolume": "7"}))
+        assert sym not in src._heal_attempts
+        assert sym not in src._heal_next
+
+    def test_same_fingerprint_after_grace_clears_attempts(self) -> None:
+        # 重掛很久之後才來的同指紋推播(五檔簿更新、無新成交)證明 key 活著 → 照舊清。
+        # 寬限只圈「SUB 回的那一則」,不圈之後所有無成交的推播。
+        api = FakeApi({})
+        src = self._src(api)
+        sym = _FP_QUOTE["Symbol"]
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))
+        src._heal_attempts[sym] = 2
+        src._heal_next[sym] = time.monotonic() + 100.0
+        src._sub_at = {sym: time.monotonic() - tc4_mod._SNAPSHOT_GRACE_SECS - 5.0}
+
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))
+        assert sym not in src._heal_attempts
+        assert sym not in src._heal_next
+
+    def test_unsub_clears_the_fingerprint(self) -> None:
+        # 白名單 2:退訂清掉所有自癒帳,指紋也是 —— 留著的話下一輪訂閱的首則會被拿去比對舊指紋
+        api = FakeApi({})
+        src = self._src(api)
+        sym = _FP_QUOTE["Symbol"]
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))
+        assert sym in src._push_fp
+        src._unsub(sym)
+        assert sym not in src._push_fp
 
 
 class TestHealWindowVariantEscalation:
