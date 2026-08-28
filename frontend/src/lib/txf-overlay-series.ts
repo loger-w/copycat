@@ -74,9 +74,9 @@ export function txfBarsToSeries(
   // `dayMinuteOf` 每根只算一次、結果與 bars 同序存下來給第二圈(pr-133 F-12):caller 的 memo deps
   // 含每拍 ~1 s 的 txf 現價,兩圈各掃一遍是每秒 2 × ~5,700 次 splitStamp。**不要**改成「由尾往前
   // 找第一根日盤 bar」—— 那會破掉這裡刻意保留的亂序防禦。
-  const dms: ([string, number] | null)[] = bars.map(dayMinuteOf);
+  const dayMinutes: ([string, number] | null)[] = bars.map(dayMinuteOf);
   let anchor: string | null = null;
-  for (const dm of dms) {
+  for (const dm of dayMinutes) {
     if (dm !== null && (anchor === null || dm[0] > anchor)) anchor = dm[0];
   }
   // 日盤日必須與個股頁正在看的交易日一致(quote.date = index engine 的 trade_date):交易日凌晨
@@ -85,7 +85,7 @@ export function txfBarsToSeries(
   if (anchor !== null && quote !== null && quote.date !== null && quote.date !== anchor) anchor = null;
   if (anchor !== null) {
     for (const [i, b] of bars.entries()) {
-      const dm = dms[i];
+      const dm = dayMinutes[i]; // `== null`:noUncheckedIndexedAccess 讓索引取值多一個 undefined
       if (dm == null || dm[0] !== anchor) continue;
       const minute = dm[1]; // 終點標記 → 起點分鐘
       // `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫點價恆 > 0 → 0 = 不可得(同 futures-overlay usable)
