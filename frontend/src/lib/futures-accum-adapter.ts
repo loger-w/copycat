@@ -90,12 +90,31 @@ export function futuresBarsToAccum(input: Input): StockAccum {
     );
   }
 
+  // Σ 與高低在**插橋之前**算完(pr-133 F-11):橋不是成交,而它與真成交格唯一的差別是索引 ——
+  // 靠 `k === ALLDAY_GAP.end` 認橋是拿位置當哨兵,空檔段哪天變 tradable,落在那一格的真成交會
+  // 靜默被排除在量 / 均價 / 高低之外、零測試紅。先算完,下面就沒有東西需要被「認出來」。
+  // 順序無關(Σ / max / min),直接走 rows;live 佔位格 v=0 不進量、h/l=p 進高低,與從前相同。
+  let amountMilli = 0;
+  let volume = 0;
+  let high: number | null = null;
+  let low: number | null = null;
+  for (const m of rows.values()) {
+    amountMilli += m.c * m.v;
+    volume += m.v;
+    // 高低取 per-minute 的 `h` / `l`(tick 級極值)—— core 的極值標記走等值反查
+    // (`m.h === accum.high`),拿收盤極值當 accum.high 會讓反查落空 = 標記靜默缺席。
+    const h = m.h ?? m.c;
+    const l = m.l ?? m.c;
+    high = high === null || h > high ? h : high;
+    low = low === null || l < low ? l : low;
+  }
+
   // 空檔水平橋(mod/futures-day-1500 Q9(a)):05:00 → 08:45 無交易,x 軸保留這 225 格,
   // 線要畫成**水平**(user 平時 APP 的畫法)。core 的單條 polyline 只會直線連相鄰 key,
   // 所以在空檔末格(08:45,`ALLDAY_GAP.end`)補一格取夜盤末格收盤的橋:05:00 → 08:45 平走、
   // 08:46 再跳到日盤價。**只在兩側都有格時補**(日盤第一筆 bar 或 live 到了才畫;日盤未開時
   // 線停在 05:00、右側留白 —— 拍板不跟牆鐘延伸)。橋不是成交:v=0、h/l=null(等值反查
-  // 不會命中它),下面的 Σ / high-low 一律跳過;vp 更早就沒收它。
+  // 不會命中它),Σ / high-low 上面已算完、vp 更早就沒收它 —— 插橋後只剩排序。
   let nightLast: number | null = null;
   let hasDay = false;
   for (const k of rows.keys()) {
@@ -110,22 +129,6 @@ export function futuresBarsToAccum(input: Input): StockAccum {
   // 兩處對「末格是誰」的答案必須是同一個(live 補在中間、bars 亂序時才不會岔開)。
   const sorted = [...rows.entries()].sort((a, b) => a[0] - b[0]);
   const minutes = new Map<number, MinuteAgg>(sorted);
-
-  let amountMilli = 0;
-  let volume = 0;
-  let high: number | null = null;
-  let low: number | null = null;
-  for (const [k, m] of sorted) {
-    if (k === ALLDAY_GAP.end) continue; // 橋:不是成交,不進 Σ 與高低
-    amountMilli += m.c * m.v;
-    volume += m.v;
-    // 高低取 per-minute 的 `h` / `l`(tick 級極值)—— core 的極值標記走等值反查
-    // (`m.h === accum.high`),拿收盤極值當 accum.high 會讓反查落空 = 標記靜默缺席。
-    const h = m.h ?? m.c;
-    const l = m.l ?? m.c;
-    high = high === null || h > high ? h : high;
-    low = low === null || l < low ? l : low;
-  }
 
   const lastRow = sorted[sorted.length - 1];
   return {
