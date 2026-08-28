@@ -276,14 +276,21 @@ describe("FuturesChart 分時圖(SC-1;mod/futures-day-1500 15:00 起算)", () =>
     calendarBody = { today: "2026-08-18", trade_date: "2026-08-18", calendar_trade_date: "2026-08-18",
       backfill_env: null, holidays: ["2026-08-19"], years_loaded: [2026], calendar_loaded: true };
     barsBody = { bars: [bar("2026-08-18 22:00", 22_990_000), bar("2026-08-18 22:29", 23_000_000)], meta: META };
-    ordersBody = { orders: [futFill({ date: "20260818", time: "22:10:30" })] };
+    // 第二筆成交是「日曆已載」的屏障(pr-133 F-06):正確實作下,載入前兩邊都讀空模組集合(錨定 08-19)、
+    // 載入後都讀 query(08-20),live 點與 22:10 成交在兩態都畫 —— 光等 length 3 可能在日曆落地前就過,
+    // 突變(live 改回讀模組集合)只在載入後才分家,紅會靠時序。08-20 09:00 這筆只在 slice 錨定 08-20
+    // 之後才畫(載入前 anchorDate 08-19 ≠ 08-20),先等它出現,再同步斷言 live 點。
+    ordersBody = {
+      orders: [futFill({ date: "20260818", time: "22:10:30" }), futFill({ date: "20260820", time: "09:00:30" })],
+    };
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 7, 18, 22, 30, 30));
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
-    await waitFor(() => expect(mainLineXs(container).length).toBe(3)); // 22:00 / 22:29 / live 22:31
+    await waitFor(() => expect(screen.getByTestId(`fill-B-${alldayIndexOf("0900")!}`)).toBeTruthy()); // 日曆已載
+    expect(mainLineXs(container).length).toBe(3); // 22:00 / 22:29 / live 22:31
     expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("2231")!));
-    await waitFor(() => expect(screen.getByTestId(`fill-B-${alldayIndexOf("2210")!}`)).toBeTruthy());
+    expect(screen.getByTestId(`fill-B-${alldayIndexOf("2210")!}`)).toBeTruthy();
   });
 
   it("假日前夜盤與假日後日盤同一天:日曆載入後 slice 重算(不等下一輪 bars)", async () => {
