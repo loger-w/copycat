@@ -162,7 +162,7 @@ tests/test_corr_config.py::TestRepoConfigFile::test_repo_config_matches_default_
 | # | 項目 | 怎麼看 |
 |---|---|---|
 | SC-1 | **N024 真實列數量測**(條文要求「要動之前先量一次真實列數」) | 理論上界已寫進 change-spec:個股 1K ≤275 列/交易日;40 日窗 ≤ ~7,700 列、20 日窗 ≤ ~3,850 列。盤中對一檔 **DK 不支援**的股號量實際列數:`GET /api/stock/overlay/{code}` 前後各記一次 server log 的耗時,或側車直呼 `StockQuoteSource.fetch_daily_bars(code, n=5)` 並在 `_collect_history` 加暫時計數。量到之後回填 change-spec §1 N024 |
-| SC-2 | **N105 盤外啟動自癒** | 交易日 13:45 之後重啟 8721,`grep "index 分時自癒" logs/server-*.log` 應看得到晚間發出的 heal(改動前該時段零筆);休市日**盤外段零筆、09:04–13:25 窗內照舊有**(交易日閘只管盤外;08-25 review 改口,補窗內閘待 user 拍板) |
+| SC-2 | **N105 盤外啟動自癒** | 交易日 13:45 之後重啟 8721,`grep "index 分時自癒" logs/server-*.log` 應看得到晚間發出的 heal(改動前該時段零筆);休市日**盤外段零筆、09:04–13:25 窗內照舊有**(交易日閘只管盤外;08-25 review 改口)—— **08-28 user 拍板補窗內閘(mod/index-heal-holiday-gate)後:有日曆的休市日整天零筆** |
 | SC-3 | **N107 混日線窗口** | 換日 08:30–09:0x 之間、`_pending_date` 還沒 swap 時重整加權分時頁 → 線不得出現昨日+今日混在一起的形狀。窗極窄(≤60 s),屬機會觀察 |
 | SC-4 | **N104 期貨空態三句話** | 期貨 tab 分時模式,TC4 忙 / 未連線時分別應看到「回補中…(TC4 忙,稍後自動重試)」與「暫無資料(TC4 未連線)」;有 bars 時 gate 5 的「分時資料落後 N 根(TC4 回補中)」照舊在模式列右側,兩者不得同時出現 |
 | SC-5 | **三顆日曆膠囊** | 平常 nav 右側應**完全看不到**它們(健康態零 DOM)。要看樣子:暫時設 `TXO_BACKFILL_DATE=2026-08-24` 重啟 → 應亮「TXO 回補日鎖定 2026-08-24」;把 `configs/trading_holidays.json` 的 `years` 只留 2025 重啟 → 應亮「交易日曆過期」。**看完記得還原**(前者會把 TXO 面鎖住) |
