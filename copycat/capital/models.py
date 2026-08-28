@@ -129,7 +129,7 @@ class OrderRecord:
     order_qty: int = 0  # 顯示單位(張/股/口)
     filled_qty: int = 0
     unit: str = "張"
-    date: str | None = None  # 委託建立日 YYYYMMDD(排序/前端跨日顯示用)
+    date: str | None = None  # 回報 idx23 YYYYMMDD,每筆回報覆寫;跨日事件是否變值未實證(排序/前端跨日顯示用)
     time: str | None = None  # 最新事件 HH:MM:SS
     pre_order: bool = False
     error_msg: str | None = None

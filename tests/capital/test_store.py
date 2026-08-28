@@ -437,8 +437,8 @@ def test_price_type_noted_after_reply_arrives() -> None:
 
 
 def test_price_type_not_applied_across_days() -> None:
-    """server 長跑跨日、seq 重用(review R7):記錄日與回報日(`_Agg.date` = 最新事件日,
-    有值就覆寫)不符一律不帶 — 今日的限價單被標成「市價」是憑空的假訊息,寧可缺標籤;
+    """server 長跑跨日、seq 重用(review R7):記錄日與回報日(idx23,每筆回報覆寫)不符
+    一律不帶 — 今日的限價單被標成「市價」是憑空的假訊息,寧可缺標籤;若 idx23 隨事件變日,
     昨日建立今日成交的單也因此掉標籤,那是 fail-safe 方向。日期缺(None)同樣不帶。"""
     s = CapitalStore()
     s.note_price_type(SEQ_A, "market", "20260610")
@@ -532,7 +532,7 @@ def test_price_type_survives_clear_and_replay() -> None:
 
 def test_price_type_matches_trade_date_for_night_session() -> None:
     """夜盤 23:50 送出的市價單:本機日是 20260824,但它屬於 20260825 那個交易日。
-    群益回報的委託建立日若是**交易日**,原本的「本機日必須相等」會讓標籤整段消失
+    群益回報的 idx23 若是**交易日**,原本的「本機日必須相等」會讓標籤整段消失
     (使用者在委託列表看到一張沒有「市價」標的市價單,零錯誤訊號)。"""
     s = CapitalStore()
     s.note_price_type(SEQ_A, "market", "20260824", trade_date="20260825")

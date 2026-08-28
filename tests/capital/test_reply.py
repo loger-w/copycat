@@ -40,7 +40,7 @@ def test_parse_preorder_new() -> None:
 
 
 def test_parse_date_field() -> None:
-    """idx23=委託建立日 — 排序鍵用,昨日預約單才不會壓在今日單上面。"""
+    """idx23 — 排序鍵用,昨日預約單才不會壓在今日單上面(同日 N / C 樣本相同;跨日是否變值未實證)。"""
     r = parse_onnewdata(RAW_N_PREORDER)
     assert r.date == "20260610"
 

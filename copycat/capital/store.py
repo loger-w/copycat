@@ -79,7 +79,7 @@ class _Agg:
     applied_qty: int = 0  # 已樂觀套進部位的成交量(張 / 口;F5 部分成交只套增量)
     applied_shares: int = 0  # 已被套用消化的成交量(股 / 口;證券 = 已套張數 × 1000),算增量均價用
     applied_value: float = 0.0  # 已被套用消化的價金(以增量均價計),殘量(不足 1 張)留給下一張
-    date: str | None = None  # 回報**最新事件日** YYYYMMDD(apply_reply 有值就覆寫;不是委託建立日)
+    date: str | None = None  # 回報 idx23 YYYYMMDD(每筆回報有值就覆寫;跨日事件是否變值未實證,見 note_price_type)
     fill_date: str | None = None  # 最後一筆成交**到達**的本機日 YYYYMMDD(today_qty 只算今天的)
     time: str | None = None
     pre_order: bool = False
@@ -202,8 +202,8 @@ class CapitalStore:
 
     def _today_net_lots_locked(self, stock_no: str, kind: TradeKind) -> int:
         """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。「今天」看成交**到達日**
-        `fill_date`,不看 idx23(它是最新事件日不是成交日:昨日建立今日成交 / 刪單的單 `date`
-        都已是今日,分不出哪些成交量是今天進來的),也不能假設聚合
+        `fill_date`,不看 idx23(它是否隨成交事件變日未實證;就算變,也只是最後一筆事件的日期,
+        分不出哪些成交量是今天進來的),也不能假設聚合
         只有當日 —— prod 8721 跨日長跑、`_orders` 沒有 caller 會清(review 2026-08-26 P1),
         隔夜庫存若被算成今天進來的,前端稅減半 = 少收稅、打平線偏低,零錯誤訊號。"""
         today = self._today()
@@ -353,10 +353,14 @@ class CapitalStore:
         判準從「日期不等」改成「集合不相交」是必要的 —— 否則夜盤那筆(0824/0825)會被
         隔天日盤第一張單(0825/0825)順手清掉,標籤在同一個交易日內就沒了。
 
-        另一個前提要說清楚:`_Agg.date` 是**最新事件日**,不是委託建立日(`apply_reply` 有值就
-        覆寫;tc4-market-facts 群益節)。日盤單只記 (0824,),隔日再有事件(成交 / 刪單)把 `date`
-        推成 0825 → 出候選集 → 標籤消失 = 只缺標籤,fail-safe 方向仍成立;夜盤單 (0824, 0825)
-        被隔日事件推日期仍在集合內,標籤照帶。語意錯位沒有把誤標窗拉寬(review §2.4 Standards 1)。
+        另一個前提要說清楚:`_Agg.date` 來自回報 idx23,`apply_reply` **每筆回報有值就覆寫**;
+        但 idx23 在跨日事件(隔日成交 / 刪單)會不會換成事件當日 —— **未實證**:`reply.py` 記同日
+        C / D 回報仍為原單日期(06-10 真樣本 N / C 逐字相同),tc4-market-facts 群益節那條「最新
+        事件日」只推自覆寫機制,repo 內沒有跨日事件樣本(pr-134 review F-01 / F-03)。兩種可能:
+        idx23 不隨事件變 → 就是委託建立日,本方標籤不會因隔日事件掉;idx23 隨事件變 → 日盤單
+        (0824,) 被推成 0825 出候選集、只缺標籤(fail-safe),夜盤單 (0824, 0825) 仍在集合內照帶,
+        但他方單入集母體是「事件日落在候選集」、比「建立日落在候選集」大 —— 窗是變寬方向,
+        量級待夜盤實驗定案。
 
         `stock_no` / `buy_sell`(review R6 ST1)= 這張單的標的與方向("B"/"S"),帶出時
         回報的同名欄位要**等值**才算同一張單。多開的那個交易日候選正是 seq 重用的誤標窗
@@ -389,7 +393,7 @@ class CapitalStore:
             self._price_types.pop(seq_no, None)
 
     def _price_type_of(self, a: _Agg) -> str | None:
-        """回報 `date`(最新事件日)落在記錄的候選日(本機日 / 交易日)之一才帶出;
+        """回報 `date`(idx23)落在記錄的候選日(本機日 / 交易日)之一才帶出;
         日期缺(None)無從比對 → 不帶,不猜。回報的日界語意(夜盤 / 預約單)未實證 —
         見 `note_price_type`。"""
         noted = self._price_types.get(a.seq_no)

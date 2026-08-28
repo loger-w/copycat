@@ -1,14 +1,16 @@
 # verification — mod/n075-price-type-label-window(2026-08-28)
 
-分支 commit(master 1ce0c500 起):c7e63fa8 test 紅先行 → 50758b2d fix → 04ca8f47 chore docs → 4f9d6404 refactor(tests) 收修 →
-0fd04dc2 chore docs 收修 → 93861b60 chore next-time seq 觀察。(5792ec68 重複 characterization 測試依 review Spec F-04 rebase 掉。)
+分支 commit(= PR #134 的 7 筆,`gh pr view 134` 順序;依 08-28 拍板 (b) 引「PR #134 第 n 筆 + subject」,不引 rebase 前 SHA):
+第 1 筆 `test(capital): 紅先行 —— 交易日推算保險絲(RuntimeError)不得吞掉晚到結果的 late 審計行…` → 第 2 筆 `fix(capital): 交易日推算保險絲炸掉時價格別標籤退回只記本機日…` →
+第 3 筆 `chore(capital/docs): N075 文件改口…` → 第 4 筆 `refactor(tests): review round 1 收修 —— 保險絲替身改名…` → 第 5 筆 `chore(capital/docs): review round 1 收修 —— _Agg.date 欄位宣告…` →
+第 6 筆 `chore(docs): next-time 記 08-28 prod 觀察…` → 第 7 筆 artifacts。(原第 3 筆之後一筆重複 characterization 測試依 review Spec F-04 rebase 掉。)
 
 ## 1. 自動化 gate(worktree `.worktrees/mod-n075`,借主 tree `.venv`)
 
 | gate | 指令 | 結果 | exit |
 |---|---|---|---|
-| 紅先行 | `pytest tests/capital/test_client.py -k trade_day_fuse`(fix 前,c7e63fa8) | **2 failed**(RuntimeError 直接穿出 `_note_price_type`) | 1 |
-| 綠 | 同上(50758b2d 後) | 2 passed | 0 |
+| 紅先行 | `pytest tests/capital/test_client.py -k trade_day_fuse`(fix 前,第 1 筆 test 紅先行) | **2 failed**(RuntimeError 直接穿出 `_note_price_type`) | 1 |
+| 綠 | 同上(第 2 筆 fix 後) | 2 passed | 0 |
 | capital 子集 | `pytest -q tests/capital`(收修後) | 405 passed | 0 |
 | 全量(收修前) | `pytest -q -p no:cacheprovider` | 3135 passed, 3 skipped(192 s) | 0 |
 | 全量(收修後) | 同上 | **3134 passed, 3 skipped**(187 s;−1 = 撤掉重複測試) | 0 |
@@ -57,7 +59,7 @@ late 審計行照寫、送單結果照回。兩條新測試釘住(`test_late_res
 | 程式不封洞 | store 比對規則零 diff(§3-5) |
 | 文件改口:`_Agg.date` = 最新事件日 | `store.py:82` 欄位註解、`note_price_type` / `_price_type_of` / `_today_net_lots_locked` docstring、`client.py::_trade_ymd` / `_note_price_type` docstring、`test_client.py::_dated` / `test_store.py` 兩條 docstring |
 | 窗未封 + 期貨路徑更寬 + 關窗條件句 | `store.note_price_type` docstring;s3 案 docstring;review §5 A2;next-time 08-28 |
-| 保險絲不吞審計行(§2.4 Spec 7) | 50758b2d + 兩條測試 + mutation |
+| 保險絲不吞審計行(§2.4 Spec 7) | 第 2 筆 fix + 兩條測試 + mutation |
 | review §5 A2 / A3 / A5 / A7 / C 類回填 | `2026-08-25-do-batch-review.md` §5 |
 | N099 spec 改「維持鎖」 | `2026-08-24-do-batch-rounds.md` N099 `[x]` |
 | 夜盤實驗 user 親做 | next-time 08-28 第一條(含 seq 口徑一起核) |
