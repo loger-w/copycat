@@ -600,7 +600,8 @@ class TestModuleClock:
     async def test_default_clock_persists_yesterday(self) -> None:
         """走真路徑:預設時刻下 `build_minute` 把 yesterday 永久化(緩衝窗內會留洞,見
         `TestMidnightMemoRace.test_inside_buffer_yesterday_not_persisted`)。哨兵第一條擋
-        「fixture 被刪」,這一條擋「時刻被凍到窗內 / 別的測試把 `_now_time` 改回真牆鐘」。"""
+        「fixture 被刪」,這一條擋「`_DAYTIME` 被凍到窗內」(外部把 `_now_time` 改回真牆鐘的
+        洩漏,autouse 每條測試 setup 都會蓋掉,兩條都偵測不到、也不需要;pr-135 F-03)。"""
         today, yesterday = _dt.date(2026, 7, 29), _dt.date(2026, 7, 28)
         cache = BarsCache(ttl=999.0)
         await build_minute(
