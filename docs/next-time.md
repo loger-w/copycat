@@ -1,3 +1,12 @@
+## 2026-08-28(mod/index-heal-holiday-gate 加權自癒休市日補窗內閘 留尾)
+
+- [ ] **日曆誤標交易日為休市的可觀測性只靠畫面**:補窗內閘後,`configs/trading_holidays.json` 若把真交易日標成休市,那天 IX0001 分時自癒
+  整天不跑(盤外段本來就不跑)—— 症狀 = 全站休市膠囊 + 圖是前一日的,錯得看得見,但 log 零訊號。候選:server 起動時若
+  `is_trading_day(today)` 為 False 而 TC4 09:00 後仍有 IX0001 推播 → 印一行 WARNING「日曆說休市但有推播」。
+- [ ] **rollover 設 pending 的 cancel 只擋 `_retry_task` 一支**:heal 與連線 retry 同走 `_schedule_retry` single-flight,現況只有一支;
+  日後若分家(各自 task)要一起 cancel。測試 `test_rollover_pending_cancels_the_inflight_retry` 用 dummy task 釘機制,沒釘「舊日分鐘沒疊進新日」
+  的結果面(需要可控的慢 fetch hook,`FakeIndexSource` 尚無)。
+
 ## 2026-08-28(mod/n075-price-type-label-window N075 標籤文件改口 留尾)
 
 - [ ] **N075 夜盤遠價市價單實驗(user 親做)**:某個夜盤用 copycat 送一張離現價很遠的市價單(不成交),看回報 `date`
