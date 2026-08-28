@@ -43,7 +43,11 @@ export async function fetchWithTimeout(
   // fetch 自己先拒絕(真 fetch 綁了 signal)時 race 不會消費 aborted,它稍後的拒絕會變 unhandled rejection
   aborted.catch(() => {});
   try {
+    // 誤報 triage(auto-verify 4.4.0):這是 fetch 的 wrapper,刻意不分 status 把 body 緩衝完 ——
+    // 非 2xx 的 body 要留給 caller 的 `parseError(res)` 讀錯誤碼;`res.ok` 由 caller 判。
+    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
     const res = await fetch(url, { signal: ctrl.signal });
+    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
     const buf = await Promise.race([res.arrayBuffer(), aborted]);
     return new Response(buf, { status: res.status, statusText: res.statusText, headers: res.headers });
   } finally {
