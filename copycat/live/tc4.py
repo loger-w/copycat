@@ -707,7 +707,7 @@ class TC4QuoteSource:
         if self._heal_resub(symbol, bump_variant=bump):
             self._sub_at[symbol] = now
 
-    def _note_push(self, symbol: str, quote: dict | None = None) -> None:
+    def _note_push(self, symbol: str, quote: dict) -> None:
         """收到推播 = 這把 key 是活的:清 attempts/退避,**保留 variant**。
 
         例外(2026-08-28 L106 / L171):重掛後 `_SNAPSHOT_GRACE_SECS` 內到達、且指紋
@@ -715,22 +715,20 @@ class TC4QuoteSource:
         —— `_last_push` 照記(key 有回應),但 attempts / `_heal_next` **不清**。清了的話冷門檔
         每 60 s 都是 attempt 1(6949 一天 92 發),退避封頂 300 s 與第 3 發換窗都永遠到不了;
         凍結 stub(08-14)在 REALTIME 側也就沒有逃逸路。
+
+        時鐘接縫:這裡用真 `time.monotonic()`,而 `_heal_tick(now)` 可注入 —— prod 兩邊同一個時鐘;
+        測試若注入假時鐘,寬限判定會靜默 fail-open 回「清 attempts」的舊行為(見 `TestHealResubSnapshot`
+        以真時鐘 base 寫法)。
         """
         now = time.monotonic()
         self._last_push[symbol] = now
-        fp = tuple(str(quote.get(k, "")) for k in _PUSH_FP_KEYS) if quote is not None else None
+        fp = tuple(str(quote.get(k, "")) for k in _PUSH_FP_KEYS)
         prev_fp = self._push_fp.get(symbol)
-        if fp is not None:
-            self._push_fp[symbol] = fp
+        self._push_fp[symbol] = fp
         if symbol not in self._heal_attempts:
             return
         sub_at = self._sub_at.get(symbol)
-        if (
-            fp is not None
-            and fp == prev_fp
-            and sub_at is not None
-            and now - sub_at <= _SNAPSHOT_GRACE_SECS
-        ):
+        if fp == prev_fp and sub_at is not None and now - sub_at <= _SNAPSHOT_GRACE_SECS:
             logger.debug(
                 "TC4 自癒:%s 重掛後 %.1fs 收到同指紋 snapshot,attempts 不清(attempt %d)",
                 symbol,

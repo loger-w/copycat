@@ -439,7 +439,7 @@ class IndexEngine:
         logger.info("index 重連重掛 + 重抓(window_variant=%d)", self._heal_variant)
         self._schedule_retry(variant=self._heal_variant)
 
-    def _note_holiday_push(self, p: int) -> None:
+    def _note_holiday_push(self, price_milli: int) -> None:
         """日曆誤標偵測(L3,2026-08-28):有日曆、日曆說今天休市、牆鐘已過 09:00,卻收到
         ≥ `_HOLIDAY_PUSH_WARN_PRICES` 個相異現價 → 同一日曆日 WARNING 一次。
 
@@ -459,7 +459,7 @@ class IndexEngine:
             self._holiday_prices = set()
         if self._holiday_warned == key:
             return
-        self._holiday_prices.add(p)
+        self._holiday_prices.add(price_milli)
         if len(self._holiday_prices) >= _HOLIDAY_PUSH_WARN_PRICES:
             self._holiday_warned = key
             logger.warning(
