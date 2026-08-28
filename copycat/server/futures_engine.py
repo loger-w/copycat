@@ -17,18 +17,45 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import functools
 import logging
 from typing import Callable, Protocol
 
 from copycat.live.stock_source import Bar, BarsStatus
 from copycat.live.tc4 import HistoryTimeoutError
+
 from copycat.live.futures_models import (
     PRODUCTS,
     parse_futures_realtime,
     product_from_symbol,
     resolve_contract_ym,
 )
+
+#: 期貨 1K 健康 WARNING(L262,2026-08-28):尾根落後最後成交**超過**這麼多分鐘才印
+#: (與前端 FuturesChart gate 5「落後 N 根」同門檻;等於門檻不印)。
+_LAG_WARN_MINUTES = 3
+#: 近全段段界(終點標記口徑,`futures_source.FUTURES_ALLDAY_DOMAIN`):日盤尾 13:45 → 夜盤首 15:01、
+#: 夜盤尾 05:00 → 日盤首 08:46;日盤 session 多日連排時 13:45 → 次日 08:46。這三種跳躍不是缺格。
+_SEGMENT_JUMPS = frozenset({("13:45", "15:01"), ("05:00", "08:46"), ("13:45", "08:46")})
+_BAR_MINUTE_FMT = "%Y-%m-%d %H:%M"
+
+
+def _bar_minute(t: str) -> _dt.datetime | None:
+    """1K bar 的 `t`("YYYY-MM-DD HH:MM" 台北)→ datetime;形狀不對回 None(健康檢查跳過,不炸 route)。"""
+    try:
+        return _dt.datetime.strptime(t, _BAR_MINUTE_FMT)
+    except ValueError:
+        return None
+
+
+def _last_trade_at(date: str, t: str) -> _dt.datetime | None:
+    """`_ProductState.date`("YYYY-MM-DD")+ `t`("HH:MM:SS.fff")→ datetime;形狀不對回 None。"""
+    try:
+        return _dt.datetime.strptime(f"{date} {t[:8]}", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +151,9 @@ class FuturesEngine:
         self._flush_interval_secs = flush_interval_secs
         self._dirty: dict[str, None] = {}
         self._flush_timer: asyncio.TimerHandle | None = None
+        #: 1K 健康 WARNING 去重:product → 上次印過的尾根 `t`(落後 / 缺格各一本;前端每分鐘輪詢不洗版)
+        self._lag_warned: dict[str, str] = {}
+        self._gap_warned: dict[str, str] = {}
         # leaf fallback:HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol,
         # 2026-08-18 實證)時 → resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約。
         # leaf 是**不同 symbol**,天然是一把新 key,所以補得回來(重訂 HOT 補不回來)
@@ -322,7 +352,65 @@ class FuturesEngine:
         except ConnectionError as e:
             logger.warning("market: futures history proxy miss %s(%s)", product, e)
             return [], "disconnected"
+        if tf == "1" and bars:
+            self._check_1k_health(product, bars, end)
         return bars, "ok"
+
+    def _check_1k_health(self, product: str, bars: list[Bar], end: str) -> None:
+        """期貨 1K 落後 / 中段缺格 WARNING(L262,2026-08-28)。固定前綴供 grep:
+        `期貨 1K 落後` / `期貨 1K 中段缺格`;同商品同尾根只印一次。
+
+        落後 = 尾根分鐘 vs 該商品最後成交(`_ProductState.date` + `t`)差 > `_LAG_WARN_MINUTES`,
+        只在查詢窗涵蓋最後成交日(`end >= date`)時判 —— 歷史窗尾根天生落後,不是病。
+        缺格 = 連續 bar 分鐘差 > 1 且不是段界(`_SEGMENT_JUMPS`)。以前只有前端 gate 5 看得到
+        落後、缺格連前端都只是一條直線,事後分不出 H1(TC4 暫時落後)與 H3(memo 釘住)。
+        純診斷:任何形狀不對的時戳一律跳過,不影響回傳。
+        """
+        stamps = [_bar_minute(b["t"]) for b in bars]
+        if any(s is None for s in stamps):
+            return
+        tail_t = bars[-1]["t"]
+        tail_at = stamps[-1]
+        assert tail_at is not None
+        st = self._states.get(product)
+        if (
+            st is not None
+            and st.t is not None
+            and st.date is not None
+            and end >= st.date
+            and self._lag_warned.get(product) != tail_t
+        ):
+            last = _last_trade_at(st.date, st.t)
+            if last is not None:
+                lag = int((last - tail_at).total_seconds() // 60)
+                if lag > _LAG_WARN_MINUTES:
+                    self._lag_warned[product] = tail_t
+                    logger.warning(
+                        "期貨 1K 落後 %s:尾根 %s 最後成交 %s %s 落後 %d 分",
+                        product,
+                        tail_t,
+                        st.date,
+                        st.t[:8],
+                        lag,
+                    )
+        gaps: list[tuple[int, str, str]] = []
+        for prev_bar, cur_bar, prev_at, cur_at in zip(bars, bars[1:], stamps, stamps[1:]):
+            assert prev_at is not None and cur_at is not None
+            missing = int((cur_at - prev_at).total_seconds() // 60) - 1
+            if missing <= 0 or (prev_bar["t"][-5:], cur_bar["t"][-5:]) in _SEGMENT_JUMPS:
+                continue
+            gaps.append((missing, prev_bar["t"], cur_bar["t"]))
+        if gaps and self._gap_warned.get(product) != tail_t:
+            self._gap_warned[product] = tail_t
+            worst = max(gaps)
+            logger.warning(
+                "期貨 1K 中段缺格 %s:%d 段,最大 %d 分(%s→%s)",
+                product,
+                len(gaps),
+                worst[0],
+                worst[1],
+                worst[2],
+            )
 
     def resolved_contract(self, product: str) -> str | None:
         """HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。"""
