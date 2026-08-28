@@ -685,6 +685,32 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.queryByText(/分時資料落後/)).toBeNull();
   });
 
+  // do-batch-review §2.2 Spec 2(A3):adapter 把 0 價 bar 整根跳過(TC4 期貨偶發送 "0"),
+  // 「資料走到哪」的尾根也要同一把尺 —— 拿一根畫面上不存在的 0 價 bar 當尾,會把「真缺 6 根」
+  // 算成「只缺 1 根」而照樣架橋,主線從 10:00 直線拉到 10:07。
+  it("gate 5 的尾根跳過 0 價 bar:真 bar 至 10:00、10:01–10:05 全 0 價、最後成交 10:05:30 → 落後 6 根,不架橋", async () => {
+    barsBody = {
+      bars: [
+        bar("2026-08-05 09:00", 22_960_000),
+        bar("2026-08-05 10:00", 23_000_000),
+        bar("2026-08-05 10:01", 0),
+        bar("2026-08-05 10:02", 0),
+        bar("2026-08-05 10:03", 0),
+        bar("2026-08-05 10:04", 0),
+        bar("2026-08-05 10:05", 0),
+      ],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 6, 30));
+    // 10:05:30 → 終點標記 10:06;與最後一根**可畫**的 bar(10:00)差 6 > 3 → 擋
+    const st: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:05:30.000" };
+    const { container } = wrap(<FuturesChart product="TXF" state={st} resolvedYm="202608" />);
+    await findIntraday();
+    expect(mainLineXs(container).length).toBe(2); // 09:00 / 10:00,0 價五根本來就不進圖
+    expect(screen.getByTestId("last-dot").getAttribute("cx")).toBe(cxOf(alldayIndexOf("1000")!));
+    expect(screen.getByText("分時資料落後 6 根(TC4 回補中)")).toBeTruthy();
+  });
+
   // review SP2:15:00 開盤後 WS 零推播時 state.t 還停在下午 13:4x(前一場次 = 剛收的那一天)→ 那是
   // WS 沒新成交,不是資料落後;拿它的索引(軸尾 1364)減夜盤頭的末根會誤印「落後 1360 根」。
   it("gate 5 不吃前一場次的成交時戳:t = 13:40(剛收那天)、bars 至 D 15:05、時鐘 15:06 → 照追加 live 點", async () => {
