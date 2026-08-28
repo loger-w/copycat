@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import threading
 from typing import Callable
 
 from copycat.live.stock_source import BarsStatus, stock_symbol
@@ -71,6 +72,9 @@ class FakeIndexSource:
         self.on_message: Callable[[dict], None] | None = None
         self.subscribe_error: Exception | None = None
         self.fetch_minutes_calls = 0
+        #: 設了就讓**下一次** `fetch_day_minutes` 在 worker thread 上卡住直到 set()(一次性;
+        #: 模擬「rollover 前起跑、rollover 後才返回」的在飛回補),之後的呼叫不受影響。
+        self.fetch_gate: threading.Event | None = None
         self.closed = False
         self.calls: list[tuple[str, str, str, str]] = []
         self._tag = tag
@@ -88,6 +92,9 @@ class FakeIndexSource:
     def fetch_day_minutes(self, code: str, *, window_variant: int = 0) -> dict[str, int]:
         self.fetch_minutes_calls += 1
         self.window_variants.append(window_variant)
+        gate, self.fetch_gate = self.fetch_gate, None
+        if gate is not None:
+            gate.wait(timeout=5)
         if isinstance(self.day_minutes, Exception):
             raise self.day_minutes
         if self.minutes_sequence:
