@@ -265,7 +265,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `txf` 報價(每拍 ~1 s),**不用**期貨 WS 0.1 s coalesce 流(圖牆 50 張卡 memo 會被打穿)。
 - **相關係數稀疏腿 `sparse` 旗標**(2026-08-27 起):產生點 `configs/correlation.json` 腿的 `"sparse": true`(只認字面
   true)與 `copycat/corr_config.py::DEFAULT_CONFIG`(降級時的同一組;`tests/test_corr_config.py::
-  test_only_sxf_is_sparse_and_the_repo_file_agrees` 鎖兩邊集合一致),讀者 = `app._default_corr_source` →
+  test_sparse_legs_are_sxf_and_vx_and_the_repo_file_agrees` 鎖兩邊集合一致;08-28 起 VX 也是稀疏腿),讀者 = `app._default_corr_source` →
   `CorrQuoteSource(heal_sparse_symbols=)` → `tc4.TC4QuoteSource._heal_tick` R2 迴圈 `continue`。與時段閘
   `heal_symbol_active` **正交**:sparse 腿仍在 R1 母體。漂掉的症狀:該腿每 240 s 一發「零推播自癒 … attempt 1」
   (漏標)或**單腿死**(session 其他腿還在推,R1 不成立)時該腿整場不救(誤標;session 整條死掉仍由 R1 整批救),
