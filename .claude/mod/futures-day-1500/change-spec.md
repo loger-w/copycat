@@ -38,6 +38,7 @@
 
 見 `current-state.md` §3 W1–W11。本 spec 追加:
 - W12:`alldayFillPoints` 簽名不變(caller 零改),錨定語意隨 `anchorDateOf` 變。
+  **P5 後修訂**(pr-133 F-02):簽名加選配 `holidays`,caller 必須傳與 `anchorDate` 同源的那一份日曆(`FuturesChart` 傳 `holidaySet`);既有三參呼叫仍相容。
 - W13:`FUT_LIVE_LAG_MAX = 3` 與提示文案「分時資料落後 N 根(TC4 回補中)」不變。
 
 ## 4. 拍板紀錄(grilling)

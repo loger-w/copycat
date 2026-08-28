@@ -4,7 +4,7 @@
   "slug": "futures-day-1500",
   "reviewed_at": "2026-08-28T00:25:00+08:00",
   "fixed_point": "origin/master c80dbde5",
-  "reviewed_head": "d6f93a12 (pre-fix; history rewritten after fixes → 608b1cfc / 1dbb7775 / 8c09cbaf)",
+  "reviewed_head": "d6f93a12 (pre-fix; history rewritten after fixes → 608b1cfc / 1dbb7775 / 5316f857; pr-133 F-09: 8c09cbaf was the pre-amend SHA of the chore commit, not on master)",
   "reviewers": [
     { "axis": "standards", "model": "opus", "read_only": true },
     { "axis": "spec", "model": "opus", "read_only": true }

@@ -59,7 +59,7 @@
 - [ ] **`src/App.test.tsx`「capital WS 唯一掛載」負載型 flake**(08-27 晚 fix/breakeven-review-followups 三次全量 vitest 與
   全量 pytest **並跑**時 3/3 紅、單獨跑 3/3 綠 2848 passed):該測試 `waitFor` 預設 1 s 等兩個 lazy 頁面掛載,並行負載下 1.8 s。
   不是本輪 diff(純函式)造成。候選 = 該測試 `waitFor(..., { timeout: 3000 })`,或 ops 紀律「全量 vitest 不與全量 pytest 同時跑」。
-- [x] **期貨 tab 改「15:00 夜盤起算」的一天定義(user 08-27 拍板另開 /mod)** —— 08-28 mod/futures-day-1500 出貨(#132);留尾見下條:現況前後端都把期指一天排成
+- [x] **期貨 tab 改「15:00 夜盤起算」的一天定義(user 08-27 拍板另開 /mod)** —— 08-28 mod/futures-day-1500 出貨(issue #132 / PR #133);留尾見下條:現況前後端都把期指一天排成
   08:45 日盤 → 13:45 → 15:00 夜盤 → 05:00(x 軸左起 08:45;凌晨 ≤05:00 算前一日)。user 要的畫面 = 近全圖左起
   15:00 夜盤、右至隔天 13:45 日盤收,「今天」= 昨 15:00 起算(交易所交易日口徑)。牽動:`frontend/src/lib/allday.ts`
   (段順序 / `anchorDateOf` / `sliceCurrentAllday` / 刻度表)、`copycat/live/futures_source.py::FUTURES_ALLDAY_DOMAIN`
