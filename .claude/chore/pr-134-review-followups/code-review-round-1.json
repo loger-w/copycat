@@ -1,0 +1,25 @@
+{
+  "fixed_point": "origin/master 「chore(skills): backend-conventions 記 ruff format stdin --check 誤判教訓」(依 08-28 拍板 (b) 引 subject 不引 SHA)",
+  "reviewed_head": "分支第 5 筆「chore(capital/docs): _Agg.date 語意降成…」(review 前形態;收修後 fix 拆成純 code、docstring 併入 chore)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "S-P1", "severity": "P1", "kind": "hard", "text": "`idx28` 是錯的欄位序(4 處):以 `RAW_N_PREORDER` 逐欄拆 `a[23]='20260610'`、`a[28]='PI'`、`a[29]='20260611'`(交叉驗證 `a[31]='B'` 預約單 ✓)。「疑似交易日欄」是 idx29;錯在 skill:251-252、next-time:14、change-spec:12,16。實驗者會去看一個恆為 PI 的常數欄,零錯誤訊號。", "disposition": "accepted → 主 agent 以同一樣本重數確認 a[28]='PI' / a[29]='20260611';skill / next-time / change-spec 四處改 idx29 並註明「pr-134 報告 F-07 寫 idx28 為誤」(已發布報告不回改,留原文)"},
+    {"id": "S-P2a", "severity": "P2", "kind": "hard", "text": "`fix(capital)` commit 混入 🔵 文件類改動(三處 docstring 的 idx23 口徑改寫),CLAUDE.md §6 三類分開;同分支已有 chore 落點,零成本可拆。", "disposition": "accepted → 分支重寫:fix commit 只剩 `today = _today_ymd()` hoist + 傳參 + 註解(client.py 一檔 7 行),三處 docstring 併入 chore commit;`git diff` 重寫前後最終樹相同"},
+    {"id": "S-P2b", "severity": "P2", "kind": "hard", "text": "`tests/capital/test_client.py:2143` 103 字元 > 100(backend-conventions line-length 100;ruff 未選 E5)。同檔其他 `StockOrderRequest(...)` 一律換行展開。", "disposition": "accepted → 展開換行(refactor(tests) commit);另兩處 awk 報 >100 的 :321 / :323 / :356 為既有行、非本分支"},
+    {"id": "S-P2c", "severity": "P2", "kind": "judgement", "text": "verification.md「第 n 筆」錨點自相矛盾:檔頭寫 base = master 1ce0c500 起,但 `git log --reverse 1ce0c500..` 第 1 筆是 e600f341,不是所列的 test 紅先行;實際編號對齊的是 PR #134 的 7 筆。", "disposition": "accepted → 錨點改「= PR #134 的 7 筆,`gh pr view 134` 順序」"},
+    {"id": "S-P3a", "severity": "P3", "kind": "hard", "text": "next-time:12 所引 06-10 樣本 `2313091595225` 前 7 位是 2313091,文中寫 2313092(那是 RAW_D_MARGIN_SELL)。", "disposition": "accepted(與 Spec P2-2 同條)→ 兩筆樣本都引、前綴寫 2313091–2313092"},
+    {"id": "S-P3b", "severity": "P3", "kind": "judgement", "text": "新測試 `calls` 與巢狀 `def _today()` 間缺空行(E306),同函式 `_trade` 前有空行 → 自我不一致;其餘符合檔內慣例;已核 pre-fix 確為紅、`_today_ymd` 全 repo 僅一個 caller。", "disposition": "accepted → 補空行"},
+    {"id": "S-P3c", "severity": "P3", "kind": "judgement", "text": "`today = _today_ymd()` 行乾淨,但根因(兩次獨立讀時鐘)未動,只釘順序 —— 建議註解一句點明。", "disposition": "accepted → 註解補「兩次讀時鐘本來就不是原子,這裡只釘順序,不釘同一瞬」"},
+    {"id": "S-P3d", "severity": "P3", "kind": "judgement (Shotgun Surgery)", "text": "「idx23 每筆覆寫、跨日未實證」同時寫在 client×3、store×3、models、reply、test_store×2、test_reply、skill、next-time;定案那天要改十餘處。建議 SoT = skill 條目,程式端只留指標。", "disposition": "knowing → 本輪不再擴;client / models / reply / test 側已是一句 + 指向 `store.note_price_type`,完整敘述只在 store docstring 與 skill 兩處;定案日以 grep `未實證` 收斂,記 change-spec 留尾"},
+    {"id": "S-P3e", "severity": "P3", "kind": "judgement", "text": "next-time「seq 是全域遞增計數不重編,撞同 seq 實務上不可能」由 3 個樣本外推,語氣強於原句「趨近零」(鐵則 D)。", "disposition": "accepted → 改「看來是…(三日樣本外推)…機率趨近零」"},
+    {"id": "S-P3f", "severity": "P3", "kind": "judgement", "text": "change-spec §3.4「既有 405 條逐字不變」與實際不符(4 條既有測試 docstring 被改);應寫「斷言逐字不變」。", "disposition": "accepted → 改「既有 405 條**斷言**逐字不變(4 條既有測試只改 docstring)」"}
+  ],
+  "spec": [
+    {"id": "P-P2a", "severity": "P2", "text": "F-04 只改了逐字點名的兩格,rebase 期 SHA 仍留 6 個(verification.md:12/13/62、JSON :6/8/9/10/13/14/16/17),逐個 `merge-base --is-ancestor` 全 NOT on master。", "disposition": "accepted → 全部改「第 n 筆 + subject」;`grep -E '[0-9a-f]{8}'` 只剩 1ce0c500(master 祖先)"},
+    {"id": "P-P2b", "severity": "P2", "text": "F-07 引的 seq 樣本與自述前綴對不上(`2313091595225` 前 7 位是 2313091,文寫 2313092)—— 「證據忠實度」條目自身失真。", "disposition": "accepted → 同 S-P3a"},
+    {"id": "P-P3a", "severity": "P3", "text": "`docs/next-time.md:330` / `:433` 仍把 `date` 當「最新事件日」既成事實,與本輪「未實證」互斥並存 —— F-01 同型病換檔復發;不在 spec §1 逐字範圍。", "disposition": "accepted(超出 §1 但同型,一句可收)→ 兩處改「是否為最新事件日未實證(08-28 pr-134 F-01)」/「若 date 隨事件變日 —— 未實證」"},
+    {"id": "P-P3b", "severity": "P3", "text": "change-spec.md 仍 untracked,artifact 未隨分支落檔。", "disposition": "accepted → 隨 chore commit 入版控"},
+    {"id": "P-OK", "severity": "-", "text": "scope creep 無(13 檔全對得上 F-01–F-07 或報告落檔);白名單 §3 逐條核過(store diff 全 docstring、apply_reply 不在 diff、client 只 hoist);求值順序:`git show e600f341:client.py:898-906` #134 前 `_today_ymd()` 在前,hoist 後一致(注意 5c0244f1^ 仍含 #134 不能當基準);紅先行:6795d6f9 上 calls == ['trade','today'] 必紅,HEAD 3 passed;F-01 四處皆「機制 + 未實證 + 兩種可能」未把任一語意寫成事實。", "disposition": "no-op"}
+  ],
+  "disposition": "Standards 10 條(1 P1 / 3 P2 / 6 P3):9 accepted 已修(含 P1 idx28→idx29、fix commit 拆純 code、行長、錨點、前綴、空行、註解、語氣、白名單措辭),1 knowing(Shotgun,留尾)。Spec 4 條 + 1 OK:4 accepted 已修(殘留 SHA 清光、前綴、兩處舊句、artifact 入版控)。修後 tests/capital 406 passed、ruff / pyright 綠;分支重寫為 報告 → test 紅先行 → fix(純 code)→ refactor(tests) → chore,重寫前後最終樹 diff 為空。"
+}
