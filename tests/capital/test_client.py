@@ -1793,7 +1793,7 @@ def _freeze_today(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _dated(raw: str, date: str = _FIXED_YMD) -> str:
-    """把回報日期(idx23;最新事件日)塞進回報字串;store 只在日期相符時帶出 price_type。"""
+    """把回報日期(idx23)塞進回報字串;store 只在日期相符時帶出 price_type。"""
     arr = raw.split(",")
     arr[23] = date
     return ",".join(arr)
@@ -2095,6 +2095,7 @@ async def test_submit_result_survives_trade_day_fuse(
 ) -> None:
     """同一把保險絲炸在正常送單路徑:單已送出、審計已寫,送單結果必須照回 —— 不能讓 route
     因為標籤算不出交易日而回 500(user 看到錯誤、單卻在市場上)。"""
+    _freeze_today(monkeypatch)  # 不凍日界會拿斷言當下重算的牆鐘比,午夜跨日一瞬紅(pr-134 F-05)
     monkeypatch.setattr(client_mod, "_trade_ymd", _trade_ymd_blows_fuse)
     com = FakeCom()
     client = _client(com, tmp_path)
@@ -2109,7 +2110,7 @@ async def test_submit_result_survives_trade_day_fuse(
             ),
         )
     assert result.ok is True and result.seq_no is not None
-    assert client.store._price_types[result.seq_no][1] == (client_mod._today_ymd(),)
+    assert client.store._price_types[result.seq_no][1] == (_FIXED_YMD,)
     # 斷等級 + seq,不再綁文案(review S F-4):log 句子不是契約,seq 點名才是
     assert any(
         r.levelname == "WARNING" and result.seq_no in r.getMessage() for r in caplog.records
@@ -2123,6 +2124,7 @@ async def test_note_price_type_evaluates_local_day_before_trade_day(
     `trade_date=_trade_ymd()` 求值;try 把 `_trade_ymd()` 提前後順序反了,跨午夜一瞬本機日會
     落在交易日之後 —— 候選日集合從 (0824, 0825) 變 (0825,)。釘住「本機日先」。"""
     calls: list[str] = []
+
     def _today() -> str:
         calls.append("today")
         return "20260824"
@@ -2139,7 +2141,9 @@ async def test_note_price_type_evaluates_local_day_before_trade_day(
     await _drive(
         client,
         lambda: client.submit_stock_order(
-            StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market")
+            StockOrderRequest(
+                stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market"
+            )
         ),
     )
     assert calls == ["today", "trade"]
