@@ -1,0 +1,19 @@
+{
+  "fixed_point": "origin/master 「chore(mod-index-heal-holiday-gate): artifacts」(依 08-28 拍板 (b) 引 subject 不引 SHA)",
+  "reviewed_head": "分支第 2 筆「fix(frontend): 期貨分時 gate 5 的尾根跳過 0 價 bar…」(review 前形態;收修落在第 3–4 筆)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "F-01", "severity": "P2", "kind": "judgement", "text": "Duplicated Code:「哪根 bar 畫得出來」兩份定義 —— `FuturesChart.tsx::tailIndex` 的 `c <= 0 continue` + `alldayIndexOfStamp` 與 `lib/futures-accum-adapter.ts:44-47` 是同一條規則的第二份實作;repo 判例 `lib/stock-accum.ts:159`「單一定義而不是自己再寫一次 `p <= 0`」。adapter 之後再加一道閘,tailIndex 靜默落後半步。建議 adapter export `drawableIndexOf(b): number | null` 兩邊共用。", "disposition": "accepted → 第 3 筆 refactor:adapter 匯出 `drawableIndexOf`(軸上有格且 c > 0),adapter 迴圈與 tailIndex 同吃"},
+    {"id": "F-02", "severity": "P3", "kind": "judgement", "text": "註解重抄被指涉方的規則(`c <= 0` 整根跳過、TC4 偶發送 \"0\"),`frontend-conventions`「推導數字只留一份」口徑是元件側指過去不重抄;首行「第一個索引可解」與下方「且 c > 0」自相矛盾。", "disposition": "accepted → 第 3 筆:tailIndex docstring 改「第一根畫得出來」並指向 `drawableIndexOf`,細節只留 adapter 一份"},
+    {"id": "F-03", "severity": "P3", "kind": "judgement", "text": "測試期望值 `cxOf(alldayIndexOf(\"1000\")!)` 由同源常數算回(`frontend-testing` 同義反覆條);本案有「落後 6 根」字面錨且突變已證紅,鑑別力不缺;既有檔內慣例同款,要收就整檔收。", "disposition": "declined(記錄):鑑別力由字面錨與 mutation 證明;整檔統一改法不在本案 scope,留 next-time"},
+    {"id": "鑑別力", "severity": "-", "kind": "evidence", "text": "reviewer 暫時移除 `if (b.c <= 0) continue;` 後單跑新案 FAIL(`mainLineXs 3 ≠ 2`);突變體已還原。", "disposition": "recorded"}
+  ],
+  "spec": [
+    {"id": "P2", "severity": "P2", "text": "註解宣稱兩個守衛受惠(時鐘落後守衛與 gate 5),但 gate 3(`tailIndex > live.index`)的行為改動零案;值得補一條或把註解收斂成只講 gate 5。", "disposition": "accepted(收斂):第 3 筆 docstring 只講 gate 5;gate 3 那條情境要 bar 時戳晚於時鐘(未來 bar),真環境不可構造,不補測"},
+    {"id": "P3-1", "severity": "P3", "text": "全 0 價 slice 下「有沒有資料」兩把尺:`last !== undefined` 而 `tailIndex === null` → gate 3 / 5 被短路,live 點照畫在一張沒有任何線的圖上;判準應改吃 `tailIndex !== null`。", "disposition": "accepted → 第 4 筆 fix:入口改 `tailIndex === null`,新案「slice 整段 0 價 → 不追加 live 點」;mutation(換回舊入口)紅"},
+    {"id": "P3-2", "severity": "P3", "text": "`anchorDate` 同樣取原始末根,經核刻意不動是對的(`anchorDateOf` 只吃 `t`),但 diff 沒寫下理由,下一位讀者會誤判成漏改而順手加上(全 0 價 slice 時 anchorDate 變 null → overlay 兩鈕靜默反灰)。", "disposition": "accepted → 第 4 筆:anchorDate docstring 補「刻意不套 tailIndex 那把尺」與後果"},
+    {"id": "P3-3", "severity": "P3", "text": "本分支無 change-spec / verification artifact 落檔。", "disposition": "accepted → 本目錄三檔"},
+    {"id": "scope", "severity": "-", "text": "(b) Scope creep 無;中段 0 價斷格架橋(core 單條 polyline 結構根因)仍未涵蓋,與 §2.2「SP1 不擴 scope」一致,屬正確留尾。", "disposition": "recorded"}
+  ],
+  "disposition": "Standards 3 條(F-01 / F-02 accepted、F-03 declined 記錄);Spec 4 條全 accepted(P2 以收斂註解處置,不補未來 bar 的測試)。收修 = 第 3 筆 refactor(共用 drawableIndexOf)+ 第 4 筆 fix(入口同尺 + 新案)。收修後 gate:vitest 2875 / tsc 0 / eslint 0 / react-doctor 無新 finding。"
+}
