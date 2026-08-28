@@ -1,0 +1,29 @@
+{
+  "fixed_point": "master e74b40c3(merge-base)",
+  "reviewed_commits": "第 1–8 筆(test(live) 指紋紅先行 → fix(live) _note_push 指紋 → test sparse 集合 → chore(corr) VX sparse → test(server) main_wiring 期望 → feat(server) index 日曆誤標 → feat(server) 期貨 1K 健康 → feat(capital) 損益列 INFO)",
+  "reviewers": "兩軸 sub-agent 皆 opus / effort high;白名單 8 條附進兩邊 prompt",
+  "standards": [
+    {"id": "S1", "sev": "P3", "hard": true, "text": "tests/server/test_futures_engine.py 三條新測試用 @pytest.mark.asyncio,違 backend-conventions L25(asyncio_mode=auto 不用裝飾器);同檔既有 5 條同寫法。"},
+    {"id": "S2", "sev": "P3", "hard": true, "text": "copycat/server/futures_engine.py 匯入區被插入空行,違 backend-conventions Ruff 節「不順手重排既存格式」。"},
+    {"id": "S3", "sev": "P3", "hard": true, "text": "CLAUDE.md §6 三類分開:5584d622 chore(corr) 夾帶 skill 文件中 _note_push 指紋那段(主題屬 241968f4 fix(live))。"},
+    {"id": "J1", "sev": "P2", "hard": false, "text": "Speculative Generality:tc4._note_push(symbol, quote: dict | None = None) 唯一 caller 恆傳 dict,None 分支與三處 fp is not None 守衛在 prod 是死碼。"},
+    {"id": "J2", "sev": "P2", "hard": false, "text": "_check_1k_health 在 to_thread 回來後於 event loop 上對全量 bars 跑 strptime(allday 多日 1–2k 根),前端每分鐘輪詢 × 商品數;同 backend-conventions「同步阻塞不進 route handler」顧慮。"},
+    {"id": "J3", "sev": "P3", "hard": false, "text": "assert 型別窄化符合 repo 先例;但迴圈內 assert prev_at/cur_at 在 any(None) 早退後冗餘,改逐根建 list 可全消。"},
+    {"id": "J4", "sev": "P3", "hard": false, "text": "Data Clumps:_lag_warned / _gap_warned 同 key 同值型,可併一本。"},
+    {"id": "J5", "sev": "P3", "hard": false, "text": "Primitive Obsession:_avg_logged key 型 tuple[str, str | None] 比 r.kind 實際型別 PositionKind | None 寬;kind=None 路徑已被 continue 擋掉。"},
+    {"id": "J6", "sev": "P3", "hard": false, "text": "Mysterious Name:_note_holiday_push(self, p: int) 的 p(毫點現價)簽名讀不出。"},
+    {"id": "J7", "sev": "P3", "hard": false, "text": "時鐘接縫:_heal_tick(now) 可注入、_note_push 硬取 time.monotonic();prod 一致,但未來注入假時鐘的測試會讓 grace 判定靜默 fail-open。"},
+    {"id": "S-note", "sev": "P3", "hard": false, "text": "段界白名單只比 HH:MM 忽略日期,連假整日空窗(13:45 週一 → 08:46 週三)會被放行;純診斷可接受。白名單 1–8 逐條核未見破壞。"}
+  ],
+  "spec": [
+    {"id": "a1", "sev": "P2", "text": "spec 切法第 6 條「next-time 勾銷」只做了 skill;docs/next-time.md 那條 /mod 可觀測性小批仍未勾。"},
+    {"id": "a2", "sev": "P2", "text": "test_only_sxf_is_sparse_and_the_repo_file_agrees 被改名,但 CLAUDE.md:268 §4 sparse 契約仍逐字指名舊測試名 → 契約 descriptor 指向不存在的測試。"},
+    {"id": "b1", "sev": "P3", "text": "損益 INFO 多印 標籤原文=%r(spec 格式止於「(原 avg=%s)」)。"},
+    {"id": "b2", "sev": "P3", "text": "futures_engine.py import 區多插一空行,與本批無關。"},
+    {"id": "b3", "sev": "P3", "text": "測試落到第 6 個檔 tests/server/test_main_wiring.py(spec seams 只列五個);屬既有契約鎖必改,spec 未預告。"},
+    {"id": "c1", "sev": "P2", "text": "落後檢查不分段:lag 用牆鐘分、不吃 _SEGMENT_JUMPS;15:01 / 08:46 開盤時尾根停在 13:45 / 05:00、st.date/t 已跳新段 → lag 76 / 226 分,每天固定兩發假 WARNING,污染 L262 要 grep 的訊號;前端 gate 5 算的是可交易根數,單位不同。"},
+    {"id": "c2", "sev": "P3", "text": "缺格白名單只認準點 15:01 / 08:46;段首根延後(冷門商品開盤數分無成交)→ 13:45→15:03 被誤判缺格。訊息印最大段,spec 原句寫首段。"},
+    {"id": "c3", "sev": "P3", "text": "spec 該改口:目標 #4「與部位現值不同」不可行(Position.avg_price 恆 None,每 60 s 重建 pending 會每輪都印);實作「與上次印過的不同」語意正確,回填 spec。"}
+  ],
+  "disposition": "Standards:S1 三條去裝飾器(第 9 筆);S2 空行拿掉(第 9 筆);S3 不重寫歷史,記下;J1 quote 必填、三處守衛 inline(第 10 筆);J2 檢查搬進 to_thread(_fetch_and_check,第 9 筆);J3 逐根建 list、assert 全消(第 9 筆);J4 併 _1k_warned[(product, kind)](第 9 筆);J5 key 型別 PositionKind + import(第 10 筆);J6 改名 price_milli(第 10 筆);J7 docstring 補時鐘接縫一段(第 10 筆);S-note 段界白名單整組退役(改可交易分鐘計數,日期自然納入)。Spec:a1 next-time 勾銷 + /perf 實驗數字(第 11 筆);a2 CLAUDE.md 測試名同步(第 11 筆);b1 保留 標籤原文(融券 [25] 校準要它),spec 回填;b2 同 S2;b3 spec seams 補列 test_main_wiring;c1 接受 —— 落後與缺格皆改以 _tradable_minutes_between(domain 依 session)計,段界之間零可交易分鐘,新增 test_session_open_is_not_lag 鎖 15:01 / 08:46 兩個開盤(第 9 筆);c2 接受 —— 缺格門檻 ≥ 3 可交易分,首根延後兩分不算,測試 15:01 → 15:03(第 9 筆);訊息維持印最大段,spec 改口;c3 spec 回填「與上次印過的不同」。兩軸 19 條:接受修 15、spec 回填 3、記下不動 1(S3)。"
+}
