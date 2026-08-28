@@ -41,6 +41,9 @@
   「8 條」是全站上限不是每頁)全程一條都沒斷 —— uvicorn `[accepted]` 從頭到尾 6 條、console 零「s 無訊息,重連」。
   browser↔uvicorn 的 WS 靠 server 10 s ping 活著,與 TC4 斷線正交;「斷 TC4 看 8 條 WS 全回來」這個判準其實測不到 WS 重連,
   真正的 WS 斷線刺激是 **server 重啟**(15:08 優雅停 → 15:09 起,當時無分頁連著,沒量到)。
+  **16:38 補驗 PASS**:preview 4173 分頁開著(run.ps1 的 vite dev 5173 不能當觀測端,HMR 會整頁重載)→ user Ctrl+C 重跑 run.ps1
+  (`2fb25e3c`,關機收尾 0.16 s)→ 新 log 14 秒內 accepted = 2 分頁 × 6 條 = 12,+60 s 仍 12、closed 0;分頁不重整、期貨 tab
+  16:41「即時連線中」資料自流。console 零訊息是設計:server 優雅關機走 onclose 路徑靜默重連,只有靜默 watchdog 那條才印「無訊息,重連」。
 - **PASS 後端 TC4 重連**:5 條 quote source 首次 stale 15:12:12(關閉後 30 s),reconnect 退避 8 → 16 → 60 s(封頂);TC4 重開後
   15:23:24–15:23:52 五條全 `TC4 reconnected`、訂閱重掛 0 失敗、0 ERROR;TXO handover 回補 3493 ticks / 290 symbols;index
   「重連重掛 + 重抓」;corr river 回補 TWN / YM / ES / NQ 11 分鐘、SXF 13 分鐘(= 斷線長度);TMF 1K 尾根 15:24,期貨 tab
