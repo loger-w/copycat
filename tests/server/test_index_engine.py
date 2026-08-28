@@ -390,20 +390,38 @@ async def test_heal_after_hours_falls_back_to_the_old_window_without_a_calendar(
         await eng.close()
 
 
-async def test_heal_inside_watch_window_ignores_the_calendar() -> None:
-    """SP1(b):**窗內逐字沿用舊判準,不吃日曆**。
+async def test_heal_inside_watch_window_skips_a_calendar_holiday() -> None:
+    """N105 補窗內閘(2026-08-28 user 拍板 A5「休市日就不要抓」;事前標該變:原
+    `test_heal_inside_watch_window_ignores_the_calendar` 釘的是相反行為)。
 
-    日曆把一個真交易日誤標成假日時,交易日閘會讓那天**整天**不自癒 —— 那是改動前
-    沒有的新失效(舊碼 09:00–13:25 照樣救)。交易日閘的用途是壓休市日的盤外噪音,
-    只該套在盤外那一段;窗內的行為不得因為多了一份設定檔而變差。
+    休市日 minutes 恆空 → 窗內 09:04–13:25 每 60 s→900 s 空打 TC4,抓回來永遠是空的。
+    有日曆且日曆說休市 → 窗內一發都不打。代價 = 日曆誤標交易日為休市那天整天不自癒,
+    但那天整個畫面都掛休市膠囊、圖是前一日的,錯得看得見(user 08-28 知情接受)。
     """
     fake = FakeIndexSource()
     eng = make_engine(
         fake,
         in_watch_window=lambda: True,
         now_fn=lambda: _dt.time(10, 0),
-        is_trading_day=lambda _d: False,  # 日曆說今天休市(可能是誤標)
+        is_trading_day=lambda _d: False,  # 日曆說今天休市
     )
+    eng._heal_secs = 0.01  # type: ignore[attr-defined]
+    await eng.start()
+    try:
+        fake.day_minutes = {"0901": 1_000, "0959": 2_000}
+        await asyncio.sleep(0.3)
+        # boot 那一發回補仍照打(start 不受 heal 閘管);之後窗內零 heal
+        assert fake.fetch_minutes_calls == 1, "有日曆的休市日 → 窗內一發 heal 都不許出"
+        assert eng.state()["twse"]["minutes"] == {}
+    finally:
+        await eng.close()
+
+
+async def test_heal_inside_watch_window_without_a_calendar_still_heals() -> None:
+    """窗內閘只在**有日曆**時生效:無日曆 = 不知道今天開不開盤,窗內逐字沿用舊判準照救
+    (與盤外「無日曆退回舊尾窗」同一個原則:不知道就不改行為)。"""
+    fake = FakeIndexSource()  # is_trading_day 不傳 = 無日曆
+    eng = make_engine(fake, in_watch_window=lambda: True, now_fn=lambda: _dt.time(10, 0))
     eng._heal_secs = 0.05  # type: ignore[attr-defined]
     await eng.start()
     try:
@@ -411,6 +429,37 @@ async def test_heal_inside_watch_window_ignores_the_calendar() -> None:
         await asyncio.sleep(0.3)
         assert eng.state()["twse"]["minutes"] == {"0901": 1_000, "0959": 2_000}
     finally:
+        await eng.close()
+
+
+async def test_rollover_pending_cancels_the_inflight_retry() -> None:
+    """review 08-25 §2.5 Spec 2(A5 第二部分):heal / 連線 retry 若在 rollover `set_trade_date`
+    **之前**起跑、之後返回,抓的是**舊日**整天分鐘,卻因 `_pending_date` 已設而落進
+    `_pending_backfill`,swap 時當最低層疊進新日 → 舊日 09:00–13:30 整段留在新日線上直到逐分
+    被覆寫。rollover 設 pending 那一刻要讓在飛的 retry 作廢:世代 +1(executor 內未起跑的
+    工作項早退)+ cancel(已 await 的那發走不到合併點,N094)。"""
+    fake = FakeIndexSource()
+    fake.day_minutes = {}  # rollover 抓不到新日 1K → 不 swap,pending 留著可觀察
+    eng = make_engine(
+        fake,
+        rollover=True,
+        trade_date="2026-08-13",
+        today_fn=lambda: _dt.date(2026, 8, 14),  # 週五
+        is_trading_day=lambda d: d.weekday() < 5,
+    )
+    eng._rollover_check_secs = 0.005  # type: ignore[attr-defined]
+    await eng.start()
+    inflight = asyncio.create_task(asyncio.sleep(10))  # 模擬 rollover 前已在 await 的 retry
+    eng._retry_task = inflight  # type: ignore[attr-defined]
+    epoch_before = eng._retry_epoch  # type: ignore[attr-defined]
+    try:
+        await wait_until(lambda: eng._pending_date == "2026-08-14")  # type: ignore[attr-defined]
+        await asyncio.sleep(0)  # 讓 cancel 傳遞
+        assert eng._retry_epoch > epoch_before, "設 pending 必須 bump 世代"  # type: ignore[attr-defined]
+        assert inflight.cancelled(), "設 pending 必須 cancel 在飛的 retry"
+    finally:
+        if not inflight.done():
+            inflight.cancel()
         await eng.close()
 
 
