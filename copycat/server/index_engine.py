@@ -48,6 +48,9 @@ def in_futures_session(now: _dt.time | None = None) -> bool:
 # watchdog 判定窗:台北 09:00–13:25(13:25–13:30 試撮窗凍結計時 — design F4)
 _WATCH_START = _dt.time(9, 0)
 _WATCH_END = _dt.time(13, 25)
+#: 日曆誤標偵測(L3,2026-08-28):休市日 09:00 後同一日曆日收到這麼多個**相異**現價才 WARNING
+#: (server 休市日啟動時 SUBQUOTE 回的前日收盤 snapshot 是單一價,不能算「有推播」)
+_HOLIDAY_PUSH_WARN_PRICES = 5
 #: 分時自癒門檻:heal 窗內 minutes 最後一鍵落後牆鐘超過此分鐘數 → 重掛+重抓。
 #: 開盤頭幾分鐘 minutes 空是正常(域 0901 起),空集合以窗起點 09:00 起算即天然豁免。
 _LAG_HEAL_MIN = 3
@@ -188,6 +191,10 @@ class IndexEngine:
         #: 拿它當「今天有開盤」的證據等於閘恆開 —— 盤外自癒的放寬只有在真的問得到
         #: 日曆時才成立,否則退回舊窗(review SP1(a))。
         self._has_calendar = is_trading_day is not None
+        #: 日曆誤標偵測(L3):休市日 09:00 後收到的相異現價集合(按日曆日重置)+ 已印過的日
+        self._holiday_prices: set[int] = set()
+        self._holiday_date: str | None = None
+        self._holiday_warned: str | None = None
         self._in_watch_window = in_watch_window
         self._in_futures_session = in_futures_session
         self._now_fn = now_fn
@@ -432,12 +439,42 @@ class IndexEngine:
         logger.info("index 重連重掛 + 重抓(window_variant=%d)", self._heal_variant)
         self._schedule_retry(variant=self._heal_variant)
 
+    def _note_holiday_push(self, p: int) -> None:
+        """日曆誤標偵測(L3,2026-08-28):有日曆、日曆說今天休市、牆鐘已過 09:00,卻收到
+        ≥ `_HOLIDAY_PUSH_WARN_PRICES` 個相異現價 → 同一日曆日 WARNING 一次。
+
+        補窗內閘(PR #139)後,`configs/trading_holidays.json` 把真交易日標成休市的那天,
+        分時自癒整天不跑 —— 畫面掛休市膠囊、圖是前一日的,錯得看得見,但 log 零訊號。
+        門檻取「相異價數」而非「推播數」:休市日 server 啟動時 SUBQUOTE 回一則前日收盤
+        snapshot(單一價),推播數會把它算成證據。
+        """
+        if not self._has_calendar:
+            return
+        today = self._today_fn()
+        if self._is_trading_day(today) or self._now_fn() < _WATCH_START:
+            return
+        key = f"{today:%Y-%m-%d}"
+        if self._holiday_date != key:
+            self._holiday_date = key
+            self._holiday_prices = set()
+        if self._holiday_warned == key:
+            return
+        self._holiday_prices.add(p)
+        if len(self._holiday_prices) >= _HOLIDAY_PUSH_WARN_PRICES:
+            self._holiday_warned = key
+            logger.warning(
+                "日曆說 %s 休市但 IX0001 09:00 後仍有推播(%d 個相異現價)—— configs/trading_holidays.json 可能誤標",
+                key,
+                len(self._holiday_prices),
+            )
+
     def _handle_quote(self, quote: dict) -> None:
         if str(quote.get("Security", "")) != _SYMBOL:
             return
         p = _millipt(str(quote.get("TradingPrice", "")))
         if p is None:
             return
+        self._note_holiday_push(p)
         s = self._twse
         s.p = p
         s.ref = _millipt(str(quote.get("ReferencePrice", ""))) or s.ref
