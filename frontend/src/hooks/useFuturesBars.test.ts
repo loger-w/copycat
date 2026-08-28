@@ -41,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks(); // console.warn spy 不外溢到同檔後續測試(review round 1 S F-7)
   vi.useRealTimers();
 });
 
@@ -146,6 +147,37 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     expect(urls.length).toBe(3); // 之後照 60 s 輪詢
   });
 
+  // review round 1 兩軸各一條 P1:退訂後 observer 歸零 → TQ 預設 gcTime 5 分鐘回收 cache →
+  // 待超過 5 分鐘切回會 data undefined 閃「載入中」+ 日 K 也重抓,正是 user「個股頁待很久」的配方。
+  it("離開超過 5 分鐘(gcTime 預設)再切回 → 舊圖仍在、不進 pending;日 K 不重抓", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    const client = newClient();
+    const w = wrapper(client);
+    const minute = renderHook(({ active }) => useFuturesBars("TMF", "intraday", active), {
+      initialProps: { active: true },
+      wrapper: w,
+    });
+    const day = renderHook(({ active }) => useFuturesBars("TMF", "day", active), {
+      initialProps: { active: true },
+      wrapper: w,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(2); // 分 K + 日 K 各一發
+    minute.rerender({ active: false });
+    day.rerender({ active: false });
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // 待 10 分鐘 > 預設 gcTime 5 分鐘
+    expect(urls.length).toBe(2);
+    minute.rerender({ active: true });
+    day.rerender({ active: true });
+    // 切回那一個 render:分 K 的 data 還在(不閃載入中),日 K 不重抓
+    expect(minute.result.current.data).toBeDefined();
+    expect(minute.result.current.isPending).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=1")).length).toBe(2); // 分 K 立即重抓一發
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1); // 日 K 沒重抓
+  });
+
   // 候選根因(未證實但機制成立):TQ 對同 query 在飛時把後續 refetch 併進同一個 promise,
   // `fetch` 沒 timeout 的話一趟永不回就永久凍結(換商品 = 新 query 才好)。
   it("queryFn 把 timeout signal 交給 fetch(永不回的一趟不能把 query 凍住)", async () => {
@@ -182,8 +214,7 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     renderHook(() => useFuturesBars("TMF", "intraday"), { wrapper: wrapper(newClient()) });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toMatch(/bars\/TMF.*20\.0 s/);
-    warn.mockRestore();
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/^bars: 慢請求 .*bars\/TMF.*20\.0 s/);
   });
 
   it("active 未給 → 預設 true(獨立使用與既有呼叫路徑照輪詢)", async () => {

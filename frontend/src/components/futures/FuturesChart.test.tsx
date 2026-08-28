@@ -529,6 +529,33 @@ describe("FuturesChart 背景輪詢 gate(LF-2)", () => {
     await vi.advanceTimersByTimeAsync(65_000);
     expect(barsUrls.length).toBeGreaterThan(before);
   });
+
+  // review round 1 Spec F-3:bars fetch 有 30 s timeout 後,TC4 慢一輪就會進 error 態;
+  // 舊碼 isError 分支排在 data 之前 → 整張圖抽掉換「K 線載入失敗」約 60 s 一輪,比凍住還糟。
+  it("重抓失敗但舊圖還在 → 圖照畫、提示列講「K 線更新失敗」,不整張換錯誤框", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    barsBody = { bars: [bar("2026-08-05 21:59", 22_990_000), bar("2026-08-05 22:00", 23_000_000)], meta: META };
+    const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" active />);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector("[role='img']")).not.toBeNull();
+    // 下一輪重抓:bars 這條路改成拒絕(timeout / 斷線都走這裡),其餘 API 不動
+    const okFetch = fetch as unknown as (u: string) => Promise<Response>;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/market/bars")) {
+          throw new DOMException("請求 30 秒未回應,已中止", "TimeoutError");
+        }
+        return okFetch(url);
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(60_000); // 輪詢一發 → 失敗
+    await vi.advanceTimersByTimeAsync(5_000); // retry: 1(TQ 預設退避 1 s)→ 再失敗 → error 態
+    expect(screen.getByText(/K 線更新失敗:請求 30 秒未回應,已中止/)).toBeTruthy();
+    expect(container.querySelector("[role='img']")).not.toBeNull(); // 舊圖還在
+    expect(screen.queryByText("K 線載入失敗")).toBeNull(); // 沒有整張換成錯誤框
+  });
 });
 
 describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
