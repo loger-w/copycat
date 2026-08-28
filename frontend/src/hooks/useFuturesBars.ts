@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
+import { fetchWithTimeout } from "@/lib/fetch-timeout";
 import type { FutChartMode } from "@/lib/fut-chart-mode";
 import type { MarketKey } from "@/lib/timeframe";
 import { inFuturesAllDayHours } from "@/lib/trading-hours";
@@ -25,14 +26,36 @@ export const FUTURES_MINUTE_DAYS = 5;
 const POLL_MS = 60_000;
 const SESSION = "allday";
 
+/** 一趟 bars 請求最多等多久(bug/futures-tab-reactivate-refetch)。
+ *
+ *  **30 s 不是 10 s**:後端當日段的 TC4 SubHistory deadline 10 s(`BARS_POLL_DEADLINE`)+ 與
+ *  REALTIME 搶同一把 `api.lock` + 歷史段冷啟動,08-28 實測切回 tab 那一趟 14 s 才回 —— 太短會把
+ *  「慢但會回」誤判成壞;30 s 仍 < 60 s 輪詢,凍結上界 = timeout + retry 一次 ≈ 61 s。
+ *  超時的失效樣態(改前)= TQ 把後續 refetch 併進永不回的那一趟,該商品永久凍結、換商品才好。 */
+export const BARS_FETCH_TIMEOUT_MS = 30_000;
+
+/** 一趟超過這個時間才回就 `console.warn`:抓 user 真事件用(「那一趟為什麼慢」目前零證據,
+ *  uvicorn access log 只記完成的請求且無時間戳)。門檻 = 常態(0–1 s)與 14 s 實測之間留餘裕。 */
+export const BARS_SLOW_WARN_MS = 15_000;
+
 /** 支援 `session=allday` 的標的 = 期指三兄弟。取自 `MarketKey` 而不是另寫一份 union:
  *  後端 `MARKET_KEYS` 是同一份值域,兩處各留一份必漂移。 */
 export type FuturesBarsKey = Extract<MarketKey, "TXF" | "MXF" | "TMF">;
 
-async function fetchFuturesBars(key: FuturesBarsKey, tf: "1" | "D"): Promise<MarketBars> {
+async function fetchFuturesBars(
+  key: FuturesBarsKey,
+  tf: "1" | "D",
+  signal: AbortSignal | undefined,
+): Promise<MarketBars> {
   const qs =
     tf === "1" ? `tf=1&days=${FUTURES_MINUTE_DAYS}&session=${SESSION}` : `tf=${tf}`;
-  const res = await fetch(`/api/market/bars/${key}?${qs}`);
+  const url = `/api/market/bars/${key}?${qs}`;
+  const started = Date.now();
+  const res = await fetchWithTimeout(url, { timeoutMs: BARS_FETCH_TIMEOUT_MS, signal });
+  const elapsed = Date.now() - started;
+  if (elapsed > BARS_SLOW_WARN_MS) {
+    console.warn(`bars 慢請求:${url} ${(elapsed / 1000).toFixed(1)} s 才回(status ${res.status})`);
+  }
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as MarketBars;
 }
@@ -42,9 +65,14 @@ async function fetchFuturesBars(key: FuturesBarsKey, tf: "1" | "D"): Promise<Mar
 /** @param active 使用者是否正看著期貨 tab。期貨 tab 的 DOM 由 App 以 `hidden` 保留
  *  (不 unmount),沒有這道 gate 的話輪詢會在背景整晚跑(review LF-2)。
  *
- *  **只停 `refetchInterval`,不關 `enabled`**:輪詢是這支 query 唯一的背景請求來源,
- *  停掉即達成目的;而 `enabled: false` 會讓切回 tab 時 query 退回 pending 態 →
- *  圖表閃一次「載入中」而不是留著舊圖等新料(`staleTime: 0` 本來就會立刻重抓)。
+ *  **走 TQ 的 `subscribed`,不關 `enabled`**(bug/futures-tab-reactivate-refetch):
+ *  `subscribed: false` = 這個 observer 退訂 —— 不輪詢、不吃 cache 更新(hidden 的圖本來就沒人看);
+ *  翻回 `true` 時 TQ 重新 subscribe,`staleTime: 0` 的分 K 走 `shouldFetchOnMount` **立即重抓**,
+ *  切回 tab 當下就有新料。舊碼只停 `refetchInterval`:切回時只重設 60 s 計時器、不重抓,
+ *  切回當下必亮「落後 N 根」、最多等 60 s(08-28 user 配方:個股頁待久切回微台)。
+ *  `enabled: false` 仍不用:它會讓 query 退回 pending 態,圖表閃一次「載入中」;退訂
+ *  不會 —— cache 裡的舊圖留著等新料。分 K 與日 K 同一道 gate(日 K `staleTime: Infinity`,
+ *  重新 subscribe 不重抓)。**不用 `useEffect`**(frontend-conventions:server state 一律 TQ)。
  *
  *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更(同 FuturesLadder 的
  *  `qtyState` 慣例)。 */
@@ -65,11 +93,14 @@ export function useFuturesBars(
     queryKey: isMinute
       ? ["futures-bars", key, "1", FUTURES_MINUTE_DAYS, SESSION]
       : ["futures-bars", key, "D"],
-    queryFn: () => fetchFuturesBars(key, tf),
+    // TQ 的 signal 只在 observer 全部退訂 / cancel 時 abort;timeout 在 fetchFuturesBars 內另接
+    queryFn: ({ signal }) => fetchFuturesBars(key, tf, signal),
     enabled,
+    subscribed: active,
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
-    // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render
+    // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render。
+    // `active` 這一維由 `subscribed` 擋(退訂的 observer 沒有計時器),留在這裡是雙保險兼文件。
     refetchInterval: () => (active && isMinute && inFuturesAllDayHours() ? POLL_MS : false),
   });
 }
