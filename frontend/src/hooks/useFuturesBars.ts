@@ -108,7 +108,7 @@ export function useFuturesBars(
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
     // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render。
-    // `active` 這一維由 `subscribed` 擋(退訂的 observer 沒有計時器),留在這裡是雙保險兼文件。
-    refetchInterval: () => (active && isMinute && inFuturesAllDayHours() ? POLL_MS : false),
+    // `active` 這一維不在這裡:退訂的 observer 根本沒有計時器(`subscribed` 是唯一的閘)。
+    refetchInterval: () => (isMinute && inFuturesAllDayHours() ? POLL_MS : false),
   });
 }
