@@ -506,7 +506,9 @@ def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPa
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     app_mod._default_corr_source(config=load_config())
-    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset({"TC.F.TWF.SXF.HOT"})
+    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset(
+        {"TC.F.TWF.SXF.HOT", "TC.F.CFE.VX.HOT"}
+    )  # 08-28 VX 加 sparse(事前標該變)
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     no_sparse = CorrConfig(
