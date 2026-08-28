@@ -184,6 +184,10 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   真正的風險是「跨過窗結束邊界(UTC 06 或 22)推播是否停止」,需跨邊界連續觀察才能驗。
 - SXF 推播密度隨時段差異極大(146 則/60s vs 2 則/40s)。**日盤 4 分鐘零推播是常態**(2026-08-27 09:45–13:01
   R2 240 s 自癒 11 發全 attempt 1),對它的 symbol 級自癒只會 churn;已以設定檔 `sparse: true` 豁免 R2(仍吃 R1)。
+  **VX(VIX 期貨)同型**:台北 08:00–10:00 是美盤夜間段,2026-08-28 08:47–09:55 R2 7 發全 attempt 1 真沒成交
+  → 08-28 起也標 `sparse: true`(`tests/test_corr_config.py` 鎖集合 {SXF, VX})。
+  另:2026-08-28 起 `tc4._note_push` 以推播指紋(PreciseTime / TradeDate / TradeVolume / TradingPrice)辨識
+  重掛後 10 s 內的 SUBQUOTE snapshot,**不清** attempts —— 之後 log 裡「attempt 恆 1」才真的代表中間有推播。
   **「attempt 恆 1」不能當「中間有真成交」的證據**:重掛的 SUBQUOTE 本身會回 snapshot(本節 fresh subscribe 事實),
   `_note_push` 照樣清 attempts —— 08-27 SXF 有兩發間隔剛好 240 s(10:22→10:26、11:04→11:08)就是 snapshot 撐出來的,
   IX0001 收盤段 13:25–13:35 每 30 s 一發 attempt 全 1 同理。判稀疏腿看「日盤真成交間隔常 ≥ 門檻」(1K 或 tick 密度),

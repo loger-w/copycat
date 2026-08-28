@@ -75,7 +75,9 @@ DEFAULT_CONFIG = CorrConfig(
         # 第 8–11 腿(2026-08-26 F4;`spikes/corr_legs_probe.py` 01:02 實測:VX 45 s 推 19 則、
         # CL 163、GC 172,1K 首頁各 50 列)。VIX 用標準 VX 不用 VXM(45 s 零推播、1K 零列);
         # 原油 / 黃金用標準 CL / GC 不用微型 MCL / MGC(相關係數看價格方向,標準合約流動性更高)。
-        Leg("VX", "VIX", "TC.F.CFE.VX.HOT", SOURCE_TC4),
+        # VX 台北 08:00–10:00(美盤夜間段)真沒成交:2026-08-28 R2 240 s 自癒 7 發全 attempt 1
+        # → sparse(與 SXF 同型;tc4-market-facts 稀疏腿段)。
+        Leg("VX", "VIX", "TC.F.CFE.VX.HOT", SOURCE_TC4, sparse=True),
         Leg("CL", "原油", "TC.F.CME.CL.HOT", SOURCE_TC4),
         Leg("GC", "黃金", "TC.F.CME.GC.HOT", SOURCE_TC4),
         # 台積電走**現貨**不走個股期 CDF:CDF 的 `TC.F.TWF.` 前綴會吃台期交日夜盤閘,而現貨
