@@ -32,19 +32,30 @@ interface Input {
   code: string;
 }
 
+/** 一根 1K bar 畫不畫得出來 → 畫得出來就回它的近全軸索引,否則 null。
+ *
+ *  兩道閘:(1) 一天之外(13:46–15:00)/ 空檔(05:01–08:45)/ 日 K 時戳:軸上沒有那一格;
+ *  (2) `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫元價恆 > 0 → 0 = 不可得,
+ *  不在這裡收口的話它會把 low / vwap / y 域一起拉走(同 index adapter 的 0 收口)。
+ *
+ *  **單一定義**(同 `stock-accum.ts` 對 `p <= 0` 的判例):`FuturesChart` 的 `tailIndex`
+ *  (「資料走到哪」)也吃這一支 —— 兩處各寫一份的失效樣態是 adapter 多加一道閘後
+ *  tailIndex 靜默落後半步,gate 5 又比對到一個畫面上不存在的點,零錯誤訊號。 */
+export function drawableIndexOf(b: Bar): number | null {
+  const index = alldayIndexOfStamp(b.t);
+  if (index === null) return null;
+  return b.c > 0 ? index : null;
+}
+
 export function futuresBarsToAccum(input: Input): StockAccum {
   const rows = new Map<number, MinuteAgg>();
   const vp = new Map<number, VpCell>();
 
   for (const b of input.bars) {
-    // 一天之外(13:46–15:00)/ 空檔(05:01–08:45)與日 K 時戳:軸上沒有那一格 → 整根略過。
     // **minutes 與 vp 同一道閘**:畫不出來的量不該進價位別直方圖,否則 VP 的總張與
     // 說明列的「外 + 內 + 未分類」對不上,而兩個數字都是純數字,沒有測試會紅。
-    const index = alldayIndexOfStamp(b.t);
+    const index = drawableIndexOf(b);
     if (index === null) continue;
-    // `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫元價恆 > 0 → 0 = 不可得。
-    // 不在這裡收口的話它會把 low / vwap / y 域一起拉走(同 index adapter 的 0 收口)。
-    if (b.c <= 0) continue;
     const uv = b.uv ?? 0;
     const dv = b.dv ?? 0;
     rows.set(index, {
