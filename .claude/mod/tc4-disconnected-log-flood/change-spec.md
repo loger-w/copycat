@@ -37,3 +37,10 @@
 - `TC4 stale >30s` 每發一行保留(75 行 / 11 分,是 `_check_stale` 進入判準)。
 - engine 層 `history proxy miss` / index `proxy miss` WARNING(各 ~10 行)不動。
 - 個股 R3 健檢路徑斷線時零 log(樣本中沒出現),不動。
+
+## 4. 事前標該變(既有斷言;鐵則 E 唯一合法通道)
+
+- `tests/live/test_tc4.py::TestHealResilience::test_heal_thread_survives_failing_requests` 的
+  `assert src._heal_attempts.get(HEAL_A, 0) >= 2, "watchdog 未持續重試"`:該案第一發 ZMQError 經 `_req` → `_dispose`
+  把 api 清掉,之後每輪都是「quote 未連線」—— 舊斷言要求未連線也持續 +1,正是 D1 拍板拿掉的行為(洪水 + 錯檔位)。
+  改為:第一發記帳 1 → 未連線期間停在 1 且 watchdog 活著 → 連線裝回來後恢復 ≥ 2。測試意圖(REQ 例外不得殺 watchdog)不變。
