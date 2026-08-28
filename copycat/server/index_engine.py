@@ -205,8 +205,9 @@ class IndexEngine:
         # 訂閱)。重用同一個訂閱逃不出 stub 態,重送 SubHistory 也不行(2026-08-14 實證)。
         # 唯一的歸零點是 `_swap_day`(新交易日窗口字串天然全新);lag 恢復**不**歸零。
         self._heal_variant = 0
-        #: retry 的世代(review SP5):`_schedule_retry` 每次 +1,worker 在**副作用之前**
-        #: 比對 —— cancel 只攔得到還沒返回的 `await`,攔不到已排進 executor 的工作項。
+        #: retry 的世代(review SP5):`_void_inflight_retry` 每次 +1(caller = `_schedule_retry`
+        #: 與 rollover 設 pending 那一刻),worker 在**副作用之前**比對 —— cancel 只攔得到還沒
+        #: 返回的 `await`,攔不到已排進 executor 的工作項。單調計數器,一拍 +2 無害。
         self._retry_epoch = 0
         # retry 回補成功 → 下一則廣播帶 minutes 全量一次(送達已連線前端;平常
         # scalar-only 的頻寬慣例不變,前端 toSeries 對 w.minutes 是整份替換)
@@ -281,6 +282,8 @@ class IndexEngine:
         仍是**副作用**(而且帶著這一發的 window variant)—— cancel 攔不到已排入 executor
         但還沒起跑的工作項,它醒來時會用一個已作廢的 variant 對 TC4 重掛,把窗口階梯
         推到別的地方去。`epoch` 對不上(或 `_loop` 已斷 = close 中)就整支早退回空。
+        作廢的來源有兩個:`_schedule_retry`(新一發取代舊一發)與 rollover 設 pending
+        (舊日窗起跑的回補不得疊進新日;`_void_inflight_retry`)。
 
         N094:舊碼在這裡直接 in-place `.update()` 三顆 dict,而 event loop 端同時在
         `_minutes_lag_exceeded` 走 `max(m)`、在 `_payload` / `state()` 走 `dict(...)`
@@ -328,11 +331,15 @@ class IndexEngine:
 
     # ---- 重試(R5/IR8:single-flight)----
 
-    def _schedule_retry(self, *, clear_stale: bool = True, variant: int = 0) -> None:
+    def _void_inflight_retry(self) -> None:
+        """作廢在飛的 retry:世代 +1 = 上一發(含它排在 executor 裡還沒起跑的工作項)整組
+        作廢(review SP5);cancel 讓已 `await` 的那發走不到合併點(N094)。"""
         if self._retry_task is not None and not self._retry_task.done():
             self._retry_task.cancel()
-        # 世代 +1 = 上一發(含它排在 executor 裡還沒起跑的工作項)整組作廢(review SP5)
         self._retry_epoch += 1
+
+    def _schedule_retry(self, *, clear_stale: bool = True, variant: int = 0) -> None:
+        self._void_inflight_retry()
         self._retry_task = asyncio.create_task(
             self._retry_loop(clear_stale, variant, self._retry_epoch)
         )
@@ -563,11 +570,9 @@ class IndexEngine:
                     # 在飛的 retry(heal / 連線)是在**舊日窗**起跑的:它返回時 `_pending_date`
                     # 已設,`_merge_backfill` 會把舊日整天分鐘寫進 `_pending_backfill`,swap 時當
                     # 最低層疊進新日 → 舊日 09:00–13:30 整段留在新日線上直到逐分被覆寫
-                    # (review 08-25 §2.5 Spec 2)。世代 +1 讓 executor 內還沒起跑的工作項早退,
-                    # cancel 讓已 await 的那發走不到合併點(N094)。
-                    self._retry_epoch += 1
-                    if self._retry_task is not None and not self._retry_task.done():
-                        self._retry_task.cancel()
+                    # (review 08-25 §2.5 Spec 2)。要在下面兩個 `to_thread` **之前**作廢:那兩段
+                    # await 期間在飛的 retry 就可能返回並合併。
+                    self._void_inflight_retry()
                     # **to_thread**(review SP1):N052 之後 `set_trade_date` 含一批同步
                     # UNSUBQUOTE(舊窗歸零),留在 loop 上跑等於 TC4 半死時整條 loop
                     # 停擺(廣播 / watchdog / MIS 全卡)。換窗與重掛必須維持這個順序:
@@ -644,7 +649,7 @@ class IndexEngine:
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
             #
             # heal 窗(N105 + review SP1;08-28 user 拍板 A5 補窗內閘)。三段分開想:
-            # 1. **watchdog 窗內(09:00–13:25)有日曆時也吃日曆**:休市日 minutes 恆空,
+            # 1. **watchdog 窗內(09:00–13:25):有日曆吃日曆、無日曆逐字舊判準**:休市日 minutes 恆空,
             #    窗內每 60 s→900 s 空打 TC4、抓回來永遠是空的 —— 日曆說休市就一發都不打。
             #    代價 = 日曆誤標交易日為休市那天整天不自癒;但那天整個畫面都掛休市膠囊、
             #    圖是前一日的,錯得看得見(user 08-28 知情接受)。**無日曆 → 逐字舊判準**
