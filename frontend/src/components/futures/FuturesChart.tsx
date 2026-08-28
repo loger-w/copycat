@@ -362,7 +362,10 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
         </div>
       );
     }
-    if (isError) {
+    // 有舊圖就不整張換成錯誤框(review round 1 Spec F-3):bars fetch 自 bug/futures-tab-reactivate-refetch
+    // 起有 30 s timeout,TC4 慢一輪就會進 error 態;此時 TQ 仍保留上一份 data,拿它繼續畫、把失敗
+    // 講在提示列(下方 header),下一輪 60 s 輪詢成功即自動消失。整張圖抽掉 60 s 比凍住還糟。
+    if (isError && data === undefined) {
       return (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 rounded-md border border-line bg-surface">
           <p className="text-sm text-bear">K 線載入失敗</p>
@@ -433,6 +436,12 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
           // gate 5 擋下 live 點時把原因講出來:圖停在資料尾不是「沒在動」,是當日段還沒補齊。
           // 「根」= 近全軸缺的可交易 1K 根數(空檔 / 一天之外不算根,不等於牆鐘分鐘)
           <span className="text-xs text-ink-muted">分時資料落後 {lagBehind} 根(TC4 回補中)</span>
+        ) : null}
+        {isError && data !== undefined ? (
+          // 上一輪重抓失敗(timeout / HTTP 錯誤)但舊圖還在:講出來,不把圖抽掉
+          <span className="text-xs text-bear">
+            K 線更新失敗:{(error as Error | null)?.message ?? ""}(沿用上一份,每分鐘重試)
+          </span>
         ) : null}
       </div>
       {/* 量測 wrapper **恆存**(loading / error / data 三態都在內):只包 data 分支的話

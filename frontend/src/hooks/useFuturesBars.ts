@@ -28,14 +28,16 @@ const SESSION = "allday";
 
 /** 一趟 bars 請求最多等多久(bug/futures-tab-reactivate-refetch)。
  *
- *  **30 s 不是 10 s**:後端當日段的 TC4 SubHistory deadline 10 s(`BARS_POLL_DEADLINE`)+ 與
- *  REALTIME 搶同一把 `api.lock` + 歷史段冷啟動,08-28 實測切回 tab 那一趟 14 s 才回 —— 太短會把
- *  「慢但會回」誤判成壞;30 s 仍 < 60 s 輪詢,凍結上界 = timeout + retry 一次 ≈ 61 s。
+ *  **30 s 不是 10 s**:期指 1K 只有一段 SubHistory(`futures_source.fetch_bars_range`),首頁 deadline
+ *  10 s(`BARS_POLL_DEADLINE`)+ 分頁收割 + 與 REALTIME 搶同一把 `api.lock` + 歷史段冷啟動可能多日,
+ *  08-28 實測切回 tab 那一趟 14 s 才回 —— 太短會把「慢但會回」誤判成壞;30 s 仍 < 60 s 輪詢,
+ *  凍結上界 = timeout + retry 一次 ≈ 61 s。含 body(headers 到了不算回完,見 `fetchWithTimeout`)。
  *  超時的失效樣態(改前)= TQ 把後續 refetch 併進永不回的那一趟,該商品永久凍結、換商品才好。 */
 export const BARS_FETCH_TIMEOUT_MS = 30_000;
 
 /** 一趟超過這個時間才回就 `console.warn`:抓 user 真事件用(「那一趟為什麼慢」目前零證據,
- *  uvicorn access log 只記完成的請求且無時間戳)。門檻 = 常態(0–1 s)與 14 s 實測之間留餘裕。 */
+ *  uvicorn access log 只記完成的請求且無時間戳)。門檻 = 常態(0–1 s)與 14 s 實測之間留餘裕。
+ *  刻意不節流:每一趟慢請求都是一筆證據,60 s 一輪的量級不會洗版。 */
 export const BARS_SLOW_WARN_MS = 15_000;
 
 /** 支援 `session=allday` 的標的 = 期指三兄弟。取自 `MarketKey` 而不是另寫一份 union:
@@ -54,7 +56,7 @@ async function fetchFuturesBars(
   const res = await fetchWithTimeout(url, { timeoutMs: BARS_FETCH_TIMEOUT_MS, signal });
   const elapsed = Date.now() - started;
   if (elapsed > BARS_SLOW_WARN_MS) {
-    console.warn(`bars 慢請求:${url} ${(elapsed / 1000).toFixed(1)} s 才回(status ${res.status})`);
+    console.warn(`bars: 慢請求 ${url} ${(elapsed / 1000).toFixed(1)} s 才回(status ${res.status})`);
   }
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as MarketBars;
@@ -71,8 +73,12 @@ async function fetchFuturesBars(
  *  切回 tab 當下就有新料。舊碼只停 `refetchInterval`:切回時只重設 60 s 計時器、不重抓,
  *  切回當下必亮「落後 N 根」、最多等 60 s(08-28 user 配方:個股頁待久切回微台)。
  *  `enabled: false` 仍不用:它會讓 query 退回 pending 態,圖表閃一次「載入中」;退訂
- *  不會 —— cache 裡的舊圖留著等新料。分 K 與日 K 同一道 gate(日 K `staleTime: Infinity`,
- *  重新 subscribe 不重抓)。**不用 `useEffect`**(frontend-conventions:server state 一律 TQ)。
+ *  不會 —— cache 裡的舊圖留著等新料。**前提是 cache 還在**:退訂後 observer 歸零,TQ 預設
+ *  `gcTime` 5 分鐘就回收,而 user 配方正是「個股頁待很久」→ 這幾把 query 給 `gcTime: Infinity`
+ *  (鍵集合有界:3 商品 × 2 tf;review round 1 兩軸各一條 P1)。分 K 與日 K 同一道 gate
+ *  (日 K `staleTime: Infinity`,重新 subscribe 不重抓)。**不用 `useEffect`**(frontend-conventions:
+ *  server state 一律 TQ)。副作用(刻意):queryFn 吃了 TQ 的 signal 後,切走 tab 時在飛的那趟
+ *  會被 TQ 主動中止(`cancel({revert:true})`),不再讓它跑完落 cache —— 切回時反正立即重抓。
  *
  *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更(同 FuturesLadder 的
  *  `qtyState` 慣例)。 */
@@ -97,6 +103,8 @@ export function useFuturesBars(
     queryFn: ({ signal }) => fetchFuturesBars(key, tf, signal),
     enabled,
     subscribed: active,
+    // 退訂期間 cache 不能被 gc(理由見 `active` doc);鍵集合有界,Infinity 不會長
+    gcTime: Infinity,
     retry: 1,
     staleTime: isMinute ? 0 : Infinity,
     // 函式形式:TQ 每次 interval 到期都重新求值 → 日盤收 / 夜盤開的開關不依賴外部 re-render。
