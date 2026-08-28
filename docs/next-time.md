@@ -1,13 +1,22 @@
 ## 2026-08-28(next-time 100 條 triage 拍板 —— 新開案;決定表 `docs/superpowers/specs/2026-08-28-next-time-triage.md`)
 
-- [ ] **`/mod` 可觀測性小批**:L3 日曆誤標 WARNING / L262 期貨 1K 落後 WARNING / L106 重掛 snapshot 時距 DEBUG /
-  損益列 avg·cost·kind INFO / L171 冷門檔退避 60→300 s / VX 加 `sparse` 旗標。零行為改動(退避與 sparse 除外,皆只影響 log 節奏)。
+- [x] ~~**`/mod` 可觀測性小批**:L3 日曆誤標 WARNING / L262 期貨 1K 落後 WARNING / L106 重掛 snapshot 時距 DEBUG /
+  損益列 avg·cost·kind INFO / L171 冷門檔退避 60→300 s / VX 加 `sparse` 旗標。零行為改動(退避與 sparse 除外,皆只影響 log 節奏)。~~
+  → 08-28 mod/observability-batch-0828 出貨:L106 + L171 同根因(重掛後 SUBQUOTE snapshot 被 `_note_push` 清 attempts)→ 指紋規則一條收兩條;
+  退避上限 300 s 早就存在,不必改常數。**真環境待 prod 重啟後看**:次一交易日 `grep 零推播自癒 | grep 6949` 應由 92 發降到 ≤ 10 發且 attempt 遞增;
+  `grep 損益列回填` 每檔首輪一行;`grep "期貨 1K"` 只在真落後 / 缺格時出現;VX `grep 零推播自癒 | grep VX` 應 0 發。
 - [ ] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
 - [ ] **`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。
 - [ ] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
   4–8 檔會不會壞(不碰 prod)② 能就把單工 worker 改有上限並行、正在看的群組優先 ③ 另診斷 09:00→09:02 空檔。L405 圖牆 DOM 一併量。
+  **① 08-28 16:xx 已量(`spikes/stock_backfill_parallel_probe.py`,20 檔,盤後、只 history 不 SUBQUOTE)**:serial 23.3 s(1.16 s/檔)/
+  先全部 SubHistory 再收割 **3.3 s** / ThreadPool(4) 並行 backfill **3.4 s**,三法 tick 數逐檔相等、零逾時。根因不是 TC4 慢:`StockQuoteSource.backfill`
+  首頁沒備妥就 `sleep(poll_wait=1.0)`(沒有 `_collect_history` 的 0.15 s 退避),單工排隊 = 每檔白等 1 秒;真正的資料成本只有最忙那檔
+  (3481 44k ticks 0.98 s)。修法候選(② 的具體版):(a) worker 出隊前先對整批 `_sub_history`(TXO `fetch_backfill` 樣板)+ backfill 首頁 poll 改退避;
+  (b) 或 worker 改 N=4 有上限並行。(a) 改動最小、零新執行緒。③ 09:02 才起跑仍未診斷(server 08:14 起、無 rollover;疑 `_backfilled` /
+  60 s 輪詢入列時序)。
 - [ ] **`/mod` 群組圖牆逐筆**(C9):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
 - [ ] **`/mod` 緩撮第二段**(L478)。
@@ -43,9 +52,10 @@
 
 ## 2026-08-28(mod/index-heal-holiday-gate 加權自癒休市日補窗內閘 留尾)
 
-- [ ] **日曆誤標交易日為休市的可觀測性只靠畫面**:補窗內閘後,`configs/trading_holidays.json` 若把真交易日標成休市,那天 IX0001 分時自癒
+- [x] ~~**日曆誤標交易日為休市的可觀測性只靠畫面**:補窗內閘後,`configs/trading_holidays.json` 若把真交易日標成休市,那天 IX0001 分時自癒
   整天不跑(盤外段本來就不跑)—— 症狀 = 全站休市膠囊 + 圖是前一日的,錯得看得見,但 log 零訊號。候選:server 起動時若
-  `is_trading_day(today)` 為 False 而 TC4 09:00 後仍有 IX0001 推播 → 印一行 WARNING「日曆說休市但有推播」。 **→ 08-28 拍板做:併 `/mod` 可觀測性小批。**
+  `is_trading_day(today)` 為 False 而 TC4 09:00 後仍有 IX0001 推播 → 印一行 WARNING「日曆說休市但有推播」。 **→ 08-28 拍板做:併 `/mod` 可觀測性小批。**~~
+  → 08-28 mod/observability-batch-0828:`index_engine._note_holiday_push`,同日曆日 ≥ 5 個相異現價 WARNING 一次(啟動 snapshot 單價不算)。
 - [ ] **rollover 設 pending 的 cancel 只擋 `_retry_task` 一支**:heal 與連線 retry 同走 `_schedule_retry` single-flight,現況只有一支;
   日後若分家(各自 task)要一起 cancel。測試 `test_rollover_pending_cancels_the_inflight_retry` 用 dummy task 釘機制,沒釘「舊日分鐘沒疊進新日」
   的結果面(需要可控的慢 fetch hook,`FakeIndexSource` 尚無)。 **→ 08-28:併 D chore/test-hygiene-batch-2(慢 fetch hook 已有 `FakeIndexSource.fetch_gate`,PR #139)。**
@@ -149,11 +159,12 @@
   個股 / corr 台積電腿留 `in_trading_hours_now` 13:35(試撮期個股仍有簿更新推播,一起關是零收益純代價)。看門狗 13:25 下班、
   訂閱不退、13:30 收盤推播照收。驗法:`grep 零推播自癒 logs/server-<次日>.log | grep IX0001` 13:25 後 0 筆 + 13:36
   `curl /api/index/state` 記 twse 最後更新時戳(同時反證 F-03「誤判 vs 真死」);**驗過再勾**(pr-126 F-08)。 **→ 08-28:08-31 對帳驗(13:25 後 0 筆 + 13:36 現價欄)。**
-- [ ] **重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
+- [x] ~~**重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
   snapshot(tc4-market-facts fresh subscribe 事實)→ `tc4._note_push` 清 `_heal_attempts` / `_heal_next` → 下一輪又從
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
-  加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。 **→ 08-28:DEBUG 蒐證行併 `/mod` 可觀測性小批。**
+  加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。 **→ 08-28:DEBUG 蒐證行併 `/mod` 可觀測性小批。**~~
+  → 08-28 mod/observability-batch-0828:直接做候選(不只蒐證):`tc4._note_push` 指紋 + 10 s 寬限,同指紋 snapshot 不清 attempts,DEBUG 一行;6949 一天 92 發即實證。
 - [ ] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2;per-consumer review F-S2 重申):pr-126 F-01
   後 `_TRADING_END` 回 13:35,13:25–13:30 那半段名實相符了,但 **13:30–13:35 已收盤函式仍回 True** —— 它實質是「個股自癒 /
   健檢閘窗(上界 13:35 是啟發式)」;`corr_source.py:61` / `app.py:416` 讀者只看得到名字,正是 #126 誤共用的同一條失效路。
@@ -224,6 +235,7 @@ verification;這裡回填成 backlog。
   `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。**08-27 核過:休市段(08:45 前 / 13:45 後)零發 = 逐腿閘
   PASS;日盤 09:45–13:01 另有 11 發是稀疏腿真沒成交的假警報(M0 那 8 發是休市段,不是同一件事),
   已由 fix/corr-sparse-leg-heal-exempt 以 `sparse` 旗標豁免 R2。** 6949 冷門檔 172 發(每分鐘 attempt 1)仍是本條。 **→ 08-28 拍板:6949 退避上限 60→300 s 併 `/mod` 可觀測性小批(達錢無「暫停交易」旗標,今日 6949 回補三次逾時放棄 = 只能反推;暫停交易標示等 B2 調研)。**
+  → 08-28 mod/observability-batch-0828:退避上限 300 s 本來就在,病根是重掛 snapshot 清 attempts(上條)→ 指紋規則一併收;**本條留 `[ ]` 到次一交易日 grep 6949 ≤ 10 發驗過再勾**。
 - [x] ~~**`corr_source.taifex_leg_gate` 對 SGX / CME / CBOT / OSE 段恆 True**(§5.6):要收得先用 `QUERYINSTRUMENTINFO` 的
   `OpenCloseTime` 把各段時段落成事實(skill 只有 OSE 一組)。~~
   → 08-28 拍板不做:今日實測 SGX TWN 開盤前僅 2 發/日;VX 7 發是稀疏假警報 → 改加 `sparse` 旗標(併可觀測性小批)。
@@ -310,10 +322,11 @@ verification;這裡回填成 backlog。
   user 症狀:「加權分時線中間又卡住」。**下一步 = 交易日 09:10 打 `/api/index/state` 看 `twse.minutes` 筆數與最大鍵**
   (n≈10、max≈0910 = 推播路徑正常 → 自癒判準另有問題;n=0 = 推播寫入壞),再開 /bug。晚間重啟的 1K 回補 270 分鐘
   正常,所以只有盤中能量。
-- [ ] **期貨 1K 落後 / 中段缺格沒有後端量測**:user 08-25 盤中看到「K 棒沒更新 → 分時不連貫」,後端 log 零筆
+- [x] ~~**期貨 1K 落後 / 中段缺格沒有後端量測**:user 08-25 盤中看到「K 棒沒更新 → 分時不連貫」,後端 log 零筆
   (落後判定在前端 gate 5;後端只記 timeout / 回空,當日 TXF 零筆;17:16 重啟後當日序列完整 → 屬 H1 暫時落後或
   H3 memo 釘住二者之一,事後不可分辨)。候選 = `futures_engine` 每分鐘記「bars 尾 vs 最後成交時戳」差 > N 根的 WARNING
-  (固定前綴供 grep),讓 H1/H3 事後可分。 **→ 08-28 拍板做:併 `/mod` 可觀測性小批。**
+  (固定前綴供 grep),讓 H1/H3 事後可分。 **→ 08-28 拍板做:併 `/mod` 可觀測性小批。**~~
+  → 08-28 mod/observability-batch-0828:`futures_engine._check_1k_health`(`bars_range` tf=1 成功時;前綴 `期貨 1K 落後` / `期貨 1K 中段缺格`,同尾根一次)。
 - [x] 處置股 badge(FinMind `TaiwanStockDispositionSecuritiesPeriod` 名單已在 breadth 引擎)—— **user 08-26 拍板不做**,
   視覺自評即可;2455 08-25 的 TradeStatus 每 2 分鐘 1→0→1 共 133 次即處置分盤形狀,留作 N100 蒐證樣本。
 - [ ] **flake 候選:`tests/server/test_stock_engine.py::TestStreamAndStatus::test_stream_receives_tick_and_book`**
