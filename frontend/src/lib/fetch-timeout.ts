@@ -40,6 +40,8 @@ export async function fetchWithTimeout(
     if (ctrl.signal.aborted) reject(ctrl.signal.reason);
     else ctrl.signal.addEventListener("abort", () => reject(ctrl.signal.reason), { once: true });
   });
+  // fetch 自己先拒絕(真 fetch 綁了 signal)時 race 不會消費 aborted,它稍後的拒絕會變 unhandled rejection
+  aborted.catch(() => {});
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     const buf = await Promise.race([res.arrayBuffer(), aborted]);
