@@ -39,13 +39,14 @@ class TestDefaultConfig:
         assert len(DEFAULT_CONFIG.legs) == 11
         assert [leg.key for leg in DEFAULT_CONFIG.legs] == [key for key, *_rest in _EXPECTED_LEGS]
 
-    def test_only_sxf_is_sparse_and_the_repo_file_agrees(self) -> None:
-        """SXF 費半日盤 94.4% 時間沒成交(tc4-market-facts),R2 240 s 對它是假警報。
-        DEFAULT_CONFIG 與 configs/correlation.json 的 sparse 集合要一致 —— 設定檔壞掉降級到
-        預設腿時,豁免不能悄悄消失或多出來。"""
-        assert {leg.key for leg in DEFAULT_CONFIG.legs if leg.sparse} == {"SXF"}
+    def test_sparse_legs_are_sxf_and_vx_and_the_repo_file_agrees(self) -> None:
+        """SXF 費半日盤 94.4% 時間沒成交(tc4-market-facts),R2 240 s 對它是假警報;VX(VIX 期貨)
+        美盤夜間段(台北 08:00–10:00)同型:2026-08-28 7 發 R2 全 attempt 1,真沒成交(事前標該變:
+        原 `test_only_sxf_is_sparse…` 釘 {"SXF"})。DEFAULT_CONFIG 與 configs/correlation.json 的
+        sparse 集合要一致 —— 設定檔壞掉降級到預設腿時,豁免不能悄悄消失或多出來。"""
+        assert {leg.key for leg in DEFAULT_CONFIG.legs if leg.sparse} == {"SXF", "VX"}
         repo = load_config(CONFIG_PATH)
-        assert {leg.key for leg in repo.legs if leg.sparse} == {"SXF"}
+        assert {leg.key for leg in repo.legs if leg.sparse} == {"SXF", "VX"}
 
     def test_base_is_txf_and_present_in_legs(self) -> None:
         assert DEFAULT_CONFIG.base == "TXF"
