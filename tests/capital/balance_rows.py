@@ -10,6 +10,10 @@ test_balance / test_client / test_fill_latency 共用。
 原本 test_balance 定義一份、test_client 另有 `_BAL_3357` / `_BAL_2493` 兩個常數 + 同一字串
 直接內嵌 12 處、test_fill_latency 再一份 `_BAL_ROW`(pr-129 F-02 附帶):群益改欄形只改到一份、
 其餘靜默留舊欄形 —— 與 pr-119 F-05 / pr-129 F-02 損益列同坑,一併收回這裡。
+
+例外(比照 `profit_rows`):test_client 另有兩列**一次性合成列**留在測試內 —— 同股號現股 2 張
+(`3357,T,…,2000,…`,配 `RAW_C_MARGIN` 驗「兩種類並存」)與零股 500(`2330,T,…,500,…`,驗 balance 側
+丟零股);各只該處用得到、不共用,所以不收成常數。群益改欄形時那兩列要一起改(pr-135 F-02)。
 """
 
 from __future__ import annotations
