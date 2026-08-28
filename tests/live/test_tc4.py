@@ -1780,7 +1780,7 @@ class TestReconnectFailureTraceback:
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """review P-2:「之後一行」的前提是內容每發相同;同段斷線換了例外型別 / 訊息 = 新的不懂的錯,
-        要再印一次完整 traceback(鐵則 E),之後同形狀再回到一行。"""
+        要再印一次完整 traceback(鐵則 E);一段斷線內每個形狀只印一次,見過的(含交替回來的)一行。"""
         src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
         src._last_msg = time.monotonic() - 999.0
         shapes = iter(
@@ -1794,9 +1794,9 @@ class TestReconnectFailureTraceback:
 
         def _fail() -> None:
             exc = next(shapes, None)
-            if exc is None:
+            if exc is None:  # 第 5 發:回到第一種形狀(已印過)且停迴圈 → 一行
                 src._stop.set()
-                raise ConnectionError("stop")
+                raise ConnectionError("TC4 quote connect failed: Resource temporarily unavailable")
             raise exc
 
         monkeypatch.setattr(src, "_ensure_connected", _fail)
