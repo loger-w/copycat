@@ -903,6 +903,9 @@ class CapitalClient:
         N075 前的口徑,日盤單照樣標得出,只有夜盤那一天候選缺。"""
         if not (price_type and result.ok and result.seq_no):
             return
+        # 先算本機日,保持改動前「本機日先、交易日後」的求值順序(pr-134 F-06);兩次讀時鐘
+        # 本來就不是原子,這裡只釘順序,不釘「同一瞬」。
+        today = _today_ymd()
         try:
             trade_date: str | None = _trade_ymd()
         except RuntimeError:
@@ -915,7 +918,7 @@ class CapitalClient:
         self.store.note_price_type(
             result.seq_no,
             price_type,
-            _today_ymd(),
+            today,
             trade_date=trade_date,
             stock_no=stock_no,
             buy_sell=buy_sell,
