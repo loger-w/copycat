@@ -47,14 +47,47 @@ describe("fetchWithTimeout(bug/futures-tab-reactivate-refetch)", () => {
     expect(vi.getTimerCount()).toBe(0); // 計時器一併清掉,不留孤兒 timer
   });
 
-  it("正常回應 → 原樣回傳 Response,且不留下 timeout 計時器", async () => {
+  it("正常回應 → 回已緩衝的 Response(status / body 原樣),且不留下 timeout 計時器", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 200 })),
+      vi.fn(async () => new Response('{"ok":1}', { status: 201 })),
     );
     const res = await fetchWithTimeout("/api/x", { timeoutMs: 30_000 });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ ok: 1 });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // review round 1 Spec F-2:headers 到了不代表回完 —— TCP 半死的典型樣態是 body 中途停住。
+  // 只包 fetch 的話,caller 的 res.json() 會在 timeout 之外永遠懸著。
+  it("headers 到了但 body 永遠不完 → 仍以 TimeoutError 拒絕(body 讀取也在 timeout 之內)", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 })),
+    );
+    const p = fetchWithTimeout("/api/x", { timeoutMs: 30_000 });
+    const settled = p.then(
+      () => "resolved",
+      (e: unknown) => (e as Error).name,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await settled).toBe("TimeoutError");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("TimeoutError 的訊息不帶 URL(會被畫面原樣印出)", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", hangingFetch());
+    const p = fetchWithTimeout("/api/market/bars/TMF?tf=1", { timeoutMs: 30_000 });
+    const settled = p.then(
+      () => "resolved",
+      (e: unknown) => (e as Error).message,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    const msg = await settled;
+    expect(msg).toBe("請求 30 秒未回應,已中止");
+    expect(msg).not.toContain("/api/");
   });
 });
