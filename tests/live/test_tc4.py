@@ -882,7 +882,18 @@ class TestHealResilience:
             # 第一發 ZMQError 走 `_req` → `_dispose` 清掉 api → 之後是「quote 未連線」:
             # mod/tc4-disconnected-log-flood(D1)起整輪跳過不記帳(舊斷言 `>= 2` 為本案
             # 事前標該變,見 change-spec §4),watchdog 仍活著等連線回來。
-            time.sleep(0.1)  # ≥ 10 個 poll
+            polls: list[int] = []
+            real_is_connected = src._is_connected
+
+            def _counting() -> bool:
+                polls.append(1)
+                return real_is_connected()
+
+            src._is_connected = _counting  # type: ignore[method-assign]
+            deadline = time.monotonic() + 3.0
+            while len(polls) < 10 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert len(polls) >= 10, "watchdog 未持續巡檢"
             healer = src._healer
             assert healer is not None and healer.is_alive(), "REQ 例外不得殺 watchdog"
             assert src._heal_attempts.get(HEAL_A) == 1, "未連線期間不得再記帳"
@@ -1663,6 +1674,50 @@ class TestHealWhileDisconnected:
         assert len(self._waiting(caplog)) == 2
         assert api.rt_requests == []
 
+    def test_flag_resets_even_when_reconnect_lands_outside_the_heal_window(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """review P-1 / S-1:index 源的 `heal_active` 是 09:00–13:25 窗 —— 斷線 13:2x 印一次、
+        窗關後才接回、次日再斷,旗標若只在「窗內且有腿」那條路復位就整夜卡 True → 次日靜默不印。"""
+        active = [True]
+        src = TC4QuoteSource(
+            port="0",
+            api=FakeApi({}),
+            session="sess-1",
+            heal_silence_secs=30.0,
+            heal_active=lambda: active[0],
+        )
+        src._subscribed = {HEAL_A}
+        src._sub_at = {HEAL_A: 0.0}
+        with caplog.at_level(logging.WARNING):
+            with src._api_lock:
+                src._api = None
+                src._session = None
+            src._heal_tick(100.0)  # 窗內斷線 → 印一次
+            active[0] = False  # 窗關
+            with src._api_lock:  # 窗外接回
+                src._api = FakeApi({})
+                src._session = "sess-2"
+            src._heal_tick(105.0)  # 窗外、連線中:什麼都不做,但旗標要復位
+            with src._api_lock:  # 窗外再斷
+                src._api = None
+                src._session = None
+            src._heal_tick(110.0)  # 窗外:不印(不在巡檢)
+            active[0] = True  # 次日開窗,仍斷線
+            src._heal_tick(200.0)
+        assert len(self._waiting(caplog)) == 2
+
+    def test_stopped_source_does_not_promise_a_reconnect(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """review P-3:`close()` 清掉 api 後在飛的巡檢不得印「待重連後接手」(沒有重連會來)。"""
+        src = self._src()
+        src._stop.set()
+        with caplog.at_level(logging.WARNING):
+            src._heal_tick(100.0)
+        assert self._waiting(caplog) == []
+        assert src._heal_attempts == {}
+
     def test_reconnected_tick_heals_from_a_clean_ladder(self) -> None:
         """白名單:接回後的自癒從乾淨帳本起算(attempt 1、原窗、T·2^0 退避)。"""
         src = self._src()
@@ -1711,12 +1766,47 @@ class TestReconnectFailureTraceback:
         recs = self._records(caplog)
         assert len(recs) == 3
         assert recs[0].exc_info is not None, "第一發要有完整 traceback(不吞不懂的錯)"
-        assert "backoff 1s" in recs[0].message
+        assert "(#1)" in recs[0].message and "backoff 1s" in recs[0].message
         for n, rec in enumerate(recs[1:], start=2):
             assert rec.exc_info is None, f"第 {n} 發不得再印 traceback"
             assert f"(#{n})" in rec.message
-            assert "ConnectionError: TC4 quote connect failed: Resource temporarily unavailable" in rec.message
+            assert (
+                "ConnectionError: TC4 quote connect failed: Resource temporarily unavailable"
+                in rec.message
+            )
         assert "backoff 2s" in recs[1].message and "backoff 4s" in recs[2].message
+
+    def test_a_different_exception_shape_gets_its_own_traceback(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """review P-2:「之後一行」的前提是內容每發相同;同段斷線換了例外型別 / 訊息 = 新的不懂的錯,
+        要再印一次完整 traceback(鐵則 E),之後同形狀再回到一行。"""
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        src._last_msg = time.monotonic() - 999.0
+        shapes = iter(
+            [
+                ConnectionError("TC4 quote connect failed: Resource temporarily unavailable"),
+                ConnectionError("TC4 quote connect failed: Resource temporarily unavailable"),
+                OSError("[WinError 10061] 無法連線"),
+                OSError("[WinError 10061] 無法連線"),
+            ]
+        )
+
+        def _fail() -> None:
+            exc = next(shapes, None)
+            if exc is None:
+                src._stop.set()
+                raise ConnectionError("stop")
+            raise exc
+
+        monkeypatch.setattr(src, "_ensure_connected", _fail)
+        monkeypatch.setattr(src._stop, "wait", lambda _t: src._stop.is_set())
+        with caplog.at_level(logging.ERROR):
+            src._check_stale()
+        recs = self._records(caplog)
+        assert [r.exc_info is not None for r in recs] == [True, False, True, False, False]
+        assert "(#1)" in recs[0].message and "(#3)" in recs[2].message
+        assert "OSError: [WinError 10061]" in recs[3].message
 
     def test_counter_resets_after_a_successful_reconnect(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
@@ -1756,4 +1846,4 @@ class TestReconnectFailureTraceback:
             src._check_stale()
         recs = self._records(caplog)
         assert [r.exc_info is not None for r in recs] == [True, True, False]
-        assert "(#2)" in recs[2].message and "(#1)" not in recs[1].message
+        assert "(#1)" in recs[1].message and "(#2)" in recs[2].message
