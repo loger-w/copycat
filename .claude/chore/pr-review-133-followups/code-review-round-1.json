@@ -1,0 +1,29 @@
+{
+  "round": 1,
+  "fixed_point": "d34d372c(merge-base;分支後來 rebase 到 origin/master a55927c2,SHA 全換,見 verification §1)",
+  "reviewed_head": "17e92cc6(rebase 前;對應 rebase 後 90cc27bb)",
+  "reviewers": {"standards": "opus (general-purpose)", "spec": "opus (general-purpose)"},
+  "spec_source": ".claude/chore/pr-review-133-followups/change-spec.md(handoff)+ docs/superpowers/specs/pr-133-review.md",
+  "whitelist": {"items": 4, "pass": 4, "note": "行為逐 bit 不變;F-11 等價性經 Standards / Spec 兩軸各自推證(rows 落 1064 不可能、Σ 整數順序無關、live 佔位格同從前)"},
+  "commit_separation": "PASS(refactor ×3 / test ×1 / chore ×3;S-6 指 6b0a4c51 chore 內含 fill-marks.test.ts 一條 it 標題改字 —— 純文案、判斷題,不重寫)",
+  "standards": [
+    {"id": "S-1", "severity": "P2", "kind": "hard", "title": "SIC.tsx:938 新寫的「四段軸:夜盤 / 空檔 / 日盤 / 收盤撮合」與 ALLDAY_SEGMENTS 不符(實為夜盤前半 / 夜盤後半 / 空檔 / 日盤;13:45 在日盤段內)", "disposition": "fixed", "commit": "73bca78f(逐段列 1501–2359 / 0000–0500 / 0501–0845 / 0846–1345;主 agent 對 allday.ts:54-60 核實)"},
+    {"id": "S-2", "severity": "P3", "kind": "judgement", "title": "1365 / ~724px / 1.9 key 散寫四處(Duplicated Code);1139 → 1365 漂移正是重複造成", "disposition": "fixed", "commit": "73bca78f(數字只留 MINUTE_SNAP_RADIUS doc,元件三處指 ALLDAY_LEN / 該 doc)"},
+    {"id": "S-3", "severity": "P3", "kind": "judgement", "title": "F-10 只收元件兩支,lib 側 alldayFillPoints 仍 holidays?(同一失效面兩種簽名)", "disposition": "accepted", "note": "handoff 明定 lib 側維持選配、S7 已記 next-time"},
+    {"id": "S-4", "severity": "P3", "kind": "judgement", "title": "txf-overlay-series `dms` 名字不揭意;平行陣列靠 index 對齊", "disposition": "fixed", "commit": "19b1fab5(改名 dayMinutes;平行陣列保留 —— zip 成 [Bar, dm][] 每拍多配置一份陣列,與 F-12 的目的相反)"},
+    {"id": "S-5", "severity": "P3", "title": "SIC.tsx:1388「夜盤 15:01 → 05:00 屬次一交易日」對 n2 段易誤讀(通常就是自己的日曆日)", "disposition": "fixed", "commit": "73bca78f(改「D 15:01 起的夜盤屬 D 的次一交易日,含 D+1 00:00–05:00 那半段 —— 通常就是它自己的日曆日」)"},
+    {"id": "S-6", "severity": "P3", "title": "6b0a4c51 chore 夾 fill-marks.test.ts 一條 it 標題改字(純文案,嚴格屬 test 面)", "disposition": "accepted", "note": "不重寫歷史;純文案歸 chore 與 pr-131 S-7 同口徑"}
+  ],
+  "spec": [
+    {"id": "P-1", "severity": "P3", "title": "verification §4 pytest 格仍(待填)", "disposition": "fixed", "note": "review 進行中 pytest 剛跑完:3136 passed / 3 skipped,已填"},
+    {"id": "P-2", "severity": "P3", "title": "stock-intraday-svg.ts:159 不在 PR #133 內但被改 —— 判可接受的同根漂移(MINUTE_SNAP_RADIUS 推導唯一出處,不同步會與 SIC 直接矛盾)", "disposition": "accepted", "note": "verification §1 已註明"},
+    {"id": "nit", "severity": "P3", "title": "txf-overlay-series `dm == null` 宜 `=== null`(型別是 | null)", "disposition": "rejected", "note": "tsc 實證:noUncheckedIndexedAccess 開著,dayMinutes[i] 型別含 undefined,=== null 得 TS18048 ×2;維持 == null 並加註(19b1fab5)"}
+  ],
+  "findings_14": {
+    "F-01": "PASS", "F-02": "PASS", "F-03": "PASS", "F-04": "PASS(七檔 grep 實數逐一相符)", "F-05": "PASS",
+    "F-06": "PASS(屏障結構有效 + mutation 3/3 紅)", "F-07": "PASS", "F-08": "PASS(取維持 3、回校數字;算術經兩軸複核)",
+    "F-09": "PASS", "F-10": "PASS(TS2554 mutation)", "F-11": "PASS(user 拍板做;等價性經全輸入域推證)",
+    "F-12": "PASS(user 拍板做;亂序防禦不變)", "F-13": "PASS(no-op + 順手 issue / PR 標明)", "F-14": "PASS(no-op,歷史不重寫)"
+  },
+  "increment_after_review": {"commits": ["19b1fab5", "73bca78f"], "scope": "改名 + 註解(🔵 / chore)", "check": "tsc 0 / eslint 0 / txf 13 + SIC.futures + svg 185 passed;rebase 後全量 vitest 見 verification §4"}
+}
