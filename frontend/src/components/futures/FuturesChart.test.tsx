@@ -510,11 +510,12 @@ describe("FuturesChart 背景輪詢 gate(LF-2)", () => {
     barsBody = { bars: [bar("2026-08-05 22:00", 23_000_000)], meta: META };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" active={false} />);
     await vi.advanceTimersByTimeAsync(0);
-    const before = barsUrls.length;
-    // 2 = 分時 `tf=1` + 疊線 `tf=D`(日 K 那支 staleTime Infinity,不進輪詢)
-    expect(before).toBe(2);
+    // bug/futures-tab-reactivate-refetch(事前標該變:原斷言 2 = 分時 + 疊線各掛載一發):
+    // active=false 是 TQ 退訂,兩支 query 連掛載那一發都不打;切回(active=true)立即重抓
+    // 由 `useFuturesBars.test.ts` 釘。App 的期貨 tab 第一次掛載必在 active=true 時。
+    expect(barsUrls.length).toBe(0);
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(barsUrls.length).toBe(before);
+    expect(barsUrls.length).toBe(0);
   });
 
   it("active=true → 照輪詢(prop 真的接到 hook 上,不是擺著好看)", async () => {

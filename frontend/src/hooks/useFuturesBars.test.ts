@@ -210,7 +210,9 @@ describe("useFuturesBars(SC-1/2/3)", () => {
   //(掛載即抓 + refetchOnWindowFocus 都擋住),`active=false` 只停輪詢擋不住這兩條
   it("enabled=false → 掛載不打、回焦不打;轉 true 才打第一發", async () => {
     const client = newClient();
-    const hook = renderHook(({ enabled }) => useFuturesBars("TXF", "intraday", false, enabled), {
+    // active 與 enabled 同值 = App 個股頁疊線的真實呼叫形狀(`txfWanted` 一份值餵兩個參數);
+    // active=false 現在是退訂(subscribed: false),單獨看 enabled 的話這條會被它遮住
+    const hook = renderHook(({ enabled }) => useFuturesBars("TXF", "intraday", enabled, enabled), {
       wrapper: wrapper(client),
       initialProps: { enabled: false },
     });
