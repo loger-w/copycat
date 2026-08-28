@@ -17,7 +17,6 @@ import {
   alldayBarsBetween,
   alldayHhmmOf,
   alldayIndexOf,
-  alldayIndexOfStamp,
   anchorDateOf,
   sliceCurrentAllday,
 } from "@/lib/allday";
@@ -32,7 +31,7 @@ import {
   persistFutChartMode,
   type FutChartMode,
 } from "@/lib/fut-chart-mode";
-import { futuresBarsToAccum } from "@/lib/futures-accum-adapter";
+import { drawableIndexOf, futuresBarsToAccum } from "@/lib/futures-accum-adapter";
 import { buildFuturesOverlay } from "@/lib/futures-overlay";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { pickOiLines } from "@/lib/oi-levels";
@@ -235,7 +234,9 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   // ---- 分時序列(近全軸)-------------------------------------------------
   const slice = useMemo(() => sliceCurrentAllday(bars, holidaySet), [bars, holidaySet]);
   /** 這張圖的交易日(= 最後一根 bar 的錨定日;15:00 起算,夜盤屬次一交易日)。成交點的
-   *  日期界吃它 —— 近全軸橫跨兩個日曆日,拿本機「今天」當界的話昨夜 15:01 起的成交會被判成別天(N043)。 */
+   *  日期界吃它 —— 近全軸橫跨兩個日曆日,拿本機「今天」當界的話昨夜 15:01 起的成交會被判成別天(N043)。
+   *  **刻意不套 `tailIndex` 那把「畫得出來」的尺**:錨定日只看時戳,0 價 bar 的日期照樣可信;
+   *  套了的話整段 0 價 slice 會讓 anchorDate 變 null → overlay 兩鈕靜默反灰。 */
   const anchorDate = useMemo<string | null>(() => {
     const last = slice[slice.length - 1];
     return last === undefined ? null : anchorDateOf(last.t, holidaySet);
@@ -262,17 +263,15 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
         : alldayFillPoints(orders, contract, anchorDate, holidaySet),
     [orders, contract, anchorDate, holidaySet],
   );
-  /** slice 尾往前**第一個索引可解**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
+  /** slice 尾往前**第一根畫得出來**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
    *
-   *  不是「最後一根 bar」:尾巴若是空檔分鐘 / 日 K 時戳 / **0 價 bar**,那根本來就不進圖
-   *  (`futuresBarsToAccum` 對 `c <= 0` 整根跳過;TC4 期貨偶發送 "0"),拿它當「資料走到哪」
-   *  會讓時鐘落後守衛與 gate 5 比對到一個畫面上不存在的點 —— 後者的失效是「真缺 N 根」被算成
-   *  「只缺 1 根」而照樣架橋(do-batch-review §2.2 Spec 2)。跳過條件與 adapter 同一把尺。 */
+   *  「畫得出來」的定義只有一份:adapter 的 `drawableIndexOf`(軸上有格、且 `c > 0`)。
+   *  不是「最後一根 bar」:尾巴若是空檔分鐘 / 日 K 時戳 / 0 價 bar,那根本來就不進圖,拿它當
+   *  「資料走到哪」會讓 gate 5 比對到一個畫面上不存在的點 —— 「真缺 N 根」被算成「只缺 1 根」
+   *  而照樣架橋(do-batch-review §2.2 Spec 2)。`null` = 這張圖沒有任何一根畫得出來。 */
   const tailIndex = useMemo<number | null>(() => {
     for (let i = slice.length - 1; i >= 0; i--) {
-      const b = slice[i]!;
-      if (b.c <= 0) continue;
-      const index = alldayIndexOfStamp(b.t);
+      const index = drawableIndexOf(slice[i]!);
       if (index !== null) return index;
     }
     return null;
