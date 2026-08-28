@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import queue
 import time
 from collections.abc import Awaitable, Callable
@@ -2186,3 +2187,35 @@ def test_preorder_new_reply_tail_seq_differs_still_warns(
     with caplog.at_level("WARNING"):
         client._handle_reply(",".join(new))
     assert [r for r in caplog.records if "預約單" in r.message]
+
+
+def test_profit_row_backfill_logs_value_once_per_change(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """損益列回填蒐證(2026-08-28 triage,無券空單校準):群益給的均價 / 成交價金 / 種類以前不進 log,
+    08-28 8358 無券空的均價值查不回來。配對成功且均價與上次記到的不同才 INFO(每 60 s 一輪同值不洗版)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+
+    def chain(pnl_row: str) -> None:
+        # 每輪先發查詢(collector 才 reset;收完態的 collector 會丟掉後到的列)
+        client._balance_due = time.monotonic() - 1.0
+        client._maybe_query_balance()
+        client._handle_balance(RAW_C_MARGIN)
+        client._handle_balance("##")
+        client._handle_profit("000,查詢成功")
+        client._handle_profit(pnl_row)
+        client._handle_profit("##,,,,")
+        client._handle_open_interest("##")
+
+    with caplog.at_level(logging.INFO, logger="copycat.capital.client"):
+        chain(PNL_3357_MARGIN)
+        chain(PNL_3357_MARGIN)  # 第二輪同值:不再印
+        chain(pnl_variant(PNL_3357_MARGIN, {10: "151.00"}))  # 均價變了:再印一次
+    lines = [r.getMessage() for r in caplog.records if "損益列回填" in r.getMessage()]
+    assert len(lines) == 2, lines
+    assert lines[0].startswith(
+        "損益列回填 3357 kind=margin avg=150.55 cost=451650.0 pnl=12345.0 price=156.0"
+    )
+    assert "avg=151.0" in lines[1]
