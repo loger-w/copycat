@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 #:
 #: 退避**遞增**(首輪 30 s、之後翻倍、封頂 10 分)而不是固定 30 s × 3 輪:08-26 08:52
 #: 真事件 —— TSMC 腿開機首輪逾時,三輪重試全落在 08:53–08:54 的 90 秒內就放棄,
-#: 江波圖該腿整天只從啟動後累積;而 TC4 那頭的 1K 首頁在開盤幾分鐘後就備妥了。
-#: 8 輪合計 2730 s ≈ 45 分(`tests/server/test_corr_engine_river.py` 釘階梯),蓋過開盤
-#: TC4 忙碌窗仍然有界。階梯由 `_retry_delay_secs` 推導,不另寫一份數字。
+#: 江波圖該腿整天只從啟動後累積。「拉長就補得到」是**推論**(該日 log 之後沒有第二個
+#: episode 可證),真環境判準:次一交易日 `grep "river 回補重試"` 之後要出現對應的
+#: `river 回補 TSMC:N 分鐘`;8 輪打完仍全逾時 = 這個選項錯,改事件驅動(開盤後仍缺
+#: seed 就再排)。8 輪合計 ≈ 45 分,蓋過開盤 TC4 忙碌窗仍然有界。
+#: 階梯的字面值唯一鎖在 `tests/server/test_corr_engine_river.py`。
 _BACKFILL_RETRY_SECS = 30.0
 _BACKFILL_RETRY_MAX_SECS = 600.0
 _BACKFILL_RETRY_MAX_ROUNDS = 8
@@ -380,7 +382,7 @@ class CorrelationEngine:
             )
             # 計數是**連續**失敗輪數 → 放棄那一刻也要歸零(同「補齊一輪」那條路)。
             # 不歸零的話它永久停在上限:當天稍後每一次 reconnect 回補都會在第一次逾時
-            # 就直接放棄(零重試),而 log 只有一行「已重試 3 輪」讀起來像真的試過。
+            # 就直接放棄(零重試),而 log 只有一行「已重試 N 輪」讀起來像真的試過。
             # 第二個 episode 是新的抖動,該有自己的完整預算。
             self._backfill_retry_round = 0
             return
@@ -410,7 +412,7 @@ class CorrelationEngine:
             self._backfill_retry_round = 0
 
     def _schedule_backfill_retry(self, legs: set[str]) -> None:
-        """`_BACKFILL_RETRY_SECS` 後只補 `legs`;task 進集合供 close() 統一取消。"""
+        """`_retry_delay_secs(本輪)` 後只補 `legs`;task 進集合供 close() / 整輪回補統一取消。"""
         loop = self._loop
         if loop is None:  # close 中 / 尚未 start
             return
@@ -418,10 +420,23 @@ class CorrelationEngine:
         self._backfill_retry_tasks.add(task)
         task.add_done_callback(self._backfill_retry_tasks.discard)
 
+    def _cancel_sleeping_retries(self) -> None:
+        """整輪回補(reconnect)起跑前作廢所有沉睡中的逾時重試(review round 1 Spec P2-2)。
+
+        整輪本來就涵蓋全部腿,沉睡的部分重試醒來只是多打一發;更糟的是它沒有世代標記,
+        會在共享的 `_backfill_retry_round` 上 +1、把新 episode 的階梯洗回去。舊的 90 秒窗
+        幾乎撞不到 reconnect,拉到 45 分後「睡眠期間重連」變常態 —— 對照 index_engine
+        的 `_void_inflight_retry`。"""
+        for task in list(self._backfill_retry_tasks):
+            task.cancel()
+        self._backfill_retry_tasks.clear()
+
     async def _backfill_retry(self, legs: set[str]) -> None:
-        # 輪數在排程當下已 +1,所以這裡讀到的就是「即將進行的這一輪」的序號
-        await asyncio.sleep(_retry_delay_secs(self._backfill_retry_round))
-        logger.info("river 回補重試(第 %d 輪):%s", self._backfill_retry_round, sorted(legs))
+        # 輪數在排程當下已 +1,所以這裡讀到的就是「即將進行的這一輪」的序號。
+        # 睡前就定案:600 s 的睡眠期間 reconnect 會把共享計數歸零,醒來再讀會印「第 0 輪」。
+        round_no = self._backfill_retry_round
+        await asyncio.sleep(_retry_delay_secs(round_no))
+        logger.info("river 回補重試(第 %d 輪):%s", round_no, sorted(legs))
         try:
             await self._backfill_river(legs=legs)
         except Exception:
@@ -492,6 +507,9 @@ class CorrelationEngine:
         loop = self._loop
         if loop is None:
             return
+        # 整輪涵蓋全部腿:沉睡中的部分重試一律作廢(兩條路徑都要,inflight 併回那條的尾巴
+        # 會重排,新 episode 的預算不該被舊鏈的 +1 吃掉)
+        self._cancel_sleeping_retries()
         if self._backfill_inflight:
             # reconnect 撞上進行中那一輪:這裡才是整輪真正的丟棄點(2026-08-22 review P1),
             # 不建 task 但要併回,否則 reconnect 後的整輪回補零訊號蒸發。
