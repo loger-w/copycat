@@ -711,6 +711,24 @@ describe("FuturesChart live 現價點(§3.2 錨定日 gate)", () => {
     expect(screen.getByText("分時資料落後 6 根(TC4 回補中)")).toBeTruthy();
   });
 
+  // review round 1 Spec P3:「有沒有資料」與 tailIndex 同一把尺 —— slice 非空但整段 0 價時,
+  // 舊的 `last === undefined` 入口會放行,在一張沒有任何線的圖上單獨追加一顆 live 點。
+  it("slice 整段 0 價 → 沒有任何一根畫得出來 → 不追加 live 點、不印落後", async () => {
+    barsBody = {
+      bars: [bar("2026-08-05 09:00", 0), bar("2026-08-05 10:00", 0)],
+      meta: META,
+    };
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 4, 30));
+    const st: FuturesProductState = { ...STATE, date: "2026-08-05", t: "10:03:30.000" };
+    wrap(<FuturesChart product="TXF" state={st} resolvedYm="202608" />);
+    // core 對空 accum 印的是它自己的空態(不是 N104 那三句:bars 非空、source 非 unavailable);
+    // 舊入口會把 live 點塞進 accum → 這句不出現、改畫一張只有一顆點的圖
+    await screen.findByText("無分時資料");
+    expect(screen.queryByRole("img", { name: "期貨近全時段分時走勢" })).toBeNull();
+    expect(screen.queryByTestId("last-dot")).toBeNull();
+    expect(screen.queryByText(/分時資料落後/)).toBeNull();
+  });
+
   // review SP2:15:00 開盤後 WS 零推播時 state.t 還停在下午 13:4x(前一場次 = 剛收的那一天)→ 那是
   // WS 沒新成交,不是資料落後;拿它的索引(軸尾 1364)減夜盤頭的末根會誤印「落後 1360 根」。
   it("gate 5 不吃前一場次的成交時戳:t = 13:40(剛收那天)、bars 至 D 15:05、時鐘 15:06 → 照追加 live 點", async () => {

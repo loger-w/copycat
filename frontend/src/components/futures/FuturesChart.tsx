@@ -283,9 +283,10 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   // gate 5(資料落後時鐘)另帶回落後格數給回補提示用。
   const { liveIndex, lagBehind } = ((): { liveIndex: number | null; lagBehind: number | null } => {
     const none = { liveIndex: null, lagBehind: null };
-    const last = slice[slice.length - 1];
     const p = state?.p ?? null;
-    if (p === null || last === undefined) return none;
+    // 「有沒有資料」與 tailIndex 同一把尺:slice 非空但全是畫不出來的 bar(整段 0 價)時,
+    // 不該在一張沒有任何線的圖上單獨追加一顆 live 點(review round 1 Spec P3)。
+    if (p === null || tailIndex === null) return none;
     const live = liveSlotOf(new Date(), holidaySet);
     if (live === null) return none; // 空檔 / 一天之外
     if (live.anchor !== anchorDate) return none; // 錨定日 gate(§3.2)
