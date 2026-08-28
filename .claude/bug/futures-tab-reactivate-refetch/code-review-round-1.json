@@ -1,0 +1,24 @@
+{
+  "fixed_point": "origin/master 「chore(bug-corr-backfill-retry-backoff): artifacts」(依 08-28 拍板 (b) 引 subject 不引 SHA)",
+  "reviewed_head": "分支第 3 筆「test(frontend): active=false 掛載不抓為事前標該變…」(review 前形態;收修落在第 4–6 筆)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "確認", "severity": "-", "kind": "evidence", "text": "docstring 的 `subscribed` 三項主張對照 TQ 5.101 原始碼逐條為真(退訂無 interval;重訂 + staleTime 0 走 shouldFetchOnMount;`_optimisticResults` undefined 原樣回 cache);fetchWithTimeout 無 listener leak / double-abort;兩處事前標該變有交代。", "disposition": "recorded"},
+    {"id": "F-1", "severity": "P1", "kind": "judgement", "text": "docstring「舊圖留著等新料」在 user 情境下為假:裸 `new QueryClient()` gcTime 5 分鐘,hidden 且 txfOn 關時 observer 歸零 → destroy → 5 分鐘後 cache 回收 → 切回 data undefined 閃「載入中」;user 配方正是待久。新測試 300_000 正踩 gc 邊界卻只斷言 URL 數。", "disposition": "accepted → 第 5 筆:`gcTime: Infinity`;第 4 筆新案「離開 >5 分鐘再切回 → 舊圖仍在、不進 pending;日 K 不重抓」(mutation:拿掉 gcTime → 紅)"},
+    {"id": "F-2", "severity": "P2", "kind": "hard", "text": "`useBreadthRows.ts:35` 交叉引用「(`useFuturesBars` 同慣例)」已過期且重抄整套理由。", "disposition": "accepted → 第 6 筆:改口並指過去"},
+    {"id": "F-3", "severity": "P2", "kind": "judgement", "text": "`refetchInterval` 的 `active &&` 是 Duplicated Code 不是雙保險:與 `subscribed` 同一參數,退訂的 observer 連 interval 都不存在。", "disposition": "accepted → 第 6 筆:拿掉,理由留在 subscribed doc"},
+    {"id": "F-4", "severity": "P3", "kind": "judgement", "text": "timeout 的 message 帶內部 URL,`FuturesChart.tsx:369` 原樣印給使用者。", "disposition": "accepted → 第 5 筆:訊息改「請求 30 秒未回應,已中止」;第 4 筆釘不含 /api/"},
+    {"id": "F-5", "severity": "P3", "kind": "judgement", "text": "`FetchWithTimeoutOptions.init` 零 caller(Speculative Generality)。", "disposition": "accepted → 第 5 筆:刪"},
+    {"id": "F-6", "severity": "P3", "kind": "judgement", "text": "`console.warn` 無節流、前綴不同款(repo 慣例 `<域>: 訊息`)。", "disposition": "partial:前綴改 `bars: 慢請求 …`;節流 declined —— 每趟慢請求都是證據,60 s 一輪不會洗版(docstring 明寫刻意)"},
+    {"id": "F-7", "severity": "P3", "kind": "judgement", "text": "`console.warn` spy 的 restore 只在 it 尾,斷言拋出即外溢。", "disposition": "accepted → 第 4 筆:afterEach `vi.restoreAllMocks()`"}
+  ],
+  "spec": [
+    {"id": "確認", "severity": "-", "text": "§4.2 visited.futures 閘成立;App:193 疊線 observer 開 / 關行為不變;§3.3 日 K 不重抓;error 態下 60 s 輪詢照跑(凍結有上界);無 scope creep;§5 六條 seam 落地。", "disposition": "recorded"},
+    {"id": "F-1", "severity": "P1", "text": "離開超過 gcTime 5 分鐘後 §3.1 白名單被打破(同 Standards F-1),連 §3.3 日 K 也重抓。", "disposition": "accepted(同上)"},
+    {"id": "F-2", "severity": "P2", "text": "fix B 沒真的封住「永不回」:`finally` 在 headers 抵達即 clearTimeout,之後 `res.json()` / `parseError` 無保護;body 中途停住仍永久凍結。", "disposition": "accepted → 第 5 筆:body 以 `Promise.race(arrayBuffer, aborted)` 讀完再回已緩衝 Response;第 4 筆新案「headers 到了但 body 永遠不完 → TimeoutError」"},
+    {"id": "F-3", "severity": "P2", "text": "超時後圖表消失未在 §4 宣告:isError 分支排在 data 之前,舊圖被丟棄改印「K 線載入失敗」約 60 s 一輪。", "disposition": "accepted → 第 5 筆:有舊 data 時照畫、提示列印「K 線更新失敗:…(沿用上一份,每分鐘重試)」;第 4 筆新案;change-spec §4.5 宣告"},
+    {"id": "F-4", "severity": "P3", "text": "30 s 理由句「當日段 … 兩段」是 stock_source 的形狀,期指 1K 只有一段。", "disposition": "accepted → 第 5 筆:註解改「期指 1K 只有一段 SubHistory」"},
+    {"id": "F-5", "severity": "P3", "text": "queryFn 吃 signal 後切走 tab 在飛那趟改走 `cancel({revert:true})` 主動中止,屬行為改動 §4 未列。", "disposition": "accepted → change-spec §4.6 + subscribed doc 宣告"}
+  ],
+  "disposition": "Standards 7 條:accepted F-1 / F-2 / F-3 / F-4 / F-5 / F-7,F-6 partial(前綴改、節流不做)。Spec 5 條全 accepted(F-1 與 Standards F-1 同源)。收修 = 第 4 筆 test + 第 5 筆 fix + 第 6 筆 refactor/docs。收修後 gate 見 verification §1。"
+}
