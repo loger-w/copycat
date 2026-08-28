@@ -70,10 +70,13 @@ export function txfBarsToSeries(
   const minutes: Record<string, number> = {};
   let p: number | null = null;
   let lastMinute = -1;
-  // 日盤日 = 最後一根日盤 bar 的日曆日(bars 升冪;亂序時取日期最大者,與下面 p 的取法同尺)
+  // 日盤日 = 最後一根日盤 bar 的日曆日(bars 升冪;亂序時取日期最大者,與下面 p 的取法同尺)。
+  // `dayMinuteOf` 每根只算一次、結果與 bars 同序存下來給第二圈(pr-133 F-12):caller 的 memo deps
+  // 含每拍 ~1 s 的 txf 現價,兩圈各掃一遍是每秒 2 × ~5,700 次 splitStamp。**不要**改成「由尾往前
+  // 找第一根日盤 bar」—— 那會破掉這裡刻意保留的亂序防禦。
+  const dms: ([string, number] | null)[] = bars.map(dayMinuteOf);
   let anchor: string | null = null;
-  for (const b of bars) {
-    const dm = dayMinuteOf(b);
+  for (const dm of dms) {
     if (dm !== null && (anchor === null || dm[0] > anchor)) anchor = dm[0];
   }
   // 日盤日必須與個股頁正在看的交易日一致(quote.date = index engine 的 trade_date):交易日凌晨
@@ -81,9 +84,9 @@ export function txfBarsToSeries(
   // (review round 1 Spec 5)。quote 沒給日期(WS 未就緒)時不擋。
   if (anchor !== null && quote !== null && quote.date !== null && quote.date !== anchor) anchor = null;
   if (anchor !== null) {
-    for (const b of bars) {
-      const dm = dayMinuteOf(b);
-      if (dm === null || dm[0] !== anchor) continue;
+    for (const [i, b] of bars.entries()) {
+      const dm = dms[i];
+      if (dm == null || dm[0] !== anchor) continue;
       const minute = dm[1]; // 終點標記 → 起點分鐘
       // `c <= 0`:TC4 偶發送 "0",後端原樣轉 0 不轉 null;毫點價恆 > 0 → 0 = 不可得(同 futures-overlay usable)
       if (!(b.c > 0)) continue;
