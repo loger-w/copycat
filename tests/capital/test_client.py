@@ -2116,6 +2116,35 @@ async def test_submit_result_survives_trade_day_fuse(
     )
 
 
+async def test_note_price_type_evaluates_local_day_before_trade_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """求值順序是契約的一部分(pr-134 F-06):改動前 `_today_ymd()` 在呼叫參數內先於
+    `trade_date=_trade_ymd()` 求值;try 把 `_trade_ymd()` 提前後順序反了,跨午夜一瞬本機日會
+    落在交易日之後 —— 候選日集合從 (0824, 0825) 變 (0825,)。釘住「本機日先」。"""
+    calls: list[str] = []
+    def _today() -> str:
+        calls.append("today")
+        return "20260824"
+
+    def _trade(when: datetime | None = None) -> str:
+        calls.append("trade")
+        return "20260825"
+
+    monkeypatch.setattr(client_mod, "_today_ymd", _today)
+    monkeypatch.setattr(client_mod, "_trade_ymd", _trade)
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    await _drive(
+        client,
+        lambda: client.submit_stock_order(
+            StockOrderRequest(stock_no="2330", buy_sell="buy", price=590.0, qty=1, price_type="market")
+        ),
+    )
+    assert calls == ["today", "trade"]
+
+
 # ---------------------------------------------------------------------------
 # fix/tc4-logout-and-cancel-reply-warning:刪單回報的尾欄序號是刪單自己的序號
 # ---------------------------------------------------------------------------
