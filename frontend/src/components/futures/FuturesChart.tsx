@@ -94,11 +94,15 @@ const EMPTY_TEXT: Record<BarsStatus, string> = {
  *  終點標記:`HH:MM:00.000` 整分成交屬 HH:MM 那根,其餘屬 HH:MM+1(review SP4)。
  *  壞格式 / 空檔 / 一天之外 → null(gate 5 不參與)。回傳 anchor 讓 caller 擋掉「`state.t` 停在前一
  *  場次」(15:00 開盤前未成交 / WS 零推播時 t 還是下午 13:4x)—— 那不是回補落後,是 WS 沒新成交,
- *  拿它比索引會把「WS 靜默」講成「TC4 回補中」(review SP2)。 */
+ *  拿它比索引會把「WS 靜默」講成「TC4 回補中」(review SP2)。
+ *
+ *  `holidays` **必填、可 `undefined`**(與 `liveSlotOf` 同):兩支各只有一個 caller,而 P5 那類 bug
+ *  (錨定日 gate 一邊讀 query、一邊讀模組集合)的復發面正是「有人忘了傳」—— 必填讓漏傳在型別層
+ *  就紅;lib 側 `anchorDateOf` / `alldayFillPoints` 維持選配(既有三參 caller 相容,S7 記 next-time)。 */
 function tradeSlotOf(
   date: string,
   t: string,
-  holidays?: ReadonlySet<string>,
+  holidays: ReadonlySet<string> | undefined,
 ): { index: number; anchor: string } | null {
   const m = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(t);
   if (m === null || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
@@ -131,8 +135,12 @@ function hhmmOf(totalMinutes: number): string {
  *  那邊的來源已經是終點標記,這邊的來源是牆上時鐘)。
  *
  *  回傳的 `anchor` 供錨定日 gate 用:開盤瞬間(15:00–15:01,今日首根未回)slice 仍
- *  錨在剛收的那一天,live 點若照畫會落在 x=0 拉出一條橫貫整圖的假線。 */
-function liveSlotOf(now: Date, holidays?: ReadonlySet<string>): { index: number; anchor: string } | null {
+ *  錨在剛收的那一天,live 點若照畫會落在 x=0 拉出一條橫貫整圖的假線。
+ *  `holidays` 必填可 `undefined`,理由見 `tradeSlotOf`。 */
+function liveSlotOf(
+  now: Date,
+  holidays: ReadonlySet<string> | undefined,
+): { index: number; anchor: string } | null {
   const t = new Date(now.getTime() + 60_000);
   const hhmm = hhmmOf(t.getHours() * 60 + t.getMinutes());
   const index = alldayIndexOf(hhmm);
