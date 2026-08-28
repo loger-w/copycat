@@ -264,11 +264,15 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   );
   /** slice 尾往前**第一個索引可解**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
    *
-   *  不是「最後一根 bar」:尾巴若是空檔分鐘 / 日 K 時戳,那根本來就不進圖,拿它當
-   *  「資料走到哪」會讓時鐘落後守衛比對到一個畫面上不存在的點。 */
+   *  不是「最後一根 bar」:尾巴若是空檔分鐘 / 日 K 時戳 / **0 價 bar**,那根本來就不進圖
+   *  (`futuresBarsToAccum` 對 `c <= 0` 整根跳過;TC4 期貨偶發送 "0"),拿它當「資料走到哪」
+   *  會讓時鐘落後守衛與 gate 5 比對到一個畫面上不存在的點 —— 後者的失效是「真缺 N 根」被算成
+   *  「只缺 1 根」而照樣架橋(do-batch-review §2.2 Spec 2)。跳過條件與 adapter 同一把尺。 */
   const tailIndex = useMemo<number | null>(() => {
     for (let i = slice.length - 1; i >= 0; i--) {
-      const index = alldayIndexOfStamp(slice[i]!.t);
+      const b = slice[i]!;
+      if (b.c <= 0) continue;
+      const index = alldayIndexOfStamp(b.t);
       if (index !== null) return index;
     }
     return null;
