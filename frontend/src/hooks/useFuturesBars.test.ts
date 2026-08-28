@@ -116,11 +116,74 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0)); // active=true 時這個時刻會輪詢
     renderHook(() => useFuturesBars("TXF", "m1", false), { wrapper: wrapper(newClient()) });
     await vi.advanceTimersByTimeAsync(0);
-    const before = urls.length;
-    // 掛載時仍抓一次:enabled 不關,只停 interval —— 切回 tab 時圖還在(不閃載入中)
-    expect(before).toBe(1);
+    // bug/futures-tab-reactivate-refetch(事前標該變:原斷言「掛載時仍抓一次」= 1):
+    // active=false 現在是 TQ 的 `subscribed: false` —— 沒人看的 observer 連掛載那一發都不打。
+    // App 的期貨 tab 由 `visited.futures` 閘住,第一次掛載必在 active=true 時,所以真實路徑
+    // 上這一發本來就不存在;舊斷言釘的是一個沒有 caller 的情境。
+    expect(urls.length).toBe(0);
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(urls.length).toBe(before);
+    expect(urls.length).toBe(0);
+  });
+
+  // 08-28 user 配方:個股頁待一陣子 → 切期貨 tab → 該商品分時圖凍住、「落後 N 根」常亮。
+  // 舊碼切回時只重設 60 s 計時器,不立即重抓 → 切回當下必亮提示、最多等 60 s。
+  it("active false→true(切回期貨 tab)→ 立即重抓,不等下一輪 60 s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    const { rerender } = renderHook(({ active }) => useFuturesBars("TMF", "intraday", active), {
+      initialProps: { active: true },
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1); // 掛載(人在 tab 上)
+    rerender({ active: false });
+    await vi.advanceTimersByTimeAsync(300_000); // 個股頁待 5 分鐘:零輪詢
+    expect(urls.length).toBe(1);
+    rerender({ active: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(2); // 切回當下就抓,不是 60 s 後
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(urls.length).toBe(3); // 之後照 60 s 輪詢
+  });
+
+  // 候選根因(未證實但機制成立):TQ 對同 query 在飛時把後續 refetch 併進同一個 promise,
+  // `fetch` 沒 timeout 的話一趟永不回就永久凍結(換商品 = 新 query 才好)。
+  it("queryFn 把 timeout signal 交給 fetch(永不回的一趟不能把 query 凍住)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    renderHook(() => useFuturesBars("TMF", "intraday"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    const init = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as
+      | RequestInit
+      | undefined;
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("一趟超過 BARS_SLOW_WARN_MS 才回 → console.warn 留下慢請求證據(抓 user 真事件用)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (url: string) =>
+          new Promise<Response>((resolve) => {
+            urls.push(String(url));
+            setTimeout(
+              () =>
+                resolve(
+                  new Response(JSON.stringify({ key: "TMF", tf: "1", bars: [], meta: META })),
+                ),
+              20_000,
+            );
+          }),
+      ),
+    );
+    renderHook(() => useFuturesBars("TMF", "intraday"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/bars\/TMF.*20\.0 s/);
+    warn.mockRestore();
   });
 
   it("active 未給 → 預設 true(獨立使用與既有呼叫路徑照輪詢)", async () => {
