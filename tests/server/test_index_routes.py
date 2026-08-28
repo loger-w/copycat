@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import datetime as _dt
+import time
 from pathlib import Path
 
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+import copycat.server.ws as ws_mod
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
 from copycat.server.overlay import compute_cdp
@@ -20,6 +22,11 @@ from tests.helpers.fake_txo import FakeTxoSource
 #: 撥 `_dirty` 的點不只回補完成 / MIS poll(watchdog / 分時自癒 / txf 價變 / 換日也會),常態 0–2 則;
 #: 超過這個數仍是 None = 推播鏈真的壞了,不是順序問題
 _WS_PRE_QUOTE_MAX = 5
+#: 等「含 `p` 那則」的牆鐘預算(pr-135 F-01):`_WS_PRE_QUOTE_MAX` 只計 index 則,ping 不計 ——
+#: 推播鏈迴歸(quote 進來但不撥 dirty)時迴圈只會一直拿到 ping,沒有這道預算就是 hang 不是紅。
+#: `receive_json` 阻塞,預算靠 ping 喚醒才檢查得到(測試內把心跳調快);ping 也停 = relay 死,
+#: 那是 test_ws_disconnect 的範圍。
+_WS_QUOTE_DEADLINE_SECS = 3.0
 
 #: 本檔的當日回補固定給一根分鐘 —— `/api/index/state` 與 `/ws/index` 都靠它斷言接線
 _DAY_MINUTES = {"0901": 43_000_000}
@@ -73,7 +80,7 @@ class TestIndexState:
                 with client.websocket_connect("/ws/index"):
                     raise AssertionError("index 引擎缺席時握手不該成功")
 
-    def test_ws_streams_index_payload(self) -> None:
+    def test_ws_streams_index_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """連上後推一則 quote,WS 要收到 `twse.p` 已更新的 payload。
 
         `/ws/index` **沒有 seed 快照**(`index.stream()` 無 seed;relay 也不補),首則是
@@ -82,6 +89,7 @@ class TestIndexState:
         (`p` None)。首則就斷 `p` 是順序型 flake(08-27 全量 1/3135 紅);改成收到含 `p`
         的那則為止,quote 保證撥 dirty,所以有界迴圈必收得到。
         """
+        monkeypatch.setattr(ws_mod, "WS_HEARTBEAT_SECS", 0.2)  # ping 只負責把 receive 叫醒
         client, fake = make_client(FakeIndexSource(day_minutes=_DAY_MINUTES))
         with client:
             assert fake is not None and fake.on_message is not None
@@ -97,9 +105,13 @@ class TestIndexState:
                     }
                 )
                 seen: list[int | None] = []
+                deadline = time.monotonic() + _WS_QUOTE_DEADLINE_SECS
                 while len(seen) <= _WS_PRE_QUOTE_MAX:
+                    assert time.monotonic() < deadline, (
+                        f"{_WS_QUOTE_DEADLINE_SECS} s 內沒等到含 p 的 index payload;已收 {seen}"
+                    )
                     msg = ws.receive_json()
-                    if msg["type"] == "ping":  # 心跳直送不經 queue(10 s 一發),不算一則
+                    if msg["type"] == "ping":  # 心跳直送不經 queue,不算一則
                         continue
                     assert msg["type"] == "index"
                     seen.append(msg["twse"]["p"])
