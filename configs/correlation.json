@@ -50,7 +50,8 @@
       "key": "VX",
       "label": "VIX",
       "symbol": "TC.F.CFE.VX.HOT",
-      "source": "tc4"
+      "source": "tc4",
+      "sparse": true
     },
     {
       "key": "CL",
