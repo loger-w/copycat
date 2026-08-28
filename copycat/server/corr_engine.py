@@ -32,10 +32,23 @@ from copycat.live.tc4 import HistoryTimeoutError
 
 logger = logging.getLogger(__name__)
 
-#: 逾時腿的重補退避(秒)與輪數上限。真實事故是「三腿同秒逾時 → 整天不再回補」,
+#: 逾時腿的重補退避與輪數上限。真實事故是「三腿同秒逾時 → 整天不再回補」,
 #: 而 TC4 端的 1K 一直都在;沒有輪數上限則反過來變成整天重打必敗請求。
+#:
+#: 退避**遞增**(首輪 30 s、之後翻倍、封頂 10 分)而不是固定 30 s × 3 輪:08-26 08:52
+#: 真事件 —— TSMC 腿開機首輪逾時,三輪重試全落在 08:53–08:54 的 90 秒內就放棄,
+#: 江波圖該腿整天只從啟動後累積;而 TC4 那頭的 1K 首頁在開盤幾分鐘後就備妥了。
+#: 8 輪合計 2730 s ≈ 45 分(`tests/server/test_corr_engine_river.py` 釘階梯),蓋過開盤
+#: TC4 忙碌窗仍然有界。階梯由 `_retry_delay_secs` 推導,不另寫一份數字。
 _BACKFILL_RETRY_SECS = 30.0
-_BACKFILL_RETRY_MAX_ROUNDS = 3
+_BACKFILL_RETRY_MAX_SECS = 600.0
+_BACKFILL_RETRY_MAX_ROUNDS = 8
+
+
+def _retry_delay_secs(round_no: int) -> float:
+    """第 `round_no` 輪(1 起算)重試前的退避秒數:`_BACKFILL_RETRY_SECS × 2^(n−1)`,封頂
+    `_BACKFILL_RETRY_MAX_SECS`。測試把兩個常數都 patch 成 0.01 即整條階梯歸零。"""
+    return min(_BACKFILL_RETRY_SECS * (2 ** max(round_no - 1, 0)), _BACKFILL_RETRY_MAX_SECS)
 
 
 def _taipei_hhmmss() -> str:
@@ -406,7 +419,8 @@ class CorrelationEngine:
         task.add_done_callback(self._backfill_retry_tasks.discard)
 
     async def _backfill_retry(self, legs: set[str]) -> None:
-        await asyncio.sleep(_BACKFILL_RETRY_SECS)
+        # 輪數在排程當下已 +1,所以這裡讀到的就是「即將進行的這一輪」的序號
+        await asyncio.sleep(_retry_delay_secs(self._backfill_retry_round))
         logger.info("river 回補重試(第 %d 輪):%s", self._backfill_retry_round, sorted(legs))
         try:
             await self._backfill_river(legs=legs)
