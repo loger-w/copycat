@@ -74,6 +74,8 @@ class FakeIndexSource:
         self.fetch_minutes_calls = 0
         #: 設了就讓**下一次** `fetch_day_minutes` 在 worker thread 上卡住直到 set()(一次性;
         #: 模擬「rollover 前起跑、rollover 後才返回」的在飛回補),之後的呼叫不受影響。
+        #: 回傳值在**卡住之前**就定案(起跑當下的 `day_minutes`)—— 測試在放行前改 `day_minutes`
+        #: 是給 rollover 自己那趟用的,不能反過來洗掉在飛那趟抓到的舊日分鐘。
         self.fetch_gate: threading.Event | None = None
         self.closed = False
         self.calls: list[tuple[str, str, str, str]] = []
@@ -93,14 +95,16 @@ class FakeIndexSource:
         self.fetch_minutes_calls += 1
         self.window_variants.append(window_variant)
         gate, self.fetch_gate = self.fetch_gate, None
-        if gate is not None:
-            gate.wait(timeout=5)
         if isinstance(self.day_minutes, Exception):
             raise self.day_minutes
         if self.minutes_sequence:
-            return dict(self.minutes_sequence.pop(0))
-        override = self.variant_minutes.get(window_variant)
-        return dict(self.day_minutes if override is None else override)
+            result = dict(self.minutes_sequence.pop(0))
+        else:
+            override = self.variant_minutes.get(window_variant)
+            result = dict(self.day_minutes if override is None else override)
+        if gate is not None:
+            gate.wait(timeout=5)
+        return result
 
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb

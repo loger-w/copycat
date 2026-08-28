@@ -495,7 +495,9 @@ async def test_rollover_keeps_old_day_backfill_out_of_pending() -> None:
         fake.day_minutes = {}  # rollover 自己那趟回補抓空 → 不 swap,pending 留著可觀察
         await wait_until(lambda: eng._pending_date == "2026-08-14")  # type: ignore[attr-defined]
         gate.set()  # 在飛的 retry 現在才返回
-        await asyncio.sleep(0.1)
+        # 等那發 retry 真的收場(被 cancel → done;沒被 cancel → merge 後 return → 也 done),
+        # 再看結果 —— 固定 sleep 會在 worker 還沒返回時假綠(本測試第一版就是這樣)
+        await wait_until(lambda: eng._retry_task is not None and eng._retry_task.done())  # type: ignore[attr-defined]
         assert eng._pending_backfill == {}, "舊日窗起跑的回補不得疊進新日"  # type: ignore[attr-defined]
         assert eng.state()["twse"]["minutes"] == {}  # 舊日 dict 也沒被寫(retry 沒走到合併)
     finally:
