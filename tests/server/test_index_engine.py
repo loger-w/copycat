@@ -1312,3 +1312,51 @@ def test_watch_end_is_the_index_heal_gate_boundary() -> None:
         _dt.datetime.combine(_dt.date(2026, 1, 1), _WATCH_END) - _dt.timedelta(seconds=1)
     ).time()
     assert in_index_heal_window_now(earlier) is True
+
+
+class TestHolidayPushWarning:
+    """L3(2026-08-28 triage):有日曆的休市日 index 自癒整天不打(PR #139)—— 日曆把真交易日誤標成
+    休市那天,畫面掛休市膠囊、圖是前一日的,但 log 零訊號。09:00 後 IX0001 仍有推播就是「日曆錯了」
+    的直接證據:同一日曆日收到 ≥ 5 個相異現價才 WARNING 一次(休市日 server 啟動時 SUBQUOTE 回一則
+    前日收盤 snapshot 是單一價,不能算)。"""
+
+    @staticmethod
+    def _engine(**kw: Any) -> IndexEngine:
+        base: dict[str, Any] = {
+            "now_fn": lambda: _dt.time(10, 0),
+            "is_trading_day": lambda _d: False,
+        }
+        base.update(kw)
+        return make_engine(FakeIndexSource(), **base)
+
+    def test_five_distinct_prices_on_a_calendar_holiday_warn_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        eng = self._engine()
+        with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+            for i in range(4):
+                eng._handle_quote(_quote(price=f"4200{i}.00"))
+            assert "可能誤標" not in caplog.text, "4 個相異價還不夠(啟動 snapshot 那種單價不算)"
+            eng._handle_quote(_quote(price="42000.00"))  # 重複價不算新的一個
+            assert "可能誤標" not in caplog.text
+            eng._handle_quote(_quote(price="42004.00"))
+            assert caplog.text.count("日曆說 2026-07-28 休市但 IX0001 09:00 後仍有推播") == 1
+            for i in range(10):
+                eng._handle_quote(_quote(price=f"4300{i}.00"))
+        assert caplog.text.count("可能誤標") == 1, "同一日曆日只印一次"
+        assert "configs/trading_holidays.json" in caplog.text
+
+    def test_no_warning_on_trading_day_before_nine_or_without_calendar(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 白名單 4:交易日 / 09:00 前 / 無日曆三條路零新 log
+        engines = [
+            self._engine(is_trading_day=lambda _d: True),
+            self._engine(now_fn=lambda: _dt.time(8, 40)),
+            self._engine(is_trading_day=None),
+        ]
+        with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+            for eng in engines:
+                for i in range(8):
+                    eng._handle_quote(_quote(price=f"4200{i}.00"))
+        assert "可能誤標" not in caplog.text
