@@ -321,7 +321,8 @@ reviewer 重跑後端 68 / 前端 35 passed。
 - A6 #105 重連 → `_schedule_retry(variant=self._heal_variant)` 或不清 stale(§3.4);`tc4.py:389` Disconnect 取鎖(§2.6 S2)。
   **已出貨 PR #113(2026-08-26;沿用 variant + 無進展推階梯,stale 維持樂觀清)**。
 - A7 #99 N037 補「節流 tick 真跑」案 + grace 改「只在偵測到凍結時」(§2.1)。
-  **08-28 拍板:先真環境驗(盤後刻意斷 TC4 / 斷網 30 s,看 8 條 WS 全回來),驗出問題才改 code。**
+  **08-28 拍板:先真環境驗(盤後刻意斷 TC4 / 斷網 30 s,看 8 條 WS 全回來),驗出問題才改 code。** **08-28 15:12–15:24 真環境驗 PASS(斷 TC4 11.5 分鐘:6 條 WS 零重連、
+  五條 source 全 reconnected + 訂閱重掛 0 失敗、tick 恢復);不改 code。細節與兩條留尾(log 洪水 / 慢請求真事件)見 `docs/next-time.md` 08-28 A7 節。**
 - A8 #101 `PARAM_DEFAULTS` 進 parity + `COOLDOWN` + 整數檢查(§2.3)。**已出貨 PR #112(2026-08-26)**。
 
 **B. 文件改口(不動行為)** —— **2026-08-26 chore 一次做完(`chore/do-batch-review-docs`),除 `ops-discipline:67`

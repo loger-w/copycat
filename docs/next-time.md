@@ -1,3 +1,23 @@
+## 2026-08-28(A7 / N037 WS 韌性真環境驗 —— PASS,留尾)
+
+真環境:prod 8721 = `c451e403`(15:09 起,含 #142),preview 4173 分頁開在期貨 tab(微台);user 15:11:42 左右關閉達錢 4,
+15:23 重開;斷線 ≈ 11.5 分鐘(夜盤已開)。證據 `logs/server-20260828-1509.log`。
+
+- **PASS 前端 WS**:分頁 6 條 WS(txo-pnl / stock / index / futures / breadth / capital;corr / river 兩條只在相關係數 tab 才開,
+  「8 條」是全站上限不是每頁)全程一條都沒斷 —— uvicorn `[accepted]` 從頭到尾 6 條、console 零「s 無訊息,重連」。
+  browser↔uvicorn 的 WS 靠 server 10 s ping 活著,與 TC4 斷線正交;「斷 TC4 看 8 條 WS 全回來」這個判準其實測不到 WS 重連,
+  真正的 WS 斷線刺激是 **server 重啟**(15:08 優雅停 → 15:09 起,當時無分頁連著,沒量到)。
+- **PASS 後端 TC4 重連**:5 條 quote source 首次 stale 15:12:12(關閉後 30 s),reconnect 退避 8 → 16 → 60 s(封頂);TC4 重開後
+  15:23:24–15:23:52 五條全 `TC4 reconnected`、訂閱重掛 0 失敗、0 ERROR;TXO handover 回補 3493 ticks / 290 symbols;index
+  「重連重掛 + 重抓」;corr river 回補 TWN / YM / ES / NQ 11 分鐘、SXF 13 分鐘(= 斷線長度);TMF 1K 尾根 15:24,期貨 tab
+  15:25 46430「即時連線中」。
+- [ ] **TC4 斷線期間 log 洪水**:11.5 分鐘長出 6764 行 / 585 KB —— `零推播自癒 … → 重掛` + `自癒重掛失敗 …: TC4 quote not connected`
+  每 symbol 每輪各一行(1206 條),reconnect 失敗每次印 4 行 traceback(210 個 `Traceback`)。TC4 整天沒開會長到 ~30 MB,
+  且把真訊號淹掉。候選:quote 未連線時零推播自癒整批只印一行(「N 腿等連線」)、reconnect 失敗 traceback 只在第一次與換退避檔時印。
+- [ ] **#142 `bars: 慢請求` 第一筆真事件**:15:13:06 console `bars: 慢請求 /api/market/bars/TMF?tf=D 24.9 s 才回(status 200)`
+  —— TC4 斷線中的日 K 請求要等 24.9 s 才回(200,後端 cache / 降級路徑),離 30 s timeout 只差 5 s。題 4「一趟永不回」的候選
+  在 TC4 半死時是可觸及的;要看盤中有沒有同款(TC4 沒斷卻 > 15 s)。後端 `build_minute` 慢請求 WARNING 留尾(handoff §4)仍未做。
+
 ## 2026-08-28(mod/index-heal-holiday-gate 加權自癒休市日補窗內閘 留尾)
 
 - [ ] **日曆誤標交易日為休市的可觀測性只靠畫面**:補窗內閘後,`configs/trading_holidays.json` 若把真交易日標成休市,那天 IX0001 分時自癒
