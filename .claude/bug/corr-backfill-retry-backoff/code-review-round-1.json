@@ -1,0 +1,26 @@
+{
+  "fixed_point": "origin/master 「chore(mod-index-heal-holiday-gate): artifacts」(依 08-28 拍板 (b) 引 subject 不引 SHA)",
+  "reviewed_head": "分支第 2 筆「fix(server): river 回補逾時重試改遞增退避…」(review 前形態;收修落在第 3–4 筆)",
+  "reviewers": {"standards": "opus sub-agent", "spec": "opus sub-agent"},
+  "standards": [
+    {"id": "S-1", "severity": "P2", "kind": "hard", "text": "`_schedule_backfill_retry` docstring 仍寫「`_BACKFILL_RETRY_SECS` 後只補 `legs`」,已是階梯(最長 600 s)。", "disposition": "accepted → 第 4 筆:docstring 改「`_retry_delay_secs(本輪)` 後」"},
+    {"id": "S-2", "severity": "P2", "kind": "hard", "text": "`corr_engine.py:383` 與 `test_corr_engine_river.py:489` 兩處註解仍引「已重試 3 輪」字面(log 是 %d 沒問題);兩份複本改一份漏一份必然。", "disposition": "accepted → 第 3 / 4 筆:兩處改「已重試 N 輪」"},
+    {"id": "S-3", "severity": "P3", "kind": "grep", "text": "`docs/`、`.claude/skills/`、`CLAUDE.md` 全庫無 3 輪 / 30 s 的舊行為敘述;`.claude/*/review-diff.txt` 命中是歷史 artifact。", "disposition": "recorded(無事)"},
+    {"id": "S-4", "severity": "P2", "kind": "judgement", "text": "`test_giving_up_resets_the_round_for_the_next_episode` 的 4→9 / 8→18 只改行內註解,docstring 沒提上界變動;同一行為改動兩條測試的揭示標準不一致。", "disposition": "accepted → 第 3 筆:兩條 docstring 皆明寫「既有斷言為本案預告的行為改動」"},
+    {"id": "S-5", "severity": "P3", "kind": "judgement", "text": "延遲值在 sleep 前求值、log 輪數在 sleep 後才讀;reconnect 會把共享計數歸零,窗拉到 600 s 後「第 0 輪」機率放大。建議 sleep 前先存區域變數。", "disposition": "accepted → 第 4 筆:`round_no` 睡前定案,sleep 與 log 同用"},
+    {"id": "S-6", "severity": "P3", "kind": "judgement", "text": "只 patch `_BACKFILL_RETRY_SECS` 的四條既有測試現況跑不到第 2 輪,不會變慢;但日後只 patch 一個常數又跑到上界的新測試會 0.01×(2⁸−1)=2.55 s > wait_until 2.0 s 間歇假紅;測試側沒有機械閘。", "disposition": "declined(記錄 next-time):生產碼 docstring 已寫「兩個常數都 patch」;機械閘(fixture 同時 patch 兩常數)是測試基建改動,不在本案"},
+    {"id": "S-7", "severity": "P3", "kind": "judgement", "text": "模組註解寫「不另寫一份數字」,但同段 / 測試 docstring / commit message 各抄一份階梯,共四份;測試釘字面值是對的,那句宣稱與現況相反。", "disposition": "accepted → 第 4 筆:改「階梯的字面值唯一鎖在測試」,模組註解不再列數字"},
+    {"id": "S-8", "severity": "P3", "kind": "judgement", "text": "Mysterious Name:階梯測試裡混了 `_BACKFILL_RETRY_MAX_ROUNDS == 8`,壞掉時測試名指錯方向。", "disposition": "accepted → 第 3 筆:斷言搬進 `test_retry_rounds_are_capped`"},
+    {"id": "S-9", "severity": "P3", "kind": "hard-lite", "text": "`backend-conventions` 要求 module-level globals 帶 type hint;`_BACKFILL_RETRY_MAX_SECS = 600.0` 沒有,與同區既有兩常數一致。", "disposition": "declined:與相鄰兩個既有常數同格式,不順手重排既存格式"}
+  ],
+  "spec": [
+    {"id": "P2-1", "severity": "P2", "text": "「退避到成功」只被近似(時間押注 vs 事件驅動),且 diff 內沒有證據證明 TC4 在該窗內真會回答;08-26 log 只有四發 timeout + 放棄。請把真環境判準寫死:次一交易日 `grep \"river 回補重試\"` 後必須出現 `river 回補 TSMC:N 分鐘`;8 輪打完仍全 timeout = 選項錯、改事件驅動。", "disposition": "accepted → 第 4 筆:模組註解改標「推論」+ 寫死判準;verification §5 真環境列同一判準"},
+    {"id": "P3-1", "severity": "P3", "text": "若 09:39 前 TC4 都沒好,該腿依舊整天無 seed,與修前同構只是晚 45 分(給不出「開盤後才排」的最小保險)。", "disposition": "recorded(留尾):事件驅動變體是 P2-1 判準失敗時的下一步,change-spec §1 已寫取捨"},
+    {"id": "P3-2", "severity": "P3", "text": "測試 docstring 出處寫「do-batch 第二批題 4 順帶」,本案出處是 discussion handoff §1-2。", "disposition": "accepted → 第 3 筆:改引 discussion handoff §1-2"},
+    {"id": "P2-2", "severity": "P2", "text": "世代計數在 45 分窗內會被別的 episode 洗掉:沉睡的 retry task 沒有世代標記,reconnect 把共享計數歸零後舊 task 醒來照跑並 +1;舊 90 秒窗幾乎撞不到,拉長後「睡眠期間 reconnect」變常態。建議 retry task 帶世代(對照 index_engine `_void_inflight_retry`)。", "disposition": "accepted → 第 4 筆:`_cancel_sleeping_retries()` 在 `_schedule_backfill`(整輪)起跑前取消全部沉睡重試(整輪涵蓋全部腿,舊 task 純冗餘);第 3 筆新案 `test_reconnect_full_round_cancels_sleeping_retry`"},
+    {"id": "P2-3", "severity": "P2", "text": "跨盤別邊界的一發是靜默空轉且會被記為成功:回補被 session 比對整批丟棄(回 0)時 pending 為空 → 輪數歸零,等於把「一發都沒補進去」記成「補齊一輪」。", "disposition": "declined(記錄 next-time):既有行為、非本案引入;失效方向是「多給一份預算」(有界的 9 發),不是少補;要修得讓 `apply_backfill` 回「被丟棄」訊號並回填 pending,屬另一案"},
+    {"id": "P3-3", "severity": "P3", "text": "`_schedule_backfill_retry` docstring 仍寫「`_BACKFILL_RETRY_SECS` 後只補 `legs`」。", "disposition": "accepted(同 S-1)"},
+    {"id": "cost", "severity": "-", "text": "成本上界可接受:每腿每 episode 9 發攤在 45.5 分 ≈ 每 5 分 1 發、每發佔 history lane 10 s;`close()` 已納入取消、600 s sleep 取消即時,`shutdown_budget` 83 s 不受影響。", "disposition": "recorded"}
+  ],
+  "disposition": "Standards 9 條:accepted S-1 / S-2 / S-4 / S-5 / S-7 / S-8,declined S-6 / S-9(理由如上),S-3 無事。Spec 7 條:accepted P2-1 / P2-2 / P3-2 / P3-3,recorded P3-1 / cost,declined P2-3(既有行為、失效在安全側,留 next-time)。收修 = 第 3 筆 test + 第 4 筆 fix。"
+}
