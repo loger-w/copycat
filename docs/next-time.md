@@ -23,8 +23,10 @@
 - [ ] **`/mod` 成交點精確版**(L439 / L444 / L435)。
 - [ ] **`/mod` 盤前前一交易日 + TXO 自動日期**(L461 / L457)。
 - [ ] **`/mod` 斷線徽章分態**(L296)。
-- [ ] **B2 調研(background research)**:達錢商品資訊欄位還能拿到什麼 —— 暫停交易旗標?當日當沖資格?(L171 / L272);
-  證交所當日可當沖名單 API;FinMind 當日更新時刻。
+- [x] ~~**B2 調研(background research)**:達錢商品資訊欄位還能拿到什麼 —— 暫停交易旗標?當日當沖資格?(L171 / L272);
+  證交所當日可當沖名單 API;FinMind 當日更新時刻。~~
+  → 08-28 `docs/research/2026-08-28-instrument-flags-survey.md`:達錢**不可**;證交所 `TWTB4U`(含 `Suspension`)/ 櫃買 `tpex_securities` 免 token JSON **可**(盤前公布時刻未證,08:30 打一次);
+  FinMind DayTrading 盤前可取、資券 21:00。C1 當沖資格標示 → 資料源定為交易所 OpenAPI 當日名單,等 user 排 `/feat`。
 - [ ] **D `chore/test-hygiene-batch-2`**:L29 / L68 / L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。
 - [ ] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
   L467 / L471 heal 階梯(壞日子才有);6949 發數(≤ 40);海外腿休市段亂救;13:50 NK225M probe(L430);L84 SC-13 (b)–(e)。
