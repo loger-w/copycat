@@ -635,11 +635,12 @@ class IndexEngine:
             # 偵測產出面(minutes 覆蓋度)而非輸入面:對「回補 timeout」「推播死」
             # 「推播鍵不可用」三種上游失效同構。固定字串供 grep:index 分時自癒。
             #
-            # heal 窗(N105 + review SP1)。三段分開想:
-            # 1. **watchdog 窗內(09:00–13:25)逐字沿用舊判準,不吃日曆**:日曆把一個
-            #    真交易日誤標成假日時,交易日閘會讓那天**整天**不自癒 —— 那是改動前
-            #    沒有的新失效(舊碼在窗內照樣救)。交易日閘的用途是壓休市日的**盤外**
-            #    噪音,不該把窗內的既有保護一起收走。
+            # heal 窗(N105 + review SP1;08-28 user 拍板 A5 補窗內閘)。三段分開想:
+            # 1. **watchdog 窗內(09:00–13:25)有日曆時也吃日曆**:休市日 minutes 恆空,
+            #    窗內每 60 s→900 s 空打 TC4、抓回來永遠是空的 —— 日曆說休市就一發都不打。
+            #    代價 = 日曆誤標交易日為休市那天整天不自癒;但那天整個畫面都掛休市膠囊、
+            #    圖是前一日的,錯得看得見(user 08-28 知情接受)。**無日曆 → 逐字舊判準**
+            #    (不知道今天開不開盤就不改行為,與第 3 段同一原則)。
             # 2. **有日曆時,盤外放寬到午夜**:尾窗上界原本 13:40,盤後 / 晚間啟動踩到
             #    1K 回補 timeout 就要空到次日 09:06 才自癒。`_minutes_lag_exceeded` 的
             #    `min(now, 13:30)` 封頂本來就是條文要的「窗外以 13:30 為期望覆蓋終點」。
@@ -651,7 +652,7 @@ class IndexEngine:
             # 之前恆偽,而盤外那半邊(`now >= 13:25`)也還沒開。
             now_t = self._now_fn()
             if self._in_watch_window():
-                heal_window = True
+                heal_window = not self._has_calendar or self._is_trading_day(self._today_fn())
             elif self._has_calendar:
                 heal_window = now_t >= _WATCH_END and self._is_trading_day(self._today_fn())
             else:
