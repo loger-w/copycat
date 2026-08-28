@@ -274,9 +274,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **index session 自癒閘上界 = `index_engine._WATCH_END`**(2026-08-27 起,pr-126 F-01 per-consumer):產生點
   `copycat/live/stock_source.py::_INDEX_HEAL_END`(13:25,end-exclusive;`in_index_heal_window_now` 只給
   `app._default_index_source` 注入),必須與 `copycat/server/index_engine.py::_WATCH_END`(**推播靜默(stale)watchdog**
-  的凍結點;分時自癒 09:00 起全程都在,`_WATCH_END` 後只是換成尾段判準接手 —— 有日曆**且當天是交易日**到午夜、
-  休市日**整天**一發都不打(08-28 起窗內段也吃日曆,N105 補窗內閘;無日曆 → 窗內照救、盤外到 13:40);
-  `_broadcast_loop` 的 `_is_trading_day` AND,pr-131 F-03)
+  的凍結點;分時自癒在**交易日** 09:00 起全程都在,`_WATCH_END` 後只是換成尾段判準接手 —— 有日曆且交易日到午夜、
+  有日曆的休市日**整天**一發都不打(08-28 起窗內段也吃日曆,N105 補窗內閘);無日曆 → 窗內照救、盤外到 13:40
+  (`_broadcast_loop` 的 heal_window:窗內 `not _has_calendar or _is_trading_day`、盤外 `_has_calendar and _is_trading_day`,pr-131 F-03)
   **同值同語意** —— 兩把都釘在
   「收盤試撮起指數不更新」這一個事實。個股 / corr 台積電腿走另一把 `_TRADING_END` 13:35(試撮期個股仍有簿更新推播),
   **三個消費者不共用一把閘**。13:25 後「index_engine 分時自癒還在救、source 層 REALTIME watchdog 已凍結」是**正常態**,
