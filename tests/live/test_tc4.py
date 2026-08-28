@@ -1586,3 +1586,162 @@ class TestCloseTiming:
         assert "UNSUBQUOTE 2/2" in caplog.text
         assert "LOGOUT + Disconnect" in caplog.text
         assert api.disconnected is True
+
+
+# ---- quote 未連線期間的 log 洪水(mod/tc4-disconnected-log-flood)----
+#
+# 08-28 15:12–15:24 斷達錢 4 11.5 分鐘實測 6764 行:reconnect 失敗每發 ~58 行巢狀 traceback(70 發)
+# + 零推播自癒逐 symbol 逐輪「→ 重掛」「重掛失敗: quote not connected」各 1206 行。重掛根本
+# 送不出去,記帳卻照 +1 → 接回後第一次真自癒落在 300 s / 已換窗的錯檔位(D1 拍板整輪跳過)。
+
+
+class TestHealWhileDisconnected:
+    """D1 / D2:quote 未連線 → 該輪整輪跳過(不記帳、不逐 symbol 印),整段斷線只印一次「等連線」。"""
+
+    @staticmethod
+    def _src() -> TC4QuoteSource:
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1", heal_silence_secs=30.0)
+        src._subscribed = {HEAL_A, HEAL_B}
+        src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
+        with src._api_lock:  # 模擬 _dispose 後、_ensure_connected 尚未成功的斷線態
+            src._api = None
+            src._session = None
+        return src
+
+    @staticmethod
+    def _waiting(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.message for r in caplog.records if "quote 未連線" in r.message]
+
+    def test_disconnected_tick_skips_accounting_and_per_symbol_lines(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = self._src()
+        with caplog.at_level(logging.WARNING):
+            src._heal_tick(100.0)
+        assert src._heal_attempts == {} and src._heal_next == {}, "未連線那輪不得記帳"
+        assert src._window_variant == {}
+        assert "零推播自癒" not in caplog.text and "自癒重掛失敗" not in caplog.text
+        waiting = self._waiting(caplog)
+        assert len(waiting) == 1 and "2 腿" in waiting[0]
+
+    def test_waiting_line_prints_once_per_outage(self, caplog: pytest.LogCaptureFixture) -> None:
+        src = self._src()
+        with caplog.at_level(logging.WARNING):
+            for now in (100.0, 105.0, 110.0, 400.0):
+                src._heal_tick(now)
+        assert len(self._waiting(caplog)) == 1
+        assert src._heal_attempts == {}
+
+    def test_waiting_line_prints_again_for_a_new_outage(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = self._src()
+        api = FakeApi({})
+        with caplog.at_level(logging.WARNING):
+            src._heal_tick(100.0)
+            with src._api_lock:  # 接回(reconnect 重掛後 _sub_at 會被刷新)
+                src._api = api
+                src._session = "sess-2"
+            src._sub_at = {HEAL_A: 100.0, HEAL_B: 100.0}
+            src._heal_tick(105.0)  # 連線中、剛重掛 → 不自癒、不印等待
+            with src._api_lock:  # 第二段斷線
+                src._api = None
+                src._session = None
+            src._heal_tick(110.0)
+        assert len(self._waiting(caplog)) == 2
+        assert api.rt_requests == []
+
+    def test_reconnected_tick_heals_from_a_clean_ladder(self) -> None:
+        """白名單:接回後的自癒從乾淨帳本起算(attempt 1、原窗、T·2^0 退避)。"""
+        src = self._src()
+        api = FakeApi({})
+        src._heal_tick(100.0)
+        src._heal_tick(200.0)
+        with src._api_lock:
+            src._api = api
+            src._session = "sess-2"
+        src._heal_tick(300.0)  # _sub_at 仍 0 → 靜默 > 30 s → 真自癒
+        assert src._heal_attempts == {HEAL_A: 1, HEAL_B: 1}
+        assert src._heal_next == {HEAL_A: 330.0, HEAL_B: 330.0}
+        assert _rt_pairs(api) == [
+            ("UNSUBQUOTE", HEAL_A),
+            ("SUBQUOTE", HEAL_A),
+            ("UNSUBQUOTE", HEAL_B),
+            ("SUBQUOTE", HEAL_B),
+        ]
+
+
+class TestReconnectFailureTraceback:
+    """D3:同一段斷線第一發失敗印完整 traceback,之後每發一行(例外型別 + 訊息 + 退避);
+    重連成功後歸零,下一段斷線的第一發再印全 traceback。"""
+
+    @staticmethod
+    def _records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+        return [r for r in caplog.records if r.message.startswith("reconnect attempt failed")]
+
+    def test_first_failure_has_traceback_then_one_liners(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1")
+        src._last_msg = time.monotonic() - 999.0
+        calls: list[int] = []
+
+        def _fail() -> None:
+            calls.append(1)
+            if len(calls) >= 3:
+                src._stop.set()  # 第三發失敗後停迴圈(退避 wait 回 True → return)
+            raise ConnectionError("TC4 quote connect failed: Resource temporarily unavailable")
+
+        monkeypatch.setattr(src, "_ensure_connected", _fail)
+        monkeypatch.setattr(src._stop, "wait", lambda _t: src._stop.is_set())  # 不真睡
+        with caplog.at_level(logging.ERROR):
+            src._check_stale()
+        recs = self._records(caplog)
+        assert len(recs) == 3
+        assert recs[0].exc_info is not None, "第一發要有完整 traceback(不吞不懂的錯)"
+        assert "backoff 1s" in recs[0].message
+        for n, rec in enumerate(recs[1:], start=2):
+            assert rec.exc_info is None, f"第 {n} 發不得再印 traceback"
+            assert f"(#{n})" in rec.message
+            assert "ConnectionError: TC4 quote connect failed: Resource temporarily unavailable" in rec.message
+        assert "backoff 2s" in recs[1].message and "backoff 4s" in recs[2].message
+
+    def test_counter_resets_after_a_successful_reconnect(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = FakeApi({})
+        src = TC4QuoteSource(port="0", api=api, session="sess-1")
+        src._last_msg = time.monotonic() - 999.0
+        outcomes = iter(["fail", "ok", "fail", "fail"])
+
+        def _ensure() -> None:
+            if next(outcomes) == "fail":
+                raise ConnectionError("TC4 quote connect failed: boom")
+            with src._api_lock:
+                src._api = api
+                src._session = "sess-2"
+
+        monkeypatch.setattr(src, "_ensure_connected", _ensure)
+        monkeypatch.setattr(src._stop, "wait", lambda _t: src._stop.is_set())
+        with caplog.at_level(logging.ERROR):
+            src._check_stale()  # fail → ok:第一段斷線
+            assert src.reconnects == 1
+            src._last_msg = time.monotonic() - 999.0
+            with src._api_lock:
+                src._api = None
+                src._session = None
+
+            # 第二段斷線:fail(traceback)→ fail(一行,同時停迴圈)
+            seq: list[int] = []
+
+            def _fail_twice() -> None:
+                seq.append(1)
+                if len(seq) >= 2:
+                    src._stop.set()
+                raise ConnectionError("TC4 quote connect failed: boom")
+
+            monkeypatch.setattr(src, "_ensure_connected", _fail_twice)
+            src._check_stale()
+        recs = self._records(caplog)
+        assert [r.exc_info is not None for r in recs] == [True, True, False]
+        assert "(#2)" in recs[2].message and "(#1)" not in recs[1].message
