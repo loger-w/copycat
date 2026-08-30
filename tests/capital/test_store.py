@@ -845,13 +845,20 @@ def test_today_qty_net_at_or_below_zero_with_inventory_is_zero() -> None:
 # 負現股列 kind=cash 平倉鍵被鎖(user 手動買回)。
 
 
+SEQ_C = "2313093000001"
+
+
+def _fill_8358(seq: str, bs: str, qty: str, price: str) -> ReplyRecord:
+    return _evt(seq=seq, typ="D", bs=bs, stock="8358", qty=qty, price=price)
+
+
 def _borrowless_short_store() -> CapitalStore:
     from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
     from copycat.capital.balance import parse_balance_line
 
     s = CapitalStore()
     s.set_positions([])
-    s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S08R2", stock="8358", qty="1000", price="512.0000"))
+    assert s.apply_reply(_fill_8358(SEQ_A, "S08R2", "1000", "512.0000")) is True  # 無券賣要套得上
     row = parse_balance_line(RAW_T_BORROWLESS_SHORT)
     assert row is not None
     s.set_positions([row])
@@ -881,7 +888,7 @@ def test_borrowless_short_position_is_closable_with_cash_buy() -> None:
 def test_borrowless_short_buyback_fill_nets_to_zero_without_phantom_rows() -> None:
     """回補是現股買(reply idx6 = B00):樂觀套用要沖掉空單列、不能另開一列現股多單。"""
     s = _borrowless_short_store()
-    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="B00R2", stock="8358", qty="1000", price="523.0000")) is True
+    assert s.apply_reply(_fill_8358(SEQ_B, "B00R2", "1000", "523.0000")) is True
     assert s.positions() == []
 
 
@@ -890,15 +897,15 @@ def test_cash_buy_offsets_borrowless_short_first_then_opens_long_with_residue() 
     (均價 = 這張單成交價)。交易所對同股號自動沖銷,樂觀套用要照同一語意。"""
     s = CapitalStore()
     s.set_positions([])
-    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S08R2", stock="8358", qty="2000", price="512.0000")) is True
+    assert s.apply_reply(_fill_8358(SEQ_A, "S08R2", "2000", "512.0000")) is True
     ds = s.position_for("8358", "daytrade_sell")
     assert ds is not None and ds.qty == -2 and ds.avg_price == 512.0 and ds.today_qty == 2
-    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="B00R2", stock="8358", qty="1000", price="520.0000")) is True
+    assert s.apply_reply(_fill_8358(SEQ_B, "B00R2", "1000", "520.0000")) is True
     ds = s.position_for("8358", "daytrade_sell")
     assert ds is not None and ds.qty == -1 and ds.avg_price == 512.0 and ds.today_qty == 1
     assert s.position_for("8358", "cash") is None
-    seq_c = "2313093000001"
-    assert s.apply_reply(_evt(seq=seq_c, typ="D", bs="B00R2", stock="8358", qty="3000", price="523.0000")) is True
+    assert s.apply_reply(_fill_8358(SEQ_C, "B00R2", "3000", "523.0000")) is True
     assert s.position_for("8358", "daytrade_sell") is None
     cash = s.position_for("8358", "cash")
-    assert cash is not None and cash.qty == 2 and cash.avg_price == 523.0 and cash.avg_source == "fill"
+    assert cash is not None and cash.qty == 2 and cash.avg_price == 523.0
+    assert cash.avg_source == "fill"

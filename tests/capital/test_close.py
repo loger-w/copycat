@@ -72,7 +72,7 @@ def test_kind_direction_mismatch_rejected() -> None:
         )
 
 
-def test_cash_short_direction_close_blocked_until_calibrated() -> None:
+def test_cash_short_direction_is_data_contradiction_and_rejected() -> None:
     """(cash, 空向)刻意**不在** _CLOSE_MAP:2026-08-28 校準後群益負現股列已在 parse 端歸
     daytrade_sell,cash 負向不再有正常來源 = 資料矛盾 → 不猜單種,與 (short, 多向) 同理拒絕。"""
     with pytest.raises(ValueError, match="無法平倉"):

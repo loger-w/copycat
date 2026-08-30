@@ -16,10 +16,12 @@ export const KIND_TEXT: Record<PositionKind, { short: string; full: string }> = 
   cash: { short: "現", full: "現股" },
   margin: { short: "資", full: "融資" },
   short: { short: "券", full: "融券" },
+  daytrade_sell: { short: "無", full: "無券" },
 };
 
-/** 後端 `Position.kind` 值域(TradeKind)比 `PositionKind` 寬(另有 daytrade_sell)——
- *  認不得就不標也不送 kind(退回「同檔唯一列」語意;真有多列後端會擋,不會猜錯種類)。
+/** `Position.kind` 是後端字串直傳(值域外 = 舊後端 / 未來新值)—— 認不得就不標也不送 kind
+ *  (退回「同檔唯一列」語意;真有多列後端會擋,不會猜錯種類)。`daytrade_sell` 自 2026-08-30 起
+ *  在表內:標得出「無券」就送得出 kind,後端 wire 值域同步放寬(不然這裡標了、那邊 422)。
  *
  *  用 `Object.hasOwn` 不用 `in`:`in` 會讓 "toString" / "constructor" 這種原型鏈上的
  *  名字被判為合法 kind,而 kind 是後端字串直傳的。 */

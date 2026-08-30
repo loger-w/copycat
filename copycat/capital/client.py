@@ -553,7 +553,9 @@ class CapitalClient:
             if p is None and r.kind == "cash":
                 # 無券空單:群益損益列標籤仍是「現股」(2026-08-28 prod 8358 實錄 :2427 配對成功、
                 # 沒印種類不符),而庫存段那列已歸 daytrade_sell —— 唯一的跨 kind 配對例外,
-                # 且只配負向列(daytrade_sell 沒有多向)。
+                # 且只配負向列(daytrade_sell 沒有多向)。前提:pending 每股號只有一列現股 T 列
+                # (`_handle_balance` 逐列 parse,同股號 cash 與 daytrade_sell 不會並存)—— 若並存,
+                # cash 列先中 by_key、例外不觸發,daytrade_sell 列缺 avg(退化,不誤配)。
                 ds = by_key.get((r.stock_no, "daytrade_sell"))
                 if ds is not None and ds.qty < 0:
                     p = ds
@@ -572,9 +574,10 @@ class CapitalClient:
                 # 08-28 8358 那筆平掉後查不回來 —— 每次值變動印一行,下一筆實錄就有第一手
                 self._avg_logged[(r.stock_no, p.kind)] = r.avg_price
                 logger.info(
-                    "損益列回填 %s kind=%s avg=%s cost=%s pnl=%s price=%s(原 avg=%s,標籤原文=%r)",
+                    "損益列回填 %s kind=%s 部位=%s avg=%s cost=%s pnl=%s price=%s(原 avg=%s,標籤原文=%r)",
                     r.stock_no,
                     r.kind,
+                    p.kind,
                     r.avg_price,
                     r.cost,
                     r.pnl,

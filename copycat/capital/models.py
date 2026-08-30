@@ -100,7 +100,8 @@ class PositionCloseRequest:
     source: str = "panel"
     # sec 庫存種類(同檔資+集保並存時的第二把鍵);
     # None = 舊 body:同檔唯一列才成立,多列一律阻擋不猜。fut 忽略此欄。
-    kind: PositionKind | None = None
+    # 值域 TradeKind(2026-08-30 起含 daytrade_sell:無券空單可平倉,_CLOSE_MAP 回補 = 現股買)。
+    kind: TradeKind | None = None
 
 
 @dataclass(frozen=True)

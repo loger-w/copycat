@@ -41,8 +41,8 @@ from copycat.capital.models import (
     DecreaseQtyRequest,
     FutureOrderRequest,
     PositionCloseRequest,
-    PositionKind,
     StockOrderRequest,
+    TradeKind,
 )
 from copycat.market import tick_size_milli
 from copycat.server.futures_engine import FuturesEngine
@@ -108,8 +108,10 @@ class PositionCloseBody(BaseModel):
     price_type: _PriceType = "market"
     source: str = "panel"
     # sec 庫存種類;未帶 = 同檔唯一列才成立。列舉不是自由字串:錯值在 wire 層 422,
-    # 否則會降級成誤導的 403「無部位可平」(查不到是因為拼錯,不是因為沒庫存)
-    kind: PositionKind | None = None
+    # 否則會降級成誤導的 403「無部位可平」(查不到是因為拼錯,不是因為沒庫存)。
+    # 值域 TradeKind(2026-08-30 起含 daytrade_sell 無券空單):前端 close-order KIND_TEXT 鍵集
+    # 同源 —— 「畫面標得出來的種類就送得出去」這條不變量靠兩邊同值域。
+    kind: TradeKind | None = None
 
 
 # ---------------------------------------------------------------------------
