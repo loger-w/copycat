@@ -7,7 +7,7 @@
   結果用短 TTL(比照 `TODAY_TTL_SECS`)或 13:46 後失效一次;個股日 K 走 `build_daily` 同構(但個股 overlay 走後端 `date < today`,
   盤中不會拿部分 bar 當基準,夜盤也沒有現貨交易 → 個股面無症狀)。
 - [ ] **App 級 lazy 測試在剛 `npm ci` 的 worktree 全量必紅 1–2 條、每次不同**(`App.memo.test.tsx` railCtx 換主檔 ×3 / `App.corr-tab.test.tsx`
-  零 corr WS ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 4/4 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
+  零 corr WS ×1 / `App.test.tsx` localStorage 記住 index tab + capital WS 唯一掛載 ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 5/5 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
   主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
   單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。
 - [ ] **`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**(render 時重算):與本次否決的 H3 同構 ——
