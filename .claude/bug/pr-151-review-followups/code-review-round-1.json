@@ -1,0 +1,19 @@
+{
+  "fixed_point": "2873e004",
+  "branch": "fix/pr-151-review-followups",
+  "reviewers": {"standards": "opus", "spec": "opus"},
+  "standards": [
+    {"id": "S-1", "kind": "hard", "rule": "frontend-conventions 推導數字只留一份;hook 大 doc 自述「界的由來只寫這一處」", "finding": "F-01 推導(TQ 每 render setOptions → 重排計時器 → slack 窗跳隔天)同時出現在 ① hook 大 doc (a) 段 ② DAY_ROLLOVER_SLACK_MS ⚠ 段 ③ 測試 describe 前註 ④ diagnosis.md F-08 段;②③ 是再推導不是指標"},
+    {"id": "S-2", "kind": "judgement", "finding": "setInterval spy 無生效自檢、斷言鬆:該案確定值是 0 卻寫 toBeLessThanOrEqual(1),無法區分「量化生效」與「spy 看不到 TQ」;已查 timeoutManager 預設 provider 讓全域 spy 有效、afterEach 順序正確"},
+    {"id": "S-3", "kind": "judgement", "finding": "Duplicated Code:新 describe 重宣告 D1_ISO / D_SNAPSHOT / D1_SNAPSHOT / stubDayFetchByWallClock;D_SNAPSHOT 同名不同值(1 bar vs 2 bar)= Mysterious Name"},
+    {"id": "S-4", "kind": "judgement", "finding": "renderHook callback 的 void tick 多餘,callback 可省參數"},
+    {"id": "S-5", "kind": "judgement", "finding": "生產註解引 node_modules 行號(useBaseQuery.js:69-70 / queryObserver.js:115-118 / query.js:128)逐字核過正確,但升 TQ 即靜默過期;diagnosis.md 112-118 vs 其他 115-118 不一致"},
+    {"id": "S-6", "kind": "judgement", "finding": "useFuturesBars.test.ts EOF 多一空白行"}
+  ],
+  "spec": [
+    {"id": "P-ok", "severity": "info", "finding": "9 條逐條做到;F-01 算式數值驗證:三個邊界(00:01:00.000 → 24 h / 00:00:30 → 30 s / 23:59:30 → 90 s)+ 全日 137 ms 掃描 630k 點 v>0 且 truth ≤ v ≤ truth+1000 零違反、最小值 1000 ms;未改吃 dataUpdatedAt 且測試 2 反向鎖住;F-07 測試結構無漏洞(tick -1 不撞、斷言時點餘裕 1 ms 為數學保證);scope creep 無(hook 非註解改動 2 行;報告落 docs 屬既有慣例)"},
+    {"id": "P-1", "severity": "LOW", "finding": "staleTime 吃同一支的副作用未寫進註解:dataUpdatedAt 落在 00:00–00:01 內時 stale 點 = 今日 00:01 而非明日(有界、方向安全)"},
+    {"id": "P-2", "severity": "LOW", "finding": "churn 測試 ≤ 1 偏鬆:fixture 對齊 09:00:00.000、期望值其實是 0"}
+  ],
+  "disposition": "全部接受。S-1:② slack doc 收成一句指標「推導見 msUntilDayRollover」、③ describe 前註改指向推導;④ diagnosis.md 是診斷紀錄(目的不同)保留。S-2 = P-2:改 toHaveBeenCalledTimes(0),並補跨秒重繪一次 → 恰 1 次的生效自檢。S-3:D1_ISO / stubDayFetchByWallClock(dBars, d1Bars) / dayFetchCount 提到檔案層,舊 describe 改傳 (D_SNAPSHOT, D1_SNAPSHOT),新 describe 常數改名 ONE_BAR_D / ONE_BAR_D1;舊 describe 內 ~20 處 filter 不順手改(鐵則 B)。S-4:callback 改 () => useFuturesBars(...) 保留 initialProps + rerender({ tick })。S-5:hook 註解改 `useBaseQuery` effect / `QueryObserver.setOptions` / `Query.isStaleByTime` 函式名 + 「@tanstack/query-core 5.101 核過」;diagnosis.md 行號統一標 5.101.2。S-6:EOF 單換行。P-1:msUntilDayRollover doc 補一句連帶。收修後 39/39、tsc / eslint 0、mutation M-A / M-B 再跑各紅;三筆 commit(test / chore(frontend) 純註解 / chore(docs))。"
+}
