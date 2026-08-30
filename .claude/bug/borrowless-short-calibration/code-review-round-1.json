@@ -1,0 +1,24 @@
+{
+  "fixed_point": "09cc3e63",
+  "head_reviewed": "e5e6fe1e",
+  "reviewers": {"standards": "opus / effort high", "spec": "opus / effort high"},
+  "standards": [
+    {"id": "F-01", "severity": "Must", "file": "copycat/capital/store.py:561", "finding": "position_for docstring 第一行 223 字元(byte 計;字元計 161),違反 backend-conventions line-length 100;wire 契約說明塞進摘要行。pyproject 未開 E501 → gate 不擋。", "disposition": "收:括號內容移到 docstring 末段獨立段落。"},
+    {"id": "F-02", "severity": "Should", "file": "store.py:299; tests/capital/test_store.py:884/893/896/901/904", "finding": "新增行超 100(store 102;測試 114 × 4、103)。", "disposition": "收:store 改多行 kwargs;測試抽 _fill_8358 helper + SEQ_C 常數(順帶收 F-07)。awk length 算 byte,實際以 Python len 重量:只這 6 行超 100 字元,其餘中文註解行未超。"},
+    {"id": "F-03", "severity": "Should", "file": "copycat/capital/balance.py:79", "finding": "負現股列 INFO 無條件每列印;庫存段每輪(成交後 + 定時)都會再看到 → 空單抱一天每分鐘一行。校準完成後已是正常態非蒐證素材。", "disposition": "收:降 DEBUG。prod 判準改看 client「成交樂觀套用部位 … stock=」(修前該筆印「不在樂觀套用表」)與「損益列回填 … 部位=daytrade_sell」;test_balance caplog 降 DEBUG(該變)。next-time 記 grep「balance line 負股數」對現股列自此 0 筆。"},
+    {"id": "F-04", "severity": "Nice", "file": "copycat/capital/client.py:558", "finding": "回填 log 印 r.kind(cash)但實際配到 p.kind(daytrade_sell),跨 kind 例外一開唯一蒐證行自報錯 kind。", "disposition": "收:log 加「部位=%s」印 p.kind;test_profit_row_backfill_logs_value_once_per_change 整行比對跟改(該變)。"},
+    {"id": "F-05", "severity": "Nice(指定檢查項 2)", "file": "client.py:551", "finding": "跨 kind 例外不會誤配(cash 先中 by_key 才輪不到例外);前提「pending 每股號單一 T 列」應寫進註解。", "disposition": "收:註解補前提與退化行為。"},
+    {"id": "F-06", "severity": "Nice(指定檢查項 1)", "file": "store.py:288", "finding": "鎖紀律 / applied_* 記帳正確。只做「現股買沖空單」一向;反向(持多單收「無券」賣)會短暫雙列,註解把幽靈雙列講成已根除。", "disposition": "收:註解補界線(群益對有庫存的賣出標「現股」不標「無券」,該態無實錄)。不加反向邏輯。"},
+    {"id": "F-07", "severity": "Nice(指定檢查項 4)", "file": "tests/capital/test_store.py:900, 868", "finding": "治具規則遵守(RAW_T_BORROWLESS_SHORT 唯一定義在 balance_rows);seq_c 就地字面量應升 SEQ_C;fixture 首行 apply_reply 未斷言 is True(_FILL_KIND 壞掉 fixture 仍綠)。", "disposition": "收:SEQ_C 模組常數;fixture 斷言 is True。"},
+    {"id": "F-08", "severity": "Nice", "file": "tests/capital/test_close.py:75", "finding": "Mysterious Name:test_cash_short_direction_close_blocked_until_calibrated 與新 docstring(資料矛盾)對不上。", "disposition": "收:改名 test_cash_short_direction_is_data_contradiction_and_rejected。"},
+    {"id": "F-09", "severity": "Nice", "file": "多檔", "finding": "Shotgun Surgery + Primitive Obsession:daytrade_sell 語意散在 balance / client / store / close / ladder-position + 前端四處字串比較;positionEcon(kind: string)。", "disposition": "不在本次動(reviewer 亦建議);記 docs/next-time.md 08-28 節新條。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "Should", "file": "frontend/src/components/capital/CapitalPositionsList.tsx:74,116", "finding": "標籤只走 close-order.ts KIND_TEXT(三值):daytrade_sell → 部位面板種類欄空白、平倉確認窗「種類」列消失 —— 正落在新解鎖真錢送單路徑的最後一道人工閘(§7 二次確認)。trade-kinds.ts 與 KIND_TEXT 值域分岔;CLAUDE.md 新契約條漏此讀者。", "disposition": "收(核實屬實):守住 close-order 自述不變量「標籤 ⇔ 送 kind」—— KIND_TEXT 加 daytrade_sell {無 / 無券},types.ts PositionKind 加值,wire 兩端(capital_api PositionCloseBody.kind、models PositionCloseRequest.kind)放寬到 TradeKind → 前端對無券列送 kind 走精確鍵。新測:test_capital_api::test_close_body_kind_daytrade_sell_sends_cash_buy(sFlag 0 / sBuySell 0 / nQty 1)+ close-order.test 三條;舊「daytrade_sell 認不得 → null / 不送 kind」兩條改用值域外字串(該變)。CLAUDE.md 契約條改寫。"},
+    {"id": "F-02", "severity": "Nice", "file": "store.py:259-262", "finding": "無券買向 guard + WARNING 不在五步內,但無此 guard 會生出 (no, daytrade_sell) 正張數列 → 平倉再鎖,屬正當防禦。", "disposition": "留。"},
+    {"id": "F-03", "severity": "Nice", "file": "store.py:558", "finding": "position_for kind 放寬到 TradeKind 由測試驅動、非五步之一。", "disposition": "留:F-01 修法後 wire 也是 TradeKind,放寬成為必要而非測試驅動。"},
+    {"id": "F-04", "severity": "Nice", "file": "balance.py:76-80", "finding": "現股負列 WARNING 降 INFO + 改文案:舊 handoff / ops 的 grep「balance line 負股數」對 cash 路徑靜默 0 筆。", "disposition": "收(併 Standards F-03):再降 DEBUG;next-time 判準條明寫 grep 漂移。"},
+    {"id": "F-05", "severity": "Nice", "file": "CLAUDE.md:244", "finding": "舊條「現股 today_qty 那段賣出稅 0.15%」未補 daytrade_sell,與新條不一致。", "disposition": "收:舊條加「/ 無券空單(daytrade_sell,08-30 起)」。"}
+  ],
+  "disposition": "Standards 9 條(Must 1 / Should 2 / Nice 6):F-01~F-08 全收修,F-09 記 next-time。Spec 5 條(Should 1 / Nice 4):F-01 收修(wire 放寬 + KIND_TEXT 加值 + 三條新測 + 兩條該變),F-02/F-03 留(reviewer 亦建議留),F-04/F-05 收修。兩軸 (c) 皆確認 08-28 實錄重放五步走得通、白名單未越界。收修 commit 見 branch log;round 2 不另跑(收修皆 review 明示修法,gate 全綠為證)。"
+}
