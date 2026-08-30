@@ -244,16 +244,24 @@ class TestPrepareBackfill:
 
     def test_bad_payload_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         """pr-153 F-05:`_req` 的 `json.loads` 在 try/finally 之後,壞電文的 `JSONDecodeError`
-        不會收斂成 ConnectionError —— prepare 的 best-effort 契約要連這條一起擋。"""
+        不會收斂成 ConnectionError —— prepare 的 best-effort 契約要連這條一起擋。
+
+        與傳輸失敗**不同**(review round 1 F-C):壞電文路徑 `_req` 不 dispose、連線還活著,
+        一則壞回應只該跳過那一檔、其餘照常預熱(斷線才「就停」)。
+        """
+        sent: list[str] = []
 
         def handler(obj: dict) -> bytes:
             if obj["Request"] == "SUBQUOTE":
-                return b"not json\0"
+                sent.append(obj["Param"]["Symbol"])
+                if obj["Param"]["Symbol"].endswith("2330"):
+                    return b"not json\0"
             return ok()
 
         src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
         with caplog.at_level(logging.WARNING):
             src.prepare_backfill(["2330", "2317"])
+        assert sent == ["TC.S.TWS.2330", "TC.S.TWS.2317"]  # 壞電文那檔跳過,第二檔照常 Sub
         assert "prepare_backfill" in caplog.text
 
 
