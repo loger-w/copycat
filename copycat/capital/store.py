@@ -287,6 +287,9 @@ class CapitalStore:
             # 現股買先沖同股號的無券空單(交易所自動沖銷;2026-08-28 8358 回補 idx6 = B00 不是 08):
             # 不沖的話這裡會另開 (股號, cash) +1 列、空單列原地不動 —— 快照落地前約 2 s 幽靈雙列。
             # 沖掉的那段均價不動(減碼語意),餘量才照常開 / 加現股多單。
+            # 界線:只做這一向。反向(持現股多單時收到「無券」賣)不沖 —— 群益對有庫存的賣出回報
+            # 會標「現股」不標「無券」,那一態沒有實錄;真發生會短暫並存 (cash, +n) 與
+            # (daytrade_sell, −m) 兩列直到快照落地(review 2026-08-30 F-06)。
             ds_key = (key_no, "daytrade_sell")
             ds = self._positions.get(ds_key)
             if ds is not None and ds.qty < 0:
@@ -296,7 +299,11 @@ class CapitalStore:
                 else:
                     self._positions[ds_key] = self._with_today_qty_locked(
                         dataclasses.replace(
-                            ds, qty=ds.qty + offset, pnl_base=None, pnl_base_price=None, pnl_cost=None
+                            ds,
+                            qty=ds.qty + offset,
+                            pnl_base=None,
+                            pnl_base_price=None,
+                            pnl_cost=None,
                         )
                     )
                 signed -= offset
@@ -558,12 +565,15 @@ class CapitalStore:
     def position_for(
         self, stock_no: str, kind: TradeKind | None = None, *, market: Market | None = None
     ) -> Position | None:
-        """平倉查找。kind 有值 = 精確鍵;(值域 TradeKind:store 鍵含 daytrade_sell 無券空單列;wire 端 PositionCloseBody.kind 仍 PositionKind,前端對無券列不送 kind 走同檔唯一列)kind=None = 同股號恰一列才回傳,
+        """平倉查找。kind 有值 = 精確鍵;kind=None = 同股號恰一列才回傳,
         多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。
 
         market 收斂唯一匹配的掃描母體:證券股號與期交所契約碼是兩套獨立代碼,
         「不會撞字串」是隱形不變量不是保證(個股期契約碼隨期交所異動);不帶 market
-        時一個巧合的同名列就會讓另一邊誤判成歧義 → fut 平倉靜默「無部位可平」。"""
+        時一個巧合的同名列就會讓另一邊誤判成歧義 → fut 平倉靜默「無部位可平」。
+
+        kind 值域 = TradeKind(2026-08-30 起):store 鍵含 daytrade_sell 無券空單列,wire
+        `PositionCloseBody.kind` 同值域,前端 close-order 對無券列送 "daytrade_sell" 走精確鍵。"""
         with self._lock:
             if kind is not None:
                 p = self._positions.get((stock_no, kind))

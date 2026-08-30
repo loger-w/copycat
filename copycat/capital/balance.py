@@ -74,8 +74,10 @@ def parse_balance_line(raw: str) -> Position | None:
             # 現股 T 列負股數 = 無券當沖先賣未回補(2026-08-28 prod 8358 實錄:`8358,T,…,-1000,…`,
             # 不是融券 L 列)→ 部位狀態 daytrade_sell:_CLOSE_MAP 回補 = 現股買(交易所自動沖銷),
             # 與 store._FILL_KIND「無券」同鍵,樂觀套用 / 當沖段(today_qty)才對得上同一列。
+            # 校準完成後這是正常態,庫存段每輪(成交後 + 定時)都會再看到同一列 → DEBUG 不洗版;
+            # prod 判準改看 client 的「成交樂觀套用部位」與「損益列回填 … 部位=daytrade_sell」。
             pos_kind = "daytrade_sell"
-            logger.info("balance line 現股負股數 → 無券空單(daytrade_sell),整列: %r", raw)
+            logger.debug("balance line 現股負股數 → 無券空單(daytrade_sell),整列: %r", raw)
         else:
             # 融資列負股數(資券互抵?)無實錄,kind 維持、_CLOSE_MAP 無 (margin, False) 鍵 →
             # 平倉鍵鎖住;整列 warning 即蒐證素材(回補後自然停)。

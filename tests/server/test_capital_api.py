@@ -816,6 +816,26 @@ class TestPositionClose:
             assert isinstance(fields, dict)
             assert fields["sFlag"] == 1 and fields["nQty"] == 5  # 融資賣、融資列張數
 
+    def test_close_body_kind_daytrade_sell_sends_cash_buy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 無券空單(fix/borrowless-short-calibration):前端 KIND_TEXT 認得 daytrade_sell 就會送 kind,
+        # wire 值域要收得下 → 精確鍵到空單列,回補 = 現股買(sFlag 0、nQty = |qty|)
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            cap.store.set_positions(
+                [Position(market="sec", stock_no="8358", qty=-1, kind="daytrade_sell")]
+            )
+            res = client.post(
+                "/api/capital/position/close",
+                json={"market": "sec", "key": "8358", "price": 523.0, "kind": "daytrade_sell"},
+            )
+            assert res.status_code == 200, res.text
+            fields = _sent(com, "stock")[0][1]
+            assert isinstance(fields, dict)
+            assert fields["sFlag"] == 0 and fields["nQty"] == 1 and fields["sBuySell"] == 0
+
     def test_close_without_kind_ambiguous_403(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

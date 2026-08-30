@@ -108,9 +108,10 @@ def test_parse_cash_negative_shares_keeps_short_direction(
 ) -> None:
     """現股列負股數 = 無券當沖先賣未回補(2026-08-20 user 實報空單方向錯;2026-08-28 prod 8358
     實錄校準 kind)—— 舊 abs() 會把真空單顯示成多單,平倉映射再送賣單 = 對空單加倉(真金風險)。
-    方向保留、kind 歸 daytrade_sell(_CLOSE_MAP 回補 = 現股買);整列 INFO 留痕。"""
+    方向保留、kind 歸 daytrade_sell(_CLOSE_MAP 回補 = 現股買);整列 DEBUG 留痕(每輪都會看到,
+    不洗 INFO;review 2026-08-30 F-03)。"""
     raw = RAW_T_BOUGHT.replace(",1000,0,,", ",-1000,0,,")
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         p = parse_balance_line(raw)
     assert p is not None
     assert p.qty == -1 and p.kind == "daytrade_sell"

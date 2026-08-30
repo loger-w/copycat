@@ -47,22 +47,29 @@ describe("closeBodyOf 稽核分流(N082 / review SP3)", () => {
 });
 
 describe("kindOf / KIND_TEXT(值域單一定義)", () => {
-  it("PositionKind 三值認得", () => {
+  it("PositionKind 四值認得(daytrade_sell 自 2026-08-30 無券空單校準起)", () => {
     expect(kindOf(pos({ kind: "cash" }))).toBe("cash");
     expect(kindOf(pos({ kind: "margin" }))).toBe("margin");
     expect(kindOf(pos({ kind: "short" }))).toBe("short");
+    expect(kindOf(pos({ kind: "daytrade_sell" }))).toBe("daytrade_sell");
   });
 
-  it("後端較寬的值域(daytrade_sell)認不得 → null", () => {
-    expect(kindOf(pos({ kind: "daytrade_sell" }))).toBe(null);
+  it("值域外字串(舊後端 / 未來新值)認不得 → null", () => {
     expect(kindOf(pos({ kind: "" }))).toBe(null);
+    expect(kindOf(pos({ kind: "borrowless" }))).toBe(null);
   });
 
   it("KIND_TEXT 鍵集 = kindOf 的值域(不留第二份白名單)", () => {
-    expect(Object.keys(KIND_TEXT).sort()).toEqual(["cash", "margin", "short"]);
+    expect(Object.keys(KIND_TEXT).sort()).toEqual(["cash", "daytrade_sell", "margin", "short"]);
     expect(KIND_TEXT.cash).toEqual({ short: "現", full: "現股" });
     expect(KIND_TEXT.margin).toEqual({ short: "資", full: "融資" });
     expect(KIND_TEXT.short).toEqual({ short: "券", full: "融券" });
+    expect(KIND_TEXT.daytrade_sell).toEqual({ short: "無", full: "無券" });
+  });
+
+  it("無券空單列的平倉 body 帶 kind(部位面板標「無券」就送得出去;後端精確鍵到空單列)", () => {
+    const body = closeBodyOf(pos({ kind: "daytrade_sell", qty: -1 }), 523_000);
+    expect(body.kind).toBe("daytrade_sell");
   });
 
   it("原型鏈上的名字不被當成合法 kind(`in` 判定的經典漏洞)", () => {
@@ -99,8 +106,8 @@ describe("closeBodyOf(SC-10 送單面;兩呼叫端同形)", () => {
     });
   });
 
-  it("sec 但 kind 認不得(daytrade_sell)→ 不送 kind(退回「同檔唯一列」語意)", () => {
-    expect(closeBodyOf(pos({ kind: "daytrade_sell", qty: 1 }), 985)).toEqual({
+  it("sec 但 kind 值域外(舊後端 / 未來新值)→ 不送 kind(退回「同檔唯一列」語意)", () => {
+    expect(closeBodyOf(pos({ kind: "borrowless", qty: 1 }), 985)).toEqual({
       market: "sec",
       key: "2330",
       price: 985,
