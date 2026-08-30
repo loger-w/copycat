@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 from copycat.live.stock_source import Bar, BarsStatus
 from copycat.live.tc4 import HistoryTimeoutError
@@ -32,12 +32,17 @@ from copycat.live.futures_models import (
 from copycat.live.futures_source import FUTURES_ALLDAY_DOMAIN, FUTURES_MINUTE_DOMAIN
 
 #: 期貨 1K 健康 WARNING(L262,2026-08-28):以「**可交易分鐘**」為單位(段外的分鐘不算 ——
-#: 15:01 夜盤剛開時尾根停在 13:45 是正常,牆鐘差 76 分不是落後;與前端 FuturesChart gate 5 用
-#: 「根數」同一把尺)。落後 > 這麼多分才印、缺格 ≥ 這麼多分才印(冷門商品開盤頭一兩分沒成交是常態)。
+#: 15:01 夜盤剛開時尾根停在 13:45 是正常,牆鐘差 76 分不是落後)。與前端 FuturesChart gate 5 用
+#: 「根數」同一把尺:最後成交先換成它所屬 bar 的**終點標記**(非整秒 +1 分,`_last_trade_at`)再數,
+#: 不然後端恆比前端少 1、徽章亮了 log 還靜默(pr-145 F-08)。落後 > 這麼多分才印、缺格 ≥ 這麼多分才印
+#: (冷門商品開盤頭一兩分沒成交是常態)。
 _LAG_WARN_MINUTES = 3
 _GAP_WARN_MINUTES = 3
-#: 走分鐘計數的上限(> 2 天的差距不再逐分數,直接視為落後 / 缺格上限)—— 純診斷,不追求精確
+#: 走分鐘計數的上限(> 2 天的差距不再逐分數)。超過 = 跨了整個休市日(週末 / 連假),這裡沒有日曆、
+#: 分不出「休市」與「真缺」→ 視為不可判回 0,不報警(回上限等於「不確定就報警」,方向反了;pr-145 F-01)
 _MINUTE_WALK_CAP = 2 * 1440
+#: `_1k_warned` 的兩本帳
+_HealthKind = Literal["lag", "gap"]
 
 
 def _bar_minute(t: str) -> _dt.datetime | None:
@@ -49,11 +54,15 @@ def _bar_minute(t: str) -> _dt.datetime | None:
 
 
 def _last_trade_at(date: str, t: str) -> _dt.datetime | None:
-    """`_ProductState.date`("YYYY-MM-DD")+ `t`("HH:MM:SS.fff")→ datetime(捨秒);形狀不對回 None。"""
+    """`_ProductState.date`("YYYY-MM-DD")+ `t`("HH:MM:SS.fff")→ 該成交所屬 1K bar 的**終點標記**
+    (整分整秒的成交落在本分鐘那根,其餘 +1 分;同前端 `tradeSlotOf` 的 onBoundary 規則);形狀不對回 None。"""
     try:
-        return _dt.datetime.strptime(f"{date} {t[:5]}", "%Y-%m-%d %H:%M")
+        at = _dt.datetime.strptime(f"{date} {t[:5]}", "%Y-%m-%d %H:%M")
     except ValueError:
         return None
+    if t[5:].strip(":.0"):  # ":SS.fff" 有非零位 = 不在分鐘邊界上
+        at += _dt.timedelta(minutes=1)
+    return at
 
 
 def _session_domain(session: str) -> tuple[tuple[str, str, str], ...]:
@@ -64,12 +73,12 @@ def _tradable_minutes_between(
     a: _dt.datetime, b: _dt.datetime, domain: tuple[tuple[str, str, str], ...]
 ) -> int:
     """(a, b] 之間落在 domain 段內(終點標記口徑 HHMM ∈ [start, end])的分鐘數;b ≤ a → 0。
-    逐分走(bar 分鐘級,一天 ≤ 1440 步),超過 `_MINUTE_WALK_CAP` 直接回上限。"""
+    逐分走(bar 分鐘級,一天 ≤ 1440 步),超過 `_MINUTE_WALK_CAP` 視為不可判回 0(見常數註解)。"""
     if b <= a:
         return 0
     total = int((b - a).total_seconds() // 60)
     if total > _MINUTE_WALK_CAP:
-        return _MINUTE_WALK_CAP
+        return 0
     n = 0
     cur = a
     step = _dt.timedelta(minutes=1)
@@ -175,9 +184,11 @@ class FuturesEngine:
         self._flush_interval_secs = flush_interval_secs
         self._dirty: dict[str, None] = {}
         self._flush_timer: asyncio.TimerHandle | None = None
-        #: 1K 健康 WARNING 去重:(product, "lag" | "gap") → 上次印過的尾根 `t`(前端每分鐘輪詢不洗版)。
+        #: 1K 健康 WARNING 去重:(product, session, "lag" | "gap") → 上次印過的尾根 `t`(前端每分鐘輪詢不洗版)。
+        #: session 進 key:同商品會同時被 allday(期貨 tab)與 day(大盤 tab)查,兩者 domain 不同、缺格結果不同,
+        #: 日盤時段尾根又是同一根 —— 共用一格會讓先跑的靜默壓掉後跑的(pr-145 F-13)。
         #: 只在 `_fetch_and_check`(executor thread)讀寫;GIL 下 dict 單步操作原子,診斷用途不加鎖。
-        self._1k_warned: dict[tuple[str, str], str] = {}
+        self._1k_warned: dict[tuple[str, str, _HealthKind], str] = {}
         # leaf fallback:HOT 被 TC4 refcount 誤殺(別把 key 歸零 → 上游退訂整個 symbol,
         # 2026-08-18 實證)時 → resolve 已知後,寬限期仍零推播的商品補訂 leaf 契約。
         # leaf 是**不同 symbol**,天然是一把新 key,所以補得回來(重訂 HOT 補不回來)
@@ -380,12 +391,23 @@ class FuturesEngine:
         return bars, "ok"
 
     def _fetch_and_check(
-        self, fetch: Callable[..., list[Bar]], product: str, tf: str, start: str, end: str, session: str
+        self,
+        fetch: Callable[..., list[Bar]],
+        product: str,
+        tf: str,
+        start: str,
+        end: str,
+        session: str,
     ) -> list[Bar]:
-        """executor thread:抓 K 線,tf=1 且非空時順做 1K 健康 WARNING。例外原樣往上拋(`bars_range` 接)。"""
+        """executor thread:抓 K 線,tf=1 且非空時順做 1K 健康 WARNING。fetch 的例外原樣往上拋
+        (`bars_range` 接);健康檢查自己的例外不得出去 —— 它是純診斷,炸了只能少一行 log,
+        不能把本來 200 的 `/api/market/bars` 打成 500(pr-145 F-09;同 `_flush` 的圍籬)。"""
         bars = fetch(product, tf, start, end, session=session)
         if tf == "1" and bars:
-            self._check_1k_health(product, bars, end, session)
+            try:
+                self._check_1k_health(product, bars, end, session)
+            except Exception:
+                logger.exception("期貨 1K 健康檢查失敗(續行,不影響回傳)%s", product)
         return bars
 
     def _check_1k_health(self, product: str, bars: list[Bar], end: str, session: str) -> None:
@@ -396,7 +418,9 @@ class FuturesEngine:
         - 落後 = 尾根 → 該商品最後成交(`_ProductState.date` + `t`)之間的可交易分鐘 > `_LAG_WARN_MINUTES`,
           只在查詢窗涵蓋最後成交日(`end >= date`)時判 —— 歷史窗尾根天生落後,不是病;段界(13:45 → 15:01、
           05:00 → 08:46)之間沒有可交易分鐘,開盤那一刻不會假警報(review Spec c1)。
-        - 缺格 = 連續 bar 之間的可交易分鐘 ≥ `_GAP_WARN_MINUTES`(冷門商品開盤頭一兩分沒成交是常態,不算)。
+        - 缺格 = 連續 bar 之間的可交易分鐘 ≥ `_GAP_WARN_MINUTES`(冷門商品開盤頭一兩分沒成交是常態,不算);
+          相鄰兩根跨過超過一個日曆日(週五 → 週一、連假)不判 —— 沒有任何一段跨兩個午夜,中間只可能是休市,
+          這裡沒日曆分不出休市與真缺,寧可不印(冷 memo 30 日窗必含週末,曾每次重啟固定假警報;pr-145 F-01)。
         以前只有前端 gate 5 看得到落後、缺格連前端都只是一條直線,事後分不出 H1(TC4 暫時落後)與
         H3(memo 釘住)。純診斷:任何形狀不對的時戳一律跳過,不影響回傳;`_ProductState` 讀到的是
         loop thread 正在寫的字串,偶爾撕裂只是少印一輪。
@@ -415,13 +439,13 @@ class FuturesEngine:
             and st.t is not None
             and st.date is not None
             and end >= st.date
-            and self._1k_warned.get((product, "lag")) != tail_t
+            and self._1k_warned.get((product, session, "lag")) != tail_t
         ):
             last = _last_trade_at(st.date, st.t)
             if last is not None:
                 lag = _tradable_minutes_between(stamps[-1], last, domain)
                 if lag > _LAG_WARN_MINUTES:
-                    self._1k_warned[(product, "lag")] = tail_t
+                    self._1k_warned[(product, session, "lag")] = tail_t
                     logger.warning(
                         "期貨 1K 落後 %s:尾根 %s 最後成交 %s %s 落後 %d 分(可交易分鐘)",
                         product,
@@ -434,11 +458,13 @@ class FuturesEngine:
         for prev_bar, cur_bar, prev_at, cur_at in zip(bars, bars[1:], stamps, stamps[1:]):
             if (cur_at - prev_at) <= _dt.timedelta(minutes=1):
                 continue  # 快路徑:相鄰分鐘不用走 domain
+            if (cur_at.date() - prev_at.date()).days > 1:
+                continue  # 跨過整個休市日(週末 / 連假):不是缺格,見 docstring
             missing = _tradable_minutes_between(prev_at, cur_at, domain) - 1
             if missing >= _GAP_WARN_MINUTES:
                 gaps.append((missing, prev_bar["t"], cur_bar["t"]))
-        if gaps and self._1k_warned.get((product, "gap")) != tail_t:
-            self._1k_warned[(product, "gap")] = tail_t
+        if gaps and self._1k_warned.get((product, session, "gap")) != tail_t:
+            self._1k_warned[(product, session, "gap")] = tail_t
             worst = max(gaps)
             logger.warning(
                 "期貨 1K 中段缺格 %s:%d 段,最大 %d 分(%s→%s;可交易分鐘)",

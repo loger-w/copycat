@@ -762,7 +762,10 @@ class TC4QuoteSource:
         fp = tuple(str(quote.get(k, "")) for k in _PUSH_FP_KEYS)
         prev_fp = self._push_fp.get(symbol)
         self._push_fp[symbol] = fp
-        if symbol not in self._heal_attempts:
+        # 一次取值不裸索引:_unsub(別的執行緒)會在中間 pop 同一鍵,而 handle_raw 在 _listen_loop
+        # 的 try 之外 —— KeyError 逃出去 = listener thread 死、整條 session 零推播(pr-145 F-03)
+        attempts = self._heal_attempts.get(symbol)
+        if attempts is None:
             return
         sub_at = self._sub_at.get(symbol)
         if fp == prev_fp and sub_at is not None and now - sub_at <= _SNAPSHOT_GRACE_SECS:
@@ -770,7 +773,7 @@ class TC4QuoteSource:
                 "TC4 自癒:%s 重掛後 %.1fs 收到同指紋 snapshot,attempts 不清(attempt %d)",
                 symbol,
                 now - sub_at,
-                self._heal_attempts[symbol],
+                attempts,
             )
             return
         self._heal_attempts.pop(symbol, None)
