@@ -1714,18 +1714,20 @@ class TestFirstTickEnqueuesBackfill:
         await engine.set_watchlist(["2330"])
         assert src.on_message is not None
         src.on_message(_quote(cum=0, qty="0"))  # 純簿更新,無成交
-        await _drain(engine)
+        # 先錨「那則報價真的被處理過」(meta 落地),否定斷言才不是永久假綠(pr-153 F-09)
+        await wait_until(lambda: engine._states["2330"].meta is not None)
         assert src.backfills == []
         await engine.close()
 
     async def test_trial_window_tick_does_not_enqueue(self) -> None:
-        """08:30–09:00 試撮成交被 parse 濾掉 → 不入列:盤前對 TC4 發當日 TICKS 歷史只會
+        """08:30–09:00 試撮成交帶 `is_trial=True`(`parse_stock_realtime` 標旗標、**不丟棄**),
+        由 `_handle_quote` 的 `not tick.is_trial` 擋下入列:盤前對 TC4 發當日 TICKS 歷史只會
         逾時(無資料),入列等於替每一檔排 30 s 的必敗等待。"""
         engine, src = await _make()
         await engine.set_watchlist(["2330"])
         assert src.on_message is not None
         src.on_message(_quote(cum=1, precise="003500000000"))  # UTC 00:35 = 台北 08:35
-        await _drain(engine)
+        await wait_until(lambda: engine._states["2330"].meta is not None)  # 報價確實處理過
         assert src.backfills == []
         await engine.close()
 
@@ -1756,10 +1758,31 @@ class TestFirstTickEnqueuesBackfill:
         src.on_message(_quote(cum=1))
         await _drain(engine)
         assert src.backfills == ["2330"]
-        engine._handle_reconnect()
+        assert src.on_reconnect is not None
+        src.on_reconnect()  # 走真回呼路徑(threadsafe → loop),與檔內其餘 reconnect 測試同款
         src.on_message(_quote(cum=2))
         await _drain(engine)
         assert src.backfills == ["2330", "2330"]
+        await engine.close()
+
+    async def test_member_connection_error_rearms_the_first_tick_trigger(self) -> None:
+        """pr-153 F-01:成員回補走 ConnectionError 分支後要能靠下一筆成交再點火。
+
+        那條路只 `_backfill_failed += 1`、不設 `_backfilled`、也不武裝 timer;點火權若在
+        `_backfill_wanted` 之前就用掉,開盤 TC4 抖一下 → 40 檔各 fails=1,tick 通道整天不再
+        點火,又退回等群組檢視 60 s 輪詢。預算由 `_BACKFILL_MAX_FAILS` 封口:每次重排都先付
+        一次真失敗 REQ,第 3 次失敗後 `_backfill_wanted` 自然擋下 —— 不會重演 F-2 的毫秒燒盡。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.backfill_errors = [ConnectionError("x"), ConnectionError("x"), ConnectionError("x")]
+        for cum in (1, 2, 3, 4):
+            src.on_message(_quote(cum=cum))
+            await _drain(engine)
+        assert src.backfills == ["2330", "2330", "2330"]  # 三次失敗各由一筆成交點火,第 4 筆被冷卻擋下
+        assert engine._backfill_failed == {"2330": 3}
+        assert engine.tc4_status == "up"  # 成員失敗不打全站 status
         await engine.close()
 
     async def test_main_is_left_to_its_own_enqueue_points(self) -> None:
@@ -1775,11 +1798,12 @@ class TestFirstTickEnqueuesBackfill:
         assert src.on_message is not None
         src.on_message(_quote(cum=1))  # 主圖首筆:漲跌停 None→有值那條會排(既有 A6-5)
         await _drain(engine)
-        n = len(src.backfills)
+        assert src.backfills == ["2330", "2330"]  # 只有 set_main + A6-5 那兩排,tick 路徑沒插手
+        assert engine._tick_armed == set()  # 主圖永不武裝(pr-153 F-03:浮動基準量不到這件事)
         engine.tc4_status = "up"
         src.on_message(_quote(cum=2))  # 之後的 tick:不再由 tick 路徑排
         await _drain(engine)
-        assert len(src.backfills) == n
+        assert src.backfills == ["2330", "2330"]
         assert engine.tc4_status == "up"
         await engine.close()
 
@@ -1811,10 +1835,14 @@ class TestBackfillBatchPrepare:
         engine, src = await _make()
         codes = ["2330", "2317", "2454", "3008"]
         await engine.set_watchlist(codes)
+        src.backfill_gate = threading.Event()  # 把第一檔卡在收割中,趁機驗「整批早已 Sub 完」
         engine.group_snapshot(codes)  # 四筆同時入列(群組檢視的入列點)
+        await wait_until(lambda: src.backfills == ["2330"])  # 第一檔正在收割
+        assert src.prepares == [codes], src.prepares  # …整批在第一檔收割前就 Sub 完(pr-153 F-02)
+        src.backfill_gate.set()
         await _drain(engine)
         assert src.backfills == codes  # 收割順序 = 入列順序(單工語意不變)
-        assert src.prepares == [codes], src.prepares  # 整批一次,且在第一檔收割前
+        assert src.prepares == [codes]
         await engine.close()
 
     async def test_single_job_is_not_prepared_separately(self) -> None:
@@ -1847,17 +1875,23 @@ class TestBackfillBatchPrepare:
         await engine.close()
 
     async def test_batch_is_deduplicated_before_prepare(self) -> None:
-        """review J2:同批同 code(set_main 不過 guard)只 Sub 一次。"""
+        """review J2:同批同 code(set_main 不過 guard)只 Sub 一次。
+
+        批次要有**兩個**不同 code 才觀測得到去重(單 code 批次塌成 1 → 走「單筆不 prepare」,
+        測到的不是去重;pr-153 F-07)。
+        """
         engine, src = await _make()
         src.backfill_gate = threading.Event()
-        await engine.set_watchlist(["2330", "2317"])
+        await engine.set_watchlist(["2330", "2317", "2454"])
         engine.group_snapshot(["2330"])
         await _drain(engine)  # 2330 卡在 gate
         engine.group_snapshot(["2317"])
         await engine.set_main("2317")  # 無條件再入列 2317
+        engine.group_snapshot(["2454"])
         src.backfill_gate.set()
         await _drain(engine)
-        assert src.prepares == [["2317"]] or src.prepares == [], src.prepares
+        assert src.prepares == [["2317", "2454"]], src.prepares  # 去重壞掉會是 [["2317","2317","2454"]]
+        assert src.backfills == ["2330", "2317", "2317", "2454"]  # 批次組成:兩筆 2317 job 都存在
         await engine.close()
 
     async def test_stale_generation_jobs_are_settled_and_not_prepared(self) -> None:
@@ -2625,6 +2659,55 @@ class TestWatchlistRemovalBookkeeping:
         await _drain(engine)
 
         assert src.backfills.count("2330") == 2
+        await engine.close()
+
+    async def test_first_tick_trigger_rearms_after_a_real_unsubscribe(self) -> None:
+        """`_tick_armed` 同構(pr-153 F-04):點火記帳隨真退訂作廢。
+
+        不作廢的失效樣態:移除再加回之後首筆成交不再點火,只剩群組檢視 60 s 輪詢救得回來;
+        使用者沒開群組檢視就是當日整段缺口,`backfilling` / `no_data` 全 False 零訊號。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        assert "2330" in engine._tick_armed  # 前提:確實點過火
+
+        await engine.set_watchlist([])  # 真退訂(自選是唯一 owner)
+        assert "2330" not in engine._refs
+        await engine.set_watchlist(["2330"])  # 重新加回
+        src.on_message(_quote(cum=2))
+        await _drain(engine)
+
+        assert src.backfills.count("2330") == 2
+        await engine.close()
+
+    async def test_first_tick_trigger_rearms_after_a_main_slot_release(self) -> None:
+        """F-04 鏡像:真退訂發生在 `set_main` 舊主圖 release 那一份清點時同樣要作廢。
+
+        走「先當成員點火 → 升主圖 → 自選移除(主圖仍持有,不清)→ 主圖切走(真退訂)」:
+        只有這條路能讓一個**點過火**的 code 經由主圖槽位真退訂。
+        """
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert "2330" in engine._tick_armed
+        await engine.set_main("2330")
+        await engine.set_watchlist([])  # 主圖仍持有 → 不是真退訂
+        assert "2330" in engine._refs
+        await engine.set_main("5483")  # 主圖切走 → 2330 真退訂(set_main 舊主圖 release 清點)
+        await _drain(engine)
+        assert "2330" not in engine._refs
+
+        await engine.set_watchlist(["2330"])  # 以成員身分加回
+        n = src.backfills.count("2330")
+        src.on_message(_quote(cum=2))
+        await _drain(engine)
+        assert src.backfills.count("2330") == n + 1
         await engine.close()
 
     async def test_failure_cooldown_restarts_after_a_real_unsubscribe(self) -> None:

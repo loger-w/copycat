@@ -224,9 +224,8 @@ class TestPrepareBackfill:
         src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
         with caplog.at_level(logging.WARNING):
             src.prepare_backfill(["2330", "2317", "2454"])
-        assert sent[:2] == ["TC.S.TWS.2330", "TC.S.TWS.2317"]
+        assert sent == ["TC.S.TWS.2330", "TC.S.TWS.2317"]  # 沒有第三筆:中斷即停(pr-153 F-06)
         assert "prepare_backfill" in caplog.text
-
 
     def test_not_connected_is_logged_not_raised(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -241,6 +240,21 @@ class TestPrepareBackfill:
         monkeypatch.setattr(src, "_ensure_connected", _down)
         with caplog.at_level(logging.WARNING):
             src.prepare_backfill(["2330"])
+        assert "prepare_backfill" in caplog.text
+
+
+    def test_bad_payload_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        """pr-153 F-05:`_req` 的 `json.loads` 在 try/finally 之後,壞電文的 `JSONDecodeError`
+        不會收斂成 ConnectionError —— prepare 的 best-effort 契約要連這條一起擋。"""
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "SUBQUOTE":
+                return b"not json\0"
+            return ok()
+
+        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
+        with caplog.at_level(logging.WARNING):
+            src.prepare_backfill(["2330", "2317"])
         assert "prepare_backfill" in caplog.text
 
 
