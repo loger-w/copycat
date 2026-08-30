@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -115,7 +116,8 @@ def test_parse_cash_negative_shares_keeps_short_direction(
         p = parse_balance_line(raw)
     assert p is not None
     assert p.qty == -1 and p.kind == "daytrade_sell"
-    assert any("負股數" in r.message and "2493" in r.message for r in caplog.records)
+    hits = [r for r in caplog.records if "負股數" in r.message and "2493" in r.message]
+    assert hits and all(r.levelno == logging.DEBUG for r in hits)  # DEBUG 這一格是不洗版的依據,釘住
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 

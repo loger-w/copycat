@@ -24,6 +24,7 @@ from copycat.capital.models import (
     Position,
     PositionCloseRequest,
     StockOrderRequest,
+    TradeKind,
 )
 from tests.helpers.frontend_source import read_frontend_source
 
@@ -161,3 +162,17 @@ def test_avg_source_parity_with_frontend() -> None:
     backend = list(get_args(AvgSource))
     assert len(frontend) == len(set(frontend)), frontend
     assert set(frontend) == set(backend), (frontend, backend)
+
+
+def test_close_kind_wire_parity_with_frontend() -> None:
+    """跨語言契約(CLAUDE.md §4 證券部位 kind 的 daytrade_sell 值):前端 `types.ts::PositionKind`(平倉 body 送得出的
+    種類 = `close-order.ts::KIND_TEXT` 鍵集)必須是後端 `TradeKind`(`PositionCloseBody.kind` 值域)的**子集** ——
+    後端單邊拿掉一值 → 前端照送 → 真錢空單平倉 422,兩側各自的字面測試全綠(pr-152 review F-13)。
+    子集不相等:TradeKind 同時是下單交易別值域,日後加值不該逼前端跟。"""
+    text = read_frontend_source("types.ts")
+    m = re.search(r"export type PositionKind = ([^;]+);", text)
+    assert m, "types.ts 找不到 `export type PositionKind = ...;` 字面"
+    frontend = re.findall(r'"([^"]+)"', m.group(1))
+    backend = set(get_args(TradeKind))
+    assert frontend and len(frontend) == len(set(frontend)), frontend
+    assert set(frontend) <= backend, (frontend, sorted(backend))
