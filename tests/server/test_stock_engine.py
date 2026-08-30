@@ -292,20 +292,28 @@ class TestBackfillGuard:
         —— 觸發 stage2 的那一則會順手排一筆合法的新日回補,`_backfilled` 就在同一輪
         drain 內被正當地重新填上,這條測試要釘的「清空」反而被那件事蓋掉。
         先讓 meta 有值(且新日報價的漲跌停與之相同)就沒有這個混淆源。
+
+        S2(首筆當日成交 tick 入列)之後,觸發 stage2 的那一則**本身**就會替新一天排一筆
+        回補 —— 用 `backfill_gate` 把它卡在在途,「清空」的斷言才看得到;放行後重新進帳
+        的是新一天的記帳,不是舊的沒清。
         """
         engine, src = await _make()
         await engine.set_watchlist(["2330"])
         assert src.on_message is not None
-        src.on_message(_quote(cum=1))  # meta 到位;此時尚未回補過 → 不觸發重入列
+        src.on_message(_quote(cum=1))  # 首筆當日成交 → S2 入列一次(meta 同時到位)
         await _drain(engine)
-        engine._backfill_jobs.put_nowait(("2330", engine._generation))
-        await _drain(engine)
+        assert src.backfills == ["2330"]
         assert "2330" in engine._backfilled
         engine.rollover_stage1("2026-07-22")
+        src.backfill_gate = threading.Event()  # 新一天那筆卡在在途
         src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
         await _drain(engine)
-        assert "2330" not in engine._backfilled
-        assert "2330" not in engine._backfill_pending
+        assert "2330" not in engine._backfilled  # 舊記帳清掉
+        assert engine._backfill_pending == {"2330": 1}  # 新一天的 job 在途(S2)
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills == ["2330", "2330"]
+        assert "2330" in engine._backfilled  # 新一天的記帳
         await engine.close()
 
     async def test_rollover_generation_voids_inflight_backfill(self) -> None:
@@ -394,12 +402,16 @@ class TestRollover:
         state.reset = _mutating_reset  # type: ignore[method-assign]
 
         engine.rollover_stage1("2026-07-22")
+        src.backfill_gate = threading.Event()  # S2:新日首筆會排 2330 的新一天 job,先卡住
         src.on_message(_quote(cum=50, date="20260722"))
         await _drain(engine)
 
         assert engine._backfilled == set()  # 迴圈之後的步驟確實跑完
+        assert engine._backfill_pending == {"2330": 1}  # 新一天的 job 在途(不是舊帳沒清)
         assert engine.snapshot("5483")["last"] is None  # 迴圈內的每個 state 都 reset 到
         assert engine.trade_date == "2026-07-22"
+        src.backfill_gate.set()
+        await _drain(engine)
         await engine.close()
 
 
@@ -1667,6 +1679,66 @@ class TestGroupSnapshot:
         src.on_message(_quote(cum=7))  # 首則 REALTIME:漲跌停 None → 有值
         await _drain(engine)
         assert src.backfills.count("2330") == 2
+        await engine.close()
+
+
+class TestFirstTickEnqueuesBackfill:
+    """perf/opening-backfill-parallel S2(🔴):自選成員**首筆當日成交 tick** 即入列回補。
+
+    舊入列點全是需求驅動(set_main / 群組檢視 60 s 輪詢 / rollover 主圖 / reconnect 主圖 /
+    漲跌停值變),08-28 開盤 09:00→09:02 零回補,直到 user 打開群組檢視。改「訂閱當下
+    入列」不行:08:14 開站對 TC4 建當日 TICKS 歷史訂閱只會 30 s 逾時 ×3 再「放棄」
+    (08-28 主圖 6207 實錄),40 檔就是 20 分鐘的必敗 REQ;首筆成交才是「TC4 有東西可補」
+    的正面訊號,薄股沒成交就不會去卡住單工 worker。
+    """
+
+    async def test_first_day_tick_of_a_watchlist_member_enqueues_once(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await _drain(engine)
+        assert src.backfills == []  # 訂閱本身不入列(前提)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        src.on_message(_quote(cum=2))  # 第二筆:今日已回補 → 不重入列
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        await engine.close()
+
+    async def test_book_only_update_does_not_enqueue(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=0, qty="0"))  # 純簿更新,無成交
+        await _drain(engine)
+        assert src.backfills == []
+        await engine.close()
+
+    async def test_trial_window_tick_does_not_enqueue(self) -> None:
+        """08:30–09:00 試撮成交被 parse 濾掉 → 不入列:盤前對 TC4 發當日 TICKS 歷史只會
+        逾時(無資料),入列等於替每一檔排 30 s 的必敗等待。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, precise="003500000000"))  # UTC 00:35 = 台北 08:35
+        await _drain(engine)
+        assert src.backfills == []
+        await engine.close()
+
+    async def test_in_flight_job_is_not_doubled(self) -> None:
+        """在途 dedup 與 `group_snapshot` 同一把尺(`_backfill_wanted`)。用成員不用主圖:
+        主圖的首則 REALTIME 本來就會經「漲跌停 None → 有值」再排一次(既有設計,A6-5)。"""
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])  # 群組檢視已入列(在途,卡在 gate)
+        await _drain(engine)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills == ["2330"]
         await engine.close()
 
 
