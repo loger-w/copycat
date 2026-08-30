@@ -1,3 +1,19 @@
+## 2026-08-30(fix/futures-daily-bars-rollover 留尾)
+
+- [ ] **期貨日 K 後端 daily cache 在 15:01–24:00 這段是早上那份快照**(`copycat/server/bars.py::build_period`,鍵 = `(code|L, date.today())`,
+  無 TTL;`prune` 只清別天):前端 15:01 錨定日翻頁到 D+1 後,疊線基準要 D 的完整 bar,但後端整個日曆日都回首抓時的 D 部分 bar
+  (夜盤段 / 09:00 首抓時只有夜盤那截),要到午夜前端重抓才拿到完整 D bar —— 08-30 的前端修法刻意把界取在午夜,**夜盤 15:01–24:00
+  這段的 CDP / MA 仍是「昨天早上的 D 部分 bar」算的**(推論自 cache 鍵,未實錄夜盤畫面)。候選 = 日 K cache 對「末根 == today」的
+  結果用短 TTL(比照 `TODAY_TTL_SECS`)或 13:46 後失效一次;個股日 K 走 `build_daily` 同構(但個股 overlay 走後端 `date < today`,
+  盤中不會拿部分 bar 當基準,夜盤也沒有現貨交易 → 個股面無症狀)。
+- [ ] **App 級 lazy 測試在剛 `npm ci` 的 worktree 全量必紅 1–2 條、每次不同**(`App.memo.test.tsx` railCtx 換主檔 ×3 / `App.corr-tab.test.tsx`
+  零 corr WS ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 4/4 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
+  主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
+  單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。
+- [ ] **`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**(render 時重算):與本次否決的 H3 同構 ——
+  只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了「沒人看就退訂」的閘,
+  跨日會與期貨日 K 同病。記著,不動。
+
 ## 2026-08-28(next-time 100 條 triage 拍板 —— 新開案;決定表 `docs/superpowers/specs/2026-08-28-next-time-triage.md`)
 
 - [x] ~~**`/mod` 可觀測性小批**:L3 日曆誤標 WARNING / L262 期貨 1K 落後 WARNING / L106 重掛 snapshot 時距 DEBUG /
@@ -14,7 +30,7 @@
   單腿死無人救,候選 = sparse 時段化(比照 `heal_symbol_active`);不在意就維持。
 - [ ] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
-- [ ] **`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。
+- [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [ ] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
   4–8 檔會不會壞(不碰 prod)② 能就把單工 worker 改有上限並行、正在看的群組優先 ③ 另診斷 09:00→09:02 空檔。L405 圖牆 DOM 一併量。
@@ -405,12 +421,13 @@ review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture /
   而 key 的語意由當前 `XWindow` 決定(現貨窗 = 分鐘、近全軸 = 軸索引)。兩者分開放的話,
   換窗時半徑的實際涵蓋範圍跟著變而沒有任何提示。候選 = 併進 `XWindow`(每個窗自帶
   預設 snap 半徑),`buildIntradayGeometry` 的 `opts.snapRadius` 退成覆寫。
-- [ ] **期貨日 K `staleTime: Infinity` 跨日不重抓 → 基準日停在昨天**
+- [x] **期貨日 K `staleTime: Infinity` 跨日不重抓 → 基準日停在昨天**
   (`hooks/useFuturesBars.ts:61`):疊線資料源與日 K 模式共用同一份 query,`Infinity` 讓它
   「一天只打一次」—— 但 preview 整天掛著(看盤日常,CLAUDE.md §1)跨過午夜後那份 cache
   不會失效,新交易日的圖會拿**前一天的**基準日畫疊線。本輪的錨定日判準只保證「不畫到
   未來 / 當前這一節」,對「停在更早的一天」無感(那正是它刻意的安全側)。候選 = staleTime
   改吃「到下一個交易日切換點」的毫秒數,或 queryKey 帶交易日。**現象輕微但整天掛著必中**。 **→ 08-28 拍板升 `/bug`(整天掛著必中)。**
+  **→ 08-30 fix/futures-daily-bars-rollover 出貨**:日 K `staleTime` / `refetchInterval` 改函式形式吃 `msUntilNextLocalDate` + 60 s slack(界 = 本機日曆午夜,不是 15:00 錨定日翻頁 —— 後端 `build_period` daily cache 鍵是 `date.today()`,午夜前問到的還是同一份);queryKey 帶日期那條否決(只在 re-render 時重算,週末無輪詢 = 無 re-render)。四條 hook 測試釘住(一直在 tab / 切走再切回 / 背景分頁 / 兩個午夜恰兩發)。
 - [ ] **`o.date` 的夜盤跨午夜組合假設未證**(`lib/fill-marks.ts::alldayFillPoints`):
   群益回報的 `date` 是否為最新事件日**未實證**(08-28 pr-134 F-01:同日 C/D 實測仍原單日期),而近全軸把 `date + time` 組成時戳後丟給 `anchorDateOf`
   —— 這假設了「夜盤 01:00 的成交,`date` 已是次一日曆日」。若群益實際回的是委託所屬交易日
