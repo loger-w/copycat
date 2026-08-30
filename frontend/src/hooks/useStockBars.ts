@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/hooks/useFuturesBars";
 import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
+import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/lib/day-bars-rollover";
 import { inTradingHours } from "@/lib/trading-hours";
 
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
  *  - `D`:**同一個本機日曆日內**不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
- *    界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `useFuturesBars.ts::msUntilDayRollover`
+ *    界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `lib/day-bars-rollover.ts::msUntilDayRollover`
  *    (bug/daily-bars-siblings-rollover)。個股 overlay(CDP / MA)走後端 `/api/stock/overlay` 的
  *    `date < today` + queryKey 帶日期,不受這條影響。
  *  - `1`:交易時段每 60s 重取(D-9)。成本控制在後端 —— 歷史日走永久 memo,

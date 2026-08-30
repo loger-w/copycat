@@ -218,7 +218,7 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
 
 // bug/daily-bars-siblings-rollover(next-time 08-30 節第 3 條;pr-151-review F-03):preview 整天掛著跨過
 // 午夜後個股頁日 K 停在昨天的快照(個股 overlay 走後端 `date < today` + 日期鍵,不受影響)。症狀、界與
-// 三條鐵律 (a)(b)(c) 都寫在 `useFuturesBars.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts`
+// 三條鐵律 (a)(b)(c) 都寫在 `lib/day-bars-rollover.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts`
 // 最後兩個 describe,鐵律 ↔ 測試的對應同 `useMarketBars.test.ts` 同名 describe 前言。
 describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", () => {
   /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起回「D 完成 + D+1 部分」。 */

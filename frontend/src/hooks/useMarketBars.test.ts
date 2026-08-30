@@ -149,7 +149,7 @@ describe("useMarketBars", () => {
 
 // bug/daily-bars-siblings-rollover(next-time 08-30 節第 3 條;pr-151-review F-03):preview 整天掛著跨過
 // 午夜後日 / 週 / 月 K 停在昨天的快照。症狀、界(日曆午夜 + slack)與三條鐵律 (a)(b)(c) 都寫在
-// `useFuturesBars.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts` 最後兩個 describe。
+// `lib/day-bars-rollover.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts` 最後兩個 describe。
 // 鐵律對應的測試:(a) 界嚴格在 from 之後 → 「slack 窗內每 100 ms 重繪」;(b) interval 不吃
 // `dataUpdatedAt` → 「同一秒重繪 … 跨秒恰 1 次」後半的生效自檢(`dataUpdatedAt` 版跨秒回同值 → 0 ≠ 1;
 // 本 hook 無 `subscribed`,沒有期指那條「20:00 切回武裝 15 h」的直接情境);(c) 秒級量化 → 同一條前半。
