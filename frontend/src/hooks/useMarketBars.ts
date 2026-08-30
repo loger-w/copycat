@@ -10,10 +10,8 @@ import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
  *
  * 新鮮度策略沿用個股 K 線的兩檔(D-9/D-15):
  * - `D` / `W` / `M`:**同一個本機日曆日內**不過期(已完成日 bar 不會變),query key **不含 days**。
- *   界 = 日曆午夜 + slack,與期指日 K 同一把尺(`useFuturesBars.ts::msUntilDayRollover`,由來寫在那裡;
- *   bug/daily-bars-siblings-rollover):舊碼 `staleTime: Infinity` + 不輪詢,preview 整天掛著跨過午夜
- *   後 K 線停在昨天早上抓的快照(末根 = 昨天的部分 bar、沒有今天那根)。當週 / 當月那根每個交易日
- *   都會變,W / M 與 D 同一條分支。
+ *   界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `useFuturesBars.ts::msUntilDayRollover`
+ *   (bug/daily-bars-siblings-rollover)。當週 / 當月那根每個交易日都會變,W / M 與 D 同一條分支。
  * - `1`:交易時段每 60s 重取;成本控制在後端(歷史段永久 memo,只有當日段真打 TC4)
  *
  * 30/60/90 分與 2–10 分**共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合。
@@ -77,13 +75,14 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
     // 午夜都不依賴外部 re-render;回值一變 TQ 就重排計時器,所以日 K 那條回整秒值。
     refetchInterval: (q) => {
       if (!isMinute) {
+        // 日 / 週 / 月 K 這條**整段不吃 `active`**(與 `useFuturesBars` 的 `subscribed: active` 形狀
+        // 不同,知情):台股綜合 tab 是 hidden 保留不 unmount,人在個股頁跨過午夜、早上切回時 K 線
+        // 必須已是今天的 —— 切回那次 render 重算 interval 只會排到「下一個」午夜,拿不到「立刻打」。
+        // 午夜那發一天一次、每把 key 一發;失敗後的 60 s 重試也不閘(否則午夜失敗恰發生在人不在時,
+        // 就整晚凍結、切回還得再等 60 s),且 error 只在 HTTP 非 2xx(見 `DAY_ERROR_RETRY_MS`),
+        // 都不是 XR-4 擋的那種每 60 s 打 TC4 SubHistory 的成本。
         // refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。
-        // `active` 只擋這條 60 s 重試(每分鐘兩發,與分 K 輪詢同量級);午夜那一發**不吃 `active`**:
-        // 台股綜合 tab 是 hidden 保留不 unmount,人在個股頁跨過午夜、早上切回時 K 線必須已是今天的 ——
-        // 靠切回那次 render 重算 interval 拿不到「立刻打」(那只會排到下一個午夜),而這一發一天
-        // 一次、每把 key 一發,不是 XR-4 擋的那種每 60 s 打 TC4 SubHistory 的成本。
-        if (q.state.status === "error") return active ? DAY_ERROR_RETRY_MS : false;
-        return msUntilDayRollover(Date.now());
+        return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
       }
       return active && inHours() ? POLL_MS : false;
     },
