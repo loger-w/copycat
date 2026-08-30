@@ -219,7 +219,7 @@ describe("CandleChart 縮放與平移(SC-6.3/6.4)", () => {
     fireEvent.mouseMove(svg, { clientX: 1, clientY: 200 });
     const text = screen.getByTestId("chart-readout").textContent ?? "";
     expect(text).toContain("漲跌");
-    expect(text).not.toContain("漲跌 - "); // 佔位
+    expect(text).not.toMatch(/漲跌 -(?!\d)/); // 佔位 "-"(prev 缺值)不得出現;負值 "-1.23%" 不算
     expect(/漲跌 [+-]?\d/.test(text)).toBe(true);
   });
 
