@@ -1,22 +1,82 @@
 {
   "fixed_point": "09cc3e63",
   "branch": "fix/futures-daily-bars-rollover",
-  "reviewers": {"standards": "opus", "spec": "opus"},
+  "reviewers": {
+    "standards": "opus",
+    "spec": "opus"
+  },
   "standards": [
-    {"id": "S-F1", "kind": "hard", "rule": "frontend-conventions SKILL.md:168-173 推導數字只留一份", "finding": "「界取午夜 = 後端 build_period cache 鍵是 date.today()」推導在 lib/trading-calendar.ts doc、useFuturesBars.ts DAY_ROLLOVER_SLACK_MS doc、useFuturesBars.test.ts describe 上方各寫一份全文"},
-    {"id": "S-F2", "kind": "judgement", "finding": "msUntilDayRollover 的 from <= 0 → 0 無測試釘;TQ 無資料時本來就會抓,改成 86_400_000 四條照綠 = 假分支或死碼"},
-    {"id": "S-F3", "kind": "judgement", "finding": "stubDayFetchByWallClock 的 new Date().getDate() >= 6 是 magic number 綁死 D = 2026-08-05;第四條推到 D+2 仍回 D1_SNAPSHOT 不一致(只數 URL 未被咬到)"},
-    {"id": "S-F4", "kind": "judgement", "finding": "第一條測試 toBeGreaterThanOrEqual(2) 偏鬆,精確值就是 2"},
-    {"id": "S-F5", "kind": "judgement", "finding": "refetchInterval 巢狀三元把兩個無關維度壓進一個表達式;早退更順"},
-    {"id": "S-F6", "kind": "judgement", "finding": "useFuturesBars.ts:106 被改成 150 字元(全檔最長);DAY_ROLLOVER_SLACK_MS 18 行 doc 偏長但全是為什麼,可接受"}
+    {
+      "id": "S-F1",
+      "kind": "hard",
+      "rule": "frontend-conventions SKILL.md:168-173 推導數字只留一份",
+      "finding": "「界取午夜 = 後端 build_period cache 鍵是 date.today()」推導在 lib/trading-calendar.ts doc、useFuturesBars.ts DAY_ROLLOVER_SLACK_MS doc、useFuturesBars.test.ts describe 上方各寫一份全文"
+    },
+    {
+      "id": "S-F2",
+      "kind": "judgement",
+      "finding": "msUntilDayRollover 的 from <= 0 → 0 無測試釘;TQ 無資料時本來就會抓,改成 86_400_000 四條照綠 = 假分支或死碼"
+    },
+    {
+      "id": "S-F3",
+      "kind": "judgement",
+      "finding": "stubDayFetchByWallClock 的 new Date().getDate() >= 6 是 magic number 綁死 D = 2026-08-05;第四條推到 D+2 仍回 D1_SNAPSHOT 不一致(只數 URL 未被咬到)"
+    },
+    {
+      "id": "S-F4",
+      "kind": "judgement",
+      "finding": "第一條測試 toBeGreaterThanOrEqual(2) 偏鬆,精確值就是 2"
+    },
+    {
+      "id": "S-F5",
+      "kind": "judgement",
+      "finding": "refetchInterval 巢狀三元把兩個無關維度壓進一個表達式;早退更順"
+    },
+    {
+      "id": "S-F6",
+      "kind": "judgement",
+      "finding": "useFuturesBars.ts:106 被改成 150 字元(全檔最長);DAY_ROLLOVER_SLACK_MS 18 行 doc 偏長但全是為什麼,可接受"
+    }
   ],
   "spec": [
-    {"id": "P-F1", "severity": "Should", "finding": "「界在午夜」核心決策在 hook 層零測試:固定 24 h 以掛載時刻起算的突變體四條全過(測試 1 mount 09:00 推 24 h 恰在邊界;測試 4 mount 22:00 推 48 h 同樣恰 3 發)。真實代價:20:00 開的分頁整個次日交易日用 D-1 基準"},
-    {"id": "P-F2", "severity": "Nice", "finding": "午夜那一發失敗(retry:1 用完)後 interval 重算成到下一個午夜 → 整個交易日停在昨天基準,spec 要的「新交易日拿到新基準」在失敗路徑無回退(非迴歸)"},
-    {"id": "P-F3", "severity": "Nice", "finding": "DAY_ROLLOVER_SLACK_MS = 60_000 無依據亦未釘住(改 0 四條全綠);註解先說無時差又用秒級抖動 justify"},
-    {"id": "P-F4", "severity": "Nice", "finding": "msUntilDayRollover from <= 0 分支不可達(dataUpdatedAt === 0 ⇔ data undefined,isStaleByTime 直接 true)"},
-    {"id": "P-F5", "severity": "LOW", "finding": "背景測試註解「下一個 interval tick 是 24 小時後」不成立:period = 上次求值的 msUntilDayRollover(該測試 2 h 1 min),背景中每 tick 被 focus 閘跳過;結論對理由錯"},
-    {"id": "P-ok", "severity": "info", "finding": "三情境(interval / shouldFetchOnMount / queryCache.onFocus)機制自查成立;界取午夜推理成立(bars.py:430-433);分 K 路徑逐字等價;FuturesChart 純註解;scope creep 無;留尾已如實入 next-time"}
+    {
+      "id": "P-F1",
+      "severity": "Should",
+      "finding": "「界在午夜」核心決策在 hook 層零測試:固定 24 h 以掛載時刻起算的突變體四條全過(測試 1 mount 09:00 推 24 h 恰在邊界;測試 4 mount 22:00 推 48 h 同樣恰 3 發)。真實代價:20:00 開的分頁整個次日交易日用 D-1 基準"
+    },
+    {
+      "id": "P-F2",
+      "severity": "Nice",
+      "finding": "午夜那一發失敗(retry:1 用完)後 interval 重算成到下一個午夜 → 整個交易日停在昨天基準,spec 要的「新交易日拿到新基準」在失敗路徑無回退(非迴歸)"
+    },
+    {
+      "id": "P-F3",
+      "severity": "Nice",
+      "finding": "DAY_ROLLOVER_SLACK_MS = 60_000 無依據亦未釘住(改 0 四條全綠);註解先說無時差又用秒級抖動 justify"
+    },
+    {
+      "id": "P-F4",
+      "severity": "Nice",
+      "finding": "msUntilDayRollover from <= 0 分支不可達(dataUpdatedAt === 0 ⇔ data undefined,isStaleByTime 直接 true)"
+    },
+    {
+      "id": "P-F5",
+      "severity": "LOW",
+      "finding": "背景測試註解「下一個 interval tick 是 24 小時後」不成立:period = 上次求值的 msUntilDayRollover(該測試 2 h 1 min),背景中每 tick 被 focus 閘跳過;結論對理由錯"
+    },
+    {
+      "id": "P-ok",
+      "severity": "info",
+      "finding": "三情境(interval / shouldFetchOnMount / queryCache.onFocus)機制自查成立;界取午夜推理成立(bars.py:430-433);分 K 路徑逐字等價;FuturesChart 純註解;scope creep 無;留尾已如實入 next-time"
+    }
   ],
-  "disposition": "S-F1 接受:推導只留 useFuturesBars.ts::msUntilDayRollover 一處,lib helper doc 與測試 describe 改指過去。S-F2 = P-F4 接受:核過 TQ isStaleByTime 對 !updatedAt 直接判過期 → 刪守衛(非補測試),doc 註明。S-F3 接受:改 isoLocalDate(new Date()) >= D1_ISO 具名常數,並註明第四條只數 URL。S-F4 接受:改 toBe(2)。S-F5 接受:改早退 if (!isMinute)。S-F6 接受:106 行折行;slack doc 改口。P-F1 接受(Should):測試 1 改 09:00 掛載 → 23:59 仍 1 / 00:00:30 仍 1 / 00:01:01 = 2 / 09:00 仍 2;mutation 實證固定 24 h 突變體 2 紅。P-F2 接受(同一 user 症狀的失敗路徑,非 scope creep):日 K 在 status === 'error' 時 refetchInterval 回 POLL_MS(60 s,不閘時段),成功即回到下一個午夜;新測試「午夜那一發失敗 → 60 s 後再試」;mutation 拔掉分支 1 紅。P-F3 接受:doc 誠實寫「無硬依據、擋排程誤差、失效方向安全」,值由測試 1 的 00:00:30 / 00:01:01 兩點釘住;mutation slack=0 → 2 紅。P-F5 接受:註解改寫為「每個 tick 被 focus 閘跳過、靠 queryCache.onFocus 補上」。收修後 36/36(兩檔)、tsc / eslint / react-doctor 0、全量 2888/2891(三紅皆 App 級 waitFor 環境 flake,單檔 61/61 ×3)。"
+  "disposition": "S-F1 接受:推導只留 useFuturesBars.ts::msUntilDayRollover 一處,lib helper doc 與測試 describe 改指過去。S-F2 = P-F4 接受:核過 TQ isStaleByTime 對 !updatedAt 直接判過期 → 刪守衛(非補測試),doc 註明。S-F3 接受:改 isoLocalDate(new Date()) >= D1_ISO 具名常數,並註明第四條只數 URL。S-F4 接受:改 toBe(2)。S-F5 接受:改早退 if (!isMinute)。S-F6 接受:106 行折行;slack doc 改口。P-F1 接受(Should):測試 1 改 09:00 掛載 → 23:59 仍 1 / 00:00:30 仍 1 / 00:01:01 = 2 / 09:00 仍 2;mutation 實證固定 24 h 突變體 2 紅。P-F2 接受(同一 user 症狀的失敗路徑,非 scope creep):日 K 在 status === 'error' 時 refetchInterval 回 POLL_MS(60 s,不閘時段),成功即回到下一個午夜;新測試「午夜那一發失敗 → 60 s 後再試」;mutation 拔掉分支 1 紅。P-F3 接受:doc 誠實寫「無硬依據、擋排程誤差、失效方向安全」,值由測試 1 的 00:00:30 / 00:01:01 兩點釘住;mutation slack=0 → 2 紅。P-F5 接受:註解改寫為「每個 tick 被 focus 閘跳過、靠 queryCache.onFocus 補上」。收修後 36/36(兩檔)、tsc / eslint / react-doctor 0、全量 2888/2891(三紅皆 App 級 waitFor 環境 flake,單檔 61/61 ×3)。",
+  "increment_screen": {
+    "range": "2bd6db9c..9d60b6e9(review 後 3 筆收修 commit)",
+    "by": "main agent 機械快篩(非註解行逐行看)+ mutation M1–M3 + tsc / eslint / react-doctor / 兩檔 36 綠",
+    "findings": [],
+    "notes": [
+      "`q.state.status === \"error\"` 也涵蓋掛載首發就失敗(無 data)的情況:此時日 K 每 60 s 重試直到成功(不閘時段;TC4 整個週末沒開而期貨 tab 開著 = 每分鐘一發 503),成本可忽略、失效方向安全,知情即可。"
+    ]
+  }
 }
