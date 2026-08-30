@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
@@ -110,7 +111,7 @@ SPOT_WINDOW_OFFSET = _HEAL_VARIANT_CYCLE + 1
 #: TXO session 的門檻:R1 60s、R2 關 —— 277 檔契約深價外本就整場靜默,R2 收它們
 #: 等於無止盡 churn(change-spec §3)。
 #:
-#: 接線點:`app._default_source`(heal_active = `session.in_txo_session`)。
+#: 接線點:`app._default_source`(`HealPolicy.active` = `session.in_txo_session`)。
 TXO_HEAL_SILENCE_SECS = 60.0
 # context 級 REQ timeout:app 死亡時 Connect/_rt_request 的裸 recv 才可返回、重連迴圈
 # 才可被 _stop 中斷。10s = 實測最重呼叫 QUERYALLINSTRUMENT(Opt) 1.93s 的 5 倍裕度;
@@ -161,13 +162,44 @@ def close_worst_secs() -> float:
 
 
 def always_active() -> bool:
-    """`heal_active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
+    """`HealPolicy.active` 預設:不設閘 = 全時段自癒(盤別閘由各 source 建構子帶)。"""
     return True
 
 
 def always_symbol_active(symbol: str) -> bool:
-    """`heal_symbol_active` 預設:每個 symbol 都在母體內(逐字等於逐 symbol 閘之前)。"""
+    """`HealPolicy.symbol_active` 預設:每個 symbol 都在母體內(逐字等於逐 symbol 閘之前)。"""
     return True
+
+
+@dataclass(frozen=True)
+class HealPolicy:
+    """REALTIME 零推播自癒的門檻與閘(一份值物件;預設**全關**,門檻由各 source 帶)。
+
+    原本是 `TC4QuoteSource` 六個 `heal_*` kwargs,四個子類逐字轉發、`app` 四處逐項填 ——
+    加一個旗標要動 tc4 簽名 + body、corr_source 簽名 + 轉發、app、四支測試(review Standards
+    Data Clump,next-time 08-27 留尾)。收攏後加欄位只動這裡 + `_heal_tick` 的讀者;子類用
+    `dataclasses.replace(<MODULE>_HEAL, …)` 疊自己的門檻,測試同形。
+    """
+
+    #: R1「整條 session 靜默」門檻(秒);None = 自癒整體關閉
+    silence_secs: float | None = None
+    #: R2「單 symbol 曾有推播後靜默」門檻(秒);None = R2 關
+    symbol_silence_secs: float | None = None
+    #: 只在回 True 時自癒(盤外不 churn);session 級
+    active: Callable[[], bool] = always_active
+    #: **逐 symbol** 的自癒閘(N051):同一條 session 上各腿的交易時段不同時,session 級的
+    #: `active` 表達不了 —— 台期交國外指數腿(SXF/UDF/SPF/UNF)在自己休市段照樣落進 R2
+    #: 「從未推播」母體,每 300s 一發 UNSUB+SUB。回 False 的 symbol 整輪不進母體
+    #: (R1 的全場靜默判定也扣掉它)。
+    symbol_active: Callable[[str], bool] = always_symbol_active
+    #: **稀疏腿**(corr SXF 費半,事實見 tc4-market-facts)豁免 R2 —— 對它「靜默 240s」是常態
+    #: 不是死亡,每發都是假警報。與 `symbol_active` 的差別:**仍留在 R1 母體**,整條 session
+    #: 死掉時跟著整批重掛;時段閘那種整輪扣掉的做法會讓它在 session 死時永遠沒人救。邊界:
+    #: 母體**只剩**稀疏腿時 R1 會接手(靜默 > t1 就整批重掛,退避階梯照走)—— 這是「沒有別的腿
+    #: 可對照」下的保守選擇,不是 bug;單腿 session 別用本旗標。
+    sparse_symbols: frozenset[str] = frozenset()
+    #: 巡檢週期(秒)
+    poll_secs: float = 5.0
 
 
 def build_rt_request(request: str, session: str, symbol: str, window: tuple[str, str]) -> dict:
@@ -331,25 +363,9 @@ class TC4QuoteSource:
         # 取捨:毒鎖(KeepAlive Pong 無 try/finally)的偵測延遲從 5s 拉長到 12s ——
         # 那條路本來就要重建連線,晚 7 秒發現可接受;而誤殺健康連線是每次都發生。
         lock_timeout_secs: float = DEFAULT_LOCK_TIMEOUT_SECS,
-        # ---- REALTIME 零推播自癒(預設全關;門檻由各子類建構子帶)----
-        #: R1「整條 session 靜默」門檻(秒);None = 自癒整體關閉
-        heal_silence_secs: float | None = None,
-        #: R2「單 symbol 曾有推播後靜默」門檻(秒);None = R2 關
-        heal_symbol_silence_secs: float | None = None,
-        #: 只在回 True 時自癒(盤外不 churn)
-        heal_active: Callable[[], bool] = always_active,
-        #: **逐 symbol** 的自癒閘(N051):同一條 session 上各腿的交易時段不同時,
-        #: session 級的 `heal_active` 表達不了 —— 台期交國外指數腿(SXF/UDF/SPF/UNF)
-        #: 在自己休市段照樣落進 R2「從未推播」母體,每 300s 一發 UNSUB+SUB。
-        #: 回 False 的 symbol 整輪不進母體(R1 的全場靜默判定也扣掉它)。
-        heal_symbol_active: Callable[[str], bool] = always_symbol_active,
-        #: **稀疏腿**(corr SXF 費半,事實見 tc4-market-facts)豁免 R2 —— 對它「靜默 240s」是
-        #: 常態不是死亡,每發都是假警報。與 `heal_symbol_active` 的差別:**仍留在 R1 母體**,
-        #: 整條 session 死掉時跟著整批重掛;時段閘那種整輪扣掉的做法會讓它在 session 死時
-        #: 永遠沒人救。邊界:母體**只剩**稀疏腿時 R1 會接手(靜默 > t1 就整批重掛,退避階梯
-        #: 照走)—— 這是「沒有別的腿可對照」下的保守選擇,不是 bug;單腿 session 別用本旗標。
-        heal_sparse_symbols: frozenset[str] = frozenset(),
-        heal_poll_secs: float = 5.0,
+        # ---- REALTIME 零推播自癒(預設全關;門檻由各子類建構子帶)—— 六個門檻 / 閘收在一份
+        # `HealPolicy`(欄位語意見該 dataclass)
+        heal: HealPolicy = HealPolicy(),
     ) -> None:
         self._port = port
         self._api = api
@@ -371,12 +387,12 @@ class TC4QuoteSource:
         self._api_lock = threading.Lock()
         self.reconnects = 0
         self.on_reconnect: Callable[[], None] | None = None
-        self._heal_silence = heal_silence_secs
-        self._heal_symbol_silence = heal_symbol_silence_secs
-        self._heal_active = heal_active
-        self._heal_symbol_active = heal_symbol_active
-        self._heal_sparse = heal_sparse_symbols
-        self._heal_poll = heal_poll_secs
+        self._heal_silence = heal.silence_secs
+        self._heal_symbol_silence = heal.symbol_silence_secs
+        self._heal_active = heal.active
+        self._heal_symbol_active = heal.symbol_active
+        self._heal_sparse = heal.sparse_symbols
+        self._heal_poll = heal.poll_secs
         #: symbol → 最後一則 REALTIME 推播的 monotonic(`_realtime_msg` 單點記錄)
         self._last_push: dict[str, float] = {}
         #: symbol → 最後一次 SUBQUOTE 成功的 monotonic(剛重掛不算靜默)

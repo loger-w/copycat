@@ -8,7 +8,7 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as _date
 from datetime import datetime as _datetime
 from datetime import time as _clock_time
@@ -343,7 +343,8 @@ def _heal_gate(
 
 def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
     from copycat.live import session as session_mod
-    from copycat.live.tc4 import TXO_HEAL_SILENCE_SECS, TC4QuoteSource  # 延遲 import:測試不觸 pyzmq/TC4
+    # 延遲 import:測試不觸 pyzmq/TC4
+    from copycat.live.tc4 import TXO_HEAL_SILENCE_SECS, HealPolicy, TC4QuoteSource
 
     return TC4QuoteSource(
         port=_tc4_port(),
@@ -351,8 +352,10 @@ def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
         # REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill):TXO 是唯一直接用基底類的
         # session,基底預設全關 → 這裡顯式開 R1(60s 全場靜默 → 整批重掛)、R2 關(277 檔
         # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘 AND 交易日。
-        heal_silence_secs=TXO_HEAL_SILENCE_SECS,
-        heal_active=_heal_gate(calendar, session_mod.in_txo_session),
+        heal=HealPolicy(
+            silence_secs=TXO_HEAL_SILENCE_SECS,
+            active=_heal_gate(calendar, session_mod.in_txo_session),
+        ),
     )
 
 
@@ -385,7 +388,10 @@ def _default_futures_source(calendar: TradingCalendar | None = None) -> FuturesS
     # 13:45–15:00 與夜盤收後 05:00–08:45 兩段都在對 TC4 空 churn UNSUB+SUB
     return futures_mod.FuturesQuoteSource(
         port=_tc4_port(),
-        heal_active=_heal_gate(calendar, futures_mod.in_futures_session_now),
+        heal=replace(
+            futures_mod.FUTURES_HEAL,
+            active=_heal_gate(calendar, futures_mod.in_futures_session_now),
+        ),
     )
 
 
@@ -394,7 +400,7 @@ def _default_corr_source(
 ) -> CorrSource:
     from copycat.live import futures_source as futures_mod  # 延遲 import:測試不觸 pyzmq
     from copycat.live import stock_source as stock_mod
-    from copycat.live.corr_source import CorrQuoteSource, segment_leg_gate
+    from copycat.live.corr_source import CORR_HEAL, CorrQuoteSource, segment_leg_gate
 
     # **逐腿**閘(N051),不是 session 級:corr 這條 session 上同時掛著台期交段、台股現貨段
     # 與 SGX/CME/CBOT/CFE/OSE 段的腿,時段各不相同。session 級的閘全開時,台期交段的國外
@@ -412,11 +418,14 @@ def _default_corr_source(
     # keyword-only 讓 `calendar` 的預設值與四個兄弟工廠同形。
     return CorrQuoteSource(
         port=_tc4_port(),
-        heal_symbol_active=segment_leg_gate(
-            taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
-            tws=_heal_gate(calendar, stock_mod.in_stock_heal_window_now),
+        heal=replace(
+            CORR_HEAL,
+            symbol_active=segment_leg_gate(
+                taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
+                tws=_heal_gate(calendar, stock_mod.in_stock_heal_window_now),
+            ),
+            sparse_symbols=frozenset(leg.symbol for leg in config.tc4_legs() if leg.sparse),
         ),
-        heal_sparse_symbols=frozenset(leg.symbol for leg in config.tc4_legs() if leg.sparse),
     )
 
 

@@ -241,10 +241,10 @@ def test_default_txo_source_wires_realtime_heal(monkeypatch: pytest.MonkeyPatch)
 
     app_mod._default_source()
 
-    assert seen["kwargs"]["heal_silence_secs"] == tc4_mod.TXO_HEAL_SILENCE_SECS == 60.0
-    assert "heal_symbol_silence_secs" not in seen["kwargs"], "TXO R2 必須維持關(深價外契約 churn)"
+    assert seen["kwargs"]["heal"].silence_secs == tc4_mod.TXO_HEAL_SILENCE_SECS == 60.0
+    assert seen["kwargs"]["heal"].symbol_silence_secs is None, "TXO R2 必須維持關(深價外契約 churn)"
     # 無日曆 = 逐字等於改動前的純牆鐘閘
-    assert seen["kwargs"]["heal_active"] is _session_mod().in_txo_session
+    assert seen["kwargs"]["heal"].active is _session_mod().in_txo_session
 
 
 # ---- C-5:自癒閘 AND 交易日曆(純牆鐘 → 假日整天 churn TC4 上游)----
@@ -291,7 +291,7 @@ def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock:
     monkeypatch.setattr(_session_mod(), "in_txo_session", lambda: clock)
 
     app_mod._default_source(_CAL)
-    gate = seen["kwargs"]["heal_active"]
+    gate = seen["kwargs"]["heal"].active
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate() is False, "非交易日不得自癒(整天每 5s 對 TC4 送 UNSUB+SUB)"
@@ -365,7 +365,7 @@ def test_futures_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, cl
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
 
     app_mod._default_futures_source(_CAL)
-    gate = seen["kwargs"]["heal_active"]
+    gate = seen["kwargs"]["heal"].active
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate() is False, "非交易日不得自癒"
@@ -484,7 +484,7 @@ class TestHealGateThresholdCoversSessionClose:
 
 def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """海外腿(SGX/CBOT/CME)在台灣假日照開 → corr 的 **session 級**閘不接日曆
-    (接了等於整天不自癒)。逐腿的閘走 `heal_symbol_active`,見下一條。"""
+    (接了等於整天不自癒)。逐腿的閘走 `heal.symbol_active`,見下一條。"""
     import copycat.live.corr_source as corr_mod
     from copycat.corr_config import DEFAULT_CONFIG
     from copycat.server import app as app_mod
@@ -493,7 +493,9 @@ def test_corr_source_keeps_the_always_on_session_gate(monkeypatch: pytest.Monkey
 
     app_mod._default_corr_source(config=DEFAULT_CONFIG)
 
-    assert "heal_active" not in seen["kwargs"]
+    from copycat.live.tc4 import always_active
+
+    assert seen["kwargs"]["heal"].active is always_active  # session 級閘維持預設全開
 
 
 def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,7 +508,7 @@ def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPa
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
     app_mod._default_corr_source(config=load_config())
-    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset(
+    assert seen["kwargs"]["heal"].sparse_symbols == frozenset(
         {"TC.F.TWF.SXF.HOT", "TC.F.CFE.VX.HOT"}
     )  # 08-28 VX 加 sparse(事前標該變)
 
@@ -516,7 +518,7 @@ def test_corr_sparse_legs_come_from_the_config_file(monkeypatch: pytest.MonkeyPa
         base=DEFAULT_CONFIG.base,
     )
     app_mod._default_corr_source(_CAL, config=no_sparse)
-    assert seen["kwargs"]["heal_sparse_symbols"] == frozenset()
+    assert seen["kwargs"]["heal"].sparse_symbols == frozenset()
 
 
 @pytest.mark.parametrize("clock", [True, False])
@@ -534,7 +536,7 @@ def test_corr_leg_gate_only_applies_to_the_taifex_segment(
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: clock)
 
     app_mod._default_corr_source(_CAL, config=DEFAULT_CONFIG)
-    gate = seen["kwargs"]["heal_symbol_active"]
+    gate = seen["kwargs"]["heal"].symbol_active
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate("TC.F.TWF.SXF.HOT") is False, "非交易日的台期交腿不得 churn"
@@ -566,7 +568,7 @@ def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: True)
 
     app_mod._default_corr_source(_CAL, config=DEFAULT_CONFIG)
-    gate = seen["kwargs"]["heal_symbol_active"]
+    gate = seen["kwargs"]["heal"].symbol_active
 
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_SATURDAY, 10))
     assert gate("TC.S.TWS.2330") is False, "非交易日的現貨腿不得 churn"
