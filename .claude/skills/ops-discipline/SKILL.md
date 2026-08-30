@@ -86,6 +86,13 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   別份 code。worktree 內直跑腳本開頭要 `sys.path.insert(0, <repo root>)`。另:remove 時有 process
   開著 worktree 檔案會以 Invalid argument 失敗且先刪 `.git/worktrees/<name>` 中繼資料 → 收尾要
   `git worktree prune` + 手動 rmdir。(Trigger:worktree 寫直跑腳本 / 收尾清 worktree)
+- **主 tree 可能同時被另一 session 用著:`git switch` 前後各查一次 `git status`**(2026-08-24
+  真踩到):session 開頭 status 乾淨,幾分鐘後 commit 完才發現多出六個他人未提交的前端改動 ——
+  `git switch -c` 會把那些改動一起帶到新分支、又帶回去(內容沒壞,但對方的 branch 名在那幾分鐘
+  是錯的)。docs-only / 小 chore 要開分支時:(1) switch 前查 status,有他人改動就**不切**,改用
+  `git worktree add` 或把 commit 打在 detached HEAD 再 `git branch` 指過去;(2) push / PR / merge 全
+  用 branch ref(`git push origin <br>`、`gh pr merge <br>`),不需要 checkout;(3) 切回去後再查一次
+  status 確認改動還在。(Trigger:主 tree 開分支、多 session 並行)
 
 ## 驗證迴圈
 
