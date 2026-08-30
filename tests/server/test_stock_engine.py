@@ -421,6 +421,11 @@ class TestRollover:
 class TestStreamAndStatus:
     async def test_stream_receives_tick_and_book(self) -> None:
         engine, src = await _make()
+        # 主圖入列的**空回補**照樣 `apply_backfill` → seq 跳增 1001(stock_state
+        # `_BACKFILL_SEQ_MARGIN`)。它跑在 worker thread 上,與下面那則 tick 誰先落地
+        # 沒有定序:回補先到時首則 tick 的 seq 是 1002 不是 1(08-26 全套三輪一紅、單跑
+        # 恆綠的那條 flake)。卡住回補,讓 tick 必然是第一個事件;斷言不動。
+        src.backfill_gate = threading.Event()
         await engine.set_main("2330")
         stream = engine.stream()
         assert src.on_message is not None
@@ -446,6 +451,7 @@ class TestStreamAndStatus:
         assert tick_msg["a"] == 2_380_000
         assert tick_msg["h"] == 2_380_000
         assert tick_msg["l"] == 2_380_000
+        src.backfill_gate.set()
         await engine.close()
 
     async def test_tick_high_low_track_new_extreme(self) -> None:
