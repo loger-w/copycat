@@ -241,7 +241,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   的方法上,測試綠、prod 全 null。`today_qty` 產生點 `store.py::_with_today_qty_locked`(當日聚合 buy − sell,
   clamp 到 [0, |qty|],per (股號, 種類),fut 恆 0)。wire 欄名的讀者 = `frontend/src/components/stock/
   PriceLadder.tsx` 與 `frontend/src/lib/position-summary.ts`(把 `avg_source` / `today_qty` 映成 `avgSource` / `todayQty`
-  餵 `lib/ladder-position.ts::positionEcon`,唯一算式所在):`broker` 不再加買費、`fill` 加;現股 `today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
+  餵 `lib/ladder-position.ts::positionEcon`,唯一算式所在):`broker` 不再加買費、`fill` 加;現股 / 無券空單(`daytrade_sell`,08-30 起)`today_qty` 那段賣出稅 `SELL_TAX_DAYTRADE` 0.15%、其餘 0.3%。
   漂掉的症狀:後端少送 `avg_source` → 前端當 fill 全加一次買費 → 損益比群益 APP 少一筆買費、打平線在快照落地時
   跳一格(08-26 修、08-27 才真的修到 prod 路徑,零錯誤訊號);少送 `today_qty` → 當沖減半靜默消失;前端 switch 無
   default 時整欄缺席(舊後端)= NaN 印到四處 —— 紅燈判準 `curl /api/capital/positions` **證券**持倉列(`market == "sec"`)`avg_source` 非 null;
@@ -253,10 +253,12 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **證券部位 `kind` 的 `daytrade_sell` 值**(2026-08-30 起,fix/borrowless-short-calibration):產生點
   `copycat/capital/balance.py::parse_balance_line`(現股 T 列負股數 → `daytrade_sell`)與 `store.py::_FILL_KIND`(「無券」);
   讀者 = `frontend/src/lib/ladder-position.ts::positionEcon`(當沖稅減半條件 `cash | daytrade_sell`)、`lib/trade-kinds.ts`
-  (標籤「無券」)、`lib/close-order.ts::kindOf`(**不認得 → 不送 kind**,後端 `position_for(no, None)` 走同檔唯一列;
-  wire `PositionCloseBody.kind` 仍是 `PositionKind` 三值)。後端把負現股列改回 `cash` 或改別的字串 → 前端減半靜默消失、
-  標籤印原字串、平倉照走唯一列 —— 三個讀者都不會報錯。`tests/capital/test_store.py -k borrowless` +
-  `frontend/src/lib/ladder-position.test.ts`「無券空單」釘住。
+  (閃電梯 / header / chip 標籤「無券」)、`lib/close-order.ts::KIND_TEXT`(部位面板「無」/ 確認窗「無券」;**鍵集 = `kindOf`
+  送 kind 的值域**,與 wire `server/capital_api.py::PositionCloseBody.kind` 同為 `TradeKind` 四值 —— 「標得出來就送得出去」)。
+  後端把負現股列改回 `cash` 或改別的字串 → 前端減半靜默消失、標籤印原字串 / 空白、平倉退回同檔唯一列 —— 讀者都不會報錯;
+  wire 值域單邊收窄 → 前端送 `daytrade_sell` 吃 422。`tests/capital/test_store.py -k borrowless` +
+  `tests/server/test_capital_api.py::test_close_body_kind_daytrade_sell_sends_cash_buy` + 前端 `ladder-position.test.ts`
+  「無券空單」/ `close-order.test.ts` 釘住。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿

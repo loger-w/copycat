@@ -33,6 +33,11 @@
   daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `balance line 現股負股數 → 無券空單`(INFO,不再是「平倉暫鎖」WARNING)、
   `curl /api/capital/positions` 該列 `kind:"daytrade_sell"` / `today_qty:1` / `avg_source:"broker"`、閃電梯部位標籤「無券」、平倉鈕可按(送現股買)、
   買回後 positions 立即歸零(不出現 cash +1 幽靈列)。倉位線語意仍留尾(下條)。
+  review 收修:parser 那行降 DEBUG(每輪洗版)→ 判準改看 `成交樂觀套用部位 … stock=<股號>`(修前是「不在樂觀套用表」)與
+  `損益列回填 <股號> kind=cash 部位=daytrade_sell`;`grep "balance line 負股數"` 對現股列自此 0 筆(融資列仍會印)。
+- [ ] **`daytrade_sell` 語意散在六處(review 2026-08-30 F-09,Shotgun Surgery)**:balance.py / client.py / store.py / close.py
+  `_CLOSE_MAP` / `ladder-position.ts`,前端另有 PriceLadder / close-order / flash-send / trade-kinds 各自 `=== "daytrade_sell"`
+  字串比較,`positionEcon(kind: string)` 收裸 string。候選 = 前端把 kind 收成單一型別 + 一張「稅 / 費 / 方向」表;等下一次再加種類時併做。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [ ] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
