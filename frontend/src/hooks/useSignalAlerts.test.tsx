@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSignalAlerts } from "@/hooks/useSignalAlerts";
 import { emitSignal } from "@/lib/signal-bus";
-import { formatToastText, type SignalMsg } from "@/lib/signal-model";
+import type { SignalMsg } from "@/lib/signal-model";
 
 function sig(id: string): SignalMsg {
   return {
@@ -26,6 +26,14 @@ function sig(id: string): SignalMsg {
 
 /** 同一 tick 的一則:code / time 固定(= 合併鍵 `(code, time)`),kind 與 id 互異。
  *  `sig()` 的 code 帶 id 是為了節流測試分辨「發的是哪一則」,同 tick 案要的正好相反。 */
+/** `sig(id)` 一則的 toast / 通知文案,**逐字寫死**(不再拿 `formatToastText` 當期望值 ——
+ *  實作與斷言同一顆函式時文案改壞 mutant 全綠,next-time 08-24 N013 留尾)。
+ *  拆解:`代號(= id) 名稱(台積電) 訊號名(surge → 爆拉 +1.50%,pct 1.5 兩位小數帶正號)
+ *  價格(1_234_500 毫元 → 1234.5)`,空格相接。 */
+function toastText(id: string): string {
+  return `${id} 台積電 爆拉 +1.50% 1234.5`;
+}
+
 function tick(id: string, over: Partial<SignalMsg>): SignalMsg {
   return { ...sig(id), code: "2330", ...over };
 }
@@ -203,11 +211,11 @@ describe("useSignalAlerts — toast 佇列", () => {
     expect(oscillators).toBe(2);
   });
 
-  it("toast 文字 = formatToastText(單一份文案來源)", () => {
+  it("toast 文字 = 代號 名稱 訊號名 價格(字面量)", () => {
     const hook = renderHook(() => useSignalAlerts());
     const s = sig("a");
     act(() => emitSignal(s));
-    expect(hook.result.current.toasts[0]?.text).toBe(formatToastText(s));
+    expect(hook.result.current.toasts[0]?.text).toBe(toastText("a"));
   });
 });
 
@@ -356,7 +364,7 @@ describe("useSignalAlerts — Notification", () => {
     const s = sig("a");
     act(() => emitSignal(s));
     act(() => vi.advanceTimersByTime(300));
-    expect(notified).toEqual([formatToastText(s)]);
+    expect(notified).toEqual([toastText("a")]);
   });
 
   // TQ-2:桌面通知走的是**合併後**文案(pendingRef 存的是 handler 算好的 text)——
@@ -396,7 +404,7 @@ describe("useSignalAlerts — Notification", () => {
     const s = sig("b");
     act(() => emitSignal(s));
     act(() => vi.advanceTimersByTime(300));
-    expect(notified).toEqual([formatToastText(s)]);
+    expect(notified).toEqual([toastText("b")]);
   });
 
   // Edge 4(a):排程時是背景,timer 到期時人已回到前景 → 丟棄(前景有 toast,
@@ -419,7 +427,7 @@ describe("useSignalAlerts — Notification", () => {
       emitSignal(s);
     });
     act(() => vi.advanceTimersByTime(300)); // t=900 = 600 + COALESCE_MS
-    expect(notified).toEqual([formatToastText(s)]);
+    expect(notified).toEqual([toastText("b")]);
   });
 
   // D5':pending 是**全域單槽**(固定 tag 本來就只有一格)—— 同一合併窗內不同標的
@@ -434,7 +442,7 @@ describe("useSignalAlerts — Notification", () => {
       emitSignal(b);
     });
     act(() => vi.advanceTimersByTime(200));
-    expect(notified).toEqual([formatToastText(b)]);
+    expect(notified).toEqual([toastText("B")]);
   });
 
   // handoff R4:tag 用唯一 sig.id 會讓背景分頁每則各佔一格,爆量疊成一排 ——
@@ -461,21 +469,21 @@ describe("useSignalAlerts — Notification", () => {
     act(() => vi.advanceTimersByTime(299)); // t=299
     expect(notified).toEqual([]);
     act(() => vi.advanceTimersByTime(1)); // t=300:窗內最後一則
-    expect(notified).toEqual([formatToastText(b)]);
+    expect(notified).toEqual([toastText("b")]);
     act(() => {
       vi.advanceTimersByTime(4_999); // t=5299
       emitSignal(sig("b2"));
     });
-    expect(notified).toEqual([formatToastText(b)]);
+    expect(notified).toEqual([toastText("b")]);
     const third = sig("c");
     act(() => {
       vi.advanceTimersByTime(1); // t=5300:pending 覆寫為 c
       emitSignal(third);
     });
     act(() => vi.advanceTimersByTime(298)); // t=5598
-    expect(notified).toEqual([formatToastText(b)]);
+    expect(notified).toEqual([toastText("b")]);
     act(() => vi.advanceTimersByTime(1)); // t=5599 = max(5299+300, 300+5000)
-    expect(notified).toEqual([formatToastText(b), formatToastText(third)]);
+    expect(notified).toEqual([toastText("b"), toastText("c")]);
   });
 
   // TQ-1:上一案的 t=5299 emit 恰好落在「合併窗尾 = 節流窗尾」的重合點,兩個排程式子
@@ -487,7 +495,7 @@ describe("useSignalAlerts — Notification", () => {
     const a = sig("a");
     act(() => emitSignal(a));
     act(() => vi.advanceTimersByTime(300)); // t=300:第一則發出,lastSent=300
-    expect(notified).toEqual([formatToastText(a)]);
+    expect(notified).toEqual([toastText("a")]);
     const b = sig("b");
     act(() => {
       vi.advanceTimersByTime(700); // t=1000
@@ -497,7 +505,7 @@ describe("useSignalAlerts — Notification", () => {
     expect(notified.length).toBe(1);
     act(() => vi.advanceTimersByTime(1)); // t=5300 = lastSent 300 + 5000
     expect(notified.length).toBe(2);
-    expect(notified).toEqual([formatToastText(a), formatToastText(b)]);
+    expect(notified).toEqual([toastText("a"), toastText("b")]);
   });
 
   // spec Edge case 3:本輪要解的使用者症狀規模(爆量疊成一排);同時鎖住
@@ -512,7 +520,7 @@ describe("useSignalAlerts — Notification", () => {
     expect(hook.result.current.toasts.length).toBe(4);
     expect(hook.result.current.overflow).toBe(16);
     act(() => vi.advanceTimersByTime(300));
-    expect(notified).toEqual([formatToastText(sig("s19"))]); // trailing = 窗內最後一則
+    expect(notified).toEqual([toastText("s19")]); // trailing = 窗內最後一則
     expect(notifiedTags).toEqual(["copycat-signal"]);
   });
 
@@ -533,7 +541,7 @@ describe("useSignalAlerts — Notification", () => {
     act(() => vi.advanceTimersByTime(299)); // t=609
     expect(notified).toEqual([]);
     act(() => vi.advanceTimersByTime(1)); // t=610
-    expect(notified).toEqual([formatToastText(s)]);
+    expect(notified).toEqual([toastText("b")]);
   });
 
   // TQ-6:只斷言「沒發通知」是半 vacuous —— pendingRef 被清空也會讓通知不發,timer
@@ -570,7 +578,7 @@ describe("useSignalAlerts — 音效與靜音", () => {
     expect(oscillators).toBe(0);
     expect(hook.result.current.toasts.length).toBe(1);
     act(() => vi.advanceTimersByTime(300));
-    expect(notified).toEqual([formatToastText(s)]);
+    expect(notified).toEqual([toastText("a")]);
   });
 
   it("靜音狀態落 localStorage,新 hook 讀得回來", () => {

@@ -275,19 +275,16 @@ describe("groupKindLabels / groupRuleNames", () => {
 });
 
 describe("formatGroupToastText", () => {
-  // SC-4:單則組必須與逐則 toast 的文案逐字相同 —— 合併上線後同一則訊號的文案
-  // 不該因為「剛好只有一則」而換一套來源(兩份文案會漂)。
-  it("單則組 === formatToastText(單一份文案來源)", () => {
-    const s = sig();
-    const [group] = groupSignals([s]);
-    expect(formatGroupToastText(group!)).toBe(formatToastText(s));
+  // SC-4:單則組的文案 = 逐則 toast 舊口徑「代號 名稱 訊號名 價格」逐字相同。舊參照組
+  // `formatToastText` 已刪(prod 無讀者),口徑改由下面兩條字面量釘住 —— 期望值寫死,
+  // 文案改壞才會紅(實作與斷言同一顆函式時 mutant 全綠)。
+  it("單則組:代號 名稱 訊號名 價格(字面量鎖欄位口徑)", () => {
+    const [group] = groupSignals([sig()]);
     expect(formatGroupToastText(group!)).toBe("2330 台積電 爆拉 +5.23% 1234.5");
   });
 
-  it("名稱缺值的單則組亦等價(不留雙空格)", () => {
-    const s = sig({ name: "" });
-    const [group] = groupSignals([s]);
-    expect(formatGroupToastText(group!)).toBe(formatToastText(s));
+  it("名稱缺值的單則組不留雙空格", () => {
+    const [group] = groupSignals([sig({ name: "" })]);
     expect(formatGroupToastText(group!)).toBe("2330 爆拉 +5.23% 1234.5");
   });
 
