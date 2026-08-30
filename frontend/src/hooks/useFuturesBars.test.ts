@@ -290,7 +290,7 @@ describe("useFuturesBars(SC-1/2/3)", () => {
 
 // bug/futures-daily-bars-rollover(next-time 08-24 L408 → 08-28 升 /bug):看盤日常 = preview 整天掛著,
 // 跨過午夜後日 K 那份 cache 不會失效(`staleTime: Infinity` + 不輪詢)→ 新交易日的 CDP / MA 疊線
-// 拿**前一天那份快照**當基準。為什麼界是日曆午夜:見 `useFuturesBars.ts::msUntilDayRollover`。
+// 拿**前一天那份快照**當基準。為什麼界是日曆午夜:見 `lib/day-bars-rollover.ts::msUntilDayRollover`。
 describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", () => {
   /** D 當天的請求回「D 部分 bar」快照;D+1 起的請求回「D 完成 + D+1 部分」
    *  (第四條推到 D+2 只數 URL,快照沒有 D+2 bar 無妨)。 */
@@ -417,7 +417,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
 });
 
 // pr-151-review F-01 / F-02 / F-07:TQ 每一次 render 都重算 `refetchInterval` 並在回值變動時重排計時器
-//(推導見 `useFuturesBars.ts::msUntilDayRollover`)。上一個 describe 用 `renderHook` 推進期間不重繪,
+//(推導見 `lib/day-bars-rollover.ts::msUntilDayRollover`)。上一個 describe 用 `renderHook` 推進期間不重繪,
 // 量不到「人一直在期貨 tab 上」這一維 —— 這裡用 `rerender` 模擬 FuturesChart 吃 WS 的重繪節奏。
 describe("useFuturesBars 日 K 跨午夜 × 重繪(pr-151-review F-01 / F-02 / F-07)", () => {
   /** 只數請求,一根 bar 就夠(與上一個 describe 的兩根快照刻意不同名)。 */

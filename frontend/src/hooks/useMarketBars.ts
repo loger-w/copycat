@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/hooks/useFuturesBars";
 import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
+import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/lib/day-bars-rollover";
 import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
 import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
 
@@ -10,7 +10,7 @@ import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
  *
  * 新鮮度策略沿用個股 K 線的兩檔(D-9/D-15):
  * - `D` / `W` / `M`:**同一個本機日曆日內**不過期(已完成日 bar 不會變),query key **不含 days**。
- *   界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `useFuturesBars.ts::msUntilDayRollover`
+ *   界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `lib/day-bars-rollover.ts::msUntilDayRollover`
  *   (bug/daily-bars-siblings-rollover)。當週 / 當月那根每個交易日都會變,W / M 與 D 同一條分支。
  * - `1`:交易時段每 60s 重取;成本控制在後端(歷史段永久 memo,只有當日段真打 TC4)
  *
