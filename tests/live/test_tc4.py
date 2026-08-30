@@ -10,7 +10,7 @@ import pytest
 import zmq
 
 import copycat.live.tc4 as tc4_mod
-from copycat.live.tc4 import SPOT_SYMBOL, TC4QuoteSource, build_rt_request, group_series
+from copycat.live.tc4 import SPOT_SYMBOL, HealPolicy, TC4QuoteSource, build_rt_request, group_series
 from tests.conftest import requires_tcpy
 
 
@@ -723,7 +723,7 @@ class TestHealSessionSilence:
 
     def test_silent_session_resubscribes_every_symbol(self) -> None:
         api = FakeApi({})
-        src = self._src(api, heal_silence_secs=30.0)
+        src = self._src(api, heal=HealPolicy(silence_secs=30.0))
         src._heal_tick(100.0)
         assert _rt_pairs(api) == [
             ("UNSUBQUOTE", HEAL_A),
@@ -734,13 +734,13 @@ class TestHealSessionSilence:
 
     def test_inactive_gate_skips_heal(self) -> None:
         api = FakeApi({})
-        src = self._src(api, heal_silence_secs=30.0, heal_active=lambda: False)
+        src = self._src(api, heal=HealPolicy(silence_secs=30.0, active=lambda: False))
         src._heal_tick(100.0)
         assert api.rt_requests == []
 
     def test_recent_push_skips_heal(self) -> None:
         api = FakeApi({})
-        src = self._src(api, heal_silence_secs=30.0)
+        src = self._src(api, heal=HealPolicy(silence_secs=30.0))
         src._last_push = {HEAL_B: 90.0}  # 90 秒那則推播 = 整條 session 還活著
         src._heal_tick(100.0)
         assert api.rt_requests == []
@@ -748,7 +748,7 @@ class TestHealSessionSilence:
     def test_recent_resubscribe_skips_heal(self) -> None:
         # 剛重掛過(訂閱窗才建立)不算靜默 —— 否則每輪都重掛,churn 到 TC4 上游
         api = FakeApi({})
-        src = self._src(api, heal_silence_secs=30.0)
+        src = self._src(api, heal=HealPolicy(silence_secs=30.0))
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 95.0}
         src._heal_tick(100.0)
         assert api.rt_requests == []
@@ -766,7 +766,7 @@ class TestHealSymbolSilence:
 
     def test_only_the_silent_symbol_is_healed(self) -> None:
         api = FakeApi({})
-        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src = self._src(api, heal=HealPolicy(symbol_silence_secs=60.0))
         src._last_push = {HEAL_A: 10.0, HEAL_B: 95.0}
         src._heal_tick(100.0)
         assert _rt_pairs(api) == [("UNSUBQUOTE", HEAL_A), ("SUBQUOTE", HEAL_A)]
@@ -776,7 +776,7 @@ class TestHealSymbolSilence:
         # 舊母體只收「曾有推播」,那些腿 R1(其他 symbol 還在流)與 R2 都收不到,
         # 永遠沒人救。訂閱後超過 T2 仍零推播 = 與「靜默」同一件事。
         api = FakeApi({})
-        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src = self._src(api, heal=HealPolicy(symbol_silence_secs=60.0))
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 95.0}
         src._last_push = {HEAL_B: 95.0}
         src._heal_tick(100.0)
@@ -786,14 +786,14 @@ class TestHealSymbolSilence:
         # 剛訂閱就判死 = 每輪都重掛;TXO 深價外那類本就沒成交的 symbol 由
         # R2=None 豁免(app._default_source),不是靠這條窄母體擋
         api = FakeApi({})
-        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src = self._src(api, heal=HealPolicy(symbol_silence_secs=60.0))
         src._sub_at = {HEAL_A: 50.0, HEAL_B: 50.0}
         src._heal_tick(100.0)
         assert api.rt_requests == []
 
     def test_push_resets_attempts(self) -> None:
         api = FakeApi({})
-        src = self._src(api, heal_symbol_silence_secs=60.0)
+        src = self._src(api, heal=HealPolicy(symbol_silence_secs=60.0))
         src._last_push = {HEAL_A: 10.0, HEAL_B: 95.0}
         src._heal_tick(100.0)
         assert src._heal_attempts[HEAL_A] == 1
@@ -814,7 +814,12 @@ class TestHealResubSnapshot:
 
     @staticmethod
     def _src(api: FakeApi) -> TC4QuoteSource:
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
+        )
         src._subscribed = {"TC.S.TWS.6949"}
         return src
 
@@ -894,7 +899,12 @@ class TestHealWindowVariantEscalation:
 
     @staticmethod
     def _src(api: FakeApi) -> TC4QuoteSource:
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
+        )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
         src._last_push = {HEAL_A: 0.0}
@@ -941,7 +951,11 @@ class TestHealResilience:
     ) -> None:
         api = _ReqApi(_RaisingSocket())
         src = TC4QuoteSource(
-            port="0", api=api, session="sess-1", lock_timeout_secs=0.5, heal_silence_secs=30.0
+            port="0",
+            api=api,
+            session="sess-1",
+            lock_timeout_secs=0.5,
+            heal=HealPolicy(silence_secs=30.0),
         )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
@@ -953,7 +967,12 @@ class TestHealResilience:
 
     def test_backoff_blocks_the_next_tick(self) -> None:
         api = FakeApi({})
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_silence_secs=30.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(silence_secs=30.0),
+        )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
         src._heal_tick(100.0)
@@ -968,8 +987,7 @@ class TestHealResilience:
             api=api,
             session="sess-1",
             lock_timeout_secs=0.5,
-            heal_silence_secs=0.01,
-            heal_poll_secs=0.01,
+            heal=HealPolicy(silence_secs=0.01, poll_secs=0.01),
         )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
@@ -1023,7 +1041,12 @@ class TestHealVariantReleasesOldKey:
     ) -> None:
         monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
         api = FakeApi({})
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
+        )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
         src._last_push = {HEAL_A: 0.0}
@@ -1047,7 +1070,12 @@ class TestHealConcurrentUnsubscribe:
 
     def test_heal_skips_a_symbol_the_engine_already_unsubscribed(self) -> None:
         api = FakeApi({})
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_silence_secs=30.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(silence_secs=30.0),
+        )
         src._subscribed = set()
         src._heal(HEAL_A, 100.0, 30.0)
         assert api.rt_requests == []
@@ -1068,8 +1096,7 @@ class TestHealLoopResilience:
             port="0",
             api=FakeApi({}),
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_poll_secs=0.01,
+            heal=HealPolicy(silence_secs=30.0, poll_secs=0.01),
         )
         calls: list[float] = []
 
@@ -1098,8 +1125,7 @@ class TestHealRuleInteraction:
             port="0",
             api=api,
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_symbol_silence_secs=60.0,
+            heal=HealPolicy(silence_secs=30.0, symbol_silence_secs=60.0),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
@@ -1133,7 +1159,12 @@ class TestHealBookkeepingLifecycle:
     def test_unsub_clears_every_heal_book(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("copycat.live.tc4.session_key", lambda: ("20260818", "day"))
         api = FakeApi({})
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
+        )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
         src._last_push = {HEAL_A: 0.0}
@@ -1162,7 +1193,12 @@ class TestHealRecoveryCycle:
 
     def test_push_silence_heal_recovery_cycle(self) -> None:
         api = FakeApi({})
-        src = TC4QuoteSource(port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
+        )
         src._subscribed = {HEAL_A}
         base = time.monotonic()
         src._sub_at = {HEAL_A: base}
@@ -1404,8 +1440,7 @@ class TestHealSparseSymbol:
             port="0",
             api=api,
             session="sess-1",
-            heal_symbol_silence_secs=60.0,
-            heal_sparse_symbols=frozenset({HEAL_B}),
+            heal=HealPolicy(symbol_silence_secs=60.0, sparse_symbols=frozenset({HEAL_B})),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
@@ -1419,9 +1454,11 @@ class TestHealSparseSymbol:
             port="0",
             api=api,
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_symbol_silence_secs=60.0,
-            heal_sparse_symbols=frozenset({HEAL_B}),
+            heal=HealPolicy(
+                silence_secs=30.0,
+                symbol_silence_secs=60.0,
+                sparse_symbols=frozenset({HEAL_B}),
+            ),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
@@ -1445,9 +1482,11 @@ class TestHealSparseSymbol:
             port="0",
             api=api,
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_symbol_silence_secs=60.0,
-            heal_sparse_symbols=frozenset({HEAL_B}),
+            heal=HealPolicy(
+                silence_secs=30.0,
+                symbol_silence_secs=60.0,
+                sparse_symbols=frozenset({HEAL_B}),
+            ),
         )
         src._subscribed = {HEAL_B}
         src._sub_at = {HEAL_B: 0.0}
@@ -1464,9 +1503,11 @@ class TestHealSparseSymbol:
             port="0",
             api=api,
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_symbol_silence_secs=60.0,
-            heal_sparse_symbols=frozenset({HEAL_B}),
+            heal=HealPolicy(
+                silence_secs=30.0,
+                symbol_silence_secs=60.0,
+                sparse_symbols=frozenset({HEAL_B}),
+            ),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
@@ -1487,8 +1528,7 @@ class TestHealSymbolGate:
             port="0",
             api=api,
             session="sess-1",
-            heal_symbol_silence_secs=60.0,
-            heal_symbol_active=lambda sym: sym not in closed,
+            heal=HealPolicy(symbol_silence_secs=60.0, symbol_active=lambda sym: sym not in closed),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
@@ -1504,8 +1544,7 @@ class TestHealSymbolGate:
             port="0",
             api=api,
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_symbol_active=lambda sym: sym != HEAL_B,
+            heal=HealPolicy(silence_secs=30.0, symbol_active=lambda sym: sym != HEAL_B),
         )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 990.0, HEAL_B: 0.0}
@@ -1516,7 +1555,10 @@ class TestHealSymbolGate:
     def test_default_gate_keeps_every_symbol_active(self) -> None:
         api = FakeApi({})
         src = TC4QuoteSource(
-            port="0", api=api, session="sess-1", heal_symbol_silence_secs=60.0
+            port="0",
+            api=api,
+            session="sess-1",
+            heal=HealPolicy(symbol_silence_secs=60.0),
         )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}
@@ -1725,7 +1767,12 @@ class TestHealWhileDisconnected:
 
     @staticmethod
     def _src() -> TC4QuoteSource:
-        src = TC4QuoteSource(port="0", api=FakeApi({}), session="sess-1", heal_silence_secs=30.0)
+        src = TC4QuoteSource(
+            port="0",
+            api=FakeApi({}),
+            session="sess-1",
+            heal=HealPolicy(silence_secs=30.0),
+        )
         src._subscribed = {HEAL_A, HEAL_B}
         src._sub_at = {HEAL_A: 0.0, HEAL_B: 0.0}
         with src._api_lock:  # 模擬 _dispose 後、_ensure_connected 尚未成功的斷線態
@@ -1786,8 +1833,7 @@ class TestHealWhileDisconnected:
             port="0",
             api=FakeApi({}),
             session="sess-1",
-            heal_silence_secs=30.0,
-            heal_active=lambda: active[0],
+            heal=HealPolicy(silence_secs=30.0, active=lambda: active[0]),
         )
         src._subscribed = {HEAL_A}
         src._sub_at = {HEAL_A: 0.0}

@@ -21,8 +21,8 @@ from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
 from copycat.live.tc4 import (
     BARS_POLL_DEADLINE,
     HistoryTimeoutError,
+    HealPolicy,
     TC4QuoteSource,
-    always_active,
 )
 from copycat.tc4common import TC4_DEFAULT_PORT
 
@@ -66,6 +66,11 @@ def futures_symbol(product: str) -> str:
     return f"TC.F.TWF.{product}.HOT"
 
 
+#: 期貨 session 的自癒門檻:R1 30 s / R2 60 s;閘預設 always(prod 由 `app._default_futures_source`
+#: `replace(FUTURES_HEAL, active=交易日曆 AND 盤別)`)。
+FUTURES_HEAL = HealPolicy(silence_secs=30.0, symbol_silence_secs=60.0)
+
+
 class FuturesQuoteSource(TC4QuoteSource):
     def __init__(
         self,
@@ -74,9 +79,7 @@ class FuturesQuoteSource(TC4QuoteSource):
         api: Any | None = None,
         session: str | None = None,
         poll_wait_secs: float = 1.0,
-        heal_silence_secs: float | None = 30.0,
-        heal_symbol_silence_secs: float | None = 60.0,
-        heal_active: Callable[[], bool] = always_active,
+        heal: HealPolicy = FUTURES_HEAL,
     ) -> None:
         # 自癒預設不設閘(source 層 always):純建構這個 source 的用途(測試 / 一次性
         # 腳本)不該被牆鐘左右。prod 由 `app._default_futures_source` 補上
@@ -87,9 +90,7 @@ class FuturesQuoteSource(TC4QuoteSource):
             api=api,
             session=session,
             poll_wait_secs=poll_wait_secs,
-            heal_silence_secs=heal_silence_secs,
-            heal_symbol_silence_secs=heal_symbol_silence_secs,
-            heal_active=heal_active,
+            heal=heal,
         )
         self._on_message: Callable[[dict], None] | None = None
 

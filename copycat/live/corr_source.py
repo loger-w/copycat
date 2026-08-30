@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 from copycat.live.river_backfill import collect_1k_minutes
 from copycat.live.stock_source import stock_window
-from copycat.live.tc4 import TC4QuoteSource, always_symbol_active
+from copycat.live.tc4 import HealPolicy, TC4QuoteSource
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,11 @@ def all_day_window() -> tuple[str, str]:
     return (f"{ymd}00", f"{ymd}23")
 
 
+#: corr session 的自癒門檻:R1 120 s / R2 240 s(海外腿時段錯開、成交稀疏,台指門檻會誤判);
+#: session 級閘不設(全天窗跨時段),逐腿閘 / 稀疏腿由 `app._default_corr_source` `replace(...)` 帶。
+CORR_HEAL = HealPolicy(silence_secs=120.0, symbol_silence_secs=240.0)
+
+
 class CorrQuoteSource(TC4QuoteSource):
     def __init__(
         self,
@@ -91,24 +96,18 @@ class CorrQuoteSource(TC4QuoteSource):
         api: Any | None = None,
         session: str | None = None,
         poll_wait_secs: float = 1.0,
-        heal_silence_secs: float | None = 120.0,
-        heal_symbol_silence_secs: float | None = 240.0,
-        heal_symbol_active: Callable[[str], bool] = always_symbol_active,
-        heal_sparse_symbols: frozenset[str] = frozenset(),
+        heal: HealPolicy = CORR_HEAL,
     ) -> None:
         # 門檻放寬一倍:海外腿(SGX/CBOT/CME)時段錯開、成交稀疏,台指門檻會把
         # 「這條腿現在本來就沒人交易」誤判成零推播。不設 **session 級**盤別閘 ——
         # 全天窗本就跨時段,而各腿的時段各不相同(閘一開一關都會錯一半)。逐腿的閘
-        # 由 `heal_symbol_active` 帶(prod 走 `segment_leg_gate`,見 `app._default_corr_source`)。
+        # 由 `heal.symbol_active` 帶(prod 走 `segment_leg_gate`,見 `app._default_corr_source`)。
         super().__init__(
             port,
             api=api,
             session=session,
             poll_wait_secs=poll_wait_secs,
-            heal_silence_secs=heal_silence_secs,
-            heal_symbol_silence_secs=heal_symbol_silence_secs,
-            heal_symbol_active=heal_symbol_active,
-            heal_sparse_symbols=heal_sparse_symbols,
+            heal=heal,
         )
         self._on_message: Callable[[dict], None] | None = None
 

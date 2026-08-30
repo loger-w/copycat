@@ -22,9 +22,12 @@ from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
 from copycat.live.tc4 import (
     BARS_POLL_DEADLINE,
     HEAL_VARIANT_AFTER,
+    HealPolicy,
     HistoryTimeoutError,
     TC4QuoteSource,
 )
+from dataclasses import replace
+
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -498,6 +501,10 @@ def in_index_heal_window_now(now: _dt.time | None = None) -> bool:
     return _HEAL_START <= t < _INDEX_HEAL_END
 
 
+#: 個股 session 的自癒門檻:R1 30 s / R2 60 s(閘由 `in_trading_hours` 帶,見建構子)。
+STOCK_HEAL = HealPolicy(silence_secs=30.0, symbol_silence_secs=60.0)
+
+
 class StockQuoteSource(TC4QuoteSource):
     def __init__(
         self,
@@ -509,20 +516,16 @@ class StockQuoteSource(TC4QuoteSource):
         poll_wait_secs: float = 1.0,
         no_data_secs: float = 10.0,
         in_trading_hours: Callable[[], bool] = in_stock_heal_window_now,
-        heal_silence_secs: float | None = 30.0,
-        heal_symbol_silence_secs: float | None = 60.0,
-        heal_poll_secs: float = 5.0,
+        heal: HealPolicy = STOCK_HEAL,
     ) -> None:
-        # 自癒閘沿用既有的盤中判定:個股盤外沒有推播是正常的,churn 沒有意義
+        # 自癒閘沿用既有的盤中判定:個股盤外沒有推播是正常的,churn 沒有意義。
+        # `heal.active` 一律被 `in_trading_hours` 蓋掉(健檢與自癒同一把閘,不另開參數)。
         super().__init__(
             port,
             api=api,
             session=session,
             poll_wait_secs=poll_wait_secs,
-            heal_silence_secs=heal_silence_secs,
-            heal_symbol_silence_secs=heal_symbol_silence_secs,
-            heal_active=in_trading_hours,
-            heal_poll_secs=heal_poll_secs,
+            heal=replace(heal, active=in_trading_hours),
         )
         self._trade_date = trade_date or f"{_dt.date.today():%Y-%m-%d}"
         self._no_data_secs = no_data_secs

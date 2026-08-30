@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import replace
 import json
 import time
 from typing import Callable
 
 import pytest
 
-from copycat.live.corr_source import CorrQuoteSource, all_day_window, segment_leg_gate
+from copycat.live.corr_source import CORR_HEAL, CorrQuoteSource, all_day_window, segment_leg_gate
 from copycat.live.stock_source import stock_window
 from copycat.live.session import session_key, session_window
 from copycat.live.stock_source import in_stock_heal_window_now
@@ -110,7 +111,11 @@ class TestHealDefaults:
 
     def test_sparse_symbols_pass_through_to_the_watchdog(self) -> None:
         sparse = frozenset({"TC.F.TWF.SXF.HOT"})
-        src = CorrQuoteSource(api=FakeApi(lambda o: ok()), session="s1", heal_sparse_symbols=sparse)
+        src = CorrQuoteSource(
+            api=FakeApi(lambda o: ok()),
+            session="s1",
+            heal=replace(CORR_HEAL, sparse_symbols=sparse),
+        )
         assert src._heal_sparse == sparse
 
 
