@@ -10,11 +10,19 @@
   零 corr WS ×1 / `App.test.tsx` localStorage 記住 index tab + capital WS 唯一掛載 ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 5/5 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
   主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
   單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。 **→ 08-31 chore/app-tests-async-timeout 出貨**:`App.test.tsx` / `App.memo.test.tsx` / `App.corr-tab.test.tsx` 檔頭 `configure({ asyncUtilTimeout: 3000 })`(= L68),剛 `npm ci` 的 worktree 全量 2896/2896 ×2 首次全綠;判讀規則仍留 ops-discipline。
-- [ ] **`useMarketBars.ts:69` / `useStockBars.ts:95` 與修前 `useFuturesBars` 逐字同病、未修**(pr-151-review F-03 改正:原記的
+- [x] ~~**`useMarketBars.ts:69` / `useStockBars.ts:95` 與修前 `useFuturesBars` 逐字同病、未修**~~(pr-151-review F-03 改正:原記的
   overlay 兩支不是同病):`useMarketBars` 日 / 週 / 月 K `staleTime: isMinute ? 0 : Infinity`、queryKey `["market-bars", key, tf]` 無日期;
   `useStockBars` 日 K `staleTime: isDaily ? Infinity : 0`、queryKey `["stock-bars", code, "D"]` 無日期 —— 台股綜合 tab 的日 / 週 / 月 K
   與個股頁日 K 整天掛著跨午夜同樣停在昨天(個股 overlay 走後端 `date < today` 不受影響,症狀只在 K 線本身)。修法沿
   `useFuturesBars.ts::msUntilDayRollover`(界嚴格在 from 之後 + 秒級量化;**不要**改吃 `dataUpdatedAt`,切回路徑會漂)。另開 /bug。
+  **→ 08-31 fix/daily-bars-siblings-rollover 出貨**:兩支 `staleTime` / `refetchInterval` 改吃同一把尺;`useMarketBars` 日 K 分支**整段不吃 `active`**
+  (tab hidden 保留不 unmount,切回只會排到下一個午夜;與期指 `subscribed: active` 是同一個界、不同閘形狀 —— review P-F2 / P-F3 知情);
+  `useStockBars` 沿 `barsPollInterval` 先判(20 s 空態重試優先於日界);兩支同加午夜失敗 60 s 重試(error 只在 HTTP 非 2xx,TC4 斷線是 200 降級
+  payload 不進 error)。helper 三顆搬 `lib/day-bars-rollover.ts`(user 拍板)。13 條 hook 測試 + 10 突變體全殺。真環境判準 = 09-01 00:01 Network 一發
+  `market/bars/*?tf=D` + `stock/bars/<code>?tf=D`、09:00 後末根是 09-01(artifact `.claude/bug/daily-bars-siblings-rollover/verification.md`)。
+- [ ] **三支日 K 跨日測試鷹架逐字三份**(review S-F5,08-31):`rerenderBurst` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D1_ISO` / `stubFetchByWallClock` 在
+  `useFuturesBars.test.ts` / `useMarketBars.test.ts` / `useStockBars.test.tsx` 同形。可抽 `hooks/__fixtures__/day-rollover.ts`;動到期指那檔出本案範圍,
+  併 test-hygiene 批。
 - [x] ~~**`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**~~(08-31 user 拍板知情不動、結案;render 時重算,**有**日期鍵、風險較低):
   與 08-30 否決的 H3 同構 —— 只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了
   「沒人看就退訂」的閘,跨日會與期貨日 K 同病。記著,不動。

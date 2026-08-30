@@ -98,6 +98,10 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   db0e6d48 當基準(六顆全 yes 但全不在 master);收修 F-13 第一版照抄回填,round-1 review 才抓到。正解 = master SHA +
   「第 n 筆 + subject」(08-27 拍板),例:`a7156aac(第 1 筆 perf(live) 退避)`。
   (Trigger:worktree 分支 merge 後清理 / 回填 commit SHA 進 docs 或 artifacts)
+- **突變體迴圈的還原手段決定它能不能在未 commit 的改動上跑**(2026-08-31 fix/daily-bars-siblings-rollover 踩到):腳本用
+  `git checkout -- <file>` 還原 = 還原到 **HEAD**,在「review 收修寫好、還沒 commit」的樹上跑會把收修整個洗掉 —— 症狀是第一個突變體之後
+  下一個突變體找不到字串(assert 0 命中)、接著全量 vitest 紅在收修新加的那條測試,零其他訊號。正解:收修**先 commit 再跑**突變體;
+  或還原改走「讀進記憶體 → 寫回」/ `git stash` 差分,不用 checkout。(Trigger:寫或跑任何會改原始碼再還原的 mutation / 突變體腳本)
 - **剛 `npm ci` 的 worktree 全量 vitest 必紅 1–2 條 App 級 lazy `waitFor` 測試、每次不同**(2026-08-30:5/5 次,
   `App.memo` / `App.test` / `App.corr-tab`;單檔重跑 3/3 綠;**stash 掉全部改動仍紅** → 環境不是改動)。判讀順序:
   單檔重跑 → 在 worktree 內 `git stash push` 全部改動再全量(差分)→ 主 tree master 全量對照;三步都指向環境才歸 flake,
