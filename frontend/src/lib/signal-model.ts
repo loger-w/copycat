@@ -78,16 +78,6 @@ export function kindLabel(sig: SignalMsg): string {
   return kind;
 }
 
-/** toast 一行文字:`代號 名稱 訊號名 價格`(名稱缺值時不留雙空格)。
- *
- *  **prod 已無讀者**(N013,2026-08-24 覆查):`useSignalAlerts` 自合併 toast(D1'')起
- *  一律走 `formatGroupToastText`。留著的唯一理由是它是那支的**參照組** ——
- *  `signal-model.test.ts` 鎖「單則組的 `formatGroupToastText` 輸出與本函式逐字相同」,
- *  刪掉等於把那條欄位口徑的 lock 一併刪掉。要刪請連同該 lock 一起想清楚。 */
-export function formatToastText(sig: SignalMsg): string {
-  return [sig.code, sig.name, kindLabel(sig), fmt(sig.price)].filter((x) => x !== "").join(" ");
-}
-
 /** live 訊號 + 當日 baseline 合併,輸出依 `time` 降冪(新在前)。
  *
  *  **兩份輸入都是「新在前」**(呼叫端負責把 jsonl 的舊在前反轉);同 id 取 live 那筆。
@@ -185,8 +175,10 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
 
 /** 合併 toast 一行文字:`代號 名稱 <kind 段以「・」串接> 價格`。
  *
- *  與 `formatToastText` 同一套欄位口徑(單則組輸出逐字相同,signal-model.test lock)——
- *  toast 只有一行,**不含規則名**(規則名在 rail 另起一行放得下)。kind 段沿
+ *  欄位口徑沿逐則 toast 舊函式 `formatToastText`(2026-08-31 刪,prod 零讀者;N013):
+ *  單則組輸出 = `代號 名稱 訊號名 價格`,由 signal-model.test / useSignalAlerts.test 的
+ *  **字面量**釘住,不再有參照組函式 —— toast 只有一行,**不含規則名**(規則名在 rail
+ *  另起一行放得下)。kind 段沿
  *  `groupKindLabels` 的到達序去重;價格取組錨(最早到那則),與 Discord 合併訊息
  *  `rows[0]` 同口徑。 */
 export function formatGroupToastText(group: SignalGroup): string {

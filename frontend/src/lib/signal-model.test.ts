@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatGroupToastText,
-  formatToastText,
   groupKindLabels,
   groupRuleNames,
   groupSignals,
@@ -73,16 +72,6 @@ describe("kindLabel", () => {
 
   it("未知 kind 原樣回傳(新後端 kind 不因前端舊而變空白)", () => {
     expect(kindLabel(sig({ kind: "brand_new" as SignalMsg["kind"], pct: null }))).toBe("brand_new");
-  });
-});
-
-describe("formatToastText", () => {
-  it("代號 名稱 訊號名 價格(價格毫元轉字串)", () => {
-    expect(formatToastText(sig())).toBe("2330 台積電 爆拉 +5.23% 1234.5");
-  });
-
-  it("名稱缺值不留雙空格", () => {
-    expect(formatToastText(sig({ name: "" }))).toBe("2330 爆拉 +5.23% 1234.5");
   });
 });
 
