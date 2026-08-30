@@ -23,6 +23,10 @@ worktree `C:/side-project/copycat-wt-futures-daily-rollover`,自 master 09cc3e63
 
 ## 真實環境
 
+> **pr-151-review F-09(08-30 晚)**:下面第 1 條判準在 PR #151 那版**會失敗** —— 期貨 tab 開著 = 00:00–00:01 那 60 秒有重繪 =
+> `refetchInterval` 被重排到隔天(F-01)。fix/pr-151-review-followups 修後判準才成立;下方 mutation 表的 M1 / M2 / M3 三個突變體
+> 都在「render 這一維」之外(測試 seam `renderHook` 推進期間不重繪),全殺 ≠ 界已釘牢 —— 修後另有「slack 窗內 rerender」紅測試釘住。
+
 原始重現步驟 = 「preview 整天掛著跨過午夜」—— 本 session(08-30 晚)無法在真時間內重走;瀏覽器端無法 fast-forward TQ 的
 `setInterval` / `Date.now`(prod 8721 亦關著)。真環境判準留給次一次跨午夜(08-31 週一早上,以含本 PR 的 dist 重 build 並讓 preview
 自週日晚掛到週一):
@@ -41,7 +45,7 @@ worktree `C:/side-project/copycat-wt-futures-daily-rollover`,自 master 09cc3e63
 | gate | 結果 | exit |
 |---|---|---|
 | `npx vitest run src/hooks/useFuturesBars.test.ts src/lib/trading-calendar.test.ts` | 36 passed(新增:00:00:30 / 00:01:01 精確界 + 午夜失敗 60 s 重試) | 0 |
-| mutation M1 固定 24 h(`: 24 * 60 * 60_000`) | 2 failed / 17 passed | 紅(殺) |
+| mutation M1 固定 24 h(`: 24 * 60 * 60_000`) | 2 failed / 17 passed | 紅(殺)—— ⚠ M1–M3 共用 render 盲區,見「真實環境」節 F-09 註 |
 | mutation M2 `DAY_ROLLOVER_SLACK_MS = 0` | 2 failed / 17 passed | 紅(殺) |
 | mutation M3 拔掉 `status === "error" ? DAY_ERROR_RETRY_MS` | 1 failed / 18 passed | 紅(殺) |
 | `npx tsc -b` / `npx eslint src` / `npx react-doctor@latest --scope changed --no-telemetry` | 無輸出 / 無輸出 / No issues found! | 0 / 0 / 0 |
