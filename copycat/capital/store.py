@@ -261,7 +261,8 @@ class CapitalStore:
                 logger.info("成交種類 %r 不在樂觀套用表,等回查鏈: %s", a.flag_label, a.stock_no)
                 return False
             if k == "daytrade_sell" and a.buy_sell == "B":
-                # 無券只有賣向(回補走現股買 B00);買向的「無券」沒有對應部位狀態,寧缺勿錯
+                # 無券只有賣向(回補走現股買 B00);買向的「無券」沒有對應部位狀態,寧缺勿錯。
+                # `_today_net_lots_locked` 對 daytrade_sell 桶同樣排除買向 —— 兩處一致(pr-152 F-08)
                 logger.warning("無券買向成交無部位語意,不樂觀套用: %s %r", a.stock_no, a.flag_label)
                 return False
             market, kind, key_no = "sec", k, a.stock_no

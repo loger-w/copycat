@@ -146,3 +146,23 @@ def test_future_zero_price_rejected() -> None:
 def test_future_source_propagated() -> None:
     req = PositionCloseRequest(market="fut", key="TXFI6", price=22000.0, source="flash")
     assert build_future_close_order(_fut_pos(1), req).source == "flash"
+
+
+def test_close_kind_label_parity_with_frontend() -> None:
+    """跨語言契約(CLAUDE.md §4 證券部位 kind 的 daytrade_sell 值):前端 `close-order.ts::CLOSE_KIND`(確認窗
+    「反向單 … (現股)」的回補交易別)鏡像後端 `_CLOSE_MAP` 的回補單種 —— 後端改回補單種而前端沒跟,確認窗會
+    謊報實送交易別、兩側各自測試全綠(pr-152 review 收修 Standards F-01)。逐 kind 比:前端 kind → kind,
+    後端 (kind, 多空) → (方向, 單種),同 kind 所有方向的單種必須等於前端值。"""
+    import re
+
+    from copycat.capital.close import _CLOSE_MAP
+    from tests.helpers.frontend_source import read_frontend_source
+
+    text = read_frontend_source("lib/close-order.ts")
+    m = re.search(r"const CLOSE_KIND: Record<PositionKind, PositionKind> = \{([^}]*)\};", text)
+    assert m, "close-order.ts 找不到 `const CLOSE_KIND: Record<PositionKind, PositionKind> = {...};` 字面"
+    frontend = dict(re.findall(r'(\w+): "(\w+)"', m.group(1)))
+    backend = {kind: {v[1] for (k, _), v in _CLOSE_MAP.items() if k == kind} for kind in {k for k, _ in _CLOSE_MAP}}
+    assert set(frontend) == set(backend), (frontend, backend)
+    for kind, close_kind in frontend.items():
+        assert backend[kind] == {close_kind}, (kind, close_kind, backend[kind])

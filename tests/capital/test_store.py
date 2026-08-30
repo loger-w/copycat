@@ -916,7 +916,9 @@ def test_borrowless_sell_offsets_cash_long_first_then_opens_short_with_residue()
     沖銷,與買向 B00 先沖空單對稱),餘量才開 daytrade_sell 空單列 —— 否則多長一列已解鎖平倉的空單,
     快照落地前 ~2 s 點下去就是一張非預期的現股買。"""
     s = CapitalStore()
-    s.set_positions([Position(market="sec", stock_no="8358", qty=5, avg_price=500.0, avg_source="broker")])
+    s.set_positions(
+        [Position(market="sec", stock_no="8358", qty=5, avg_price=500.0, avg_source="broker")]
+    )
     assert s.apply_reply(_fill_8358(SEQ_A, "S08R2", "1000", "512.0000")) is True
     cash = s.position_for("8358", "cash")
     assert cash is not None and cash.qty == 4 and cash.avg_price == 500.0  # 減碼:均價不動

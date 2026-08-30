@@ -164,7 +164,7 @@ def test_avg_source_parity_with_frontend() -> None:
     assert set(frontend) == set(backend), (frontend, backend)
 
 
-def test_close_kind_wire_parity_with_frontend() -> None:
+def test_position_kind_subset_of_trade_kind() -> None:
     """跨語言契約(CLAUDE.md §4 證券部位 kind 的 daytrade_sell 值):前端 `types.ts::PositionKind`(平倉 body 送得出的
     種類 = `close-order.ts::KIND_TEXT` 鍵集)必須是後端 `TradeKind`(`PositionCloseBody.kind` 值域)的**子集** ——
     後端單邊拿掉一值 → 前端照送 → 真錢空單平倉 422,兩側各自的字面測試全綠(pr-152 review F-13)。
