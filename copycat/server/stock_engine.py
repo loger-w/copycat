@@ -718,13 +718,7 @@ class StockEngine:
             state = self._states.get(code)
             subscribed = code in self._refs
             light = state.light_snapshot() if state is not None else dict(_EMPTY_LIGHT)
-            if (
-                subscribed
-                and code not in self._no_data
-                and code not in self._backfilled
-                and self._backfill_pending.get(code, 0) == 0
-                and self._backfill_failed.get(code, 0) < _BACKFILL_MAX_FAILS
-            ):
+            if subscribed and self._backfill_wanted(code):
                 # 先入列再讀旗標:順序反了的話第一次請求會回 backfilling=False,
                 # 卡片顯示「無資料」而不是「回補中…」,而下一輪(60s 後)才會更正
                 self._enqueue_backfill(code)
@@ -737,6 +731,16 @@ class StockEngine:
                 "backfilling": self._backfill_pending.get(code, 0) > 0,
             }
         return out
+
+    def _backfill_wanted(self, code: str) -> bool:
+        """「今日還沒回補、也沒理由不補」的四道 guard(`group_snapshot` docstring 列的
+        那四道,抽出來讓別的入列點共用同一把尺;訂閱與否由呼叫端自己判)。"""
+        return (
+            code not in self._no_data
+            and code not in self._backfilled
+            and self._backfill_pending.get(code, 0) == 0
+            and self._backfill_failed.get(code, 0) < _BACKFILL_MAX_FAILS
+        )
 
     async def daily_bars(self, code: str, n: int = 25) -> list[DailyBar]:
         """overlay 日 bar;TC4 離線降級空(具體處理 = best-effort null,design R3)。
