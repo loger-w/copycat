@@ -72,11 +72,11 @@
   證交所當日可當沖名單 API;FinMind 當日更新時刻。~~
   → 08-28 `docs/research/2026-08-28-instrument-flags-survey.md`:達錢**不可**;證交所 `TWTB4U`(含 `Suspension`)/ 櫃買 `tpex_securities` 免 token JSON **可**(盤前公布時刻未證,08:30 打一次);
   FinMind DayTrading 盤前可取、資券 21:00。C1 當沖資格標示 → 資料源定為交易所 OpenAPI 當日名單,等 user 排 `/feat`。
-- [ ] **D `chore/test-hygiene-batch-2`**:L29 / ~~L68~~(08-31 已出貨 chore/app-tests-async-timeout)/ L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。
-  - [ ] `tests/server/test_stock_engine.py` 3800+ 行,回補主題散在 6 個 class(約 L210 `TestBackfillGuard` / L911 `TestBackfillTimeoutRetry` /
+- [x] **D `chore/test-hygiene-batch-2`**:L29 / ~~L68~~(08-31 已出貨 chore/app-tests-async-timeout)/ L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。 **→ 08-31 chore/test-hygiene-batch-2 出貨:L29(rollover 結果面)早在 08-28 0619cc18 已補、L292(futures_engine 錯句)早在 08-26 b0df23b7 已改,兩條只回填;其餘 11 條本批做完(逐條見各自留尾處)。**
+  - [x] `tests/server/test_stock_engine.py` 3800+ 行,回補主題散在 6 個 class(約 L210 `TestBackfillGuard` / L911 `TestBackfillTimeoutRetry` /
     L1688 `TestFirstTickEnqueuesBackfill` / L1844 `TestBackfillBatchPrepare` / L1933 `TestBackfillFailureIsolation` / L2614
     `TestWatchlistRemovalBookkeeping`;`/pr-review 153` chunk B 觀察,行號為 08-31 master 6c082132 的值)。#154 已把 `_tick_armed` 兩條
-    鏡射測試補進既有 `TestWatchlistRemovalBookkeeping`(抑制碎裂的方向);批次整併時以「同一個記帳集合的邊界測試放同一 class」為原則,不動斷言。
+    鏡射測試補進既有 `TestWatchlistRemovalBookkeeping`(抑制碎裂的方向);批次整併時以「同一個記帳集合的邊界測試放同一 class」為原則,不動斷言。 **→ 08-31 chore/test-hygiene-batch-2 出貨:TestBackfillTimeoutRetry 搬到 TestFirstTickEnqueuesBackfill 前 + 主題索引節標(AST 全等腳本斷言);Guard 與 RemovalBookkeeping 留原位。**
 - [ ] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
   L467 / L471 heal 階梯(壞日子才有);6949 發數(≤ 40);海外腿休市段亂救;13:50 NK225M probe(L430);L84 SC-13 (b)–(e)。
 - [ ] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
@@ -110,9 +110,9 @@
   整天不跑(盤外段本來就不跑)—— 症狀 = 全站休市膠囊 + 圖是前一日的,錯得看得見,但 log 零訊號。候選:server 起動時若
   `is_trading_day(today)` 為 False 而 TC4 09:00 後仍有 IX0001 推播 → 印一行 WARNING「日曆說休市但有推播」。 **→ 08-28 拍板做:併 `/mod` 可觀測性小批。**~~
   → 08-28 mod/observability-batch-0828:`index_engine._note_holiday_push`,同日曆日 ≥ 5 個相異現價 WARNING 一次(啟動 snapshot 單價不算)。
-- [ ] **rollover 設 pending 的 cancel 只擋 `_retry_task` 一支**:heal 與連線 retry 同走 `_schedule_retry` single-flight,現況只有一支;
+- [x] **rollover 設 pending 的 cancel 只擋 `_retry_task` 一支**:heal 與連線 retry 同走 `_schedule_retry` single-flight,現況只有一支;
   日後若分家(各自 task)要一起 cancel。測試 `test_rollover_pending_cancels_the_inflight_retry` 用 dummy task 釘機制,沒釘「舊日分鐘沒疊進新日」
-  的結果面(需要可控的慢 fetch hook,`FakeIndexSource` 尚無)。 **→ 08-28:併 D chore/test-hygiene-batch-2(慢 fetch hook 已有 `FakeIndexSource.fetch_gate`,PR #139)。**
+  的結果面(需要可控的慢 fetch hook,`FakeIndexSource` 尚無)。 **→ 08-28:併 D chore/test-hygiene-batch-2(慢 fetch hook 已有 `FakeIndexSource.fetch_gate`,PR #139)。** **→ 08-31 chore/test-hygiene-batch-2 出貨:結果面測試 `test_rollover_keeps_old_day_backfill_out_of_pending` 已於 08-28 0619cc18(PR #139 round-1 收修)補上,本批只回填勾銷;「分家要一起 cancel」那句仍是提醒,不是待辦。**
 
 ## 2026-08-28(mod/n075-price-type-label-window N075 標籤文件改口 留尾)
 
@@ -133,10 +133,10 @@
 
 ## 2026-08-28(chore/test-hygiene-batch 測試衛生三條 留尾)
 
-- [ ] **`test_balance.py` 六處 `RAW_*.replace(",1000,0,,", …)` 字串猜欄位變異**(:105 / :117 / :128 / :140 / :155 / :161):
+- [x] **`test_balance.py` 六處 `RAW_*.replace(",1000,0,,", …)` 字串猜欄位變異**(:105 / :117 / :128 / :140 / :155 / :161):
   `profit_rows.py` 已立「變異一律走 `pnl_variant`(按欄索引),不 `.replace` 猜字串」,庫存列 `balance_rows.py` 沒有對應的
   `balance_variant`;`.replace` 靠子字串唯一性,欄形一改就靜默改錯欄。本輪純搬移不動斷言(scope),候選 = 加 `balance_variant(row, {idx: v})`
-  六處改按欄索引。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+  六處改按欄索引。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:`balance_rows.balance_variant(row, {idx: v})` 六處改按欄索引,PNL 五處改既有 `pnl_variant`;十一處新舊字串腳本 assert 全等。**
 - [x] ~~**`/ws/index` 首則可能是 ping 或任一 dirty 拍,前端 `useIndexStream` 是否假設首則含完整 payload**(本輪 B 校正前提時順帶看到,未查):
   relay docstring 寫「無 seed 的路(index/capital/futures)首則可能是 ping」;前端 helper 已濾 ping,但首則 `twse.p` None 的 payload
   會不會讓現價欄閃一下 `—`,要看 `index-accum` 的合併語意。待查,不是本輪 finding。~~
@@ -174,9 +174,9 @@
 ## 2026-08-27(feat/txf-intraday-overlay 個股分時圖疊台指期 留尾)
 
 
-- [ ] **`src/App.test.tsx`「capital WS 唯一掛載」負載型 flake**(08-27 晚 fix/breakeven-review-followups 三次全量 vitest 與
+- [x] **`src/App.test.tsx`「capital WS 唯一掛載」負載型 flake**(08-27 晚 fix/breakeven-review-followups 三次全量 vitest 與
   全量 pytest **並跑**時 3/3 紅、單獨跑 3/3 綠 2848 passed):該測試 `waitFor` 預設 1 s 等兩個 lazy 頁面掛載,並行負載下 1.8 s。
-  不是本輪 diff(純函式)造成。候選 = 該測試 `waitFor(..., { timeout: 3000 })`,或 ops 紀律「全量 vitest 不與全量 pytest 同時跑」。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+  不是本輪 diff(純函式)造成。候選 = 該測試 `waitFor(..., { timeout: 3000 })`,或 ops 紀律「全量 vitest 不與全量 pytest 同時跑」。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:08-31 已隨 chore/app-tests-async-timeout(e182cc7b)把 App 級測試 asyncUtilTimeout 拉到 3 s,本批回填勾銷。**
 - [x] **期貨 tab 改「15:00 夜盤起算」的一天定義(user 08-27 拍板另開 /mod)** —— 08-28 mod/futures-day-1500 出貨(issue #132 / PR #133);留尾見下條:現況前後端都把期指一天排成
   08:45 日盤 → 13:45 → 15:00 夜盤 → 05:00(x 軸左起 08:45;凌晨 ≤05:00 算前一日)。user 要的畫面 = 近全圖左起
   15:00 夜盤、右至隔天 13:45 日盤收,「今天」= 昨 15:00 起算(交易所交易日口徑)。牽動:`frontend/src/lib/allday.ts`
@@ -219,10 +219,10 @@
   但 SUB 仍回 stub snapshot,`HEAL_VARIANT_AFTER` 永遠到不了 = 08-14 凍結 stub 那類病 REALTIME 側沒有逃逸路。要證得先
   加一行 DEBUG 記「snapshot 到達 vs 上次重掛時距」;候選 = 重掛後第一則推播若在 N 秒內且無新成交時戳,不清 attempts。 **→ 08-28:DEBUG 蒐證行併 `/mod` 可觀測性小批。**~~
   → 08-28 mod/observability-batch-0828:直接做候選(不只蒐證):`tc4._note_push` 指紋 + 10 s 寬限,同指紋 snapshot 不清 attempts,DEBUG 一行;6949 一天 92 發即實證。
-- [ ] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2;per-consumer review F-S2 重申):pr-126 F-01
+- [x] **`in_trading_hours_now` / `_TRADING_END` 名不符實**(review Standards P2;per-consumer review F-S2 重申):pr-126 F-01
   後 `_TRADING_END` 回 13:35,13:25–13:30 那半段名實相符了,但 **13:30–13:35 已收盤函式仍回 True** —— 它實質是「個股自癒 /
   健檢閘窗(上界 13:35 是啟發式)」;`corr_source.py:61` / `app.py:416` 讀者只看得到名字,正是 #126 誤共用的同一條失效路。
-  index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。 **→ 08-28:併 D 測試衛生 chore 分支。**
+  index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。 **→ 08-28:併 D 測試衛生 chore 分支。** **→ 08-31 chore/test-hygiene-batch-2 出貨:更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END` / `_HEAL_START`(六讀者 + CLAUDE.md §4),docstring 補「不是盤中判定」。**
 - [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
   13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆且為交易日 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
   pr-126 F-05);現價欄不靠回補(`_merge_backfill` 只寫 minutes),但同一發自癒會連帶重掛 IX0001
@@ -237,9 +237,9 @@
   (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
   row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`
   看 twse 最後更新時戳 / minutes 最大鍵,或 13:20 起只聽不訂 probe(`ix_listen_probe.py` 樣板)。 **→ 08-28:併 L101 08-31 同一次量。**
-- [ ] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
+- [x] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
   本輪加一個旗標動了 tc4 簽名 + body、corr_source 簽名 + 轉發、app 兩處、四支測試。候選 = `HealPolicy` frozen dataclass
-  收攏,四個 source 子類一起改,獨立 🔵。 **→ 08-28:併 D 測試衛生 chore 分支。**
+  收攏,四個 source 子類一起改,獨立 🔵。 **→ 08-28:併 D 測試衛生 chore 分支。** **→ 08-31 chore/test-hygiene-batch-2 出貨:`tc4.HealPolicy` frozen dataclass;STOCK_HEAL / FUTURES_HEAL / CORR_HEAL 模組常數 + `dataclasses.replace` 疊閘;test_tc4 28 呼叫點、wiring 10 斷言改 `.heal` 欄位。**
 
 ## 2026-08-27(fix/breakeven-avg-source-prod-chain #118 broker 半邊在 prod 是死的 留尾)
 
@@ -310,15 +310,15 @@ verification;這裡回填成 backlog。
 - [ ] **Duplicated Code 抽取候選**(review §5 D):`capital_api.py` tick 閘尾段六行 ×2;`futExchangeContract` try/catch→null
   第 5 份(`FuturesLadder.tsx`);`flash-locked` 三個產生點(`flash-send.ts` / `FuturesLadder.tsx` / `close-order.ts`);
   `list-drag.ts` 六位置參數 Data Clump(`WatchlistSidebar.tsx` ×2)。
-- [ ] **「不 Disconnect 則 process 不退」錯句**:`tc4.py` 兩處已改;`futures_engine.py:221/245/258` 三處本輪一併改。 **→ 08-28:併 D 測試衛生 chore 分支。**
+- [x] **「不 Disconnect 則 process 不退」錯句**:`tc4.py` 兩處已改;`futures_engine.py:221/245/258` 三處本輪一併改。 **→ 08-28:併 D 測試衛生 chore 分支。** **→ 08-31 chore/test-hygiene-batch-2 出貨:futures_engine 三處早在 08-26 b0df23b7(「做」批 review §5 B 文件改口)改成「是 daemon=True 之前的舊敘述」,現只剩 L311 一處且正確;本批回填勾銷。**
 
 ## 2026-08-26(mod/watchlist-rename-collision A4 改名保留編輯框 留尾)
 
 - [ ] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時
   文案出來、字已清(#101 verification §5.3 舊留尾;A4 只收改名)。改成留著要另設守門(清空同時是它的重送防護),
   可照 `renameInFlight` + `onSettled` 的形狀做。
-- [ ] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
-  抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+- [x] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
+  抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:檔頂 `makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`,三個 describe 各叫一次;N118 測試裡第四份行內 400 resolve 一併改 `releaseFail()`。**
 - [x] ~~**`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
   1.2.2 vs 1.2.3):主 tree 的 node_modules 是 `npm install` 長出來的,worktree 只能 robocopy 複製(A4 實踩)。
   修法 = 主 tree 跑一次 `npm install` 把 lock 更新後 commit(單獨 chore,確認 diff 只有 `@emnapi/*`)。~~
@@ -347,8 +347,8 @@ verification;這裡回填成 backlog。
   若盤中觀察到「部位閃一下回舊值再回來」就是這條,候選 = 鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次。 **→ 08-28 拍板升 `/bug 部位快照不得倒退`:鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次(根治)。**
 - [x] ~~**worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
   `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。~~ → 08-26 chore/frontend-lockfile-sync `npm install` 更新 lock(diff = @emnapi/* + wasm32-wasi optional 平台包 bundled 項 + yaml peer 旗標)。
-- [ ] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
-  (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+- [x] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
+  (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:斷言改只看 `copycat.server.ws` logger(caplog 收整個 root,他測殘留背景執行緒的 WARNING 落進 2 秒窗即誤紅)。**候選根因未親眼抓到那則紀錄**;再紅時失敗訊息印 caplog.text 可回溯是哪個 logger。**
 
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
@@ -385,10 +385,10 @@ verification;這裡回填成 backlog。
   → 08-28 mod/observability-batch-0828:`futures_engine._check_1k_health`(`bars_range` tf=1 成功時;前綴 `期貨 1K 落後` / `期貨 1K 中段缺格`,同尾根一次)。
 - [x] 處置股 badge(FinMind `TaiwanStockDispositionSecuritiesPeriod` 名單已在 breadth 引擎)—— **user 08-26 拍板不做**,
   視覺自評即可;2455 08-25 的 TradeStatus 每 2 分鐘 1→0→1 共 133 次即處置分盤形狀,留作 N100 蒐證樣本。
-- [ ] **flake 候選:`tests/server/test_stock_engine.py::TestStreamAndStatus::test_stream_receives_tick_and_book`**
+- [x] **flake 候選:`tests/server/test_stock_engine.py::TestStreamAndStatus::test_stream_receives_tick_and_book`**
   (08-26 全套三輪中一輪紅:`tick_msg["seq"]` 拿到 1002 而非 1,像是別的測試灌了 1000 筆 tick 的狀態漏進來;
   單跑 3/3 綠、其餘兩輪全套綠、當輪 diff 只動 tc4 close / capital reply log)。候選 = 找共用 StockState /
-  engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+  engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:根因 = 主圖入列的**空回補**照樣 `apply_backfill`(seq +1001),worker thread 先於 tick 落地時首則 tick seq=1002;測試改用 `backfill_gate` 卡住回補讓 tick 必為首事件,斷言不動。不是狀態外漏。**
 - [ ] **現股當沖 / 信用當沖資格顯示**(user 08-26 提問,未拍板):現股當沖 = FinMind `TaiwanStockDayTrading`
   (`BuyAfterSale` Y/＊ = 僅先買後賣;回測 `backfill_daytrade.py` 已用),信用當沖 = `TaiwanStockMarginPurchaseShortSale`
   資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。 **→ 08-28:併 B2 調研(達錢商品資訊有無當日當沖資格 / 暫停交易;證交所當日名單 API;FinMind 當日更新時刻;順便列達錢還能拿到哪些欄位)。user:不能用前一日名單。**
@@ -409,10 +409,10 @@ seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
   鎖的是 `[0,1]` / `[1]` 這種**位置**,同樣跟著漂)。候選 = 輸入改帶 key
   (`{ key: "TWSE" | "OTC", minutes, ref }`),幾何回傳 key、呼叫端以 key 查表(ST4);
   順帶讓 `OVERLAY_LINES` 從陣列變 `Record<key, style>`,「腿數多於樣式表」那條 guard 可退休。
-- [ ] **`signal-model.ts::formatToastText` 待刪**:prod 已無讀者(只剩 `useSignalAlerts.test`
+- [x] **`signal-model.ts::formatToastText` 待刪**:prod 已無讀者(只剩 `useSignalAlerts.test`
   拿它當期望值來源)。現況是**同源同義反覆** —— 實作與斷言同一顆函式,文案改動 mutant 全綠。
   順序不可顛倒:**先**把測試的期望值改成字面量(逐字寫死文案 + 註解寫拆解),lock 生效後
-  才刪 `formatToastText`。先刪的話那批斷言只能整條拿掉,等於把文案的守門一起丟了。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+  才刪 `formatToastText`。先刪的話那批斷言只能整條拿掉,等於把文案的守門一起丟了。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:兩筆:先把 useSignalAlerts / signal-model 測試期望值改字面量 `toastText(id)`(拆解註解),再刪函式 + describe + import;formatGroupToastText docstring 改口。**
 - [ ] **N109 的真分態需後端 seed 加欄位**:`status.tc4 === "down"` 的兩個來源(engine 在但
   TC4 斷 / 無 engine 模式)前端沒有可分辨訊號,本輪只能出「對兩態都誠實」的單句。真解 =
   `stock_engine` 的 status seed 加一個「engine 是否存在」欄(`/api/health` 刻意不含引擎
@@ -490,8 +490,8 @@ review 收修已出貨(N007 讓位方向 / 界單位 / N044 補完 / 三處斷�
 - [ ] **N062 修後 1536×678 以下仍會溢出**:6rem 地板讓 1536×700 的家數帶 section 需求
   252 ≤ 262,餘裕只有 **10px** —— 視窗再矮 22px 就回到出捲軸。候選 = 家數帶 section 的
   `flex` 由 `0 0 auto` 改 `5 1 auto`(讓它跟著壓縮而不是硬撐),**本輪未評估**。
-- [ ] **`CandleChart.test.tsx` 含歷史 NUL 位元組**,git 判整檔 binary(diff / grep 全瞎;
-  N026 的 class 鎖因此只能落在新檔 `CandleChart.caption.test.tsx`)。獨立 chore 清掉。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+- [x] **`CandleChart.test.tsx` 含歷史 NUL 位元組**,git 判整檔 binary(diff / grep 全瞎;
+  N026 的 class 鎖因此只能落在新檔 `CandleChart.caption.test.tsx`)。獨立 chore 清掉。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:3bef8634 帶進的 `"漲跌 -\0"` 清掉(not.toContain 恆真),改 `/漲跌 -(?!\d)/`;git 不再判 binary。**
 
 ## 2026-08-24(fix/futures-bars-gap 收尾留尾)
 
@@ -555,7 +555,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
   → 08-28 拍板不做:本機每秒 ~8 KB 無感;跨機器看盤再做 delta。
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
-- [ ] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。 **→ 08-28:併 D chore/test-hygiene-batch-2。**
+- [x] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:連同 `tests/server/test_futures_engine.py` 一起去 BOM。**
 - [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
   可帶 `--listen-secs` 拉長在 13:5x 起跑順帶驗。 **→ 08-28:08-31 13:50 跑 probe(今日 15:00 才想到,14:00 邊界已過)。**
 
