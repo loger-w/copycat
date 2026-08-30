@@ -163,7 +163,8 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   const [mode, setMode] = useState<FutChartMode>(initialFutChartMode);
   const { data, isPending, isError, error } = useFuturesBars(product, mode, active);
   // 疊線(CDP/MA)的資料源 = **期貨日 K**(N042)。與日 K 模式**同一個 queryKey** →
-  // TQ 自然去重(兩個 observer 一份 cache、一發請求),`staleTime: Infinity` 讓它一天只打一次。
+  // TQ 自然去重(兩個 observer 一份 cache、一發請求),日 K 的 staleTime / refetchInterval 讓它
+  // **同一日曆日**只打一次、跨午夜重抓一次(bug/futures-daily-bars-rollover;看盤日常 preview 整天掛著)。
   // 不掛 `enabled: toggles.cdp || toggles.ma`:那會讓「按下 CDP 才開始抓」多一次空窗閃動,
   // 而這支的成本是每商品每日一發(日 K 模式本來就要抓)。
   const dayQ = useFuturesBars(product, "day", active);
