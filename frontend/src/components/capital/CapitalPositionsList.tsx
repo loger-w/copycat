@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { CapitalConfirmDialog } from "@/components/capital/CapitalConfirmDialog";
 import { useCapitalPositions, useCapitalStatus, useClosePosition } from "@/hooks/useCapital";
-import { closeBodyOf, kindOf, KIND_TEXT } from "@/lib/close-order";
+import { closeBodyOf, closeKindLabel, kindOf, KIND_TEXT } from "@/lib/close-order";
 import { tradeErrorText } from "@/lib/trade-text";
 import { cn } from "@/lib/utils";
 import type { CapitalMarket, CapitalPosition } from "@/types";
@@ -124,7 +124,12 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
             },
             {
               label: "反向單",
-              value: `${closing.qty > 0 ? "賣出" : "買回"} ${Math.abs(closing.qty)} ${unit}`,
+              // sec 附回補交易別:無券空單回補是「現股」買,種類列印的「無券」不是送出去的單種(F-14)
+              value: `${closing.qty > 0 ? "賣出" : "買回"} ${Math.abs(closing.qty)} ${unit}${
+                market === "sec" && closeKindLabel(closing.kind) !== null
+                  ? `(${closeKindLabel(closing.kind)})`
+                  : ""
+              }`,
             },
             { label: "閘用估價", value: String(estimate) },
           ]}

@@ -234,6 +234,8 @@ class CapitalClient:
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
         #: 損益列回填蒐證去重:(股號, 種類) → 上次印過的均價(每 60 s 一輪同值不洗版)
         self._avg_logged: dict[tuple[str, TradeKind], float] = {}
+        # 無券空單列每 (股號, 交易日) 一行 INFO 的去重帳(pr-152 review F-11;parser 那行是 DEBUG)
+        self._short_row_logged: set[tuple[str, str]] = set()
         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
         # 放棄輪旗標:collector.abandon() 已開遲到終止符的時間窗,下一次發查詢的 reset
         # 要保留它(COM 回呼無查詢識別 → 遲到的 `##` 只能靠這個窗擋;見 collector docstring)。
@@ -433,7 +435,7 @@ class CapitalClient:
                 # 沒套的成交也要留痕(review Spec a):零股 / 無券 / 選擇權 / 期貨契約碼不明 /
                 # 增量未滿張 / 無價 —— 正是最需要量「等回查鏈多久」的那些;不印就與現狀一樣看不見。
                 logger.info(
-                    "成交未樂觀套用(零股 / 無券 / 選擇權 / 契約碼不明 / 未滿張),等回查鏈: seq=%s stock=%s market=%s",
+                    "成交未樂觀套用(零股 / 無券買向 / 選擇權 / 契約碼不明 / 未滿張),等回查鏈: seq=%s stock=%s market=%s",
                     rec.seq_no, rec.stock_no, rec.market,
                 )
         if rec.seq_no:
@@ -523,6 +525,14 @@ class CapitalClient:
         同檔多種庫存列(集保+融資並存)全數保留 — store 以 (股號, 種類) 為鍵,不需去重補償。"""
         self._pending_sec = positions
         self._log_chain_stage("庫存段收齊 %d 列", len(positions))
+        # 負現股列 → daytrade_sell 這個分類讓平倉鍵從鎖住變成可送「現股買」,parser 那行是 DEBUG(每輪洗版);
+        # 只有快照、沒成交事件的 session(重啟後帶空單開機)要留一條 INFO —— 每 (股號, 交易日) 一次
+        #(pr-152 review F-11;分類依據目前只有 2026-08-28 8358 一筆實錄,出現第二種負 T 列時靠這行對帳)
+        day = _today_ymd()
+        for p in positions:
+            if p.kind == "daytrade_sell" and (p.stock_no, day) not in self._short_row_logged:
+                self._short_row_logged.add((p.stock_no, day))
+                logger.info("庫存段 %s 現股負股數 %+d 張 → 無券空單(daytrade_sell),平倉會送現股買", p.stock_no, p.qty)
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)
         self._balance_last_ts = time.monotonic()

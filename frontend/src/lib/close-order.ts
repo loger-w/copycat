@@ -29,6 +29,19 @@ export function kindOf(p: CapitalPosition): PositionKind | null {
   return Object.hasOwn(KIND_TEXT, p.kind) ? (p.kind as PositionKind) : null;
 }
 
+/** 平倉反向單的交易別(鏡像後端 `close._CLOSE_MAP` 的回補單種):現股 / 融資 / 融券回補同種,
+ *  **無券空單回補是現股買** —— 唯一「部位種類 ≠ 送出交易別」的組合,確認窗要印出來,不然
+ *  「種類:無券 + 買回」讀起來像 safety 明文禁止的「無券買進」(pr-152 review F-14)。值域外 → null。 */
+const CLOSE_KIND: Record<PositionKind, PositionKind> = {
+  cash: "cash",
+  margin: "margin",
+  short: "short",
+  daytrade_sell: "cash",
+};
+export function closeKindLabel(kind: string): string | null {
+  return Object.hasOwn(CLOSE_KIND, kind) ? KIND_TEXT[CLOSE_KIND[kind as PositionKind]].full : null;
+}
+
 /** 部位 + 閘用估價 → 平倉 body。
  *
  *  - `key` = `stock_no`(**不是** UI 列選取用的複合鍵 `stock_no:kind`)

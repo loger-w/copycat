@@ -217,6 +217,10 @@ class CapitalStore:
                 continue
             if _FILL_KIND.get(a.flag_label or "") != kind:
                 continue
+            if kind == "daytrade_sell" and a.buy_sell == "B":
+                # 無券買向(B08)與 `_apply_fill_locked` 的守門同一把尺:沒有部位語意就不進淨額,
+                # 否則被算成 +1 淨買進、空單的 today_qty 靜默少 1(pr-152 review F-08)
+                continue
             lots = a.filled_qty // 1000
             net += lots if a.buy_sell == "B" else -lots
         return net
@@ -286,10 +290,7 @@ class CapitalStore:
         if market == "sec" and kind == "cash" and signed > 0:
             # 現股買先沖同股號的無券空單(交易所自動沖銷;2026-08-28 8358 回補 idx6 = B00 不是 08):
             # 不沖的話這裡會另開 (股號, cash) +1 列、空單列原地不動 —— 快照落地前約 2 s 幽靈雙列。
-            # 沖掉的那段均價不動(減碼語意),餘量才照常開 / 加現股多單。
-            # 界線:只做這一向。反向(持現股多單時收到「無券」賣)不沖 —— 群益對有庫存的賣出回報
-            # 會標「現股」不標「無券」,那一態沒有實錄;真發生會短暫並存 (cash, +n) 與
-            # (daytrade_sell, −m) 兩列直到快照落地(review 2026-08-30 F-06)。
+            # 沖掉的那段均價不動(減碼語意),餘量才照常開 / 加現股多單。反向(無券賣沖現股多單)見下一段。
             ds_key = (key_no, "daytrade_sell")
             ds = self._positions.get(ds_key)
             if ds is not None and ds.qty < 0:
@@ -307,6 +308,31 @@ class CapitalStore:
                         )
                     )
                 signed -= offset
+                if signed == 0:
+                    return True
+        if market == "sec" and kind == "daytrade_sell" and signed < 0:
+            # 對稱的另一向:持現股多單時從閃電梯選「無券」送賣(PriceLadder 只鎖無券買側,賣側照送;回報
+            # idx6 = S08)—— 交易所對同股號自動沖銷,先減現股多單、餘量才開空單列。不沖的話會多長一列
+            # (股號, daytrade_sell) −m 與 (cash, +n) 並存,而該列的平倉鈕已解鎖:快照落地前 ~2 s 點下去
+            # 就是一張非預期的現股買(pr-152 review F-02)。有庫存時群益回報 flag 是 08 還是 00 沒有實錄,
+            # 兩種都對:回 00 走上面 cash 減碼路徑,回 08 走這裡,結果同為現股列減 m。
+            cash_key = (key_no, "cash")
+            long_row = self._positions.get(cash_key)
+            if long_row is not None and long_row.qty > 0:
+                offset = min(-signed, long_row.qty)
+                if long_row.qty - offset == 0:
+                    del self._positions[cash_key]
+                else:
+                    self._positions[cash_key] = self._with_today_qty_locked(
+                        dataclasses.replace(
+                            long_row,
+                            qty=long_row.qty - offset,
+                            pnl_base=None,
+                            pnl_base_price=None,
+                            pnl_cost=None,
+                        )
+                    )
+                signed += offset
                 if signed == 0:
                     return True
         key = (key_no, kind)
