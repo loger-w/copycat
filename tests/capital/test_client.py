@@ -2224,3 +2224,30 @@ def test_profit_row_backfill_logs_value_once_per_change(
     assert lines[1].startswith("損益列回填 3357 kind=margin avg=151.0 ")
     # 「原 avg」是回填前 Position.avg_price:pending 每輪從庫存重建、恆 None(spec c3),不是上一輪印過的值
     assert "(原 avg=None,標籤原文='融資')" in lines[1]
+
+
+def test_borrowless_short_profit_row_labeled_cash_pairs_with_daytrade_sell_row(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """無券空單:庫存段是現股 T 列負股數(parse 端歸 daytrade_sell),損益段標籤仍是「現股」
+    (2026-08-28 prod 8358 :2427 實錄:4 列收齊、沒印「種類不符」)—— 回填要配到 daytrade_sell 那列,
+    否則空單 avg / pnl 全 null,比校準前退步。"""
+    from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
+    from tests.capital.profit_rows import RAW_PNL_ROW
+
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+    with caplog.at_level("WARNING"):
+        client._handle_balance(RAW_T_BORROWLESS_SHORT)
+        client._handle_balance("##")
+        client._handle_profit("000,查詢成功")
+        client._handle_profit(
+            pnl_variant(RAW_PNL_ROW, {1: "8358", 3: "現股", 25: "1", 4: "-1000", 10: "512.00"})
+        )
+        client._handle_profit("##,,,,")
+    p = client.store.position_for("8358")
+    assert p is not None and p.kind == "daytrade_sell" and p.qty == -1
+    assert p.avg_price == 512.0 and p.avg_source == "broker"
+    assert not [r for r in caplog.records if "種類不符" in r.message]
+    assert client.store.position_for("8358", "cash") is None

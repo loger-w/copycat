@@ -655,7 +655,8 @@ def test_short_sell_fill_is_negative_lots_under_short_kind() -> None:
 def test_unknown_or_odd_lot_fills_are_not_applied() -> None:
     s = CapitalStore()
     s.set_positions([])  # 首次快照落地後才開樂觀套用(review F-02)
-    assert s.apply_reply(_evt(typ="D", bs="B08R2", qty="1000")) is False  # 無券:不在對映表
+    assert s.apply_reply(_evt(typ="D", bs="B08R2", qty="1000")) is False  # 無券買向:無部位語意
+    assert s.apply_reply(_evt(typ="D", bs="B09R2", qty="1000")) is False  # 未知資券別:不在對映表
     assert s.apply_reply(_evt(typ="D", market="TL", qty="1000")) is False  # 零股市場
     assert s.positions() == []
 
@@ -835,3 +836,69 @@ def test_today_qty_net_at_or_below_zero_with_inventory_is_zero() -> None:
     assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="S00R2", qty="6000", price="82.0")) is True
     p = s.position_for("4989")
     assert p is not None and p.qty == 9 and p.today_qty == 0
+
+
+# ---- fix/borrowless-short-calibration(2026-08-30;2026-08-28 prod 8358 無券當沖實錄)----
+# 09:23:38 無券賣 1 張 @512 成交(reply idx6 = S08 → flag_label「無券」)→ 09:23:39 群益庫存段回
+# 現股 T 列 -1000(不是融券 L 列)→ 09:52:07 現股買 1 張 @523 回補,部位歸零。
+# 症狀:空單存續期間 today_qty = 0 → 前端賣出稅用 0.3% 而非當沖 0.15%(差 512×0.15% ≈ 1 檔);
+# 負現股列 kind=cash 平倉鍵被鎖(user 手動買回)。
+
+
+def _borrowless_short_store() -> CapitalStore:
+    from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
+    from copycat.capital.balance import parse_balance_line
+
+    s = CapitalStore()
+    s.set_positions([])
+    s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S08R2", stock="8358", qty="1000", price="512.0000"))
+    row = parse_balance_line(RAW_T_BORROWLESS_SHORT)
+    assert row is not None
+    s.set_positions([row])
+    return s
+
+
+def test_borrowless_short_counts_today_qty_after_broker_snapshot() -> None:
+    """無券賣成交 + 群益負現股列落地 → 該空單今天賣出的 1 張要進 today_qty(前端當沖稅減半吃這格)。"""
+    s = _borrowless_short_store()
+    p = s.position_for("8358")
+    assert p is not None and p.market == "sec" and p.qty == -1
+    assert p.today_qty == 1
+
+
+def test_borrowless_short_position_is_closable_with_cash_buy() -> None:
+    """群益負現股列 = 無券空單:平倉鍵要能組出「現股買」回補單(交易所自動沖銷),不再鎖住。"""
+    from copycat.capital.close import build_close_order
+    from copycat.capital.models import PositionCloseRequest
+
+    s = _borrowless_short_store()
+    p = s.position_for("8358")
+    assert p is not None
+    order = build_close_order(p, PositionCloseRequest(market="sec", key="8358", price=523.0))
+    assert (order.buy_sell, order.trade_kind, order.qty) == ("buy", "cash", 1)
+
+
+def test_borrowless_short_buyback_fill_nets_to_zero_without_phantom_rows() -> None:
+    """回補是現股買(reply idx6 = B00):樂觀套用要沖掉空單列、不能另開一列現股多單。"""
+    s = _borrowless_short_store()
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="B00R2", stock="8358", qty="1000", price="523.0000")) is True
+    assert s.positions() == []
+
+
+def test_cash_buy_offsets_borrowless_short_first_then_opens_long_with_residue() -> None:
+    """無券空 2 張:現股買 1 → 空單剩 -1(均價不動、沒開現股列);再買 3 → 空單消、餘 2 張開現股多單
+    (均價 = 這張單成交價)。交易所對同股號自動沖銷,樂觀套用要照同一語意。"""
+    s = CapitalStore()
+    s.set_positions([])
+    assert s.apply_reply(_evt(seq=SEQ_A, typ="D", bs="S08R2", stock="8358", qty="2000", price="512.0000")) is True
+    ds = s.position_for("8358", "daytrade_sell")
+    assert ds is not None and ds.qty == -2 and ds.avg_price == 512.0 and ds.today_qty == 2
+    assert s.apply_reply(_evt(seq=SEQ_B, typ="D", bs="B00R2", stock="8358", qty="1000", price="520.0000")) is True
+    ds = s.position_for("8358", "daytrade_sell")
+    assert ds is not None and ds.qty == -1 and ds.avg_price == 512.0 and ds.today_qty == 1
+    assert s.position_for("8358", "cash") is None
+    seq_c = "2313093000001"
+    assert s.apply_reply(_evt(seq=seq_c, typ="D", bs="B00R2", stock="8358", qty="3000", price="523.0000")) is True
+    assert s.position_for("8358", "daytrade_sell") is None
+    cash = s.position_for("8358", "cash")
+    assert cash is not None and cash.qty == 2 and cash.avg_price == 523.0 and cash.avg_source == "fill"
