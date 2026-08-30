@@ -28,7 +28,11 @@
 - [ ] **VX `sparse` 全日旗標的取捨**(pr-145 F-18,知情用):sparse 整場豁免 R2、CFE 段 `segment_leg_gate` 恆 True → VX 任何時段只剩 R1,
   但證據只有台北 08:47–09:55 那 68 分鐘;`corr_config.py` 既有註解記「01:02 實測 VX 45 s 推 19 則」(美盤盤中活躍)。若在意美盤時段
   單腿死無人救,候選 = sparse 時段化(比照 `heal_symbol_active`);不在意就維持。
-- [ ] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
+- [x] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
+  **→ 08-30 出貨 fix/borrowless-short-calibration**:負現股列歸 `daytrade_sell`(user 拍板)+ 兩條連帶(現股買先沖空單 / 損益列「現股」配
+  daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `balance line 現股負股數 → 無券空單`(INFO,不再是「平倉暫鎖」WARNING)、
+  `curl /api/capital/positions` 該列 `kind:"daytrade_sell"` / `today_qty:1` / `avg_source:"broker"`、閃電梯部位標籤「無券」、平倉鈕可按(送現股買)、
+  買回後 positions 立即歸零(不出現 cash +1 幽靈列)。倉位線語意仍留尾(下條)。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [ ] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
@@ -238,6 +242,8 @@
 - [ ] **空方(融券 / 無券 daytrade_sell)均價語意無真樣本**:群益損益試算的空方「均價」是純賣價、還是扣掉賣費稅後的淨收?
   `positionEcon` 空方分支沿舊式當純價;無券當沖(先賣後買)照法規也是現股當沖 0.15%,但 `today_qty` 減半目前**只套 kind === "cash"**,
   `daytrade_sell` 未套 —— 等 08-27 user 無券當沖實錄(balance.py 負股數整列)一併校準兩件事。 **→ 08-28 併 `/bug 無券空單校準`:① `_FILL_KIND` 補「無券」→ today_qty 對空單生效 ② 負現股列平倉解鎖 ③ 損益列 avg/cost/kind 印 INFO;**倉位線語意(user 確認今日 8358 倉位標記 ≠ 賣出價 512,差約兩檔)等下一筆實錄再定**。**
+  **→ 08-30:①② 已出貨(fix/borrowless-short-calibration;前端 `positionEcon` 減半條件加 `daytrade_sell`);③ 已隨 #145 出貨。剩倉位線語意:下一筆無券當沖
+  看 `損益列回填 <股號> kind=cash avg=…` 那行的 avg 是否 = 賣出價(純賣價)還是 < 賣出價(扣費稅淨收),再決定 `positionEcon` 空方分支要不要改口徑。**
 - [ ] **樂觀加碼時 broker 均價(含費)與純成交價加權**:`_apply_fill_locked` 同向加碼沿用舊來源,新增那幾張少算一次買費
   (0.026%),鏈落地 1–2 s 即消;要精確得讓後端知道折數(= 被否決的修法 B)或前端拆兩段。撞到再說。 **→ 08-28:已知風險,只記著。**
 - [ ] **`today_qty` 依賴「聚合只有當日 backlog」**:群益 ConnectByID 只重播當日;若哪天重播含前一日(跨日未重啟、
@@ -492,6 +498,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
   的 [25] 代碼與均價口徑(打平線要不要吃它)。校準後改 `test_cash_short_direction_close_
   blocked_until_calibrated` 為解鎖語意。注意:打平公式的 SELL_TAX 固定 0.3%(user 拍板不分
   當沖),當沖實際稅 0.15% → 空單打平線會偏保守(往不利側),要精確另議。 **→ 08-28:今日 8358 無券空(現股列 T,-1000)實錄已取得,併上條 `/bug 無券空單校準`;(b) 損益均價口徑等下一筆。**
+  **→ 08-30 (a) 已定:負現股列歸 `daytrade_sell`(`_CLOSE_MAP` 既有鍵解鎖 = 現股買);`test_cash_short_direction_close_blocked_until_calibrated` 保留、
+  語意改口為「cash 負向 = 資料矛盾」。負**融資**列仍鎖(資券互抵無實錄,WARNING 文案改「融資賣超,未校準」)。(b) 見 08-26 節。**
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
