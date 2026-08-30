@@ -12,7 +12,7 @@ import pytest
 from copycat.live.corr_source import CorrQuoteSource, all_day_window, segment_leg_gate
 from copycat.live.stock_source import stock_window
 from copycat.live.session import session_key, session_window
-from copycat.live.stock_source import in_trading_hours_now
+from copycat.live.stock_source import in_stock_heal_window_now
 from tests.helpers.tc4_fakes import FakeApi, ok
 
 
@@ -190,7 +190,7 @@ class TestSegmentLegGate:
 
 
 class TestTwsLegClock:
-    """台積電腿吃的那把牆鐘 = 個股 session 既有的 `in_trading_hours_now`(不另立第二張表)。
+    """台積電腿吃的那把牆鐘 = 個股 session 既有的 `in_stock_heal_window_now`(不另立第二張表)。
 
     **不是** index session 那把 `in_index_heal_window_now`(13:25 關):現貨腿在收盤試撮期
     13:25–13:30 仍有簿更新推播(TradeStatus=1),看門狗留到 13:35 才有意義(pr-126 F-01)。
@@ -204,7 +204,7 @@ class TestTwsLegClock:
             (8, 30, True),  # 試撮開始(現貨這段有推播,閘要開著才救得到)
             (13, 24, True),
             (13, 25, True),  # 收盤試撮起:個股仍有簿更新推播,看門狗照開(只有 index session 在這裡下班)
-            (13, 26, True),  # 13:25 / 13:26 / 13:30 三列擋「`_TRADING_END` 被改回 13:25」(value-only revert)
+            (13, 26, True),  # 13:25 / 13:26 / 13:30 三列擋「`_STOCK_HEAL_END` 被改回 13:25」(value-only revert)
             (13, 30, True),  # 收盤撮合那一分仍開:收盤那筆推播晚到時看門狗還在
             (13, 35, False),  # 上界 end-exclusive:13:35:00 起關。這列只擋 `<` → `<=` 復原,
             #                   對 value-only revert **不**敏感(pr-126 F-06;擋 13:25 復原的是上面 13:25 / 13:26 / 13:30)
@@ -215,7 +215,7 @@ class TestTwsLegClock:
         ],
     )
     def test_stock_cash_session_only(self, hh: int, mm: int, expected: bool) -> None:
-        assert in_trading_hours_now(datetime.time(hh, mm)) is expected
+        assert in_stock_heal_window_now(datetime.time(hh, mm)) is expected
 
 
 class TestTwsLegWindow:

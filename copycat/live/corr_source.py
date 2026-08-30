@@ -58,7 +58,7 @@ def segment_leg_gate(
     自己盤中的海外腿一起關掉(台灣連假時 SGX / CME 照開)。
 
     - `TC.F.TWF.` → `taifex`(台期交日夜盤,prod 帶交易日曆 AND `in_futures_session_now`)
-    - `TC.S.TWS.` → `tws`(台股現貨日盤,prod 帶交易日曆 AND `in_trading_hours_now`)
+    - `TC.S.TWS.` → `tws`(台股現貨日盤,prod 帶交易日曆 AND `in_stock_heal_window_now`)
     - 其餘(SGX / CME / CBOT / CFE / OSE)→ 恆 True
 
     **不做「猜海外時段」**:CME/SGX/CFE/OSE 的時段本專案沒有實測事實(OSE 只有 skill 記的
