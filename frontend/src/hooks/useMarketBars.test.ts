@@ -147,10 +147,12 @@ describe("useMarketBars", () => {
   });
 });
 
-// bug/daily-bars-siblings-rollover(next-time 08-30 節第 3 條;pr-151-review F-03):看盤日常 = preview
-// 整天掛著,跨過午夜後日 / 週 / 月 K 那份 cache 不會失效(`staleTime: Infinity` + 不輪詢)→ 台股綜合 tab 的
-// K 線停在昨天早上抓的快照(末根 = 昨天的部分 bar、沒有今天那根)。界 = 日曆午夜 + slack,由來與三條鐵律見
-// `useFuturesBars.ts::msUntilDayRollover`(期指那支先修,PR #151 / #155);本 describe 沿它的最後兩個 describe。
+// bug/daily-bars-siblings-rollover(next-time 08-30 節第 3 條;pr-151-review F-03):preview 整天掛著跨過
+// 午夜後日 / 週 / 月 K 停在昨天的快照。症狀、界(日曆午夜 + slack)與三條鐵律 (a)(b)(c) 都寫在
+// `useFuturesBars.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts` 最後兩個 describe。
+// 鐵律對應的測試:(a) 界嚴格在 from 之後 → 「slack 窗內每 100 ms 重繪」;(b) interval 不吃
+// `dataUpdatedAt` → 「同一秒重繪 … 跨秒恰 1 次」後半的生效自檢(`dataUpdatedAt` 版跨秒回同值 → 0 ≠ 1;
+// 本 hook 無 `subscribed`,沒有期指那條「20:00 切回武裝 15 h」的直接情境);(c) 秒級量化 → 同一條前半。
 describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-rollover)", () => {
   /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起回「D 完成 + D+1 部分」。 */
   const D1_ISO = "2026-08-06";
@@ -163,12 +165,19 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
     { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
   ];
-  function stubFetchByWallClock(dBars: readonly object[], d1Bars: readonly object[]) {
+  /** D+1 起先失敗 `failTimes` 發(503),之後照牆鐘回快照。 */
+  function stubFetchByWallClock(failTimes = 0) {
+    let failLeft = failTimes;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        const bars = isoLocalDate(new Date()) >= D1_ISO ? d1Bars : dBars;
+        const d1 = isoLocalDate(new Date()) >= D1_ISO;
+        if (d1 && failLeft > 0) {
+          failLeft -= 1;
+          return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
+        }
+        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
         return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta: META }));
       }),
     );
@@ -189,7 +198,7 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   it("日 K:人一直在 tab 上跨過午夜 → 00:01 重抓一次,cache 不停在昨天的快照", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
+    stubFetchByWallClock();
     const { result } = renderHook(() => useMarketBars("TWSE", "day"), {
       wrapper: wrapper(newClient()),
     });
@@ -210,42 +219,33 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
 
   // 週 / 月 K 與日 K 同一把 key 形狀(`["market-bars", key, tf]`)、同一條 staleTime / interval 分支:
   // 當週 / 當月那根 bar 每個交易日都會變,界同樣是日曆午夜。
-  it("週 K:跨過午夜同樣在 00:01 重抓(D / W / M 同一條分支)", async () => {
+  it.each([
+    ["week", "W"],
+    ["month", "M"],
+  ] as const)("%s(tf=%s):跨過午夜同樣在 00:01 重抓(D / W / M 同一條分支)", async (mode, tf) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
-    renderHook(() => useMarketBars("OTC", "week"), { wrapper: wrapper(newClient()) });
+    stubFetchByWallClock();
+    renderHook(() => useMarketBars("OTC", mode), { wrapper: wrapper(newClient()) });
     await vi.advanceTimersByTimeAsync(0);
-    expect(count("W")).toBe(1);
+    expect(count(tf)).toBe(1);
     await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 30_000); // 00:00:30
-    expect(count("W")).toBe(1);
+    expect(count(tf)).toBe(1);
     await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
-    expect(count("W")).toBe(2);
+    expect(count(tf)).toBe(2);
   });
 
-  // 午夜那一發失敗(TC4 忙 / 後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,
-  // 整個交易日就停在昨天的基準 —— 與修前同一個症狀(pr-151-review F-05 同款)。
+  // 午夜那一發失敗(後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,整個交易日就
+  // 停在昨天的基準 —— 與修前同一個症狀(pr-151-review F-05 同款)。
   it("日 K:午夜那一發失敗 → 60 s 後再試,成功即回到「下一個午夜」節奏", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    let failLeft = 2; // 本體 + retry:1 各失敗一次
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        urls.push(String(url));
-        if (isoLocalDate(new Date()) >= D1_ISO && failLeft > 0) {
-          failLeft -= 1;
-          return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
-        }
-        const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
-        return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta: META }));
-      }),
-    );
+    stubFetchByWallClock(2); // 本體 + retry:1 各失敗一次
     const { result } = renderHook(() => useMarketBars("TWSE", "day"), {
       wrapper: wrapper(newClient()),
     });
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 60_000 + 5_000); // 00:01:05:本體失敗 + 1 s 後 retry 失敗
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 60_000 + 5_000); // 00:01:05:本體 + 1 s 後 retry 皆失敗
     expect(count("D")).toBe(3);
     expect(result.current.isError).toBe(true);
     expect(result.current.data?.bars).toEqual(D_SNAPSHOT); // v5:refetch 失敗保留舊 data
@@ -262,7 +262,7 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   it("日 K:active=false 跨過午夜再切回 → 切回後資料是 D+1 那份;同日曆日內切回不重抓", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
+    stubFetchByWallClock();
     const { result, rerender } = renderHook(
       ({ active }) => useMarketBars("TWSE", "day", active),
       { initialProps: { active: true }, wrapper: wrapper(newClient()) },
@@ -283,12 +283,30 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
+  // review round 1 Spec P-F2:午夜那發失敗恰恰最常發生在人不在的時候(後端沒起來);60 s 重試若吃
+  // `active`,人在個股頁就整晚凍結、早上切回還要再等 60 s。日 K 這條整段不吃 `active`。
+  it("日 K:active=false 時午夜那一發失敗 → 人還沒切回就在 60 s 後重試成功", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    stubFetchByWallClock(2);
+    const { result } = renderHook(() => useMarketBars("TWSE", "day", false), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 60_000 + 5_000); // 00:01:05:兩發皆失敗
+    expect(count("D")).toBe(3);
+    expect(result.current.isError).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000); // 00:02:05:人仍不在 tab 上
+    expect(count("D")).toBe(4);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+  });
+
   // TQ 預設 `refetchIntervalInBackground: false`:分頁在背景時 interval tick 被 focus 閘跳過 ——
   // 回前景那一刻要靠「已過期」+ refetchOnWindowFocus 補上,不是靠 interval。
   it("日 K:分頁在背景跨過午夜 → 回前景那一刻重抓", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
+    stubFetchByWallClock();
     const { result } = renderHook(() => useMarketBars("TWSE", "day"), {
       wrapper: wrapper(newClient()),
     });
@@ -303,12 +321,11 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
-  // pr-151-review F-01 / F-02:TQ 每一次 render 都重算 `refetchInterval` 並在回值變動時重排計時器;
-  // MarketPane 每個指數 tick 重繪一次 —— `renderHook` 推進期間不重繪量不到這一維,用 `rerender` 補。
-  it("日 K:slack 窗內(00:00:10 → 00:00:50)每 100 ms 重繪一次 → 00:01:01 照樣重抓,不被推到隔天", async () => {
+  // 鐵律 (a):MarketPane 每個指數 tick 重繪一次,`renderHook` 推進期間不重繪量不到這一維,用 `rerender` 補。
+  it("日 K:slack 窗內(00:00:10 → 00:00:50)每 100 ms 重繪 → 00:01:01 照樣重抓,不被推到隔天", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
+    stubFetchByWallClock();
     const { result, rerender } = renderHook(() => useMarketBars("TWSE", "day"), {
       initialProps: { tick: -1 },
       wrapper: wrapper(newClient()),
@@ -325,10 +342,12 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     expect(count("D")).toBe(2);
   });
 
+  // 鐵律 (c) 前半 + (b) 後半:跨秒必須看到 1 是生效自檢(spy 真的看得到 TQ 的 setInterval),
+  // 也是 `dataUpdatedAt` 版的死穴(跨 render 恆同值 → 0)。
   it("日 K:同一秒內重繪 50 次 → setInterval 零重排(秒級量化);跨秒重繪一次 → 恰 1 次", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
-    stubFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
+    stubFetchByWallClock();
     const { rerender } = renderHook(() => useMarketBars("TWSE", "day"), {
       initialProps: { tick: -1 },
       wrapper: wrapper(newClient()),
