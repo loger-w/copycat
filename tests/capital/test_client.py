@@ -44,9 +44,9 @@ from copycat.server.audit import AuditWriteError
 from copycat.stkfut_map import write_map
 from copycat.trading_calendar import TradingCalendar
 from copycat.live.trade_models import BrokerRejectedError
-from tests.capital.balance_rows import RAW_C_MARGIN, RAW_T_BOUGHT
+from tests.capital.balance_rows import RAW_C_MARGIN, RAW_T_BORROWLESS_SHORT, RAW_T_BOUGHT
 from tests.capital.fake_com import FakeCom, RecordingCom, RejectingCom
-from tests.capital.profit_rows import PNL_3357_MARGIN, RAW_PNL_MARGIN, pnl_variant
+from tests.capital.profit_rows import PNL_3357_MARGIN, RAW_PNL_MARGIN, RAW_PNL_ROW, pnl_variant
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -2232,9 +2232,6 @@ def test_borrowless_short_profit_row_labeled_cash_pairs_with_daytrade_sell_row(
     """無券空單:庫存段是現股 T 列負股數(parse 端歸 daytrade_sell),損益段標籤仍是「現股」
     (2026-08-28 prod 8358 :2427 實錄:4 列收齊、沒印「種類不符」)—— 回填要配到 daytrade_sell 那列,
     否則空單 avg / pnl 全 null,比校準前退步。"""
-    from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
-    from tests.capital.profit_rows import RAW_PNL_ROW
-
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client, futures_account=None)
@@ -2251,3 +2248,30 @@ def test_borrowless_short_profit_row_labeled_cash_pairs_with_daytrade_sell_row(
     assert p.avg_price == 512.0 and p.avg_source == "broker"
     assert not [r for r in caplog.records if "種類不符" in r.message]
     assert client.store.position_for("8358", "cash") is None
+
+
+def test_borrowless_short_row_logs_info_once_per_stock_and_day(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """F-11(pr-152 review):parser 那行是 DEBUG(每輪洗版),只有快照、沒成交事件的 session(重啟後帶空單開機)
+    要有一條 INFO 說「這列被歸成無券空單、平倉會送現股買」—— 每 (股號, 交易日) 一次,同一列連餵兩輪不重印。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client, futures_account=None)
+
+    def one_round() -> None:
+        client._balance_due = time.monotonic() - 1.0
+        client._maybe_query_balance()
+        client._handle_balance(RAW_T_BORROWLESS_SHORT)
+        client._handle_balance("##")
+        client._handle_profit("000,查詢成功")
+        client._handle_profit("##,,,,")
+
+    with caplog.at_level("INFO"):
+        one_round()
+        one_round()
+    hits = [
+        r for r in caplog.records
+        if "無券空單" in r.message and "8358" in r.message and r.levelno == logging.INFO
+    ]
+    assert len(hits) == 1, [r.message for r in hits]

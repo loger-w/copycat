@@ -200,6 +200,28 @@ describe("CapitalPositionsList", () => {
     expect(bodies[1]).toEqual({ market: "sec", key: "2330", price: 985, qty: 3, kind: "margin" });
   });
 
+  it("無券空單:確認窗反向單標「買回 1 張(現股)」—— 部位種類與實送交易別第一次分家(pr-152 review F-14)", async () => {
+    const bodies: unknown[] = [];
+    mockFetch({
+      "/api/capital/status": () => json(STATUS),
+      "/api/capital/position/close": (init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return json({ ok: true, code: 0, message: "ok", seq_no: "007" });
+      },
+      "/api/capital/positions": () =>
+        json({ positions: [pos({ kind: "daytrade_sell", qty: -1, avg_price: 512 })] }),
+    });
+    renderList("sec", () => 523);
+    await screen.findByText(/2330/);
+    expect(screen.getByText("無")).toBeTruthy(); // 列內短標籤
+    fireEvent.click(screen.getByText("平倉"));
+    expect(screen.getByText("無券")).toBeTruthy(); // 種類列
+    expect(screen.getByText("買回 1 張(現股)")).toBeTruthy(); // 反向單列帶交易別:送的是現股買,不是「無券買」
+    fireEvent.click(screen.getByText("確認"));
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toEqual({ market: "sec", key: "2330", price: 523, qty: 1, kind: "daytrade_sell" });
+  });
+
   it("同檔兩列的 React key 唯一(複合鍵),無 duplicate key warning", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     mockFetch({

@@ -825,7 +825,12 @@ class TestPositionClose:
         with make_client(monkeypatch, capital=cap) as client:
             _wait_status(cap)
             cap.store.set_positions(
-                [Position(market="sec", stock_no="8358", qty=-1, kind="daytrade_sell")]
+                [
+                    Position(market="sec", stock_no="8358", qty=-1, kind="daytrade_sell"),
+                    # 融資多 + 現股無券空是真實可達的共存態:兩列並存讓 kind=None 的唯一列 fallback 不成立,
+                    # route 掉 kind 透傳 / 精確鍵失效 → 兩列歧義 403,這條才紅(pr-152 review F-10)
+                    Position(market="sec", stock_no="8358", qty=5, kind="margin"),
+                ]
             )
             res = client.post(
                 "/api/capital/position/close",

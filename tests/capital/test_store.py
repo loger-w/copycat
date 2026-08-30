@@ -8,9 +8,12 @@ import dataclasses
 
 import pytest
 
+from copycat.capital.balance import parse_balance_line
+from copycat.capital.close import build_close_order
+from copycat.capital.models import Position, PositionCloseRequest
 from copycat.capital.reply import ReplyRecord, parse_onnewdata
-from copycat.capital.models import Position
 from copycat.capital.store import CapitalStore
+from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
 
 SEQ_A = "2313091378319"
 SEQ_B = "2313092917885"
@@ -853,9 +856,6 @@ def _fill_8358(seq: str, bs: str, qty: str, price: str) -> ReplyRecord:
 
 
 def _borrowless_short_store() -> CapitalStore:
-    from tests.capital.balance_rows import RAW_T_BORROWLESS_SHORT
-    from copycat.capital.balance import parse_balance_line
-
     s = CapitalStore()
     s.set_positions([])
     assert s.apply_reply(_fill_8358(SEQ_A, "S08R2", "1000", "512.0000")) is True  # 無券賣要套得上
@@ -875,9 +875,6 @@ def test_borrowless_short_counts_today_qty_after_broker_snapshot() -> None:
 
 def test_borrowless_short_position_is_closable_with_cash_buy() -> None:
     """群益負現股列 = 無券空單:平倉鍵要能組出「現股買」回補單(交易所自動沖銷),不再鎖住。"""
-    from copycat.capital.close import build_close_order
-    from copycat.capital.models import PositionCloseRequest
-
     s = _borrowless_short_store()
     p = s.position_for("8358")
     assert p is not None
@@ -909,3 +906,35 @@ def test_cash_buy_offsets_borrowless_short_first_then_opens_long_with_residue() 
     cash = s.position_for("8358", "cash")
     assert cash is not None and cash.qty == 2 and cash.avg_price == 523.0
     assert cash.avg_source == "fill"
+
+
+# ---- pr-152 review 收修(2026-08-30)----
+
+
+def test_borrowless_sell_offsets_cash_long_first_then_opens_short_with_residue() -> None:
+    """F-02:持現股多單時從閃電梯送「無券」賣(回報 idx6 S08):先沖同股號現股多單(交易所對同股號自動
+    沖銷,與買向 B00 先沖空單對稱),餘量才開 daytrade_sell 空單列 —— 否則多長一列已解鎖平倉的空單,
+    快照落地前 ~2 s 點下去就是一張非預期的現股買。"""
+    s = CapitalStore()
+    s.set_positions([Position(market="sec", stock_no="8358", qty=5, avg_price=500.0, avg_source="broker")])
+    assert s.apply_reply(_fill_8358(SEQ_A, "S08R2", "1000", "512.0000")) is True
+    cash = s.position_for("8358", "cash")
+    assert cash is not None and cash.qty == 4 and cash.avg_price == 500.0  # 減碼:均價不動
+    assert s.position_for("8358", "daytrade_sell") is None
+    assert s.apply_reply(_fill_8358(SEQ_B, "S08R2", "6000", "513.0000")) is True
+    assert s.position_for("8358", "cash") is None
+    ds = s.position_for("8358", "daytrade_sell")
+    assert ds is not None and ds.qty == -2 and ds.avg_price == 513.0 and ds.avg_source == "fill"
+    assert ds.today_qty == 2
+
+
+def test_borrowless_buy_side_fill_does_not_count_into_daytrade_today_qty() -> None:
+    """F-08:無券**買向**(B08)在 `_apply_fill_locked` 已拒套(無部位語意),`_today_net_lots_locked`
+    對 daytrade_sell 桶要同一把尺 —— 只計賣向;否則 B08 被算成 +1 淨買進,空單的 today_qty 靜默少 1。"""
+    s = _borrowless_short_store()
+    assert s.apply_reply(_fill_8358(SEQ_B, "B08R2", "1000", "520.0000")) is False
+    row = parse_balance_line(RAW_T_BORROWLESS_SHORT)
+    assert row is not None
+    s.set_positions([row])  # 拒套的成交仍在聚合裡;下一輪快照落地會重算 today_qty —— 這一步才是 finding 顯形點
+    ds = s.position_for("8358", "daytrade_sell")
+    assert ds is not None and ds.qty == -1 and ds.today_qty == 1

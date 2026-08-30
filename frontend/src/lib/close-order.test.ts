@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { KIND_TEXT, closeBodyOf, kindOf } from "@/lib/close-order";
+import { KIND_TEXT, closeBodyOf, closeKindLabel, kindOf } from "@/lib/close-order";
 import type { CapitalPosition } from "@/types";
 
 function pos(overrides: Partial<CapitalPosition> = {}): CapitalPosition {
@@ -133,5 +133,20 @@ describe("closeBodyOf(SC-10 送單面;兩呼叫端同形)", () => {
     expect(futKeys).toEqual(["key", "market", "price", "qty"]);
     expect(secKeys).toEqual(["key", "kind", "market", "price", "qty"]);
     expect(secKeys.filter((k) => !futKeys.includes(k))).toEqual(["kind"]);
+  });
+});
+
+// ---- pr-152 review F-14(2026-08-30)----
+describe("closeKindLabel(確認窗反向單的交易別;鏡像後端 close._CLOSE_MAP 的回補單種)", () => {
+  it("現股 / 融資 / 融券 回補同種;無券空單回補是現股買 —— 唯一與部位種類不同的組合", () => {
+    expect(closeKindLabel("cash")).toBe("現股");
+    expect(closeKindLabel("margin")).toBe("融資");
+    expect(closeKindLabel("short")).toBe("融券");
+    expect(closeKindLabel("daytrade_sell")).toBe("現股");
+  });
+
+  it("值域外字串 → null(不猜單種,確認窗不印交易別)", () => {
+    expect(closeKindLabel("borrowless")).toBe(null);
+    expect(closeKindLabel("")).toBe(null);
   });
 });
