@@ -41,7 +41,13 @@ export const BARS_FETCH_TIMEOUT_MS = 30_000;
  *  刻意不節流:每一趟慢請求都是一筆證據,60 s 一輪的量級不會洗版。 */
 export const BARS_SLOW_WARN_MS = 15_000;
 
-/** 日 K 的有效期 = **同一個本機日曆日**(bug/futures-daily-bars-rollover)。
+/** 午夜過後再等這麼久才問日 K。**沒有硬依據**:同一台機器上前後端牆鐘無時差,後端
+ *  `date.today()` 在 00:00:00 就翻頁;這一分鐘只擋計時器排程誤差與「恰在同一毫秒」那類極端
+ *  情況,失效方向安全(最壞是新基準晚一分鐘到)。值由測試釘住(00:00:30 仍不打、00:01:01 打)。 */
+export const DAY_ROLLOVER_SLACK_MS = 60_000;
+
+/** 日 K 的有效期 = **同一個本機日曆日**(bug/futures-daily-bars-rollover):`from` 起算,到
+ *  它之後的第一個日曆日 00:00 + `DAY_ROLLOVER_SLACK_MS` 的毫秒數。
  *
  *  舊碼 `staleTime: Infinity` + 不輪詢:看盤日常是 preview 整天掛著(CLAUDE.md §1),跨過午夜
  *  那份 cache 永不失效 → 新交易日的 CDP / MA 疊線(`lib/futures-overlay.ts`,基準 = 錨定日前
@@ -50,22 +56,23 @@ export const BARS_SLOW_WARN_MS = 15_000;
  *
  *  **界是日曆午夜,不是 15:00 錨定日翻頁**:後端 `server/bars.py::build_period` 的日 K cache
  *  鍵是 `date.today()`,15:01–24:00 之間再怎麼問都是同一份(那一段留 next-time);午夜一過
- *  後端才有新料。三條路徑同一把尺:
+ *  後端才有新料。三條路徑同一把尺(界的由來只寫這一處,helper 與測試指過來):
  *  - `refetchInterval`:人一直在 tab 上 → 午夜到了自己打一發(函式形式,每次結果落地後
- *    重算到下一個午夜;不是固定 24 h —— 那會把「掛載時刻」當午夜);
- *  - `staleTime`:切走的 observer 是退訂(沒計時器)、背景分頁 interval 被跳過(TQ 預設
- *    `refetchIntervalInBackground: false`)—— 這兩條都靠「這份是昨天抓的」才能在切回 /
- *    回前景時補上。以 `dataUpdatedAt` 為起點算到它之後的第一個午夜,不是以現在算(否則
- *    每次判定都會把過期點往後推)。
- *  `DAY_ROLLOVER_SLACK_MS`:午夜過後再等一分鐘才問 —— 同一台機器上前後端牆鐘無時差,
- *  這一分鐘擋的是計時器早觸發那類秒級抖動(早一秒問到的還是昨天那份,而下一次是 24 h 後)。 */
-export const DAY_ROLLOVER_SLACK_MS = 60_000;
-
-/** `from` 起算,到「下一個日曆日 + slack」的毫秒數。`from` = 0(尚無資料)→ 0:立即過期。 */
+ *    重算到下一個午夜;不是固定 24 h —— 那會把「掛載時刻」當午夜,20:00 開的分頁整個
+ *    次日交易日都用舊基準);
+ *  - `staleTime`:切走的 observer 是退訂(沒計時器)、背景分頁的 interval tick 被 focus 閘
+ *    跳過(TQ 預設 `refetchIntervalInBackground: false`)—— 這兩條都靠「這份是昨天抓的」
+ *    才能在切回 / 回前景時補上。以 `dataUpdatedAt` 為起點算到它之後的第一個午夜,不是以
+ *    現在算(否則每次判定都會把過期點往後推)。
+ *  尚無資料(`dataUpdatedAt` = 0)不用守:TQ `isStaleByTime` 對 `!updatedAt` 直接判過期。 */
 export function msUntilDayRollover(from: number): number {
-  if (from <= 0) return 0;
   return msUntilNextLocalDate(new Date(from)) + DAY_ROLLOVER_SLACK_MS;
 }
+
+/** 日 K 那一發失敗(`retry: 1` 用完)後的重試節奏。沒有這條的話 interval 會照樣重算成
+ *  「到下一個午夜」—— 00:01 那一發碰上 TC4 忙就整個交易日停在昨天的基準,與修前同一個症狀。
+ *  拿分 K 的 60 s 同口徑,成功落地即回到下一個午夜。 */
+const DAY_ERROR_RETRY_MS = POLL_MS;
 
 /** 支援 `session=allday` 的標的 = 期指三兄弟。取自 `MarketKey` 而不是另寫一份 union:
  *  後端 `MARKET_KEYS` 是同一份值域,兩處各留一份必漂移。 */
@@ -103,8 +110,8 @@ async function fetchFuturesBars(
  *  不會 —— cache 裡的舊圖留著等新料。**前提是 cache 還在**:退訂後 observer 歸零,TQ 預設
  *  `gcTime` 5 分鐘就回收,而 user 配方正是「個股頁待很久」→ 這幾把 query 給 `gcTime: Infinity`
  *  (鍵集合有界:3 商品 × 2 tf;review round 1 兩軸各一條 P1)。分 K 與日 K 同一道 gate
- *  (日 K 同一日曆日內重新 subscribe 不重抓;跨了午夜才重抓,見 `msUntilDayRollover`)。**不用 `useEffect`**(frontend-conventions:
- *  server state 一律 TQ)。副作用(刻意):queryFn 吃了 TQ 的 signal 後,切走 tab 時在飛的那趟
+ *  (日 K 同一日曆日內重新 subscribe 不重抓;跨了午夜才重抓,見 `msUntilDayRollover`)。
+ *  **不用 `useEffect`**(frontend-conventions:server state 一律 TQ)。副作用(刻意):queryFn 吃了 TQ 的 signal 後,切走 tab 時在飛的那趟
  *  會被 TQ 主動中止(`cancel({revert:true})`),不再讓它跑完落 cache —— 切回時反正立即重抓。
  *
  *  預設 `true`:獨立使用與既有呼叫路徑不因這道 gate 靜默停更(同 FuturesLadder 的
@@ -138,11 +145,12 @@ export function useFuturesBars(
     // 函式形式:TQ 每次結果落地都重新求值 → 日盤收 / 夜盤開的開關、日 K 的下一個午夜
     // 都不依賴外部 re-render。`active` 這一維不在這裡:退訂的 observer 根本沒有計時器
     //(`subscribed` 是唯一的閘)。
-    refetchInterval: () =>
-      isMinute
-        ? inFuturesAllDayHours()
-          ? POLL_MS
-          : false
-        : msUntilDayRollover(Date.now()),
+    refetchInterval: (q) => {
+      if (!isMinute) {
+        // refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)
+        return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
+      }
+      return inFuturesAllDayHours() ? POLL_MS : false;
+    },
   });
 }

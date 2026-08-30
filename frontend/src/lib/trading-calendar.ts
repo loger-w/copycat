@@ -94,10 +94,7 @@ export function nextTradingDayIso(iso: string, holidays: ReadonlySet<string> = h
 }
 
 /** `from` 到**下一個本機日曆日 00:00** 的毫秒數(恆 > 0;`from` 恰在午夜 → 整整一天)。
- *
- *  給「一份 cache 只在同一個日曆日內有效」的 query 當 `staleTime` / `refetchInterval`
- *  (`hooks/useFuturesBars` 的日 K):後端 `server/bars.py::build_period` 的日 K cache 鍵是
- *  `date.today()`,午夜一過才有新料可拿 —— 前端沒有理由更早問、也沒有理由更晚問。
+ *  唯一讀者 `hooks/useFuturesBars.ts::msUntilDayRollover`(為什麼界是日曆午夜寫在那裡)。
  *  以本機 `Date` 進位(不用 UTC):看盤機 = 台北,與 `isoLocalDate` 同一把尺;夏令時間台灣沒有。 */
 export function msUntilNextLocalDate(from: Date): number {
   const next = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1, 0, 0, 0, 0);
