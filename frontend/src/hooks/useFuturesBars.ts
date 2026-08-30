@@ -44,8 +44,7 @@ export const BARS_SLOW_WARN_MS = 15_000;
 /** 午夜過後再等這麼久才問日 K。**沒有硬依據**:同一台機器上前後端牆鐘無時差,後端
  *  `date.today()` 在 00:00:00 就翻頁;這一分鐘只擋計時器排程誤差與「恰在同一毫秒」那類極端
  *  情況,失效方向安全(最壞是新基準晚一分鐘到)。值由測試釘住(00:00:30 仍不打、00:01:01 打)。
- *  ⚠ slack 是「界」的一部分、不是加在界之後的等待(見 `msUntilDayRollover`):寫成
- *  「到下一個午夜 + slack」的話,00:00–00:01 這 60 秒內求值會跳到「明天」—— pr-151-review F-01。 */
+ *  slack 是「界」的一部分、不是加在界之後的等待 —— 推導見 `msUntilDayRollover`。 */
 export const DAY_ROLLOVER_SLACK_MS = 60_000;
 
 /** 日 K 的有效期 = **同一個本機日曆日**(bug/futures-daily-bars-rollover):`from` 起算,到
@@ -61,9 +60,9 @@ export const DAY_ROLLOVER_SLACK_MS = 60_000;
  *  後端才有新料。三條路徑同一把尺(界的由來只寫這一處,helper 與測試指過來):
  *  - `refetchInterval`:人一直在 tab 上 → 午夜到了自己打一發(函式形式,每次結果落地後
  *    重算到下一個午夜;不是固定 24 h —— 那會把「掛載時刻」當午夜,20:00 開的分頁整個
- *    次日交易日都用舊基準)。**而且每一次 render 也重算**:TQ v5 的 `useBaseQuery` 每 render
- *    都 `observer.setOptions(...)`(useBaseQuery.js:69-70),回值一變就 clear + 重排計時器
- *    (queryObserver.js:115-118);`FuturesChart` 每則 WS 訊息重繪一次、夜盤正在跑 —— 所以
+ *    次日交易日都用舊基準)。**而且每一次 render 也重算**:react-query 的 `useBaseQuery` 每 render
+ *    都 `observer.setOptions(...)`,`QueryObserver.setOptions` 見回值一變就 clear + 重排計時器
+ *    (@tanstack/query-core 5.101 核過);`FuturesChart` 每則 WS 訊息重繪一次、夜盤正在跑 —— 所以
  *    (a) 界必須**嚴格在 from 之後**(00:00–00:01 內求值回「到今天 00:01」,不是「到明天」;
  *    pr-151-review F-01:修前那 60 秒內任一重繪就把那一發推到隔天,主情境沒修好);
  *    (b) 要以「現在」算,**不以 `dataUpdatedAt`**:那版跨 render 穩定,但 setInterval 的週期從
@@ -73,13 +72,15 @@ export const DAY_ROLLOVER_SLACK_MS = 60_000;
  *    跳過(TQ 預設 `refetchIntervalInBackground: false`)—— 這兩條都靠「這份是昨天抓的」
  *    才能在切回 / 回前景時補上。以 `dataUpdatedAt` 為起點算到它之後的第一個午夜,不是以
  *    現在算(否則每次判定都會把過期點往後推)。
- *  尚無資料不用守:TQ `isStaleByTime` 對 `state.data === undefined` 直接判過期(query.js:128),
+ *  尚無資料不用守:TQ `Query.isStaleByTime` 第一條對 `state.data === undefined` 直接判過期,
  *  `dataUpdatedAt` 要到第三條 `timeUntilStale` 才用到;本 query 無 `initialData` / `setQueryData`,
  *  `data` 有值 ⇔ `dataUpdatedAt > 0`(pr-151-review F-04 改正:不是 `!updatedAt`)。
  *
  *  算法:界 B_k = 日曆日 k 的 00:00 + slack;回「第一個 B_k > from」− from。`from − slack` 到下一個
  *  午夜的距離正好等於 `from` 到下一個 B_k 的距離,且 `msUntilNextLocalDate` 恆 > 0 保證嚴格在後。
- *  再 ceil 到整秒:回值 ≥ 真距離(不會早於界打)、最多晚 1 s;同一秒內重繪回同值。 */
+ *  再 ceil 到整秒:回值 ≥ 真距離(不會早於界打)、最多晚 1 s;同一秒內重繪回同值。
+ *  `staleTime` 吃同一支(以 `dataUpdatedAt` 起算)的連帶:資料若在 00:00–00:01 內落地(error 重試那條路),
+ *  stale 點是**今天** 00:01 而不是明天 —— 有界(那一發落地後下一界即明天,不成迴圈)、方向安全(多打一發)。 */
 export function msUntilDayRollover(from: number): number {
   const ms = msUntilNextLocalDate(new Date(from - DAY_ROLLOVER_SLACK_MS));
   return Math.ceil(ms / 1000) * 1000;
