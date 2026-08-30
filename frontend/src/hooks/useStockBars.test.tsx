@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   useStockBars,
   type BarsPayload,
 } from "@/hooks/useStockBars";
+import { isoLocalDate } from "@/lib/trading-calendar";
 import { inTradingHours } from "@/lib/trading-hours";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -22,6 +23,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  focusManager.setFocused(undefined); // 跨日測試手動切過 focus 的還原,避免外溢到別檔
 });
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -180,7 +183,7 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
     expect(barsCalls()).toBe(2);
   });
 
-  it("tf=D 空 + ok:前進 60s 仍只打一次(既有 staleTime ∞ 語意不變)", async () => {
+  it("tf=D 空 + ok:前進 60s 仍只打一次(同日曆日內不重抓;界見 msUntilDayRollover)", async () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ bars: [], status: "ok" })),
     );
@@ -203,5 +206,176 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
     expect(barsCalls()).toBe(1);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(barsCalls()).toBe(1);
+  });
+});
+
+// bug/daily-bars-siblings-rollover(next-time 08-30 節第 3 條;pr-151-review F-03):看盤日常 = preview
+// 整天掛著,個股頁日 K 跨過午夜後那份 cache 不會失效(`staleTime: Infinity` + `barsPollInterval` 對日 K
+// 回 false)→ K 線停在昨天早上抓的快照(末根 = 昨天的部分 bar、沒有今天那根)。個股 overlay(CDP / MA)
+// 走後端 `/api/stock/overlay` 的 `date < today` + queryKey 帶日期,不受影響 —— 症狀只在 K 線本身。
+// 界 = 日曆午夜 + slack,由來與三條鐵律見 `useFuturesBars.ts::msUntilDayRollover`(期指那支先修,
+// PR #151 / #155);本 describe 沿它的最後兩個 describe。
+describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", () => {
+  /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起回「D 完成 + D+1 部分」。 */
+  const D1_ISO = "2026-08-06";
+  const D_SNAPSHOT = [
+    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
+    { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
+  ];
+  const D1_SNAPSHOT = [
+    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
+    { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
+    { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
+  ];
+  function stubFetchByWallClock() {
+    fetchMock.mockImplementation(async () => {
+      const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
+      return new Response(JSON.stringify({ bars, status: "ok" }));
+    });
+  }
+  const dayCalls = () => urls().filter((u) => u.includes("tf=D")).length;
+  /** 檔案頂端的 `wrapper` 每次 render 都 new 一個 QueryClient —— rerender 會換 client、observer 重建、
+   *  重抓一發,量不到「同一份 cache 跨 render」。這裡固定一顆 client。 */
+  function stableWrapper() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  }
+  /** 模擬 StockChart 吃個股 WS 的重繪節奏:每 `everyMs` 一次 rerender、持續 `forMs`。 */
+  async function rerenderBurst(
+    rerender: (p: { tick: number }) => void,
+    forMs: number,
+    everyMs: number,
+  ) {
+    for (let t = 0; t < forMs; t += everyMs) {
+      rerender({ tick: t });
+      await vi.advanceTimersByTimeAsync(everyMs);
+    }
+  }
+
+  it("人一直在個股頁跨過午夜 → 00:01 重抓一次,cache 不停在昨天的快照", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
+    stubFetchByWallClock();
+    const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      wrapper: stableWrapper(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayCalls()).toBe(1);
+    expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(14 * 60 * 60_000 + 59 * 60_000); // 23:59
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(dayCalls()).toBe(2);
+    // 使用者的症狀:D+1 早上 K 線末根仍是昨天 09:00 那份(D bar 停在部分值、沒有 D+1 那根)
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同一日曆日內不再打
+    expect(dayCalls()).toBe(2);
+  });
+
+  // 午夜那一發失敗(TC4 忙 / 後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,
+  // 整個交易日就停在昨天的快照 —— 與修前同一個症狀(pr-151-review F-05 同款)。
+  it("午夜那一發失敗 → 60 s 後再試,成功即回到「下一個午夜」節奏", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    let failLeft = 2; // 本體 + retry:1 各失敗一次
+    fetchMock.mockImplementation(async () => {
+      if (isoLocalDate(new Date()) >= D1_ISO && failLeft > 0) {
+        failLeft -= 1;
+        return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
+      }
+      const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
+      return new Response(JSON.stringify({ bars, status: "ok" }));
+    });
+    const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      wrapper: stableWrapper(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 60_000 + 5_000); // 00:01:05:本體失敗 + 1 s 後 retry 失敗
+    expect(dayCalls()).toBe(3);
+    expect(result.current.isError).toBe(true);
+    expect(result.current.data?.bars).toEqual(D_SNAPSHOT); // v5:refetch 失敗保留舊 data
+    await vi.advanceTimersByTimeAsync(60_000); // 60 s 重試
+    expect(dayCalls()).toBe(4);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // 成功後不再每 60 s 打
+    expect(dayCalls()).toBe(4);
+  });
+
+  // SC-4 的 20 s 空態重試優先於日界:空 + 非 ok 在 23:59:50 掛上,20 s 後(00:00:10,slack 內)照樣重打。
+  it("空 + timeout 跨午夜 → 20 s 空態重試不被日界蓋掉(barsPollInterval 既有行為)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 23, 59, 50));
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ bars: [], status: "timeout" })),
+    );
+    renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), { wrapper: stableWrapper() });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(20_000); // 00:00:10
+    expect(dayCalls()).toBe(2);
+  });
+
+  // TQ 預設 `refetchIntervalInBackground: false`:分頁在背景時 interval tick 被 focus 閘跳過 ——
+  // 回前景那一刻要靠「已過期」+ refetchOnWindowFocus 補上,不是靠 interval。
+  it("分頁在背景跨過午夜 → 回前景那一刻重抓", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    stubFetchByWallClock();
+    const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      wrapper: stableWrapper(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayCalls()).toBe(1);
+    focusManager.setFocused(false); // 分頁縮到背景
+    await vi.advanceTimersByTimeAsync(11 * 60 * 60_000); // D+1 09:00
+    expect(dayCalls()).toBe(1); // 背景不打
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayCalls()).toBe(2);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+  });
+
+  // pr-151-review F-01 / F-02:TQ 每一次 render 都重算 `refetchInterval` 並在回值變動時重排計時器;
+  // StockChart 每則個股 WS 訊息重繪一次 —— `renderHook` 推進期間不重繪量不到這一維,用 `rerender` 補。
+  it("slack 窗內(00:00:10 → 00:00:50)每 100 ms 重繪一次 → 00:01:01 照樣重抓,不被推到隔天", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    stubFetchByWallClock();
+    const { result, rerender } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      initialProps: { tick: -1 },
+      wrapper: stableWrapper(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 60_000 + 10_000); // D+1 00:00:10
+    await rerenderBurst(rerender, 40_000, 100); // → 00:00:50,400 次重繪
+    expect(dayCalls()).toBe(1); // 還在 slack 內
+    await vi.advanceTimersByTimeAsync(11_000); // 00:01:01
+    expect(dayCalls()).toBe(2);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同日不再打
+    expect(dayCalls()).toBe(2);
+  });
+
+  it("同一秒內重繪 50 次 → setInterval 零重排(秒級量化);跨秒重繪一次 → 恰 1 次", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    stubFetchByWallClock();
+    const { rerender } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      initialProps: { tick: -1 },
+      wrapper: stableWrapper(),
+    });
+    await vi.advanceTimersByTimeAsync(0); // 首發落地 → interval 武裝
+    const spy = vi.spyOn(globalThis, "setInterval");
+    await rerenderBurst(rerender, 500, 10); // 09:00:00.000 → 09:00:00.500,50 次重繪
+    expect(spy).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(500); // 09:00:01.000:回值少 1 s → TQ 重排一次
+    rerender({ tick: 999 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
