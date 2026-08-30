@@ -196,6 +196,11 @@ class StockSource(Protocol):
 
     def backfill(self, code: str) -> list[StockTick]: ...
 
+    def prepare_backfill(self, codes: list[str]) -> None:
+        """整批預熱:對每檔先送 SubHistory 讓 TC4 平行備資料,之後逐檔 `backfill` 收割
+        (perf/opening-backfill-parallel S1-b)。best-effort:失敗只 log,不 raise。"""
+        ...
+
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
 
     def fetch_bars_range(
@@ -1345,104 +1350,129 @@ class StockEngine:
         self._backfill_timeout_handles.clear()
 
     async def _backfill_worker(self) -> None:
+        """單工 worker;出隊時把佇列裡**當下全部**的 job 一次取出,整批先交 source
+        `prepare_backfill`(對每檔送 SubHistory 讓 TC4 平行備資料),再逐檔收割
+        (perf/opening-backfill-parallel S1-b;TXO `fetch_backfill` 的「先全訂再收割」樣板)。
+
+        逐檔「Sub → 等首頁 → 收」讓每檔各付一次 TC4 備資料的等待,單工串起來就是
+        prod 08-28 的一秒一檔;先全訂之後輪到第 2 檔起首頁多半已備妥。每檔的處置
+        (generation 早退 / 逾時重排 / 失敗記帳 / 套用)逐字沿用 `_run_backfill_job`,
+        批次只是把「誰先 Sub」提前,不改順序、不改單工套用。
+
+        單筆不 prepare:`backfill` 自己就會 Sub,多發一次是純代價。過期 job 不進批次
+        (它們在 `_run_backfill_job` 一進門就被丟棄結清,對它們 Sub 是替沒人要的 job 打 TC4)。
+        """
         while True:
-            code, generation = await self._backfill_jobs.get()
-            # 取件早退**只比 generation**(design v3 R12):job 自帶 code,收件人是那一檔
-            # 自己的 state 而不是「當下的主圖」。綁 `_main` 會讓群組成員的 job 全部被
-            # 靜默丟棄(零錯誤訊號,卡片只是一直空著)。
-            if generation != self._generation:
-                self._backfill_settled(code)
-                continue
-            self._backfilling = code
-            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
-            try:
-                ticks = await asyncio.to_thread(self._source.backfill, code)
-            except HistoryTimeoutError:
-                # **先於** ConnectionError(它是子類):逾時 ≠ TC4 掛了。打 `tc4_status`
-                # 會讓整個畫面掛上「達錢 4 連線中斷」而達錢 4 好得很;計進
-                # `_backfill_failed` 則會吃掉真失敗的冷卻額度。這條路唯一該做的是
-                # **隔一會兒再排一次** —— 而那正是舊碼(回空)整天都不會做的事。
-                self._backfilling = None
-                self._backfill_settled(code)
-                if code not in self._refs:
-                    # release 時已在佇列 / 正跑的 job 之後才逾時:這一檔已無 owner,不記帳
-                    # 不武裝 —— 否則 15s 後對已退訂的 code 再打 TC4,終局 `_backfilled.add`
-                    # 把 release 清掉的記帳寫回去(2026-08-22 review;判準 = 訂閱池 `_refs`)。
-                    logger.info("backfill %s timeout 但已退訂,不重排", code)
-                    # 補推與其他離開路徑同款:不推的話「回補中…」徽章永遠掛著(TQ-4)
-                    self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
-                    continue
-                tries = self._backfill_timeouts.get(code, 0) + 1
-                if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
-                    self._backfill_timeouts[code] = tries
-                    logger.warning(
-                        "backfill %s timeout(非 TC4 down),%.0fs 後重排(第 %d/%d 次)",
-                        code,
-                        _BACKFILL_TIMEOUT_RETRY_SECS,
-                        tries,
-                        _BACKFILL_TIMEOUT_MAX_RETRIES,
-                    )
-                    loop = self._loop
-                    if loop is not None:
-                        self._arm_backfill_timeout_retry(loop, code)
-                else:
-                    logger.warning(
-                        "backfill %s timeout 重試 %d 次仍未備妥,放棄(當日不再重排)",
-                        code,
-                        _BACKFILL_TIMEOUT_MAX_RETRIES,
-                    )
-                    # 放棄 = **當日不再入列**(與逾時旗標之前的行為逐字相同)。
-                    # `group_snapshot` 那條 60s 輪詢的四道 guard 看得到的是 `_backfilled`
-                    # / `_no_data` / 在途 / `_backfill_failed`,唯獨看不到逾時記帳 ——
-                    # 不進 `_backfilled` 的話它會每 60s 把同一檔重新推回單工 worker,
-                    # 重試上界形同虛設,而 TC4 歷史通道是整個群組檢視共用的稀缺資源。
-                    self._backfilled.add(code)
-                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
-                continue
-            except ConnectionError:
-                # 全域 `tc4_status` **只由主圖的失敗決定**(A2)。群組檢視把非主圖成員
-                # 也送進這條單工 worker 之後,一檔成員的 SubHistory 失敗會把整個畫面
-                # 打上「達錢 4 連線中斷」而達錢 4 好得很 —— 使用者據此判斷的每一件事
-                # (要不要重開、要不要相信盤面)都被誤導。主圖那條路維持舊語意:
-                # 使用者當下就在看那一檔,靜默降級會讓他以為畫面是真的。
-                self._backfilling = None
-                self._backfill_settled(code)
-                fails = self._backfill_failed.get(code, 0) + 1
-                self._backfill_failed[code] = fails
-                if code == self._main:
-                    logger.exception("backfill %s failed(主圖 → tc4 down)", code)
-                    self.tc4_status = "down"
-                else:
-                    logger.warning(
-                        "backfill %s failed(成員;當日第 %d 次,達 %d 次即停止入列)",
-                        code,
-                        fails,
-                        _BACKFILL_MAX_FAILS,
-                    )
-                # 兩條路都要補推:不推的話「回補中…」徽章永遠掛著而內部態早就清了(TQ-4)
-                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
-                continue
-            except Exception:
-                # CR4:非連線類例外(壞電文 JSONDecodeError 等)不得殺死 worker —
-                # 死掉 = 之後所有回補靜默失效、backfilling 永久卡住
-                logger.exception("backfill %s unexpected failure(worker 續行)", code)
-                self._backfilling = None
-                self._backfill_settled(code)
-                self._backfill_failed[code] = self._backfill_failed.get(code, 0) + 1
-                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
-                continue
-            self._backfilling = None
-            # 套用 guard:rollover 作廢 in-flight 回補 → 丟棄(design §2.3);
-            # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)。
-            # **不再比 `_main`**(design v3 R12,同取件早退的 rationale)。
-            if generation == self._generation:
-                state = self._states.get(code)
-                if state is not None:
-                    state.apply_backfill([t for t in ticks if t.trade_date == self._trade_date])
-                    self._backfilled.add(code)  # 套用成功才記帳
-            # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
+            batch = [await self._backfill_jobs.get()]
+            while True:
+                try:
+                    batch.append(self._backfill_jobs.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            fresh = [code for code, generation in batch if generation == self._generation]
+            if len(fresh) >= 2:
+                await asyncio.to_thread(self._source.prepare_backfill, fresh)
+            for code, generation in batch:
+                await self._run_backfill_job(code, generation)
+
+    async def _run_backfill_job(self, code: str, generation: int) -> None:
+        """一筆回補 job 的完整處置(原 `_backfill_worker` 迴圈本體,逐字搬出)。"""
+        # 取件早退**只比 generation**(design v3 R12):job 自帶 code,收件人是那一檔
+        # 自己的 state 而不是「當下的主圖」。綁 `_main` 會讓群組成員的 job 全部被
+        # 靜默丟棄(零錯誤訊號,卡片只是一直空著)。
+        if generation != self._generation:
             self._backfill_settled(code)
+            return
+        self._backfilling = code
+        self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code})
+        try:
+            ticks = await asyncio.to_thread(self._source.backfill, code)
+        except HistoryTimeoutError:
+            # **先於** ConnectionError(它是子類):逾時 ≠ TC4 掛了。打 `tc4_status`
+            # 會讓整個畫面掛上「達錢 4 連線中斷」而達錢 4 好得很;計進
+            # `_backfill_failed` 則會吃掉真失敗的冷卻額度。這條路唯一該做的是
+            # **隔一會兒再排一次** —— 而那正是舊碼(回空)整天都不會做的事。
+            self._backfilling = None
+            self._backfill_settled(code)
+            if code not in self._refs:
+                # release 時已在佇列 / 正跑的 job 之後才逾時:這一檔已無 owner,不記帳
+                # 不武裝 —— 否則 15s 後對已退訂的 code 再打 TC4,終局 `_backfilled.add`
+                # 把 release 清掉的記帳寫回去(2026-08-22 review;判準 = 訂閱池 `_refs`)。
+                logger.info("backfill %s timeout 但已退訂,不重排", code)
+                # 補推與其他離開路徑同款:不推的話「回補中…」徽章永遠掛著(TQ-4)
+                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+                return
+            tries = self._backfill_timeouts.get(code, 0) + 1
+            if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
+                self._backfill_timeouts[code] = tries
+                logger.warning(
+                    "backfill %s timeout(非 TC4 down),%.0fs 後重排(第 %d/%d 次)",
+                    code,
+                    _BACKFILL_TIMEOUT_RETRY_SECS,
+                    tries,
+                    _BACKFILL_TIMEOUT_MAX_RETRIES,
+                )
+                loop = self._loop
+                if loop is not None:
+                    self._arm_backfill_timeout_retry(loop, code)
+            else:
+                logger.warning(
+                    "backfill %s timeout 重試 %d 次仍未備妥,放棄(當日不再重排)",
+                    code,
+                    _BACKFILL_TIMEOUT_MAX_RETRIES,
+                )
+                # 放棄 = **當日不再入列**(與逾時旗標之前的行為逐字相同)。
+                # `group_snapshot` 那條 60s 輪詢的四道 guard 看得到的是 `_backfilled`
+                # / `_no_data` / 在途 / `_backfill_failed`,唯獨看不到逾時記帳 ——
+                # 不進 `_backfilled` 的話它會每 60s 把同一檔重新推回單工 worker,
+                # 重試上界形同虛設,而 TC4 歷史通道是整個群組檢視共用的稀缺資源。
+                self._backfilled.add(code)
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+            return
+        except ConnectionError:
+            # 全域 `tc4_status` **只由主圖的失敗決定**(A2)。群組檢視把非主圖成員
+            # 也送進這條單工 worker 之後,一檔成員的 SubHistory 失敗會把整個畫面
+            # 打上「達錢 4 連線中斷」而達錢 4 好得很 —— 使用者據此判斷的每一件事
+            # (要不要重開、要不要相信盤面)都被誤導。主圖那條路維持舊語意:
+            # 使用者當下就在看那一檔,靜默降級會讓他以為畫面是真的。
+            self._backfilling = None
+            self._backfill_settled(code)
+            fails = self._backfill_failed.get(code, 0) + 1
+            self._backfill_failed[code] = fails
+            if code == self._main:
+                logger.exception("backfill %s failed(主圖 → tc4 down)", code)
+                self.tc4_status = "down"
+            else:
+                logger.warning(
+                    "backfill %s failed(成員;當日第 %d 次,達 %d 次即停止入列)",
+                    code,
+                    fails,
+                    _BACKFILL_MAX_FAILS,
+                )
+            # 兩條路都要補推:不推的話「回補中…」徽章永遠掛著而內部態早就清了(TQ-4)
+            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+            return
+        except Exception:
+            # CR4:非連線類例外(壞電文 JSONDecodeError 等)不得殺死 worker —
+            # 死掉 = 之後所有回補靜默失效、backfilling 永久卡住
+            logger.exception("backfill %s unexpected failure(worker 續行)", code)
+            self._backfilling = None
+            self._backfill_settled(code)
+            self._backfill_failed[code] = self._backfill_failed.get(code, 0) + 1
+            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
+            return
+        self._backfilling = None
+        # 套用 guard:rollover 作廢 in-flight 回補 → 丟棄(design §2.3);
+        # 另過濾非當日列(防舊日窗殘留資料混入新日狀態)。
+        # **不再比 `_main`**(design v3 R12,同取件早退的 rationale)。
+        if generation == self._generation:
+            state = self._states.get(code)
+            if state is not None:
+                state.apply_backfill([t for t in ticks if t.trade_date == self._trade_date])
+                self._backfilled.add(code)  # 套用成功才記帳
+        # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
+        self._backfill_settled(code)
+        self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
 
     # ---- 廣播 ----
 

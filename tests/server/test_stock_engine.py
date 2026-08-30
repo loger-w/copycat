@@ -64,6 +64,7 @@ class FakeSource:
         self.unsubscribed: list[str] = []
         self.trade_dates: list[str] = []
         self.backfills: list[str] = []
+        self.prepares: list[list[str]] = []
         self.fail_subscribe: set[str] = set()
         # 「訂閱丟非連線類例外」(壞電文 / wrapper 內部型別錯)—— `fail_subscribe` 丟的
         # ConnectionError 是引擎預期並吞掉的那條路,測不到 task 帶例外結束的情境
@@ -107,6 +108,10 @@ class FakeSource:
         第二份對映時,engine 的路由表鍵與真實 symbol 會在測試裡永遠一致、在 prod
         永遠對不上 —— 而那條路的失效是「訂閱成功但零推播」。"""
         return stock_symbol(key)
+
+    def prepare_backfill(self, codes: list[str]) -> None:
+        """S1-b:worker 出隊時整批先 SubHistory。只記批次(順序 + 成員)。"""
+        self.prepares.append(list(codes))
 
     def backfill(self, code: str) -> list:
         self.backfills.append(code)
@@ -1662,6 +1667,51 @@ class TestGroupSnapshot:
         src.on_message(_quote(cum=7))  # 首則 REALTIME:漲跌停 None → 有值
         await _drain(engine)
         assert src.backfills.count("2330") == 2
+        await engine.close()
+
+
+class TestBackfillBatchPrepare:
+    """perf/opening-backfill-parallel S1-b:worker 出隊時把佇列裡**整批**先交給 source
+    `prepare_backfill`(= 對全部先 SubHistory,TXO `fetch_backfill` 樣板),再逐檔收割。
+
+    單工逐檔「Sub → 等首頁 → 收」讓每檔各付一次 TC4 備資料的等待;先全訂讓 TC4 平行備,
+    輪到第 2 檔起首頁多半已備妥(probe 08-28:20 檔 serial 23.3 s → 批次 3.3 s)。
+    """
+
+    async def test_worker_prepares_the_whole_queued_batch_before_harvesting(self) -> None:
+        engine, src = await _make()
+        codes = ["2330", "2317", "2454", "3008"]
+        await engine.set_watchlist(codes)
+        engine.group_snapshot(codes)  # 四筆同時入列(群組檢視的入列點)
+        await _drain(engine)
+        assert src.backfills == codes  # 收割順序 = 入列順序(單工語意不變)
+        assert src.prepares == [codes], src.prepares  # 整批一次,且在第一檔收割前
+        await engine.close()
+
+    async def test_single_job_is_not_prepared_separately(self) -> None:
+        """單筆 job 不多發一次 SubHistory:backfill 自己就會 Sub,多發一次是純代價。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        assert src.prepares == []
+        await engine.close()
+
+    async def test_stale_generation_jobs_are_settled_and_not_prepared(self) -> None:
+        """出隊整批裡的過期 job(rollover 換代)照舊丟棄結清,不進 prepare 批次。"""
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()  # 讓 worker 卡在第一筆,後面的排在佇列裡
+        await engine.set_watchlist(["2330", "2317", "2454"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)  # worker 取走 2330,卡在 gate
+        engine.group_snapshot(["2317", "2454"])
+        engine._generation += 1  # 佇列裡那兩筆過期
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        assert src.prepares == []
+        assert engine._backfill_pending == {}
         await engine.close()
 
 

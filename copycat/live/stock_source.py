@@ -692,6 +692,24 @@ class StockQuoteSource(TC4QuoteSource):
 
     # ---- 回補(收割分頁;跨 symbol 序列化由 engine worker queue 統籌)----
 
+    def prepare_backfill(self, codes: list[str]) -> None:
+        """整批先 SubHistory(TICKS、當日日盤窗),讓 TC4 平行備資料;之後逐檔 `backfill`
+        收割時首頁多半已備妥(perf/opening-backfill-parallel S1-b;probe 08-28:20 檔
+        serial 23.3 s → 先全訂 3.3 s)。
+
+        **best-effort**:傳輸失敗只記 WARNING 就停(`_req` 已 dispose 連線,再送也是
+        同一個答案),讓逐檔 `backfill` 自己去撞 —— 那條路的錯誤處置(主圖 → tc4 down /
+        成員記帳冷卻)齊全,這裡 raise 會讓整批被單一檔拖垮。
+        """
+        self._ensure_connected()
+        start, end = stock_window(self._trade_date)
+        for code in codes:
+            try:
+                self._sub_history(stock_symbol(code), start, end)
+            except ConnectionError as e:
+                logger.warning("prepare_backfill 於 %s 中斷(%s);其餘交逐檔回補", code, e)
+                return
+
     def backfill(self, code: str) -> list[StockTick]:
         """當日 tick 回補;**首頁等滿預算仍未備妥 → `HistoryTimeoutError`**。
 

@@ -274,6 +274,9 @@ class FakeStockSource:
     def backfill(self, code: str) -> list:
         return []
 
+    def prepare_backfill(self, codes: list[str]) -> None:
+        pass
+
     def set_on_message(self, cb: Callable[[dict], None]) -> None:
         self.on_message = cb
 
