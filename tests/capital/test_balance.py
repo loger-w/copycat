@@ -24,8 +24,9 @@ from tests.capital.balance_rows import (
     RAW_L_SHORT,
     RAW_T_BOUGHT,
     RAW_T_FLAT,
+    balance_variant,
 )
-from tests.capital.profit_rows import RAW_PNL_MARGIN, RAW_PNL_ROW
+from tests.capital.profit_rows import RAW_PNL_MARGIN, RAW_PNL_ROW, pnl_variant
 
 
 # ── merge_fut_positions:同契約淨額合併(review A5)──────────────
@@ -98,7 +99,7 @@ def test_parse_short_position_negative_qty() -> None:
 def test_parse_short_negative_shares_defensive() -> None:
     """融券列真實符號未實測:若 [14] 回的是負股數,floor division 會把幅度多算一張
     再負負得正 — 防禦寫法兩種符號都要對。"""
-    raw = RAW_L_SHORT.replace(",2000,0,130.25,", ",-2000,0,130.25,")
+    raw = balance_variant(RAW_L_SHORT, {14: "-2000"})
     p = parse_balance_line(raw)
     assert p is not None
     assert p.qty == -2 and p.kind == "short"
@@ -111,7 +112,7 @@ def test_parse_cash_negative_shares_keeps_short_direction(
     實錄校準 kind)—— 舊 abs() 會把真空單顯示成多單,平倉映射再送賣單 = 對空單加倉(真金風險)。
     方向保留、kind 歸 daytrade_sell(_CLOSE_MAP 回補 = 現股買);整列 DEBUG 留痕(每輪都會看到,
     不洗 INFO;review 2026-08-30 F-03)。"""
-    raw = RAW_T_BOUGHT.replace(",1000,0,,", ",-1000,0,,")
+    raw = balance_variant(RAW_T_BOUGHT, {14: "-1000"})
     with caplog.at_level("DEBUG"):
         p = parse_balance_line(raw)
     assert p is not None
@@ -124,7 +125,7 @@ def test_parse_cash_negative_shares_keeps_short_direction(
 def test_parse_margin_negative_shares_keeps_short_direction(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    raw = RAW_C_MARGIN.replace(",3000,0,155.63,", ",-3000,0,155.63,")
+    raw = balance_variant(RAW_C_MARGIN, {14: "-3000"})
     with caplog.at_level("WARNING"):
         p = parse_balance_line(raw)
     assert p is not None
@@ -136,7 +137,7 @@ def test_parse_short_negative_shares_no_daytrade_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # 融券列負股數是既有防禦路徑(符號未實測),不屬「疑當沖賣」蒐證對象,不洗版
-    raw = RAW_L_SHORT.replace(",2000,0,130.25,", ",-2000,0,130.25,")
+    raw = balance_variant(RAW_L_SHORT, {14: "-2000"})
     with caplog.at_level("WARNING"):
         parse_balance_line(raw)
     assert not [r for r in caplog.records if "負股數" in r.message]
@@ -151,13 +152,13 @@ def test_unparseable_or_short_line_skipped() -> None:
     assert parse_balance_line(RAW_END) is None  # 結束標記
     assert parse_balance_line("") is None
     assert parse_balance_line("2493,T,0,0") is None  # 欄位不足
-    bad = RAW_T_BOUGHT.replace(",1000,0,,", ",x,0,,")  # [14] 數字壞 → 整筆略過
+    bad = balance_variant(RAW_T_BOUGHT, {14: "x"})  # [14] 數字壞 → 整筆略過
     assert parse_balance_line(bad) is None
 
 
 def test_unknown_kind_skipped() -> None:
     # 未知庫存種類寧缺勿錯:平倉映射依 kind 送單,猜錯=送錯單種
-    assert parse_balance_line(RAW_T_BOUGHT.replace(",T,", ",Z,")) is None
+    assert parse_balance_line(balance_variant(RAW_T_BOUGHT, {1: "Z"})) is None
 
 
 def test_collector_flush_on_end_marker() -> None:
@@ -329,7 +330,7 @@ def test_parse_profit_line() -> None:
 
 def test_parse_profit_line_pnl_fields_optional() -> None:
     # 損益欄壞掉只丟那幾欄,均價仍要保住(均價是主要產出)
-    bad = RAW_PNL_ROW.replace(",1368.00,", ",x,")
+    bad = pnl_variant(RAW_PNL_ROW, {9: "x"})
     assert parse_profit_line(bad) == ProfitRow(
         "2493", 178.05, None, 180.0, 178000.0, "cash", "現股"
     )
@@ -354,14 +355,14 @@ def test_parse_profit_line_garbled_label_falls_back_to_kind_code() -> None:
 
 def test_parse_profit_line_label_wins_over_kind_code() -> None:
     # 標籤可解時以標籤為準([25] 語意屬觀察歸納,非官方文件;可解標籤是更強證據)
-    row = parse_profit_line(RAW_PNL_ROW.replace(",Y,1,0,", ",Y,2,0,"))
+    row = parse_profit_line(pnl_variant(RAW_PNL_ROW, {25: "2"}))
     assert row is not None and row.kind == "cash"
 
 
 def test_parse_profit_line_unknown_kind_is_none(caplog: pytest.LogCaptureFixture) -> None:
     # 標籤與 [25] 都對不上 → kind=None:回填端視為不符、略過(寧缺均價,不可套錯成本
     # 基礎;融券代碼未實證前不猜)。整列進 log 才有下一步診斷素材;kind_raw 保留原文。
-    raw = RAW_PNL_ROW.replace(",現股,", ",信用,").replace(",Y,1,0,", ",Y,7,0,")
+    raw = pnl_variant(RAW_PNL_ROW, {3: "信用", 25: "7"})
     with caplog.at_level("WARNING"):
         row = parse_profit_line(raw)
     assert row is not None and row.kind is None
@@ -382,8 +383,8 @@ def test_parse_profit_skips_status_total_end_and_junk() -> None:
     assert parse_profit_line("##,,,,") is None  # 結束標記
     assert parse_profit_line("") is None
     assert parse_profit_line("名,3357,新台幣,現股,1000") is None  # 欄位不足
-    assert parse_profit_line(RAW_PNL_ROW.replace("178.05", "x")) is None  # 均價壞
-    assert parse_profit_line(RAW_PNL_ROW.replace("178.05", "0")) is None  # 均價 0 不出垃圾
+    assert parse_profit_line(pnl_variant(RAW_PNL_ROW, {10: "x"})) is None  # 均價壞
+    assert parse_profit_line(pnl_variant(RAW_PNL_ROW, {10: "0"})) is None  # 均價 0 不出垃圾
 
 
 def test_collector_with_profit_parser() -> None:
