@@ -11,7 +11,7 @@ function sig(id: string): SignalMsg {
     type: "signal",
     id,
     kind: "surge",
-    // code 帶 id:讓 formatToastText 每則互異 —— 節流測試要能分辨「發的是哪一則」,
+    // code 帶 id:讓每則 toast 文案互異 —— 節流測試要能分辨「發的是哪一則」,
     // 全同文案會讓內容斷言退化成長度檢查(review TC-1)。
     code: id,
     name: "台積電",
@@ -254,7 +254,7 @@ describe("useSignalAlerts — 同 tick 合併(SC-1 / SC-2)", () => {
     expect(hook.result.current.toasts.length).toBe(0);
   });
 
-  // TQ-8:同 kind 兩條規則同一 tick 各發一則(rule_id 讓 id 互異,formatToastText 文案
+  // TQ-8:同 kind 兩條規則同一 tick 各發一則(rule_id 讓 id 互異,toast 文案
   // 一模一樣)—— 併成一張、kind 段只印一次(規則名在 rail 另行顯示,toast 不含)。
   it("同 tick 同 kind 兩條規則 → 一張一聲,kind 段只印一次", () => {
     const hook = renderHook(() => useSignalAlerts());
