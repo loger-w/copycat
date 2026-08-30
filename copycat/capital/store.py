@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from copycat.capital.mapping import contract_from_fill, is_option_contract
-from copycat.capital.models import AvgSource, Market, OrderRecord, Position, PositionKind, TradeKind
+from copycat.capital.models import AvgSource, Market, OrderRecord, Position, TradeKind
 from copycat.capital.reply import ReplyRecord
 
 logger = logging.getLogger(__name__)
@@ -30,16 +30,18 @@ logger = logging.getLogger(__name__)
 _SEC_LOT_MARKETS = {"TS", "TA", "TP"}  # 整股:股 → 張(÷1000)
 _FUT_MARKETS = {"TF", "TO", "OF", "OO"}  # 口
 
-# 成交樂觀套用(F5)的證券種類對映:回報 idx6 資券別 → 部位種類。**只列確定的**:「無券」
-# (無券當沖賣)的部位狀態與回補單種待首筆實錄校準(balance.py 負股數同一條),不在表內
-# = 不套(回查鏈仍會補),寧缺勿錯。零股不在此表 —— 零股市場(TL/TC)整個不套。
-_FILL_KIND: dict[str, PositionKind] = {
+# 成交樂觀套用(F5)的證券種類對映:回報 idx6 資券別 → 部位種類。**只列確定的**;零股不在此表
+# —— 零股市場(TL/TC)整個不套。「無券」= 無券當沖賣(2026-08-28 prod 8358 實錄校準):部位狀態
+# `daytrade_sell`(群益庫存段記成現股 T 列**負股數**,`parse_balance_line` 同歸此種),回補 = 現股買
+# (idx6 B00,交易所自動沖銷;`_apply_fill_locked` 先沖空單列)。無券只有賣向;買向不套(見該處)。
+_FILL_KIND: dict[str, TradeKind] = {
     "現股": "cash",
     "拍賣現股": "cash",
     "融資": "margin",
     "代資": "margin",
     "融券": "short",
     "代券": "short",
+    "無券": "daytrade_sell",
 }
 
 # 狀態只進不退(防 backlog 重播亂序降級)
@@ -248,11 +250,15 @@ class CapitalStore:
         if a.buy_sell not in ("B", "S") or a.filled_qty <= 0 or not a.stock_no:
             return False
         market: Market
-        kind: PositionKind
+        kind: TradeKind
         if a.market in _SEC_LOT_MARKETS:
             k = _FILL_KIND.get(a.flag_label or "")
             if k is None:
                 logger.info("成交種類 %r 不在樂觀套用表,等回查鏈: %s", a.flag_label, a.stock_no)
+                return False
+            if k == "daytrade_sell" and a.buy_sell == "B":
+                # 無券只有賣向(回補走現股買 B00);買向的「無券」沒有對應部位狀態,寧缺勿錯
+                logger.warning("無券買向成交無部位語意,不樂觀套用: %s %r", a.stock_no, a.flag_label)
                 return False
             market, kind, key_no = "sec", k, a.stock_no
             total = a.filled_qty // 1000
@@ -277,6 +283,25 @@ class CapitalStore:
         a.applied_shares += delta * unit
         a.applied_value += fill_avg * delta * unit
         signed = delta if a.buy_sell == "B" else -delta
+        if market == "sec" and kind == "cash" and signed > 0:
+            # 現股買先沖同股號的無券空單(交易所自動沖銷;2026-08-28 8358 回補 idx6 = B00 不是 08):
+            # 不沖的話這裡會另開 (股號, cash) +1 列、空單列原地不動 —— 快照落地前約 2 s 幽靈雙列。
+            # 沖掉的那段均價不動(減碼語意),餘量才照常開 / 加現股多單。
+            ds_key = (key_no, "daytrade_sell")
+            ds = self._positions.get(ds_key)
+            if ds is not None and ds.qty < 0:
+                offset = min(signed, -ds.qty)
+                if ds.qty + offset == 0:
+                    del self._positions[ds_key]
+                else:
+                    self._positions[ds_key] = self._with_today_qty_locked(
+                        dataclasses.replace(
+                            ds, qty=ds.qty + offset, pnl_base=None, pnl_base_price=None, pnl_cost=None
+                        )
+                    )
+                signed -= offset
+                if signed == 0:
+                    return True
         key = (key_no, kind)
         prev = self._positions.get(key)
         if prev is None:
@@ -531,9 +556,9 @@ class CapitalStore:
             return list(self._positions.values())
 
     def position_for(
-        self, stock_no: str, kind: PositionKind | None = None, *, market: Market | None = None
+        self, stock_no: str, kind: TradeKind | None = None, *, market: Market | None = None
     ) -> Position | None:
-        """平倉查找。kind 有值 = 精確鍵;kind=None = 同股號恰一列才回傳,
+        """平倉查找。kind 有值 = 精確鍵;(值域 TradeKind:store 鍵含 daytrade_sell 無券空單列;wire 端 PositionCloseBody.kind 仍 PositionKind,前端對無券列不送 kind 走同檔唯一列)kind=None = 同股號恰一列才回傳,
         多列(同檔資+集保並存)回 None — 平倉種類猜錯會送錯單種,寧可讓 caller 阻擋。
 
         market 收斂唯一匹配的掃描母體:證券股號與期交所契約碼是兩套獨立代碼,

@@ -25,7 +25,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from copycat.capital.models import Position, PositionKind
+from copycat.capital.models import Position, PositionKind, TradeKind
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +63,24 @@ def parse_balance_line(raw: str) -> Position | None:
     lots = abs(shares) // 1000
     if lots == 0:  # 零股不足 1 張:清單以張為單位,暫不顯示
         return None
+    pos_kind: TradeKind = kind
     if kind == "short":
         lots = -lots  # 融券放空 → 負張數(close 映射靠 qty>0 判多空)
     elif shares < 0:
-        # 現股/融資列負股數 = 賣超(疑當沖先賣/無券賣出未回補;2026-08-20 user 實報)。
-        # 舊 abs() 會把真空單顯示成多單、平倉映射再送賣單 = 對空單加倉 → 方向必須保留。
-        # kind 歸類(daytrade_sell?)與回補單種待首筆實錄校準 — 校準前 _CLOSE_MAP 無
-        # (cash, False) 鍵,平倉鍵鎖住;整列 warning 即蒐證素材(空單回補後自然停)。
+        # 現股/融資列負股數 = 賣超。舊 abs() 會把真空單顯示成多單、平倉映射再送賣單 = 對空單加倉
+        # → 方向必須保留(2026-08-20 user 實報)。
         lots = -lots
-        logger.warning("balance line 負股數(疑當沖先賣/賣超),方向記空、平倉暫鎖,整列: %r", raw)
-    return Position(market="sec", stock_no=stock_no, qty=lots, kind=kind)
+        if kind == "cash":
+            # 現股 T 列負股數 = 無券當沖先賣未回補(2026-08-28 prod 8358 實錄:`8358,T,…,-1000,…`,
+            # 不是融券 L 列)→ 部位狀態 daytrade_sell:_CLOSE_MAP 回補 = 現股買(交易所自動沖銷),
+            # 與 store._FILL_KIND「無券」同鍵,樂觀套用 / 當沖段(today_qty)才對得上同一列。
+            pos_kind = "daytrade_sell"
+            logger.info("balance line 現股負股數 → 無券空單(daytrade_sell),整列: %r", raw)
+        else:
+            # 融資列負股數(資券互抵?)無實錄,kind 維持、_CLOSE_MAP 無 (margin, False) 鍵 →
+            # 平倉鍵鎖住;整列 warning 即蒐證素材(回補後自然停)。
+            logger.warning("balance line 負股數(融資賣超,未校準),方向記空、平倉暫鎖,整列: %r", raw)
+    return Position(market="sec", stock_no=stock_no, qty=lots, kind=pos_kind)
 
 
 def merge_fut_positions(rows: list[Position]) -> list[Position]:

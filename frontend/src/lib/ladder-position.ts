@@ -35,7 +35,8 @@ export interface PositionEconInput {
   /** broker = 均價已含買進手續費(群益損益試算口徑);fill = 純成交價,要再加買費;
    *  null = 來源未知 → 走修前口徑(當純價加買費),明確分支不吞進 else。 */
   avgSource: AvgSource | null;
-  /** 今天成交淨進來的張數;現股(kind === "cash")這一段賣出稅用 `SELL_TAX_DAYTRADE`。
+  /** 今天成交淨進來的張數;現股(kind === "cash")與無券空單(kind === "daytrade_sell",群益記成
+   *  現股負股數、法規同為現股當沖)這一段賣出稅用 `SELL_TAX_DAYTRADE`。
    *  後端已 clamp 到 [0, |qty|],這裡**再 clamp 一次是刻意的防禦**:wire 漂了(或缺欄)也不能
    *  把有效稅率壓成負 / NaN —— 兩側都留,別把任一側當贅碼刪掉。 */
   todayQty: number;
@@ -94,7 +95,8 @@ export function positionEcon(
   // 後端未重啟的窗口 payload 沒有 today_qty → undefined 進 Math.max 變 NaN,整條算式毒化印「NaN」;
   // 缺欄退成 0(= 舊口徑 0.3%),與 avg_source 缺欄退成 fill 同一個方向:退回修前行為,不退成假數字
   const todayRaw = Number.isFinite(input.todayQty) ? input.todayQty : 0;
-  const todayLots = kind === "cash" ? Math.min(lots, Math.max(0, todayRaw)) : 0;
+  const todayLots =
+    kind === "cash" || kind === "daytrade_sell" ? Math.min(lots, Math.max(0, todayRaw)) : 0;
   const t = (todayLots * SELL_TAX_DAYTRADE + (lots - todayLots) * SELL_TAX) / lots;
   const b = kind === "short" ? SHORT_BORROW : 0;
   const long = qty > 0;
