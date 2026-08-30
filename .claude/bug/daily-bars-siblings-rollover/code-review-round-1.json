@@ -1,0 +1,74 @@
+{
+  "fixed_point": "0b744bb8",
+  "branch": "fix/daily-bars-siblings-rollover",
+  "reviewers": { "standards": "opus", "spec": "opus" },
+  "standards": [
+    {
+      "id": "S-F1",
+      "kind": "judgement",
+      "smell": "Feature Envy / 錯置模組",
+      "finding": "useMarketBars.ts 與 useStockBars.ts 都新增 import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from \"@/hooks/useFuturesBars\",只為一個純日期函式(本體 Math.ceil(msUntilNextLocalDate(...)/1000)*1000,依賴已在 @/lib/trading-calendar)。不是 runtime 循環(useFuturesBars.ts:9 是 import type),但方向倒置:兩支兄弟掛在期貨 hook 上;DAY_ERROR_RETRY_MS = POLL_MS(期貨分 K 輪詢常數)被三支日 K 共用。宜搬 lib/trading-calendar.ts 或新 lib/day-bars-freshness.ts,三支平行 import。"
+    },
+    {
+      "id": "S-F2",
+      "kind": "judgement",
+      "smell": "Duplicated Code(敘述)",
+      "finding": "「舊碼 staleTime: Infinity … 停在昨天早上抓的快照(末根 = 昨天的部分 bar、沒有今天那根)」逐字出現在 useMarketBars.ts:12-15、useStockBars.ts:9-12 與兩份 test 的 describe 前言;三段測試註解在兩份 test 逐字重複。界的由來確實只寫一處(合格),但 frontend-conventions「推導數字只留一份」的理由同樣適用敘述:宜只留「症狀與由來見 msUntilDayRollover」。"
+    },
+    {
+      "id": "S-F3",
+      "kind": "judgement",
+      "finding": "DAY_ERROR_RETRY_MS doc 加了「讀者三支」卻沒回校同段舊句「TC4 整個週末沒開而期貨 tab 開著 = 每分鐘兩發 503,已知情、成本可忽略」。現在讀者含 useMarketBars(每把 key × 每個 tf 各一條 error 分支)與 useStockBars(每檔股),週末量級不再是那個數,「已知情」的範圍未重新確認。"
+    },
+    {
+      "id": "S-F4",
+      "kind": "judgement",
+      "smell": "Duplicated Code + Mysterious Name",
+      "finding": "useStockBars.test.tsx 新 describe 另立 stableWrapper()(每次呼叫仍 new 一顆 client,「stable」指跨 render 穩定,名字不自明),而 useMarketBars.test.ts / useFuturesBars.test.ts 早有 wrapper(client) + newClient() 形狀。宜把檔頂 wrapper 改成同姊妹檔的簽章。"
+    },
+    {
+      "id": "S-F5",
+      "kind": "judgement",
+      "smell": "Duplicated Code(測試鷹架)",
+      "finding": "rerenderBurst 在 useFuturesBars.test.ts:427 與兩份新檔逐字三份;D_SNAPSHOT / D1_SNAPSHOT / D1_ISO / stubFetchByWallClock 同形。可抽 hooks/__fixtures__/day-rollover.ts。"
+    },
+    {
+      "id": "S-F6",
+      "kind": "judgement",
+      "finding": "新增 >120 字元行:useMarketBars.ts:15,76,81,82,83、useStockBars.ts:12,102,103、useMarketBars.test.ts:43,151,152,153,226,262,307,308,328、useStockBars.test.tsx:213,214,215,237,279,308,343,344(pr-152 Std F-04 曾要求折行;eslint 未設 max-len,非 hard)。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "P-F1",
+      "kind": "scope",
+      "finding": "DAY_ERROR_RETRY_MS 兩支同加。spec 修法只列 staleTime / refetchInterval 兩項,未提失敗重試。方向認同(午夜那發失敗 → interval 重算成下一個午夜 = 原症狀整天回來),但 useStockBars 那條沒有任何閘:個股頁停在日 K + 後端壞掉 = 每 60 s 兩發、整夜整個週末不停。pr-151-review F-05 的「已知情、成本可忽略」只覆蓋期貨 tab,個股這份成本未經 user 拍板 → 建議明示知情。"
+    },
+    {
+      "id": "P-F2",
+      "kind": "wrong",
+      "finding": "useMarketBars 午夜那發不吃 active、60 s 重試吃 active —— 對同一個問題給相反答案。午夜失敗恰恰發生在「人不在」(理由句自己寫的情境),此時 status===\"error\" + active===false → interval 回 false,整晚凍結,早上切回還要再等 60 s,decision 1 的目的被自己的重試閘吃掉一半。這個組合無測試覆蓋。"
+    },
+    {
+      "id": "P-F3",
+      "kind": "whitelist",
+      "finding": "decision 1 動到 spec 白名單點名的「useMarketBars 的 active 閘」。分 K 那半逐字不變,變的是 day 分支繞過閘;這正是 bug 本身,判定為合理,但與 useFuturesBars 形狀不同(那支 active→subscribed,午夜不打、切回靠 staleTime 補),需記為知情變更而非「同一把尺」。"
+    },
+    {
+      "id": "P-F4",
+      "kind": "partial",
+      "finding": "三鐵律逐條:(a) 有精確覆蓋 —— 兩支的「slack 窗內每 100 ms 重繪 40 s」確實會殺「下一個午夜 + slack」突變體;(c) 由「同一秒 50 次 → setInterval 0 次;跨秒 → 恰 1 次」釘住;(b) 只被 (c) 那條後半的生效自檢間接殺掉(dataUpdatedAt 版跨秒回同值 → spy 0 ≠ 1),樣板那條直接情境測試(「20:00 切回 → 00:01 不是 11:00」)兩支都沒有等價物 —— 因兩支不用 subscribed、重新武裝場景不存在,可接受,但建議在測試註解寫明 (b) 靠哪一條釘住。"
+    },
+    {
+      "id": "P-F5",
+      "kind": "partial",
+      "finding": "月 K 無測試(只有 D / W),同分支,列知情即可。"
+    },
+    {
+      "id": "P-F6",
+      "kind": "design",
+      "finding": "useFuturesBars ↔ useMarketBars 現為雙向 import(前者 type-only、後者取值,無 runtime cycle)。兩支 sibling 現在 runtime 依賴期貨 hook 模組 —— 建議把這條併入 spec 已預留的 helper 搬家 grilling 材料。"
+    }
+  ],
+  "disposition": "收修 commit 2226d17d。接受:P-F2(核為真 —— 日 K 分支改整段不吃 active,一個政策一句話;補測試「active=false 時午夜那一發失敗 → 人還沒切回就在 60 s 後重試成功」;突變體 M4b 釘修前形狀);S-F3 / P-F1(先查後端:/api/market/bars 只在 index 未就緒才 503 NOT_READY,TC4 斷線 / 慢是 200 + status 降級 payload 不進 error → error 分支只在 HTTP 非 2xx,「TC4 整個週末沒開每分鐘兩發」的量級假設不成立;DAY_ERROR_RETRY_MS doc 回校為「後端沒起來時每個掛著的日 K query 各兩發 / 分鐘」,三支讀者各自閘況寫明;P-F1 個股無閘的成本列 user 知情項);S-F2(兩支 hook doc 與 test 前言改指 msUntilDayRollover);S-F4(useStockBars.test.tsx 檔頂 wrapper 改 wrapper(client) + newClient() 同姊妹檔簽章,12 處改寫,stableWrapper 併掉);P-F4(test 前言寫明鐵律 ↔ 測試對應,(b) 由跨秒生效自檢間接釘);P-F5(週 K 測試改 it.each 涵蓋月 K);P-F3(知情:記入 hook 註解與 verification / next-time,不再稱「同一把尺」而是「同一個界、不同閘形狀」)。駁回:S-F6 —— 逐行以 python len() 量,全部 ≤ 120 字元(reviewer / awk 量的是 UTF-8 bytes,CJK 一字三 bytes),不折;S-F5 —— 抽共用 fixture 要動 useFuturesBars.test.ts,出本案範圍,記 next-time 併 test-hygiene 批。S-F1 / P-F6 helper 搬家:08-31 user 拍板新開 lib/day-bars-rollover.ts(🔵 a85befe0,helper 本體逐字相同、測試零改)。增量 diff(a85befe0 + docs b2ede8a0)由 main agent 機械快篩,無新 finding(見 verification.md 末節)。"
+}
