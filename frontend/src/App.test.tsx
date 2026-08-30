@@ -1,6 +1,15 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
@@ -8,6 +17,11 @@ import { purgeOrphanKeys } from "@/lib/constants";
 import { emitSignal } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 import { clearHolidays, isTradingDay } from "@/lib/trading-calendar";
+
+// App 級整鏈測試(lazy 頁 + TQ + WS fake)在剛 `npm ci` 的 worktree / 兩個 reviewer 並跑時,`waitFor` / `findBy*`
+// 預設 1 s 會被負載打穿(08-30 五次全量各紅 1–4 條、每次不同、單檔重跑全綠;next-time 08-28 L68 / 08-30 節)。
+// 拉到 3 s 只是把「等」的上限放寬,斷言本身不變 —— 綠的路徑仍在首輪就 settle,不會多等。
+configure({ asyncUtilTimeout: 3000 });
 
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
