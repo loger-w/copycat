@@ -57,6 +57,41 @@ function open(wl: Watchlist = WL) {
   return { onClose, onGroupDeleted };
 }
 
+/** PUT 卡 gate 逐發放行(成功 echo / 400 失敗可選):製造「第一發在途時做第二個動作」
+ *  的視窗。gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
+ *  對應 resolver 必已存在,release 不會撲空。每個 describe 各叫一次(閉包各自持 `gated`);
+ *  `gatePuts()` 重設佇列並換掉 `fetchMock` 實作,`beforeEach` 的 echo 版在下一條測試自動復原。
+ *  原本三個 describe 各抄一份逐字複本(next-time 08-26 A4 留尾)。 */
+function makeGate(): {
+  gatePuts: () => void;
+  releaseOk: () => void;
+  releaseFail: () => void;
+} {
+  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }> = [];
+  function gatePuts(): void {
+    gated = [];
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as Watchlist;
+        putBodies.push(body);
+        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+  }
+  function releaseOk(): void {
+    const g = gated.shift()!;
+    g.resolve(new Response(JSON.stringify(g.body)));
+  }
+  function releaseFail(): void {
+    gated
+      .shift()!
+      .resolve(new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 }));
+  }
+  return { gatePuts, releaseOk, releaseFail };
+}
+
 describe("關閉時不佔版面(round6 bug)", () => {
   /** f46cc29 把 dialog 的 className 從「無 display utility」改成含 `flex`。
    *
@@ -358,31 +393,7 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
 // 第二發 mutate 覆蓋(TQ v5 契約:per-call callbacks 只 fire 最新一次 mutate);且 commit
 // 一律以 render 閉包的 stale wl 算 next。兩缺陷共用同一觸發窗:第一發 PUT 在途時做第二個動作。
 describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () => {
-  /** PUT 卡 gate 逐發放行(成功 echo / 400 失敗可選):製造「第一發在途時做第二個動作」
-   *  的視窗。gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
-   *  對應 resolver 必已存在,release 不會撲空。 */
-  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
-  function gatePuts(): void {
-    gated = [];
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Watchlist;
-        putBodies.push(body);
-        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
-      }
-      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
-      return new Response(JSON.stringify(WL));
-    });
-  }
-  function releaseOk(): void {
-    const g = gated.shift()!;
-    g.resolve(new Response(JSON.stringify(g.body)));
-  }
-  function releaseFail(): void {
-    gated
-      .shift()!
-      .resolve(new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 }));
-  }
+  const { gatePuts, releaseOk, releaseFail } = makeGate();
 
   it("連刪兩組:第二發 PUT 以第一發結果為基底,不把第一組還原回去", async () => {
     gatePuts();
@@ -457,23 +468,7 @@ describe("WatchlistManagerDialog 連續操作(吞 callback / stale 基底)", () 
 
 // 🔴 N115 / N118:撞名判定與交錯覆蓋的其餘組合。
 describe("WatchlistManagerDialog 佇列視窗內的撞名與交錯(N115 / N118)", () => {
-  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
-  function gatePuts(): void {
-    gated = [];
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Watchlist;
-        putBodies.push(body);
-        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
-      }
-      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
-      return new Response(JSON.stringify(WL));
-    });
-  }
-  function releaseOk(): void {
-    const g = gated.shift()!;
-    g.resolve(new Response(JSON.stringify(g.body)));
-  }
+  const { gatePuts, releaseOk, releaseFail } = makeGate();
 
   function addGroupNamed(name: string): void {
     fireEvent.change(screen.getByPlaceholderText("群組名稱"), { target: { value: name } });
@@ -551,9 +546,7 @@ describe("WatchlistManagerDialog 佇列視窗內的撞名與交錯(N115 / N118)"
     open();
     fireEvent.click(screen.getByLabelText("刪除群組 觀察"));
     await waitFor(() => expect(putBodies).toHaveLength(1));
-    gated
-      .shift()!
-      .resolve(new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 }));
+    releaseFail();
     await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("從自選移除 2317"));
@@ -697,23 +690,7 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
 // commit **之前**無條件 `setRenaming(null)` —— 撞名時文案是非同步從佇列冒出來的,而編輯框已經關了、
 // 使用者打的字消失。change-spec 說 eager「降級為純 UX(決定要不要清輸入框)」,那一半沒留下。
 describe("WatchlistManagerDialog 改名被拒時保留編輯框(review A4)", () => {
-  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
-  function gatePuts(): void {
-    gated = [];
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Watchlist;
-        putBodies.push(body);
-        return new Promise<Response>((resolve) => gated.push({ body, resolve }));
-      }
-      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
-      return new Response(JSON.stringify(WL));
-    });
-  }
-  function releaseOk(): void {
-    const g = gated.shift()!;
-    g.resolve(new Response(JSON.stringify(g.body)));
-  }
+  const { gatePuts, releaseOk } = makeGate();
   function startRename(to: string): HTMLInputElement {
     fireEvent.click(screen.getByLabelText("改名 主力"));
     const input = screen.getByDisplayValue("主力") as HTMLInputElement;
