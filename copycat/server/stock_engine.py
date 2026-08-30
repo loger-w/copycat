@@ -709,9 +709,10 @@ class StockEngine:
           - `_no_data` → 不入列(A6-4;TC4 已經說沒有這檔,再問也是同一個答案)
           - 已回補 / 在途 → dedup
           - 當日失敗 ≥ `_BACKFILL_MAX_FAILS` → 冷卻(A2)
-        冷卻**只擋這條 60s 輪詢的路**,不下沉到 `_enqueue_backfill`:另外四個入列點
-        (set_main / rollover / reconnect / 漲跌停值變)都是低頻且對應「使用者當下在
-        看的那一檔」或「日別重來」,被冷卻擋掉會變成主圖整天補不回來。
+        冷卻**只擋這條 60s 輪詢的路**與首筆成交 tick 那條(兩者共用 `_backfill_wanted`),
+        不下沉到 `_enqueue_backfill`:另外四個入列點(set_main / rollover / reconnect /
+        漲跌停值變)都是低頻且對應「使用者當下在看的那一檔」或「日別重來」,被冷卻擋掉
+        會變成主圖整天補不回來。
         """
         out: dict[str, dict] = {}
         for code in codes:
@@ -1046,7 +1047,7 @@ class StockEngine:
         self._publish({"type": "status", "tc4": "up", "backfilling": self._backfilling})
         # reconnect **不** bump generation(實碼事實)→ 記帳不會被 generation 作廢帶走,
         # 得顯式清。漏清的話斷線那段的缺口整天補不回來:主圖靠下一行自癒,主圖以外的
-        # 成員全靠這次清空才有機會再被 `group_snapshot` 入列(R4)。
+        # 成員全靠這次清空才有機會再被 `group_snapshot` / 重連後的首筆成交 tick 入列(R4)。
         # **只清 `_backfilled`**(A3):`_backfill_pending` 是在途計數,清掉之後那些
         # job 回來仍會各扣一次 → 旗標永久假、同一檔又被重複入列一次。斷線期間發出的
         # job 由 worker 自己走失敗路徑結清,不需要外力。
@@ -1158,6 +1159,23 @@ class StockEngine:
             and tick.trade_date == self._pending_date
         ):
             self._rollover_stage2(tick)
+        # **首筆當日成交 tick → 入列回補**(perf/opening-backfill-parallel S2):其餘入列點
+        # 全是需求驅動(set_main / 群組檢視 60 s 輪詢 / rollover 與 reconnect 只排主圖 /
+        # 漲跌停值變只認已補過的檔),08-28 開盤 09:00→09:02 零回補、直到 user 打開群組
+        # 檢視。不改成「訂閱當下入列」:08:14 開站對 TC4 建當日 TICKS 歷史訂閱只會
+        # 30 s 逾時 ×3 再「放棄」(08-28 主圖 6207 實錄),40 檔 = 20 分鐘必敗 REQ;
+        # 首筆成交才是「TC4 有東西可補」的正面訊號,薄股沒成交也不會卡住單工 worker。
+        # 放在 stage2 **之後**:換日首筆排的是新一天(新 generation)的 job。
+        # 試撮成交帶 `is_trial`(`ingest` 也不收),盤前 08:30–09:00 不觸發。guard 與
+        # `group_snapshot` 同一把尺(`_backfill_wanted`):在途 / 已補 / 冷卻都不重排。
+        if (
+            tick is not None
+            and not tick.is_trial
+            and tick.trade_date == self._trade_date
+            and code in self._refs
+            and self._backfill_wanted(code)
+        ):
+            self._enqueue_backfill(code)
         if tick is not None and state.ingest(tick):
             if code == self._main:
                 self._publish(
@@ -1291,8 +1309,8 @@ class StockEngine:
     # ---- backfill worker(單工;guard = job 自帶 code ∧ generation)----
 
     def _enqueue_backfill(self, code: str) -> None:
-        """入列回補 job 的**唯一**接點(五個產出點共用:set_main / rollover stage2 /
-        reconnect / 漲跌停值變 / group_snapshot)。
+        """入列回補 job 的**唯一**接點(六個產出點共用:set_main / rollover stage2 /
+        reconnect / 漲跌停值變 / group_snapshot / 首筆當日成交 tick)。
 
         `_backfill_pending` 必須與 put 同步寫入 —— 分開寫的話,某個入列點漏寫就會讓
         `backfilling` 旗標與群組 dedup 對那條路徑靜默失準(卡片顯示「無資料」而不是
