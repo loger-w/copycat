@@ -198,7 +198,9 @@ class StockSource(Protocol):
 
     def prepare_backfill(self, codes: list[str]) -> None:
         """整批預熱:對每檔先送 SubHistory 讓 TC4 平行備資料,之後逐檔 `backfill` 收割
-        (perf/opening-backfill-parallel S1-b)。best-effort:失敗只 log,不 raise。"""
+        (perf/opening-backfill-parallel S1-b)。best-effort:傳輸失敗與壞電文
+        (`ConnectionError` / `ValueError`)只 log,不 raise;其餘例外由 worker 的
+        `except Exception` 兜住(pr-153 F-05)。"""
         ...
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
@@ -1183,11 +1185,11 @@ class StockEngine:
         # 全站 tc4_status 打 down —— 多一條高頻入列點只是多一條誤報路)。
         if (
             tick is not None
+            and code not in self._tick_armed  # 最具選擇性的判斷放最前:訂閱期內第 2 筆起全在這裡早退
             and not tick.is_trial
             and tick.trade_date == self._trade_date
             and code != self._main
             and code in self._refs
-            and code not in self._tick_armed
         ):
             self._tick_armed.add(code)
             if self._backfill_wanted(code):
@@ -1497,6 +1499,11 @@ class StockEngine:
                     fails,
                     _BACKFILL_MAX_FAILS,
                 )
+                # 這條路不設 `_backfilled`、也不武裝 timer,tick 點火權若已用掉,該檔當日就只剩
+                # 群組檢視 60 s 輪詢救得回來(pr-153 F-01)。還回點火權讓下一筆成交再排一次;
+                # 預算由 `_BACKFILL_MAX_FAILS` 封口 —— 每次重排都先付一次真失敗 REQ,第 3 次後
+                # `_backfill_wanted` 自然擋下,不會重演逾時路徑那種毫秒燒盡(那條靠 timer 節奏)。
+                self._tick_armed.discard(code)
             # 兩條路都要補推:不推的話「回補中…」徽章永遠掛著而內部態早就清了(TQ-4)
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
             return

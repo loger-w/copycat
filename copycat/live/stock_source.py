@@ -699,7 +699,9 @@ class StockQuoteSource(TC4QuoteSource):
 
         **best-effort**:傳輸失敗只記 WARNING 就停(`_req` 已 dispose 連線,再送也是
         同一個答案),讓逐檔 `backfill` 自己去撞 —— 那條路的錯誤處置(主圖 → tc4 down /
-        成員記帳冷卻)齊全,這裡 raise 會讓整批被單一檔拖垮。
+        成員記帳冷卻)齊全,這裡 raise 會讓整批被單一檔拖垮。壞電文同款:`_req` 尾端的
+        `json.loads` 在 try 之外,`JSONDecodeError`(`ValueError` 子類)不會收斂成
+        ConnectionError,要在這裡一併擋(pr-153 F-05)。
         """
         start, end = stock_window(self._trade_date)
         code = "(connect)"
@@ -709,7 +711,7 @@ class StockQuoteSource(TC4QuoteSource):
             self._ensure_connected()
             for code in codes:
                 self._sub_history(stock_symbol(code), start, end)
-        except ConnectionError as e:
+        except (ConnectionError, ValueError) as e:
             logger.warning("prepare_backfill 於 %s 中斷(%s);其餘交逐檔回補", code, e)
 
     def backfill(self, code: str) -> list[StockTick]:
