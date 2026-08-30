@@ -1,4 +1,4 @@
-﻿"""RiverState 狀態機測試(SC-1:分桶 / 換場清空 / 回補只補空缺 / snapshot & delta 形狀)。"""
+"""RiverState 狀態機測試(SC-1:分桶 / 換場清空 / 回補只補空缺 / snapshot & delta 形狀)。"""
 
 from __future__ import annotations
 
