@@ -250,6 +250,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   —— 兩者都不是契約斷了,也不要替 OI 列硬填來源(pr-119 F-03 / pr-129 F-01)。兩邊值域以
   `tests/capital/test_models.py::test_avg_source_parity_with_frontend` 釘住(後端測試直讀 `types.ts::AVG_SOURCES` 字面比
   `get_args(AvgSource)`;pr-129 F-05):後端先加值而前端沒跟,白名單會把新值**靜默**歸 null 退回修前口徑,零訊號。
+- **證券部位 `kind` 的 `daytrade_sell` 值**(2026-08-30 起,fix/borrowless-short-calibration):產生點
+  `copycat/capital/balance.py::parse_balance_line`(現股 T 列負股數 → `daytrade_sell`)與 `store.py::_FILL_KIND`(「無券」);
+  讀者 = `frontend/src/lib/ladder-position.ts::positionEcon`(當沖稅減半條件 `cash | daytrade_sell`)、`lib/trade-kinds.ts`
+  (標籤「無券」)、`lib/close-order.ts::kindOf`(**不認得 → 不送 kind**,後端 `position_for(no, None)` 走同檔唯一列;
+  wire `PositionCloseBody.kind` 仍是 `PositionKind` 三值)。後端把負現股列改回 `cash` 或改別的字串 → 前端減半靜默消失、
+  標籤印原字串、平倉照走唯一列 —— 三個讀者都不會報錯。`tests/capital/test_store.py -k borrowless` +
+  `frontend/src/lib/ladder-position.test.ts`「無券空單」釘住。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿
