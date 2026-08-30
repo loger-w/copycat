@@ -10,9 +10,14 @@
   零 corr WS ×1 / `App.test.tsx` localStorage 記住 index tab + capital WS 唯一掛載 ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 5/5 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
   主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
   單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。
-- [ ] **`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**(render 時重算):與本次否決的 H3 同構 ——
-  只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了「沒人看就退訂」的閘,
-  跨日會與期貨日 K 同病。記著,不動。
+- [ ] **`useMarketBars.ts:69` / `useStockBars.ts:95` 與修前 `useFuturesBars` 逐字同病、未修**(pr-151-review F-03 改正:原記的
+  overlay 兩支不是同病):`useMarketBars` 日 / 週 / 月 K `staleTime: isMinute ? 0 : Infinity`、queryKey `["market-bars", key, tf]` 無日期;
+  `useStockBars` 日 K `staleTime: isDaily ? Infinity : 0`、queryKey `["stock-bars", code, "D"]` 無日期 —— 台股綜合 tab 的日 / 週 / 月 K
+  與個股頁日 K 整天掛著跨午夜同樣停在昨天(個股 overlay 走後端 `date < today` 不受影響,症狀只在 K 線本身)。修法沿
+  `useFuturesBars.ts::msUntilDayRollover`(界嚴格在 from 之後 + 秒級量化;**不要**改吃 `dataUpdatedAt`,切回路徑會漂)。另開 /bug。
+- [ ] **`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**(render 時重算,**有**日期鍵、風險較低):
+  與 08-30 否決的 H3 同構 —— 只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了
+  「沒人看就退訂」的閘,跨日會與期貨日 K 同病。記著,不動。
 
 ## 2026-08-28(next-time 100 條 triage 拍板 —— 新開案;決定表 `docs/superpowers/specs/2026-08-28-next-time-triage.md`)
 
@@ -444,6 +449,10 @@ review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture /
   未來 / 當前這一節」,對「停在更早的一天」無感(那正是它刻意的安全側)。候選 = staleTime
   改吃「到下一個交易日切換點」的毫秒數,或 queryKey 帶交易日。**現象輕微但整天掛著必中**。 **→ 08-28 拍板升 `/bug`(整天掛著必中)。**
   **→ 08-30 fix/futures-daily-bars-rollover 出貨**:日 K `staleTime` / `refetchInterval` 改函式形式吃 `msUntilNextLocalDate` + 60 s slack(界 = 本機日曆午夜,不是 15:00 錨定日翻頁 —— 後端 `build_period` daily cache 鍵是 `date.today()`,午夜前問到的還是同一份);queryKey 帶日期那條否決(只在 re-render 時重算,週末無輪詢 = 無 re-render)。四條 hook 測試釘住(一直在 tab / 切走再切回 / 背景分頁 / 兩個午夜恰兩發)。
+  **→ 08-30 晚 /pr-review #151 F-01 Must Fix → fix/pr-151-review-followups 收修**:那版 `msUntilDayRollover(Date.now())` = 「到下一個午夜 + slack」,
+  而 TQ v5 每 render 都 `setOptions` 重排計時器 → 00:00–00:01 內任一重繪把那一發推到隔天,「一直在期貨 tab 上」主情境其實沒修好
+  (`FuturesChart` 每則 WS 訊息重繪)。改成界嚴格在 from 之後(`msUntilNextLocalDate(new Date(from − slack))`)+ 秒級量化;
+  紅測試 = slack 窗內每 100 ms rerender 40 s。報告 `docs/superpowers/specs/pr-151-review.md`。
 - [ ] **`o.date` 的夜盤跨午夜組合假設未證**(`lib/fill-marks.ts::alldayFillPoints`):
   群益回報的 `date` 是否為最新事件日**未實證**(08-28 pr-134 F-01:同日 C/D 實測仍原單日期),而近全軸把 `date + time` 組成時戳後丟給 `anchorDateOf`
   —— 這假設了「夜盤 01:00 的成交,`date` 已是次一日曆日」。若群益實際回的是委託所屬交易日

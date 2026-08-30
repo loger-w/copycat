@@ -28,6 +28,12 @@
 無需額外 log:TQ observer 原始碼(`queryObserver.js` `#computeRefetchInterval` / `#updateStaleTimeout` / `resolveStaleTime`)確認
 `staleTime` 與 `refetchInterval` 皆支援函式形式、interval 只在 `focusManager.isFocused()` 時打、staleTime 以 `dataUpdatedAt` 起算。
 
+**pr-151-review F-08 補(這一輪漏掉、正是 F-01 所在)**:
+- `useBaseQuery.js:69-70` —— **每一次 render** 都 `observer.setOptions(defaultedOptions)`;`queryObserver.js:112-118` 對
+  `nextRefetchInterval !== #currentRefetchInterval` 就 `#updateRefetchInterval`(`:208-218` 先 `#clearRefetchInterval` 再
+  `setInterval`)。`refetchInterval` 函式回連續時間值 = 每 render 重排一次;界若寫成「到下一個午夜 + slack」,slack 窗內求值會跳到隔天。
+- `focusManager.js:9-18` —— `isFocused()` 只聽 `visibilitychange`,**不是**視窗 focus;整夜可見的分頁沒有 `refetchOnWindowFocus` 退路。
+
 ## Phase 5 修法
 
 - `lib/trading-calendar.ts::msUntilNextLocalDate(from)`:到下一個本機日曆日 00:00 的毫秒數(純函式,三例測試)。
@@ -41,3 +47,5 @@
 
 無 `[DEBUG-…]` 儀器、無拋棄式原型。Blast radius:`"day"` 模式唯一 caller = `FuturesChart.tsx:170`;App 只用 intraday;
 新 helper 只有 hook 一個讀者。同構 `useIndexOverlay` / `useStockOverlay`(render 時翻鍵)記 next-time 不動。
+**pr-151-review F-03 / F-08 補**:真正逐字同病的是 `useMarketBars.ts:69` 與 `useStockBars.ts:95`(`staleTime: Infinity` + queryKey 無日期),
+overlay 兩支有日期鍵、風險較低;兩支同病另開 /bug(next-time 08-30 節)。
