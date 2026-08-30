@@ -2215,7 +2215,12 @@ def test_profit_row_backfill_logs_value_once_per_change(
         chain(pnl_variant(PNL_3357_MARGIN, {10: "151.00"}))  # 均價變了:再印一次
     lines = [r.getMessage() for r in caplog.records if "損益列回填" in r.getMessage()]
     assert len(lines) == 2, lines
-    assert lines[0].startswith(
+    # 整行比對:括號內的「原 avg」與「標籤原文」是這行 log 存在的理由(融券 [25] 校準要對群益原文),
+    # 只 startswith 到 price= 會讓它們被靜默拿掉(pr-145 F-06)
+    assert lines[0] == (
         "損益列回填 3357 kind=margin avg=150.55 cost=451650.0 pnl=12345.0 price=156.0"
+        "(原 avg=None,標籤原文='融資')"
     )
-    assert "avg=151.0" in lines[1]
+    assert lines[1].startswith("損益列回填 3357 kind=margin avg=151.0 ")
+    # 「原 avg」是回填前 Position.avg_price:pending 每輪從庫存重建、恆 None(spec c3),不是上一輪印過的值
+    assert "(原 avg=None,標籤原文='融資')" in lines[1]

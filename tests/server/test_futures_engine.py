@@ -1081,6 +1081,22 @@ class TestBarsRangeProxy:
         assert len(bars) == 1
 
 
+class RecordingBarsSource(FakeSource):
+    """`fetch_bars_range` 的 fake:記下每次呼叫的五個參數、回固定 `bars`(預設空)。
+    `TestBarsRangeSession`(只看 call)與 `TestOneKHealthWarnings`(只看 bars)共用一支(pr-145 F-16)。"""
+
+    def __init__(self, bars: list[dict] | None = None) -> None:
+        super().__init__()
+        self.bars = bars or []
+        self.bars_calls: list[tuple[str, str, str, str, str]] = []
+
+    def fetch_bars_range(
+        self, product: str, tf: str, start: str, end: str, *, session: str = "day"
+    ) -> list[dict]:
+        self.bars_calls.append((product, tf, start, end, session))
+        return self.bars
+
+
 class TestBarsRangeSession:
     """futures-allday §1.4:`session` 必須原樣轉給 source(三層貫通的中間那層)。
 
@@ -1088,16 +1104,7 @@ class TestBarsRangeSession:
     沒有任何錯誤訊號,所以這一層要有自己的斷言。
     """
 
-    class _WithBars(FakeSource):
-        def __init__(self) -> None:
-            super().__init__()
-            self.bars_calls: list[tuple[str, str, str, str, str]] = []
-
-        def fetch_bars_range(
-            self, product: str, tf: str, start: str, end: str, *, session: str = "day"
-        ) -> list[dict]:
-            self.bars_calls.append((product, tf, start, end, session))
-            return []
+    _WithBars = RecordingBarsSource
 
     @pytest.mark.asyncio
     async def test_session_forwarded_and_defaults_to_day(self) -> None:
@@ -1234,15 +1241,7 @@ class TestOneKHealthWarnings:
     事後分不出 H1(TC4 暫時落後)與 H3(memo 釘住)。`bars_range` tf=1 成功回非空時檢查,固定前綴供 grep;
     同商品同尾根只印一次(前端每分鐘輪詢不洗版)。"""
 
-    class _Bars(FakeSource):
-        def __init__(self, bars: list[dict]) -> None:
-            super().__init__()
-            self.bars = bars
-
-        def fetch_bars_range(
-            self, product: str, tf: str, start: str, end: str, *, session: str = "day"
-        ) -> list[dict]:
-            return self.bars
+    _Bars = RecordingBarsSource
 
     @staticmethod
     def _bar(t: str) -> dict:
@@ -1256,14 +1255,125 @@ class TestOneKHealthWarnings:
         await engine.start()
         try:
             st = engine._states["TXF"]
-            st.date, st.t = "2026-07-28", "09:10:30.000"  # 最後成交 09:10 vs 尾根 09:01 → 落後 9 分
+            # 最後成交 09:10:30 落在終點標記 09:11 那根(非整秒 +1,與前端 tradeSlotOf 同一把尺;pr-145 F-08)
+            # vs 尾根 09:01 → 落後 10 根
+            st.date, st.t = "2026-07-28", "09:10:30.000"
             with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
                 await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
                 await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+                assert caplog.text.count("期貨 1K 落後 TXF") == 1, "同尾根第二次輪詢不再印"
+                assert "尾根 2026-07-28 09:01" in caplog.text and "落後 10 分" in caplog.text
+                # 尾根前進(TC4 補了一根)但仍落後 → 是新事件,要再印一次(pr-145 F-05)
+                src.bars = [*src.bars, self._bar("2026-07-28 09:02")]
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
         finally:
             await engine.close()
-        assert caplog.text.count("期貨 1K 落後 TXF") == 1, "同尾根第二次輪詢不再印"
-        assert "尾根 2026-07-28 09:01" in caplog.text and "落後 9 分" in caplog.text
+        assert caplog.text.count("期貨 1K 落後 TXF") == 2
+        assert "尾根 2026-07-28 09:02" in caplog.text and "落後 9 分" in caplog.text
+        assert src.bars_calls[0][1:] == ("1", "2026-07-28", "2026-07-28", "allday")
+
+    async def test_lag_and_gap_are_booked_separately(self, caplog: pytest.LogCaptureFixture) -> None:
+        # 同一次查詢同時落後又缺格 → 兩行都要在(lag / gap 各記各的,不互吞;pr-145 F-05)
+        bars = [self._bar("2026-07-28 09:00"), self._bar("2026-07-28 09:05"), self._bar("2026-07-28 09:06")]
+        engine = FuturesEngine(lambda: self._Bars(bars))
+        await engine.start()
+        try:
+            st = engine._states["TXF"]
+            st.date, st.t = "2026-07-28", "09:20:00.000"
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+        finally:
+            await engine.close()
+        assert caplog.text.count("期貨 1K 落後 TXF") == 1 and "落後 14 分" in caplog.text
+        assert caplog.text.count("期貨 1K 中段缺格 TXF") == 1 and "最大 4 分" in caplog.text
+
+    async def test_day_and_allday_queries_each_warn_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 期貨 tab 打 session=allday、大盤 tab 打 day,同商品同尾根 —— 去重帳要按 session 分開,
+        # 不然先跑的那個會把後跑的靜默壓掉(pr-145 F-13)
+        bars = [self._bar("2026-07-28 09:00"), self._bar("2026-07-28 09:05")]
+        engine = FuturesEngine(lambda: self._Bars(bars))
+        await engine.start()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="day")
+                await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="day")
+        finally:
+            await engine.close()
+        assert caplog.text.count("期貨 1K 中段缺格 TXF") == 2
+
+    async def test_weekend_and_holiday_gaps_are_not_missing_bars(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 週五收盤 → 週一開盤(或連假)之間沒有任何一根該存在的 bar —— 不是缺格。冷 memo 時
+        # build_minute 抓 30 個日曆日必含週末,這裡曾每次重啟固定噴「最大 2879 分」(pr-145 F-01)
+        for session, ts in (
+            ("allday", ("2026-07-25 05:00", "2026-07-27 08:46")),  # 週六 05:00 夜盤收 → 週一日盤首
+            ("day", ("2026-07-24 13:45", "2026-07-27 08:46")),  # 週五日盤尾 → 週一日盤首
+            ("day", ("2026-02-13 13:45", "2026-02-23 08:46")),  # 春節連假
+        ):
+            engine = FuturesEngine(lambda: self._Bars([self._bar(t) for t in ts]))
+            await engine.start()
+            try:
+                with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                    await engine.bars_range("TXF", "1", "2026-02-01", "2026-07-27", session=session)
+            finally:
+                await engine.close()
+        assert "期貨 1K" not in caplog.text
+
+    async def test_day_session_domain_ignores_night_minutes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # session=day 的分鐘域只有日盤:尾根 13:43、最後成交 15:30 → allday 算 2 + 30 = 32 分落後,
+        # day 只算 13:44 / 13:45 兩分 → 不印(else 分支曾零覆蓋,恆回 allday 也全綠;pr-145 F-14)
+        for session, expect in (("allday", True), ("day", False)):
+            engine = FuturesEngine(lambda: self._Bars([self._bar("2026-07-28 13:43")]))
+            await engine.start()
+            try:
+                st = engine._states["TXF"]
+                st.date, st.t = "2026-07-28", "15:30:00.000"
+                with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                    await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session=session)
+            finally:
+                await engine.close()
+            assert ("期貨 1K 落後" in caplog.text) is expect, session
+            caplog.clear()
+
+    async def test_bad_timestamp_skips_check_and_keeps_bars(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 形狀不對的時戳整組跳過(不是跳過那一根),回傳原樣(pr-145 F-14)
+        bars = [self._bar("2026-07-28 09:00"), self._bar("bad"), self._bar("2026-07-28 09:30")]
+        engine = FuturesEngine(lambda: self._Bars(bars))
+        await engine.start()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.futures_engine"):
+                got, status = await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+        finally:
+            await engine.close()
+        assert (got, status) == (bars, "ok") and "期貨 1K" not in caplog.text
+
+    async def test_health_check_failure_does_not_break_bars_range(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 純診斷自己炸掉不得把 200 變 500:bars 照回、status 照 ok、只留一行 exception log(pr-145 F-09)
+        bars = [self._bar("2026-07-28 09:00")]
+        engine = FuturesEngine(lambda: self._Bars(bars))
+
+        def boom(*_a: object, **_k: object) -> None:
+            raise KeyError("t")
+
+        monkeypatch.setattr(engine, "_check_1k_health", boom)
+        await engine.start()
+        try:
+            with caplog.at_level(logging.ERROR, logger="copycat.server.futures_engine"):
+                got, status = await engine.bars_range("TXF", "1", "2026-07-28", "2026-07-28", session="allday")
+        finally:
+            await engine.close()
+        assert (got, status) == (bars, "ok")
+        assert "期貨 1K 健康檢查失敗" in caplog.text
 
     async def test_session_open_is_not_lag(self, caplog: pytest.LogCaptureFixture) -> None:
         # review Spec c1:15:01 夜盤剛開,尾根停在 13:45、最後成交 15:00:30 —— 牆鐘差 76 分,但兩者之間
@@ -1314,9 +1424,8 @@ class TestOneKHealthWarnings:
         bars = [
             self._bar("2026-07-28 13:44"),
             self._bar("2026-07-28 13:45"),
-            self._bar("2026-07-28 15:03"),  # 日盤尾 → 夜盤首:段界;首根延後兩分(冷門開盤)不算缺格(< 3 分)
-            self._bar("2026-07-28 15:02"),
-            self._bar("2026-07-28 15:06"),  # 15:03–15:05 三根缺
+            self._bar("2026-07-28 15:02"),  # 日盤尾 → 夜盤首:段界;首根延後一分(冷門開盤)不算缺格(< 3 分)
+            self._bar("2026-07-28 15:06"),  # 15:03–15:05 三根缺 → 缺格(bars 遞增序,TC4 真正會回的形狀;pr-145 F-07)
             self._bar("2026-07-28 15:07"),
             self._bar(
                 "2026-07-29 05:00"
