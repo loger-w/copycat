@@ -242,7 +242,6 @@ class TestPrepareBackfill:
             src.prepare_backfill(["2330"])
         assert "prepare_backfill" in caplog.text
 
-
     def test_bad_payload_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         """pr-153 F-05:`_req` 的 `json.loads` 在 try/finally 之後,壞電文的 `JSONDecodeError`
         不會收斂成 ConnectionError —— prepare 的 best-effort 契約要連這條一起擋。"""

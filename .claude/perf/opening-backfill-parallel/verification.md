@@ -1,7 +1,7 @@
 # verification — perf/opening-backfill-parallel(2026-08-30)
 
 worktree `C:\side-project\copycat-wt-opening-backfill-parallel`,branch `perf/opening-backfill-parallel`,
-merge-base master = 09cc3e63。venv = 主 tree `.venv`(Python 3.13)。
+分支自 master 09cc3e63 開、收尾 rebase 到 25312d79(PR #153 rebase merge,七筆);本檔 commit SHA 一律為 rebase 後之值(pr-153 review F-13 回填,對照:9f30386f→cdd847fd / 51a35de3→eb11b24d / bf1ce02e→5d9f8567 / c53107ed→b14fa0f4 / f93f530f→ea05509c / f1b7a52c→780f4153)。venv = 主 tree `.venv`(Python 3.13)。
 
 ## 1. 自動化 gate(auto-verify;專案 CLAUDE.md §1)
 
@@ -9,8 +9,8 @@ merge-base master = 09cc3e63。venv = 主 tree `.venv`(Python 3.13)。
 |---|---|---|---|
 | baseline pytest(master 09cc3e63) | `.venv/Scripts/python -m pytest -q -p no:cacheprovider` | all passed(尾段截斷,exit 0) | 0 |
 | baseline ruff / pyright | `ruff check copycat tests` / `pyright` | All checks passed / 0 errors | 0 / 0 |
-| pytest(f93f530f,review 前) | `.venv/Scripts/python -m pytest -q -p no:cacheprovider` | 3181 passed, 1 skipped, 1 warning in 210.34s | 0 |
-| **pytest(HEAD f1b7a52c,review 收修後)** | 同上 | **3187 passed, 1 skipped, 1 warning in 204.96s** | 0 |
+| pytest(ea05509c,review 前) | `.venv/Scripts/python -m pytest -q -p no:cacheprovider` | 3181 passed, 1 skipped, 1 warning in 210.34s | 0 |
+| **pytest(HEAD 780f4153,review 收修後)** | 同上 | **3187 passed, 1 skipped, 1 warning in 204.96s** | 0 |
 | **ruff** | `.venv/Scripts/python -m ruff check copycat tests` | All checks passed! | 0 |
 | **pyright** | `.venv/Scripts/python -m pyright` | 0 errors, 0 warnings, 0 informations | 0 |
 | **copycat validate** | 主 tree `.venv/Scripts/python -m copycat validate`(replay / engine 程式碼本分支零 diff;`out/` gitignored 不在 worktree) | 42/42 PASS | 0 |
@@ -31,16 +31,16 @@ merge-base master = 09cc3e63。venv = 主 tree `.venv`(Python 3.13)。
 | 版本 | backfill_wall_s(40 檔) | gethis_empty_polls | 備註 |
 |---|---|---|---|
 | baseline 09cc3e63 | **40.72** | 40 | 1.02 s/檔 = prod 08-28 log 的一秒一檔 |
-| S1-a 9f30386f(退避) | 18.91 | 80 | 0.47 s/檔(0.15+0.3 退避) |
-| S1-b 51a35de3(整批 SubHistory) | **0.873** | 1 | 只剩第一檔 poll 一次落空;**目標 < 5 s 達標(−97.9%)** |
-| HEAD f1b7a52c(review 收修後),`--trigger group` | 0.87 | 1 | 收修無退化 |
+| S1-a cdd847fd(退避) | 18.91 | 80 | 0.47 s/檔(0.15+0.3 退避) |
+| S1-b eb11b24d(整批 SubHistory) | **0.873** | 1 | 只剩第一檔 poll 一次落空;**目標 < 5 s 達標(−97.9%)** |
+| HEAD 780f4153(review 收修後),`--trigger group` | 0.87 | 1 | 收修無退化 |
 | HEAD,`--trigger ticks --tick-gap-ms 10`(S2 路徑:40 檔首筆成交 0.4 s 內到齊) | **1.341** | 3 | 第一筆單跑 ~0.5 s,其餘在它跑的期間累成大批次(review F-4/F-5 的疑慮實測否定) |
 | HEAD,`--trigger ticks --tick-gap-ms 50`(首筆散在 2.0 s 內) | 2.70 | 9 | 上界 = 末筆到達 + ~0.5 s;仍 < 5 s |
 
 證據檔:`evidence/harness-head-40codes.json`。
 
 ## 1a. review 收修(round 1;`code-review-round-1.json`)
-commit f1b7a52c:F-1/H1 worker 不死(source `_ensure_connected` 納入 try + worker 端擋 ConnectionError / Exception)、
+commit 780f4153:F-1/H1 worker 不死(source `_ensure_connected` 納入 try + worker 端擋 ConnectionError / Exception)、
 F-2 tick 入列每訂閱期至多一次(`_tick_armed`)、F-3 主圖排除、J1 訊息、J2 去重。新增紅先行測試 7 條
 (`test_prepare_failure_does_not_kill_the_worker` / `test_batch_is_deduplicated_before_prepare` /
 `test_fires_at_most_once_per_subscription_period` / `test_reconnect_rearms_the_first_tick_trigger` /

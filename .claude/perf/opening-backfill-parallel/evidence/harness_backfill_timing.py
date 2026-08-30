@@ -7,7 +7,8 @@ FakeApi 模擬 TC4 歷史通道的實測形狀(08-28 probe):
 
 量:`set_watchlist(N 檔)` → 觸發入列 → 全部進 `_backfilled` 的牆鐘秒數。
 用法(**在 worktree 根目錄執行**,sys.path 釘 cwd 避免 venv .pth 把 import 拉回主 tree):
-  .venv/Scripts/python <this file> --codes 40 [--ready-ms 200] [--req-ms 3] [--trigger group|watchlist]
+  .venv/Scripts/python <this file> --codes 40 [--ready-ms 200] [--req-ms 3] [--trigger group|ticks] [--tick-gap-ms N]
+  group = 群組檢視 60 s 輪詢一次入列 40 檔(量 S1);ticks = 模擬 09:00 首筆成交逐檔到達(量 S2 逐筆入列路徑)
 """
 
 from __future__ import annotations
@@ -177,7 +178,7 @@ def main() -> int:
     ap.add_argument("--codes", type=int, default=40)
     ap.add_argument("--ready-ms", type=float, default=200)
     ap.add_argument("--req-ms", type=float, default=3)
-    ap.add_argument("--trigger", choices=["group", "ticks", "watchlist"], default="group")
+    ap.add_argument("--trigger", choices=["group", "ticks"], default="group")
     ap.add_argument("--tick-gap-ms", type=float, default=10.0, help="ticks 模式:相鄰檔首筆間隔")
     a = ap.parse_args()
     res = asyncio.run(run(a.codes, a.ready_ms, a.req_ms, a.trigger, a.tick_gap_ms))
