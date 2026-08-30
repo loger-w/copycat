@@ -65,6 +65,7 @@ class FakeSource:
         self.trade_dates: list[str] = []
         self.backfills: list[str] = []
         self.prepares: list[list[str]] = []
+        self.prepare_error: Exception | None = None
         self.fail_subscribe: set[str] = set()
         # 「訂閱丟非連線類例外」(壞電文 / wrapper 內部型別錯)—— `fail_subscribe` 丟的
         # ConnectionError 是引擎預期並吞掉的那條路,測不到 task 帶例外結束的情境
@@ -112,6 +113,8 @@ class FakeSource:
     def prepare_backfill(self, codes: list[str]) -> None:
         """S1-b:worker 出隊時整批先 SubHistory。只記批次(順序 + 成員)。"""
         self.prepares.append(list(codes))
+        if self.prepare_error is not None:
+            raise self.prepare_error
 
     def backfill(self, code: str) -> list:
         self.backfills.append(code)
@@ -1726,6 +1729,60 @@ class TestFirstTickEnqueuesBackfill:
         assert src.backfills == []
         await engine.close()
 
+    async def test_fires_at_most_once_per_subscription_period(self) -> None:
+        """review F-2:tick 節拍是次秒級,不是 group_snapshot 的 60 s。逾時 settle 後
+        下一筆 tick 若立刻重排,15 s 退避與 2 次上限會在毫秒內燒完 → 「放棄」→ 該檔
+        當日不再回補。首筆只點火一次,之後的重試交原本的 timer / 60 s 輪詢。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.backfill_errors = [HistoryTimeoutError("首頁未備妥")]
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        assert "2330" in engine._backfill_timeout_handles  # 15 s timer 已武裝
+        src.on_message(_quote(cum=2))  # 逾時 settle 後的下一筆:不重排
+        src.on_message(_quote(cum=3))
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        assert engine._backfill_timeouts == {"2330": 1}  # 重試預算沒被 tick 燒掉
+        await engine.close()
+
+    async def test_reconnect_rearms_the_first_tick_trigger(self) -> None:
+        """reconnect 清 `_backfilled` 之後,成員靠重連後的首筆成交再補一次(斷線缺口)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        engine._handle_reconnect()
+        src.on_message(_quote(cum=2))
+        await _drain(engine)
+        assert src.backfills == ["2330", "2330"]
+        await engine.close()
+
+    async def test_main_is_left_to_its_own_enqueue_points(self) -> None:
+        """review F-3:主圖失敗會把全站 tc4_status 打 down;主圖已有 set_main / rollover /
+        reconnect 三個入列點,tick 這條不再多排一次。"""
+        engine, src = await _make()
+        src.backfill_error = ConnectionError("SubHistory fail")
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        assert engine.tc4_status == "down"
+        engine.tc4_status = "up"
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 主圖首筆:漲跌停 None→有值那條會排(既有 A6-5)
+        await _drain(engine)
+        n = len(src.backfills)
+        engine.tc4_status = "up"
+        src.on_message(_quote(cum=2))  # 之後的 tick:不再由 tick 路徑排
+        await _drain(engine)
+        assert len(src.backfills) == n
+        assert engine.tc4_status == "up"
+        await engine.close()
+
     async def test_in_flight_job_is_not_doubled(self) -> None:
         """在途 dedup 與 `group_snapshot` 同一把尺(`_backfill_wanted`)。用成員不用主圖:
         主圖的首則 REALTIME 本來就會經「漲跌停 None → 有值」再排一次(既有設計,A6-5)。"""
@@ -1768,6 +1825,39 @@ class TestBackfillBatchPrepare:
         await _drain(engine)
         assert src.backfills == ["2330"]
         assert src.prepares == []
+        await engine.close()
+
+    async def test_prepare_failure_does_not_kill_the_worker(self) -> None:
+        """review F-1/H1:prepare 逸出例外 = 整條 worker 靜默死亡、當日回補全失效。
+        prepare 只是預熱,失敗交逐檔 `backfill` 自己去撞(那條路的處置齊全)。"""
+        engine, src = await _make()
+        codes = ["2330", "2317", "2454"]
+        await engine.set_watchlist(codes)
+        src.prepare_error = ConnectionError("TC4 quote not connected")
+        engine.group_snapshot(codes)
+        await _drain(engine)
+        assert src.prepares == [codes]
+        assert src.backfills == codes  # worker 活著,逐檔照跑
+        assert engine._backfill_pending == {}
+        src.prepare_error = RuntimeError("壞電文")  # 非連線類同樣不得殺死 worker(CR4)
+        engine._backfilled.clear()
+        engine.group_snapshot(codes)
+        await _drain(engine)
+        assert src.backfills == codes * 2
+        await engine.close()
+
+    async def test_batch_is_deduplicated_before_prepare(self) -> None:
+        """review J2:同批同 code(set_main 不過 guard)只 Sub 一次。"""
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()
+        await engine.set_watchlist(["2330", "2317"])
+        engine.group_snapshot(["2330"])
+        await _drain(engine)  # 2330 卡在 gate
+        engine.group_snapshot(["2317"])
+        await engine.set_main("2317")  # 無條件再入列 2317
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.prepares == [["2317"]] or src.prepares == [], src.prepares
         await engine.close()
 
     async def test_stale_generation_jobs_are_settled_and_not_prepared(self) -> None:

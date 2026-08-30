@@ -228,6 +228,22 @@ class TestPrepareBackfill:
         assert "prepare_backfill" in caplog.text
 
 
+    def test_not_connected_is_logged_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """review F-1/H1:`_ensure_connected` 也在 best-effort 範圍內 —— 它逸出的話 worker
+        整條死掉(開盤 TC4 未就緒正是主場景)。"""
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
+
+        def _down() -> None:
+            raise ConnectionError("TC4 quote not connected")
+
+        monkeypatch.setattr(src, "_ensure_connected", _down)
+        with caplog.at_level(logging.WARNING):
+            src.prepare_backfill(["2330"])
+        assert "prepare_backfill" in caplog.text
+
+
 class TestFetchDailyBars:
     """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
 
