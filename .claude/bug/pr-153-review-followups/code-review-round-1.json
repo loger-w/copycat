@@ -1,0 +1,22 @@
+{
+  "fixed_point": "2873e004(master,PR #153 rebase merge tip)",
+  "head_reviewed": "93fcab7d(第 3 筆 chore);增量 = 第 4–6 筆(b5b4effd / f35f545b / 5bb62633)",
+  "reviewers": {"standards": "opus/high", "spec": "opus/high"},
+  "standards": [
+    {"id": "F-A", "severity": "hard", "loc": ".claude/perf/opening-backfill-parallel/verification.md:4 + code-review-round-1.json:3,10,11", "finding": "F-13 回填的 SHA(cdd847fd / eb11b24d / 5d9f8567 / b14fa0f4 / ea05509c / 780f4153)一顆都不在 master 歷史 —— 它們是 db0e6d48(GitHub rebase merge 前的 PR head)的歷史,master 上真正的七筆是 a7156aac / 84dce05f / eab0f33e / 50701501 / 2de68fe3 / 6615f006 / 2873e004;原報告 R8 補驗用 db0e6d48 當基準驗錯了。且 08-27 拍板是「第 n 筆 + subject」,兩份 artifact 仍是裸 SHA。"},
+    {"id": "F-B", "severity": "hard", "loc": "tests/server/test_stock_engine.py:1783,1893", "finding": "本 diff 新增兩處 ruff format 偏差(CJK 行尾註解超長),正是 F-12 引用的那條規則;hunk 數 pre-PR 14 → HEAD 16。"},
+    {"id": "F-C", "severity": "judgement", "loc": "copycat/live/stock_source.py:702,714", "finding": "ValueError 分支下 docstring「就停(_req 已 dispose)」理由不成立:壞電文路徑 _req 不 dispose、連線還活著,一則壞回應就放棄其餘 N−1 檔預熱,log 仍寫「中斷」。catch 面精準、兩處 docstring 口徑一致。"},
+    {"id": "F-D", "severity": "judgement", "loc": "copycat/server/stock_engine.py:1508-1515", "finding": "F-01 只修一半:except Exception 分支同樣不設 _backfilled、不武裝 timer、_backfill_failed += 1,卻沒有 _tick_armed.discard → 壞電文型失敗仍讓該檔當日 tick 通道死掉。主圖排除正確;預算論證成立(實測第 4 筆被擋)。"},
+    {"id": "F-E", "severity": "judgement", "loc": "commit 28e7d900 / c1216c15", "finding": "§6 三類分開:F-01/F-05(🔴)與 F-14(🔵 純重排,報告 action=no-op)同一筆;c1216c15 訊息宣稱 F-12 刪空白行,該改動實際落在 93fcab7d。F-14 語意完全等價。"},
+    {"id": "F-F", "severity": "judgement", "loc": "tests/live/test_stock_source.py:245-257", "finding": "test_bad_payload 傳兩檔卻只斷言 log,不驗第二筆 SUBQUOTE;與同檔 F-06 剛強化的全等口徑不一致。"},
+    {"id": "OK", "severity": "verified-ok", "loc": "tests", "finding": "六個突變(刪 F-01 discard / 縮 catch / 刪 main guard / dict.fromkeys→list / 刪訂閱期 discard / prepare 搬迴圈後)全部紅;_drain→wait_until(meta) 置換非假綠(update_meta 在 guard 之前且同 loop);F-03 改具體全等是強化。260 passed。"}
+  ],
+  "spec": [
+    {"id": "S-1", "severity": "LOW", "loc": "verification.md:4,13 + round-1.json:11,23", "finding": "F-13 未照拍板「第 n 筆 + subject」,改採次選回填 SHA(七顆 git log -1 可解析)。"},
+    {"id": "S-2", "severity": "LOW", "loc": "verification.md:4", "finding": "對照表多了報告未列的兩對(bf1ce02e→5d9f8567、c53107ed→b14fa0f4);harness docstring 多一行 group/ticks 說明 —— 在精神內。白名單六條無違反。"},
+    {"id": "S-3", "severity": "MED", "loc": "copycat/server/stock_engine.py:1519-1526", "finding": "= Standards F-D:except Exception 分支沒有 discard,壞電文一次就用掉當日點火權。"},
+    {"id": "S-4", "severity": "LOW", "loc": "tests/server/test_stock_engine.py:1717,1774 / :2701", "finding": "F-09 的 meta is not None 錨點今天不是假綠但非因果保證;main-slot 鏡射測試用浮動基準 n+1(F-03 剛消滅的寫法)。"},
+    {"id": "OK", "severity": "verified-ok", "loc": "F-01 / F-05 / F-14", "finding": "F-01 無緊迴圈(add 在 wanted 之前、上界 3、逾時路徑不受影響);F-05 catch 未藏 bug class(try 內 ValueError 來源只有 json.loads / decode);F-14 四述詞純判定順序可換。F-02/03/04/07 斷言確實釘住報告要求。21 passed。"}
+  ],
+  "disposition": "F-A/S-1 接受並修(5bb62633):以 origin/master 逐顆 --is-ancestor 驗 a7156aac…2873e004 七筆全 yes(cdd847fd 等六顆 no),兩份 artifact 改引「master SHA + 第 n 筆 + subject」;/pr-review R8 補驗基準錯誤一併記入 memory 教訓。F-B 接受並修(b5b4effd):兩行尾註改獨立行,hunk 數回到 pre-PR 14。F-C+F-F 接受並修(f35f545b + b5b4effd):prepare_backfill 拆成 _ensure_connected 失敗整批停 / 逐檔 ConnectionError 停 / ValueError 跳過該檔續行,兩處 docstring 同口徑;test_bad_payload 改「第一檔壞電文、第二檔照常 Sub」全等斷言(紅先行)。F-D/S-3 接受並修(f35f545b):except Exception 分支加 discard;紅先行 test_member_unexpected_error_rearms_the_first_tick_trigger(RuntimeError 後下一筆 tick 再點火)。S-4 後半接受並修(b5b4effd):main-slot 鏡射測試改具體計數 2 → 3;前半不改:_handle_quote 為同步函式,update_meta 與 enqueue 在同一次呼叫內完成,wait_until 在 await 之後才評估述詞,述詞成立 ⇒ 該次呼叫已整體完成 ⇒ 因果成立(Standards OK 項亦獨立驗證穩定紅)。F-E 接受不重寫:六筆已依三類排好,F-14 混入 🔴 筆與 c1216c15 訊息偏差為既成事實,記錄於此不 rebase;S-2 接受(多兩對對照是正確且有助追溯,保留)。增量(第 4–6 筆)由 main session 機械快篩:diff 只含兩軸指名處 + 兩條紅先行測試;261 passed、ruff / format parity / pyright 綠。"
+}
