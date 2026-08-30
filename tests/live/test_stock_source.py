@@ -188,6 +188,46 @@ class TestBackfill:
         assert elapsed < 0.7, f"首頁 0.2 s 備妥卻等了 {elapsed:.2f}s(固定睡滿 poll_wait)"
 
 
+class TestPrepareBackfill:
+    """S1-b:`prepare_backfill(codes)` = 對整批先送 SubHistory(TICKS、當日日盤窗)。"""
+
+    def test_sends_one_ticks_subhistory_per_code_with_the_day_window(self) -> None:
+        sent: list[dict] = []
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj)
+            return ok()
+
+        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
+        src.prepare_backfill(["2330", "F:CDF:202609"])
+        subs = [o for o in sent if o["Request"] == "SUBQUOTE"]
+        assert [(o["Param"]["Symbol"], o["Param"]["SubDataType"]) for o in subs] == [
+            ("TC.S.TWS.2330", "TICKS"),
+            ("TC.F.TWF.CDF.202609", "TICKS"),
+        ]
+        assert all(
+            (o["Param"]["StartTime"], o["Param"]["EndTime"]) == ("2026072100", "2026072106")
+            for o in subs
+        )
+
+    def test_transport_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        """prepare 只是預熱:失敗讓逐檔 `backfill` 自己去撞(那條路的錯誤處置齊全),
+        這裡 raise 會讓整批被單一檔拖垮 —— 而那正是批次要避免的事。"""
+        sent: list[str] = []
+
+        def handler(obj: dict) -> bytes:
+            sent.append(obj["Param"]["Symbol"])
+            if obj["Param"]["Symbol"].endswith("2317"):
+                raise OSError("zmq down")
+            return ok()
+
+        src = StockQuoteSource(api=FakeApi(handler), session="s1", trade_date="2026-07-21")
+        with caplog.at_level(logging.WARNING):
+            src.prepare_backfill(["2330", "2317", "2454"])
+        assert sent[:2] == ["TC.S.TWS.2330", "TC.S.TWS.2317"]
+        assert "prepare_backfill" in caplog.text
+
+
 class TestFetchDailyBars:
     """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
 
