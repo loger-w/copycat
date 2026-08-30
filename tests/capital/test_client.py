@@ -2251,7 +2251,7 @@ def test_borrowless_short_profit_row_labeled_cash_pairs_with_daytrade_sell_row(
 
 
 def test_borrowless_short_row_logs_info_once_per_stock_and_day(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """F-11(pr-152 review):parser 那行是 DEBUG(每輪洗版),只有快照、沒成交事件的 session(重啟後帶空單開機)
     要有一條 INFO 說「這列被歸成無券空單、平倉會送現股買」—— 每 (股號, 交易日) 一次,同一列連餵兩輪不重印。"""
@@ -2267,11 +2267,20 @@ def test_borrowless_short_row_logs_info_once_per_stock_and_day(
         client._handle_profit("000,查詢成功")
         client._handle_profit("##,,,,")
 
+    def info_hits() -> list[str]:
+        return [
+            r.message
+            for r in caplog.records
+            if "無券空單" in r.message and "8358" in r.message and r.levelno == logging.INFO
+        ]
+
     with caplog.at_level("INFO"):
         one_round()
         one_round()
-    hits = [
-        r for r in caplog.records
-        if "無券空單" in r.message and "8358" in r.message and r.levelno == logging.INFO
-    ]
-    assert len(hits) == 1, [r.message for r in hits]
+        assert len(info_hits()) == 1, info_hits()
+        # 換日要重印一次(這條 INFO 存在的理由就是每個交易日對帳一次),且前一日的去重帳不累積
+        monkeypatch.setattr(client_mod, "_today_ymd", lambda: "20991231")
+        one_round()
+        one_round()
+        assert len(info_hits()) == 2, info_hits()
+        assert client._short_row_day == "20991231" and client._short_row_logged == {"8358"}

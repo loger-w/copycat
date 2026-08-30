@@ -234,8 +234,10 @@ class CapitalClient:
         self._pending_sec: list[Position] | None = None  # 證券部位暫存,期貨回完才合併發布
         #: 損益列回填蒐證去重:(股號, 種類) → 上次印過的均價(每 60 s 一輪同值不洗版)
         self._avg_logged: dict[tuple[str, TradeKind], float] = {}
-        # 無券空單列每 (股號, 交易日) 一行 INFO 的去重帳(pr-152 review F-11;parser 那行是 DEBUG)
-        self._short_row_logged: set[tuple[str, str]] = set()
+        # 無券空單列每 (股號, 交易日) 一行 INFO 的去重帳(pr-152 review F-11;parser 那行是 DEBUG)。
+        # 只留當日:換日整組清掉(prod 8721 跨日長跑,不留逐日累積;同時保住「每日重印一次」語意)
+        self._short_row_day: str = ""
+        self._short_row_logged: set[str] = set()
         self._pending_deadline: float | None = None  # pending 逾時強制發布(watchdog)
         # 放棄輪旗標:collector.abandon() 已開遲到終止符的時間窗,下一次發查詢的 reset
         # 要保留它(COM 回呼無查詢識別 → 遲到的 `##` 只能靠這個窗擋;見 collector docstring)。
@@ -529,9 +531,12 @@ class CapitalClient:
         # 只有快照、沒成交事件的 session(重啟後帶空單開機)要留一條 INFO —— 每 (股號, 交易日) 一次
         #(pr-152 review F-11;分類依據目前只有 2026-08-28 8358 一筆實錄,出現第二種負 T 列時靠這行對帳)
         day = _today_ymd()
+        if day != self._short_row_day:
+            self._short_row_day = day
+            self._short_row_logged.clear()
         for p in positions:
-            if p.kind == "daytrade_sell" and (p.stock_no, day) not in self._short_row_logged:
-                self._short_row_logged.add((p.stock_no, day))
+            if p.kind == "daytrade_sell" and p.stock_no not in self._short_row_logged:
+                self._short_row_logged.add(p.stock_no)
                 logger.info("庫存段 %s 現股負股數 %+d 張 → 無券空單(daytrade_sell),平倉會送現股買", p.stock_no, p.qty)
         self._pending_deadline = time.monotonic() + _PENDING_TIMEOUT_S
         self._balance_inflight_until = None  # 守門交棒給 pending 判(它有 8s 保底)

@@ -37,6 +37,11 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
   const estimate = closing !== undefined ? (closePriceOf?.(closing) ?? null) : null;
   const closingKind = closing !== undefined && market === "sec" ? kindOf(closing) : null;
   const closingKindText = closingKind !== null ? KIND_TEXT[closingKind] : undefined;
+  // 反向單的回補交易別只在**與部位種類不同**時附註(現況只有無券空單 → 現股買):現股 / 融資 / 融券回補
+  // 同種,附註是贅字;無券不附則「種類:無券 + 買回」讀起來像 safety 禁止的無券買進(pr-152 F-14)
+  const closeKindText = closing !== undefined ? closeKindLabel(closing.kind) : null;
+  const closeKindSuffix =
+    closeKindText !== null && closeKindText !== closingKindText?.full ? `(${closeKindText})` : "";
 
   if (positions.length === 0) {
     return <p className="py-3 text-center text-xs text-ink-dim">無部位</p>;
@@ -124,12 +129,7 @@ export function CapitalPositionsList({ market, closePriceOf }: CapitalPositionsL
             },
             {
               label: "反向單",
-              // sec 附回補交易別:無券空單回補是「現股」買,種類列印的「無券」不是送出去的單種(F-14)
-              value: `${closing.qty > 0 ? "賣出" : "買回"} ${Math.abs(closing.qty)} ${unit}${
-                market === "sec" && closeKindLabel(closing.kind) !== null
-                  ? `(${closeKindLabel(closing.kind)})`
-                  : ""
-              }`,
+              value: `${closing.qty > 0 ? "賣出" : "買回"} ${Math.abs(closing.qty)} ${unit}${closeKindSuffix}`,
             },
             { label: "閘用估價", value: String(estimate) },
           ]}

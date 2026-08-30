@@ -200,7 +200,7 @@ describe("CapitalPositionsList", () => {
     expect(bodies[1]).toEqual({ market: "sec", key: "2330", price: 985, qty: 3, kind: "margin" });
   });
 
-  it("無券空單:確認窗反向單標「買回 1 張(現股)」—— 部位種類與實送交易別第一次分家(pr-152 review F-14)", async () => {
+  it("無券空單:確認窗反向單標「買回 1 張(現股)」—— 部位種類與實送交易別分家時才附註(pr-152 F-14)", async () => {
     const bodies: unknown[] = [];
     mockFetch({
       "/api/capital/status": () => json(STATUS),
