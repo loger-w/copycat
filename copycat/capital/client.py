@@ -57,8 +57,8 @@ from copycat.capital.models import (
     OrderResult,
     Position,
     PositionCloseRequest,
-    TradeKind,
     StockOrderRequest,
+    TradeKind,
 )
 from copycat.capital.reply import SEC_MARKETS, parse_onnewdata
 from copycat.capital.safety import (

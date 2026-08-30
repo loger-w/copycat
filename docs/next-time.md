@@ -5,6 +5,13 @@
   → 08-28 mod/observability-batch-0828 出貨:L106 + L171 同根因(重掛後 SUBQUOTE snapshot 被 `_note_push` 清 attempts)→ 指紋規則一條收兩條;
   退避上限 300 s 早就存在,不必改常數。**真環境待 prod 重啟後看**:次一交易日 `grep 零推播自癒 | grep 6949` 應由 92 發降到 ≤ 10 發且 attempt 遞增;
   `grep 損益列回填` 每檔首輪一行;`grep "期貨 1K"` 只在真落後 / 缺格時出現;VX `grep 零推播自癒 | grep VX` 應 0 發。
+  **08-30 /pr-review #145 收修(fix/pr-145-review-followups)**:F-01 週末 / 連假空窗不再算「中段缺格」(冷 memo 30 日窗曾每次重啟固定
+  噴「最大 2879 分」;修前 08-31 grep 要先扣掉那批,修後 `grep "期貨 1K"` 判準才成立)、F-08 落後量對齊前端終點標記(非整秒 +1,後端不再少 1)、
+  F-13 去重帳按 session 分開、F-09 健康檢查加圍籬、F-03 `_note_push` 裸索引競態;測試層 F-02 / F-04 / F-05 / F-06 / F-07 / F-14 / F-15 釘齊
+  (報告 `docs/superpowers/specs/pr-145-review.md`)。
+- [ ] **VX `sparse` 全日旗標的取捨**(pr-145 F-18,知情用):sparse 整場豁免 R2、CFE 段 `segment_leg_gate` 恆 True → VX 任何時段只剩 R1,
+  但證據只有台北 08:47–09:55 那 68 分鐘;`corr_config.py` 既有註解記「01:02 實測 VX 45 s 推 19 則」(美盤盤中活躍)。若在意美盤時段
+  單腿死無人救,候選 = sparse 時段化(比照 `heal_symbol_active`);不在意就維持。
 - [ ] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
 - [ ] **`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。

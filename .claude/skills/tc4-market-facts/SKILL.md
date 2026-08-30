@@ -188,10 +188,11 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   → 08-28 起也標 `sparse: true`(`tests/test_corr_config.py` 鎖集合 {SXF, VX})。
   另:2026-08-28 起 `tc4._note_push` 以推播指紋(PreciseTime / TradeDate / TradeVolume / TradingPrice)辨識
   重掛後 10 s 內的 SUBQUOTE snapshot,**不清** attempts —— 之後 log 裡「attempt 恆 1」才真的代表中間有推播。
-  **「attempt 恆 1」不能當「中間有真成交」的證據**:重掛的 SUBQUOTE 本身會回 snapshot(本節 fresh subscribe 事實),
-  `_note_push` 照樣清 attempts —— 08-27 SXF 有兩發間隔剛好 240 s(10:22→10:26、11:04→11:08)就是 snapshot 撐出來的,
-  IX0001 收盤段 13:25–13:35 每 30 s 一發 attempt 全 1 同理。判稀疏腿看「日盤真成交間隔常 ≥ 門檻」(1K 或 tick 密度),
-  不看 attempt。
+  **08-28 指紋規則之前的 log,「attempt 恆 1」不能當「中間有真成交」的證據**:重掛的 SUBQUOTE 本身會回 snapshot
+  (本節 fresh subscribe 事實),當時 `_note_push` 無條件清 attempts —— 08-27 SXF 有兩發間隔剛好 240 s
+  (10:22→10:26、11:04→11:08)就是 snapshot 撐出來的,IX0001 收盤段 13:25–13:35 每 30 s 一發 attempt 全 1 同理。
+  判稀疏腿一律看「日盤真成交間隔常 ≥ 門檻」(1K 或 tick 密度),不看 attempt(修後的 attempt 階梯只證明「有推播」,
+  仍不證明「有成交」)。
 - **日經有、韓指無(2026-08-17 重跑 Fut 全量 dump 實證)**:17 個交易所段與 06-30 快照零增減,
   **無 KRX 段、全樹零命中 KOSPI** → 韓指做不到(D14 拍板不做不追蹤)。日經三處:OSE
   `TC.F.OSE.{NK225,NK225M,NK225MC,NK400}.HOT`、SGX `TC.F.SGX.NK.HOT`、CME `NKD`。夜盤 60s 推播
