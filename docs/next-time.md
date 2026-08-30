@@ -38,6 +38,9 @@
   daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `庫存段 <股號> 現股負股數 … → 無券空單(daytrade_sell)`(INFO,每股號每日一次;parser 那行是 DEBUG 看不到;不得再出現「平倉暫鎖」WARNING)、
   `curl /api/capital/positions` 該列 `kind:"daytrade_sell"` / `today_qty:1` / `avg_source:"broker"`、閃電梯部位標籤「無券」、平倉鈕可按(送現股買)、
   買回後 positions 立即歸零(不出現 cash +1 幽靈列)。倉位線語意仍留尾(下條)。
+  **→ 08-31 /pr-review #152 十四條收修(fix/pr-152-review-followups)**:對稱沖銷補齊(無券賣先沖現股多單)、B08 不進 daytrade_sell 淨額、
+  庫存段負 T 列每股號每日一次 INFO、確認窗反向單「買回 n 張(現股)」、兩支跨語言 parity 測試;留尾:殘量開列取整批 `fill_avg`
+  (含已被沖銷那幾張的價金,多價位分批成交時殘餘列均價偏移;買向 block 同形、快照落地即蓋,參考用)。
   review 收修:parser 那行降 DEBUG(每輪洗版)→ 判準改看 `成交樂觀套用部位 … stock=<股號>`(修前是「不在樂觀套用表」)與
   `損益列回填 <股號> kind=cash 部位=daytrade_sell`;`grep "balance line 負股數"` 對現股列自此 0 筆(融資列仍會印)。
 - [ ] **`daytrade_sell` 語意散在六處(review 2026-08-30 F-09,Shotgun Surgery)**:balance.py / client.py / store.py / close.py
