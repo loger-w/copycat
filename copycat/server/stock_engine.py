@@ -296,6 +296,12 @@ class StockEngine:
         # 而畫面毫無異狀)。
         self._backfill_pending: dict[str, int] = {}
         self._backfilled: set[str] = set()
+        #: 首筆當日成交 tick 已點火過的檔(perf/opening-backfill-parallel S2;review F-2):
+        #: tick 節拍是次秒級,點火只許**每個訂閱期一次**,否則逾時 settle 後的下一筆
+        #: tick 立刻重排,15 s 退避與 2 次上限在毫秒內燒完 → 「放棄」→ 當日不再回補。
+        #: 之後的重試仍走原本的 timer / 60 s 輪詢。與 `_backfilled` 同界:真退訂 discard、
+        #: rollover stage2 與 reconnect clear(重連後首筆再補一次斷線缺口)。
+        self._tick_armed: set[str] = set()
         self._backfill_failed: dict[str, int] = {}
         #   `_backfill_timeouts` = 當日**逾時**重排次數(與 `_backfill_failed` 分帳:
         #     逾時不是失敗,不該吃掉「三次就冷卻」那個給真失敗用的額度)。日別語意,
@@ -541,6 +547,7 @@ class StockEngine:
                     # 不變式不是註解能帶過的,記 next-time。
                     self._backfilled.discard(code)
                     self._backfill_failed.pop(code, None)
+                    self._tick_armed.discard(code)
                     self._forget_backfill_timeout(code)
                     # TradeStatus 前值同以**訂閱期**為界(code review IC-6):留著的話
                     # 重新訂閱後拿上一段訂閱期的前值跟新的第一則比對 = 一則跨訂閱期的
@@ -608,6 +615,7 @@ class StockEngine:
                     # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
                     self._backfilled.discard(old)
                     self._backfill_failed.pop(old, None)
+                    self._tick_armed.discard(old)
                     self._forget_backfill_timeout(old)
                     # TradeStatus 前值同以訂閱期為界(理由見 `set_watchlist` removed 迴圈)
                     self._trade_status.pop(old, None)
@@ -987,6 +995,7 @@ class StockEngine:
         self._backfilled.clear()
         self._backfill_failed.clear()
         self._backfill_timeouts.clear()
+        self._tick_armed.clear()
         # 記帳清空了,在途的那幾支 timer 也要一起 —— 它們醒來時會用**新一天**的
         # generation 重排一筆沒有人要的 job(主圖那筆 stage2 自己下面就排了)。
         self._cancel_backfill_timeout_retries()
@@ -1052,6 +1061,7 @@ class StockEngine:
         # job 回來仍會各扣一次 → 旗標永久假、同一檔又被重複入列一次。斷線期間發出的
         # job 由 worker 自己走失敗路徑結清,不需要外力。
         self._backfilled.clear()
+        self._tick_armed.clear()  # 成員靠重連後的首筆成交再補一次斷線缺口
         if self._main is not None:
             self._enqueue_backfill(self._main)
 
@@ -1168,14 +1178,20 @@ class StockEngine:
         # 放在 stage2 **之後**:換日首筆排的是新一天(新 generation)的 job。
         # 試撮成交帶 `is_trial`(`ingest` 也不收),盤前 08:30–09:00 不觸發。guard 與
         # `group_snapshot` 同一把尺(`_backfill_wanted`):在途 / 已補 / 冷卻都不重排。
+        # **每個訂閱期只點火一次**(`_tick_armed`,review F-2)、**主圖不走這條**
+        # (review F-3:主圖有 set_main / rollover / reconnect 三個入列點,而它的失敗會把
+        # 全站 tc4_status 打 down —— 多一條高頻入列點只是多一條誤報路)。
         if (
             tick is not None
             and not tick.is_trial
             and tick.trade_date == self._trade_date
+            and code != self._main
             and code in self._refs
-            and self._backfill_wanted(code)
+            and code not in self._tick_armed
         ):
-            self._enqueue_backfill(code)
+            self._tick_armed.add(code)
+            if self._backfill_wanted(code):
+                self._enqueue_backfill(code)
         if tick is not None and state.ingest(tick):
             if code == self._main:
                 self._publish(
@@ -1391,9 +1407,19 @@ class StockEngine:
                     batch.append(self._backfill_jobs.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-            fresh = [code for code, generation in batch if generation == self._generation]
+            fresh = list(
+                dict.fromkeys(code for code, generation in batch if generation == self._generation)
+            )  # 去重(review J2):set_main 不過 guard,同批同 code 只 Sub 一次
             if len(fresh) >= 2:
-                await asyncio.to_thread(self._source.prepare_backfill, fresh)
+                try:
+                    await asyncio.to_thread(self._source.prepare_backfill, fresh)
+                except ConnectionError as e:
+                    # source 已是 best-effort;這裡再擋一層是因為逸出 = worker 整條死掉
+                    # (review F-1)。失敗交逐檔 backfill 自己去撞,那條路的處置齊全。
+                    logger.warning("prepare_backfill 失敗(%s);改逐檔回補", e)
+                except Exception:
+                    # CR4 同款:非連線類例外不得殺死 worker
+                    logger.exception("prepare_backfill unexpected failure(worker 續行)")
             for code, generation in batch:
                 await self._run_backfill_job(code, generation)
 

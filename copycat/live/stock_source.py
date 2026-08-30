@@ -701,14 +701,16 @@ class StockQuoteSource(TC4QuoteSource):
         同一個答案),讓逐檔 `backfill` 自己去撞 —— 那條路的錯誤處置(主圖 → tc4 down /
         成員記帳冷卻)齊全,這裡 raise 會讓整批被單一檔拖垮。
         """
-        self._ensure_connected()
         start, end = stock_window(self._trade_date)
-        for code in codes:
-            try:
+        code = "(connect)"
+        try:
+            # `_ensure_connected` 也在 best-effort 範圍內(review F-1):它逸出的話 worker
+            # 整條死掉,而「開盤 TC4 未就緒」正是本路徑的主場景。
+            self._ensure_connected()
+            for code in codes:
                 self._sub_history(stock_symbol(code), start, end)
-            except ConnectionError as e:
-                logger.warning("prepare_backfill 於 %s 中斷(%s);其餘交逐檔回補", code, e)
-                return
+        except ConnectionError as e:
+            logger.warning("prepare_backfill 於 %s 中斷(%s);其餘交逐檔回補", code, e)
 
     def backfill(self, code: str) -> list[StockTick]:
         """當日 tick 回補;**首頁等滿預算仍未備妥 → `HistoryTimeoutError`**。
@@ -728,8 +730,8 @@ class StockQuoteSource(TC4QuoteSource):
         # 當日不再重排(見 docstring)。
         result = self._collect_history(sym, "TICKS", start, end)
         if result.timed_out:
-            budget = max(self._poll_wait * 30, 1.0)
-            raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
+            # 預算數字不重抄基底的式子(review J1):基底已印一行含預算的 INFO
+            raise HistoryTimeoutError(f"backfill {sym}:首頁等滿預算仍未備妥")
         rows = result.rows
         windows = trial_windows_for(code)  # 個股期空窗(D2);現貨照舊
         ticks = [
