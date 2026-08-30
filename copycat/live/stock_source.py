@@ -25,7 +25,7 @@ from copycat.live.tc4 import (
     HistoryTimeoutError,
     TC4QuoteSource,
 )
-from copycat.tc4common import TC4_DEFAULT_PORT, iter_qry_pages
+from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -702,28 +702,17 @@ class StockQuoteSource(TC4QuoteSource):
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
-        self._sub_history(sym, start, end)
-        rows: list[dict] = []
-        budget = max(self._poll_wait * 30, 1.0)
-        deadline = time.monotonic() + budget
-        while True:
-            first = self._get_history(sym, start, end, "0")
-            if first.get("HisData"):
-                break
-            remaining = deadline - time.monotonic()
-            # `poll_wait <= 0` = 測試組態,語意 = **不等待**(探測一次就走,沿
-            # `river_backfill.collect_1k_minutes` 的同名慣例)。少了這道早退,`budget`
-            # 的 1.0s 地板會被拿去空轉幾十萬次 GETHISDATA —— 每條測試付一秒,而真實
-            # 組態(poll_wait > 0)完全看不到。
-            if self._poll_wait <= 0 or remaining <= 0:
-                raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
-            time.sleep(min(self._poll_wait, remaining))
-
-        def _page(qry_index: str) -> list[dict]:
-            return self._get_history(sym, start, end, qry_index).get("HisData", [])
-
-        for page in iter_qry_pages(_page):
-            rows.extend(page)
+        # 首頁 poll 走基底 `_collect_history`(SubHistory → 0.15 s 起加倍退避 → 收割),
+        # 不再自寫一份「首頁沒備妥就睡滿 poll_wait」的迴圈(perf/opening-backfill-parallel
+        # S1-a):prod 08-28 log 單工 worker 一秒一檔、40 檔一分鐘,每檔那 1 s 幾乎全是
+        # 這道固定睡眠(probe 真資料成本 0.02–0.98 s)。預算與 `poll_wait <= 0` 不等待
+        # 的測試語意都由基底承擔;逾時仍升成例外 —— 回空會讓 worker 當成功套用而
+        # 當日不再重排(見 docstring)。
+        result = self._collect_history(sym, "TICKS", start, end)
+        if result.timed_out:
+            budget = max(self._poll_wait * 30, 1.0)
+            raise HistoryTimeoutError(f"backfill {sym}:{budget:.1f}s 內首頁未備妥")
+        rows = result.rows
         windows = trial_windows_for(code)  # 個股期空窗(D2);現貨照舊
         ticks = [
             t for r in rows if (t := parse_hist_tick(code, r, trial_windows=windows)) is not None

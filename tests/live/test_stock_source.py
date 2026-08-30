@@ -155,6 +155,38 @@ class TestBackfill:
         assert time.monotonic() - started < 0.5
         assert calls["n"] == 1
 
+    def test_first_page_poll_backs_off_instead_of_sleeping_a_full_poll_wait(self) -> None:
+        """perf/opening-backfill-parallel S1-a:首頁未備妥時退避輪詢,不固定睡滿 poll_wait。
+
+        prod 08-28 log:單工 worker 一秒一檔、40 檔一分鐘 —— 每檔的 1 s 不是 TC4 慢
+        (probe 真資料成本 0.02–0.98 s),是 SubHistory 後首頁沒備妥就
+        `sleep(poll_wait=1.0)`。基底 `_collect_history` 早有 0.15 s 起的加倍退避,
+        backfill 沒用它。這條以「0.2 s 後備妥」的 TC4 形狀釘住:退避下 < 0.7 s 回來,
+        固定睡 1 s 的舊碼必紅。
+        """
+        ready_at: dict[str, float] = {}
+
+        def handler(obj: dict) -> bytes:
+            if obj["Request"] == "SUBQUOTE":
+                ready_at.setdefault(obj["Param"]["Symbol"], time.monotonic() + 0.2)
+                return ok()
+            if obj["Request"] == "GETHISDATA":
+                sym = obj["Param"]["Symbol"]
+                qi = obj["Param"]["QryIndex"]
+                ready = sym in ready_at and time.monotonic() >= ready_at[sym]
+                rows = [HIST_ROW] if (ready and qi == "0") else []
+                return ("TICKS:" + json.dumps({"Success": "OK", "HisData": rows}) + "\0").encode()
+            return ok()
+
+        src = StockQuoteSource(
+            api=FakeApi(handler), session="s1", trade_date="2026-07-21", poll_wait_secs=1.0
+        )
+        started = time.monotonic()
+        ticks = src.backfill("2330")
+        elapsed = time.monotonic() - started
+        assert len(ticks) == 1
+        assert elapsed < 0.7, f"首頁 0.2 s 備妥卻等了 {elapsed:.2f}s(固定睡滿 poll_wait)"
+
 
 class TestFetchDailyBars:
     """SC-4 overlay 資料源:DK 優先、1K 聚合 fallback、SubDataType 欄位釘死(impl-spec R3)."""
