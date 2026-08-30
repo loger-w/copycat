@@ -35,3 +35,13 @@ RAW_T_HELD: str = "3357,T,2000,1944,0,0,3000,0,0,0,0,3000,0,0,3000,0,155.63,A123
 #: 昨庫 0、今委買 / 買成 0,[11] / [14] 即時庫存 = **-1000**(群益把無券空單記成現股負股數,不是 L 列);
 #: [10] 今日賣出成交 = 0 **是群益原樣**(整列除末兩欄外與 prod log 逐字同;pr-152 review F-16)
 RAW_T_BORROWLESS_SHORT: str = "8358,T,0,0,0,0,0,0,0,0,0,-1000,0,0,-1000,0,,A123456789,1234567890"
+
+
+def balance_variant(row: str, changes: dict[int, str]) -> str:
+    """按欄索引改值(比照 `profit_rows.pnl_variant`)。`.replace(",1000,0,,", …)` 那種靠子字串
+    唯一性猜欄位的變異,群益改欄形時會靜默改錯欄(next-time 08-28 test_balance 六處)。
+    常用欄:[1] 庫存種類、[14] 即時庫存(parser 取這一欄換張)。"""
+    parts = row.split(",")
+    for i, v in changes.items():
+        parts[i] = v
+    return ",".join(parts)
