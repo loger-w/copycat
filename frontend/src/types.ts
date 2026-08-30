@@ -116,7 +116,8 @@ export interface CapitalPosition {
   qty: number;
   name: string;
   avg_price: number | null;
-  // 後端 Position.kind 值域是 TradeKind(另含 daytrade_sell 無券空單),比 PositionKind 寬
+  // 保留裸 string 是為了舊後端 / 未來新值(值域外字串):`close-order.ts::kindOf` 的白名單負責歸一;
+  // 認得的值域 = PositionKind(2026-08-30 起四值,= 後端 TradeKind)
   kind: string;
   pnl_base: number | null;
   pnl_base_price: number | null;
