@@ -40,8 +40,8 @@ D+1 00:01:01,斷言 `tf=D` 恰 2 發且 `data.bars` 換成「D 完成 + D+1 部�
 
 - `useFuturesBars.ts`:`DAY_ERROR_RETRY_MS` 開 export(三支同源);`msUntilDayRollover` doc 加「讀者三支」一句。helper 搬家
   先問 user(handoff 指明 grilling 一輪再動)→ **08-31 拍板新開 `lib/day-bars-rollover.ts`**(三顆常數 / 函式逐字搬,三支 hook 平行 import;
-  不併 `lib/trading-calendar.ts`:那邊純日曆算術、這邊 TQ 新鮮度政策;🔵 commit a85befe0)。
-- review round 1(11 條)收修 commit 2226d17d:`useMarketBars` 日 K 分支改**整段**不吃 `active`(P-F2:午夜失敗恰發生在人不在時,60 s 重試若
+  不併 `lib/trading-calendar.ts`:那邊純日曆算術、這邊 TQ 新鮮度政策;🔵 commit 490e6a2e)。
+- review round 1(11 條)收修 commit b0492f54:`useMarketBars` 日 K 分支改**整段**不吃 `active`(P-F2:午夜失敗恰發生在人不在時,60 s 重試若
   吃閘就整晚凍結)—— H3 的結論修正為「日 K 這條與 `active` 正交」。
 - `useMarketBars.ts`:`staleTime: isMinute ? 0 : (q) => msUntilDayRollover(q.state.dataUpdatedAt)`;`refetchInterval` 非分 K 分支
   `error → 60 s`、否則 `msUntilDayRollover(Date.now())`;**整段不吃 `active`**(理由 H3 + P-F2;一天一發、每把 key 一發,error 只在

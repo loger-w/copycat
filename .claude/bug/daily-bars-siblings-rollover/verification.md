@@ -49,7 +49,7 @@ worktree `C:/side-project/copycat-wt-daily-bars-siblings`,自 master 0b744bb8。
 - 期指那支未動行為:`useFuturesBars.test.ts` 22 條全綠(只開 export + 加 doc 一句)。
 - 兩個 caller 的元件測試(`MarketChart` / `StockChart` / `MarketPane` / `IndexPage` / `App.*`)在全量 2912 內全綠。
 
-## Review round 1 收修後(commit 2226d17d;11 條中 9 條接受 / 2 條駁回 / S-F1+P-F6 留 user,見 `code-review-round-1.json`)
+## Review round 1 收修後(commit b0492f54;11 條中 9 條接受 / 2 條駁回 / S-F1+P-F6 留 user,見 `code-review-round-1.json`)
 
 | gate | 結果 | exit |
 |---|---|---|
@@ -65,7 +65,7 @@ worktree `C:/side-project/copycat-wt-daily-bars-siblings`,自 master 0b744bb8。
 **真環境判準補一條(P-F2 / P-F3 知情變更)**:5. 人在個股頁、後端剛好在 00:01 沒起來 → 起來後 ≤ 60 s Network 自動再打一發
 `market/bars/*?tf=D`,不用切回 tab。
 
-## Helper 搬家(🔵 a85befe0,user 拍板 `lib/day-bars-rollover.ts`)+ docs chore(b2ede8a0)後
+## Helper 搬家(🔵 490e6a2e,user 拍板 `lib/day-bars-rollover.ts`)+ docs chore(c1dab2ec)後
 
 | gate | 結果 | exit |
 |---|---|---|
@@ -73,4 +73,4 @@ worktree `C:/side-project/copycat-wt-daily-bars-siblings`,自 master 0b744bb8。
 | `npx vitest run` 三支 hook 測試 + `trading-calendar.test.ts` | 80 passed(測試檔零改,只改註解路徑) | 0 |
 | `npm test` 全量 | 153 files / 2914 passed | 0 |
 | `npx tsc -b` / `npx eslint src` / react-doctor `--scope changed`(8 files) | 無輸出 / 無輸出 / `No issues found!` | 0 / 0 / 0 |
-| 增量 diff 機械快篩(review fixed point 2226d17d 之後:a85befe0 搬家 + b2ede8a0 docs) | main agent 逐檔看:lib 新檔 import 只有 `msUntilNextLocalDate`、三個 export 名不變;`useFuturesBars.ts` 無 `POLL_MS` / `msUntilNextLocalDate` 殘留;docs 兩檔純文字 —— 無新 finding | — |
+| 增量 diff 機械快篩(review fixed point b0492f54 之後:490e6a2e 搬家 + c1dab2ec docs) | main agent 逐檔看:lib 新檔 import 只有 `msUntilNextLocalDate`、三個 export 名不變;`useFuturesBars.ts` 無 `POLL_MS` / `msUntilNextLocalDate` 殘留;docs 兩檔純文字 —— 無新 finding | — |
