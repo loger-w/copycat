@@ -5,6 +5,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FUTURES_MINUTE_DAYS, useFuturesBars } from "@/hooks/useFuturesBars";
+import { isoLocalDate } from "@/lib/trading-calendar";
 
 const META = {
   source: "tc4_1k",
@@ -275,10 +276,11 @@ describe("useFuturesBars(SC-1/2/3)", () => {
 
 // bug/futures-daily-bars-rollover(next-time 08-24 L408 → 08-28 升 /bug):看盤日常 = preview 整天掛著,
 // 跨過午夜後日 K 那份 cache 不會失效(`staleTime: Infinity` + 不輪詢)→ 新交易日的 CDP / MA 疊線
-// 拿**前一天那份快照**(昨天的 D bar 還是盤中部分值,或根本沒有)當基準;後端 `build_period` 的
-// daily cache 鍵 = 牆鐘日曆日,午夜一過就有新料可拿,只是前端從不去問。
+// 拿**前一天那份快照**當基準。為什麼界是日曆午夜:見 `useFuturesBars.ts::msUntilDayRollover`。
 describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", () => {
-  /** D = 2026-08-05(週三)。第一發回「D 部分 bar」快照;跨過午夜後的請求回「D 完成 + D+1 部分」。 */
+  /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起的請求回「D 完成 + D+1 部分」
+   *  (第四條推到 D+2 只數 URL,快照沒有 D+2 bar 無妨)。 */
+  const D1_ISO = "2026-08-06";
   const D_SNAPSHOT = [
     { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
     { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
@@ -293,13 +295,16 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        const bars = new Date().getDate() >= 6 ? D1_SNAPSHOT : D_SNAPSHOT;
+        const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
         return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
       }),
     );
   }
 
-  it("人一直在期貨 tab 上跨過午夜 → 次一日曆日重抓一次,cache 不停在昨天的快照", async () => {
+  // 界 = 日曆午夜 + 60 s slack,不是「掛載後固定 24 h」(那會讓 20:00 開的分頁整個次日都用舊基準;
+  // review Spec F-1)—— 所以掛載時刻取 09:00、斷言點取 23:59 / 00:00:30 / 00:01:01 三點,固定 24 h
+  // 與 slack = 0 兩種突變體各紅一點。
+  it("人一直在期貨 tab 上跨過午夜 → 00:01 重抓一次,cache 不停在昨天的快照", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
     stubDayFetchByWallClock();
@@ -309,10 +314,49 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     await vi.advanceTimersByTimeAsync(0);
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
     expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
-    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000); // 掛到 D+1 09:00
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBeGreaterThanOrEqual(2);
+    await vi.advanceTimersByTimeAsync(14 * 60 * 60_000 + 59 * 60_000); // 23:59
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
     // 使用者的症狀:D+1 早上疊線基準仍是昨天 09:00 那份(D bar 停在部分值)
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同一日曆日內不再打
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+  });
+
+  // 午夜那一發失敗(TC4 忙 / 後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,
+  // 整個交易日就停在昨天的基準 —— 與修前同一個症狀(review Spec F-2)。
+  it("午夜那一發失敗 → 60 s 後再試,成功即回到「下一個午夜」節奏", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    let failLeft = 2; // 本體 + retry:1 各失敗一次
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        if (isoLocalDate(new Date()) >= D1_ISO && failLeft > 0) {
+          failLeft -= 1;
+          return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
+        }
+        const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+      }),
+    );
+    const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 60_000 + 5_000); // 00:01:05:本體失敗 + 1 s 後 retry 失敗
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+    expect(result.current.isError).toBe(true);
+    expect(result.current.data?.bars).toEqual(D_SNAPSHOT); // v5:refetch 失敗保留舊 data
+    await vi.advanceTimersByTimeAsync(60_000); // 60 s 重試
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(4);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // 成功後不再每 60 s 打
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(4);
   });
 
   // 切走的 observer 是退訂(subscribed: false):沒有計時器,午夜那一發不會打;切回時靠
@@ -336,8 +380,9 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
-  // TQ 預設 `refetchIntervalInBackground: false`:分頁縮在背景時午夜那一發被跳過,下一個
-  // interval tick 是 24 小時後 —— 回前景那一刻要靠「已過期」+ refetchOnWindowFocus 補上。
+  // TQ 預設 `refetchIntervalInBackground: false`:分頁在背景時每個 interval tick 都被 focus 閘跳過
+  //(本例 period = 22:00 → 00:01 的 2 h 1 min,背景中一路跳過)—— 回前景那一刻要靠「已過期」+
+  // refetchOnWindowFocus(`queryCache.onFocus`)補上,不是靠 interval。
   it("分頁在背景跨過午夜 → 回前景那一刻重抓,不等下一個 24 小時", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
