@@ -617,13 +617,14 @@ def _rt_keys(api: FakeApi) -> list[tuple[str, str, str]]:
     ]
 
 
-def _push_raw(symbol: str) -> str:
-    return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": {"Symbol": symbol}})
-
-
 def _push_raw_quote(quote: dict[str, str]) -> str:
-    """帶成交欄位的 REALTIME 推播(snapshot 指紋測試用;`_push_raw` 只有 Symbol)。"""
+    """REALTIME 推播電文(`Quote` 原樣帶入;snapshot 指紋測試用整組成交欄位)。"""
     return "Q:" + json.dumps({"DataType": "REALTIME", "Quote": quote})
+
+
+def _push_raw(symbol: str, **fields: str) -> str:
+    """只有 Symbol(或再帶幾個欄位)的 REALTIME 推播 —— `_push_raw_quote` 的薄包裝。"""
+    return _push_raw_quote({"Symbol": symbol, **fields})
 
 
 #: 一則「有成交欄位」的推播:指紋 = PreciseTime / TradeDate / TradeVolume / TradingPrice
@@ -822,17 +823,21 @@ class TestHealResubSnapshot:
         src = self._src(api)
         sym = _FP_QUOTE["Symbol"]
         src.handle_raw(_push_raw_quote(_FP_QUOTE))  # 首則:指紋建檔
+        # 時間關係要讓 _heal_tick 收到的 now 就是真時鐘的現在:重掛寫進 _sub_at 的是這個 now,
+        # 而 _note_push 用真 time.monotonic() 算 elapsed —— 寫成 base+100 會得到 -100 s 的「未來重掛」,
+        # 寬限分支靠負值恆真,prod 唯一會發生的正向 elapsed 反而沒被驗到(pr-145 F-02)
         base = time.monotonic()
-        src._sub_at = {sym: base}
-        src._last_push = {sym: base}
-        src._heal_tick(base + 100.0)  # 靜默 100 s > 60 s → 重掛,_sub_at = base+100
+        src._sub_at = {sym: base - 100.0}
+        src._last_push = {sym: base - 100.0}
+        src._heal_tick(base)  # 靜默 100 s > 60 s → 重掛,_sub_at = base(真時鐘現在)
         assert src._heal_attempts[sym] == 1
+        assert src._sub_at[sym] == base
         next_before = src._heal_next[sym]
 
-        src.handle_raw(_push_raw_quote(_FP_QUOTE))  # SUB 回的 snapshot:同指紋、重掛後即刻
+        src.handle_raw(_push_raw_quote(_FP_QUOTE))  # SUB 回的 snapshot:同指紋、重掛後即刻(elapsed ≈ +0.00x s)
         assert src._heal_attempts[sym] == 1, "同指紋 snapshot 不得清 attempts"
         assert src._heal_next[sym] == next_before, "退避時刻不得被 snapshot 重設"
-        assert src._last_push[sym] > base, "key 有回應:_last_push 照記"
+        assert src._last_push[sym] >= base, "key 有回應:_last_push 照記"
 
         # 第二輪:退避到期後再重掛 → attempt 2(階梯在爬),不再是永遠的 attempt 1
         api.rt_requests.clear()
@@ -847,11 +852,12 @@ class TestHealResubSnapshot:
         sym = _FP_QUOTE["Symbol"]
         src.handle_raw(_push_raw_quote(_FP_QUOTE))
         base = time.monotonic()
-        src._sub_at = {sym: base}
-        src._last_push = {sym: base}
-        src._heal_tick(base + 100.0)
+        src._sub_at = {sym: base - 100.0}
+        src._last_push = {sym: base - 100.0}
+        src._heal_tick(base)  # 重掛時刻 = 真時鐘現在(同上一條的時間關係)
         assert src._heal_attempts[sym] == 1
 
+        # 重掛後 10 s 內、但指紋變了 = 真成交 → 照清(白名單 1 的「指紋變動」那半,寬限內也一樣)
         src.handle_raw(_push_raw_quote({**_FP_QUOTE, "TradeVolume": "7"}))
         assert sym not in src._heal_attempts
         assert sym not in src._heal_next
@@ -1134,6 +1140,7 @@ class TestHealBookkeepingLifecycle:
         src._heal_attempts[HEAL_A] = 2
         src._heal_next[HEAL_A] = 999.0
         src._window_variant[HEAL_A] = 2
+        src._push_fp[HEAL_A] = ("a", "b", "c", "d")
         src._unsub(HEAL_A)
         for book in (
             src._last_push,
@@ -1141,6 +1148,7 @@ class TestHealBookkeepingLifecycle:
             src._heal_attempts,
             src._heal_next,
             src._window_variant,
+            src._push_fp,  # 新帳本要進這份窮舉,不然「every」名不副實(pr-145 F-15)
         ):
             assert HEAL_A not in book
         # 下一輪訂閱回到 base 窗(帶著舊 variant 訂的是一把沒人知道的窗)

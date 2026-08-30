@@ -1318,7 +1318,10 @@ class TestHolidayPushWarning:
     """L3(2026-08-28 triage):有日曆的休市日 index 自癒整天不打(PR #139)—— 日曆把真交易日誤標成
     休市那天,畫面掛休市膠囊、圖是前一日的,但 log 零訊號。09:00 後 IX0001 仍有推播就是「日曆錯了」
     的直接證據:同一日曆日收到 ≥ 5 個相異現價才 WARNING 一次(休市日 server 啟動時 SUBQUOTE 回一則
-    前日收盤 snapshot 是單一價,不能算)。"""
+    前日收盤 snapshot 是單一價,不能算)。
+
+    純同步:本組只驗 `_note_holiday_push` 的記帳,直呼 `_handle_quote`、不起 loop 不走廣播
+    (同檔其他測試走 `fake.on_message` 是因為要涵蓋 `_on_quote_threadsafe` 那一跳)。"""
 
     @staticmethod
     def _engine(**kw: Any) -> IndexEngine:
@@ -1345,6 +1348,25 @@ class TestHolidayPushWarning:
                 eng._handle_quote(_quote(price=f"4300{i}.00"))
         assert caplog.text.count("可能誤標") == 1, "同一日曆日只印一次"
         assert "configs/trading_holidays.json" in caplog.text
+
+    def test_next_calendar_day_warns_again_and_restarts_the_count(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # prod server 連跑數日不重啟:日曆連錯兩天,第二天要能再印一次,而且相異價從 0 重數
+        # (退化成「每 process 一次」或跨日累積,這裡都會紅;pr-145 F-04)
+        today = [_dt.date(2026, 7, 28)]
+        eng = self._engine(today_fn=lambda: today[0])
+        with caplog.at_level(logging.WARNING, logger="copycat.server.index_engine"):
+            for i in range(5):
+                eng._handle_quote(_quote(price=f"4200{i}.00"))
+            assert caplog.text.count("日曆說 2026-07-28 休市") == 1
+            today[0] = _dt.date(2026, 7, 29)
+            for i in range(4):
+                eng._handle_quote(_quote(price=f"4300{i}.00"))
+            assert "2026-07-29" not in caplog.text, "新日曆日要重新湊滿 5 個相異價,不能沿用前一天的"
+            eng._handle_quote(_quote(price="43004.00"))
+        assert caplog.text.count("日曆說 2026-07-29 休市") == 1
+        assert caplog.text.count("可能誤標") == 2
 
     def test_no_warning_on_trading_day_before_nine_or_without_calendar(
         self, caplog: pytest.LogCaptureFixture
