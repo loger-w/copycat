@@ -255,7 +255,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   讀者 = `frontend/src/lib/ladder-position.ts::positionEcon`(當沖稅減半條件 `cash | daytrade_sell`)、`lib/trade-kinds.ts`
   (閃電梯 / header / chip 標籤「無券」)、`lib/close-order.ts::KIND_TEXT`(部位面板「無」/ 確認窗「無券」;**鍵集 = `kindOf`
   送 kind 的值域**,與 wire `server/capital_api.py::PositionCloseBody.kind` 同為 `TradeKind` 四值 —— 「標得出來就送得出去」)。
-  後端把負現股列改回 `cash` 或改別的字串 → 前端減半靜默消失、標籤印原字串 / 空白、平倉退回同檔唯一列 —— 讀者都不會報錯;
+  漂掉的症狀分兩種:後端把負現股列改成**別的字串** → `kindOf` 回 null → 前端減半靜默消失、標籤印原字串 / 空白、平倉退回
+  同檔唯一列 —— 讀者都不會報錯;改回 **`cash`** → `kindOf` 認得、照送 `kind:"cash"` → `position_for` 命中負向 cash 列 → `_CLOSE_MAP`
+  無 `(cash, False)` → 平倉直接 403(資料矛盾,`test_cash_short_direction_is_data_contradiction_and_rejected` 釘的就是這個);
   wire 值域單邊收窄 → 前端送 `daytrade_sell` 吃 422。`tests/capital/test_store.py -k borrowless` +
   `tests/server/test_capital_api.py::test_close_body_kind_daytrade_sell_sends_cash_buy` + 前端 `ladder-position.test.ts`
   「無券空單」/ `close-order.test.ts` 釘住。

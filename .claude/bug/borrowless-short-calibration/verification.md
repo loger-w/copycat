@@ -53,7 +53,7 @@ commits:`fc809e83` test 紅先行 → `1ae9c2ad` fix → `e5e6fe1e` docs chore �
 - `_FILL_KIND` / `parse_balance_line` 無 store / balance 之外的 caller(grep copycat tests)。
 - `position_for(kind)` 放寬到 `TradeKind`;review Spec F-01 後 wire 兩端(`server/capital_api.py::PositionCloseBody.kind`、
   `models.PositionCloseRequest.kind`)同放寬 —— 唯一外部 caller 就是 close route,四值全部進得來;`_CLOSE_MAP` 對 `(daytrade_sell, True)`
-  無鍵 → 正向 daytrade_sell 列(不可達)仍 400 不猜單種。前端 `PositionKind` 型別讀者:`close-order.ts`(KIND_TEXT / kindOf)、
+  無鍵 → 正向 daytrade_sell 列(不可達)仍 `ValueError` → `_close_blocked` → 403 `ORDER_BLOCKED` 不猜單種(pr-152 review F-06 校正:原寫 400)。前端 `PositionKind` 型別讀者:`close-order.ts`(KIND_TEXT / kindOf)、
   `types.ts::CapitalCloseBody.kind`;`grep -rn PositionKind frontend/src` 無第三處。
 - 前端 `kind === "cash"` 假設:只有 `positionEcon` 一處與稅相關(已改);`PriceLadder.tsx:77` 是交易別 pill 樣式,與部位無關。
 - `today_qty` 讀者:`PriceLadder.tsx:148`、`position-summary.ts:149` 直傳 `positionEcon`,無第二條算式。
