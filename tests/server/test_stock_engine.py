@@ -914,183 +914,6 @@ class TestHistoryTimeoutIsConnectionError:
         await engine.close()
 
 
-class TestBackfillTimeoutRetry:
-    """回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。"""
-
-    async def test_timeout_reenqueues_without_touching_tc4_status(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
-        engine, src = await _make()
-        from copycat.live.stock_models import StockTick
-
-        src.backfill_errors = [HistoryTimeoutError("first page not ready")]
-        src.backfill_result = [
-            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
-                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
-                      is_trial=False)
-        ]
-        await engine.set_main("2330")
-        await wait_until(lambda: src.backfills.count("2330") >= 1)
-        # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
-        assert engine.tc4_status != "down"
-        assert engine._backfill_failed.get("2330", 0) == 0
-        # 等**終態**(分鐘套用進去了)而不是等固定圈數 —— `backfills` 是進場時記的
-        await wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
-        assert src.backfills.count("2330") == 2  # 重排且第二發成功
-        assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
-        await engine.close()
-
-    async def test_retry_is_bounded_then_gives_up(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        with caplog.at_level(logging.WARNING):
-            await engine.set_main("2330")
-            await wait_until(lambda: src.backfills.count("2330") == 3)
-            await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 4 發(若有)現形
-            await _drain(engine)
-        # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
-        assert src.backfills.count("2330") == 3
-        assert engine.tc4_status != "down"
-        assert "放棄" in caplog.text
-        await engine.close()
-
-    async def test_release_cancels_pending_timeout_retry_and_clears_budget(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """2026-08-22 review R8 P2:退訂 / 主圖切走必須取消該 code 在途的逾時重排 timer、
-        清掉逾時記帳。留著的話 (a) 孤兒 timer 醒來對已 release 的 code 發 SubHistory、成功後
-        `_backfilled.add` 把剛清掉的記帳寫回(原註解「秒級殘留窗」變成 15s+ 且可發生兩次);
-        (b) 重新訂閱時重試預算已被吃掉,與「訂閱期為界」的記帳語意相反。"""
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        await engine.set_main("2330")
-        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
-        assert engine._backfill_timeouts.get("2330") == 1
-        handle = engine._backfill_timeout_handles["2330"]
-        await engine.set_main("2317")  # 2330 無其他 owner → 真退訂
-        assert "2330" not in engine._backfill_timeout_handles
-        assert handle.cancelled()
-        assert "2330" not in engine._backfill_timeouts
-        # 自選路徑:主圖 + 自選共同持有 → 主圖切走**不**釋放(記帳歸還在的 owner),
-        # 移出自選才真退訂 → 此時才取消
-        await engine.set_main("2330")
-        await engine.set_watchlist(["2330"])
-        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
-        handle = engine._backfill_timeout_handles["2330"]
-        await engine.set_main("2317")
-        assert "2330" in engine._backfill_timeout_handles and not handle.cancelled()
-        await engine.set_watchlist([])
-        assert "2330" not in engine._backfill_timeout_handles
-        assert handle.cancelled()
-        assert "2330" not in engine._backfill_timeouts
-        await engine.close()
-
-    async def test_timeout_after_release_does_not_rearm_or_bookkeep(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """2026-08-22 review round-2 P2:release 時已在佇列 / 正跑的 job 之後逾時,worker 不得
-        替一支**已無 owner** 的 code 記逾時帳、武裝新 timer(15s 後再打 TC4 → 再逾時 → 終局
-        `_backfilled.add` 把 release 清掉的記帳寫回)。判準 = `_refs`(訂閱池唯一真相)。"""
-        import threading
-
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
-        engine, src = await _make()
-        gate = threading.Event()
-
-        def slow_backfill(code: str) -> list[object]:
-            gate.wait(2.0)
-            raise HistoryTimeoutError("first page not ready")
-
-        monkeypatch.setattr(src, "backfill", slow_backfill)
-        await engine.set_main("2330")
-        await wait_until(lambda: engine._backfilling == "2330")  # job 正跑著
-        await engine.set_main("2317")  # 2330 真退訂
-        gate.set()
-        await wait_until(lambda: engine._backfilling != "2330")
-        await _drain(engine)
-        assert "2330" not in engine._backfill_timeout_handles
-        assert "2330" not in engine._backfill_timeouts
-        assert "2330" not in engine._backfilled
-        await engine.close()
-
-    async def test_give_up_stops_group_snapshot_from_reenqueueing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """放棄 = **當日不再入列**(與舊行為同),而 `group_snapshot` 也是入列點之一。
-
-        逾時記帳(`_backfill_timeouts`)與失敗記帳分帳的代價:`group_snapshot` 那條
-        60s 輪詢的四道 guard 一條都看不到它。放棄後不進 `_backfilled` 的話,輪詢會
-        每 60s 把同一檔重新推回 worker —— 重試上界形同虛設,而 TC4 的歷史通道是全站
-        共用的稀缺資源(整個群組檢視都排在後面)。
-        """
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        await engine.set_watchlist(["2330"])  # 進訂閱池(group_snapshot 的第一道 guard)
-        expected = 1 + stock_engine_mod._BACKFILL_TIMEOUT_MAX_RETRIES
-        for _ in range(6):
-            engine.group_snapshot(["2330"])
-            await asyncio.sleep(0.03)
-            await _drain(engine)
-        assert src.backfills.count("2330") == expected
-        await engine.close()
-
-    async def test_close_cancels_the_pending_timeout_reenqueue(self) -> None:
-        """`loop.call_later` 的 handle 必須有取消點:關機後醒來的那一發會對已關閉的
-        engine 入列(`_backfill_pending` 起帳、job 進佇列而 worker 已死),測試環境下
-        則是 loop 已關而 callback 還在排程表上。"""
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        await engine.set_main("2330")
-        await wait_until(lambda: bool(engine._backfill_timeout_handles))
-        handles = list(engine._backfill_timeout_handles.values())
-        await engine.close()
-        assert handles and all(h.cancelled() for h in handles)
-        assert not engine._backfill_timeout_handles
-
-    async def test_rollover_cancels_the_pending_timeout_reenqueue(self) -> None:
-        """換日 = 日別記帳重來(`_backfill_timeouts` 已在 stage2 清空)。留著昨天排的
-        那一發 handle,它醒來時會用**新一天**的 generation 重新入列一筆沒有人要的 job,
-        而 stage2 自己已經替主圖排過一筆了。"""
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        await engine.set_main("2330")
-        await wait_until(lambda: bool(engine._backfill_timeout_handles))
-        handles = list(engine._backfill_timeout_handles.values())
-        engine.rollover_stage1("2026-07-22")
-        assert src.on_message is not None
-        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
-        await _drain(engine)
-        assert all(h.cancelled() for h in handles)
-        await engine.close()
-
-    async def test_rollover_clears_the_timeout_ledger(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """`_backfill_timeouts` 是**日別**記帳:換日後那一檔要重新有完整的重試預算。
-
-        不清的話計數永久停在上限 —— 昨天忙窗逾時放棄的檔,今天第一次逾時就直接放棄
-        (零重試),而它的分時圖整天空著、log 只有一行「已重試 2 次」讀起來像真的試過。
-        """
-        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
-        engine, src = await _make()
-        src.backfill_error = HistoryTimeoutError("first page not ready")
-        await engine.set_main("2330")
-        await wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
-        before = src.backfills.count("2330")
-        engine.rollover_stage1("2026-07-22")
-        assert src.on_message is not None
-        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
-        # 記帳沒清的話 stage2 排的那一發會**當場**放棄(+1 就到頂),等不到 +3
-        await wait_until(lambda: src.backfills.count("2330") >= before + 3)
-        await engine.close()
-
-
 class TestStkfut:
     async def test_stkfut_subscribed_with_future_prefix(self) -> None:
         engine, src = await _make()
@@ -1688,6 +1511,190 @@ class TestGroupSnapshot:
         src.on_message(_quote(cum=7))  # 首則 REALTIME:漲跌停 None → 有值
         await _drain(engine)
         assert src.backfills.count("2330") == 2
+        await engine.close()
+
+
+# ---- 回補(backfill)主題索引(next-time 08-31:六 class 散在 3800 行檔,先聚在一起)----
+# TestBackfillGuard(檔頭:design v3 R12 事前標記該變的斷言)→ 本節 TestBackfillTimeoutRetry /
+# TestFirstTickEnqueuesBackfill / TestBackfillBatchPrepare / TestBackfillFailureIsolation →
+# TestWatchlistRemovalBookkeeping(自選移除時 `_backfilled` / `_tick_armed` 記帳清理;#154 把
+# `_tick_armed` 兩條鏡射測試補在那裡)。整併原則:同一個記帳集合的邊界測試放同一 class,不動斷言。
+
+
+class TestBackfillTimeoutRetry:
+    """回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。"""
+
+    async def test_timeout_reenqueues_without_touching_tc4_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        from copycat.live.stock_models import StockTick
+
+        src.backfill_errors = [HistoryTimeoutError("first page not ready")]
+        src.backfill_result = [
+            StockTick(code="2330", price_milli=2_400_000, qty=3, cum_vol=3,
+                      time="09:01:00.000", trade_date="2026-07-21", side="outer",
+                      is_trial=False)
+        ]
+        await engine.set_main("2330")
+        await wait_until(lambda: src.backfills.count("2330") >= 1)
+        # 主圖逾時**不得**打成 tc4 down(達錢 4 好得很,只是這一檔首頁還沒備妥)
+        assert engine.tc4_status != "down"
+        assert engine._backfill_failed.get("2330", 0) == 0
+        # 等**終態**(分鐘套用進去了)而不是等固定圈數 —— `backfills` 是進場時記的
+        await wait_until(lambda: "541" in engine.snapshot("2330")["minutes"])
+        assert src.backfills.count("2330") == 2  # 重排且第二發成功
+        assert engine.snapshot("2330")["minutes"]["541"]["c"] == 2_400_000
+        await engine.close()
+
+    async def test_retry_is_bounded_then_gives_up(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        with caplog.at_level(logging.WARNING):
+            await engine.set_main("2330")
+            await wait_until(lambda: src.backfills.count("2330") == 3)
+            await asyncio.sleep(0.05)  # 退避已是 0.01s → 這段足夠讓第 4 發(若有)現形
+            await _drain(engine)
+        # 首發 + 2 次重試 = 3 次;沒有上界的話這裡會一路長下去
+        assert src.backfills.count("2330") == 3
+        assert engine.tc4_status != "down"
+        assert "放棄" in caplog.text
+        await engine.close()
+
+    async def test_release_cancels_pending_timeout_retry_and_clears_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-08-22 review R8 P2:退訂 / 主圖切走必須取消該 code 在途的逾時重排 timer、
+        清掉逾時記帳。留著的話 (a) 孤兒 timer 醒來對已 release 的 code 發 SubHistory、成功後
+        `_backfilled.add` 把剛清掉的記帳寫回(原註解「秒級殘留窗」變成 15s+ 且可發生兩次);
+        (b) 重新訂閱時重試預算已被吃掉,與「訂閱期為界」的記帳語意相反。"""
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
+        assert engine._backfill_timeouts.get("2330") == 1
+        handle = engine._backfill_timeout_handles["2330"]
+        await engine.set_main("2317")  # 2330 無其他 owner → 真退訂
+        assert "2330" not in engine._backfill_timeout_handles
+        assert handle.cancelled()
+        assert "2330" not in engine._backfill_timeouts
+        # 自選路徑:主圖 + 自選共同持有 → 主圖切走**不**釋放(記帳歸還在的 owner),
+        # 移出自選才真退訂 → 此時才取消
+        await engine.set_main("2330")
+        await engine.set_watchlist(["2330"])
+        await wait_until(lambda: "2330" in engine._backfill_timeout_handles)
+        handle = engine._backfill_timeout_handles["2330"]
+        await engine.set_main("2317")
+        assert "2330" in engine._backfill_timeout_handles and not handle.cancelled()
+        await engine.set_watchlist([])
+        assert "2330" not in engine._backfill_timeout_handles
+        assert handle.cancelled()
+        assert "2330" not in engine._backfill_timeouts
+        await engine.close()
+
+    async def test_timeout_after_release_does_not_rearm_or_bookkeep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-08-22 review round-2 P2:release 時已在佇列 / 正跑的 job 之後逾時,worker 不得
+        替一支**已無 owner** 的 code 記逾時帳、武裝新 timer(15s 後再打 TC4 → 再逾時 → 終局
+        `_backfilled.add` 把 release 清掉的記帳寫回)。判準 = `_refs`(訂閱池唯一真相)。"""
+        import threading
+
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 5.0)
+        engine, src = await _make()
+        gate = threading.Event()
+
+        def slow_backfill(code: str) -> list[object]:
+            gate.wait(2.0)
+            raise HistoryTimeoutError("first page not ready")
+
+        monkeypatch.setattr(src, "backfill", slow_backfill)
+        await engine.set_main("2330")
+        await wait_until(lambda: engine._backfilling == "2330")  # job 正跑著
+        await engine.set_main("2317")  # 2330 真退訂
+        gate.set()
+        await wait_until(lambda: engine._backfilling != "2330")
+        await _drain(engine)
+        assert "2330" not in engine._backfill_timeout_handles
+        assert "2330" not in engine._backfill_timeouts
+        assert "2330" not in engine._backfilled
+        await engine.close()
+
+    async def test_give_up_stops_group_snapshot_from_reenqueueing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """放棄 = **當日不再入列**(與舊行為同),而 `group_snapshot` 也是入列點之一。
+
+        逾時記帳(`_backfill_timeouts`)與失敗記帳分帳的代價:`group_snapshot` 那條
+        60s 輪詢的四道 guard 一條都看不到它。放棄後不進 `_backfilled` 的話,輪詢會
+        每 60s 把同一檔重新推回 worker —— 重試上界形同虛設,而 TC4 的歷史通道是全站
+        共用的稀缺資源(整個群組檢視都排在後面)。
+        """
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_watchlist(["2330"])  # 進訂閱池(group_snapshot 的第一道 guard)
+        expected = 1 + stock_engine_mod._BACKFILL_TIMEOUT_MAX_RETRIES
+        for _ in range(6):
+            engine.group_snapshot(["2330"])
+            await asyncio.sleep(0.03)
+            await _drain(engine)
+        assert src.backfills.count("2330") == expected
+        await engine.close()
+
+    async def test_close_cancels_the_pending_timeout_reenqueue(self) -> None:
+        """`loop.call_later` 的 handle 必須有取消點:關機後醒來的那一發會對已關閉的
+        engine 入列(`_backfill_pending` 起帳、job 進佇列而 worker 已死),測試環境下
+        則是 loop 已關而 callback 還在排程表上。"""
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await wait_until(lambda: bool(engine._backfill_timeout_handles))
+        handles = list(engine._backfill_timeout_handles.values())
+        await engine.close()
+        assert handles and all(h.cancelled() for h in handles)
+        assert not engine._backfill_timeout_handles
+
+    async def test_rollover_cancels_the_pending_timeout_reenqueue(self) -> None:
+        """換日 = 日別記帳重來(`_backfill_timeouts` 已在 stage2 清空)。留著昨天排的
+        那一發 handle,它醒來時會用**新一天**的 generation 重新入列一筆沒有人要的 job,
+        而 stage2 自己已經替主圖排過一筆了。"""
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await wait_until(lambda: bool(engine._backfill_timeout_handles))
+        handles = list(engine._backfill_timeout_handles.values())
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+        await _drain(engine)
+        assert all(h.cancelled() for h in handles)
+        await engine.close()
+
+    async def test_rollover_clears_the_timeout_ledger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_backfill_timeouts` 是**日別**記帳:換日後那一檔要重新有完整的重試預算。
+
+        不清的話計數永久停在上限 —— 昨天忙窗逾時放棄的檔,今天第一次逾時就直接放棄
+        (零重試),而它的分時圖整天空著、log 只有一行「已重試 2 次」讀起來像真的試過。
+        """
+        monkeypatch.setattr(stock_engine_mod, "_BACKFILL_TIMEOUT_RETRY_SECS", 0.01)
+        engine, src = await _make()
+        src.backfill_error = HistoryTimeoutError("first page not ready")
+        await engine.set_main("2330")
+        await wait_until(lambda: src.backfills.count("2330") == 3)  # 首發 + 2 重試 → 放棄
+        before = src.backfills.count("2330")
+        engine.rollover_stage1("2026-07-22")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=50, date="20260722"))  # 首筆新日 tick → stage2
+        # 記帳沒清的話 stage2 排的那一發會**當場**放棄(+1 就到頂),等不到 +3
+        await wait_until(lambda: src.backfills.count("2330") >= before + 3)
         await engine.close()
 
 
