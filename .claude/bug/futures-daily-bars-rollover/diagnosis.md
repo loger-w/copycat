@@ -29,7 +29,7 @@
 `staleTime` 與 `refetchInterval` 皆支援函式形式、interval 只在 `focusManager.isFocused()` 時打、staleTime 以 `dataUpdatedAt` 起算。
 
 **pr-151-review F-08 補(這一輪漏掉、正是 F-01 所在)**:
-- `useBaseQuery.js:69-70` —— **每一次 render** 都 `observer.setOptions(defaultedOptions)`;`queryObserver.js:112-118` 對
+- (行號皆 @tanstack/query-core 5.101.2)`useBaseQuery.js:69-70` —— **每一次 render** 都 `observer.setOptions(defaultedOptions)`;`queryObserver.js:112-118` 對
   `nextRefetchInterval !== #currentRefetchInterval` 就 `#updateRefetchInterval`(`:208-218` 先 `#clearRefetchInterval` 再
   `setInterval`)。`refetchInterval` 函式回連續時間值 = 每 render 重排一次;界若寫成「到下一個午夜 + slack」,slack 窗內求值會跳到隔天。
 - `focusManager.js:9-18` —— `isFocused()` 只聽 `visibilitychange`,**不是**視窗 focus;整夜可見的分頁沒有 `refetchOnWindowFocus` 退路。
