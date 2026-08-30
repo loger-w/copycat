@@ -362,7 +362,7 @@ def _default_stock_source(calendar: TradingCalendar | None = None) -> StockSourc
     # 個股走既有的 `in_trading_hours` 注入點(健檢與自癒同一把閘),不另開參數
     return stock_mod.StockQuoteSource(
         port=_tc4_port(),
-        in_trading_hours=_heal_gate(calendar, stock_mod.in_trading_hours_now),
+        in_trading_hours=_heal_gate(calendar, stock_mod.in_stock_heal_window_now),
     )
 
 
@@ -402,7 +402,7 @@ def _default_corr_source(
     # UNSUB+SUB(2026-08-21 M0:SXF 三小時 8 發);全關則會把在自己盤中的海外腿一起
     # 關掉(台灣連假 SGX / CME 照開)。日曆也只 AND 在有閘的那兩段,理由同上。
     #
-    # 現貨腿(F4 台積電)吃**個股** session 那把 `in_trading_hours_now`,不是期貨那把:
+    # 現貨腿(F4 台積電)吃**個股** session 那把 `in_stock_heal_window_now`,不是期貨那把:
     # 現貨 13:30 收盤且無夜盤,套期貨閘 = 整個夜盤都在對一條收盤了的腿空 churn。
     #
     # 稀疏腿(SXF 費半,事實見 tc4-market-facts)豁免 R2:旗標來自設定檔 `sparse`,與時段閘
@@ -414,7 +414,7 @@ def _default_corr_source(
         port=_tc4_port(),
         heal_symbol_active=segment_leg_gate(
             taifex=_heal_gate(calendar, futures_mod.in_futures_session_now),
-            tws=_heal_gate(calendar, stock_mod.in_trading_hours_now),
+            tws=_heal_gate(calendar, stock_mod.in_stock_heal_window_now),
         ),
         heal_sparse_symbols=frozenset(leg.symbol for leg in config.tc4_legs() if leg.sparse),
     )

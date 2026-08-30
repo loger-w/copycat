@@ -303,7 +303,7 @@ def test_txo_heal_gate_ands_the_calendar(monkeypatch: pytest.MonkeyPatch, clock:
 @pytest.mark.parametrize(
     ("factory", "clock_fn"),
     [
-        ("_default_stock_source", "in_trading_hours_now"),  # 個股:13:35(試撮期仍有簿更新推播)
+        ("_default_stock_source", "in_stock_heal_window_now"),  # 個股:13:35(試撮期仍有簿更新推播)
         ("_default_index_source", "in_index_heal_window_now"),  # 指數:13:25(試撮起指數不更新)
     ],
 )
@@ -332,7 +332,7 @@ def test_stock_and_index_heal_gates_are_two_different_clocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """兩把牆鐘互不牽動:index 那把關著時個股那把仍開(13:25–13:35 正是這個形狀),反之亦然。
-    失效樣態 = 有人把 index source 接回 `in_trading_hours_now`(或個股接到 index 那把),
+    失效樣態 = 有人把 index source 接回 `in_stock_heal_window_now`(或個股接到 index 那把),
     測試只 monkeypatch 其中一把就看不出來 —— 所以兩把同時各設相反值。"""
     import copycat.live.stock_source as stock_mod
     from copycat.server import app as app_mod
@@ -340,14 +340,14 @@ def test_stock_and_index_heal_gates_are_two_different_clocks(
     seen = _capture(monkeypatch, stock_mod, "StockQuoteSource")
     monkeypatch.setattr(app_mod, "_now", lambda: _at(_TUESDAY, 10))
 
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: True)
+    monkeypatch.setattr(stock_mod, "in_stock_heal_window_now", lambda: True)
     monkeypatch.setattr(stock_mod, "in_index_heal_window_now", lambda: False)
     app_mod._default_stock_source(_CAL)
     assert seen["kwargs"]["in_trading_hours"]() is True
     app_mod._default_index_source(_CAL)
     assert seen["kwargs"]["in_trading_hours"]() is False
 
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: False)
+    monkeypatch.setattr(stock_mod, "in_stock_heal_window_now", lambda: False)
     monkeypatch.setattr(stock_mod, "in_index_heal_window_now", lambda: True)
     app_mod._default_stock_source(_CAL)
     assert seen["kwargs"]["in_trading_hours"]() is False
@@ -550,7 +550,7 @@ def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
 ) -> None:
     """F4:台積電現貨腿 `TC.S.TWS.2330` 吃「交易日曆 AND **個股日盤**」。
 
-    沿用個股 session 那把 `in_trading_hours_now`(不另立第二張時段表)。不接閘的失效
+    沿用個股 session 那把 `in_stock_heal_window_now`(不另立第二張時段表)。不接閘的失效
     樣態是整個夜盤每 240 s 一發 UNSUB+SUB —— 現貨 13:30 就收盤了,那些重掛救不到任何
     推播,只是把 TC4 上游的 refcount 反覆掀一遍。
     """
@@ -561,7 +561,7 @@ def test_corr_tws_leg_gate_ands_the_calendar_with_the_stock_session(
     from copycat.server import app as app_mod
 
     seen = _capture(monkeypatch, corr_mod, "CorrQuoteSource")
-    monkeypatch.setattr(stock_mod, "in_trading_hours_now", lambda: clock)
+    monkeypatch.setattr(stock_mod, "in_stock_heal_window_now", lambda: clock)
     # 台期交那把恆開 → 證明兩把閘各走各的,不是共用同一個 callable
     monkeypatch.setattr(futures_mod, "in_futures_session_now", lambda: True)
 

@@ -12,7 +12,7 @@ import pytest
 from copycat.live.stock_source import (
     StockQuoteSource,
     in_index_heal_window_now,
-    in_trading_hours_now,
+    in_stock_heal_window_now,
     stock_symbol,
     stock_window,
 )
@@ -1339,23 +1339,23 @@ class TestBackfillStubSignature:
         assert "疑似凍結 stub" in caplog.text
 
 
-class TestTradingHoursGate:
-    """`in_trading_hours_now` 是個股 session 看門狗 / 健檢與 corr 台積電腿共用的一把閘
+class TestStockHealWindowGate:
+    """`in_stock_heal_window_now` 是個股 session 看門狗 / 健檢與 corr 台積電腿共用的一把閘窗(13:30–13:35 已收盤仍開,名字不再叫「盤中」)
     (完整邊界表在 tests/live/test_corr_source.py::TestTwsLegClock);這裡只釘本檔常數的兩個端點,
-    讓改 `_TRADING_START` / `_TRADING_END` 時本檔自己會紅(review Standards P3)。
+    讓改 `_HEAL_START` / `_STOCK_HEAL_END` 時本檔自己會紅(review Standards P3)。
     index session **不吃這把**(見 `TestIndexHealWindowGate`)。"""
 
     def test_start_inclusive_end_exclusive(self) -> None:
-        assert in_trading_hours_now(_dt.time(8, 29, 59)) is False
-        assert in_trading_hours_now(_dt.time(8, 30, 0)) is True  # 含起點:試撮起有推播
-        assert in_trading_hours_now(_dt.time(13, 34, 59)) is True
-        assert in_trading_hours_now(_dt.time(13, 35, 0)) is False  # 不含終點:收盤補正止(end-exclusive)
+        assert in_stock_heal_window_now(_dt.time(8, 29, 59)) is False
+        assert in_stock_heal_window_now(_dt.time(8, 30, 0)) is True  # 含起點:試撮起有推播
+        assert in_stock_heal_window_now(_dt.time(13, 34, 59)) is True
+        assert in_stock_heal_window_now(_dt.time(13, 35, 0)) is False  # 不含終點:收盤補正止(end-exclusive)
 
 
 class TestIndexHealWindowGate:
     """`in_index_heal_window_now` = **只有** index session(IX0001;櫃買走 MIS poll 不吃這把)吃的自癒 / 健檢閘:
     收盤試撮 13:25 起指數不更新,看門狗每 30 s 誤判 19 發 / 日(pr-126);個股在同一段仍有簿更新
-    推播,所以個股 / corr 現貨腿留 `in_trading_hours_now` 的 13:35(pr-126 F-01 per-consumer)。"""
+    推播,所以個股 / corr 現貨腿留 `in_stock_heal_window_now` 的 13:35(pr-126 F-01 per-consumer)。"""
 
     @pytest.mark.parametrize(
         ("t", "expected"),

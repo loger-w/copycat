@@ -29,7 +29,8 @@ from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
 
-_TRADING_START = _dt.time(8, 30)
+#: 個股 / index 兩把閘窗共用的起點(08:30 試撮起,含)。
+_HEAL_START = _dt.time(8, 30)
 #: 個股 session 看門狗 / 健檢與 corr 台積電腿的閘上界,**end-exclusive**(13:35:00 起關)。
 #: 13:35「收盤補正止」是啟發式不是量測;但個股在收盤試撮 13:25–13:30 **仍有簿更新推播**
 #: (tc4-market-facts:TradeStatus=1、`_note_push` 不分成交 / 簿更新),看門狗在那 5 分鐘本來就
@@ -41,7 +42,7 @@ _TRADING_START = _dt.time(8, 30)
 #: —— pr-126 F-02 / pr-128 F-04)。index session 吃下面另一把 `_INDEX_HEAL_END`。
 #: 另三把時窗刻意**不**與本閘對齊:`signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30
 #: (訊號 / 驗證域)、`stock_models` 試撮窗 13:25–13:30(標示用)。
-_TRADING_END = _dt.time(13, 35)
+_STOCK_HEAL_END = _dt.time(13, 35)
 #: **只有 index session**(IX0001;櫃買走 MIS poll 不吃這把)吃的閘上界 = 收盤試撮起點,**end-exclusive**
 #: (13:25:00 起關;與 `index_engine._WATCH_END` 同值同語意,
 #: `tests/server/test_index_engine.py::test_watch_end_is_the_index_heal_gate_boundary` 鎖)。
@@ -467,9 +468,12 @@ def stock_window(trade_date: str) -> tuple[str, str]:
     return f"{day}00", f"{day}06"
 
 
-def in_trading_hours_now(now: _dt.time | None = None) -> bool:
-    """台股現貨盤中(08:30 試撮起,含;– 13:35 收盤補正止,不含)。
+def in_stock_heal_window_now(now: _dt.time | None = None) -> bool:
+    """個股 session 的自癒 / 健檢閘窗(08:30 試撮起,含;– 13:35 收盤補正止,不含)。
 
+    **不是**「現在是否盤中」:13:30–13:35 已收盤仍回 True —— 上界 13:35 是「收盤那筆推播晚到時
+    看門狗還在」的啟發式(舊名 `in_trading_hours_now` / `_TRADING_END` 名不符實,pr-126 F-01 後
+    改名;`corr_source` / `app` 的讀者只看得到名字,正是 #126 誤共用的同一條失效路)。
     個股 session 的健檢與自癒共用這一把;2026-08-26 F4 起 corr 的台積電現貨腿也吃它
     (`corr_source.segment_leg_gate` 的 `tws` 那半邊)—— 個股現貨時段只有一張表,第二張表
     的失效樣態是兩邊悄悄漂開,而畫面上兩邊都「看起來對」。index session **不是**這一把
@@ -479,19 +483,19 @@ def in_trading_hours_now(now: _dt.time | None = None) -> bool:
     = 讀牆鐘。
     """
     t = _dt.datetime.now().time() if now is None else now
-    return _TRADING_START <= t < _TRADING_END
+    return _HEAL_START <= t < _STOCK_HEAL_END
 
 
 def in_index_heal_window_now(now: _dt.time | None = None) -> bool:
     """index session(IX0001;櫃買走 MIS poll 不吃這把)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。
 
-    與 `in_trading_hours_now` 只差上界:指數 13:25 起不更新(19 發 / 日誤判的症狀所在),個股
+    與 `in_stock_heal_window_now` 只差上界:指數 13:25 起不更新(19 發 / 日誤判的症狀所在),個股
     同一段仍有簿更新推播。注入點 = `app._default_index_source(in_trading_hours=…)`;個股 /
     corr 現貨腿**不得**接這一把(pr-126 F-01)。兩把刻意各自具名、不參數化(讀者在 wiring 處
     只看得到名字);第三把時窗出現時再抽 `_in_window(t, end)` 共用。
     """
     t = _dt.datetime.now().time() if now is None else now
-    return _TRADING_START <= t < _INDEX_HEAL_END
+    return _HEAL_START <= t < _INDEX_HEAL_END
 
 
 class StockQuoteSource(TC4QuoteSource):
@@ -504,7 +508,7 @@ class StockQuoteSource(TC4QuoteSource):
         trade_date: str | None = None,
         poll_wait_secs: float = 1.0,
         no_data_secs: float = 10.0,
-        in_trading_hours: Callable[[], bool] = in_trading_hours_now,
+        in_trading_hours: Callable[[], bool] = in_stock_heal_window_now,
         heal_silence_secs: float | None = 30.0,
         heal_symbol_silence_secs: float | None = 60.0,
         heal_poll_secs: float = 5.0,
