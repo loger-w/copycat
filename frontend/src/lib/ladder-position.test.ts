@@ -304,3 +304,15 @@ describe("positionEcon today_qty 邊界(review round 1)", () => {
     expect(short.breakEvenMilli).toBeCloseTo(99_798.75, 1);
   });
 });
+
+// ---- fix/borrowless-short-calibration(2026-08-30;08-28 prod 8358 無券當沖實錄)----
+describe("positionEcon 無券空單(kind === 'daytrade_sell')", () => {
+  it("today_qty 那段同現股當沖減半 0.15% —— 後端負現股列歸 daytrade_sell 後與 cash 空方同一把尺", () => {
+    const asDaytrade = positionEcon(-1, 512, 523_000, 1.8, "daytrade_sell", { avgSource: null, todayQty: 1 });
+    const asCash = positionEcon(-1, 512, 523_000, 1.8, "cash", { avgSource: null, todayQty: 1 });
+    expect(asDaytrade).toEqual(asCash);
+    // 0.3% → 0.15% 差 512 × 0.15% ≈ 0.77 元 ≈ 1 檔(08-28 user 看到的打平線偏差)
+    const fullTax = positionEcon(-1, 512, 523_000, 1.8, "daytrade_sell", { avgSource: null, todayQty: 0 });
+    expect(asDaytrade.breakEvenMilli! - fullTax.breakEvenMilli!).toBeCloseTo(512 * 0.0015 / 1.0002565 * 1000, 0);
+  });
+});

@@ -106,15 +106,16 @@ def test_parse_short_negative_shares_defensive() -> None:
 def test_parse_cash_negative_shares_keeps_short_direction(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """現股列負股數(疑當沖先賣/無券賣出未回補;2026-08-20 user 實報空單方向錯)——
-    舊 abs() 會把真空單顯示成多單,平倉映射再送賣單 = 對空單加倉(真金風險)。
-    方向必須保留;kind 歸類(daytrade_sell?)待首筆實錄校準,整列 warning 就是蒐證通道。"""
+    """現股列負股數 = 無券當沖先賣未回補(2026-08-20 user 實報空單方向錯;2026-08-28 prod 8358
+    實錄校準 kind)—— 舊 abs() 會把真空單顯示成多單,平倉映射再送賣單 = 對空單加倉(真金風險)。
+    方向保留、kind 歸 daytrade_sell(_CLOSE_MAP 回補 = 現股買);整列 INFO 留痕。"""
     raw = RAW_T_BOUGHT.replace(",1000,0,,", ",-1000,0,,")
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         p = parse_balance_line(raw)
     assert p is not None
-    assert p.qty == -1 and p.kind == "cash"
+    assert p.qty == -1 and p.kind == "daytrade_sell"
     assert any("負股數" in r.message and "2493" in r.message for r in caplog.records)
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
 def test_parse_margin_negative_shares_keeps_short_direction(
