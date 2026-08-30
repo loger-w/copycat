@@ -1,0 +1,5 @@
+[
+ {"head": "f1b7a52c", "codes": 40, "ready_ms": 200, "req_ms": 3, "trigger": "group", "subscribe_wall_s": 0.288, "backfill_wall_s": 0.87, "backfilled": 40, "reqs": 281, "gethis_empty_polls": 1},
+ {"head": "f1b7a52c", "codes": 40, "ready_ms": 200, "req_ms": 3, "trigger": "ticks", "tick_gap_ms": 10, "subscribe_wall_s": 0.283, "backfill_wall_s": 1.341, "backfilled": 40, "reqs": 282, "gethis_empty_polls": 3},
+ {"head": "f1b7a52c", "codes": 40, "ready_ms": 200, "req_ms": 3, "trigger": "ticks", "tick_gap_ms": 50, "subscribe_wall_s": 0.287, "backfill_wall_s": 2.7, "backfilled": 40, "reqs": 288, "gethis_empty_polls": 9}
+]
