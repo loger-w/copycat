@@ -6,16 +6,16 @@
   這段的 CDP / MA 仍是「昨天早上的 D 部分 bar」算的**(推論自 cache 鍵,未實錄夜盤畫面)。候選 = 日 K cache 對「末根 == today」的
   結果用短 TTL(比照 `TODAY_TTL_SECS`)或 13:46 後失效一次;個股日 K 走 `build_daily` 同構(但個股 overlay 走後端 `date < today`,
   盤中不會拿部分 bar 當基準,夜盤也沒有現貨交易 → 個股面無症狀)。
-- [ ] **App 級 lazy 測試在剛 `npm ci` 的 worktree 全量必紅 1–2 條、每次不同**(`App.memo.test.tsx` railCtx 換主檔 ×3 / `App.corr-tab.test.tsx`
+- [x] **App 級 lazy 測試在剛 `npm ci` 的 worktree 全量必紅 1–2 條、每次不同**(`App.memo.test.tsx` railCtx 換主檔 ×3 / `App.corr-tab.test.tsx`
   零 corr WS ×1 / `App.test.tsx` localStorage 記住 index tab + capital WS 唯一掛載 ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 5/5 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
   主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
-  單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。
+  單檔重跑 3/3 綠。判讀規則:worktree 全量紅在 App 級 lazy 測試 → 先單檔重跑 + stash 差分,再懷疑改動。 **→ 08-31 chore/app-tests-async-timeout 出貨**:`App.test.tsx` / `App.memo.test.tsx` / `App.corr-tab.test.tsx` 檔頭 `configure({ asyncUtilTimeout: 3000 })`(= L68),剛 `npm ci` 的 worktree 全量 2896/2896 ×2 首次全綠;判讀規則仍留 ops-discipline。
 - [ ] **`useMarketBars.ts:69` / `useStockBars.ts:95` 與修前 `useFuturesBars` 逐字同病、未修**(pr-151-review F-03 改正:原記的
   overlay 兩支不是同病):`useMarketBars` 日 / 週 / 月 K `staleTime: isMinute ? 0 : Infinity`、queryKey `["market-bars", key, tf]` 無日期;
   `useStockBars` 日 K `staleTime: isDaily ? Infinity : 0`、queryKey `["stock-bars", code, "D"]` 無日期 —— 台股綜合 tab 的日 / 週 / 月 K
   與個股頁日 K 整天掛著跨午夜同樣停在昨天(個股 overlay 走後端 `date < today` 不受影響,症狀只在 K 線本身)。修法沿
   `useFuturesBars.ts::msUntilDayRollover`(界嚴格在 from 之後 + 秒級量化;**不要**改吃 `dataUpdatedAt`,切回路徑會漂)。另開 /bug。
-- [ ] **`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**(render 時重算,**有**日期鍵、風險較低):
+- [x] ~~**`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**~~(08-31 user 拍板知情不動、結案;render 時重算,**有**日期鍵、風險較低):
   與 08-30 否決的 H3 同構 —— 只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了
   「沒人看就退訂」的閘,跨日會與期貨日 K 同病。記著,不動。
 
@@ -72,7 +72,7 @@
   證交所當日可當沖名單 API;FinMind 當日更新時刻。~~
   → 08-28 `docs/research/2026-08-28-instrument-flags-survey.md`:達錢**不可**;證交所 `TWTB4U`(含 `Suspension`)/ 櫃買 `tpex_securities` 免 token JSON **可**(盤前公布時刻未證,08:30 打一次);
   FinMind DayTrading 盤前可取、資券 21:00。C1 當沖資格標示 → 資料源定為交易所 OpenAPI 當日名單,等 user 排 `/feat`。
-- [ ] **D `chore/test-hygiene-batch-2`**:L29 / L68 / L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。
+- [ ] **D `chore/test-hygiene-batch-2`**:L29 / ~~L68~~(08-31 已出貨 chore/app-tests-async-timeout)/ L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。
 - [ ] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
   L467 / L471 heal 階梯(壞日子才有);6949 發數(≤ 40);海外腿休市段亂救;13:50 NK225M probe(L430);L84 SC-13 (b)–(e)。
 - [ ] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
