@@ -40,7 +40,7 @@
   字串比較,`positionEcon(kind: string)` 收裸 string。候選 = 前端把 kind 收成單一型別 + 一張「稅 / 費 / 方向」表;等下一次再加種類時併做。
 - [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
-- [ ] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
+- [x] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
   4–8 檔會不會壞(不碰 prod)② 能就把單工 worker 改有上限並行、正在看的群組優先 ③ 另診斷 09:00→09:02 空檔。L405 圖牆 DOM 一併量。
   **① 08-28 16:xx 已量(`spikes/stock_backfill_parallel_probe.py`,20 檔,盤後、只 history 不 SUBQUOTE)**:serial 23.3 s(1.16 s/檔)/
@@ -49,6 +49,11 @@
   (3481 44k ticks 0.98 s)。修法候選(② 的具體版):(a) worker 出隊前先對整批 `_sub_history`(TXO `fetch_backfill` 樣板)+ backfill 首頁 poll 改退避;
   (b) 或 worker 改 N=4 有上限並行。(a) 改動最小、零新執行緒。③ 09:02 才起跑仍未診斷(server 08:14 起、無 rollover;疑 `_backfilled` /
   60 s 輪詢入列時序)。
+  **→ 08-30 已出貨(perf/opening-backfill-parallel)**:S1-a backfill 首頁 poll 改基底 `_collect_history` 退避;S1-b worker 出隊時整批 `prepare_backfill`(先全訂再收割);S2 🔴 自選成員**首筆當日成交 tick** 即入列(不做「訂閱當下入列」:08-28 主圖 6207 08:15 入列 → 30 s 逾時 ×2 → 「放棄」,40 檔 = 20 分鐘必敗 REQ)。harness 40 檔 40.72 s → 18.9 s → **0.87 s**。③ 真因 = 入列點全是需求驅動,09:02:08 user 打開群組檢視才有第一筆 `group-state`。**08-31 判準**:`grep "stock backfill" logs/server-20260831-*.log | awk '$2>="09:00:00" && $2<="09:01:00"'` 首筆 ≤ 09:00:05、自選全部完成 ≤ 09:00:30;09 點整點總筆數對照 08-28 的 313。L405 圖牆 DOM **未量**(user 不覺得卡,留著)。
+- [ ] **set_main 無條件重排回補去重**(08-30 /perf 旁支,user 拍板 next-time):`GET /api/stock/state/{code}` → `set_main` → `_enqueue_backfill` 不看 `_backfilled` / 在途 —— 08-28 8358 一天 44 次、6213 41 次(612 次 state 請求),每次 = SubHistory + 全量收割數千 tick + `apply_backfill`。去重會失去「切主圖時順便修補 live 缺口」的保險(reconnect 已清 `_backfilled`,斷線缺口仍會補)。S1 之後每次重複只花 ~0.3 s,痛感大減,先觀察。
+- [ ] **開盤瞬間每檔回補兩次**(08-30 觀察):08-28 09:02–09:03 有 20 檔跑兩次(3042 09:02:20.944 / 09:02:21.976),第二次來自「漲跌停值變」入列點(首則帶 UpperLimitPrice 的 REALTIME 在回補完成後才到 → `prev_limits != meta`)。設計上刻意(補鎖停判定);S2 之後首筆 tick 與meta 同一則到 → 應只剩一次,08-31 log 核。
+- [ ] **前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。要驗再開。
+
 - [ ] **`/mod` 群組圖牆逐筆**(C9):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
 - [ ] **`/mod` 緩撮第二段**(L478)。

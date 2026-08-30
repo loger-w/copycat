@@ -143,6 +143,7 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   「rows 非空但解析後全域外」grep `疑似凍結 stub`。**姊妹 ready-check(river_backfill /
   stock backfill / _fetch_symbol_ticks)未收緊**,見 docs/next-time.md 2026-08-14 節。
   (Trigger:任何 SubHistory/GETHISDATA 輪詢迴圈 / 空窗訂閱重試設計 / 排查「回補回垃圾」)
+- **TICKS 歷史訂閱盤前(窗內無資料時)建立只會 30 s 逾時,**不**進凍結 stub 態;同窗口盤中重送 SubHistory 即取回全量**(2026-08-28 prod 實錄:主圖 6207 08:15 入列 → 逾時 ×2 → 08:16「放棄」,09:02 同窗再訂 117 筆;與上條 1K 的行為不同)。代價是每檔佔單工 worker 30 s —— 「訂閱當下就入列」對 40 檔自選 = 20 分鐘必敗 REQ,回補入列要等「有成交」的正面訊號(stock_engine 首筆當日成交 tick 入列,perf/opening-backfill-parallel)。另:**個股回補一秒一檔不是 TC4 慢**——SubHistory 後首頁備妥約 0.2 s(probe 08-28:20 檔逐檔 1.16 s/檔 vs 先全訂再收割 0.17 s/檔,tick 逐檔相等零逾時;真資料成本 3481 44k ticks 0.98 s),整批 SubHistory 40 檔 TC4 吃得下。(Trigger:設計個股 / 合約 TICKS 回補的入列時機或批次)
 
 ## 指數與期指
 
