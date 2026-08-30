@@ -1780,9 +1780,27 @@ class TestFirstTickEnqueuesBackfill:
         for cum in (1, 2, 3, 4):
             src.on_message(_quote(cum=cum))
             await _drain(engine)
-        assert src.backfills == ["2330", "2330", "2330"]  # 三次失敗各由一筆成交點火,第 4 筆被冷卻擋下
+        # 三次失敗各由一筆成交點火,第 4 筆被冷卻擋下
+        assert src.backfills == ["2330", "2330", "2330"]
         assert engine._backfill_failed == {"2330": 3}
         assert engine.tc4_status == "up"  # 成員失敗不打全站 status
+        await engine.close()
+
+    async def test_member_unexpected_error_rearms_the_first_tick_trigger(self) -> None:
+        """F-01 的另一半(review round 1 F-D):`except Exception`(壞電文 JSONDecodeError 等)
+        同樣不設 `_backfilled`、不武裝 timer、只 `_backfill_failed += 1` —— 點火權要一樣還回,
+        否則收割端一則壞電文就讓該檔當日 tick 通道死掉。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.backfill_errors = [RuntimeError("bad payload")]
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        assert src.backfills == ["2330"]
+        src.on_message(_quote(cum=2))
+        await _drain(engine)
+        assert src.backfills == ["2330", "2330"]  # 下一筆成交再點火一次
+        assert engine.tc4_status == "up"
         await engine.close()
 
     async def test_main_is_left_to_its_own_enqueue_points(self) -> None:
@@ -1890,7 +1908,8 @@ class TestBackfillBatchPrepare:
         engine.group_snapshot(["2454"])
         src.backfill_gate.set()
         await _drain(engine)
-        assert src.prepares == [["2317", "2454"]], src.prepares  # 去重壞掉會是 [["2317","2317","2454"]]
+        # 去重壞掉會是 [["2317","2317","2454"]]
+        assert src.prepares == [["2317", "2454"]], src.prepares
         assert src.backfills == ["2330", "2317", "2317", "2454"]  # 批次組成:兩筆 2317 job 都存在
         await engine.close()
 
@@ -2703,11 +2722,11 @@ class TestWatchlistRemovalBookkeeping:
         await _drain(engine)
         assert "2330" not in engine._refs
 
-        await engine.set_watchlist(["2330"])  # 以成員身分加回
-        n = src.backfills.count("2330")
+        await engine.set_watchlist(["2330"])  # 以成員身分加回(不走 group_snapshot,不入列)
+        assert src.backfills.count("2330") == 2  # 前提:首筆點火 1 + set_main 無條件入列 1
         src.on_message(_quote(cum=2))
         await _drain(engine)
-        assert src.backfills.count("2330") == n + 1
+        assert src.backfills.count("2330") == 3  # 第三次 = 加回後的首筆成交再點火
         await engine.close()
 
     async def test_failure_cooldown_restarts_after_a_real_unsubscribe(self) -> None:
