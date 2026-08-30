@@ -35,7 +35,7 @@
   單腿死無人救,候選 = sparse 時段化(比照 `heal_symbol_active`);不在意就維持。
 - [x] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
   **→ 08-30 出貨 fix/borrowless-short-calibration**:負現股列歸 `daytrade_sell`(user 拍板)+ 兩條連帶(現股買先沖空單 / 損益列「現股」配
-  daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `balance line 現股負股數 → 無券空單`(INFO,不再是「平倉暫鎖」WARNING)、
+  daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `庫存段 <股號> 現股負股數 … → 無券空單(daytrade_sell)`(INFO,每股號每日一次;parser 那行是 DEBUG 看不到;不得再出現「平倉暫鎖」WARNING)、
   `curl /api/capital/positions` 該列 `kind:"daytrade_sell"` / `today_qty:1` / `avg_source:"broker"`、閃電梯部位標籤「無券」、平倉鈕可按(送現股買)、
   買回後 positions 立即歸零(不出現 cash +1 幽靈列)。倉位線語意仍留尾(下條)。
   review 收修:parser 那行降 DEBUG(每輪洗版)→ 判準改看 `成交樂觀套用部位 … stock=<股號>`(修前是「不在樂觀套用表」)與
