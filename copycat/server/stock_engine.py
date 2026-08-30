@@ -198,9 +198,9 @@ class StockSource(Protocol):
 
     def prepare_backfill(self, codes: list[str]) -> None:
         """整批預熱:對每檔先送 SubHistory 讓 TC4 平行備資料,之後逐檔 `backfill` 收割
-        (perf/opening-backfill-parallel S1-b)。best-effort:傳輸失敗與壞電文
-        (`ConnectionError` / `ValueError`)只 log,不 raise;其餘例外由 worker 的
-        `except Exception` 兜住(pr-153 F-05)。"""
+        (perf/opening-backfill-parallel S1-b)。best-effort:傳輸失敗(`ConnectionError`)
+        只 log 就停、壞電文(`ValueError`)只 log 並跳過那一檔;都不 raise。其餘例外由 worker 的
+        `except Exception` 兜住(pr-153 F-05 / round-1 F-C)。"""
         ...
 
     def fetch_daily_bars(self, code: str, n: int = 25) -> list[DailyBar]: ...
@@ -1514,6 +1514,10 @@ class StockEngine:
             self._backfilling = None
             self._backfill_settled(code)
             self._backfill_failed[code] = self._backfill_failed.get(code, 0) + 1
+            # 與 ConnectionError 成員分支同款(pr-153 F-01 / round-1 F-D):這條也不設
+            # `_backfilled`、不武裝 timer,點火權不還回就是當日 tick 通道死掉;預算同由
+            # `_BACKFILL_MAX_FAILS` 封口。主圖本來就不走 tick 路徑,discard 對它是 no-op。
+            self._tick_armed.discard(code)
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None})
             return
         self._backfilling = None
