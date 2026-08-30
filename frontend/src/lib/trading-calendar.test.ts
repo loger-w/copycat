@@ -9,6 +9,7 @@ import {
   isTradingDay,
   isWeekendIso,
   isoLocalDate,
+  msUntilNextLocalDate,
   nextTradingDayIso,
   setHolidays,
   shiftIso,
@@ -151,5 +152,12 @@ describe("nextTradingDayIso / shiftIso(mod/futures-day-1500:錨定日要跳到�
     }
     setHolidays(days);
     expect(nextTradingDayIso("2026-08-24")).toBe("2026-09-24");
+  });
+
+  it("msUntilNextLocalDate:22:00 → 2 小時;恰在午夜 → 整整一天;跨月末照進位", () => {
+    expect(msUntilNextLocalDate(new Date(2026, 7, 5, 22, 0, 0, 0))).toBe(2 * 60 * 60_000);
+    expect(msUntilNextLocalDate(new Date(2026, 7, 6, 0, 0, 0, 0))).toBe(24 * 60 * 60_000);
+    // 23:59:59.500 → 500 ms:秒與毫秒也算在內,不是只看時分
+    expect(msUntilNextLocalDate(new Date(2026, 7, 31, 23, 59, 59, 500))).toBe(500);
   });
 });

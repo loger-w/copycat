@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +43,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks(); // console.warn spy 不外溢到同檔後續測試(review round 1 S F-7)
   vi.useRealTimers();
+  focusManager.setFocused(undefined); // 跨日測試手動切過 focus 的還原,避免外溢到別檔
 });
 
 describe("useFuturesBars(SC-1/2/3)", () => {
@@ -269,5 +270,101 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     // hook 內 retry:1 覆寫 defaultOptions → 要等一次重試(與 useMarketBars 同慣例)
     await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
     expect((result.current.error as Error).message).toBe("INVALID_SESSION");
+  });
+});
+
+// bug/futures-daily-bars-rollover(next-time 08-24 L408 → 08-28 升 /bug):看盤日常 = preview 整天掛著,
+// 跨過午夜後日 K 那份 cache 不會失效(`staleTime: Infinity` + 不輪詢)→ 新交易日的 CDP / MA 疊線
+// 拿**前一天那份快照**(昨天的 D bar 還是盤中部分值,或根本沒有)當基準;後端 `build_period` 的
+// daily cache 鍵 = 牆鐘日曆日,午夜一過就有新料可拿,只是前端從不去問。
+describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", () => {
+  /** D = 2026-08-05(週三)。第一發回「D 部分 bar」快照;跨過午夜後的請求回「D 完成 + D+1 部分」。 */
+  const D_SNAPSHOT = [
+    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
+    { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
+  ];
+  const D1_SNAPSHOT = [
+    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
+    { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
+    { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
+  ];
+  function stubDayFetchByWallClock() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const bars = new Date().getDate() >= 6 ? D1_SNAPSHOT : D_SNAPSHOT;
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+      }),
+    );
+  }
+
+  it("人一直在期貨 tab 上跨過午夜 → 次一日曆日重抓一次,cache 不停在昨天的快照", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
+    stubDayFetchByWallClock();
+    const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000); // 掛到 D+1 09:00
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBeGreaterThanOrEqual(2);
+    // 使用者的症狀:D+1 早上疊線基準仍是昨天 09:00 那份(D bar 停在部分值)
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+  });
+
+  // 切走的 observer 是退訂(subscribed: false):沒有計時器,午夜那一發不會打;切回時靠
+  // staleTime 判「這份是昨天的」才重抓 —— 同日曆日內切回仍不重抓(上一個 describe 那條)。
+  it("在個股頁跨過午夜再切回期貨 tab → 日 K 重抓(同日曆日切回才是不重抓)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0)); // D 22:00 在期貨 tab
+    stubDayFetchByWallClock();
+    const { result, rerender } = renderHook(({ active }) => useFuturesBars("TXF", "day", active), {
+      initialProps: { active: true },
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    rerender({ active: false });
+    await vi.advanceTimersByTimeAsync(11 * 60 * 60_000); // 個股頁待到 D+1 09:00
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1); // 退訂期間零請求
+    rerender({ active: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+  });
+
+  // TQ 預設 `refetchIntervalInBackground: false`:分頁縮在背景時午夜那一發被跳過,下一個
+  // interval tick 是 24 小時後 —— 回前景那一刻要靠「已過期」+ refetchOnWindowFocus 補上。
+  it("分頁在背景跨過午夜 → 回前景那一刻重抓,不等下一個 24 小時", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    stubDayFetchByWallClock();
+    const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    focusManager.setFocused(false); // 分頁縮到背景
+    await vi.advanceTimersByTimeAsync(11 * 60 * 60_000); // D+1 09:00
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1); // 背景不打
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+  });
+
+  it("同一日曆日內(22:00 → 23:59)不重抓,跨兩個午夜恰重抓兩次(不是每 60 s 一發)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    stubDayFetchByWallClock();
+    renderHook(() => useFuturesBars("TXF", "day"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(119 * 60_000); // 23:59
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    await vi.advanceTimersByTimeAsync(48 * 60 * 60_000); // D+2 23:59
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
   });
 });
