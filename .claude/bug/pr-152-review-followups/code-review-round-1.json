@@ -1,0 +1,23 @@
+{
+  "fixed_point": "2873e004",
+  "head_reviewed": "792b57a4",
+  "reviewers": {"standards": "opus / effort high", "spec": "opus / effort high"},
+  "standards": [
+    {"id": "F-01", "severity": "Should", "file": "frontend/src/lib/close-order.ts:35-42", "finding": "CLOSE_KIND 是後端 close._CLOSE_MAP 回補單種的第二份鏡像,未登錄 CLAUDE.md §4 契約清單、無 parity 測試;後端改回補單種 → 確認窗「(現股)」謊報實送交易別、兩側各自全綠零訊號(真錢送單面)。", "disposition": "收:tests/capital/test_close.py::test_close_kind_label_parity_with_frontend(讀 close-order.ts CLOSE_KIND 字面 vs _CLOSE_MAP 同 kind 所有方向的單種);CLAUDE.md 契約條點名兩支 parity 測試。"},
+    {"id": "F-02", "severity": "Nice(判斷題)", "file": "copycat/capital/store.py:290-336", "finding": "對稱塊與買向塊逐行同構(Duplicated Code);`signed < 0` 後半因 B08 早退恆真。鎖與 applied_* 帳務已查無誤。", "disposition": "留(§B 不為未來可能加 abstraction;兩處實例抽 helper 要傳 sign 反而難讀);第三向出現時再抽。記本 json。"},
+    {"id": "F-03", "severity": "Nice", "file": "copycat/capital/client.py:238", "finding": "_short_row_logged 鍵含交易日從不清理,長跑 prod 逐日累積。", "disposition": "收:改 _short_row_day + set[str],換日整組 clear(併 Spec F-05,補跨日重印測試)。"},
+    {"id": "F-04", "severity": "Nice", "file": "tests/capital/test_store.py:919; CapitalPositionsList.test.tsx:222", "finding": "兩行超 100 字元(ruff 未選 E501)。", "disposition": "收:test_store 折行;tsx 該行因 Spec F-04 改標題順手縮短。"},
+    {"id": "F-05", "severity": "Nice", "file": "tests/capital/test_models.py:167", "finding": "Mysterious Name:test_close_kind_wire_parity_with_frontend 驗的是 PositionKind ⊆ TradeKind,與 CLOSE_KIND(回補單種)同詞異義。", "disposition": "收:改名 test_position_kind_subset_of_trade_kind。"},
+    {"id": "F-06", "severity": "Nice", "file": "frontend/src/components/capital/CapitalPositionsList.tsx:129-130", "finding": "同一 render 內 closeKindLabel 呼叫兩次。", "disposition": "收:抽 closeKindText / closeKindSuffix 兩個 const(併 Spec F-04)。"},
+    {"id": "F-07", "severity": "Nice", "file": "commit a2a7c7a8", "finding": "fix commit 含 models.py / types.ts / balance_rows.py 三處純註解回校,與三類分開略混。", "disposition": "不重寫歷史(註解是 F-01 / F-05 / F-16 對同一批 code 的回校,語意上同一筆行為改動的說明);記錄。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "Should", "file": "CLAUDE.md:263-265", "finding": "契約條「釘住」清單仍只列原三支,未點名新加的跨語言 parity 測試(avg_source 條有先例)。", "disposition": "收:契約條補 test_position_kind_subset_of_trade_kind + test_close_kind_label_parity_with_frontend。"},
+    {"id": "F-02", "severity": "Should", "file": "copycat/capital/store.py:313", "finding": "反向沖銷是真錢樂觀套用路徑的新行為,CLAUDE.md 契約條 / next-time L32 / verification.md edge 清單三處都沒補。", "disposition": "收:三處各補一句(CLAUDE.md 沖銷兩向 + 漂掉症狀;next-time 08-31 收修段;verification.md edge 加反向案例)。"},
+    {"id": "F-03", "severity": "Nice", "file": "copycat/capital/store.py:262-264", "finding": "報告 F-08 要求守門處註「買向兩處一致排除」,只改了算式。", "disposition": "收:守門處補一行。"},
+    {"id": "F-04", "severity": "Nice", "file": "frontend/src/components/capital/CapitalPositionsList.tsx:126-133", "finding": "報告 F-14 定位「唯一與部位種類不同的組合」,實作對所有 sec kind 加後綴(現股列也變「賣出 3 張(現股)」),略超範圍;closeKindLabel 呼叫兩次。", "disposition": "收:後綴只在 closeKindLabel(kind) ≠ KIND_TEXT[kind].full 時印(現況只有 daytrade_sell);抽 const。"},
+    {"id": "F-05", "severity": "Nice", "file": "copycat/capital/client.py:238 / tests/capital/test_client.py:2254", "finding": "_short_row_logged 含日期鍵無清理;新測沒釘「跨日重印」。", "disposition": "收:換日清 + monkeypatch _today_ymd 的跨日重印斷言(len == 2、set == {\"8358\"})。"},
+    {"id": "F-06", "severity": "參考用", "file": "copycat/capital/store.py:339", "finding": "殘量開列取整批 fill_avg(含已被沖銷那幾張的價金),多價位分批成交時殘餘列均價偏移;買向 block 同形、非本分支引入、快照落地即蓋。", "disposition": "不動;記 docs/next-time.md 08-28 節第 2 條留尾。"}
+  ],
+  "disposition": "Standards 7(Should 1 / Nice 6):F-01 / F-03 / F-04 / F-05 / F-06 收修,F-02 留(§B),F-07 不重寫歷史。Spec 6(Should 2 / Nice 3 / 參考用 1):F-01 ~ F-05 收修,F-06 記 next-time。Spec 軸 (a) 確認 14 條可執行 finding 全部有對應改動、(c) F-02 沖銷追鏈 / F-11 鍵語意 / F-14 四鍵鏡像皆過、scope creep 無。收修 commit = a2a7c7a8 之後的 fix + docs 兩筆(見 branch log);增量只補 reviewer 明示修法,round 2 不另跑。"
+}
