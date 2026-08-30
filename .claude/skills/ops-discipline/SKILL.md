@@ -86,6 +86,18 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   別份 code。worktree 內直跑腳本開頭要 `sys.path.insert(0, <repo root>)`。另:remove 時有 process
   開著 worktree 檔案會以 Invalid argument 失敗且先刪 `.git/worktrees/<name>` 中繼資料 → 收尾要
   `git worktree prune` + 手動 rmdir。(Trigger:worktree 寫直跑腳本 / 收尾清 worktree)
+- **worktree 分支 rebase merge 後的三個收尾坑**(2026-08-30 fix/futures-daily-bars-rollover 全踩):
+  (1) 主 tree 若留著同名 untracked artifact 副本(§0 第 2 點的「先寫主 tree 再 cp 進 worktree」),
+  `git pull --ff-only` 會以「untracked 會被覆蓋」拒絕 —— 先 `MSYS_NO_PATHCONV=1 git show origin/master:<path> | diff -q - <path>`
+  比對一致再刪副本(Git Bash 沒有 `MSYS_NO_PATHCONV=1` 時 `rev:path` 的冒號會被轉成 Windows 路徑而 fatal);
+  (2) `gh pr merge --rebase` 後 `git branch -d` 必拒「not fully merged」(rebase 改寫 SHA),確認 `gh pr view --json state` = MERGED
+  且 origin/master tip subject = 分支末筆後用 `-D`;`--delete-branch` 對 worktree 佔用中的分支會撞本地刪除,遠端另 `git push origin --delete`;
+  (3) 收尾鏈用 `&&` 串時,任一步失敗後面的 `|| echo` 會誤印成功字樣 —— 每步印明確 exit / 狀態,不靠 `||`。
+  (Trigger:worktree 分支 merge 後清理)
+- **剛 `npm ci` 的 worktree 全量 vitest 必紅 1–2 條 App 級 lazy `waitFor` 測試、每次不同**(2026-08-30:5/5 次,
+  `App.memo` / `App.test` / `App.corr-tab`;單檔重跑 3/3 綠;**stash 掉全部改動仍紅** → 環境不是改動)。判讀順序:
+  單檔重跑 → 在 worktree 內 `git stash push` 全部改動再全量(差分)→ 主 tree master 全量對照;三步都指向環境才歸 flake,
+  記 next-time 併 test-hygiene 批。(Trigger:worktree 全量 vitest 紅在 App 級測試)
 - **主 tree 可能同時被另一 session 用著:`git switch` 前後各查一次 `git status`**(2026-08-24
   真踩到):session 開頭 status 乾淨,幾分鐘後 commit 完才發現多出六個他人未提交的前端改動 ——
   `git switch -c` 會把那些改動一起帶到新分支、又帶回去(內容沒壞,但對方的 branch 名在那幾分鐘
