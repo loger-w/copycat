@@ -413,3 +413,102 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
   });
 });
+
+// pr-151-review F-01 / F-02 / F-07:TQ v5 的 `useBaseQuery` **每一次 render** 都 `observer.setOptions(...)`
+//(useBaseQuery.js:69-70),`refetchInterval` 函式回值一變就 clear + 重排計時器(queryObserver.js:115-118)。
+// 修前的 `msUntilDayRollover(Date.now())` 在 00:00–00:01 slack 窗內回「到明天午夜」→ 那 60 秒內任一重繪把
+// 午夜那一發推到隔天;而 `FuturesChart` 每則 WS 訊息重繪一次、夜盤正在跑 —— 「人一直在期貨 tab 上」正是
+// 上一個 describe 用 `renderHook`(推進期間不重繪)量不到的那一維。
+describe("useFuturesBars 日 K 跨午夜 × 重繪(pr-151-review F-01 / F-02 / F-07)", () => {
+  const D1_ISO = "2026-08-06";
+  const D_SNAPSHOT = [{ t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }];
+  const D1_SNAPSHOT = [{ t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
+  function stubDayFetchByWallClock() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+      }),
+    );
+  }
+  const dCount = () => urls.filter((u) => u.includes("tf=D")).length;
+  /** 模擬 FuturesChart 吃 WS 的重繪節奏:每 `everyMs` 一次 rerender、持續 `forMs`。 */
+  async function rerenderBurst(
+    rerender: (p: { tick: number }) => void,
+    forMs: number,
+    everyMs: number,
+  ) {
+    for (let t = 0; t < forMs; t += everyMs) {
+      rerender({ tick: t });
+      await vi.advanceTimersByTimeAsync(everyMs);
+    }
+  }
+
+  it("slack 窗內(00:00:10 → 00:00:50)每 100 ms 重繪一次 → 00:01:01 照樣重抓,不被推到隔天", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    stubDayFetchByWallClock();
+    const { result, rerender } = renderHook(
+      ({ tick }) => {
+        void tick;
+        return useFuturesBars("TXF", "day");
+      },
+      { initialProps: { tick: -1 }, wrapper: wrapper(newClient()) },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 60_000 + 10_000); // D+1 00:00:10
+    await rerenderBurst(rerender, 40_000, 100); // → 00:00:50,400 次重繪
+    expect(dCount()).toBe(1); // 還在 slack 內
+    await vi.advanceTimersByTimeAsync(11_000); // 00:01:01
+    expect(dCount()).toBe(2);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同日不再打
+    expect(dCount()).toBe(2);
+  });
+
+  // 鎖住修法的另一面:以 `dataUpdatedAt` 起算的版本跨 render 穩定,但 setInterval 的週期是從「重新武裝的時刻」
+  // 起算 —— 09:00 抓、20:00 切回會武裝 15 h、11:00 才打。界必須以「現在」算到下一個 00:01。
+  it("09:00 抓 → 15:00 切走 → 20:00 切回(未過期)→ 仍在 00:01:01 重抓,不是 11:00", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    stubDayFetchByWallClock();
+    const { rerender } = renderHook(({ active }) => useFuturesBars("TXF", "day", active), {
+      initialProps: { active: true },
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000); // 15:00
+    rerender({ active: false });
+    await vi.advanceTimersByTimeAsync(5 * 60 * 60_000); // 20:00
+    rerender({ active: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dCount()).toBe(1); // 同日曆日切回不重抓
+    await vi.advanceTimersByTimeAsync(4 * 60 * 60_000 + 30_000); // 00:00:30
+    expect(dCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(dCount()).toBe(2);
+  });
+
+  // F-02:連續值 interval 讓每次 render 都 clear + setInterval 一組;秒級量化後同一秒內的重繪不再重排。
+  it("同一秒內重繪 50 次 → setInterval 最多重排一次(秒級量化),不是 50 次", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    stubDayFetchByWallClock();
+    const { rerender } = renderHook(
+      ({ tick }) => {
+        void tick;
+        return useFuturesBars("TXF", "day");
+      },
+      { initialProps: { tick: -1 }, wrapper: wrapper(newClient()) },
+    );
+    await vi.advanceTimersByTimeAsync(0); // 首發落地 → interval 武裝
+    const spy = vi.spyOn(globalThis, "setInterval");
+    await rerenderBurst(rerender, 500, 10); // 09:00:00.000 → 09:00:00.500,50 次重繪
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+});
+
