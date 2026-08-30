@@ -86,14 +86,18 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   別份 code。worktree 內直跑腳本開頭要 `sys.path.insert(0, <repo root>)`。另:remove 時有 process
   開著 worktree 檔案會以 Invalid argument 失敗且先刪 `.git/worktrees/<name>` 中繼資料 → 收尾要
   `git worktree prune` + 手動 rmdir。(Trigger:worktree 寫直跑腳本 / 收尾清 worktree)
-- **worktree 分支 rebase merge 後的三個收尾坑**(2026-08-30 fix/futures-daily-bars-rollover 全踩):
+- **worktree 分支 rebase merge 後的四個收尾坑**(2026-08-30 fix/futures-daily-bars-rollover 全踩 (1)–(3);(4) 同日兩次):
   (1) 主 tree 若留著同名 untracked artifact 副本(§0 第 2 點的「先寫主 tree 再 cp 進 worktree」),
   `git pull --ff-only` 會以「untracked 會被覆蓋」拒絕 —— 先 `MSYS_NO_PATHCONV=1 git show origin/master:<path> | diff -q - <path>`
   比對一致再刪副本(Git Bash 沒有 `MSYS_NO_PATHCONV=1` 時 `rev:path` 的冒號會被轉成 Windows 路徑而 fatal);
   (2) `gh pr merge --rebase` 後 `git branch -d` 必拒「not fully merged」(rebase 改寫 SHA),確認 `gh pr view --json state` = MERGED
   且 origin/master tip subject = 分支末筆後用 `-D`;`--delete-branch` 對 worktree 佔用中的分支會撞本地刪除,遠端另 `git push origin --delete`;
-  (3) 收尾鏈用 `&&` 串時,任一步失敗後面的 `|| echo` 會誤印成功字樣 —— 每步印明確 exit / 狀態,不靠 `||`。
-  (Trigger:worktree 分支 merge 後清理)
+  (3) 收尾鏈用 `&&` 串時,任一步失敗後面的 `|| echo` 會誤印成功字樣 —— 每步印明確 exit / 狀態,不靠 `||`;
+  (4) **回填 / 引用 commit SHA 一律對 `origin/master` 做 `git merge-base --is-ancestor`**:GitHub rebase merge 會重寫全部 SHA,
+  PR head(含本地 rebase 後)的 SHA 在 merge 後全部不在 master。08-30 兩次踩到:`/pr-review 153` Self-Verify R8 補驗用 PR head
+  db0e6d48 當基準(六顆全 yes 但全不在 master);收修 F-13 第一版照抄回填,round-1 review 才抓到。正解 = master SHA +
+  「第 n 筆 + subject」(08-27 拍板),例:`a7156aac(第 1 筆 perf(live) 退避)`。
+  (Trigger:worktree 分支 merge 後清理 / 回填 commit SHA 進 docs 或 artifacts)
 - **剛 `npm ci` 的 worktree 全量 vitest 必紅 1–2 條 App 級 lazy `waitFor` 測試、每次不同**(2026-08-30:5/5 次,
   `App.memo` / `App.test` / `App.corr-tab`;單檔重跑 3/3 綠;**stash 掉全部改動仍紅** → 環境不是改動)。判讀順序:
   單檔重跑 → 在 worktree 內 `git stash push` 全部改動再全量(差分)→ 主 tree master 全量對照;三步都指向環境才歸 flake,
@@ -131,6 +135,9 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   (2026-08-17):含 neutralize、20 檔 / 多群組、合成日 bar(overlay 可算)、全日回補不看時鐘、
   realtime ±1 tick 抖動(liveP 路徑真的變);port 走 argv。盤外 `useGroupSnapshots` 不輪詢 →
   fake 重啟後首輪 snapshot 若還在回補,卡片停「回補中…」直到重整(非 bug)。
+  2026-08-30 起 `StockSource` Protocol 多了 `prepare_backfill(codes)`(PR #153);`.claude/**/evidence/*_server.py` 13 支既有側車 fake
+  都沒有它 —— 照抄起側車能跑,但 worker 出隊 ≥ 2 檔時會在 `except Exception` 印整段 `AttributeError` traceback(降級可用、很吵)。
+  抄樣板先補 `def prepare_backfill(self, codes: list[str]) -> None: pass`(參考 `tests/helpers/fake_sources.py::FakeStockSource`)。
   (Trigger:起 fake server 驗個股 / 群組 UI)
 
 ## 零推播 / 訂閱異常排查順序(2026-08-18 開盤全站零推播實證)

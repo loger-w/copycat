@@ -73,6 +73,10 @@
   → 08-28 `docs/research/2026-08-28-instrument-flags-survey.md`:達錢**不可**;證交所 `TWTB4U`(含 `Suspension`)/ 櫃買 `tpex_securities` 免 token JSON **可**(盤前公布時刻未證,08:30 打一次);
   FinMind DayTrading 盤前可取、資券 21:00。C1 當沖資格標示 → 資料源定為交易所 OpenAPI 當日名單,等 user 排 `/feat`。
 - [ ] **D `chore/test-hygiene-batch-2`**:L29 / ~~L68~~(08-31 已出貨 chore/app-tests-async-timeout)/ L231 / L268 / L429 / L368 / L201 / L292 / L6 + 三條零風險 🔵(L111 改名 / L129 HealPolicy / L194 註解)。
+  - [ ] `tests/server/test_stock_engine.py` 3800+ 行,回補主題散在 6 個 class(約 L210 `TestBackfillGuard` / L911 `TestBackfillTimeoutRetry` /
+    L1688 `TestFirstTickEnqueuesBackfill` / L1844 `TestBackfillBatchPrepare` / L1933 `TestBackfillFailureIsolation` / L2614
+    `TestWatchlistRemovalBookkeeping`;`/pr-review 153` chunk B 觀察,行號為 08-31 master 6c082132 的值)。#154 已把 `_tick_armed` 兩條
+    鏡射測試補進既有 `TestWatchlistRemovalBookkeeping`(抑制碎裂的方向);批次整併時以「同一個記帳集合的邊界測試放同一 class」為原則,不動斷言。
 - [ ] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
   L467 / L471 heal 階梯(壞日子才有);6949 發數(≤ 40);海外腿休市段亂救;13:50 NK225M probe(L430);L84 SC-13 (b)–(e)。
 - [ ] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
