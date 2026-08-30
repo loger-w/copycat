@@ -550,6 +550,13 @@ class CapitalClient:
             if not same_no:
                 continue
             p = by_key.get((r.stock_no, r.kind)) if r.kind is not None else None
+            if p is None and r.kind == "cash":
+                # 無券空單:群益損益列標籤仍是「現股」(2026-08-28 prod 8358 實錄 :2427 配對成功、
+                # 沒印種類不符),而庫存段那列已歸 daytrade_sell —— 唯一的跨 kind 配對例外,
+                # 且只配負向列(daytrade_sell 沒有多向)。
+                ds = by_key.get((r.stock_no, "daytrade_sell"))
+                if ds is not None and ds.qty < 0:
+                    p = ds
             if p is None:
                 # kind=None(未知標籤)也略過:寧缺均價,不可套錯成本基礎
                 logger.warning(
