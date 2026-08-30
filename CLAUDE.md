@@ -260,7 +260,11 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   無 `(cash, False)` → 平倉直接 403(資料矛盾,`test_cash_short_direction_is_data_contradiction_and_rejected` 釘的就是這個);
   wire 值域單邊收窄 → 前端送 `daytrade_sell` 吃 422。`tests/capital/test_store.py -k borrowless` +
   `tests/server/test_capital_api.py::test_close_body_kind_daytrade_sell_sends_cash_buy` + 前端 `ladder-position.test.ts`
-  「無券空單」/ `close-order.test.ts` 釘住。
+  「無券空單」/ `close-order.test.ts` 釘住;**跨語言集合**另由 `tests/capital/test_models.py::test_position_kind_subset_of_trade_kind`
+  (前端 `PositionKind` ⊆ 後端 `TradeKind`)與 `tests/capital/test_close.py::test_close_kind_label_parity_with_frontend`
+  (前端 `close-order.ts::CLOSE_KIND` 回補交易別 = 後端 `_CLOSE_MAP` 回補單種;確認窗「買回 n 張(現股)」的來源)釘住 ——
+  兩側各自的字面測試不比集合,單邊收窄 / 改回補單種時只有這兩支紅。樂觀套用的**同股號沖銷兩向**(`store._apply_fill_locked`):
+  現股買先沖 daytrade_sell 空單、無券賣先沖現股多單,餘量才開列 —— 少任一向的症狀是快照落地前 ~2 s 兩列並存且平倉鈕可按。
 - **江波圖調色盤色數 ≥ 相關係數腿數**(2026-08-26 起,F4):產生點 `configs/correlation.json` / `copycat/corr_config.py::
   DEFAULT_CONFIG` 的腿數(現 11),讀者 = `frontend/src/components/corr/river-colors.ts`(`RIVER_STROKES/FILLS/TEXTS`
   三組字面值 class)+ `index.css` 的 `--color-river-N` token。顏色依腿序位取模指派,腿數 > 色數的症狀是第 n+1 腿

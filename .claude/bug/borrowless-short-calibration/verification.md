@@ -33,7 +33,7 @@ commits:`fc809e83` test 紅先行 → `1ae9c2ad` fix → `e5e6fe1e` docs chore �
   → 落地列 `kind=daytrade_sell / qty=-1 / avg_price=512 / avg_source=broker`、無「種類不符」log、無 cash 列。
 - `tests/capital/test_store.py::test_borrowless_short_*` 三條 + `test_cash_buy_offsets_borrowless_short_first_then_opens_long_with_residue`:
   reply `S08`(= :2417 成交)→ 負列快照 → today_qty 1 / 平倉組出 `buy cash 1` / `B00` 回補(= :3650)歸零無幽靈列。
-- Happy:上述;edge ≥ 2:部分沖銷(空 2 買 1 → -1 留、無 cash 列)、餘量開多(再買 3 → cash +2 @523 fill)、無券**買向** B08 不套 + WARNING、
+- Happy:上述;edge ≥ 2:部分沖銷(空 2 買 1 → -1 留、無 cash 列)、餘量開多(再買 3 → cash +2 @523 fill)、**反向**(持現股 5 送無券賣 1 → cash 4;再賣 6 → cash 刪、daytrade_sell −2 @fill;pr-152 收修 F-02)、無券**買向** B08 不套 + WARNING、
   負融資列仍鎖 + WARNING;未改功能抽 2:`test_short_sell_fill_is_negative_lots_under_short_kind`(融券路徑)、
   `test_today_qty_is_per_kind_and_zero_for_futures`(多方 / 期貨 today_qty)—— 皆在 487 綠內。
 
