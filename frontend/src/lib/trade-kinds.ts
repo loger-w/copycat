@@ -5,6 +5,8 @@
  *  `TradeKind`,既有 import 路徑(`RightRail` 等)不變。
  */
 
+import type { PositionKind } from "@/types";
+
 export const TRADE_KINDS = [
   ["cash", "現股"],
   ["margin", "融資"],
@@ -17,4 +19,45 @@ export type TradeKind = (typeof TRADE_KINDS)[number][0];
  *  交易別寬(D13),不認得的部位寧可標籤怪也不要靜默消失。 */
 export function kindLabel(kind: string): string {
   return TRADE_KINDS.find(([v]) => v === kind)?.[1] ?? kind;
+}
+
+/** 各交易別的行為特性 —— 散落 `=== "daytrade_sell"` 逐點比較的唯一收斂點
+ *  (refactor/daytrade-sell-kind-table;review 2026-08-30 F-09 Shotgun Surgery)。
+ *  加新種類時:值域(`TRADE_KINDS`)+ 這張表 + `types.ts::PositionKind`(wire 型別,
+ *  跨語言 parity 測試逐字讀,不可搬)三處一起動 —— 漏表 / 漏型別由下面的
+ *  `Record` 交集型別在 tsc 紅出來,不是 runtime 才發現。 */
+export interface KindTraits {
+  /** 買側鎖:無券只有賣向,回補走平倉的現股買(後端同一把尺 = `safety.py`
+   *  「daytrade_sell 不可買進」gate;閃電梯 UI disabled + 程式雙保險都吃這格)。 */
+  buyLocked: boolean;
+  /** 今日成交(`today_qty`)段賣出稅減半 0.15%(現股當沖法規;`positionEcon`)。 */
+  halfTaxToday: boolean;
+  /** 融券借券費 0.08%(`positionEcon`)。 */
+  borrowFee: boolean;
+  /** 部位列顯示順序(`secPositionsOf`);未知字串殿後(`UNKNOWN_KIND_TRAITS`)。 */
+  order: number;
+}
+
+/** `Record` 交集:`TradeKind`(本檔標籤表推導)與 wire 型別 `PositionKind` 若值域
+ *  漂開,缺的那個鍵讓這裡 tsc 紅 —— 「前端單一型別」靠這行機驗,零 runtime 產物。 */
+export const KIND_TRAITS: Record<TradeKind, KindTraits> & Record<PositionKind, KindTraits> = {
+  cash: { buyLocked: false, halfTaxToday: true, borrowFee: false, order: 0 },
+  margin: { buyLocked: false, halfTaxToday: false, borrowFee: false, order: 1 },
+  short: { buyLocked: false, halfTaxToday: false, borrowFee: true, order: 2 },
+  daytrade_sell: { buyLocked: true, halfTaxToday: true, borrowFee: false, order: 3 },
+};
+
+/** 值域外字串(舊 dist / 舊後端 / 未來新 kind)的預設政策:全稅、無借券費、不鎖買側、
+ *  殿後 —— 與收斂前各散點的 else 分支逐一相同(ladder-position characterization 釘住)。 */
+export const UNKNOWN_KIND_TRAITS: KindTraits = {
+  buyLocked: false,
+  halfTaxToday: false,
+  borrowFee: false,
+  order: 3,
+};
+
+/** kind(裸 wire 字串)→ 特性;查無 → `UNKNOWN_KIND_TRAITS`。
+ *  未知值政策收斂在這一點,消費端不各自寫 else。 */
+export function kindTraits(kind: string): KindTraits {
+  return (KIND_TRAITS as Record<string, KindTraits>)[kind] ?? UNKNOWN_KIND_TRAITS;
 }

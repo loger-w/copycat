@@ -32,7 +32,7 @@ import { DASH } from "@/lib/pnl-format";
 import { initialQtyState, manualQty, pressQuick, type QtyState } from "@/lib/qty-quick";
 import type { StockBook, StockMeta } from "@/lib/stock-accum";
 import { buildLadder } from "@/lib/stock-tick";
-import { kindLabel, TRADE_KINDS, type TradeKind } from "@/lib/trade-kinds";
+import { kindLabel, TRADE_KINDS, type TradeKind, KIND_TRAITS } from "@/lib/trade-kinds";
 import { cn } from "@/lib/utils";
 import type { CapitalPosition } from "@/types";
 
@@ -266,7 +266,7 @@ export function PriceLadder({
 
   function clickPrice(priceMilli: number, side: "buy" | "sell"): void {
     touchIdle();
-    if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
+    if (KIND_TRAITS[tradeKind].buyLocked && side === "buy") return; // UI 已 disabled,雙保險
     if (!arm.state.armed) {
       showHint("未武裝 — 點價不送單", true);
       return;
@@ -319,7 +319,7 @@ export function PriceLadder({
    *  onClick,連把 DOM 上的 `disabled` 拔掉都打不到這裡(code review r1 IMPL-2 實測)。 */
   function marketOrder(side: "buy" | "sell"): void {
     touchIdle();
-    if (tradeKind === "daytrade_sell" && side === "buy") return; // UI 已 disabled,雙保險
+    if (KIND_TRAITS[tradeKind].buyLocked && side === "buy") return; // UI 已 disabled,雙保險
     if (last === null) return; // 估價缺:鈕已 disabled,雙保險(不拿假想價送真單)
     if (!arm.state.armed) {
       showHint("未武裝 — 市價不送單", true);
@@ -423,7 +423,7 @@ export function PriceLadder({
         touchIdle();
         dispatchArm({ type: arm.state.locked ? "unlock" : "lock" });
       }}
-      buyLocked={tradeKind === "daytrade_sell"}
+      buyLocked={KIND_TRAITS[tradeKind].buyLocked}
       qty={qtyState.qty}
       qtyLabel="張數"
       onQtyPreset={(p) => {
@@ -444,7 +444,7 @@ export function PriceLadder({
           state={marketButtonState({
             kind: "stock",
             estimateMissing: last === null,
-            buyLocked: tradeKind === "daytrade_sell",
+            buyLocked: KIND_TRAITS[tradeKind].buyLocked,
           })}
         />
       }
