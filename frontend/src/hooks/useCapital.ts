@@ -14,11 +14,12 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { parseErrorDetail } from "@/lib/api-error";
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type { CapitalFill,
+import type {
   CapitalCancelBody,
   CapitalCloseBody,
   CapitalCorrectPriceBody,
   CapitalDecreaseBody,
+  CapitalFill,
   CapitalFutureOrderBody,
   CapitalOrder,
   CapitalPosition,
@@ -155,8 +156,10 @@ export function useCapitalStatus() {
   });
 }
 
-export function useCapitalFills() {
-  return useQuery({
+const FILLS_POLL_MS = 30_000;
+
+function fillsQueryOptions(refetchInterval: number | false) {
+  return {
     queryKey: ["capital-fills"],
     queryFn: async (): Promise<{ fills: CapitalFill[] }> => {
       const res = await fetch("/api/capital/fills");
@@ -166,9 +169,18 @@ export function useCapitalFills() {
       if (!res.ok) throw new Error(`fills ${res.status}`);
       return (await res.json()) as { fills: CapitalFill[] };
     },
-    refetchInterval: 30_000,
+    refetchInterval,
     retry: 1,
-  });
+  } as const;
+}
+
+/** 成交讀取端(FuturesChart / GroupGridView / StockChart,前兩者 hidden 保留可並存)。
+ *  **不帶 `refetchInterval`**(N068,同 `useCapitalPositions` 的理由與樣板):per-observer
+ *  輪詢的相位由掛載時點決定,同一支 API 在 30 s 窗內被打多次。節奏收斂到
+ *  `useCapitalStream`(App 層掛一次);WS `capital_order` 事件另走 invalidate。
+ *  代價同 positions:provider 不在場時不輪詢,只有掛載那一發 + WS invalidate。 */
+export function useCapitalFills() {
+  return useQuery(fillsQueryOptions(false));
 }
 
 export function useCapitalOrders() {
@@ -248,9 +260,11 @@ export function useClosePosition() {
 export function useCapitalStream(): void {
   const queryClient = useQueryClient();
 
-  // 部位輪詢的**唯一擁有者**(N068):本 hook 已是「App 層掛一次」的既有約定,節奏掛在
-  // 這裡就與掛載時點無關。讀取端(useCapitalPositions)一律 refetchInterval: false。
+  // 部位 / 成交輪詢的**唯一擁有者**(N068):本 hook 已是「App 層掛一次」的既有約定,
+  // 節奏掛在這裡就與掛載時點無關。讀取端(useCapitalPositions / useCapitalFills)
+  // 一律 refetchInterval: false。
   useQuery(positionsQueryOptions(POSITIONS_POLL_MS));
+  useQuery(fillsQueryOptions(FILLS_POLL_MS));
 
   useEffect(() => {
     // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)
