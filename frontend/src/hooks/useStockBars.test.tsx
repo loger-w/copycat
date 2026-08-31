@@ -186,6 +186,8 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
     expect(barsCalls()).toBe(2);
   });
 
+  // pr-159-followups 起,本條同時釘 retryEmpty: false(SC-4 空+ok = 真無資料不輪詢;
+  // 誤開成 true 這條就紅 —— 突變體 M-b 實證)。
   it("tf=D 空 + ok:前進 60s 仍只打一次(同日曆日內不重抓;界見 msUntilDayRollover)", async () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ bars: [], status: "ok" })),

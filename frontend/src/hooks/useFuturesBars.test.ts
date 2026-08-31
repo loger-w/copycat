@@ -249,14 +249,8 @@ describe("useFuturesBars(SC-1/2/3)", () => {
   it("日 K(資料非空)不輪詢(已完成日 bar 不會變)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        urls.push(String(url));
-        const bars = [{ t: "2026-08-05", o: 1, h: 1, l: 1, c: 1, v: 1 }];
-        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
-      }),
-    );
+    const oneBar = [{ t: "2026-08-05", o: 1, h: 1, l: 1, c: 1, v: 1 }];
+    stubDayFetchByWallClock(oneBar, oneBar); // 兩天同料:本條只看「非空就不輪詢」
     renderHook(() => useFuturesBars("TXF", "day"), { wrapper: wrapper(newClient()) });
     await vi.advanceTimersByTimeAsync(0);
     const before = urls.length;
@@ -396,15 +390,15 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
       wrapper: wrapper(newClient()),
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    expect(dayFetchCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 61_000); // D+1 00:01:01:拿到空快照
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    expect(dayFetchCount()).toBe(2);
     expect(result.current.data?.bars).toEqual([]);
     await vi.advanceTimersByTimeAsync(60_000); // 60 s 重試 → TC4 回來了
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+    expect(dayFetchCount()).toBe(3);
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(10 * 60_000); // 資料非空後回到「下一個午夜」節奏
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+    expect(dayFetchCount()).toBe(3);
   });
 
   // 切走的 observer 是退訂(subscribed: false):沒有計時器,午夜那一發不會打;切回時靠
