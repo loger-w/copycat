@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import datetime as _dt
 import json
 import logging
@@ -15,6 +17,7 @@ from copycat.live.stock_source import (
     in_stock_heal_window_now,
     stock_symbol,
     stock_window,
+    STOCK_HEAL,
 )
 from copycat.live.tc4 import BARS_POLL_DEADLINE, HistoryTimeoutError
 from tests.helpers.tc4_fakes import FakeApi, ok
@@ -1337,6 +1340,23 @@ class TestBackfillStubSignature:
             ticks = src.backfill("2330")
         assert ticks == []
         assert "疑似凍結 stub" in caplog.text
+
+
+class TestHealActiveMisuseGuard:
+    """pr-160 review F-06:`StockQuoteSource` 的自癒閘由 `in_trading_hours` 單一表達,
+    `heal.active` 另傳必被覆蓋 —— 靜默覆蓋 = 走錯閘零訊號(pr-126 共用閘同族),改為拒收。"""
+
+    def test_custom_heal_active_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="in_trading_hours"):
+            StockQuoteSource(
+                api=FakeApi(lambda o: ok()),
+                session="s1",
+                heal=replace(STOCK_HEAL, active=lambda: True),
+            )
+
+    def test_default_policy_still_constructs(self) -> None:
+        src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1")
+        assert src._heal_active is in_stock_heal_window_now
 
 
 class TestStockHealWindowGate:
