@@ -601,6 +601,9 @@ def create_app(
                     last,
                 )
                 return
+            # 14:00 與 bars.DAILY_FINAL_TIME 字面同值、語意不同:這把問「今日 IX0001 DK
+            # **存在**了沒」,那把問「**定稿**了沒」—— 刻意不共用常數;改任一值前先看對方
+            # (pr-165-review #1)
             if not cal.is_trading_day(today) or _now().time() >= _clock_time(14, 0):
                 expected = latest_trading
             else:
@@ -1669,7 +1672,8 @@ def create_app(
         """加權的 CDP / 日均線(index-overlay SC-5);形狀同 `/api/stock/overlay/{code}`。
 
         日 K 走 **`build_period`**(鍵自動成 `IX0001|L`)= 與 `/api/market/bars/TWSE?tf=D`
-        真共用同一格,同日兩端點只發一次 DK 取數。**不得改走 `build_daily` 的裸
+        真共用同一格,同日兩端點合計至多兩次 DK 取數(自 `DAILY_FINAL_TIME` 起:界前
+        一次、界後定稿一次;pr-165-review #6)。**不得改走 `build_daily` 的裸
         `IX0001`** —— 那格是 `/api/stock/bars/IX0001`(**stock** session)的,共用它就
         重開了 `|M` / `|L` 後綴當初堵住的跨 session 汙染洞(W-12 / W-14)。
 
