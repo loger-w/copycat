@@ -623,7 +623,13 @@ class StockEngine:
                     self._trade_status.pop(old, None)
             if not is_futures_key(key):
                 await self._acquire_stkfut(key)
-            self._enqueue_backfill(key)
+            # 已回補 / 在途不重排(next-time L69):來回切主圖曾讓 2455 一天重複回補
+            # 75 次(08-31 實測),每次 = SubHistory + 全量收割。切主圖「順便修補 live
+            # 缺口」的保險由 reconnect 清 `_backfilled` 承接(斷線缺口仍會補);真退訂
+            # 再切回的檔記帳已清,照樣入列。**只擋這兩道**,no_data / 冷卻不下沉到這裡
+            # (`group_snapshot` docstring:被冷卻擋掉會變成主圖整天補不回來)。
+            if key not in self._backfilled and self._backfill_pending.get(key, 0) == 0:
+                self._enqueue_backfill(key)
 
     def _spot_trial_now(self) -> bool:
         """現貨試撮旗標 = 交易日曆 AND 時間窗(D4')——`_flush_watchlist_loop` 的翻轉判準。
