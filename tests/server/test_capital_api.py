@@ -78,10 +78,12 @@ def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000", typ: str
     return ",".join(arr)
 
 
-def _fut_evt_raw(seq: str, contract: str = "TXFI6", qty: str = "2", price: str = "23000") -> str:
-    """OnNewData 期權委託事件(N;市場別 TF)最小治具(欄位對照 test_client 同款)。"""
+def _fut_evt_raw(
+    seq: str, contract: str = "TXFI6", qty: str = "2", price: str = "23000", typ: str = "N"
+) -> str:
+    """OnNewData 期權委託事件(N;`typ="D"` 成交;市場別 TF)最小治具(欄位對照 test_client 同款)。"""
     arr = [""] * 48
-    arr[0], arr[1], arr[2], arr[3] = seq, "TF", "N", "N"
+    arr[0], arr[1], arr[2], arr[3] = seq, "TF", typ, "N"
     arr[6], arr[8], arr[11], arr[20] = "BNR20", contract, price, qty
     return ",".join(arr)
 
@@ -1300,6 +1302,26 @@ class TestCapitalFills:
             assert f["seq_no"] == "00000000001"
             assert f["qty"] == 1 and f["unit"] == "張"
             assert f["code"] == f["stock_no"]  # 現股:code = 股號
+
+    def test_fills_futures_carry_reverse_looked_up_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-167 F-03:`unit=="口"` 的反查分支(L444 的全部意義)—— mutation 實證改成
+        `return stock_no` 全套照綠,而那會讓個股期成交在圖牆一個三角都不長、零訊號。
+        期貨成交 code = 契約碼反查股號、未知契約碼回 None 不猜;口徑對齊
+        `test_positions_carry_code`(真版控對映表,期交所改碼 / 沒 refresh 時要跟著紅)。"""
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            assert com.on_reply is not None
+            cap.store.set_positions([])
+            com.on_reply(_fut_evt_raw("00000000001", contract="CDFI6", typ="D"))
+            com.on_reply(_fut_evt_raw("00000000002", contract="EE1I6", typ="D"))
+            fills = client.get("/api/capital/fills").json()["fills"]
+            assert [(f["stock_no"], f["unit"], f["code"]) for f in fills] == [
+                ("CDFI6", "口", "2330"),  # 個股期:反查落到現股卡
+                ("EE1I6", "口", None),  # 除權息調整碼進不了對映表 → 不猜
+            ]
 
     def test_orders_carry_code_field(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
