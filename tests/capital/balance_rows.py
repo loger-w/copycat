@@ -18,6 +18,8 @@ test_balance / test_client / test_fill_latency 共用。
 
 from __future__ import annotations
 
+from tests.capital.rows import csv_variant
+
 #: 今日買進 1 張現股:昨庫 0、今委買 / 買成 1000、即時庫存 [14]=1000
 RAW_T_BOUGHT: str = "2493,T,0,0,0,0,0,1000,0,1000,0,1000,0,0,1000,0,,A123456789,1234567890"
 #: 當沖軋平:買賣各 1000、即時庫存 0 → 不佔一列
@@ -38,10 +40,6 @@ RAW_T_BORROWLESS_SHORT: str = "8358,T,0,0,0,0,0,0,0,0,0,-1000,0,0,-1000,0,,A1234
 
 
 def balance_variant(row: str, changes: dict[int, str]) -> str:
-    """按欄索引改值(比照 `profit_rows.pnl_variant`)。`.replace(",1000,0,,", …)` 那種靠子字串
-    唯一性猜欄位的變異,群益改欄形時會靜默改錯欄(next-time 08-28 test_balance 六處)。
-    常用欄:[1] 庫存種類、[14] 即時庫存(parser 取這一欄換張)。"""
-    parts = row.split(",")
-    for i, v in changes.items():
-        parts[i] = v
-    return ",".join(parts)
+    """按欄索引改值(實作共用 `rows.csv_variant`)。常用欄:[1] 庫存種類、
+    [14] 即時庫存(parser 取這一欄換張)。"""
+    return csv_variant(row, changes)

@@ -14,6 +14,8 @@ prod 實列 `RAW_PNL_MARGIN` 另在 test_client 檔尾有一份逐 byte 相同�
 
 from __future__ import annotations
 
+from tests.capital.rows import csv_variant
+
 # 實際 30 欄(比文件 25 欄多尾端含費均價等);第一筆 = 查詢結果(000,訊息可空)、總計列股號為空
 # (那兩種列留在 test_balance,只有 parser 邊界測試用得到)。
 RAW_PNL_ROW: str = (
@@ -35,9 +37,6 @@ PNL_3357_MARGIN: str = (
 
 
 def pnl_variant(row: str, changes: dict[int, str]) -> str:
-    """按欄索引改值。種類標籤 [3] 與種類代碼 [25] 要**成對**改(現股 1 / 融資 2),否則產出
-    「標籤現股 / 代碼 2」自相矛盾列,把 [25] 備援遮住(pr-119 review round 1)。"""
-    parts = row.split(",")
-    for i, v in changes.items():
-        parts[i] = v
-    return ",".join(parts)
+    """按欄索引改值(實作共用 `rows.csv_variant`)。種類標籤 [3] 與種類代碼 [25] 要**成對**改
+    (現股 1 / 融資 2),否則產出「標籤現股 / 代碼 2」自相矛盾列,把 [25] 備援遮住(pr-119 round 1)。"""
+    return csv_variant(row, changes)
