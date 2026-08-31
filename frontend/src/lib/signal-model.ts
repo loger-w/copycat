@@ -178,9 +178,8 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
  *  欄位口徑沿逐則 toast 舊函式 `formatToastText`(2026-08-31 刪,prod 零讀者;N013):
  *  單則組輸出 = `代號 名稱 訊號名 價格`,由 signal-model.test / useSignalAlerts.test 的
  *  **字面量**釘住,不再有參照組函式 —— toast 只有一行,**不含規則名**(規則名在 rail
- *  另起一行放得下)。kind 段沿
- *  `groupKindLabels` 的到達序去重;價格取組錨(最早到那則),與 Discord 合併訊息
- *  `rows[0]` 同口徑。 */
+ *  另起一行放得下)。kind 段沿 `groupKindLabels` 的到達序去重;價格取組錨(最早到那則),
+ *  與 Discord 合併訊息 `rows[0]` 同口徑。 */
 export function formatGroupToastText(group: SignalGroup): string {
   const kinds = groupKindLabels(group)
     .map((s) => s.label)
