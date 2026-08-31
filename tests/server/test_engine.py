@@ -963,3 +963,33 @@ async def test_concurrent_activate_second_raises_busy() -> None:
     finally:
         fake.gate.set()
         await rt.close()
+
+
+
+class TestWindowIdentRollover:
+    """L77:rollover 判準改比 window identity(預設 = session_key,行為逐字不變);
+    app 層在 TXO 自動日模式組 (session_key, auto_date) —— 盤前固定日 → 開盤 live 窗
+    的切換(08:45)也要觸發交接,否則前一交易日種子與開盤 live tick 混同一份 agg。"""
+
+    async def test_ident_change_triggers_rehandover_without_session_key_change(self) -> None:
+        ident = {"v": (("20260817", "day"), "20260814")}  # (session_key, 自動日)
+        fake = FakeQuoteSource()
+        rt = EngineRuntime(fake, throttle_secs=0.01, window_ident_fn=lambda: ident["v"])
+        await rt.start()
+        try:
+            assert len(fake.backfill_calls) == 1
+            ident["v"] = (("20260817", "day"), None)  # 08:45 開盤:自動日 → live 窗
+            await asyncio.sleep(0.3)
+            assert len(fake.backfill_calls) == 2  # ident 變化觸發重交接
+        finally:
+            await rt.close()
+
+    async def test_ident_constant_does_not_rehandover(self) -> None:
+        fake = FakeQuoteSource()
+        rt = EngineRuntime(fake, throttle_secs=0.01, window_ident_fn=lambda: (("k",), "20260814"))
+        await rt.start()
+        try:
+            await asyncio.sleep(0.3)
+            assert len(fake.backfill_calls) == 1
+        finally:
+            await rt.close()

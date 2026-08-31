@@ -1995,3 +1995,23 @@ class TestReconnectFailureTraceback:
         recs = self._records(caplog)
         assert [r.exc_info is not None for r in recs] == [True, True, False]
         assert "(#1)" in recs[1].message and "(#2)" in recs[2].message
+
+
+class TestBackfillWindow:
+    """L77:回補窗選擇 —— env 固定日恆優先 → 自動日(休市段)→ live session 窗。"""
+
+    def test_env_date_wins_over_auto(self) -> None:
+        src = TC4QuoteSource(
+            port="0", backfill_date="2026-08-14", auto_backfill_date=lambda: "20260817"
+        )
+        assert src._backfill_window() == ("2026081400", "2026081406")
+
+    def test_auto_date_used_when_env_unset(self) -> None:
+        src = TC4QuoteSource(port="0", auto_backfill_date=lambda: "20260814")
+        assert src._backfill_window() == ("2026081400", "2026081406")
+
+    def test_auto_none_falls_back_to_live_session_window(self) -> None:
+        src = TC4QuoteSource(port="0", auto_backfill_date=lambda: None)
+        from copycat.live.session import session_key, session_window
+
+        assert src._backfill_window() == session_window(session_key())

@@ -70,13 +70,19 @@ class EngineRuntime:
         throttle_secs: float = 1.0,
         queue_maxsize: int = 10_000,
         session_rollover: bool = True,
+        # 回補窗 identity(L77):rollover 的觸發判準。預設 = session_key()(逐次模組
+        # 查找,測試 monkeypatch 不失效);app 層在 TXO 自動日模式組 (session_key(),
+        # auto_date()) —— 讓「盤前固定日 → 開盤 live 窗」的切換(08:45)也觸發交接,
+        # 否則盤前種的前一交易日資料會與開盤後的 live tick 混在同一份 agg。
+        window_ident_fn: Callable[[], object] | None = None,
     ) -> None:
         self._source = source
         self._throttle = throttle_secs
         # TXO_BACKFILL_DATE 固定日回補模式要傳 False:偵測依真實時鐘,固定日模式下
         # 跨界重跑只會拿到同一份指定日資料,純浪費(spec R5)
         self._session_rollover = session_rollover
-        self._session_key: SessionKey | None = None
+        self._window_ident_fn = window_ident_fn
+        self._session_key: object | None = None  # 回補窗 identity(見 window_ident_fn)
         self._queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=queue_maxsize)
         self._agg: ChainAggregator | None = None
         self._series: dict[str, SeriesInfo] = {}
@@ -170,6 +176,10 @@ class EngineRuntime:
 
     # ---- 生命週期 ----
 
+    def _window_ident(self) -> object:
+        """rollover 比對用的回補窗 identity(預設 = session_key)。"""
+        return self._window_ident_fn() if self._window_ident_fn is not None else session_key()
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         if hasattr(self._source, "on_reconnect"):
@@ -229,7 +239,7 @@ class EngineRuntime:
         assert self._agg is not None
         # 交接起點即記時段 key:失敗也記(避免 rollover 條件無限重觸發;恢復走
         # on_reconnect 鏈,test_rollover_during_source_down 釘住)
-        self._session_key = session_key()
+        self._session_key = self._window_ident()
         # 交接不可並發(review F1):to_thread 回補期間 _consume 照輪詢,rollover /
         # force 若再啟動第二個交接會共用 _buffer 互搶 + backfill 雙份疊加
         self._handover_running = True
@@ -403,7 +413,7 @@ class EngineRuntime:
             self._session_rollover
             and self._active is not None
             and self._session_key is not None
-            and session_key() != self._session_key
+            and self._window_ident() != self._session_key
         )
         if force or rollover or (self.queue_dropped > self._healed_dropped and self._queue.empty()):
             dropped = self.queue_dropped

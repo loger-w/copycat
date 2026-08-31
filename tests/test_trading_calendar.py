@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import datetime as _dt
+
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from copycat.trading_calendar import (
     _reset_year_warnings,
     load_trading_calendar,
     resolve_trade_date,
+    resolve_trade_date_before,
     warn_if_year_missing,
 )
 
@@ -342,3 +345,37 @@ def test_warn_if_year_missing_is_atomic_across_threads(
         for t in threads:
             t.join(timeout=5)
     assert len(caplog.records) == 1
+
+
+class TestResolveTradeDateBefore:
+    """L77 盤前冷啟動:交易日 stage 時刻前 = 前一交易日;其餘同 resolve_trade_date。"""
+
+    def test_trading_day_before_stage_uses_previous_trading_day(self) -> None:
+        cal = _cal()  # 預設只擋週末
+        # 2026-08-17(一)07:30,stage 08:00 → 前一交易日 = 08-14(五)
+        now = _dt.datetime(2026, 8, 17, 7, 30)
+        assert resolve_trade_date_before(now, cal, _dt.time(8, 0)) == _dt.date(2026, 8, 14)
+
+    def test_trading_day_at_or_after_stage_is_same_day(self) -> None:
+        cal = _cal()
+        assert resolve_trade_date_before(
+            _dt.datetime(2026, 8, 17, 8, 0), cal, _dt.time(8, 0)
+        ) == _dt.date(2026, 8, 17)
+        assert resolve_trade_date_before(
+            _dt.datetime(2026, 8, 17, 12, 0), cal, _dt.time(8, 0)
+        ) == _dt.date(2026, 8, 17)
+
+    def test_non_trading_day_ignores_stage(self) -> None:
+        cal = _cal()
+        # 週六不論幾點都是最近交易日(五);stage 只對「今天是交易日」有意義
+        for hh in (7, 12):
+            assert resolve_trade_date_before(
+                _dt.datetime(2026, 8, 15, hh, 0), cal, _dt.time(8, 0)
+            ) == _dt.date(2026, 8, 14)
+
+    def test_stage_boundary_per_face(self) -> None:
+        """index 面 08:30 vs stock 面 08:00:同一時刻(08:15)兩面答案不同 —— 各沿自家 stage。"""
+        cal = _cal()
+        now = _dt.datetime(2026, 8, 17, 8, 15)
+        assert resolve_trade_date_before(now, cal, _dt.time(8, 0)) == _dt.date(2026, 8, 17)
+        assert resolve_trade_date_before(now, cal, _dt.time(8, 30)) == _dt.date(2026, 8, 14)
