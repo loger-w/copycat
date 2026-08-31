@@ -101,7 +101,7 @@
 - [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:
 - [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。要驗再開。
 
-- [ ] **`/mod` 群組圖牆逐筆**(C9):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
+- [ ] **`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
 - [x] ~~**`/mod` 緩撮第二段**(L478)。~~ → 08-31 mod/chart-ux-batch-0831 出貨(見下方詳細條)。
 - [x] ~~**`/mod` 成交點精確版**(L439 / L444 / L435)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。
