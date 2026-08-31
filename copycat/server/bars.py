@@ -68,8 +68,14 @@ MIDNIGHT_BUFFER_END = _dt.time(0, 10)
 #: 零錯誤訊號。取 14:00:晚於全部日盤收盤(現貨 13:30/13:33、期貨日盤 13:45)留 TC4
 #: 把定稿寫進 DK 的寬限(寫入時點未實測,界後寫入即永久 → 寬限要給足),早於 15:00
 #: 夜盤開盤 / 錨定翻頁(消費者最早需要點 15:01)。成本:成功路徑上界 = 每 code 每天
-#: 多一次 DK 取數;refetch 失敗窗(TC4 關/忙)沿 `EMPTY_TTL_SECS` 節奏重試至成功,
-#: 與既有空態自癒同級(期間讀者拿 `daily_stale` 墊背,不是空白)。
+#: 多一次 DK 取數;refetch 失敗窗(TC4 關/忙)的重試由**下一個請求**驅動(cache 無背景
+#: refresher),節奏上限 = 每 `EMPTY_TTL_SECS` 至多一次 —— 且墊背回的是**非空**快照,
+#: 前端三條空態自癒(retryEmpty / barsPollInterval / index overlay 輪詢)都不會被觸發,
+#: 掛著的分頁到午夜才會再問(實務上 = F5 才重試;期間讀者拿 `daily_stale` 墊背,
+#: 不是空白 —— pr-165-review #3 改口徑,行為不變)。
+#: 另一個 14:00 讀者:app.py `_calendar_crosscheck`(語意 = 今日 IX0001 DK **存在**了沒、
+#: boot 只跑一次)—— 與本界(**定稿**了沒)不同問題,刻意分家不共用常數;改任一值前
+#: 先看對方(pr-165-review #1)。
 DAILY_FINAL_TIME = _dt.time(14, 0)
 
 
@@ -382,9 +388,16 @@ async def build_daily(
 def _daily_stale_or_empty(cache: BarsCache, code: str, day: str, status: BarsStatus) -> BarsResult:
     """定稿界作廢後 refetch 拿空手(或 15s 負向窗內)的墊背:有舊快照回舊快照,
     status 照實帶(標記的原因 / fetch 實際結果,不洗白)。與 `_period_stale_or_empty`
-    同一條政策 —— 各寫一份必然漂移(`_today_ttl` 的同一條理由)。"""
+    同一條政策 —— 各寫一份必然漂移(`_today_ttl` 的同一條理由)。
+
+    INFO 固定字串(pr-165-review #2):墊背回應與新鮮取數在 payload 上不可分,少這行
+    log 就無法區分「定稿到手」與「一直吃墊背」。負向窗內的重複請求也各印一行 ——
+    日 K 請求本就稀疏(前端到午夜才再問、overlay 拿到非空也不輪詢),不另做去重。"""
     stale = cache.daily_stale(code, day)
-    return BarsResult(stale, status) if stale is not None else BarsResult([], status)
+    if stale is not None:
+        logger.info("bars %s: 日 K refetch 空手(%s),墊背舊快照 %s 根", code, status, len(stale))
+        return BarsResult(stale, status)
+    return BarsResult([], status)
 
 
 def _period_key(stamp: str, period: str) -> str | None:
@@ -446,6 +459,11 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
     **由資料判定,不是 tf 的常數**:盤中的日 K / 分 K 最後一根就是今天 / 當下那分鐘,
     週末查的週 K 最後一桶其實已收盤 —— 用 `tf != "D"` 這種常數兩個方向都會誤導,
     而「meta 不說謊」正是本輪的設計主軸(review P1-1)。
+
+    **與 `DAILY_FINAL_TIME` 是兩個口徑**(pr-165-review #5):過界後 tf=D 的末根雖已
+    定稿,本函式仍回 True(日曆日判準)—— 大盤頁 14:00–24:00 的「最後一根未收盤」字樣
+    因此失真。非定稿界引入(冷啟動 13:45 後首問同樣誤標),D 分支要不要吃界見
+    docs/next-time.md 08-31 節(期貨側不吃本欄,不受影響)。
     """
     if not bars:
         return False
@@ -505,11 +523,12 @@ def _shaped(bars: list[Bar], period: str) -> list[Bar]:
 
 def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) -> TaggedBars:
     """定稿界作廢後 refetch 拿空手(或 15s 負向窗內)的墊背:有舊快照回舊快照 + 舊 tag,
-    否則維持原本的空態表述。"""
+    否則維持原本的空態表述。INFO 的理由見 `_daily_stale_or_empty`(pr-165-review #2)。"""
     stale = cache.daily_stale(key, day)
     if stale is None:
         return TaggedBars([], "unavailable")
     tag = cache.daily_tag_get(key, day) or "unavailable"
+    logger.info("bars %s: 日 K refetch 空手,墊背舊快照 %s 根(%s)", key, len(stale), day)
     return TaggedBars(_shaped(stale, period), tag)
 
 
