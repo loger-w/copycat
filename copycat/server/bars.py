@@ -463,7 +463,7 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
     **與 `DAILY_FINAL_TIME` 是兩個口徑**(pr-165-review #5):過界後 tf=D 的末根雖已
     定稿,本函式仍回 True(日曆日判準)—— 大盤頁 14:00–24:00 的「最後一根未收盤」字樣
     因此失真。非定稿界引入(冷啟動 13:45 後首問同樣誤標),D 分支要不要吃界見
-    docs/next-time.md 08-31 節(期貨側不吃本欄,不受影響)。
+    docs/next-time.md 08-31 pr-165-review 留尾節(期貨側不吃本欄,不受影響)。
     """
     if not bars:
         return False
@@ -528,7 +528,9 @@ def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) ->
     if stale is None:
         return TaggedBars([], "unavailable")
     tag = cache.daily_tag_get(key, day) or "unavailable"
-    logger.info("bars %s: 日 K refetch 空手,墊背舊快照 %s 根(%s)", key, len(stale), day)
+    # 與 _daily_stale_or_empty 同形(前綴/欄序:鍵、括號、根數)—— 括號欄這邊放來源 tag
+    # (period 路徑無 status 欄);grep 錨點統一「墊背舊快照」(review S-1)
+    logger.info("bars %s: 日 K refetch 空手(%s),墊背舊快照 %s 根", key, tag, len(stale))
     return TaggedBars(_shaped(stale, period), tag)
 
 
