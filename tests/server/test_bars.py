@@ -713,8 +713,9 @@ class TestDailySnapshotFinality:
 
     TODAY = _dt.date(2026, 8, 31)
 
-    def _flip_clock(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
-        now = {"t": _dt.time(9, 0)}
+    def _mutable_clock(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
+        """回可變 handle(`now["t"] = ...` 即翻牆鐘);起始值 = 檔頭 `_DAYTIME`。"""
+        now = {"t": _DAYTIME}
         monkeypatch.setattr(bars_mod, "_now_time", lambda: now["t"])
         return now
 
@@ -722,7 +723,7 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """user 症狀本體:早上抓(今日 bar 仍在進行)→ 夜盤段再問必須拿到定稿。"""
-        now = self._flip_clock(monkeypatch)
+        now = self._mutable_clock(monkeypatch)
         partial = [bar("2026-08-28"), bar("2026-08-31", c=100)]  # 早上:今日 bar 只有夜盤那截
         final = [bar("2026-08-28"), bar("2026-08-31", c=200)]  # 收盤後:今日 bar 定稿
         fetch = _TaggedFetcher([partial, final])
@@ -737,7 +738,7 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """界前(盤中)的重複請求照走 memo —— 本修不得把日 K 變成盤中輪詢重抓。"""
-        self._flip_clock(monkeypatch)
+        self._mutable_clock(monkeypatch)
         fetch = _TaggedFetcher([[bar("2026-08-31", c=100)]])
         cache = BarsCache()
         await build_period(fetch, cache, "TXF", self.TODAY, "D")
@@ -749,7 +750,7 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """界後寫入 = 定稿:當天之後的請求(含夜盤)不再重付 DK 取數。"""
-        now = self._flip_clock(monkeypatch)
+        now = self._mutable_clock(monkeypatch)
         now["t"] = _dt.time(14, 1)
         fetch = _TaggedFetcher([[bar("2026-08-31", c=200)]])
         cache = BarsCache()
@@ -767,7 +768,7 @@ class TestDailySnapshotFinality:
         沒有這條的話,本修把「盤後 TC4 關著」(已知常態)從「顯示早上快照」惡化成
         「空白到午夜」。負向短 TTL(15 s)照常生效:窗內第三個請求不再打 TC4。
         """
-        now = self._flip_clock(monkeypatch)
+        now = self._mutable_clock(monkeypatch)
         clock = {"t": 0.0}
         morning = [bar("2026-08-28"), bar("2026-08-31", c=100)]
         fetch = _TaggedFetcher([morning, [], []])
@@ -790,7 +791,7 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """`build_daily`(個股日 K)同一結構同病:夜間 F5 不得拿到早上快照。"""
-        now = self._flip_clock(monkeypatch)
+        now = self._mutable_clock(monkeypatch)
         fetch = _Fetcher([[bar("2026-08-31", c=100)], [bar("2026-08-31", c=200)]])
         cache = BarsCache()
         assert (await build_daily(fetch, cache, "2330", self.TODAY)).bars[-1]["c"] == 100
@@ -801,7 +802,7 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """`build_daily` 的墊背帶 fetch 實際 status(timeout 不洗白 —— SC-5 同理)。"""
-        now = self._flip_clock(monkeypatch)
+        now = self._mutable_clock(monkeypatch)
         morning = [bar("2026-08-31", c=100)]
         fetch = _Fetcher([morning, []], statuses=["ok", "timeout"])
         cache = BarsCache()
@@ -810,3 +811,39 @@ class TestDailySnapshotFinality:
         out = await build_daily(fetch, cache, "2330", self.TODAY)
         assert out.bars == morning
         assert out.status == "timeout"
+
+    async def test_period_invalidates_once_then_refetch_is_final(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """「作廢**一次**」的「一次」:界後成功 refetch 寫入即定稿,同日第三個請求
+        不再打 TC4 —— 少了 `daily_put` 的 discard,14:00–24:00 會退化成每請求重抓
+        (夜盤版的「盤中輪詢重抓」;two-axis review S-1)。"""
+        now = self._mutable_clock(monkeypatch)
+        fetch = _TaggedFetcher([[bar("2026-08-31", c=100)], [bar("2026-08-31", c=200)]])
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        assert (await build_period(fetch, cache, "TXF", self.TODAY, "D")).bars[-1]["c"] == 200
+        now["t"] = _dt.time(23, 0)
+        third = await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert third.bars[-1]["c"] == 200
+        assert len(fetch.calls) == 2
+
+    async def test_daily_marked_window_serves_stale_without_fetch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`build_daily` 的負向窗墊背(two-axis review S-2):refetch 空手後 15 s 內的
+        請求不打 TC4、仍回舊快照,status = 標記的原因(不洗白)。"""
+        now = self._mutable_clock(monkeypatch)
+        clock = {"t": 0.0}
+        morning = [bar("2026-08-31", c=100)]
+        fetch = _Fetcher([morning, []], statuses=["ok", "timeout"])
+        cache = BarsCache(clock=lambda: clock["t"])
+        await build_daily(fetch, cache, "2330", self.TODAY)
+        now["t"] = _dt.time(20, 0)
+        second = await build_daily(fetch, cache, "2330", self.TODAY)
+        assert second == BarsResult(morning, "timeout")
+        clock["t"] = 5.0  # EMPTY_TTL_SECS 內:負向快取擋 TC4
+        third = await build_daily(fetch, cache, "2330", self.TODAY)
+        assert third == BarsResult(morning, "timeout")
+        assert len(fetch.calls) == 2
