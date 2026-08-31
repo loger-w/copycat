@@ -62,6 +62,7 @@ function quote(over: Partial<WatchlistQuote> = {}): WatchlistQuote {
     lower: null,
     no_data: false,
     trial: false,
+    disposition: false,
     ...over,
   };
 }

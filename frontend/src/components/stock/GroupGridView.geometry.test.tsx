@@ -98,6 +98,7 @@ function quote(p: number): WatchlistQuote {
     lower: null,
     no_data: false,
     trial: false,
+    disposition: false,
   };
 }
 

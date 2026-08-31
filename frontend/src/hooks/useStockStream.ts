@@ -33,6 +33,9 @@ export interface WatchlistQuote {
    *  **必填**:選填會讓「哪天解析漏帶」靜默降級成 false = badge 永遠不亮、零錯誤訊號。
    *  舊後端不發此欄 → `Boolean(undefined)` = false → 不標,不炸。 */
   trial: boolean;
+  /** 處置股(分盤撮合;breadth FinMind 名單,L75)。trial 亮起時標籤改「(處置)」——
+   *  分盤等待期不是暴漲暴跌延緩。**必填**(同 `trial` 的理由);舊後端缺欄 → false = 照標(緩)。 */
+  disposition: boolean;
 }
 
 export interface StkfutQuote {
@@ -67,6 +70,7 @@ interface PendingBook {
 interface PendingTrial {
   key: string;
   trial: boolean;
+  disposition: boolean;
 }
 
 interface WsMsg {
@@ -267,7 +271,7 @@ export function useStockStream(
           // 交錯期間的最後一則 trial 蓋回 snapshot 凍結的窗判斷(IC-3);key 比對同上。
           const pendingTrial = takePendingTrial();
           if (pendingTrial !== null && pendingTrial.key === current) {
-            next = { ...next, trial: pendingTrial.trial };
+            next = { ...next, trial: pendingTrial.trial, disposition: pendingTrial.disposition };
           }
           accumRef.current = next;
           setAccum(next);
@@ -387,6 +391,7 @@ export function useStockStream(
             lower: (msg.lower as number | null) ?? null,
             no_data: Boolean(msg.no_data),
             trial: Boolean(msg.trial),
+            disposition: Boolean(msg.disposition),
           };
           setWatchlist((prev) => ({ ...prev, [msg.code as string]: q }));
           // 主圖也要收這一則(code review A2)。engine 的 `_handle_no_data` 對**任何**
@@ -417,11 +422,11 @@ export function useStockStream(
             // snapshot 的值),而要蓋掉的是**新** snapshot 的值 —— 兩者不同源。同值時多
             // 蓋一次是 no-op,少記一次就是回捲。
             if (refetchingRef.current && current !== null) {
-              pendingTrialRef.current = { key: current, trial: q.trial };
+              pendingTrialRef.current = { key: current, trial: q.trial, disposition: q.disposition };
             }
             const acc = accumRef.current;
-            if (acc !== null && acc.trial !== q.trial) {
-              const next = { ...acc, trial: q.trial };
+            if (acc !== null && (acc.trial !== q.trial || acc.disposition !== q.disposition)) {
+              const next = { ...acc, trial: q.trial, disposition: q.disposition };
               accumRef.current = next;
               setAccum(next);
             }

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+from collections.abc import Set as AbstractSet
 from typing import AsyncGenerator, Callable, Protocol
 
 from copycat.live.stock_models import (
@@ -250,6 +251,9 @@ class StockEngine:
         ws: WsBroadcaster | None = None,
         is_trading_day: Callable[[_dt.date], bool] | None = None,
         now_fn: Callable[[], _dt.datetime] | None = None,
+        # 處置股名單(L75):breadth 引擎的 FinMind 處置名單 late-bound 注入;
+        # None(breadth 停用 / 無 token)= 恆空 → trial 全部照標(緩)= 降級即修前行為。
+        disposition_codes: Callable[[], AbstractSet[str]] | None = None,
     ) -> None:
         self._source = source
         self._trade_date = trade_date
@@ -265,6 +269,7 @@ class StockEngine:
         # checkpoint 的時鐘同樣可注入:換日窗判定唯一的時間讀取點,不注入就只能靠真
         # 牆鐘決定測試綠不綠(index `now_fn` 的同款理由)。
         self._now_fn = now_fn if now_fn is not None else _dt.datetime.now
+        self._disposition_codes = disposition_codes
         #: checkpoint 迴圈間隔(秒)。測試把它調小以換得「迴圈真的轉過 N 拍」的觀察點。
         self._checkpoint_secs = 60.0
         self._map = stkfut_map if stkfut_map is not None else load_map()
@@ -652,7 +657,23 @@ class StockEngine:
         """
         if not self._is_trading_day(self._now_fn().date()):
             return False
-        return is_trial_window(_now_taipei_time(), trial_windows_for(code))
+        if is_trial_window(_now_taipei_time(), trial_windows_for(code)):
+            return True
+        # 第二段(L75,2026-08-31):per-code TradeStatus==1 = 延緩撮合中(2026-08-28 蒐證:
+        # 開盤段 11 檔 episode ≈2 min、TWSE「延緩撮合 2 分鐘」形狀;tc4-market-facts)。
+        # 只在盤中 09:00–13:30 採信:TradeStatus 只隨 REALTIME 更新,收盤後沒有恢復推播,
+        # 最後一則若是 1 會把旗標掛整晚。期貨鍵不進 `_trade_status`(觀測開頭即跳過)→ 恆 False。
+        # 值認 "1" 不認「非 0」:值域實測 {0, 1},未知新值走 parse 層 warning,不猜語意。
+        st = self._trade_status.get(code)
+        return st is not None and st[0] == "1" and "09:00" <= _now_taipei_time()[:5] < "13:30"
+
+    def _disposition_now(self, code: str) -> bool:
+        """該檔是否在處置名單(L75):trial 亮起時前端把標籤改「(處置)」——
+        分盤撮合的等待期不是暴漲暴跌延緩,標(緩)是錯的敘事。名單 late-bound
+        (breadth 引擎盤中更新,整份替換 = 一致快照);期貨鍵恆 False。"""
+        if is_futures_key(code) or self._disposition_codes is None:
+            return False
+        return code in self._disposition_codes()
 
     def snapshot(self, code: str, *, tape: bool = True) -> dict:
         """`tape=False` 只轉發給 state(見 `StockDayState.snapshot`):群組檢視點卡片
@@ -666,6 +687,7 @@ class StockEngine:
         # 附加點在 engine 而非 `StockDayState.snapshot()`(同 `no_data` 慣例):
         # trial 是引擎時鐘推導的,不是日內狀態機資料。
         snap["trial"] = self._trial_now(code)
+        snap["disposition"] = self._disposition_now(code)
         # tc4 / backfilling **不進 snapshot**:畫面的唯一來源是 WS `status` 訊息
         # (那邊是活碼)。同時送兩份等於讓同一個狀態有兩個真相,而 REST 那份是
         # 請求當下的凍結值,重整時機不對就會與 WS 打架。
@@ -1589,6 +1611,7 @@ class StockEngine:
             # (同 `no_data` 自身):它答的是「這個時刻交易所在不在撮合」,與該檔有沒有
             # 資料無關 —— no_data 列由前端規則決定不標(SC-1),不在這裡分岔。
             "trial": self._trial_now(code),
+            "disposition": self._disposition_now(code),
         }
 
     def stream(self) -> AsyncGenerator[dict, None]:

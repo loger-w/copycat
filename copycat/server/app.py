@@ -675,6 +675,13 @@ def create_app(
                     is_trading_day=(
                         trading_calendar.is_trading_day if trading_calendar is not None else None
                     ),
+                    # 處置名單 late-bound(L75):breadth 在 boot 序列較晚才建,取用時
+                    # 才讀 app.state;breadth 停用(無 token)→ 空集合 = 全部照標(緩)
+                    disposition_codes=lambda: (
+                        b.disposition_codes()
+                        if (b := getattr(app.state, "breadth", None)) is not None
+                        else frozenset()
+                    ),
                 )
 
             async def _start_stock(o: StockEngine) -> None:

@@ -32,7 +32,7 @@ const CODES = ["2330", "5483", "3231"];
 const QUOTES = {
   "2330": {
     p: 2_380_000, chg_pct: 2.59, vol: 12479, ref: null,
-    upper: 2_550_000, lower: 2_090_000, no_data: false, trial: false,
+    upper: 2_550_000, lower: 2_090_000, no_data: false, trial: false, disposition: false,
   },
 };
 

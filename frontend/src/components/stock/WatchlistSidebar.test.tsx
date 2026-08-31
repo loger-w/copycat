@@ -100,6 +100,7 @@ const QUOTES = {
     lower: 2_090_000,
     no_data: false,
     trial: false,
+    disposition: false,
   },
   "5483": {
     p: null,
@@ -110,6 +111,7 @@ const QUOTES = {
     lower: null,
     no_data: true,
     trial: false,
+    disposition: false,
   },
   // 3231:漲跌停不可得(舊後端 / 無漲跌幅商品)—— 一律不亮,不猜
   "3231": {
@@ -121,6 +123,7 @@ const QUOTES = {
     lower: null,
     no_data: false,
     trial: false,
+    disposition: false,
   },
 };
 
@@ -1371,6 +1374,7 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
         lower: null,
         no_data: false,
         trial: false,
+        disposition: false,
       },
     };
     const { container } = wrap(
@@ -1398,6 +1402,7 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
         lower: null,
         no_data: false,
         trial: false,
+        disposition: false,
       },
     };
     const { container } = wrap(
@@ -1423,6 +1428,7 @@ describe("WatchlistSidebar 列內容(round4 項 4 / 項 5)", () => {
         lower: null,
         no_data: false,
         trial: false,
+        disposition: false,
       },
     };
     const { container } = wrap(
@@ -1449,6 +1455,16 @@ describe("WatchlistSidebar 緩撮標示(SC-1)", () => {
       <WatchlistSidebar active={null} onSelect={() => {}} quotes={{ ...QUOTES, ...over }} />,
     );
   }
+
+  it("trial=true + disposition=true → 標「(處置)」不標「(緩)」(L75:分盤等待期不是延緩)", async () => {
+    const { container } = renderWith({
+      "2330": { ...QUOTES["2330"], trial: true, disposition: true },
+    });
+    await waitFor(() => {
+      const el = container.querySelector('[data-testid="wl-trial-2330"]');
+      expect(el?.textContent).toBe("(處置)");
+    });
+  });
 
   it("trial=true → 代號右側出現「(緩)」,且與代號同一列", async () => {
     const { container } = renderWith({ "2330": { ...QUOTES["2330"], trial: true } });
@@ -1599,6 +1615,7 @@ describe("WatchlistSidebar 倉位 chip(SC-2)", () => {
       lower: null,
       no_data: false,
       trial: false,
+      disposition: false,
     },
   };
 

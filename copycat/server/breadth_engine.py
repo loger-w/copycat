@@ -469,6 +469,11 @@ class BreadthEngine:
         self._info_day = self._today_fn()
         self._info_retry_at = None
 
+    def disposition_codes(self) -> set[str]:
+        """處置股集合(stock engine「(處置)」標籤的注入源;L75)。回傳**現份參照**:
+        更新以整份替換(`_refresh_disposition` 末段),讀者拿到的是一致快照,不另複製。"""
+        return self._disposition
+
     async def _refresh_disposition(self) -> None:
         today = self._today_fn()
         try:

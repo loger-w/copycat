@@ -163,6 +163,7 @@ export function futuresBarsToAccum(input: Input): StockAccum {
     noData: false,
     tapeOmitted: false,
     trial: false,
+    disposition: false,
     high,
     low,
     amountMilli,

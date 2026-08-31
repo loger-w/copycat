@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
+import { trialBadgeText,
   accumFromGroupSnapshot,
   applyTick,
   extendMinutes,
@@ -672,5 +672,17 @@ describe("TickRow.n 單調序號(N120)", () => {
     expect(Math.min(...after.ticks.map((r) => r.n))).toBeGreaterThan(
       Math.max(...before.ticks.map((r) => r.n)),
     );
+  });
+});
+
+describe("trialBadgeText(L75)", () => {
+  it("未亮 → null(處置與否無關)", () => {
+    expect(trialBadgeText({ trial: false, disposition: false })).toBeNull();
+    expect(trialBadgeText({ trial: false, disposition: true })).toBeNull();
+  });
+
+  it("亮 + 非處置 → (緩);亮 + 處置 → (處置)", () => {
+    expect(trialBadgeText({ trial: true, disposition: false })).toBe("(緩)");
+    expect(trialBadgeText({ trial: true, disposition: true })).toBe("(處置)");
   });
 });

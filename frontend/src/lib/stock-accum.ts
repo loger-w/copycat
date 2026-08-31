@@ -114,6 +114,9 @@ export interface StockAccum {
    *  同 `WatchlistQuote.trial`:選填會讓漏帶靜默成 false = badge 永遠不亮。
    *  snapshot 缺欄位(舊後端)由 `fromSnapshot` 以 `?? false` 降級。 */
   trial: boolean;
+  /** 處置股(分盤撮合;breadth FinMind 名單,L75)。trial 亮起時 `trialBadgeText` 把
+   *  標籤改「(處置)」。**必填**(同 trial);snapshot 缺欄(舊後端)`?? false` = 照標(緩)。 */
+  disposition: boolean;
   /** 這份 accum 是 `?tape=0` 取回的(後端 `tape_omitted`):明細與 VP 為空是「省略」不是
    *  「尚無成交」。**必填**(同 noData/trial):選填會讓漏帶靜默成 false = 空態永遠印終態文案。
    *  群組 → 單檔切換時 useStockStream 會補打全量,重建後回到 false。 */
@@ -209,6 +212,8 @@ interface SnapshotShape {
   tape_omitted?: boolean;
   /** 緩撮旗標;**選填** —— 舊後端沒給(全 additive 契約),缺欄位一律當窗外。 */
   trial?: boolean;
+  /** 處置旗標(L75);選填同上,缺欄一律當非處置。 */
+  disposition?: boolean;
 }
 
 /** 後端 minutes(JSON 物件,key 是分鐘字串)→ 前端 Map。
@@ -256,6 +261,7 @@ export function fromSnapshot(snap: SnapshotShape): StockAccum {
     low: snap.low ?? null,
     noData: snap.no_data ?? false,
     trial: snap.trial ?? false,
+    disposition: snap.disposition ?? false,
     tapeOmitted: snap.tape_omitted ?? false,
     // 觸頂 = 後端 deque 已丟掉更早的成交(N087)。`tape=0` 的空 ticks 不會命中這條。
     vpTruncated: srcTicks.length >= VP_TICK_CAP,
@@ -359,6 +365,7 @@ export function accumFromGroupSnapshot(
     meta: snap.meta,
     noData: snap.noData,
     trial: false,
+    disposition: false,
     tapeOmitted: false,
     high: snap.high ?? null,
     low: snap.low ?? null,
@@ -411,4 +418,12 @@ export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
     amountMilli,
     volume,
   };
+}
+
+/** trial 亮起時的標籤(L75):處置股(分盤撮合的等待期)標「(處置)」—— 那不是
+ *  暴漲暴跌延緩,標(緩)是錯的敘事;其餘(試撮窗 / 盤中延緩)標「(緩)」。
+ *  未亮 → null(兩個渲染點各自的 noData / 合約態守門不在這裡)。 */
+export function trialBadgeText(t: { trial: boolean; disposition: boolean }): string | null {
+  if (!t.trial) return null;
+  return t.disposition ? "(處置)" : "(緩)";
 }
