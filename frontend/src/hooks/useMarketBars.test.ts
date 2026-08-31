@@ -256,6 +256,43 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     expect(count("D")).toBe(4);
   });
 
+  // pr-159-review F-01(user 拍板 1a):後端 D/W/M 路徑未三態化,TC4 不可用時回 200 + 空 bars
+  //(不 raise)——午夜那一發若拿到它,TQ 判 success、好資料被空快照蓋掉,而 interval 已排到明天、
+  // staleTime 整天不過期、回焦 refetch 也被 isStaleByTime 擋 → 主圖空白一整天。空 bars 視同失敗:
+  // 與 error 同一個 60 s 節奏重試(修前失效樣態只是「昨天的 K 線」,這條路修後不能更差)。
+  it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    let emptyLeft = 1; // 只有午夜那一發降級;200 不觸發 TQ retry,所以一發就夠
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const d1 = isoLocalDate(new Date()) >= D1_ISO;
+        if (d1 && emptyLeft > 0) {
+          emptyLeft -= 1;
+          const meta = { ...META, source: "unavailable" };
+          return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars: [], meta }));
+        }
+        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
+        return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta: META }));
+      }),
+    );
+    const { result } = renderHook(() => useMarketBars("TWSE", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(count("D")).toBe(1);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 61_000); // D+1 00:01:01:拿到空快照
+    expect(count("D")).toBe(2);
+    expect(result.current.data?.bars).toEqual([]); // 空快照已落地(修的是「之後救得回來」)
+    await vi.advanceTimersByTimeAsync(60_000); // 60 s 重試 → TC4 回來了
+    expect(count("D")).toBe(3);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // 資料非空後回到「下一個午夜」節奏
+    expect(count("D")).toBe(3);
+  });
+
   // 台股綜合 tab 的 DOM 由 App 以 `hidden` 保留(不 unmount),`active` 只擋分 K 的 60 s 輪詢
   //(review round-2 XR-4)。人在個股頁跨過午夜、早上切回台股綜合 tab → K 線必須是今天的:
   // 斷言落在「切回之後」的資料,不釘「哪一刻打的」(午夜打 / 切回才打都算修好)。

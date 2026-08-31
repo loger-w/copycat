@@ -361,6 +361,41 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(4);
   });
 
+  // pr-159-review F-01 同洞(useFuturesBars 與 useMarketBars 同一條 200 降級路):午夜那發拿到
+  // 200 + 空 bars → 空 bars 視同失敗,60 s 重試,不把空快照鎖到隔天。
+  it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    let emptyLeft = 1; // 200 不觸發 TQ retry,一發就夠
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const d1 = isoLocalDate(new Date()) >= D1_ISO;
+        if (d1 && emptyLeft > 0) {
+          emptyLeft -= 1;
+          const meta = { ...META, source: "unavailable" };
+          return new Response(JSON.stringify({ key: "TXF", tf: "D", bars: [], meta }));
+        }
+        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+      }),
+    );
+    const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000 + 61_000); // D+1 00:01:01:拿到空快照
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    expect(result.current.data?.bars).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000); // 60 s 重試 → TC4 回來了
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // 資料非空後回到「下一個午夜」節奏
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+  });
+
   // 切走的 observer 是退訂(subscribed: false):沒有計時器,午夜那一發不會打;切回時靠
   // staleTime 判「這份是昨天的」才重抓 —— 同日曆日內切回仍不重抓(上一個 describe 那條)。
   it("在個股頁跨過午夜再切回期貨 tab → 日 K 重抓(同日曆日切回才是不重抓)", async () => {
