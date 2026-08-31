@@ -979,3 +979,18 @@ def test_fills_prune_on_day_change() -> None:
     day[0] = "20260901"
     s.apply_reply(_evt(seq=SEQ_B, typ="D", qty="1000", price="81.0"))
     assert [f.price for f in s.fills()] == [81.0]
+
+
+def test_boot_watermark_before_backlog_does_not_reapply_replayed_fills() -> None:
+    """pr-163 F-01:開機第一圈 begin_snapshot 先於 ConnectByID backlog 到達 —— 未 seeded
+    時水位必須記 None(快照即真相),不是空 dict;否則重播的每筆當日成交都被當
+    「水位後增量」重套到剛落地的券商快照上(今買 1 顯示 2,平倉鈕可按)。"""
+    s = CapitalStore()
+    s.begin_snapshot()  # 開機第一圈:balance 查詢先出手(_balance_last_ts=0),backlog 還沒到
+    s.apply_reply(_evt(typ="N", qty="1000"))  # ConnectByID 重播當日 backlog
+    s.apply_reply(_evt(typ="D", qty="1000", price="83.7000"))
+    s.set_positions(
+        [Position(market="sec", stock_no="4989", qty=1, avg_price=83.7, avg_source="broker")]
+    )
+    p = s.position_for("4989")
+    assert p is not None and p.qty == 1
