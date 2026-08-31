@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { groupPollInterval, useGroupSnapshots } from "@/hooks/useGroupSnapshots";
+import { clearHolidays, setHolidays } from "@/lib/trading-calendar";
 
 /** 後端 `/api/stock/group-state` 的 payload 形(design v3 SC-4;R15 寫死三鍵 + backfilling)。
  *
@@ -122,11 +123,32 @@ describe("useGroupSnapshots", () => {
   });
 });
 
-// 輪詢窗抽成純函式才量得到(沿 `barsPollInterval` 慣例):hook 內是函式形
-// refetchInterval,值形式只在 render 當下求值 —— 冷門股沒 re-render 就永遠不會開始輪詢。
+// 輪詢窗抽成純函式才量得到(沿 `barsPollInterval` 慣例)。**不回 false**(next-time
+// L71):TQ 對 false 不排 timer、之後再也不會重新求值 —— 08:59 就開著的群組檢視要等
+// 別的事件碰這條 query 才會開始輪詢。盤外改回「距下個交易窗開點的 ms」:窗開瞬間醒來。
 describe("groupPollInterval", () => {
-  it("盤中 60s;盤外不輪詢", () => {
-    expect(groupPollInterval(true)).toBe(60_000);
-    expect(groupPollInterval(false)).toBe(false);
+  afterEach(() => {
+    clearHolidays();
+  });
+
+  it("盤中 60s", () => {
+    expect(groupPollInterval(new Date("2026-08-25T10:00:00"))).toBe(60_000);
+  });
+
+  it("開盤前回「距 09:01 的 ms」而不是 false(TQ 對 false 不再排 timer)", () => {
+    expect(groupPollInterval(new Date("2026-08-25T08:31:00"))).toBe(30 * 60_000);
+  });
+
+  it("收盤後跳到下一個交易日 09:01(週五收盤 → 週一)", () => {
+    // 2026-08-28 是週五;13:36 起窗已關 → 下個開點 = 週一 08-31 09:01
+    const ms = groupPollInterval(new Date("2026-08-28T14:00:00"));
+    expect(ms).toBe(new Date("2026-08-31T09:01:00").getTime() - new Date("2026-08-28T14:00:00").getTime());
+  });
+
+  it("假日集合擋掉的日子一併跳過", () => {
+    setHolidays(["2026-08-25"]);
+    // 週二 08-25 是假日 → 前一晚 08-24(週一)收盤後,下個開點 = 週三 08-26 09:01
+    const now = new Date("2026-08-24T14:00:00");
+    expect(groupPollInterval(now)).toBe(new Date("2026-08-26T09:01:00").getTime() - now.getTime());
   });
 });
