@@ -56,6 +56,7 @@ export function indexSeriesToAccum(series: IndexSeries, code: string, name: stri
     noData: false,
     tapeOmitted: false,
     trial: false,
+    disposition: false,
     high,
     low,
     amountMilli: 0,

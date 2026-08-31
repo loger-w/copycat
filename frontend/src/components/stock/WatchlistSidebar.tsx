@@ -7,6 +7,7 @@ import { useStockNames } from "@/hooks/useStockNames";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { WL_COLLAPSED_KEY, WL_UNGROUPED_KEY } from "@/lib/constants";
+import { trialBadgeText } from "@/lib/stock-accum";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { fmt, fmtPct } from "@/lib/format";
 import { dropTargetFromPointer, type DropZone } from "@/lib/list-drag";
@@ -525,7 +526,7 @@ export function WatchlistSidebar({ active, onSelect, quotes }: Props) {
                     data-testid={`wl-trial-${code}`}
                     className="shrink-0 whitespace-nowrap text-xs text-amber-400"
                   >
-                    (緩)
+                    {trialBadgeText(q)}
                   </span>
                 ) : null}
               </span>

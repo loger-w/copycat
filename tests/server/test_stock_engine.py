@@ -27,6 +27,7 @@ def _quote(
     date: str = "20260721",
     symbol: str | None = None,
     precise: str = "25751000000",
+    status: str = "0",
 ) -> dict:
     """`precise` = TC4 的 UTC PreciseTime(預設 02:57:51 = 台北 10:57:51,日盤正中)。
 
@@ -54,7 +55,7 @@ def _quote(
         "YTradeVolume": "100",
         "OpenTime": "90000",
         "CloseTime": "133000",
-        "TradeStatus": "0",
+        "TradeStatus": status,
     }
 
 
@@ -2891,6 +2892,7 @@ async def _make_with_clock(
     throttle: float = 0.01,
     trading_day: bool = True,
     now_fn: Callable[[], _dt.datetime] | None = None,
+    disposition: set[str] | None = None,
 ) -> tuple[StockEngine, FakeSource]:
     """假時鐘**先注入再 `start()`**(D3 amendment R3)。
 
@@ -2921,6 +2923,7 @@ async def _make_with_clock(
             (lambda d: d == now().date()) if trading_day else (lambda d: d != now().date())
         ),
         now_fn=now,
+        disposition_codes=(lambda: disposition) if disposition is not None else None,
     )
     await engine.start()
     return engine, src
@@ -3016,6 +3019,67 @@ class TestTrialFlag:
         engine, _src = await _make_with_clock(monkeypatch, "13:30:00.000")  # 右界不含
         assert engine.snapshot("2330")["trial"] is False
         await engine.close()
+
+    async def test_trade_status_pause_marks_trial_out_of_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """L75 第二段:盤中(窗外)TradeStatus==1 = 延緩撮合中 → trial True(per-code)。
+
+        2026-08-28 蒐證:開盤段 11 檔 episode ≈2 min、TWSE「延緩撮合」形狀;窗判只涵蓋
+        08:30–09:00 / 13:25–13:30,盤中暴漲暴跌觸發的延緩第一段整段不亮。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:30:00.000")
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, status="1"))
+        await _drain(engine)
+        assert engine.snapshot("2330")["trial"] is True
+        assert engine._quote_payload("2330")["trial"] is True
+        await engine.close()
+
+    async def test_trade_status_recovery_clears_pause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """恢復推播(1→0,= 延緩後集合撮合那筆)→ trial 熄。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:30:00.000")
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, status="1"))
+        src.on_message(_quote(cum=2, status="0"))
+        await _drain(engine)
+        assert engine.snapshot("2330")["trial"] is False
+        await engine.close()
+
+    async def test_trade_status_pause_not_honored_after_close(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TradeStatus 只隨 REALTIME 更新:收盤後沒有恢復推播,最後一則若是 1 會把旗標
+        掛整晚 —— 盤中 09:00–13:30 之外不採信 per-code 值(窗判那條照走)。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:30:00.000")
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, status="1"))
+        await _drain(engine)
+        import copycat.server.stock_engine as stock_engine_mod
+
+        monkeypatch.setattr(stock_engine_mod, "_now_taipei_time", lambda: "14:10:00.000")
+        assert engine.snapshot("2330")["trial"] is False
+        await engine.close()
+
+    async def test_disposition_flag_surfaces_on_snapshot_and_quote(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """L75(處置):breadth 處置名單注入 → snapshot / quote payload 帶 disposition,
+        前端據此把 trial 的標籤從「(緩)」改「(處置)」(分盤撮合不是暴漲暴跌延緩)。
+        未注入(breadth 停用)→ 恆 False = 全部照標(緩)= 降級即現行為。"""
+        engine, _src = await _make_with_clock(monkeypatch, "10:30:00.000", disposition={"2330"})
+        assert engine.snapshot("2330")["disposition"] is True
+        assert engine._quote_payload("2330")["disposition"] is True
+        assert engine.snapshot("2317")["disposition"] is False
+        assert engine.snapshot(_CONTRACT)["disposition"] is False  # 期貨鍵恆 False
+        off, _src2 = await _make_with_clock(monkeypatch, "10:30:00.000")
+        assert off.snapshot("2330")["disposition"] is False
+        await engine.close()
+        await off.close()
 
     async def test_trial_false_on_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """SC-3(D4'):日曆說今天不開盤 → 窗內也不標(緩)。
@@ -3419,7 +3483,8 @@ class TestTradeStatusObserve:
 
         本機時鐘與 TC4 時戳的秒級偏移會把 13:25:00 進窗的 0→1 判成「窗外非 0」→
         每檔每日最多一對假 WARNING(進窗一則、出窗一則)淹沒真訊號。
-        寬限**只影響觀測分級**:payload 的 `trial` 仍是原窗,否則畫面的「(緩)」會早亮晚熄。
+        寬限**只影響觀測分級**:payload 的 `trial` 窗判仍是原窗(L75 起另有 per-code
+        TradeStatus 分支,由本測試尾兩行分開鎖),否則畫面的「(緩)」會早亮晚熄。
         """
         engine, src = await _make_with_clock(monkeypatch, "13:24:59.000")
         await engine.set_watchlist(["2330"])
@@ -3432,6 +3497,12 @@ class TestTradeStatusObserve:
         debugs = _observed(caplog, logging.DEBUG)
         assert len(debugs) == 1
         assert "trial_window=True" in debugs[0]  # 觀測窗的答案
+        # 事前標為該變(L75 第二段):TradeStatus==1 當下 wire trial=True 是新語意
+        # (per-code 延緩撮合偵測,不再只看窗)。原鎖「觀測 ±2s 寬限不得漏進 wire 窗判」
+        # 改由下面兩行承接:恢復 "0" 之後、13:25 窗前的同一時刻,wire 仍是 False。
+        assert engine._quote_payload("2330")["trial"] is True
+        src.on_message(_quote(cum=3))  # TradeStatus 恢復 "0"
+        await _drain(engine)
         assert engine._quote_payload("2330")["trial"] is False  # wire 契約不吃寬限
         await engine.close()
 

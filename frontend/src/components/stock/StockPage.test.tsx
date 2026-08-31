@@ -46,7 +46,7 @@ function stream(over: Partial<StockStreamState> = {}): StockStreamState {
   return {
     accum: ACCUM,
     watchlist: {},
-    status: { tc4: "up", backfilling: null },
+    status: { tc4: "up", backfilling: null, engine: true },
     stkfut: null,
     wsStatus: "open",
     ...over,
@@ -1167,6 +1167,7 @@ describe("StockPage header 倉位(SC-3)", () => {
           lower: null,
           no_data: false,
           trial: false,
+          disposition: false,
         },
       },
     });

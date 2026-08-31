@@ -19,6 +19,7 @@ import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
 import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { trialBadgeText } from "@/lib/stock-accum";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
 import { chgPct, fmt, fmtPct } from "@/lib/format";
@@ -322,7 +323,7 @@ export function StockPage({
                     對同一狀態給相反答案,而且是對沒有任何報價的標的講撮合狀態。 */}
                 {accum?.trial && !accum.noData && contract === null ? (
                   <span data-testid="page-trial" className="text-sm text-amber-400">
-                    (緩)
+                    {trialBadgeText(accum)}
                   </span>
                 ) : null}
               </h2>
