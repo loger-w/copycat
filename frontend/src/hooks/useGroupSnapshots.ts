@@ -97,7 +97,11 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
  *  50 檔 batch 不是免費的這一點不變 —— 盤外整段仍零請求(timer 只在開點醒一次)。 */
 export function groupPollInterval(now: Date = new Date()): number {
   if (inTradingHours(now)) return POLL_MS;
-  return Math.max(msUntilTradingOpen(now), 1_000);
+  // 秒級量化(day-bars-rollover 鐵律 (c),全 repo 函式形 refetchInterval 同款):毫秒精度
+  // 會讓每次 render 求出不同值 → TQ 白做一組 clearInterval/setInterval(盤外仍有 orders
+  // 10s 輪詢驅動 render)。1_000 下限 = 開點前最後一秒的重排護欄(09:00:59.x 求出 <1s
+  // 的值,不設下限會排出 0ms 級 timer 連環重排)。
+  return Math.max(Math.ceil(msUntilTradingOpen(now) / 1000) * 1000, 1_000);
 }
 
 /** 群組成員狀態 batch。`enabled` 是檢視開關,`codes` 空(空群組 / 零群組)一律不請求
