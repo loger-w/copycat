@@ -105,10 +105,12 @@ export function useStockBars(
     // 空態轉 timeout 後永遠不會開始 20s 重試(review R3)。
     // `barsPollInterval` 先判(SC-4 的 20 s 空態重試優先於日界);日 K 它回 false 才輪到
     // lib 的「失敗 60 s 重試 / 下一個午夜」政策(個股頁本來就沒有 `active` 閘)。
+    // retryEmpty: false —— 本 hook 的空態語意由 status 三態接手:空 + 非 ok 上面 20 s 已判,
+    // 空 + ok = 「真無資料」刻意不輪詢(SC-4;與 market / futures 的未三態化空回應不是同一種空)。
     refetchInterval: (query) => {
       const poll = barsPollInterval(query.state.data, isDaily, inTradingHours());
       if (!isDaily || poll !== false) return poll;
-      return dayBarsRefetchInterval(query);
+      return dayBarsRefetchInterval(query, { retryEmpty: false });
     },
   });
 }

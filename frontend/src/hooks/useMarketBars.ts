@@ -82,7 +82,8 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
         // 午夜那發一天一次、每把 key 一發;失敗後的 60 s 重試也不閘(否則午夜失敗恰發生在人不在時,
         // 就整晚凍結、切回還得再等 60 s),且 error 只在 HTTP 非 2xx(量級見 lib 的
         // `DAY_ERROR_RETRY_MS` doc),都不是 XR-4 擋的那種每 60 s 打 TC4 SubHistory 的成本。
-        return dayBarsRefetchInterval(q);
+        // retryEmpty:D / W / M 路徑未三態化,200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)。
+        return dayBarsRefetchInterval(q, { retryEmpty: true });
       }
       return active && inHours() ? POLL_MS : false;
     },

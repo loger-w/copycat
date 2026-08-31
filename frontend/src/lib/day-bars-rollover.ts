@@ -83,7 +83,11 @@ const DAY_ERROR_RETRY_MS = 60_000;
 /** 三支 hook 的 `staleTime` / `refetchInterval` 都以 TQ 的 Query 物件呼叫;這裡只讀用得到的兩格,
  *  結構型別、不 import TQ 泛型(呼叫端的 `Query<MarketBars>` / `Query<BarsPayload>` 皆可指派)。 */
 interface DayBarsQuery {
-  state: { status: "pending" | "error" | "success"; dataUpdatedAt: number };
+  state: {
+    status: "pending" | "error" | "success";
+    dataUpdatedAt: number;
+    data?: { bars: readonly unknown[] } | undefined;
+  };
 }
 
 /** 日 K `staleTime`:以「上次落地時刻」算到它之後的第一個午夜。以 `dataUpdatedAt` 起算而不是
@@ -94,7 +98,19 @@ export function dayBarsStaleTime(q: DayBarsQuery): number {
 
 /** 日 K `refetchInterval`:失敗 → 60 s 重試(`DAY_ERROR_RETRY_MS`);否則到下一個午夜——以「現在」算、
  *  **不吃 `dataUpdatedAt`**(鐵律 (b),推導見 `msUntilDayRollover`)。
- *  refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。 */
-export function dayBarsRefetchInterval(q: DayBarsQuery): number {
-  return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
+ *  refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。
+ *
+ *  `retryEmpty`(pr-159-review F-01,user 拍板 1a):**200 + 空 bars 要不要視同失敗**。
+ *  market / futures 的 D(/W/M)路徑後端未三態化 —— TC4 不可用時回 200 + 空 bars 不 raise,
+ *  TQ 判 success、空快照蓋掉好資料,而下一發已排到明天、staleTime 整天不過期、回焦 refetch 被
+ *  `isStaleByTime` 擋 → 圖空白一整天、零自救。兩支傳 `true`:空 = 「拿了等於沒拿」,吃同一個
+ *  60 s 節奏(資料非空即回到「下一個午夜」,不成迴圈;成本上界 = TC4 整天不可用時每分鐘一發,
+ *  與 error 重試同級)。`useStockBars` 傳 `false`:它的空態語意由 `status` 三態 + `barsPollInterval`
+ *  接手(空 + 非 ok → 20 s 已在本函式之前先判;空 + ok = 「真無資料」的刻意不輪詢,SC-4),
+ *  在這裡再開 60 s 會把「真無資料」變成整天空轉 —— 兩種空不是同一種空。 */
+export function dayBarsRefetchInterval(q: DayBarsQuery, opts: { retryEmpty: boolean }): number {
+  if (q.state.status === "error") return DAY_ERROR_RETRY_MS;
+  const data = q.state.data;
+  if (opts.retryEmpty && data !== undefined && data.bars.length === 0) return DAY_ERROR_RETRY_MS;
+  return msUntilDayRollover(Date.now());
 }
