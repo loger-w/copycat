@@ -243,9 +243,20 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     expect(urls.length).toBeGreaterThan(before);
   });
 
-  it("日 K 不輪詢(已完成日 bar 不會變)", async () => {
+  // 事前標「該變」(pr-159-review F-01 / user 拍板 1a):空 bars 現在視同失敗、60 s 重試(專測在
+  // 跨日 describe)—— 本條鎖的真契約是「**非空**日 K 不輪詢」,fixture 由 beforeEach 的空 bars
+  // 換成一根完成 bar,斷言不變。
+  it("日 K(資料非空)不輪詢(已完成日 bar 不會變)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const bars = [{ t: "2026-08-05", o: 1, h: 1, l: 1, c: 1, v: 1 }];
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+      }),
+    );
     renderHook(() => useFuturesBars("TXF", "day"), { wrapper: wrapper(newClient()) });
     await vi.advanceTimersByTimeAsync(0);
     const before = urls.length;

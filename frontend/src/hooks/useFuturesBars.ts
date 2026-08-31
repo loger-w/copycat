@@ -114,7 +114,8 @@ export function useFuturesBars(
     //(`msUntilDayRollover`)。`active` 這一維不在這裡:退訂的 observer 根本沒有計時器
     //(`subscribed` 是唯一的閘)。
     refetchInterval: (q) => {
-      if (!isMinute) return dayBarsRefetchInterval(q);
+      // retryEmpty:同 useMarketBars —— tf=D 的 200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)
+      if (!isMinute) return dayBarsRefetchInterval(q, { retryEmpty: true });
       return inFuturesAllDayHours() ? POLL_MS : false;
     },
   });
