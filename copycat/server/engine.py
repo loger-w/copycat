@@ -10,7 +10,7 @@ from typing import AsyncGenerator, Callable, Protocol
 from copycat.live.aggregate import ChainAggregator
 from copycat.live.handover import HandoverBuffer, run_handover
 from copycat.live.models import SeriesInfo, Tick
-from copycat.live.session import SessionKey, session_key
+from copycat.live.session import session_key
 
 logger = logging.getLogger(__name__)
 

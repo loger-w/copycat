@@ -17,7 +17,7 @@ import { CHART_TOGGLES_KEY } from "@/lib/constants";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { MinuteAgg, VpCell } from "@/lib/stock-accum";
 import type { Group } from "@/lib/watchlist-model";
-import type { CapitalOrder } from "@/types";
+import type { CapitalFill } from "@/types";
 import { wrap } from "@/test-utils";
 
 
@@ -74,29 +74,18 @@ class FakeResizeObserver {
 
 /** SC-5 的委託 fixture:2330 / 2317 各一筆當日成交(minute 540,價 2380 元落在
  *  `snap()` 的 y 域 [2090000, 2550000] 內)。`date` 動態算 —— 寫死會在隔天靜默轉紅。 */
-function order(code: string, seqNo: string): CapitalOrder {
+function fillOf(code: string, seqNo: string): CapitalFill {
   return {
     seq_no: seqNo,
     stock_no: code,
-    name: "",
-    market: "TS",
     buy_sell: "B",
     flag_label: null,
-    book_no: null,
-    status_raw: null,
-    status_label: null,
     price: 2380,
-    avg_fill_price: 2380,
-    order_qty: 1,
-    filled_qty: 1,
+    qty: 1,
     unit: "張",
     date: ymdOf(new Date()),
     time: "09:00:30",
-    pre_order: false,
-    error_msg: null,
-    actionable: false,
-    price_type: "limit",
-    raw: "",
+    code,
   };
 }
 
@@ -108,8 +97,8 @@ beforeEach(() => {
     vi.fn(async (url: string) =>
       // 圖牆層掛一份 `useCapitalOrders`(SC-6);不分 URL 回 overlay 的話它會拿 overlay
       // 的殼當委託列表用 → `orders` undefined → 恆零標記,SC-5 的成交點案靜默 vacuous。
-      String(url).includes("/api/capital/orders")
-        ? new Response(JSON.stringify({ orders: [order("2330", "s1"), order("2317", "s2")] }))
+      String(url).includes("/api/capital/fills")
+        ? new Response(JSON.stringify({ fills: [fillOf("2330", "s1"), fillOf("2317", "s2")] }))
         : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),
     ),
   );

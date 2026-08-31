@@ -11,8 +11,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date as _date
 from datetime import datetime as _datetime
-from datetime import time as _time
-from datetime import timedelta as _timedelta
 from datetime import time as _clock_time
 from datetime import timedelta as _timedelta
 from pathlib import Path
@@ -366,7 +364,7 @@ def _txo_auto_backfill_date(calendar: TradingCalendar | None) -> Callable[[], st
         if calendar.is_trading_day(_session_date()) and session_mod.in_txo_session(now.time()):
             return None
         d = now.date()
-        if calendar.is_trading_day(d) and now.time() < _time(8, 45):
+        if calendar.is_trading_day(d) and now.time() < _clock_time(8, 45):
             d -= _timedelta(days=1)  # 交易日盤前:今天日盤還沒開,資料在前一交易日
         return resolve_trade_date(d, calendar).strftime("%Y%m%d")
 
@@ -543,7 +541,7 @@ def create_app(
     corr_ws = WsBroadcaster()
     river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
 
-    def _resolve_trade_date(before: _time | None = None) -> str:
+    def _resolve_trade_date(before: _clock_time | None = None) -> str:
         """引擎 / overlay / hub fallback 共用的「今天在看哪一天」(Q9)。
 
         **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
@@ -714,7 +712,7 @@ def create_app(
                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
                 return StockEngine(
                     cast(StockSource, resolved_stock),
-                    trade_date=_resolve_trade_date(before=_time(8, 0)),
+                    trade_date=_resolve_trade_date(before=_clock_time(8, 0)),
                     throttle_secs=throttle_secs,
                     checkpoint=backfill_date is None,
                     ws=stock_ws,  # 與 SignalHub 共用同一顆(XR-3)
@@ -865,7 +863,7 @@ def create_app(
                     # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
                     txf_getter=runtime.spot_millipts,
                     mis_fetch=index_mis_fetch,
-                    trade_date=_resolve_trade_date(before=_time(8, 30)),
+                    trade_date=_resolve_trade_date(before=_clock_time(8, 30)),
                     rollover=backfill_date is None,
                     throttle_secs=throttle_secs,
                     # 無日曆 → None = engine 預設的「純日曆日」(W9 逐字不變)
