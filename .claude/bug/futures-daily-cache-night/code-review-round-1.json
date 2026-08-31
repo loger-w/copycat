@@ -1,0 +1,23 @@
+{
+  "fixed_point": "0e8e49a7",
+  "standards": [
+    {"id": "J1", "type": "Duplicated Code", "finding": "墊背政策兩種形狀:build_period 抽了 _period_stale_or_empty,build_daily 原地展開兩次(bars.py:366-367/377-378 vs 492-499);repo 先例 _today_ttl docstring 明寫「各寫一份必然漂移」", "disposition": "accepted — 抽 _daily_stale_or_empty(cache, code, day, status),兩處呼叫"},
+    {"id": "J2", "type": "Duplicated Code", "finding": "(bars if period=='D' else aggregate_period(...)) 由兩處變三處(475/485/499)", "disposition": "accepted — 抽 _shaped(bars, period),三處收斂"},
+    {"id": "J3", "type": "Data Clumps", "finding": "_daily/_daily_tag/_daily_pre_final 三份 (code, today) 同鍵平行結構;第三份起收成 DailyEntry 的效益已高於改動成本", "disposition": "accepted-as-followup — 🔵 refactor 候選入 docs/next-time.md 08-31 節,本輪不動(reviewer 自陳此輪不做可)"},
+    {"id": "J4", "type": "Mysterious Name", "finding": "daily_stale 非過期時回的是新鮮值,名字與行為不符;建議 daily_any / daily_ignoring_final", "disposition": "rejected — 呼叫面唯一用途是失敗路徑墊背(cached miss 之後才會走到,實務上回的必是過期件);「stale」正是要給呼叫端的警示,daily_any 反而丟失它。docstring 已載完整語意"},
+    {"id": "J5", "type": "Hidden dependency", "finding": "BarsCache 從此有兩把鐘(注入 clock=monotonic + module 級 _now_time 牆鐘),__init__ 未註記", "disposition": "accepted — _daily_pre_final 註解補「兩把鐘」一段"},
+    {"id": "J6", "type": "Duplicated Code (test)", "finding": "_TaggedFetcher 與 _Fetcher 的 plumbing 逐字重複;姿態不一致(缺 | None 預設)", "disposition": "rejected — 12 行測試替身,抽 base 的間接成本高於重複;回傳型別刻意不可互換(module docstring R5),替身分開最誠實。| None 預設 _TaggedFetcher 無使用場景,不補"},
+    {"id": "J7", "type": "Mysterious Name (test)", "finding": "_flip_clock 起始值硬寫 time(9,0) 而檔頭已有 _DAYTIME;名字未揭露回傳可變 handle", "disposition": "accepted — 改名 _mutable_clock、起始值改 _DAYTIME、docstring 說明 handle"}
+  ],
+  "spec": [
+    {"id": "S-1", "severity": "主要", "finding": "「作廢一次」的「一次」沒被測試釘住:拿掉 daily_put 的 discard 全綠,行為退化成 14:00-24:00 每請求重抓", "disposition": "accepted — 新增 test_period_invalidates_once_then_refetch_is_final(界後 refetch 成功 → 第三請求 calls==2);該突變體現在會紅"},
+    {"id": "S-2", "severity": "次要", "finding": "build_daily 的 marked 窗墊背分支零覆蓋", "disposition": "accepted — 新增 test_daily_marked_window_serves_stale_without_fetch(空手 refetch → 15s 內墊背 + 不打 TC4 + status 不洗白)"},
+    {"id": "S-3", "severity": "次要", "finding": "休市日白刷一次;handoff 原句候選 (b) 含「交易日曆」而實作純牆鐘,diagnosis 未記為何拿掉", "disposition": "rejected(知情)— 刻意不掛日曆:假日代價 = 每 code 至多一次 DK(且前端 staleTime 到午夜,常態根本沒有第二個請求),換來零 trading_calendar 依賴(檔缺/缺年退化路徑都不用背)。已補記 diagnosis.md"},
+    {"id": "S-4", "severity": "邊角", "finding": "定稿界判定用 put 當下而非 fetch 發起當下:13:59:5x 發起、14:00 後回來的部分 bar 被標定稿", "disposition": "rejected — 兩者差 = 單次 fetch 時長(≤60s),資料反映的是 TC4 在 13:59+ 的狀態(日盤 13:45 已收),風險與「界值 14:00 是否足夠晚於 TC4 DK 定稿」是同一個前提(已列 verification 判準 5 / next-time 實錄),傳發起時刻只把前提縮緊數十秒卻讓 daily_put 多一個參數"},
+    {"id": "S-5", "severity": "—", "finding": "跨午夜/prune 交互 OK(_daily_pre_final 與 _daily 同鍵同 prune,無舊快照復活路徑)", "disposition": "no-action(核過)"},
+    {"id": "S-6", "severity": "—", "finding": "15:00 錨定翻頁時序 OK(backend today 走牆鐘,14:00 界早於 15:01 消費點)", "disposition": "no-action(核過)"},
+    {"id": "S-7", "severity": "次要", "finding": "「成本上界 = 每 code 每天多一次」只在 refetch 成功時成立;TC4 關/忙時沿 EMPTY_TTL 每 15s 節奏重付直到成功", "disposition": "accepted — DAILY_FINAL_TIME doc 與 diagnosis.md 改寫成「成功路徑上界一次;失敗窗沿 EMPTY_TTL_SECS 重試至成功,與既有空態自癒同級」"}
+  ],
+  "disposition": "Standards 0 硬違規 + 7 judgement(4 收 3 反駁);Spec 缺漏 2 條全收(各補一條測試)、措辭 1 條收、日曆/發起時刻 2 條知情反駁、2 條核過無動作。收修後 test_bars 61 綠。",
+  "increment_screen": "review 之後的收修增量(test/refactor/docs 三筆 + rebase onto origin/master #163)main agent 機械快篩:diff 內容 = 接受項處置本身(_daily_stale_or_empty/_shaped/兩把鐘註記/兩條測試/註解校正),零額外行為改動;rebase 增量為 capital 區與 bars 零重疊。rebase 後全量 3216 綠 + 前端 vitest exit 0 + ruff/pyright 零項。"
+}
