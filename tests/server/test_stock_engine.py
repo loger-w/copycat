@@ -2831,8 +2831,9 @@ class TestWatchlistRemovalBookkeeping:
         `code not in self._backfilled` 恆假地擋著,而 `backfilling` / `no_data`
         都是 False,卡片零訊號地空著。
 
-        re-acquire 刻意走**自選**而不是切回主圖:`set_main_contract` 尾端無條件
-        `_enqueue_backfill`,拿它當第二次入列的證據會讓這條測試對清點與否都綠。
+        re-acquire 刻意走**自選**而不是切回主圖:`set_main_contract` 尾端對未回補
+        檔仍會入列(pr-164 後有去重 guard,但清點沒跑時記帳還在、切回主圖照樣不排;
+        清點跑了則兩條路都會排)—— 走自選 + 群組輪詢才對清點與否有鑑別力。
         """
         engine, src = await _make()
         await engine.set_main("2330")
@@ -2846,13 +2847,48 @@ class TestWatchlistRemovalBookkeeping:
         assert "2330" not in engine._backfilled
         assert "2330" in src.unsubscribed
 
-        # 重新訂閱 → 回補機會重新開始(入列點走群組輪詢,不靠 set_main 的無條件入列)
+        # 重新訂閱 → 回補機會重新開始(入列點走群組輪詢;set_main 有去重 guard,
+        # 不拿它當證據,見 docstring)
         await engine.set_watchlist(["2330"])
         engine.group_snapshot(["2330"])
         await _drain(engine)
 
         assert src.backfills.count("2330") == 2
         assert "2330" in engine._backfilled
+        await engine.close()
+
+
+    async def test_set_main_reenqueues_after_timeout_gave_up(self) -> None:
+        """pr-164 F-01:逾時放棄檔記在 `_backfill_gave_up`(當日不再**自動**入列),
+        但使用者顯式切主圖必須叫得動 —— 修前借 `_backfilled` 當冷卻,放棄檔連切
+        主圖也不重排,唯一救援只剩漲跌停值變那一次。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        engine._backfill_gave_up.add("2330")  # 逾時重試打滿後的放棄記帳
+        engine._backfill_timeouts["2330"] = 3
+        engine.group_snapshot(["2330"])  # 自動入列路:被放棄冷卻擋住
+        await _drain(engine)
+        assert src.backfills.count("2330") == 0
+        await engine.set_main("2330")  # 顯式切主圖:照樣入列
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        assert "2330" not in engine._backfill_gave_up  # 套用成功 → 冷卻解除
+        await engine.close()
+
+    async def test_set_main_enqueues_even_when_no_data_or_fail_cooldown(self) -> None:
+        """pr-164 F-04:「no_data / 失敗冷卻**不**下沉到 set_main」是刻意決定
+        (`group_snapshot` docstring:被冷卻擋掉會變成主圖整天補不回來)。
+        把 set_main 的 guard 順手收斂成 `_backfill_wanted` 看起來像純重構,
+        mutation 實證全套照綠 —— 這兩條就是那個紅燈。"""
+        engine, src = await _make()
+        engine._backfill_failed["2330"] = 99  # 真失敗冷卻打滿
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        engine._no_data.add("2455")
+        await engine.set_main("2455")
+        await _drain(engine)
+        assert src.backfills.count("2455") == 1
         await engine.close()
 
 
