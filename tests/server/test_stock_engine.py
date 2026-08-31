@@ -267,6 +267,37 @@ class TestBackfillGuard:
         assert "2330" in engine._backfilled  # 套用成功才進帳
         await engine.close()
 
+    async def test_set_main_back_to_backfilled_code_does_not_reenqueue(self) -> None:
+        """set_main 切回「今日已回補、仍有 owner」的檔不重排回補(next-time L69:
+        08-31 實測 2455 一天 75 次重複回補全來自來回切主圖,每次 = SubHistory +
+        全量收割)。斷線缺口的保險由 reconnect 清 `_backfilled` 承接,不靠切主圖
+        順便重補;no_data / 冷卻不在此擋(group_snapshot docstring 那把尺)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])  # 切走後仍有 owner,記帳不清
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        await engine.set_main("5483")
+        await _drain(engine)
+        await engine.set_main("2330")  # 切回:今日已回補 → 不重排
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        await engine.close()
+
+    async def test_set_main_back_to_inflight_code_does_not_reenqueue(self) -> None:
+        """set_main 切回「回補在途」的檔不重複入列(與 `_backfill_wanted` 的在途
+        dedup 同尺;worker 出隊不查 `_backfilled`,重複 job 一定會多打一次 TC4)。"""
+        engine, src = await _make()
+        src.backfill_gate = threading.Event()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")  # job1 在途(gate 未開)
+        await engine.set_main("5483")
+        await engine.set_main("2330")  # 在途 → 不重排
+        src.backfill_gate.set()
+        await _drain(engine)
+        assert src.backfills.count("2330") == 1
+        await engine.close()
+
     async def test_reconnect_clears_backfill_bookkeeping(self) -> None:
         """R4:reconnect **不** bump generation(實碼事實)。
 
@@ -1906,10 +1937,12 @@ class TestBackfillBatchPrepare:
         await engine.close()
 
     async def test_batch_is_deduplicated_before_prepare(self) -> None:
-        """review J2:同批同 code(set_main 不過 guard)只 Sub 一次。
+        """review J2:同批同 code 只 Sub 一次。
 
         批次要有**兩個**不同 code 才觀測得到去重(單 code 批次塌成 1 → 走「單筆不 prepare」,
-        測到的不是去重;pr-153 F-07)。
+        測到的不是去重;pr-153 F-07)。重複 job 自 fix/backfill-enqueue-trio(L69)起
+        改由唯一接點 `_enqueue_backfill` 直造 —— set_main 已有已回補 / 在途 guard,
+        但漲跌停值變 / 逾時重排 timer 等入列點仍可能與 group_snapshot 併發出同 code job。
         """
         engine, src = await _make()
         src.backfill_gate = threading.Event()
@@ -1917,7 +1950,7 @@ class TestBackfillBatchPrepare:
         engine.group_snapshot(["2330"])
         await _drain(engine)  # 2330 卡在 gate
         engine.group_snapshot(["2317"])
-        await engine.set_main("2317")  # 無條件再入列 2317
+        engine._enqueue_backfill("2317")  # 與 group_snapshot 併發的第二筆同 code job
         engine.group_snapshot(["2454"])
         src.backfill_gate.set()
         await _drain(engine)
@@ -2736,10 +2769,10 @@ class TestWatchlistRemovalBookkeeping:
         assert "2330" not in engine._refs
 
         await engine.set_watchlist(["2330"])  # 以成員身分加回(不走 group_snapshot,不入列)
-        assert src.backfills.count("2330") == 2  # 前提:首筆點火 1 + set_main 無條件入列 1
+        assert src.backfills.count("2330") == 1  # 前提:首筆點火 1;set_main 已回補不重排(L69)
         src.on_message(_quote(cum=2))
         await _drain(engine)
-        assert src.backfills.count("2330") == 3  # 第三次 = 加回後的首筆成交再點火
+        assert src.backfills.count("2330") == 2  # 第二次 = 加回後的首筆成交再點火
         await engine.close()
 
     async def test_failure_cooldown_restarts_after_a_real_unsubscribe(self) -> None:
