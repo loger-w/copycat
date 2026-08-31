@@ -314,6 +314,14 @@ class StockEngine:
         #     逾時不是失敗,不該吃掉「三次就冷卻」那個給真失敗用的額度)。日別語意,
         #     與 `_backfill_failed` 同在 rollover 清空。
         self._backfill_timeouts: dict[str, int] = {}
+        #   `_backfill_gave_up` = 逾時重試打滿後「當日不再**自動**入列」的冷卻(pr-164
+        #     F-01 分帳,user 拍板開獨立 set):修前借 `_backfilled` 當冷卻,set_main 的
+        #     去重 guard 讀到混義集合 → 放棄檔連切主圖也叫不動回補。這把只擋自動入列
+        #     (60s 輪詢 / 首筆 tick,經 `_backfill_wanted`),顯式切主圖照樣入列;
+        #     回補成功 discard、真退訂 discard、reconnect(換 session 是凍結 stub 的
+        #     逃逸維度)與 rollover clear。**不要**改判 `_backfill_timeouts > MAX`:
+        #     該 dict 成功不清,逾時過一次後成功的檔會整天繞過 set_main 去重(churn 回歸)。
+        self._backfill_gave_up: set[str] = set()
         #   `_backfill_timeout_handles` = 上面那條重排的 `loop.call_later` handle,per code。
         #     排了就要有取消點:close 之後醒來的 callback 會對已關閉的 engine 起
         #     `_backfill_pending` 帳並塞一筆沒有 worker 會取的 job;rollover 之後醒來的
@@ -553,6 +561,7 @@ class StockEngine:
                     # epoch(退訂時 +1,job 自帶取件時的 epoch,套用前比對),那是新的
                     # 不變式不是註解能帶過的,記 next-time。
                     self._backfilled.discard(code)
+                    self._backfill_gave_up.discard(code)
                     self._backfill_failed.pop(code, None)
                     self._tick_armed.discard(code)
                     self._forget_backfill_timeout(code)
@@ -621,6 +630,7 @@ class StockEngine:
                     # 回補記帳同以訂閱期為界(理由見 `set_watchlist` removed 迴圈):
                     # 主圖槽位真退訂時,那一檔的「今日已回補 / 失敗冷卻」一併作廢。
                     self._backfilled.discard(old)
+                    self._backfill_gave_up.discard(old)
                     self._backfill_failed.pop(old, None)
                     self._tick_armed.discard(old)
                     self._forget_backfill_timeout(old)
@@ -629,10 +639,14 @@ class StockEngine:
             if not is_futures_key(key):
                 await self._acquire_stkfut(key)
             # 已回補 / 在途不重排(next-time L69):來回切主圖曾讓 2455 一天重複回補
-            # 75 次(08-31 實測),每次 = SubHistory + 全量收割。切主圖「順便修補 live
-            # 缺口」的保險由 reconnect 清 `_backfilled` 承接(斷線缺口仍會補);真退訂
-            # 再切回的檔記帳已清,照樣入列。**只擋這兩道**,no_data / 冷卻不下沉到這裡
-            # (`group_snapshot` docstring:被冷卻擋掉會變成主圖整天補不回來)。
+            # 75 次(08-31 實測),每次 = SubHistory + 全量收割。「切主圖順手補 live
+            # 缺口」這條舊救援已不在不變式裡(pr-164 F-02):PING 斷線的缺口由
+            # reconnect 清 `_backfilled` 承接,但零推播自癒(`_heal_tick` R2)重掛
+            # 不通知 engine、不清記帳 —— 靜默期缺口當日補不回是已知殘餘(真解另案,
+            # 見 next-time;heal 時清記帳會把 churn 放大遠超修前,不要照字面補)。
+            # 真退訂再切回的檔記帳已清,照樣入列;逾時放棄檔記在 `_backfill_gave_up`
+            # 不在這把 → 顯式切主圖叫得動(pr-164 F-01)。**只擋這兩道**,no_data /
+            # 冷卻不下沉到這裡(`group_snapshot` docstring:被冷卻擋掉會變成主圖整天補不回來)。
             if key not in self._backfilled and self._backfill_pending.get(key, 0) == 0:
                 self._enqueue_backfill(key)
 
@@ -777,6 +791,7 @@ class StockEngine:
         return (
             code not in self._no_data
             and code not in self._backfilled
+            and code not in self._backfill_gave_up  # 逾時放棄冷卻(pr-164 F-01 分帳)
             and self._backfill_pending.get(code, 0) == 0
             and self._backfill_failed.get(code, 0) < _BACKFILL_MAX_FAILS
         )
@@ -1023,6 +1038,7 @@ class StockEngine:
         # ——昨天壞了三次的檔今天要重新有機會。`_backfill_pending` 不清,理由同 reconnect
         # (在途 job 自己會結清;跨日的 in-flight 另由 generation guard 作廢)
         self._backfilled.clear()
+        self._backfill_gave_up.clear()
         self._backfill_failed.clear()
         self._backfill_timeouts.clear()
         self._tick_armed.clear()
@@ -1091,6 +1107,7 @@ class StockEngine:
         # job 回來仍會各扣一次 → 旗標永久假、同一檔又被重複入列一次。斷線期間發出的
         # job 由 worker 自己走失敗路徑結清,不需要外力。
         self._backfilled.clear()
+        self._backfill_gave_up.clear()  # 換 session 是凍結 stub 的逃逸維度,放棄冷卻重新來
         self._tick_armed.clear()  # 成員靠重連後的首筆成交再補一次斷線缺口
         if self._main is not None:
             self._enqueue_backfill(self._main)
@@ -1156,10 +1173,12 @@ class StockEngine:
         # 限定 `_backfilled` 而不是所有檔:沒補過的檔本來就會被入列點涵蓋,無條件重跑
         # 等於讓每一檔的第一則 REALTIME 都多排一次 job。
         if (
-            (code == self._main or code in self._backfilled)
+            (code == self._main or code in self._backfilled or code in self._backfill_gave_up)
             and meta.upper_milli is not None
             and (meta.upper_milli, meta.lower_milli) != prev_limits
         ):
+            # 放棄檔也收:分帳前它們在 `_backfilled` 裡,這條救援(probe 實測 +1 次重排)
+            # 是逾時放棄後唯一的自動救援路,分帳不得把它拿掉(pr-164 F-01 複查)
             self._enqueue_backfill(code)
         # **期貨 instrument 不武裝換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
         # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它武裝 stage1 會在夜盤把
@@ -1200,8 +1219,8 @@ class StockEngine:
         ):
             self._rollover_stage2(tick)
         # **首筆當日成交 tick → 入列回補**(perf/opening-backfill-parallel S2):其餘入列點
-        # 全是需求驅動(set_main / 群組檢視 60 s 輪詢 / rollover 與 reconnect 只排主圖 /
-        # 漲跌停值變只認已補過的檔),08-28 開盤 09:00→09:02 零回補、直到 user 打開群組
+        # 全是需求驅動(set_main —— 已回補 / 在途不重排,pr-164 後非無條件 / 群組檢視
+        # 60 s 輪詢 / rollover 與 reconnect 只排主圖 / 漲跌停值變只認已補過與逾時放棄的檔),08-28 開盤 09:00→09:02 零回補、直到 user 打開群組
         # 檢視。不改成「訂閱當下入列」:08:14 開站對 TC4 建當日 TICKS 歷史訂閱只會
         # 30 s 逾時 ×3 再「放棄」(08-28 主圖 6207 實錄),40 檔 = 20 分鐘必敗 REQ;
         # 首筆成交才是「TC4 有東西可補」的正面訊號,薄股沒成交也不會卡住單工 worker。
@@ -1521,12 +1540,12 @@ class StockEngine:
                     code,
                     _BACKFILL_TIMEOUT_MAX_RETRIES,
                 )
-                # 放棄 = **當日不再入列**(與逾時旗標之前的行為逐字相同)。
-                # `group_snapshot` 那條 60s 輪詢的四道 guard 看得到的是 `_backfilled`
-                # / `_no_data` / 在途 / `_backfill_failed`,唯獨看不到逾時記帳 ——
-                # 不進 `_backfilled` 的話它會每 60s 把同一檔重新推回單工 worker,
-                # 重試上界形同虛設,而 TC4 歷史通道是整個群組檢視共用的稀缺資源。
-                self._backfilled.add(code)
+                # 放棄 = **當日不再自動入列**(60s 輪詢 / 首筆 tick 經
+                # `_backfill_wanted` 擋;不擋的話它會每 60s 把同一檔重新推回單工
+                # worker,重試上界形同虛設)。記在獨立的 `_backfill_gave_up` 而不是
+                # 借 `_backfilled`(pr-164 F-01):後者是 set_main 去重 guard 的判準,
+                # 混記會讓放棄檔連使用者顯式切主圖都叫不動回補。
+                self._backfill_gave_up.add(code)
             self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
             return
         except ConnectionError:
@@ -1579,6 +1598,7 @@ class StockEngine:
             if state is not None:
                 state.apply_backfill([t for t in ticks if t.trade_date == self._trade_date])
                 self._backfilled.add(code)  # 套用成功才記帳
+                self._backfill_gave_up.discard(code)  # 補回來了,放棄冷卻解除
         # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
         self._backfill_settled(code)
         self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})

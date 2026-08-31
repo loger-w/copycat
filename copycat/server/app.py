@@ -1612,7 +1612,8 @@ def create_app(
         await stock.set_main_contract(key)  # 含回補觸發(design §2.5)
         # `?tape=0` = 呼叫端沒有逐筆明細讀者(群組檢視點卡片只為換右欄標的)→ 省掉
         # 整份 tape。**`set_main_contract` 照打**(W-4):省的只有 payload,訂閱與回補
-        # 都還要靠它,漏掉的話點卡片換不了標的而畫面上只是「右欄沒資料」。
+        # (未回補檔;已回補 / 在途不重排,pr-164)都還要靠它,漏掉的話點卡片換不了
+        # 標的而畫面上只是「右欄沒資料」。
         #
         # 型別收 `str` 不收 `int`(D3'):`?tape=abc` 走全量比 422 好 —— 422 的 detail
         # 是 list 形,不符全站 `{"detail": {"error": code}}` 契約。
