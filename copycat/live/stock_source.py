@@ -39,10 +39,12 @@ _HEAL_START = _dt.time(8, 30)
 #: (tc4-market-facts:TradeStatus=1、`_note_push` 不分成交 / 簿更新),看門狗在那 5 分鐘本來就
 #: 不會誤判(08-26 / 08-27 兩日 log:該窗除整天在發的 6949 外個股零自癒)—— 所以這把**不**跟
 #: index session 一起關 13:25(pr-126 F-01:一起關對個股零收益,純失去收盤集合競價期間
-#: R1 / R2 / 健檢三條救援路;**在收盤試撮期訂閱死掉這個情境下**,個股當日重補只剩 `set_main_contract`
-#: / `_handle_reconnect` 會出手 —— 另兩個入列點「漲跌停值變」(`stock_engine.py` 只在 upper / lower
-#: 真的變動時,收件人含 `_backfilled`)與逾時重排該情境下不會觸發,群組 60 s 輪詢被 `_backfilled` 擋
-#: —— pr-126 F-02 / pr-128 F-04)。index session 吃下面另一把 `_INDEX_HEAL_END`。
+#: R1 / R2 / 健檢三條救援路;**在收盤試撮期訂閱死掉這個情境下**,個股當日重補只剩
+#: `_handle_reconnect`(PING 判斷線那條;零推播自癒 `_heal_tick` 重掛不通知 engine、不清記帳,
+#: 不算)與 `set_main_contract` **對未回補檔** —— 已回補檔被 set_main 去重 guard 擋(pr-164 起
+#: 非無條件,靜默缺口當日補不回是已知殘餘,見 next-time);另兩個入列點「漲跌停值變」
+#: (`stock_engine.py` 只在 upper / lower 真的變動時,收件人含 `_backfilled` 與逾時放棄檔)
+#: 與逾時重排該情境下不會觸發,群組 60 s 輪詢被 `_backfilled` 擋 —— pr-126 F-02 / pr-128 F-04)。index session 吃下面另一把 `_INDEX_HEAL_END`。
 #: 另三把時窗刻意**不**與本閘對齊:`signal_state._SESSION_END` / `verify._DOMAIN_END` 13:30
 #: (訊號 / 驗證域)、`stock_models` 試撮窗 13:25–13:30(標示用)。
 _STOCK_HEAL_END = _dt.time(13, 35)

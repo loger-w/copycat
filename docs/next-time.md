@@ -4,6 +4,10 @@
   成交已入券商快照、推播卻晚於 balance 查詢出手的那筆會被快照計一次、落地又重套一次(複查實測 qty 2→3),
   下一輪鏈 ~2 s 自癒。真堵 = 落地時對帳(該鍵快照張數已等於樂觀張數就不重套;有「同鍵兩筆只入帳一筆」殘餘邊界)。
   user 09-01 拍板先做輕(口徑註解 + 本留尾),與 60 s 洞同批等實錄再拍。
+- [ ] **零推播自癒重掛不通知 engine(pr-164 F-02 殘餘)**:`_heal_tick` R2 重掛訂閱不清 `_backfilled`,
+  靜默期的分鐘缺口當日補不回(「切主圖順手補」的舊救援已隨 set_main 去重 guard 移出不變式,三處註解
+  08-31 同批改口)。**不要照字面修** —— heal 以 60 s 門檻清記帳會把 churn 放大到遠超修前 75 次;
+  真解 = heal 發 per-code 事件或節流式 guard,另案。
 - [ ] **水位配對 token 化(pr-163 F-09)**:begin_snapshot ↔ set_positions 的 1:1 配對靠 client 三個守門旗標維持,
   balance 段超時 abandon 後遲到列被誤認新輪的縫隙裡,W2 會被 round-1 快照消耗 → 該輪退回修前少計行為(非新洞)。
   真堵 = begin_snapshot 回 token、set_positions 驗 token,消掉 store 一個跨呼叫可變欄位。user 09-01 拍板記留尾。
@@ -121,8 +125,8 @@
   **→ 08-30 已出貨(perf/opening-backfill-parallel)**:S1-a backfill 首頁 poll 改基底 `_collect_history` 退避;S1-b worker 出隊時整批 `prepare_backfill`(先全訂再收割);S2 🔴 自選成員**首筆當日成交 tick** 即入列(不做「訂閱當下入列」:08-28 主圖 6207 08:15 入列 → 30 s 逾時 ×2 → 「放棄」,40 檔 = 20 分鐘必敗 REQ)。harness 40 檔 40.72 s → 18.9 s → **0.87 s**。③ 真因 = 入列點全是需求驅動,09:02:08 user 打開群組檢視才有第一筆 `group-state`。**08-31 判準**:`grep "stock backfill" logs/server-20260831-*.log | awk '$2>="09:00:00" && $2<="09:01:00"'` 首筆 ≤ 09:00:05、自選全部完成 ≤ 09:00:30;09 點整點總筆數對照 08-28 的 313。L405 圖牆 DOM **未量**(user 不覺得卡,留著)。
 - [x] ~~**set_main 無條件重排回補去重**(08-30 /perf 旁支,user 拍板 next-time):~~ → 08-31 fix/backfill-enqueue-trio 出貨:set_main 只擋 `_backfilled` / 在途兩道(no_data / 冷卻刻意不下沉);斷線缺口保險由 reconnect 清 `_backfilled` 承接。08-31 實測 2455 一天 75 次重複回補是證據。原文:`GET /api/stock/state/{code}` → `set_main` → `_enqueue_backfill` 不看 `_backfilled` / 在途 —— 08-28 8358 一天 44 次、6213 41 次(612 次 state 請求),每次 = SubHistory + 全量收割數千 tick + `apply_backfill`。去重會失去「切主圖時順便修補 live 缺口」的保險(reconnect 已清 `_backfilled`,斷線缺口仍會補)。S1 之後每次重複只花 ~0.3 s,痛感大減,先觀察。
 - [x] ~~**開盤瞬間每檔回補兩次**(08-30 觀察):~~ → 08-31 log 核過**結案**:S2 後開盤窗(09:00–09:05)零 sub-second 雙發(08-28 的 1 秒 pattern 消失)。盤中 Δ0s 雙發(09:35 等)= 主圖 fresh subscribe 的「set_main 先入列、首則 REALTIME meta None→值再補一次」刻意設計(鎖停補判需要,stock_engine 註解記載),不改。原文:08-28 09:02–09:03 有 20 檔跑兩次(3042 09:02:20.944 / 09:02:21.976),第二次來自「漲跌停值變」入列點(首則帶 UpperLimitPrice 的 REALTIME 在回補完成後才到 → `prev_limits != meta`)。設計上刻意(補鎖停判定);S2 之後首筆 tick 與meta 同一則到 → 應只剩一次,08-31 log 核。
-- [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:
-- [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。要驗再開。
+- [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。
+- [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
 
 - [ ] **`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
