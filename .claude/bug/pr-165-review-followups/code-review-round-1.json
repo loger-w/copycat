@@ -1,0 +1,14 @@
+{
+  "fixed_point": "6e642ed3",
+  "standards": [
+    {"id": "S-1", "severity": "MED", "finding": "兩行新 INFO 形狀當場漂掉(daily 尾括號=status、period 尾括號=day),而 helper docstring 自己引「各寫一份必然漂移」", "disposition": "accepted — 統一為「bars %s: 日 K refetch 空手(%s),墊背舊快照 %s 根」,period 側括號欄放 tag;grep 錨點統一「墊背舊快照」"},
+    {"id": "S-2", "severity": "LOW", "finding": "test docstring 稱 _shaped「四個呼叫點」,實為三個(bars.py:502/512/532)—— 沿抄 pr-165 報告 #4 原句之誤", "disposition": "accepted — 改「三個」;報告已發布不回改,勘誤記 verification.md"},
+    {"id": "S-3", "severity": "LOW", "finding": "W 測試建了 clock 注入卻全程未推進(自 sibling TTL 測試複製的死鷹架)", "disposition": "accepted — 改 BarsCache() + 註明本路徑不吃 TTL"},
+    {"id": "S-4", "severity": "LOW", "finding": "bars.py is_partial_last 註解指「next-time 08-31 節」,該檔有兩個 08-31 節、懸空", "disposition": "accepted — 改「08-31 pr-165-review 留尾節」"}
+  ],
+  "spec": [
+    {"id": "P-1", "finding": "九項拍板全數落地、零 scope creep、零錯誤實作;三突變體 reviewer 獨立重注入 = 三殺三無誤殺;ISO 週分桶查曆屬實(08-27/28 = W35、08-31 = W36);報告雙檔與 root 版 cmp 零差;既有測試純 append 零刪除", "disposition": "no-action(核過)"},
+    {"id": "P-2", "finding": "驗證證據(突變體殺死紀錄 / 61→63 / INFO 真實環境判準)未落檔", "disposition": "accepted-partially — 突變體與母體證據本已在主 tree followups verification.md(reviewer 讀的是 worktree 內 #165 舊檔);實質採納第 ③ 點:補真實環境判準第 6 條(grep 錨點「墊背舊快照」)"}
+  ],
+  "disposition": "Standards 4/4 收(收修後 63 綠 + ruff + pyright 零項);Spec 核過 + 判準補一條。"
+}
