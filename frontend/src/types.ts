@@ -102,8 +102,11 @@ export interface CapitalOrder {
   code?: string | null;
 }
 
-/** 平倉可指定的庫存種類(wire `PositionCloseBody.kind`;後端 TradeKind 同字彙)。
- *  `daytrade_sell` = 無券空單(群益記成現股負股數;2026-08-30 校準後可平倉,回補 = 現股買)。 */
+/** 庫存種類:平倉(wire `PositionCloseBody.kind`)**與下單 `trade_kind`** 共用;
+ *  對應的後端型別是 `models.py::TradeKind` —— 後端另有**同名但只有三值**的
+ *  `models.py::PositionKind`(balance 解析中繼,不含 daytrade_sell),grep 對照別混。
+ *  `daytrade_sell` = 無券空單(群益記成現股負股數;2026-08-30 校準後可平倉,回補 = 現股買)。
+ *  與 `trade-kinds.ts::TradeKind` 刻意兩名獨立(交集 / 雙向斷言的機驗前提),不要合併。 */
 export type PositionKind = "cash" | "margin" | "short" | "daytrade_sell";
 
 /** 後端 `AvgSource` 同字彙(models.py):均價語意來源。執行期白名單(`ladder-position.ts::isAvgSource`)

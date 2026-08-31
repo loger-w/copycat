@@ -126,6 +126,15 @@ describe("positionEcon 邊界", () => {
     expect(long).toBe(short);
     expect(long).toBe(-703); // 0 − 51.3 − 651.3
   });
+
+  it("characterization:未知 kind 字串走全稅、無借券費(= margin 同款;收斂前 else 分支的行為)", () => {
+    // kind 是裸 wire 字串(舊 dist / 未來新值):稅路徑上不是 cash/daytrade_sell(不減半)、
+    // 不是 short(無借券費)—— 與 margin 逐位相同。收斂進 traits 表後這條釘住未知值政策。
+    const mystery = positionEcon(2, 100, 102_000, 1.8, "mystery", { avgSource: "fill", todayQty: 2 });
+    const margin = positionEcon(2, 100, 102_000, 1.8, "margin", { avgSource: "fill", todayQty: 2 });
+    expect(mystery).toEqual(margin);
+    expect(mystery.pnl).not.toBeNull();
+  });
 });
 
 describe("snapBreakEven 方向", () => {
@@ -192,18 +201,13 @@ describe("secPositionsOf", () => {
     expect(got[0]!.kind).toBe("cash");
   });
 
-  it("characterization:未知 kind 字串走全稅、無借券費(= margin 同款;收斂前 else 分支的行為)", () => {
-    // kind 是裸 wire 字串(舊 dist / 未來新值):稅路徑上不是 cash/daytrade_sell(不減半)、
-    // 不是 short(無借券費)—— 與 margin 逐位相同。收斂進 traits 表後這條釘住未知值政策。
-    const mystery = positionEcon(2, 100, 102_000, 1.8, "mystery", { avgSource: "fill", todayQty: 2 });
-    const margin = positionEcon(2, 100, 102_000, 1.8, "margin", { avgSource: "fill", todayQty: 2 });
-    expect(mystery).toEqual(margin);
-    expect(mystery.pnl).not.toBeNull();
-  });
 
-  it("排序 cash → margin → short,未知 kind 殿後(D13)", () => {
+  it("排序 cash → margin → short → 無券,未知 kind 殿後(D13)", () => {
+    // daytrade_sell 與未知同 order 3(穩定排序以輸入序分先後):order 打錯(mutation 3→0
+    // 全套曾綠,pr-166 F-01)無券列會排到前面 —— 同股號融資/融券 + 無券空單會共存,零訊號。
     const all = [
       pos({ kind: "wtf" }),
+      pos({ kind: "daytrade_sell", qty: -2 }),
       pos({ kind: "short", qty: -2 }),
       pos({ kind: "cash" }),
       pos({ kind: "margin" }),
@@ -213,6 +217,7 @@ describe("secPositionsOf", () => {
       "margin",
       "short",
       "wtf",
+      "daytrade_sell",
     ]);
   });
 
