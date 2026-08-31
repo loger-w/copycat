@@ -38,14 +38,22 @@ export interface KindTraits {
   order: number;
 }
 
-/** `Record` 交集:`TradeKind`(本檔標籤表推導)與 wire 型別 `PositionKind` 若值域
- *  漂開,缺的那個鍵讓這裡 tsc 紅 —— 「前端單一型別」靠這行機驗,零 runtime 產物。 */
+/** `Record` 交集:表**漏列 / 多列**鍵時 tsc 紅(pr-166 F-02 實測三方向)。它蓋不住的
+ *  兩向 —— 補了表但 `types.ts` 沒跟(A2)、`TRADE_KINDS` 單邊減值(B)—— 由下面的
+ *  `_KindDomainsMatch` 雙向斷言接手;「前端單一型別」的機驗合起來才完整,零 runtime 產物。 */
 export const KIND_TRAITS: Record<TradeKind, KindTraits> & Record<PositionKind, KindTraits> = {
   cash: { buyLocked: false, halfTaxToday: true, borrowFee: false, order: 0 },
   margin: { buyLocked: false, halfTaxToday: false, borrowFee: false, order: 1 },
   short: { buyLocked: false, halfTaxToday: false, borrowFee: true, order: 2 },
   daytrade_sell: { buyLocked: true, halfTaxToday: true, borrowFee: false, order: 3 },
 };
+
+type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Expect<T extends true> = T;
+/** 值域雙向相等機驗:`TradeKind`(標籤表推導)⇄ `PositionKind`(wire 型別)。
+ *  單邊加值 / 減值不跟,這行 TS2344(pr-166 F-02;實測同域編過、兩向皆紅。
+ *  `_SameDomain<A extends B, B extends A = A>` 型式是 circular constraint 編不過,不要換回)。 */
+export type _KindDomainsMatch = Expect<AssertEqual<TradeKind, PositionKind>>;
 
 /** 值域外字串(舊 dist / 舊後端 / 未來新 kind)的預設政策:全稅、無借券費、不鎖買側、
  *  殿後 —— 與收斂前各散點的 else 分支逐一相同(ladder-position characterization 釘住)。 */
@@ -57,7 +65,11 @@ export const UNKNOWN_KIND_TRAITS: KindTraits = {
 };
 
 /** kind(裸 wire 字串)→ 特性;查無 → `UNKNOWN_KIND_TRAITS`。
- *  未知值政策收斂在這一點,消費端不各自寫 else。 */
+ *  未知值政策收斂在這一點,消費端不各自寫 else。`Object.hasOwn` 不直接索引:
+ *  kind 是後端字串直傳,原型鏈鍵("toString")不可當表命中(`close-order.ts::kindOf`
+ *  同一書面決定;pr-166 F-03)。 */
 export function kindTraits(kind: string): KindTraits {
-  return (KIND_TRAITS as Record<string, KindTraits>)[kind] ?? UNKNOWN_KIND_TRAITS;
+  return Object.hasOwn(KIND_TRAITS, kind)
+    ? KIND_TRAITS[kind as TradeKind]
+    : UNKNOWN_KIND_TRAITS;
 }
