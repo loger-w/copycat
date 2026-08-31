@@ -192,6 +192,15 @@ describe("secPositionsOf", () => {
     expect(got[0]!.kind).toBe("cash");
   });
 
+  it("characterization:未知 kind 字串走全稅、無借券費(= margin 同款;收斂前 else 分支的行為)", () => {
+    // kind 是裸 wire 字串(舊 dist / 未來新值):稅路徑上不是 cash/daytrade_sell(不減半)、
+    // 不是 short(無借券費)—— 與 margin 逐位相同。收斂進 traits 表後這條釘住未知值政策。
+    const mystery = positionEcon(2, 100, 102_000, 1.8, "mystery", { avgSource: "fill", todayQty: 2 });
+    const margin = positionEcon(2, 100, 102_000, 1.8, "margin", { avgSource: "fill", todayQty: 2 });
+    expect(mystery).toEqual(margin);
+    expect(mystery.pnl).not.toBeNull();
+  });
+
   it("排序 cash → margin → short,未知 kind 殿後(D13)", () => {
     const all = [
       pos({ kind: "wtf" }),
