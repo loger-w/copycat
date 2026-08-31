@@ -344,7 +344,7 @@ def _heal_gate(
 def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
     from copycat.live import session as session_mod
     # 延遲 import:測試不觸 pyzmq/TC4
-    from copycat.live.tc4 import TXO_HEAL_SILENCE_SECS, HealPolicy, TC4QuoteSource
+    from copycat.live.tc4 import TXO_HEAL, TC4QuoteSource
 
     return TC4QuoteSource(
         port=_tc4_port(),
@@ -352,10 +352,7 @@ def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
         # REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill):TXO 是唯一直接用基底類的
         # session,基底預設全關 → 這裡顯式開 R1(60s 全場靜默 → 整批重掛)、R2 關(277 檔
         # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘 AND 交易日。
-        heal=HealPolicy(
-            silence_secs=TXO_HEAL_SILENCE_SECS,
-            active=_heal_gate(calendar, session_mod.in_txo_session),
-        ),
+        heal=replace(TXO_HEAL, active=_heal_gate(calendar, session_mod.in_txo_session)),
     )
 
 

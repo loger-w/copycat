@@ -39,7 +39,7 @@ class Leg:
     symbol: str
     source: str  # SOURCE_TC4 = 本引擎訂閱 / SOURCE_FUTURES_ENGINE = 讀既有引擎狀態
     #: 稀疏腿(事實見 tc4-market-facts SXF 節):豁免 TC4 R2 單 symbol 自癒、仍吃 R1 整批重掛
-    #: (`tc4.TC4QuoteSource(heal_sparse_symbols=)`)。設定檔選配 `"sparse": true`,只對 `source: tc4`
+    #: (`tc4.HealPolicy(sparse_symbols=)`)。設定檔選配 `"sparse": true`,只對 `source: tc4`
     #: 的腿有意義(base 腿不由 corr source 訂閱)。
     sparse: bool = False
 

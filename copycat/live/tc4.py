@@ -177,7 +177,7 @@ class HealPolicy:
 
     原本是 `TC4QuoteSource` 六個 `heal_*` kwargs,四個子類逐字轉發、`app` 四處逐項填 ——
     加一個旗標要動 tc4 簽名 + body、corr_source 簽名 + 轉發、app、四支測試(review Standards
-    Data Clump,next-time 08-27 留尾)。收攏後加欄位只動這裡 + `_heal_tick` 的讀者;子類用
+    Data Clump,next-time 08-27 留尾)。收攏後加欄位只動這裡 + `__init__` 的解構行 + `_heal_tick` 的讀者;子類用
     `dataclasses.replace(<MODULE>_HEAL, …)` 疊自己的門檻,測試同形。
     """
 
@@ -200,6 +200,12 @@ class HealPolicy:
     sparse_symbols: frozenset[str] = frozenset()
     #: 巡檢週期(秒)
     poll_secs: float = 5.0
+
+
+#: TXO session 的自癒門檻:R1 60 s、R2 關(277 檔深價外契約本就靜默)。四個 session 的
+#: 具名常數湊齊(STOCK_HEAL / FUTURES_HEAL / CORR_HEAL 在各自模組);閘由
+#: `app._default_source` `replace(TXO_HEAL, active=牆鐘 AND 交易日)` 帶。
+TXO_HEAL = HealPolicy(silence_secs=TXO_HEAL_SILENCE_SECS)
 
 
 def build_rt_request(request: str, session: str, symbol: str, window: tuple[str, str]) -> dict:
@@ -646,7 +652,7 @@ class TC4QuoteSource:
         R2(symbol 級):靜默超過門檻就重掛,母體 = 「曾有推播」**或**「訂閱已超過
         門檻卻從未推播」—— 後者是 08-18 個股面的實際形狀(部分死亡:同 session 其他
         腿還在流,R1 因此不成立,而那些從未推播的腿舊母體收不到,永遠沒人救)。
-        深價外契約那種本來就沒成交的 symbol 由 `heal_symbol_silence_secs=None` 整條
+        深價外契約那種本來就沒成交的 symbol 由 `HealPolicy.symbol_silence_secs=None` 整條
         豁免(TXO session),不靠窄母體擋。
         """
         # 連線狀態在兩道早退**之前**先看:旗標的復位不能綁在「時窗開著且有腿」那條路 ——

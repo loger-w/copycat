@@ -20,8 +20,8 @@ from copycat.live.session import in_txo_session
 from copycat.live.stock_source import Bar, parse_1k_bars, parse_dk_bars
 from copycat.live.tc4 import (
     BARS_POLL_DEADLINE,
-    HistoryTimeoutError,
     HealPolicy,
+    HistoryTimeoutError,
     TC4QuoteSource,
 )
 from copycat.tc4common import TC4_DEFAULT_PORT
