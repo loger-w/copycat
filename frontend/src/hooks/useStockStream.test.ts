@@ -916,3 +916,57 @@ describe("useStockStream(tape 選項)", () => {
     expect(stateUrls().at(-1)).toBe("/api/stock/state/2330");
   });
 });
+
+// 🟢 pr-167 #8:disposition 三條新分支(解碼 / accum 守門的 || 半邊 / pendingTrial 攜帶)
+// 零測試,失效方向全是靜默降級 —— 比照緊鄰的 trial 案補齊。
+describe("useStockStream(disposition 補寫,pr-167 #8)", () => {
+  it("watchlist_quote 的 disposition 進側欄報價;缺欄降級 false(不是 undefined)", async () => {
+    const { hook, ws } = await setup();
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "5483",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: true, disposition: true,
+      }),
+    );
+    expect(hook.result.current.watchlist["5483"]?.disposition).toBe(true);
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "9996",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: false,
+      }),
+    );
+    expect(hook.result.current.watchlist["9996"]?.disposition).toBe(false);
+  });
+
+  it("trial 同值、只有 disposition 翻轉也要補寫 accum(守門 || 的那半)", async () => {
+    // 拔掉 `|| acc.disposition !== q.disposition`:處置股 header 一直印(緩)而側欄是對的,
+    // 同畫面兩處對同一檔給不同答案 —— 這條就是那個紅燈。
+    const { hook, ws } = await setup();
+    const q = (disposition: boolean) => ({
+      type: "watchlist_quote", code: "2330",
+      p: null, chg_pct: null, vol: null, no_data: false, trial: true, disposition,
+    });
+    act(() => ws.emit(q(true)));
+    expect(hook.result.current.accum?.disposition).toBe(true);
+    act(() => ws.emit(q(false))); // trial 維持 true 不變,只翻 disposition
+    expect(hook.result.current.accum?.disposition).toBe(false);
+  });
+
+  it("refetch in-flight 期間的 disposition 轉態不被較舊的 snapshot 回捲(pendingTrial 攜帶)", async () => {
+    const { hook, ws } = await setup();
+    let resolveRefetch: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveRefetch = res; }),
+    );
+    act(() => ws.emit(T(4))); // 1→4 跳號 → refetch(snapshot 凍結於此刻,disposition 尚未轉態)
+    act(() =>
+      ws.emit({
+        type: "watchlist_quote", code: "2330",
+        p: null, chg_pct: null, vol: null, no_data: false, trial: false, disposition: true,
+      }),
+    );
+    act(() => { resolveRefetch(new Response(JSON.stringify(snap(4, [TICK1])))); }); // snap 缺欄 → false
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
+    expect(hook.result.current.accum?.disposition).toBe(true);
+  });
+});

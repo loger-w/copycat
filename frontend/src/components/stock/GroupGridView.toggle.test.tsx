@@ -95,8 +95,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) =>
-      // 圖牆層掛一份 `useCapitalOrders`(SC-6);不分 URL 回 overlay 的話它會拿 overlay
-      // 的殼當委託列表用 → `orders` undefined → 恆零標記,SC-5 的成交點案靜默 vacuous。
+      // 圖牆層掛一份 `useCapitalFills`(SC-6);不分 URL 回 overlay 的話它會拿 overlay
+      // 的殼當成交列表用 → `fills` undefined → 恆零標記,SC-5 的成交點案靜默 vacuous。
       String(url).includes("/api/capital/fills")
         ? new Response(JSON.stringify({ fills: [fillOf("2330", "s1"), fillOf("2317", "s2")] }))
         : new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null })),

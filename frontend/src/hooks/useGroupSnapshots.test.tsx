@@ -151,4 +151,12 @@ describe("groupPollInterval", () => {
     const now = new Date("2026-08-24T14:00:00");
     expect(groupPollInterval(now)).toBe(new Date("2026-08-26T09:01:00").getTime() - now.getTime());
   });
+
+  it("盤外回值秒級量化 + 1s 下限(day-bars-rollover 鐵律 (c);pr-164 F-05)", () => {
+    // 08:31:00.400 → 距 09:01 = 1_799_600ms,ceil 到整秒 = 30 分整(毫秒精度會讓
+    // 每次 render 求出不同值 → TQ 白做一組 clearInterval/setInterval)
+    expect(groupPollInterval(new Date("2026-08-25T08:31:00.400"))).toBe(30 * 60_000);
+    // 開點前最後一秒(09:00:59.5 → 500ms)吃 1s 下限,不排 0ms 級 timer 連環重排
+    expect(groupPollInterval(new Date("2026-08-25T09:00:59.500"))).toBe(1_000);
+  });
 });

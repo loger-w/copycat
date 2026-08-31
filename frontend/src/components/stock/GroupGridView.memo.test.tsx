@@ -179,7 +179,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
       </QueryClientProvider>
     );
     const { rerender } = render(ui(q1));
-    // 等成交點真的抵達 2330 那張卡(orders query settle 後才有);自檢:沒抵達的話
+    // 等成交點真的抵達 2330 那張卡(fills query settle 後才有);自檢:沒抵達的話
     // 兩張卡都是 EMPTY_FILLS,下面量的東西與成交點無關而恆綠
     await waitFor(() =>
       expect(hoisted.byCode.some((r) => r.code === "2330" && r.fills === 1)).toBe(true),

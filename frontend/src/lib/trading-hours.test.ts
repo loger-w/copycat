@@ -5,6 +5,7 @@ import {
   inFuturesAllDayHours,
   inFuturesTradingHours,
   inTradingHours,
+  msUntilTradingOpen,
 } from "@/lib/trading-hours";
 
 /** 2026-08 月曆:01 六 / 02 日 / 03 一 / 04 二 / 05 三 / 06 四 / 07 五 / 08 六。
@@ -123,5 +124,37 @@ describe("三支時段函式吃交易日曆(SC-9)", () => {
     // 週末仍恆假(假日集合空與否都一樣)
     expect(inTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
     expect(inFuturesTradingHours(SAT_AFTER_HOL(11, 0))).toBe(false);
+  });
+});
+
+describe("msUntilTradingOpen(pr-164 F-06:防護分支 + 基本幾何)", () => {
+  it("窗前:同日開點差(週三 08:00 → 09:01 = 61 分)", () => {
+    expect(msUntilTradingOpen(at(WED, 8, 0))).toBe(61 * 60_000);
+  });
+
+  it("收盤後:次一交易日開點(週三 14:00 → 週四 09:01 = 19h01m)", () => {
+    expect(msUntilTradingOpen(at(WED, 14, 0))).toBe(19 * 3_600_000 + 60_000);
+  });
+
+  it("週五收盤後 → 週一開點(跳過週末 = 67h01m)", () => {
+    expect(msUntilTradingOpen(at(7, 14, 0))).toBe(67 * 3_600_000 + 60_000);
+  });
+
+  it("次日是假日 → 再次日開點(43h01m)", () => {
+    setHolidays(["2026-08-06"]);
+    expect(msUntilTradingOpen(at(WED, 14, 0))).toBe(43 * 3_600_000 + 60_000);
+  });
+
+  it("14 天窮盡 → 24h fallback(「日曆異常不空轉」的唯一保證)", () => {
+    // 今天(週三 08-05)開點已過 + 未來 14 個日曆日的平日全設假 → 迴圈窮盡
+    setHolidays([
+      "2026-08-06", "2026-08-07", "2026-08-10", "2026-08-11", "2026-08-12",
+      "2026-08-13", "2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19",
+    ]);
+    expect(msUntilTradingOpen(at(WED, 10, 0))).toBe(24 * 3_600_000);
+  });
+
+  it("開點前最後一秒回原始毫秒差(1s 下限與秒級量化在 groupPollInterval 那層)", () => {
+    expect(msUntilTradingOpen(new Date(2026, 7, 5, 9, 0, 59, 500))).toBe(500);
   });
 });
