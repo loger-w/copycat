@@ -12,8 +12,10 @@
   不把後面的日子誤釘成空(review P1-2)。
 - **當日段**:短 TTL(預設 30s,短於前端 60s 輪詢),讓盤中最後一根會前進(SC-10)。
 
-`tf="D"` 不走兩段式:日 K 當日內不過期,整份 per (code, today) memo 即可(D-15:
-key 不含 days)。
+`tf="D"` 不走兩段式,整份 per (code, today) memo(D-15:key 不含 days),但有一道
+**定稿界**(`DAILY_FINAL_TIME`,bug/futures-daily-cache-night):界前寫入的快照(今日
+bar 仍在進行)過界即作廢一次,界後寫入視為定稿、釘到跨日 prune。作廢後 refetch 拿空手
+(TC4 關/忙)→ 墊背回舊快照(`daily_stale`)—— 沒消息不可蓋掉舊消息。
 
 **空結果的處理(round3 修訂)**:TC4 失敗與真無資料在上游不可分,所以空結果**不可
 永久 cache** —— 否則斷線恢復後的重試路徑被釘死。但完全不 cache 也不行:TC4 查無該檔
@@ -58,6 +60,15 @@ DAILY_LONG_MAX_BARS = 1500  # 不截斷 5 年(留餘裕);上限只為防呆
 #: 10 分鐘 = 「TC4 把上一個台北日的尾根寫進 1K 分頁」的寬限;比它更長只是多付幾次
 #: 歷史段往返(而且午夜本來就沒什麼人在看盤),更短則救不到真正晚寫的那幾根(TZ-2)。
 MIDNIGHT_BUFFER_END = _dt.time(0, 10)
+
+#: 日 K 快照的**定稿界**(台北牆鐘;bug/futures-daily-cache-night)。界前寫入的 `_daily`
+#: memo(今日 bar 仍在進行)過界即作廢一次;界後寫入視為定稿。少了這道界,早上首抓的
+#: 部分 bar 釘到午夜 —— 期貨 15:00 錨定日翻頁後,前端 `futures-overlay` 要前一交易日的
+#: **完整** D bar 當 CDP/MA 基準,15:01–24:00 拿到的全是早上那截,圖照樣畫得出來、
+#: 零錯誤訊號。取 14:00:晚於全部日盤收盤(現貨 13:30/13:33、期貨日盤 13:45)留 TC4
+#: 把定稿寫進 DK 的寬限(寫入時點未實測,界後寫入即永久 → 寬限要給足),早於 15:00
+#: 夜盤開盤 / 錨定翻頁(消費者最早需要點 15:01)。成本上界 = 每 code 每天多一次 DK 取數。
+DAILY_FINAL_TIME = _dt.time(14, 0)
 
 
 def _now_time() -> _dt.time:
@@ -186,6 +197,10 @@ class BarsCache:
         #: tf="D" 一律傳 days=0。**原因要存**:15s 內的重複請求若一律回 ok,
         #: 「還在等 TC4」就被快取洗成「這檔沒資料」(SC-5)。
         self._empty: dict[tuple[str, str, int], tuple[float, BarsStatus]] = {}
+        #: 定稿界(`DAILY_FINAL_TIME`)**之前**寫入的 `_daily` 鍵:過界後 `daily_get`
+        #: 視為過期(entry 本體保留,`daily_stale` 當墊背)。用集合不改 `_daily` 值型別
+        #: —— 與 `_daily_tag` 分開存的同一條理由(個股路徑呼叫點都吃 `list[Bar]`)。
+        self._daily_pre_final: set[tuple[str, str]] = set()
         self._ttl = ttl
         self._clock = clock
 
@@ -286,6 +301,7 @@ class BarsCache:
             del self._daily[key]
         for key in [k for k in self._daily_tag if k[1] != today_iso]:
             del self._daily_tag[key]
+        self._daily_pre_final = {k for k in self._daily_pre_final if k[1] == today_iso}
         now = self._clock()
         for key in [
             k
@@ -297,15 +313,33 @@ class BarsCache:
         for key in [k for k, e in self._empty.items() if now - e[0] >= EMPTY_TTL_SECS]:
             del self._empty[key]
 
-    # ---- 日 K(per (code, today) memo)----
+    # ---- 日 K(per (code, today) memo + 定稿界)----
 
     def daily_get(self, code: str, today: str) -> list[Bar] | None:
+        entry = self._daily.get((code, today))
+        if entry is None:
+            return None
+        if (code, today) in self._daily_pre_final and _now_time() >= DAILY_FINAL_TIME:
+            return None  # 界前快照過界即過期;entry 留給 `daily_stale` 墊背
+        return entry
+
+    def daily_stale(self, code: str, today: str) -> list[Bar] | None:
+        """過不過期都回 —— 過期後 refetch 拿空手(TC4 關/忙)時的墊背。
+
+        沒有這條的話,定稿界會把「盤後 TC4 關著」(已知常態)從「顯示早上快照」
+        惡化成「整片空白到午夜」。呼叫端只在 fetch 失敗路徑用它,status/tag 照實帶。
+        """
         return self._daily.get((code, today))
 
     def daily_put(self, code: str, today: str, bars: list[Bar]) -> None:
         if not bars:
             return  # don't-cache-empty
         self._daily[(code, today)] = bars
+        # 界前寫入 → 記下「今日 bar 可能還在進行」;界後寫入 → 定稿(含覆寫舊標記)
+        if _now_time() < DAILY_FINAL_TIME:
+            self._daily_pre_final.add((code, today))
+        else:
+            self._daily_pre_final.discard((code, today))
 
     # ---- 資料源標籤(大盤 meta;cache hit 也要還原正確 tag)----
 
@@ -328,7 +362,9 @@ async def build_daily(
     # 回的是**存入時的原因**,不是 ok —— 洗白等於讓「還在等」在 15s 內變成「沒資料」。
     marked = cache.empty_status(code, "D", 0)
     if marked is not None:
-        return BarsResult([], marked)
+        # 定稿界作廢後的失敗窗:有舊快照就墊背(帶標記的原因,不洗白)
+        stale = cache.daily_stale(code, today.isoformat())
+        return BarsResult(stale, marked) if stale is not None else BarsResult([], marked)
     start = today - _dt.timedelta(days=DAILY_WINDOW_DAYS)
     fetched, raw_status = await fetch(code, "D", start.isoformat(), today.isoformat())
     status = _coerce_status(raw_status)
@@ -336,9 +372,10 @@ async def build_daily(
     cache.daily_put(code, today.isoformat(), bars)
     if bars:
         cache.empty_clear(code, "D", 0)
-    else:
-        cache.empty_mark(code, "D", 0, status)
-    return BarsResult(bars, status)
+        return BarsResult(bars, status)
+    cache.empty_mark(code, "D", 0, status)
+    stale = cache.daily_stale(code, today.isoformat())
+    return BarsResult(stale, status) if stale is not None else BarsResult([], status)
 
 
 def _period_key(stamp: str, period: str) -> str | None:
@@ -437,7 +474,7 @@ async def build_period(
         tag = cache.daily_tag_get(key, day) or "unavailable"
         return TaggedBars((cached if period == "D" else aggregate_period(cached, period)), tag)
     if cache.empty_status(key, "D", 0) is not None:
-        return TaggedBars([], "unavailable")
+        return _period_stale_or_empty(cache, key, day, period)
     start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
     daily, tag = await fetch(code, "D", start.isoformat(), day)
     daily = daily[-DAILY_LONG_MAX_BARS:]
@@ -445,11 +482,21 @@ async def build_period(
     if daily:
         cache.daily_tag_put(key, day, tag)
         cache.empty_clear(key, "D", 0)
-    else:
-        # 大盤路徑的空態表述走自己的 source tag(`unavailable`),不吃三態 status ——
-        # 存 "ok" = 現況等價,只是讓 `_empty` 的值型別一致(本輪 out of scope)
-        cache.empty_mark(key, "D", 0, "ok")
-    return TaggedBars((daily if period == "D" else aggregate_period(daily, period)), tag)
+        return TaggedBars((daily if period == "D" else aggregate_period(daily, period)), tag)
+    # 大盤路徑的空態表述走自己的 source tag(`unavailable`),不吃三態 status ——
+    # 存 "ok" = 現況等價,只是讓 `_empty` 的值型別一致(本輪 out of scope)
+    cache.empty_mark(key, "D", 0, "ok")
+    return _period_stale_or_empty(cache, key, day, period)
+
+
+def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) -> TaggedBars:
+    """定稿界作廢後 refetch 拿空手(或 15s 負向窗內)的墊背:有舊快照回舊快照 + 舊 tag,
+    否則維持原本的空態表述。"""
+    stale = cache.daily_stale(key, day)
+    if stale is None:
+        return TaggedBars([], "unavailable")
+    tag = cache.daily_tag_get(key, day) or "unavailable"
+    return TaggedBars((stale if period == "D" else aggregate_period(stale, period)), tag)
 
 
 async def build_minute(
