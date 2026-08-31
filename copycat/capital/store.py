@@ -293,6 +293,8 @@ class CapitalStore:
         - avg_source:新倉 / 翻倉 = "fill"(純成交價);加碼沿用舊來源(broker 含費均價與純價加權,
           誤差只在新增那幾張的買費、鏈落地即消);減碼沿用;均價 None 時 None。today_qty 每次重算。
         - 只在 `_positions_seeded`(券商快照落地過)之後套;重播 / 開機前的成交只累計。
+          另一呼叫點 = `set_positions` 落地重套水位後增量(該路徑由水位把關:
+          未 seeded 時水位恆 None、全數標已套用,不會走到這裡)。
         - 歸零 → 移除該列。
         """
         if a.buy_sell not in ("B", "S") or a.filled_qty <= 0 or not a.stock_no:
@@ -585,19 +587,33 @@ class CapitalStore:
             # 重播會把當日成交再送一輪:關掉樂觀套用直到下一次快照落地(review F-02)
             self._positions_seeded = False
             # 水位一併丟:重播的成交是歷史不是「水位後增量」,留著會在下一次落地被
-            # 重套成幻影加倉(与 F-02 同一類洞,方向相反)
+            # 重套成幻影加倉(與 F-02 同一類洞,方向相反)
             self._snapshot_watermark = None
 
     def begin_snapshot(self) -> None:
         """balance 查詢出手當下呼叫(client._maybe_query_balance):記下涵蓋水位。
-        之後第一次 set_positions 落地消耗它;查詢失敗重發只是覆寫,無累積語意。"""
+        之後第一次 set_positions 落地消耗它;查詢失敗重發只是覆寫,無累積語意。
+
+        未 seeded(開機第一圈 / clear 後重播中)記 None 不記空 dict:backlog 還沒
+        重播完,此刻的空單集不是「查詢出手時的累計量」;記 {} 會讓落地把重播的每筆
+        當日成交當「水位後增量」重套到快照上(今買 1 顯示 2、平倉鈕可按;pr-163 F-01)。
+        None = 快照即真相。"""
         with self._lock:
-            self._snapshot_watermark = {
-                a.seq_no: (a.filled_qty, a.fill_value) for a in self._orders.values()
-            }
+            self._snapshot_watermark = (
+                {
+                    a.seq_no: (a.filled_qty, a.fill_value)
+                    for a in self._orders.values()
+                    # 零成交單是 no-op(消耗端 get 預設 (0, 0.0) 同義),鎖內少複製(F-10)
+                    if a.filled_qty
+                }
+                if self._positions_seeded
+                else None
+            )
 
     def set_positions(self, positions: list[Position]) -> None:
-        """全量替換。同 (股號, 種類) 重複列 = 後到者勝並留 warning:
+        """全量替換後,重套快照水位後的增量成交(見迴圈註;結果列數可能 ≠ len(positions))。
+
+        同 (股號, 種類) 重複列 = 後到者勝並留 warning:
         複合鍵下重複鍵是上游異常訊號(對照 merge_fut_positions 的淨額合併 warning),
         靜默 last-wins 會讓丟掉的張數無跡可尋 — 但不在此做去重補償,寧可讓訊號浮出來。"""
         with self._lock:
@@ -626,9 +642,12 @@ class CapitalStore:
                 new[key] = self._with_today_qty_locked(p)
             self._positions = new
             # 快照涵蓋的成交 = 水位(balance 查詢出手時刻)前的累計量:標「已套用」
-            # (同一筆既在快照裡又再套一次 = 重複計);水位後才到的成交,快照取數必然
-            # 沒看到 → 落地後重套於快照之上 —— 全標已套用會把鏈飛行中的成交吞掉,
-            # 部位倒退 ~2 s 直到下一輪鏈(next-time L57,user 2026-08-31 拍板只做水位)。
+            # (同一筆既在快照裡又再套一次 = 重複計);水位後才到的成交視為快照沒看到
+            # → 落地後重套於快照之上 —— 全標已套用會把鏈飛行中的成交吞掉,部位倒退
+            # ~2 s 直到下一輪鏈(next-time L57,user 2026-08-31 拍板只做水位)。
+            # 涵蓋判定以**本機到達序**為準,與券商入帳序的偏差是已知殘餘:成交已入
+            # 快照、推播卻晚於查詢出手的那筆,會被快照計一次、落地又重套一次
+            # (多計向,下一輪鏈 ~2 s 自癒;pr-163 F-02,對稱留尾見 next-time)。
             # 無水位 = 涵蓋到此刻全部(開機首刷 / clear 後重播:重播成交是歷史)。
             watermark = self._snapshot_watermark
             self._snapshot_watermark = None
@@ -642,9 +661,20 @@ class CapitalStore:
                 a.applied_qty = covered // unit
                 a.applied_shares = a.applied_qty * unit
                 a.applied_value = covered_value * (a.applied_shares / covered) if covered else 0.0
-                if a.filled_qty // unit > a.applied_qty:
-                    # 水位後增量重套(不套類別 / 未滿張由 _apply_fill_locked 自行早退)
-                    self._apply_fill_locked(a)
+                delta = a.filled_qty // unit - a.applied_qty
+                if delta > 0:
+                    # 水位後增量重套(不套類別 / 未滿張由 _apply_fill_locked 自行早退;
+                    # 拒套類別會因此把早退 WARNING 多印一行 —— 一次性非洪水,接受(F-06))
+                    if self._apply_fill_locked(a):
+                        # 全鏈唯一讓 store 部位「故意不等於」券商快照的地方:留痕供對帳(F-03)
+                        logger.info(
+                            "快照落地重套水位後增量: %s %s %s %d 張/口(水位 %d 股)",
+                            a.seq_no,
+                            a.stock_no,
+                            a.buy_sell,
+                            delta,
+                            covered,
+                        )
             self._positions_seeded = True
 
     def positions(self) -> list[Position]:

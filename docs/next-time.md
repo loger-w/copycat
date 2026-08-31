@@ -1,3 +1,13 @@
+## 2026-09-01(pr-review #163/#164/#166/#167 四份收修 留尾)
+
+- [ ] **水位多計向(pr-163 F-02,對稱留尾,與上方「倒退保護 60 s 洞」成對)**:涵蓋判定以本機到達序為準,
+  成交已入券商快照、推播卻晚於 balance 查詢出手的那筆會被快照計一次、落地又重套一次(複查實測 qty 2→3),
+  下一輪鏈 ~2 s 自癒。真堵 = 落地時對帳(該鍵快照張數已等於樂觀張數就不重套;有「同鍵兩筆只入帳一筆」殘餘邊界)。
+  user 09-01 拍板先做輕(口徑註解 + 本留尾),與 60 s 洞同批等實錄再拍。
+- [ ] **水位配對 token 化(pr-163 F-09)**:begin_snapshot ↔ set_positions 的 1:1 配對靠 client 三個守門旗標維持,
+  balance 段超時 abandon 後遲到列被誤認新輪的縫隙裡,W2 會被 round-1 快照消耗 → 該輪退回修前少計行為(非新洞)。
+  真堵 = begin_snapshot 回 token、set_positions 驗 token,消掉 store 一個跨呼叫可變欄位。user 09-01 拍板記留尾。
+
 ## 2026-08-31(pr-165-review 留尾)
 
 - [ ] **大盤頁 tf=D 的 `is_partial_last` 要不要吃定稿界**(pr-165-review #5):日曆日判準讓 14:00–24:00 印「最後一根未收盤」
@@ -90,7 +100,10 @@
 - [x] ~~**`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。~~
   → 08-31 fix/position-snapshot-no-regress 出貨(水位修法,user 拍板只做水位):`store.begin_snapshot()` 記 balance 查詢
   出手時刻每張單累計成交量,`set_positions` 落地只把水位前標「已套用」、水位後增量經 `_apply_fill_locked` 重套於快照之上;
-  `clear()` 連水位一起丟(重播不幻影加倉)。紅測試 = test_fill_latency `test_chain_landing_does_not_regress_fill_arrived_in_flight`。
+  重播/開機(未 seeded)一律不記水位(`begin_snapshot` 記 None = 快照即真相;pr-163 F-01 收修 ——
+  修前只有零 prod caller 的 `clear()` 受保護,每次開機都走的 ConnectByID backlog 路徑會被空水位 `{}` 重套)。
+  紅測試 = test_fill_latency `test_chain_landing_does_not_regress_fill_arrived_in_flight` + test_store
+  `test_boot_watermark_before_backlog_does_not_reapply_replayed_fills`。
 - [ ] **倒退保護(R1 留尾,待實錄再拍)**:成交發生在 balance 查詢出手**前**、但群益報表自身落後(> 0.5 s debounce)
   → 快照仍舊、水位判不出 → 倒退最長 60 s(L642「少一檔 / 多一檔 60s」樣態)。修法候選 =「近 N 秒內有樂觀成交的鍵」
   落地若倒退則保留樂觀值 + 立即重查;TTL 要拍板(user 08-31:「這個問題先緩緩」)。下次盤中遇到部位消失 >5 s 時抓
