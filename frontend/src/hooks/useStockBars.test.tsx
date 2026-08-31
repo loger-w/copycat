@@ -174,10 +174,6 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
     return urls().filter((u) => u.includes("/api/stock/bars")).length;
   }
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("tf=D 空 + timeout:20s 後真的重打", async () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ bars: [], status: "timeout" })),

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
-import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/lib/day-bars-rollover";
+import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollover";
 import { inTradingHours } from "@/lib/trading-hours";
 
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
@@ -96,20 +96,19 @@ export function useStockBars(
     queryFn: () => fetchBars(code as string, tf, days),
     enabled,
     retry: 1,
-    // 日 K:以「上次落地時刻」算到它之後的第一個午夜(理由見 `msUntilDayRollover`)
-    staleTime: isDaily ? (q) => msUntilDayRollover(q.state.dataUpdatedAt) : 0,
+    // 日 K 的新鮮度政策整組在 `lib/day-bars-rollover.ts`(三支日 K hook 同動,改政策只改那裡)
+    staleTime: isDaily ? dayBarsStaleTime : 0,
     // 函式形式:TQ 每次 interval 到期**與每次 render** 都會重新求值 → 開盤/收盤的開關、日 K 的
     // 下一個午夜都不依賴外部 re-render(值形式只在 render 當下求值,冷門股沒推播就不會自動開始
     // 輪詢 — review P2-4);回值一變 TQ 就重排計時器,所以日 K 那條回整秒值。
     // data 必須讀 `query.state.data`:閉包裡的 data 恆為訂閱當下的初值(undefined),
     // 空態轉 timeout 後永遠不會開始 20s 重試(review R3)。
     // `barsPollInterval` 先判(SC-4 的 20 s 空態重試優先於日界);日 K 它回 false 才輪到
-    // 「失敗 60 s 重試 / 下一個午夜」(refetch 失敗時 TQ 保留舊 data 但 status 轉 error;
-    // 個股頁本來就沒有 `active` 閘,error 只在 HTTP 非 2xx,量級見 `DAY_ERROR_RETRY_MS`)。
+    // lib 的「失敗 60 s 重試 / 下一個午夜」政策(個股頁本來就沒有 `active` 閘)。
     refetchInterval: (query) => {
       const poll = barsPollInterval(query.state.data, isDaily, inTradingHours());
       if (!isDaily || poll !== false) return poll;
-      return query.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
+      return dayBarsRefetchInterval(query);
     },
   });
 }
