@@ -994,3 +994,37 @@ def test_boot_watermark_before_backlog_does_not_reapply_replayed_fills() -> None
     )
     p = s.position_for("4989")
     assert p is not None and p.qty == 1
+
+
+def test_fills_keep_futures_night_session_across_midnight() -> None:
+    """pr-167 F-02:期貨近全軸跨兩個日曆日(D−1 15:01 → D 13:45)。昨晚 22:30 的成交
+    過了午夜仍屬同一錨定交易日,fills() 必須續回(修前只留「到達本機日 == 今天」,
+    00:00 起夜盤成交三角靜默消失);前一錨定日的列在翻頁後才 prune。"""
+    day = ["20260831"]  # 週一
+    clock = ["22:30"]
+    s = CapitalStore(today=lambda: day[0], now_hhmm=lambda: clock[0])
+    s.set_positions([])
+    s.apply_reply(
+        _evt(seq=SEQ_A, market="TF", stock="TXFI6", typ="D", qty="1", price="23000", time="22:30:00")
+    )
+    assert [f.price for f in s.fills()] == [23000.0]
+    day[0], clock[0] = "20260901", "01:00"  # 跨午夜:夜盤後半,同一錨定交易日(週二)
+    assert [f.price for f in s.fills()] == [23000.0]
+    day[0], clock[0] = "20260901", "15:30"  # 錨定日翻頁(→ 週三):昨晚那筆才落出
+    assert s.fills() == []
+
+
+def test_fills_friday_night_survive_weekend_to_monday() -> None:
+    """pr-167 F-02 複查校正的那半:「今+昨」不夠 —— 週五夜盤錨定週一(隔週末),
+    週一整個交易日都要回得到週五 / 週六到達的夜盤成交。"""
+    day = ["20260828"]  # 週五
+    clock = ["22:00"]
+    s = CapitalStore(today=lambda: day[0], now_hhmm=lambda: clock[0])
+    s.set_positions([])
+    s.apply_reply(
+        _evt(seq=SEQ_A, market="TF", stock="TXFI6", typ="D", qty="1", price="23000", time="22:00:00")
+    )
+    day[0], clock[0] = "20260831", "09:10"  # 週一日盤
+    assert [f.price for f in s.fills()] == [23000.0]
+    day[0], clock[0] = "20260831", "15:10"  # 週一 15:01 翻頁 → 錨定週二,週五夜盤落出
+    assert s.fills() == []
