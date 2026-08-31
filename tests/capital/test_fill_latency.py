@@ -14,7 +14,7 @@ from pathlib import Path
 
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
-from tests.capital.balance_rows import RAW_T_HELD
+from tests.capital.balance_rows import RAW_T_HELD, balance_variant
 from tests.capital.fake_com import FakeCom
 from tests.capital.profit_rows import PNL_3357_MARGIN, pnl_variant
 
@@ -118,3 +118,52 @@ def test_broker_chain_still_overrides_optimistic_fill(tmp_path: Path) -> None:
     fut = client.store.position_for("TXFI6")
     assert sec is not None and sec.qty == 3 and sec.avg_price == 150.55
     assert fut is not None and fut.qty == 2
+
+
+def test_chain_landing_does_not_regress_fill_arrived_in_flight(tmp_path: Path) -> None:
+    """倒退 repro(next-time L57):balance 查詢出手後、落地前又有成交 —— 快照取數
+    早於 fill B,落地的全量覆蓋不得把樂觀套用的 fill B 倒退掉(user 08-28:
+    「樂觀更新不該被資料拿到後改動」;prod 症狀 = 部位閃回舊值 ~2 s / 少一檔 60 s)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    client.store.set_positions([])  # 開機首次快照已落地
+    client._handle_reply(_fill_evt_raw(seq="S1"))  # fill A → 樂觀 1 張
+    client._mark_balance_dirty(0.0)
+    client._pump_once()
+    assert any(e[0] == "get_real_balance" for e in com.sent), "balance 查詢未出手"
+    # 券商取數時刻 = 查詢出手當下:只看得到 fill A(1 張)
+    client._handle_balance(balance_variant(RAW_T_HELD, {11: "1000", 14: "1000"}))
+    client._handle_balance("##")
+    client._pump_once()
+    # fill B 在鏈飛行中(損益段未回)到達 → 樂觀 2 張
+    client._handle_reply(_fill_evt_raw(seq="S2"))
+    mid = client.store.position_for("3357")
+    assert mid is not None and mid.qty == 2
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(_PROFIT_ROW)
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    client._pump_once()
+    p = client.store.position_for("3357")
+    assert p is not None and p.qty == 2, (
+        f"快照落地把鏈飛行中的成交倒退:qty={p.qty if p else None}"
+    )
+
+
+def test_fill_covered_by_watermark_is_not_reapplied(tmp_path: Path) -> None:
+    """水位護欄的另一半:查詢出手**前**的成交已在快照裡,落地時不得再套一次(雙計)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    client.store.set_positions([])
+    client._handle_reply(_fill_evt_raw(seq="S1"))  # fill A → 樂觀 1 張
+    client._mark_balance_dirty(0.0)
+    client._pump_once()  # 查詢出手,水位涵蓋 fill A
+    client._handle_balance(balance_variant(RAW_T_HELD, {11: "1000", 14: "1000"}))  # 快照含 A
+    client._handle_balance("##")
+    client._handle_profit("000,查詢成功")
+    client._handle_profit(_PROFIT_ROW)
+    client._handle_profit("##,,,,")
+    client._handle_open_interest("##")
+    client._pump_once()
+    p = client.store.position_for("3357")
+    assert p is not None and p.qty == 1, f"水位前成交被重套成雙計:qty={p.qty if p else None}"
