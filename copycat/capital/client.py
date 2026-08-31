@@ -662,9 +662,12 @@ class CapitalClient:
         if self._fill_seen_at is not None and opt_fut != truth_fut:
             logger.info("期貨部位鍵差異(樂觀 vs 券商): %s vs %s", sorted(opt_fut), sorted(truth_fut))
         self.store.set_positions(merged)
-        self._log_chain_stage("部位落地 %d 列", len(merged))
+        # 落地後 store 列數 ≠ len(merged):水位後增量重套可能加列(新倉)/ 刪列(沖銷歸零)
+        # —— log 與 count 讀 store 實況,才對得上重套 INFO(pr-163 F-05)
+        landed = len(self.store.positions())
+        self._log_chain_stage("部位落地 %d 列", landed)
         self._fill_seen_at = None
-        self._emit({"event": "capital_position", "data": {"count": len(merged)}})
+        self._emit({"event": "capital_position", "data": {"count": landed}})
 
     def _log_chain_stage(self, what: str, *args: object) -> None:
         """回查鏈進度(F5 觀測)。成交觸發的輪印 INFO 並附「自成交回報到達起 N ms」
