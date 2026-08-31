@@ -48,6 +48,9 @@ D+1 00:01:01,斷言 `tf=D` 恰 2 發且 `data.bars` 換成「D 完成 + D+1 部�
   HTTP 非 2xx,不是 XR-4 擋的每 60 s SubHistory 成本)。分 K 分支逐字不變。
 - `useStockBars.ts`:`staleTime: isDaily ? (q) => msUntilDayRollover(...) : 0`;`refetchInterval` 先 `barsPollInterval`,`!isDaily || poll !== false`
   原樣回傳,日 K 才 `error → 60 s`、否則到下一個午夜。分 K 分支經 `barsPollInterval` 原樣回傳。
+- (追記,pr-159-followups Std S-F2)以上兩支 hook 的 staleTime / refetchInterval 內聯運算式為**當時實作快照** ——
+  fix/pr-159-review-followups(F-02)後已收進 `lib/day-bars-rollover.ts::dayBarsStaleTime / dayBarsRefetchInterval`,
+  並加 F-01 空態閘(`retryEmpty`)。
 - 測試:market 8 條(round-1 後含月 K it.each)/ stock 6 條(pr-159-review F-03 回校;含 slack 窗內每 100 ms 重繪 40 s 那條、同一秒重繪 setInterval 零重排、午夜失敗 60 s 重試、
   背景分頁回前景;market 另有週 K 同分支 + active=false 跨午夜再切回;stock 另有 20 s 空態重試優先於日界)。
 
