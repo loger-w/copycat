@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date as _date
 from datetime import datetime as _datetime
+from datetime import time as _time
+from datetime import timedelta as _timedelta
 from datetime import time as _clock_time
 from datetime import timedelta as _timedelta
 from pathlib import Path
@@ -83,7 +85,12 @@ from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
 from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
-from copycat.trading_calendar import TradingCalendar, resolve_trade_date
+from copycat.live.session import session_key
+from copycat.trading_calendar import (
+    TradingCalendar,
+    resolve_trade_date,
+    resolve_trade_date_before,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +348,31 @@ def _heal_gate(
     return lambda: calendar.is_trading_day(_session_date()) and clock_gate()
 
 
+def _txo_auto_backfill_date(calendar: TradingCalendar | None) -> Callable[[], str | None]:
+    """TXO 回補窗的自動日期(L77;env `TXO_BACKFILL_DATE` 未設時的 fallback)。
+
+    回 None = 那一場活著(場別起始日是交易日 AND 牆鐘在盤中)→ live session 窗。
+    回 YYYYMMDD = 休市段(休市日整天 / 交易日盤前 08:45 前 / 13:45–15:00 收盤段)→
+    最近「日盤已經開過」的交易日固定日盤窗 —— 盤前冷啟動 TXO 面維持前一交易日資料,
+    開盤時 runtime 的 window identity 變化觸發 rollover 切回 live 窗(D3:TXO 開盤 stage)。
+    無日曆 = 恆 None = 改動前行為(休市要看 TXO 仍靠手動 env)。
+    """
+    if calendar is None:
+        return lambda: None
+    from copycat.live import session as session_mod
+
+    def resolve() -> str | None:
+        now = _now()
+        if calendar.is_trading_day(_session_date()) and session_mod.in_txo_session(now.time()):
+            return None
+        d = now.date()
+        if calendar.is_trading_day(d) and now.time() < _time(8, 45):
+            d -= _timedelta(days=1)  # 交易日盤前:今天日盤還沒開,資料在前一交易日
+        return resolve_trade_date(d, calendar).strftime("%Y%m%d")
+
+    return resolve
+
+
 def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
     from copycat.live import session as session_mod
     # 延遲 import:測試不觸 pyzmq/TC4
@@ -349,6 +381,8 @@ def _default_source(calendar: TradingCalendar | None = None) -> QuoteSource:
     return TC4QuoteSource(
         port=_tc4_port(),
         backfill_date=os.environ.get("TXO_BACKFILL_DATE"),
+        # 盤前 / 休市自動日(L77);env 有值時 TC4QuoteSource 內 env 恆優先
+        auto_backfill_date=_txo_auto_backfill_date(calendar),
         # REALTIME 零推播自癒(fix/tc4-realtime-refcount-kill):TXO 是唯一直接用基底類的
         # session,基底預設全關 → 這裡顯式開 R1(60s 全場靜默 → 整批重掛)、R2 關(277 檔
         # 深價外契約本就靜默),閘 = 日盤/夜盤牆鐘 AND 交易日。
@@ -509,7 +543,7 @@ def create_app(
     corr_ws = WsBroadcaster()
     river_ws = WsBroadcaster()  # 江波圖每秒 delta(全量走 REST/WS 首則;index-river-chart SC-5)
 
-    def _resolve_trade_date() -> str:
+    def _resolve_trade_date(before: _time | None = None) -> str:
         """引擎 / overlay / hub fallback 共用的「今天在看哪一天」(Q9)。
 
         **每次呼叫求值**:boot 時算一次的靜態字串會在長跑跨日後停在昨日,而 hub 的
@@ -526,6 +560,12 @@ def create_app(
             return env
         if trading_calendar is None:
             return _today().isoformat()
+        if before is not None:
+            # L77 盤前冷啟動:交易日 stage 時刻前 = 前一交易日(各面沿自家 stage:
+            # stock 08:00 / index 08:30),之後由各引擎既有 rollover 機制換今日。
+            # 只有兩個 boot 時刻的 ctor 呼叫帶 before;hub / overlay 等逐次求值的
+            # caller 不帶 = 語意逐字不變。
+            return resolve_trade_date_before(_now(), trading_calendar, before).isoformat()
         return resolve_trade_date(_today(), trading_calendar).isoformat()
 
     async def _calendar_crosscheck(index: IndexEngine) -> None:
@@ -590,6 +630,13 @@ def create_app(
             # 固定日回補模式(休市日)停用時段切換偵測:跨界重跑只會重拿同一份
             # 指定日資料(spec R5)
             session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
+            # 窗 identity 併入自動日(L77):盤前固定日 → 開盤 live 窗(08:45)也要
+            # 觸發交接,否則前一交易日的種子會與開盤後 live tick 混同一份 agg
+            window_ident_fn=(
+                (lambda auto=_txo_auto_backfill_date(trading_calendar): (session_key(), auto()))
+                if os.environ.get("TXO_BACKFILL_DATE") is None and trading_calendar is not None
+                else None
+            ),
         )
         # 未 started 的 runtime 照樣掛上去:route 對它的 None 沒有 guard,但「已建構
         # 未 started」本來就走既有 NOT_READY / 空鏈語意(current-state §4),不需新分支
@@ -667,7 +714,7 @@ def create_app(
                 backfill_date = os.environ.get("TXO_BACKFILL_DATE")
                 return StockEngine(
                     cast(StockSource, resolved_stock),
-                    trade_date=_resolve_trade_date(),
+                    trade_date=_resolve_trade_date(before=_time(8, 0)),
                     throttle_secs=throttle_secs,
                     checkpoint=backfill_date is None,
                     ws=stock_ws,  # 與 SignalHub 共用同一顆(XR-3)
@@ -818,7 +865,7 @@ def create_app(
                     # TXO runtime 現貨轉供(design IR1);runtime 掛掉時恆 None
                     txf_getter=runtime.spot_millipts,
                     mis_fetch=index_mis_fetch,
-                    trade_date=_resolve_trade_date(),
+                    trade_date=_resolve_trade_date(before=_time(8, 30)),
                     rollover=backfill_date is None,
                     throttle_secs=throttle_secs,
                     # 無日曆 → None = engine 預設的「純日曆日」(W9 逐字不變)

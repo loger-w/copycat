@@ -359,6 +359,9 @@ class TC4QuoteSource:
         session: str | None = None,
         poll_wait_secs: float = 1.0,
         backfill_date: str | None = None,
+        # TXO 盤前 / 休市自動回補日(L77):env 未設時每次 fetch_backfill 求值;回
+        # YYYYMMDD = 休市段取該日固定日盤窗、回 None = live session 窗。env 恆優先。
+        auto_backfill_date: Callable[[], str | None] | None = None,
         # 等鎖上界**必須大於** `_REQ_TIMEOUT_MS`/1000(X-2a):**健康慢路徑**的持鎖
         # 上界 ≈ 吃滿 RCVTIMEO(send 在 localhost REQ 上只有對端死了才會塞到 SNDTIMEO,
         # 那條路棄連線本來就正確;形式上的持鎖上界是 send+recv = 2×10s,且逾時方
@@ -380,6 +383,7 @@ class TC4QuoteSource:
         self._poll_wait = poll_wait_secs
         self._lock_timeout = lock_timeout_secs
         self._backfill_date = backfill_date.replace("-", "") if backfill_date else None
+        self._auto_backfill_date = auto_backfill_date
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscribed: set[str] = set()
         self._listener: threading.Thread | None = None
@@ -841,13 +845,20 @@ class TC4QuoteSource:
             raise ConnectionError(f"TC4 QUERYALLINSTRUMENT(Fut2) failed: {res.get('ErrMsg')}")
         return parse_stkfut_catalog(res)
 
+    def _backfill_window(self) -> tuple[str, str]:
+        """回補窗選擇:env 固定日(手動 ops 通道,恆優先)→ 自動日(L77,休市段取
+        最近交易日固定日盤窗;盤中回 None)→ live session 窗。固定日窗 = UTC 00–06
+        = 台北 08–14 日盤窗。"""
+        fixed = self._backfill_date
+        if fixed is None and self._auto_backfill_date is not None:
+            fixed = self._auto_backfill_date()
+        if fixed:
+            return f"{fixed}00", f"{fixed}06"
+        return session_window(session_key())
+
     def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
         self._ensure_connected()
-        if self._backfill_date:
-            # TXO_BACKFILL_DATE 休市日回補:指定日期固定日盤窗,不隨當下時段走
-            start, end = f"{self._backfill_date}00", f"{self._backfill_date}06"
-        else:
-            start, end = session_window(session_key())
+        start, end = self._backfill_window()
         # 先對全鏈送 SubHistory 讓 TC4 平行備資料再逐檔收割 —
         # 逐檔「Sub → 等 → 收」實測 280 檔 ~10 分鐘,先全訂可砍掉大部分等待(Phase 4 自評)
         for contract in series.contracts:

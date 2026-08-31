@@ -484,3 +484,67 @@ class TestOverlayBasis:
         app = _app(tmp_path, stock=stock)
         with _client(app) as c:
             assert c.get("/api/stock/overlay/2330").json()["date"] == "2026-08-13"
+
+
+class TestPreOpenPrevTradingDay:
+    """L77 盤前冷啟動:交易日各面 stage 時刻前,boot trade_date = 前一交易日
+    (圖表維持前一交易日資料,stage 後由各引擎既有 rollover 換今日)。"""
+
+    MON = _dt.date(2026, 8, 17)
+
+    def test_stock_boots_on_prev_trading_day_before_0800(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze(monkeypatch, self.MON, at=_dt.time(7, 30))
+        stock = RecordingStockSource()
+        index = DayKeyedIndexSource({FRI_ISO: {"0901": 43_000_000}})
+        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock, index=index)
+        with _client(app):
+            assert app.state.stock is not None
+            assert app.state.stock.trade_date == FRI_ISO  # stock stage 08:00 前
+            assert app.state.index is not None
+            assert app.state.index._trade_date == FRI_ISO  # index stage 08:30 前
+
+    def test_stock_boots_on_today_between_0800_and_0830_index_still_prev(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """兩面各沿自家 stage(D3 拍板):08:15 時 stock 已換今日、index 還在前一交易日。"""
+        _freeze(monkeypatch, self.MON, at=_dt.time(8, 15))
+        stock = RecordingStockSource()
+        index = DayKeyedIndexSource({FRI_ISO: {"0901": 43_000_000}})
+        app = _app(tmp_path, cal=load_trading_calendar(), stock=stock, index=index)
+        with _client(app):
+            assert app.state.stock is not None
+            assert app.state.stock.trade_date == self.MON.isoformat()
+            assert app.state.index is not None
+            assert app.state.index._trade_date == FRI_ISO
+
+
+class TestTxoAutoBackfillDate:
+    """L77 TXO 自動回補日:場活著回 None(live 窗)、休市段回最近『日盤開過』的交易日。"""
+
+    def _resolve(self, monkeypatch: pytest.MonkeyPatch, day: _dt.date, at: _dt.time) -> str | None:
+        _freeze(monkeypatch, day, at=at)
+        return app_mod._txo_auto_backfill_date(load_trading_calendar())()
+
+    def test_weekend_returns_last_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._resolve(monkeypatch, SAT, _dt.time(12, 0)) == "20260814"
+
+    def test_trading_day_preopen_returns_prev_trading_day(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 週一 07:00:今天日盤還沒開 → 前一交易日(五)
+        assert self._resolve(monkeypatch, _dt.date(2026, 8, 17), _dt.time(7, 0)) == "20260814"
+
+    def test_trading_day_in_session_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._resolve(monkeypatch, _dt.date(2026, 8, 17), _dt.time(10, 0)) is None
+
+    def test_trading_day_post_close_gap_returns_today(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 13:45–15:00 收盤段:今天日盤資料已存在 → 今天
+        assert self._resolve(monkeypatch, _dt.date(2026, 8, 17), _dt.time(14, 0)) == "20260817"
+
+    def test_no_calendar_always_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _freeze(monkeypatch, SAT, at=_dt.time(12, 0))
+        assert app_mod._txo_auto_backfill_date(None)() is None

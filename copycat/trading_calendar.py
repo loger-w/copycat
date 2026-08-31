@@ -22,7 +22,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 __all__ = [
@@ -208,3 +208,14 @@ def resolve_trade_date(today: date, cal: TradingCalendar) -> date:
     """引擎要用的交易日 = 含今天往回的最近交易日(順手做缺年提醒)。"""
     warn_if_year_missing(cal, today)
     return cal.last_trading_day(today)
+
+
+def resolve_trade_date_before(now: datetime, cal: TradingCalendar, stage: time) -> date:
+    """盤前冷啟動的交易日推導(L77):**交易日**在該面的換日 stage 時刻之前,
+    「今天在看哪一天」= 前一交易日 —— 圖表維持前一交易日資料到 stage(stock 08:00 /
+    index 08:30),之後各面既有 rollover 機制接手換今日。非交易日 / stage 之後與
+    `resolve_trade_date` 逐值相同。"""
+    d = now.date()
+    if cal.is_trading_day(d) and now.time() < stage:
+        d -= timedelta(days=1)
+    return resolve_trade_date(d, cal)
