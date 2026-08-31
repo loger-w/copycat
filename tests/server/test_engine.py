@@ -972,7 +972,9 @@ class TestWindowIdentRollover:
     的切換(08:45)也要觸發交接,否則前一交易日種子與開盤 live tick 混同一份 agg。"""
 
     async def test_ident_change_triggers_rehandover_without_session_key_change(self) -> None:
-        ident = {"v": (("20260817", "day"), "20260814")}  # (session_key, 自動日)
+        ident: dict[str, tuple[tuple[str, str], str | None]] = {
+            "v": (("20260817", "day"), "20260814")
+        }  # (session_key, 自動日)
         fake = FakeQuoteSource()
         rt = EngineRuntime(fake, throttle_secs=0.01, window_ident_fn=lambda: ident["v"])
         await rt.start()

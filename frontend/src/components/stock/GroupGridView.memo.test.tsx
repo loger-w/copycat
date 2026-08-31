@@ -9,7 +9,7 @@ import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
-import type { CapitalOrder, CapitalPosition } from "@/types";
+import type { CapitalFill, CapitalPosition } from "@/types";
 
 /** review A6-1 的 regression lock:卡片 `memo` 有沒有真的擋下重畫。
  *
@@ -78,49 +78,38 @@ function state() {
 
 /** 今日一筆 2330 現股成交(cr1 B-p2-5)。`date` 走 `ymdOf(new Date())` —— 寫死日期的話
  *  這條會在隔天靜默變成「昨日終態單」而被日期界濾掉,測試恆綠。 */
-function filledOrder(): CapitalOrder {
+function filledFill(): CapitalFill {
   return {
     seq_no: "S1",
     stock_no: "2330",
-    name: "台積電",
-    market: "TS",
     buy_sell: "B",
     flag_label: "現股",
-    book_no: "A1",
-    status_raw: "0",
-    status_label: "全部成交",
     price: 2380,
-    avg_fill_price: 2380,
-    order_qty: 1,
-    filled_qty: 1,
+    qty: 1,
     unit: "張",
     date: ymdOf(new Date()),
     time: "09:00:30",
-    pre_order: false,
-    error_msg: null,
-    actionable: false,
-    price_type: null,
-    raw: "",
+    code: "2330",
   };
 }
 
-/** 本輪的委託列表(預設空:既有兩案不該因為多了一條路由而改變行為)。 */
-let orders: CapitalOrder[] = [];
+/** 本輪的成交列表(預設空:既有兩案不該因為多了一條路由而改變行為)。 */
+let fills: CapitalFill[] = [];
 /** 本輪的部位列(預設空,同上)。 */
 let positions: CapitalPosition[] = [];
 
 beforeEach(() => {
   hoisted.renders.length = 0;
   hoisted.byCode.length = 0;
-  orders = [];
+  fills = [];
   positions = [];
   window.localStorage.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       const u = String(url);
-      if (u.includes("/api/capital/orders")) {
-        return new Response(JSON.stringify({ orders }));
+      if (u.includes("/api/capital/fills")) {
+        return new Response(JSON.stringify({ fills }));
       }
       if (u.includes("/api/capital/positions")) {
         return new Response(JSON.stringify({ positions }));
@@ -181,7 +170,7 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
    *  失效只有那幾張「我今天有下單」的卡會掉幀 —— 正是盤中最常盯的那幾張,而畫面看不出來。
    *  量法 = 拿「無成交卡」當同輪對照組:兩者增量相同才算 memo 沒被成交點打穿。 */
   it("有成交的卡:quotes 換 identity 兩輪 → 重畫次數與無成交卡相同(fills identity 穩定)", async () => {
-    orders = [filledOrder()];
+    fills = [filledFill()];
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
     const ui = (quotes: Record<string, WatchlistQuote>) => (
