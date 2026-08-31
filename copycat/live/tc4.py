@@ -30,7 +30,7 @@ from copycat.live.models import (
     parse_option_symbol,
     parse_realtime,
 )
-from copycat.live.session import session_key, session_window
+from copycat.live.session import backfill_window, session_key, session_window
 from copycat.tc4common import TC4_APPID, TC4_DEFAULT_PORT, TC4_SKEY, iter_qry_pages
 
 __all__ = [
@@ -846,15 +846,15 @@ class TC4QuoteSource:
         return parse_stkfut_catalog(res)
 
     def _backfill_window(self) -> tuple[str, str]:
-        """回補窗選擇:env 固定日(手動 ops 通道,恆優先)→ 自動日(L77,休市段取
-        最近交易日固定日盤窗;盤中回 None)→ live session 窗。固定日窗 = UTC 00–06
-        = 台北 08–14 日盤窗。"""
+        """回補窗選擇 → `session.backfill_window`(唯一定義;app 的 `window_ident_fn`
+        同源,「ident 變 ⇔ 窗變」靠這個共用成立,pr-167 F-04)。"""
         fixed = self._backfill_date
-        if fixed is None and self._auto_backfill_date is not None:
-            fixed = self._auto_backfill_date()
-        if fixed:
-            return f"{fixed}00", f"{fixed}06"
-        return session_window(session_key())
+        auto = (
+            self._auto_backfill_date()
+            if fixed is None and self._auto_backfill_date is not None
+            else None
+        )
+        return backfill_window(fixed, auto, session_key())
 
     def fetch_backfill(self, series: SeriesInfo) -> list[Tick]:
         self._ensure_connected()

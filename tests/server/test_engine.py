@@ -965,11 +965,11 @@ async def test_concurrent_activate_second_raises_busy() -> None:
         await rt.close()
 
 
-
 class TestWindowIdentRollover:
     """L77:rollover 判準改比 window identity(預設 = session_key,行為逐字不變);
-    app 層在 TXO 自動日模式組 (session_key, auto_date) —— 盤前固定日 → 開盤 live 窗
-    的切換(08:45)也要觸發交接,否則前一交易日種子與開盤 live tick 混同一份 agg。"""
+    app 層在 TXO 自動日模式給的是**回補窗本身**(`session.backfill_window`,pr-167
+    F-04)—— 盤前固定日 → 開盤 live 窗的切換(08:45)觸發交接,否則前一交易日種子
+    與開盤 live tick 混同一份 agg;窗字面不變的時刻(08:00 / 13:46)不再冗餘交接。"""
 
     async def test_ident_change_triggers_rehandover_without_session_key_change(self) -> None:
         ident: dict[str, tuple[tuple[str, str], str | None]] = {

@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 import time
 
-from copycat.live.session import in_txo_session, session_key, session_window
+from copycat.live.session import backfill_window, in_txo_session, session_key, session_window
 
 
 def _utc(y: int, mo: int, d: int, h: int, mi: int = 0) -> time.struct_time:
@@ -89,3 +89,23 @@ class TestSessionWindow:
         # 夜盤窗帶裕度 06–22(UTC 06–07 = 台北 14–15、21–22 = 台北 05–06 皆無成交,
         # 不依賴 TC4 窗邊界含斥語意)
         assert session_window(("20260720", "night")) == ("2026072006", "2026072022")
+
+
+class TestBackfillWindow:
+    """pr-167 F-04:回補窗唯一定義 —— ident = 窗本身之後,「ident 變 ⇔ 窗變」是定義。"""
+
+    def test_fixed_env_beats_auto(self) -> None:
+        assert backfill_window("20260814", "20260901", ("20260901", "day")) == (
+            "2026081400",
+            "2026081406",
+        )
+
+    def test_auto_fixed_day_equals_live_day_window(self) -> None:
+        # 13:45–15:00 收盤段 auto 落定為今日:固定日窗與 live 日盤窗**字面相同**,
+        # 13:46 那格不再觸發冗餘全鏈重交接(修前代理值 ident 在此變了、窗沒變)
+        key = ("20260901", "day")
+        assert backfill_window(None, "20260901", key) == session_window(key)
+
+    def test_no_fixed_no_auto_falls_to_live_session_window(self) -> None:
+        key = ("20260901", "night")
+        assert backfill_window(None, None, key) == session_window(key)
