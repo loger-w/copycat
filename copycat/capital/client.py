@@ -215,7 +215,9 @@ class CapitalClient:
         self._status = "starting"  # starting | ok | degraded | error
         self._last_error: str | None = None
         self._futures_account: str | None = None  # _init_com 自動發現(TF 市場)
-        self.store = CapitalStore()  # 委託/部位快取:回報事件寫入、REST 讀
+        # 委託/部位快取:回報事件寫入、REST 讀。日曆給 fills 保留窗算錨定交易日
+        # (pr-167 F-02;缺注入 = 只擋週末,假日前夜盤成交會提早一個交易日落出)
+        self.store = CapitalStore(calendar=_calendar)
         self._broadcast: Callable[[dict[str, object]], None] | None = None
         # 最近一筆成交到達的 monotonic(F5 觀測):回查鏈三段收尾各印「自成交起 N ms」,
         # 讓真成交的耗時有數字可報;鏈落地即清,60s 定時輪詢那些輪不印(避免洗版)。

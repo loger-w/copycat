@@ -20,10 +20,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 from copycat.capital.mapping import contract_from_fill, is_option_contract
 from copycat.capital.models import AvgSource, FillRecord, Market, OrderRecord, Position, TradeKind
 from copycat.capital.reply import ReplyRecord
+from copycat.trading_calendar import WEEKEND_ONLY, TradingCalendar
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +95,38 @@ def _local_yyyymmdd() -> str:
     return time.strftime("%Y%m%d")
 
 
+def _local_hhmm() -> str:
+    return time.strftime("%H:%M")
+
+
+def _anchor_trade_date(d: str, hhmm: str | None, cal: TradingCalendar) -> str:
+    """(日曆日 YYYYMMDD, 時刻)→ 錨定交易日 YYYYMMDD(期交所口徑;pr-167 F-02)。
+
+    與前端 `lib/allday.ts::anchorDateOf` 同式:夜盤前半(≥ 15:01)→ 次一交易日;
+    夜盤後半(≤ 05:00)與其餘(日盤 / 空檔 / 缺時刻)→ `next_trading_day(當日)`
+    (含當日往後;真成交的日盤日必為交易日 → 恆等,週末凌晨的夜盤後半則跳到週一)。
+    同一條式子拿 (today, 現在時刻) 進來就是「當前錨定交易日」—— 兩端共用,分界不分家。"""
+    day = date(int(d[:4]), int(d[4:6]), int(d[6:8]))
+    if (hhmm or "")[:5] >= "15:01":
+        day += timedelta(days=1)
+    return cal.next_trading_day(day).strftime("%Y%m%d")
+
+
 class CapitalStore:
-    def __init__(self, *, today: Callable[[], str] | None = None) -> None:
-        # 「今天」的來源可注入(測試跨日);prod = 本機日曆日。證券無夜盤,00:00 切日即交易日切日。
+    def __init__(
+        self,
+        *,
+        today: Callable[[], str] | None = None,
+        now_hhmm: Callable[[], str] | None = None,
+        calendar: Callable[[], TradingCalendar] | None = None,
+    ) -> None:
+        # 「今天」的來源可注入(測試跨日);prod = 本機日曆日。證券無夜盤,00:00 切日即交易日切日;
+        # 期貨夜盤跨午夜 → fills 的保留窗另以錨定交易日為鍵(`_anchor_trade_date`),
+        # 時刻與日曆同樣可注入。calendar 預設只擋週末(store 零 IO);prod 由 client 注入
+        # 真日曆(`client._calendar`),缺注入的症狀 = 假日前夜盤成交提早一個交易日落出。
         self._today = today or _local_yyyymmdd
+        self._now_hhmm = now_hhmm or _local_hhmm
+        self._calendar: Callable[[], TradingCalendar] = calendar or (lambda: WEEKEND_ONLY)
         self._lock = threading.Lock()
         self._orders: dict[str, _Agg] = {}
         self._order_seq: list[str] = []  # 到達順序
@@ -115,8 +145,11 @@ class CapitalStore:
         # qty=-3 的幻影空單、可按平倉。每次 set_positions 落地後把委託標成「已套用到水位」
         # (見 _snapshot_watermark),之後只套快照沒涵蓋的成交;clear()(重連重播前)把旗標關回去。
         self._positions_seeded = False
-        # 當日逐筆成交(L76 成交點精確版):D 事件各留一列,`fills()` 只回當日、
-        # 換日 prune(prod 長跑不累積);clear()(重播前)清空 —— 重播會重建,不清就雙計。
+        # 逐筆成交(L76 成交點精確版):D 事件各留一列。保留窗 = 「到達日 == 今天」∨
+        # 「錨定交易日 == 當前錨定交易日」(pr-167 F-02:期貨近全軸 D−1 15:01 → D 13:45
+        # 跨兩個日曆日,只留到達日會讓夜盤成交三角 00:00 起靜默消失;週五夜盤錨定週一,
+        # 「今+昨」也不夠)。append 時 prune(prod 長跑不累積)、`fills()` 讀時再濾;
+        # clear()(重播前)清空 —— 重播會重建,不清就雙計。
         self._fills: list[FillRecord] = []
         # 快照涵蓋水位(next-time L57):balance 查詢出手當下每張單的 (累計成交股, 價金)。
         # set_positions 落地時只把水位前的量標「已套用」;水位後才到的成交,快照取數必然
@@ -215,8 +248,8 @@ class CapitalStore:
         """逐筆成交入帳(L76)。整股市場撮合以張為單位 → `qty // 1000` 除得盡;
         除不盡(理論上不發生)退回原始股數 + unit="股",不靜默捨小數。"""
         today = self._today()
-        if self._fills and self._fills[0].date != today:
-            self._fills = [f for f in self._fills if f.date == today]
+        if self._fills:
+            self._fills = [f for f in self._fills if self._fill_live(f, today)]
         if a.market in _SEC_LOT_MARKETS or a.market is None:
             div, unit = 1000, "張"
         elif a.market in _FUT_MARKETS:
@@ -239,12 +272,22 @@ class CapitalStore:
             )
         )
 
+    def _fill_live(self, f: FillRecord, today: str) -> bool:
+        """保留窗判定(append prune 與 `fills()` 讀濾共用一把):到達日是今天,或錨定
+        交易日等於當前錨定交易日(夜盤跨午夜 / 隔週末仍同一根軸)。"""
+        if f.date == today:
+            return True
+        cal = self._calendar()
+        return _anchor_trade_date(f.date, f.time, cal) == _anchor_trade_date(
+            today, self._now_hhmm(), cal
+        )
+
     def fills(self) -> list[FillRecord]:
-        """當日逐筆成交(到達序)。read 時再過濾一次日期:換日後、下一筆成交來 prune
-        之前的讀取不可把昨日的列端出去。"""
+        """本錨定交易日逐筆成交(到達序)。read 時再過濾一次:翻頁後、下一筆成交來 prune
+        之前的讀取不可把上一錨定日的列端出去。"""
         with self._lock:
             today = self._today()
-            return [f for f in self._fills if f.date == today]
+            return [f for f in self._fills if self._fill_live(f, today)]
 
     def _today_net_lots_locked(self, stock_no: str, kind: TradeKind) -> int:
         """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。「今天」看成交**到達日**

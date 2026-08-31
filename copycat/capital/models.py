@@ -116,10 +116,15 @@ class OrderResult:
 
 @dataclass
 class FillRecord:
-    """當日逐筆成交(D 事件)一列(成交點精確版,L76)。與 OrderRecord 同尺:qty 已換算
+    """逐筆成交(D 事件)一列(成交點精確版,L76)。與 OrderRecord 同尺:qty 已換算
     顯示單位(整股撮合以張為單位,除得盡;除不盡的異常量退回原始股數 + unit="股",
     不靜默捨小數);`price` 是**這一筆**的成交價,不是委託均價。`date` = 成交**到達**
-    本機日(同 `_Agg.fill_date` 口徑,store 只留當日);`time` = 該筆回報事件時刻。"""
+    本機日(同 `_Agg.fill_date` 口徑);`time` = 該筆回報事件時刻。store 的保留窗 =
+    到達日今天 ∨ 錨定交易日同當前(pr-167 F-02:期貨夜盤跨午夜 / 隔週末仍同軸)。
+
+    已知殘餘限制:重播蓋日(跨錨定日重連時 `store.clear()` 後重播昨日 D 事件會以
+    到達日重建)目前**不可達** —— `clear()` 零 prod caller(ConnectByID 只在開機
+    重播,屆時 store 是新的);若未來加回報斷線重連,重播列的 `date` 語意要重審。"""
 
     seq_no: str
     stock_no: str | None
