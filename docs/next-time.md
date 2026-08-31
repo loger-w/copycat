@@ -1,11 +1,26 @@
+## 2026-08-31(fix/futures-daily-cache-night 留尾)
+
+- [ ] **前端期貨日 K 的界仍是午夜 —— 一直掛著的分頁 15:01–24:00 還是用早上快照畫 CDP**(後端定稿界落地後,F5 / 新掛載即正確,
+  但 `day-bars-rollover.ts` 的 staleTime 到午夜才過期,掛著不動的 preview 要到 00:01 才重問):候選 = `useFuturesBars` 日 K 的界改
+  min(午夜, 15:00 錨定翻頁 + slack)。**只有期貨那支該吃 15:00 界**(market / stock 的日 K 沒有錨定日概念),而政策的單一住處在
+  `lib/day-bars-rollover.ts` 三支同源 —— 怎麼開這個分岔是設計題,/mod + grilling 一輪再動。
+- [ ] **`DAILY_FINAL_TIME = 14:00` 的前提(TC4 DK 定稿寫入時點)未實測**:交易日 14:00 後首刷 `bars/TXF?tf=D` 實錄一次,末根與
+  期交所日盤收盤對照(`.claude/bug/futures-daily-cache-night/verification.md` 判準 5)。若 14:00 仍非定稿 → 界往後調。
+- [ ] **`BarsCache` 的 `_daily` / `_daily_tag` / `_daily_pre_final` 三份同鍵平行結構**(two-axis review J3):第三份起收成
+  `DailyEntry(bars, tag, pre_final)` 的效益已高於單點改動成本 —— 🔵 refactor 候選,動時連 `daily_*` 五個方法一起收。
+
 ## 2026-08-30(fix/futures-daily-bars-rollover 留尾)
 
-- [ ] **期貨日 K 後端 daily cache 在 15:01–24:00 這段是早上那份快照**(`copycat/server/bars.py::build_period`,鍵 = `(code|L, date.today())`,
+- [x] **期貨日 K 後端 daily cache 在 15:01–24:00 這段是早上那份快照**(`copycat/server/bars.py::build_period`,鍵 = `(code|L, date.today())`,
   無 TTL;`prune` 只清別天):前端 15:01 錨定日翻頁到 D+1 後,疊線基準要 D 的完整 bar,但後端整個日曆日都回首抓時的 D 部分 bar
   (夜盤段 / 09:00 首抓時只有夜盤那截),要到午夜前端重抓才拿到完整 D bar —— 08-30 的前端修法刻意把界取在午夜,**夜盤 15:01–24:00
   這段的 CDP / MA 仍是「昨天早上的 D 部分 bar」算的**(推論自 cache 鍵,未實錄夜盤畫面)。候選 = 日 K cache 對「末根 == today」的
   結果用短 TTL(比照 `TODAY_TTL_SECS`)或 13:46 後失效一次;個股日 K 走 `build_daily` 同構(但個股 overlay 走後端 `date < today`,
   盤中不會拿部分 bar 當基準,夜盤也沒有現貨交易 → 個股面無症狀)。
+  **→ 08-31 fix/futures-daily-cache-night 出貨**:採「定稿界一次失效」(`DAILY_FINAL_TIME = 14:00`,界前寫入的快照過界作廢一次、
+  界後寫入即定稿;否決 30s TTL —— 盤中重抓拿回的仍是部分 bar,純付費不治病)+ refetch 空手墊背舊快照(`daily_stale`,盤後 TC4
+  關著不得從「早上快照」惡化成「空白到午夜」);`build_daily` 同結構同病一併在 cache 層治好(個股日 K 夜間 F5 同樣拿早上快照)。
+  界值 14:00 的 TC4 前提與前端午夜界的殘餘症狀 → 見 08-31 節。
 - [x] **App 級 lazy 測試在剛 `npm ci` 的 worktree 全量必紅 1–2 條、每次不同**(`App.memo.test.tsx` railCtx 換主檔 ×3 / `App.corr-tab.test.tsx`
   零 corr WS ×1 / `App.test.tsx` localStorage 記住 index tab + capital WS 唯一掛載 ×1,皆 ~1.1–1.2 s = `waitFor` 預設 1 s 逾時;08-30 worktree 5/5 全量紅、**stash 掉全部改動仍紅同一條** → 環境不是改動;
   主 tree master 同時段 1/1 全綠)。與 08-28 節 chore/test-hygiene-batch-2 的「L68 App.test waitFor 3000」同族,併那批處理;
