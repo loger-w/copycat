@@ -112,9 +112,14 @@ class CapitalStore:
         self._contract_ym: dict[str, str] = {}
         # 樂觀套用只在「券商快照已落地一次」之後才開(PR #111 review F-02):開機時 _positions
         # 是空的,ConnectByID 的當日 backlog 重播若照套,昨日庫存 10 張今日賣 3 張的檔會變成
-        # qty=-3 的幻影空單、可按平倉。每次 set_positions 落地後把所有委託標成「已套用到目前」,
-        # 之後只套快照之後的成交;clear()(重連重播前)把旗標關回去。
+        # qty=-3 的幻影空單、可按平倉。每次 set_positions 落地後把委託標成「已套用到水位」
+        # (見 _snapshot_watermark),之後只套快照沒涵蓋的成交;clear()(重連重播前)把旗標關回去。
         self._positions_seeded = False
+        # 快照涵蓋水位(next-time L57):balance 查詢出手當下每張單的 (累計成交股, 價金)。
+        # set_positions 落地時只把水位前的量標「已套用」;水位後才到的成交,快照取數必然
+        # 沒看到,落地後重套於快照之上 —— 否則鏈飛行(~2 s)中的成交被吞,部位倒退。
+        # None = 無水位(開機首刷 / clear 後重播):涵蓋到落地此刻全部,快照才是真相。
+        self._snapshot_watermark: dict[str, tuple[int, float]] | None = None
 
     def _set_status(self, a: _Agg, label: str) -> None:
         if _RANK.get(label, 0) >= _RANK.get(a.status_label or "", 0):
@@ -539,6 +544,17 @@ class CapitalStore:
             self._contract_ym.clear()
             # 重播會把當日成交再送一輪:關掉樂觀套用直到下一次快照落地(review F-02)
             self._positions_seeded = False
+            # 水位一併丟:重播的成交是歷史不是「水位後增量」,留著會在下一次落地被
+            # 重套成幻影加倉(与 F-02 同一類洞,方向相反)
+            self._snapshot_watermark = None
+
+    def begin_snapshot(self) -> None:
+        """balance 查詢出手當下呼叫(client._maybe_query_balance):記下涵蓋水位。
+        之後第一次 set_positions 落地消耗它;查詢失敗重發只是覆寫,無累積語意。"""
+        with self._lock:
+            self._snapshot_watermark = {
+                a.seq_no: (a.filled_qty, a.fill_value) for a in self._orders.values()
+            }
 
     def set_positions(self, positions: list[Position]) -> None:
         """全量替換。同 (股號, 種類) 重複列 = 後到者勝並留 warning:
@@ -569,13 +585,26 @@ class CapitalStore:
                     )
                 new[key] = self._with_today_qty_locked(p)
             self._positions = new
-            # 快照涵蓋到此刻的所有成交:把每張單標成「已套用到目前」,之後只套快照之後的增量
-            # (同一筆成交既在快照裡又再樂觀套一次 = 重複計)。
+            # 快照涵蓋的成交 = 水位(balance 查詢出手時刻)前的累計量:標「已套用」
+            # (同一筆既在快照裡又再套一次 = 重複計);水位後才到的成交,快照取數必然
+            # 沒看到 → 落地後重套於快照之上 —— 全標已套用會把鏈飛行中的成交吞掉,
+            # 部位倒退 ~2 s 直到下一輪鏈(next-time L57,user 2026-08-31 拍板只做水位)。
+            # 無水位 = 涵蓋到此刻全部(開機首刷 / clear 後重播:重播成交是歷史)。
+            watermark = self._snapshot_watermark
+            self._snapshot_watermark = None
             for a in self._orders.values():
                 unit = 1000 if a.market in _SEC_LOT_MARKETS else 1
-                a.applied_qty = a.filled_qty // unit
+                covered, covered_value = (
+                    (a.filled_qty, a.fill_value)
+                    if watermark is None
+                    else watermark.get(a.seq_no, (0, 0.0))
+                )
+                a.applied_qty = covered // unit
                 a.applied_shares = a.applied_qty * unit
-                a.applied_value = a.fill_value * (a.applied_shares / a.filled_qty) if a.filled_qty else 0.0
+                a.applied_value = covered_value * (a.applied_shares / covered) if covered else 0.0
+                if a.filled_qty // unit > a.applied_qty:
+                    # 水位後增量重套(不套類別 / 未滿張由 _apply_fill_locked 自行早退)
+                    self._apply_fill_locked(a)
             self._positions_seeded = True
 
     def positions(self) -> list[Position]:

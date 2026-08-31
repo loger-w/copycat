@@ -521,6 +521,9 @@ class CapitalClient:
         # 查詢真的出手才交棒給 collector 的欠帳窗:rc≠0 時鏈沒啟動、放棄輪的 `##`
         # 還在路上,旗標先清掉會讓下一次成功查詢的 reset 順手關掉窗(review F3)
         self._balance_abandoned = False
+        # 涵蓋水位:此刻之後到達的成交,這一輪快照必然沒看到 —— set_positions 落地時
+        # 據此重套增量,部位不倒退(next-time L57;同執行緒,與查詢出手同刻無競速)
+        self.store.begin_snapshot()
 
     def _on_balance_complete(self, positions: list[Position]) -> None:
         """證券庫存收齊 → 暫存(不落 store)→ 串行接損益查詢(避開 1019 查詢處理中)。
