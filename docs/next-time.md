@@ -55,7 +55,11 @@
   (含已被沖銷那幾張的價金,多價位分批成交時殘餘列均價偏移;買向 block 同形、快照落地即蓋,參考用)。
   review 收修:parser 那行降 DEBUG(每輪洗版)→ 判準改看 `成交樂觀套用部位 … stock=<股號>`(修前是「不在樂觀套用表」)與
   `損益列回填 <股號> kind=cash 部位=daytrade_sell`;`grep "balance line 負股數"` 對現股列自此 0 筆(融資列仍會印)。
-- [ ] **`daytrade_sell` 語意散在六處(review 2026-08-30 F-09,Shotgun Surgery)**:balance.py / client.py / store.py / close.py
+- [x] ~~**`daytrade_sell` 語意散在六處(review 2026-08-30 F-09,Shotgun Surgery)**~~ → 08-31
+  refactor/daytrade-sell-kind-table 出貨:前端散點比較收斂 `lib/trade-kinds.ts::KIND_TRAITS`
+  (buyLocked / halfTaxToday / borrowFee / order)+ `kindTraits()` 未知字串政策;types.ts trade_kind
+  內嵌 union → PositionKind、capital_api 重複 Literal → TradeKind。後端 balance/client/store/close
+  四個決策點**刻意不收**(各有方向性邏輯 + 實錄註解,收表變淺)。原文:balance.py / client.py / store.py / close.py
   `_CLOSE_MAP` / `ladder-position.ts`,前端另有 PriceLadder / close-order / flash-send / trade-kinds 各自 `=== "daytrade_sell"`
   字串比較,`positionEcon(kind: string)` 收裸 string。候選 = 前端把 kind 收成單一型別 + 一張「稅 / 費 / 方向」表;等下一次再加種類時併做。
 - [x] ~~**`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。~~
