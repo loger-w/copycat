@@ -1,3 +1,13 @@
+## 2026-08-31(pr-165-review 留尾)
+
+- [ ] **大盤頁 tf=D 的 `is_partial_last` 要不要吃定稿界**(pr-165-review #5):日曆日判準讓 14:00–24:00 印「最後一根未收盤」
+  但 bar 已定稿 —— **非** #165 引入(冷啟動 13:45 後首問同樣誤標),定稿界只讓它變常態。docstring 兩口徑註記已補
+  (fix/pr-165-review-followups);要不要讓 D 分支改吃 `DAILY_FINAL_TIME` 是 /mod(`is_partial_last` 同時服務 1/W/M,
+  夜盤語意另一回事,期貨側不吃本欄)。
+- [ ] **`BarsCache.prune` 的 `_daily_tag`(306-307)與 `_daily_pre_final`(308)清理零測試**(pr-165-review #8,內部複查
+  REFUTED 單獨立案但缺口是真的):兩行同構、刪掉全綠、失效 = 純記憶體無界成長。要補就兩段一起 —— 比照
+  `today_entry_count()` 開 `*_count()` 觀測點 + prune 測試各一行斷言,併 test-hygiene 批。
+
 ## 2026-08-31(fix/futures-daily-cache-night 留尾)
 
 - [ ] **前端期貨日 K 的界仍是午夜 —— 一直掛著的分頁 15:01–24:00 還是用早上快照畫 CDP**(後端定稿界落地後,F5 / 新掛載即正確,

@@ -29,14 +29,17 @@ gate 照跑純屬完工紀律。
 ## 反向驗證
 
 `git stash push copycat/server/bars.py` → 同 4 條紅(morning_snapshot ×2 路徑、
-stale 墊背 ×2)、2 條 guard 綠 → `git stash pop` → 6 條全綠。紅回來的正是修復所治的
-斷言,測試確實抓著 bug。
+stale 墊背 ×2)、2 條 guard 綠 → `git stash pop` → 6 條全綠(收修前母體;收修後
+該 class 為 8 條全綠,見下節)。紅回來的正是修復所治的斷言,測試確實抓著 bug。
 
 ## 新測試(seam = tests/server/test_bars.py,handoff §2 議定)
 
-`TestDailySnapshotFinality` 六條:症狀本體(build_period 早上快照過界必作廢)/
-界前 memo 不變(guard)/ 界後寫入定稿不重付(guard)/ 過期 refetch 空手墊背舊快照
-+ 舊 tag + 15s 負向窗 + 過期恢復重試 / build_daily 同病同治 / 墊背 status 不洗白。
+`TestDailySnapshotFinality` 八條(pr-165-review #7 回校:原「六條」是 review 收修前
+快照):紅先行六條 —— 症狀本體(build_period 早上快照過界必作廢)/ 界前 memo 不變
+(guard)/ 界後寫入定稿不重付(guard)/ 過期 refetch 空手墊背舊快照 + 舊 tag + 15s
+負向窗 + 過期恢復重試 / build_daily 同病同治 / 墊背 status 不洗白;加 review 收修兩條
+—— S-1「作廢一次」discard 突變體 / S-2 build_daily 負向窗墊背(見下節)。
+(fix/pr-165-review-followups 再加兩條:W 形狀墊背 + 界上 14:00 包含性 → 十條。)
 
 ## two-axis review round-1 收修
 
