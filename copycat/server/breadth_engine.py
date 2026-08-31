@@ -32,6 +32,7 @@ import logging
 import os
 import time as _time
 from pathlib import Path
+from collections.abc import Set as AbstractSet
 from typing import AsyncGenerator, Callable, TypeGuard
 
 from copycat.breadth_config import BreadthConfig
@@ -469,9 +470,14 @@ class BreadthEngine:
         self._info_day = self._today_fn()
         self._info_retry_at = None
 
-    def disposition_codes(self) -> set[str]:
+    def disposition_codes(self) -> AbstractSet[str]:
         """處置股集合(stock engine「(處置)」標籤的注入源;L75)。回傳**現份參照**:
-        更新以整份替換(`_refresh_disposition` 末段),讀者拿到的是一致快照,不另複製。"""
+        更新以整份替換(`_refresh_disposition` 末段),讀者拿到的是一致快照,不另複製。
+
+        **刻意不看 `_disposition_ok`,取數失敗時沿用前值**(pr-167 F-09,user 拍板明文
+        表態):處置期本來就跨多日,FinMind 掛掉那天舊名單比空集合準(空集合 = 處置股
+        全部照標(緩),錯的敘事);「保前值」也是本引擎既有政策(`assemble_universe`
+        同樣不看 ok),新鮮度由 `_stale()` 表態。"""
         return self._disposition
 
     async def _refresh_disposition(self) -> None:
