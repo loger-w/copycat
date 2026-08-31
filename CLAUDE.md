@@ -157,9 +157,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **Refresh 慣例**:`?refresh=true` → backend 跳過 cache 重抓;frontend 走
   `queryClient.invalidateQueries` + refetch with refresh flag。
 - **Cache version bump**:`_CACHE_VERSION`(各 service 內)+1 即作廢所有舊 cache。
-- **`OrderRecord.unit` 字面值(張/口/股)是前端過濾鍵**(2026-08-13 起,閃電梯零股閘
-  `ladder-lots.ts` 依 `unit === "股"` 排除):產生點 `capital/store.py::_to_record`,改字面值
-  = 改契約要同時改兩邊;`tests/capital/test_store.py` 有 lock。
+- **`OrderRecord.unit` / `FillRecord.unit` 字面值(張/口/股)是前端過濾鍵 + 後端反查判準**
+  (2026-08-13 起;08-31 fills 擴充、09-01 收斂單表):產生點 `capital/store.py::_lot_unit`
+  (唯一一份表,`_to_record` 與 `_append_fill_locked` 共用);讀者 = 前端 `ladder-lots.ts`
+  (`unit === "股"` 排零股)、`fill-marks.ts`(`excludeUnit` 同鍵)+ **後端**
+  `server/capital_api.py::_fill_code`(`unit == "口"` 當期貨判準代理 → 個股期契約碼反查
+  股號;改「口」字面值 = 反查靜默死,圖牆個股期三角全滅)。改字面值 = 改契約要同時改
+  各邊;`tests/capital/test_store.py` 有 lock。
 - **自選上限常數雙邊同值**(2026-08-13 起 = 50):產生點 `copycat/stock_watchlist.py::
   WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
   WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string

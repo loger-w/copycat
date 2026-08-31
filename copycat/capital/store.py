@@ -32,6 +32,19 @@ logger = logging.getLogger(__name__)
 _SEC_LOT_MARKETS = {"TS", "TA", "TP"}  # 整股:股 → 張(÷1000)
 _FUT_MARKETS = {"TF", "TO", "OF", "OO"}  # 口
 
+
+def _lot_unit(market: str | None) -> tuple[int, str]:
+    """market → (除數, 顯示單位)。unit 字面值(張/口/股)是 CLAUDE.md §4 跨語言契約
+    (前端 ladder-lots / fill-marks 的過濾鍵、capital_api 反查的期貨判準代理)——
+    這張表只有這一份,`_append_fill_locked` 與 `_to_record` 共用(pr-167 F-05);
+    除不盡的處理留在呼叫端:成交列退回原始股數 + "股" 不靜默捨,
+    委託聚合列沿既有整數除顯示(理論上整股撮合除得盡,分岔不可達)。"""
+    if market in _SEC_LOT_MARKETS or market is None:
+        return 1000, "張"
+    if market in _FUT_MARKETS:
+        return 1, "口"
+    return 1, "股"  # TL/TC 零股
+
 # 成交樂觀套用(F5)的證券種類對映:回報 idx6 資券別 → 部位種類。**只列確定的**;零股不在此表
 # —— 零股市場(TL/TC)整個不套。「無券」= 無券當沖賣(2026-08-28 prod 8358 實錄校準):部位狀態
 # `daytrade_sell`(群益庫存段記成現股 T 列**負股數**,`parse_balance_line` 同歸此種),回補 = 現股買
@@ -250,12 +263,7 @@ class CapitalStore:
         today = self._today()
         if self._fills:
             self._fills = [f for f in self._fills if self._fill_live(f, today)]
-        if a.market in _SEC_LOT_MARKETS or a.market is None:
-            div, unit = 1000, "張"
-        elif a.market in _FUT_MARKETS:
-            div, unit = 1, "口"
-        else:  # TL/TC 零股
-            div, unit = 1, "股"
+        div, unit = _lot_unit(a.market)
         qty, u = (rec.qty // div, unit) if rec.qty % div == 0 else (rec.qty, "股")
         assert rec.price is not None  # caller 守門(無價 D 整筆不採計)
         self._fills.append(
@@ -558,12 +566,7 @@ class CapitalStore:
         return price_type
 
     def _to_record(self, a: _Agg) -> OrderRecord:
-        if a.market in _SEC_LOT_MARKETS or a.market is None:
-            div, unit = 1000, "張"
-        elif a.market in _FUT_MARKETS:
-            div, unit = 1, "口"
-        else:  # TL/TC 零股
-            div, unit = 1, "股"
+        div, unit = _lot_unit(a.market)
         avg = (a.fill_value / a.filled_qty) if a.filled_qty > 0 else None
         return OrderRecord(
             seq_no=a.seq_no,

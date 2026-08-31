@@ -239,7 +239,12 @@ async def capital_status(request: Request) -> dict:
 
 def _fill_code(unit: str, stock_no: str | None) -> str | None:
     """委託 / 成交列的股號衍生欄(L76 / L435):期貨口 → 契約碼反查股號(個股期);
-    其餘(張 / 股)`stock_no` 就是股號。反查不到回 None(同 positions 的 `code` 語意)。"""
+    其餘(張 / 股)`stock_no` 就是股號。反查不到回 None(同 positions 的 `code` 語意)。
+
+    **本支以 `unit == "口"` 當期貨判準的代理**(pr-167 F-13,user 拍板 docstring 表態):
+    positions 那把尺是 `p.market`,orders / fills 的 dataclass 沒帶 market,顯示單位
+    今日與 `market ∈ _FUT_MARKETS` 等值 —— 改 `_lot_unit` 的「口」字面值 = 改本支行為,
+    反查會靜默不觸發(圖牆個股期三角全滅、零訊號),見 CLAUDE.md §4 unit 契約條。"""
     if stock_no is None:
         return None
     return stock_code_of("fut", stock_no) if unit == "口" else stock_no

@@ -31,6 +31,7 @@ __all__ = [
     "TradingCalendar",
     "load_trading_calendar",
     "resolve_trade_date",
+    "resolve_trade_date_before",
     "warn_if_year_missing",
 ]
 
