@@ -115,6 +115,24 @@ class OrderResult:
 
 
 @dataclass
+class FillRecord:
+    """當日逐筆成交(D 事件)一列(成交點精確版,L76)。與 OrderRecord 同尺:qty 已換算
+    顯示單位(整股撮合以張為單位,除得盡;除不盡的異常量退回原始股數 + unit="股",
+    不靜默捨小數);`price` 是**這一筆**的成交價,不是委託均價。`date` = 成交**到達**
+    本機日(同 `_Agg.fill_date` 口徑,store 只留當日);`time` = 該筆回報事件時刻。"""
+
+    seq_no: str
+    stock_no: str | None
+    buy_sell: str  # "B"/"S"
+    flag_label: str | None
+    price: float
+    qty: int
+    unit: str  # 張/口/股
+    date: str
+    time: str | None
+
+
+@dataclass
 class OrderRecord:
     """委託清單一列 = 一張單的聚合狀態(key=13碼委託序號)。qty 已換算顯示單位。"""
 

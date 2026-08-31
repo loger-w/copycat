@@ -229,8 +229,10 @@ describe("useCapitalStream = 唯一 invalidate 擁有者(review B2/B4)", () => {
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(spy).toHaveBeenCalledTimes(1);
+    // L76 起 capital_order 同時失效 orders 與 fills(同源:都是回報 D 事件產物)
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-orders"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-fills"] });
   });
 
   it("capital_position → invalidate positions;capital_status 不觸發任何 invalidate", () => {
@@ -264,8 +266,10 @@ describe("useCapitalStream = 唯一 invalidate 擁有者(review B2/B4)", () => {
       emitCapitalEvent({ event: "capital_order", data: { seq_no: "001" } });
       vi.advanceTimersByTime(200);
     });
-    expect(spy).toHaveBeenCalledTimes(1);
+    // 多處掛載仍只各 invalidate 一次;orders + fills 兩鍵 = 2 次(L76)
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-orders"] });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["capital-fills"] });
   });
 
   it("stream 未掛載:orders/positions hooks 不自行接 WS 事件(review B2)", () => {

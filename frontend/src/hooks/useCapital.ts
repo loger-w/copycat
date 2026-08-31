@@ -14,7 +14,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { parseErrorDetail } from "@/lib/api-error";
 import { connectWithRetry } from "@/lib/ws-reconnect";
-import type {
+import type { CapitalFill,
   CapitalCancelBody,
   CapitalCloseBody,
   CapitalCorrectPriceBody,
@@ -119,9 +119,10 @@ async function fetchJson<T>(url: string, body?: unknown): Promise<T> {
 const INVALIDATE_DEBOUNCE_MS = 200;
 
 /** WS event 名 → 對應 queryKey(useCapitalStream 唯一接線;review B2/B4)。 */
-const EVENT_QUERY_KEY: Record<string, string> = {
-  capital_order: "capital-orders",
-  capital_position: "capital-positions",
+const EVENT_QUERY_KEY: Record<string, readonly string[]> = {
+  // fills 與 orders 同源(都是回報 D 事件的產物)→ 同一個事件一起失效
+  capital_order: ["capital-orders", "capital-fills"],
+  capital_position: ["capital-positions"],
 };
 
 // module-level 單一 timer per queryKey:同 key 連發只在尾端 invalidate 一次,
@@ -150,6 +151,22 @@ export function useCapitalStatus() {
     queryKey: ["capital-status"],
     queryFn: () => fetchJson<CapitalStatus>("/api/capital/status"),
     refetchInterval: 10_000,
+    retry: 1,
+  });
+}
+
+export function useCapitalFills() {
+  return useQuery({
+    queryKey: ["capital-fills"],
+    queryFn: async (): Promise<{ fills: CapitalFill[] }> => {
+      const res = await fetch("/api/capital/fills");
+      // 舊後端(prod 重啟前)沒有這支:404 → 空 = 成交點不畫(D2 拍板:寧空白不失真,
+      // 近似版已刪)。其餘錯誤照拋(30s 下一輪就是重試,同 orders 慣例)。
+      if (res.status === 404) return { fills: [] };
+      if (!res.ok) throw new Error(`fills ${res.status}`);
+      return (await res.json()) as { fills: CapitalFill[] };
+    },
+    refetchInterval: 30_000,
     retry: 1,
   });
 }
@@ -238,8 +255,9 @@ export function useCapitalStream(): void {
   useEffect(() => {
     // 唯一擁有者:WS 事件 → debounce invalidate(orders/positions hooks 不自行接線)
     const unsub = subscribeCapitalEvents((ev) => {
-      const queryKey = EVENT_QUERY_KEY[ev.event];
-      if (queryKey !== undefined) scheduleInvalidate(queryClient, queryKey);
+      for (const queryKey of EVENT_QUERY_KEY[ev.event] ?? []) {
+        scheduleInvalidate(queryClient, queryKey);
+      }
     });
 
     const conn = connectWithRetry(

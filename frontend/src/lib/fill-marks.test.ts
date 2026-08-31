@@ -6,7 +6,6 @@ import {
   EMPTY_FILLS,
   EMPTY_MARKS,
   FILL_MARK,
-  fillDates,
   fillLabel,
   fillPoints,
   fillsAtMinute,
@@ -17,37 +16,24 @@ import {
   type FillPoint,
 } from "@/lib/fill-marks";
 import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
-import type { CapitalOrder } from "@/types";
+import type { CapitalFill } from "@/types";
 
 const TODAY = "20260813";
 const YESTERDAY = "20260812";
-const BEFORE = "20260811";
-const DATES = { today: TODAY, yesterday: YESTERDAY };
 
-/** 已成交的活單(部分成交):`avg_fill_price` / `time` 齊、`filled_qty > 0` */
-function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
+/** 當日一筆成交(精確版 L76:`price` 是這一筆的成交價、`date` 是到達日)。 */
+function fill(over: Partial<CapitalFill> = {}): CapitalFill {
   return {
     seq_no: "S1",
     stock_no: "2330",
-    name: "台積電",
-    market: "TS",
     buy_sell: "B",
     flag_label: "現股",
-    book_no: "A1",
-    status_raw: "0",
-    status_label: "部分成交",
     price: 100,
-    avg_fill_price: 100,
-    order_qty: 3,
-    filled_qty: 1,
+    qty: 1,
     unit: "張",
     date: TODAY,
     time: "09:01:30",
-    pre_order: false,
-    error_msg: null,
-    actionable: true,
-    price_type: null,
-    raw: "",
+    code: "2330",
     ...over,
   };
 }
@@ -55,110 +41,69 @@ function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
 const MIN_901 = 9 * 60 + 1;
 const MIN_902 = 9 * 60 + 2;
 
-describe("fillDates(YYYYMMDD 減一日)", () => {
-  it("同月內減一日", () => {
-    expect(fillDates("20260813")).toEqual({ today: "20260813", yesterday: "20260812" });
-  });
-
-  it("跨月:月初退到上個月最後一日(非閏年 3/1 → 2/28)", () => {
-    expect(fillDates("20260301")).toEqual({ today: "20260301", yesterday: "20260228" });
-  });
-
-  it("跨年:1/1 退到去年 12/31", () => {
-    expect(fillDates("20260101")).toEqual({ today: "20260101", yesterday: "20251231" });
-  });
-});
-
-describe("fillPoints 過濾條件", () => {
+describe("fillPoints 過濾條件(精確版)", () => {
   it("key === null → 直接回 EMPTY_FILLS(同一 identity)", () => {
-    expect(fillPoints([order()], null, DATES)).toBe(EMPTY_FILLS);
+    expect(fillPoints([fill()], null, TODAY)).toBe(EMPTY_FILLS);
   });
 
   it("零筆 → 回 EMPTY_FILLS(同一 identity;memo 不被打穿)", () => {
-    expect(fillPoints([], "2330", DATES)).toBe(EMPTY_FILLS);
-    expect(fillPoints(undefined, "2330", DATES)).toBe(EMPTY_FILLS);
-    expect(fillPoints([order({ filled_qty: 0 })], "2330", DATES)).toBe(EMPTY_FILLS);
+    expect(fillPoints([], "2330", TODAY)).toBe(EMPTY_FILLS);
+    expect(fillPoints(undefined, "2330", TODAY)).toBe(EMPTY_FILLS);
+    expect(fillPoints([fill({ qty: 0 })], "2330", TODAY)).toBe(EMPTY_FILLS);
   });
 
-  it("比對鍵不符 → 排除", () => {
-    expect(fillPoints([order({ stock_no: "2317" })], "2330", DATES)).toEqual([]);
+  it("比對鍵不符 → 排除(比對走 stock_no:個股期圖用契約碼撿自己的單)", () => {
+    expect(fillPoints([fill({ stock_no: "2317", code: "2317" })], "2330", TODAY)).toEqual([]);
   });
 
-  it("filled_qty === 0 → 排除(只掛單未成交)", () => {
-    expect(fillPoints([order({ filled_qty: 0, avg_fill_price: null })], "2330", DATES)).toEqual([]);
+  it("price <= 0 / time null / 非 B|S → 整筆排除", () => {
+    expect(fillPoints([fill({ price: 0 })], "2330", TODAY)).toEqual([]);
+    expect(fillPoints([fill({ time: null })], "2330", TODAY)).toEqual([]);
+    expect(fillPoints([fill({ buy_sell: "X" })], "2330", TODAY)).toEqual([]);
   });
 
-  it("avg_fill_price === null 但 filled_qty > 0(回報欄位缺)→ 排除", () => {
-    expect(fillPoints([order({ avg_fill_price: null })], "2330", DATES)).toEqual([]);
+  it("excludeUnit 命中 → 整筆排除(現股零股單);不傳(個股期態)不設單位閘", () => {
+    const zero = [fill({ unit: "股", qty: 1000 })];
+    expect(fillPoints(zero, "2330", TODAY, "股")).toEqual([]);
+    expect(fillPoints(zero, "2330", TODAY)).toHaveLength(1);
   });
 
-  it("time === null → 排除(無分鐘可落點)", () => {
-    expect(fillPoints([order({ time: null })], "2330", DATES)).toEqual([]);
-  });
-
-  it("buy_sell 非 B/S → 整筆排除(無側可歸)", () => {
-    expect(fillPoints([order({ buy_sell: null })], "2330", DATES)).toEqual([]);
-    expect(fillPoints([order({ buy_sell: "X" })], "2330", DATES)).toEqual([]);
-  });
-
-  it("excludeUnit 命中 → 整筆排除(現股零股單)", () => {
-    const zero = [order({ unit: "股", order_qty: 1000, filled_qty: 1000 })];
-    expect(fillPoints(zero, "2330", DATES, "股")).toEqual([]);
-    // 不傳 excludeUnit(個股期態)→ 不設單位閘
-    expect(fillPoints(zero, "2330", DATES)).toHaveLength(1);
-  });
-
-  it("今日 date 的終態單(全部成交)→ 計入", () => {
-    const done = order({ actionable: false, status_label: "全部成交", filled_qty: 3 });
-    expect(fillPoints([done], "2330", DATES)).toEqual([
-      { minute: MIN_901, priceMilli: 100_000, side: "B", qty: 3 },
-    ]);
-  });
-
-  it("昨日 date + actionable + filled → 計入(盤後預約單今日成交)", () => {
-    const pre = order({ date: YESTERDAY, pre_order: true });
-    expect(fillPoints([pre], "2330", DATES)).toHaveLength(1);
-  });
-
-  it("昨日 date + 非活單 → 排除(昨日的成交不畫上今日圖)", () => {
-    expect(fillPoints([order({ date: YESTERDAY, actionable: false })], "2330", DATES)).toEqual([]);
-  });
-
-  it("前日 date + actionable → 排除(跨日不清的幽靈活單不無界計入)", () => {
-    expect(fillPoints([order({ date: BEFORE })], "2330", DATES)).toEqual([]);
-  });
-
-  it("date === null → 排除", () => {
-    expect(fillPoints([order({ date: null })], "2330", DATES)).toEqual([]);
+  it("date 非今日 → 排除(逐筆自帶真實到達日;近似版「昨日活單」半條退役)", () => {
+    expect(fillPoints([fill({ date: YESTERDAY })], "2330", TODAY)).toEqual([]);
   });
 });
 
-describe("fillPoints 聚合與排序", () => {
+describe("fillPoints 合併與排序(精確版:同點無損合併,不做量加權)", () => {
   it("元 → 毫元(四捨五入)", () => {
-    const r = fillPoints([order({ avg_fill_price: 100.335 })], "2330", DATES);
+    const r = fillPoints([fill({ price: 100.335 })], "2330", TODAY);
     expect(r[0]!.priceMilli).toBe(100_335);
   });
 
-  it("同分鐘同向合併:qty 加總、price 量加權平均後取整(100000@2 + 101000@1 → 100333)", () => {
+  it("同分鐘同向**不同價** → 各自一點(近似版會加權壓成一點;每筆一標記的語意)", () => {
     const r = fillPoints(
       [
-        order({ seq_no: "A", avg_fill_price: 100, filled_qty: 2 }),
-        order({ seq_no: "B", avg_fill_price: 101, filled_qty: 1, time: "09:01:59" }),
+        fill({ seq_no: "A", price: 100, qty: 2 }),
+        fill({ seq_no: "A", price: 101, qty: 1, time: "09:01:59" }),
       ],
       "2330",
-      DATES,
+      TODAY,
     );
-    expect(r).toEqual([{ minute: MIN_901, priceMilli: 100_333, side: "B", qty: 3 }]);
+    expect(r).toEqual([
+      { minute: MIN_901, priceMilli: 100_000, side: "B", qty: 2 },
+      { minute: MIN_901, priceMilli: 101_000, side: "B", qty: 1 },
+    ]);
   });
 
-  it("同分鐘買賣各一 → 兩點(不合併),B 先 S 後", () => {
+  it("同 (分鐘, 側, 價位) 無損合併:qty 相加(重疊三角只是雜訊)", () => {
+    const r = fillPoints([fill({ qty: 2 }), fill({ qty: 1, time: "09:01:59" })], "2330", TODAY);
+    expect(r).toEqual([{ minute: MIN_901, priceMilli: 100_000, side: "B", qty: 3 }]);
+  });
+
+  it("同分鐘買賣各一 → 兩點,B 先 S 後", () => {
     const r = fillPoints(
-      [
-        order({ seq_no: "S", buy_sell: "S", avg_fill_price: 101 }),
-        order({ seq_no: "B", buy_sell: "B", avg_fill_price: 100 }),
-      ],
+      [fill({ buy_sell: "S", price: 101 }), fill({ buy_sell: "B", price: 100 })],
       "2330",
-      DATES,
+      TODAY,
     );
     expect(r).toEqual([
       { minute: MIN_901, priceMilli: 100_000, side: "B", qty: 1 },
@@ -166,45 +111,24 @@ describe("fillPoints 聚合與排序", () => {
     ]);
   });
 
-  it("跨分鐘同向不合併", () => {
-    const r = fillPoints(
-      [
-        order({ seq_no: "A", filled_qty: 1 }),
-        order({ seq_no: "B", filled_qty: 2, time: "09:02:00" }),
-      ],
-      "2330",
-      DATES,
-    );
-    expect(r.map((p) => [p.minute, p.qty])).toEqual([
-      [MIN_901, 1],
-      [MIN_902, 2],
-    ]);
-  });
-
   it("輸出依 minute 升冪(輸入亂序)", () => {
     const r = fillPoints(
-      [
-        order({ seq_no: "C", time: "13:00:00" }),
-        order({ seq_no: "A", time: "09:02:00" }),
-        order({ seq_no: "B", time: "09:01:00" }),
-      ],
+      [fill({ time: "13:00:00" }), fill({ time: "09:02:00" }), fill({ time: "09:01:00" })],
       "2330",
-      DATES,
+      TODAY,
     );
     expect(r.map((p) => p.minute)).toEqual([MIN_901, MIN_902, 13 * 60]);
   });
 });
 
 describe("fillsByCode 分組(圖牆)", () => {
-  it("按 stock_no 分組;零筆的 code 不入 map", () => {
+  it("按 wire code 分組;零筆的 code 不入 map", () => {
     const m = fillsByCode(
       [
-        order({ seq_no: "A", stock_no: "2330", avg_fill_price: 1000, filled_qty: 2 }),
-        order({ seq_no: "B", stock_no: "2317", avg_fill_price: 200, buy_sell: "S" }),
-        // 未成交 → 2454 整筆不產生 entry
-        order({ seq_no: "C", stock_no: "2454", filled_qty: 0, avg_fill_price: null }),
+        fill({ seq_no: "A", stock_no: "2330", code: "2330", price: 1000, qty: 2 }),
+        fill({ seq_no: "B", stock_no: "2317", code: "2317", price: 200, buy_sell: "S" }),
       ],
-      DATES,
+      TODAY,
     );
     expect([...m.keys()].sort()).toEqual(["2317", "2330"]);
     expect(m.get("2330")).toEqual([{ minute: MIN_901, priceMilli: 1_000_000, side: "B", qty: 2 }]);
@@ -212,19 +136,30 @@ describe("fillsByCode 分組(圖牆)", () => {
     expect(m.get("2454")).toBeUndefined();
   });
 
-  it("同 code 同分鐘同向仍合併;excludeUnit 生效", () => {
-    const orders = [
-      order({ seq_no: "A", avg_fill_price: 100, filled_qty: 2 }),
-      order({ seq_no: "B", avg_fill_price: 101, filled_qty: 1 }),
-      order({ seq_no: "Z", stock_no: "2317", unit: "股", filled_qty: 1000 }),
-    ];
-    const m = fillsByCode(orders, DATES, "股");
-    expect(m.get("2330")).toEqual([{ minute: MIN_901, priceMilli: 100_333, side: "B", qty: 3 }]);
+  it("個股期成交(契約碼 + code 反查股號)落到該股的卡(L444);反查不到退回 stock_no", () => {
+    const m = fillsByCode(
+      [
+        fill({ seq_no: "F", stock_no: "CDFH6", code: "2330", unit: "口", price: 590 }),
+        fill({ seq_no: "G", stock_no: "XXFH6", code: null, unit: "口", price: 10 }),
+      ],
+      TODAY,
+    );
+    expect(m.get("2330")).toEqual([{ minute: MIN_901, priceMilli: 590_000, side: "B", qty: 1 }]);
+    expect(m.has("XXFH6")).toBe(true); // 反查不到:只會被合約鍵的圖撿到,不進任何股號卡
+  });
+
+  it("excludeUnit 生效(排零股)", () => {
+    const m = fillsByCode(
+      [fill(), fill({ seq_no: "Z", stock_no: "2317", code: "2317", unit: "股", qty: 1000 })],
+      TODAY,
+      "股",
+    );
+    expect(m.has("2330")).toBe(true);
     expect(m.has("2317")).toBe(false);
   });
 
-  it("orders undefined → 空 map", () => {
-    expect(fillsByCode(undefined, DATES).size).toBe(0);
+  it("fills undefined → 空 map", () => {
+    expect(fillsByCode(undefined, TODAY).size).toBe(0);
   });
 });
 
@@ -361,16 +296,16 @@ describe("fillsAtMinute / fillLabel", () => {
 // N043 / N070:近全軸(期貨分時)的成交點
 // ---------------------------------------------------------------------------
 
-/** 期貨單:`stock_no` 放期交所契約碼,單位「口」。 */
-function futOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
-  return order({
+/** 期貨成交:`stock_no` 放期交所契約碼,單位「口」。 */
+function futFill(over: Partial<CapitalFill> = {}): CapitalFill {
+  return fill({
     stock_no: "TXFH6",
-    market: "TF",
+    code: null,
     unit: "口",
     date: "20260821",
     time: "09:30:00",
-    avg_fill_price: 23_000,
-    filled_qty: 2,
+    price: 23_000,
+    qty: 2,
     ...over,
   });
 }
@@ -386,23 +321,23 @@ const ANCHOR = "2026-08-21";
 
 describe("alldayFillPoints — 近全軸日期界(前一日曆日夜盤的成交屬本錨定日)", () => {
   it("日盤成交 → 軸索引 = 段內偏移(09:30 → 1109)", () => {
-    const r = alldayFillPoints([futOrder()], "TXFH6", ANCHOR);
+    const r = alldayFillPoints([futFill()], "TXFH6", ANCHOR);
     expect(r).toEqual([{ minute: IDX_0930, priceMilli: 23_000_000, side: "B", qty: 2 }]);
   });
 
   it("**前一日曆日夜盤 22:00 的成交屬本錨定日** → 索引 419(夜盤前半段)", () => {
-    const r = alldayFillPoints([futOrder({ date: "20260820", time: "22:00:00" })], "TXFH6", ANCHOR);
+    const r = alldayFillPoints([futFill({ date: "20260820", time: "22:00:00" })], "TXFH6", ANCHOR);
     expect(r[0]!.minute).toBe(IDX_2200);
   });
 
   it("同日曆日凌晨 01:00 的成交(前一日夜盤後半)→ 索引 599,不被日期界丟掉", () => {
-    const r = alldayFillPoints([futOrder({ time: "01:00:00" })], "TXFH6", ANCHOR);
+    const r = alldayFillPoints([futFill({ time: "01:00:00" })], "TXFH6", ANCHOR);
     expect(r[0]!.minute).toBe(IDX_0100);
   });
 
   it("次一日曆日的**日盤**成交(錨定日 = 08-22)→ 不畫在 08-21 的圖上", () => {
     const r = alldayFillPoints(
-      [futOrder({ date: "20260822", time: "09:30:00" })],
+      [futFill({ date: "20260822", time: "09:30:00" })],
       "TXFH6",
       ANCHOR,
     );
@@ -410,46 +345,46 @@ describe("alldayFillPoints — 近全軸日期界(前一日曆日夜盤的成交
   });
 
   it("同日曆日夜盤(08-21 22:00,週五夜 → 錨定週一 08-24)→ 不畫在 08-21 的圖上", () => {
-    const r = alldayFillPoints([futOrder({ time: "22:00:00" })], "TXFH6", ANCHOR);
+    const r = alldayFillPoints([futFill({ time: "22:00:00" })], "TXFH6", ANCHOR);
     expect(r).toBe(EMPTY_FILLS);
   });
 
   it("一天之外的成交(14:30,13:46–15:00 不在近全軸上)→ 不畫(不夾到最近的段界)", () => {
-    const r = alldayFillPoints([futOrder({ time: "14:30:00" })], "TXFH6", ANCHOR);
+    const r = alldayFillPoints([futFill({ time: "14:30:00" })], "TXFH6", ANCHOR);
     expect(r).toBe(EMPTY_FILLS);
   });
 
   it("契約碼不符 / key null → 零筆(同 fillPoints 的 guard)", () => {
-    expect(alldayFillPoints([futOrder()], "MXFH6", ANCHOR)).toBe(EMPTY_FILLS);
-    expect(alldayFillPoints([futOrder()], null, ANCHOR)).toBe(EMPTY_FILLS);
+    expect(alldayFillPoints([futFill()], "MXFH6", ANCHOR)).toBe(EMPTY_FILLS);
+    expect(alldayFillPoints([futFill()], null, ANCHOR)).toBe(EMPTY_FILLS);
   });
 
-  it("同索引同向合併成一點,價 = 量加權平均(與 fillPoints 同一支聚合)", () => {
+  it("同索引同向不同價 → 各自一點(精確版;與 fillPoints 同一支聚合)", () => {
     const r = alldayFillPoints(
       [
-        futOrder({ seq_no: "A", avg_fill_price: 23_000, filled_qty: 2 }),
-        futOrder({ seq_no: "B", avg_fill_price: 23_006, filled_qty: 1 }),
+        futFill({ seq_no: "A", price: 23_000, qty: 2 }),
+        futFill({ seq_no: "B", price: 23_006, qty: 1 }),
       ],
       "TXFH6",
       ANCHOR,
     );
     expect(r).toEqual([
-      // 23_002_000 = (23_000_000×2 + 23_006_000) / 3
-      { minute: IDX_0930, priceMilli: 23_002_000, side: "B", qty: 3 },
+      { minute: IDX_0930, priceMilli: 23_000_000, side: "B", qty: 2 },
+      { minute: IDX_0930, priceMilli: 23_006_000, side: "B", qty: 1 },
     ]);
   });
 
-  it("未成交 / 無均價 / 無時間 / 非 B|S 一律不畫(共用 fillPoints 的欄位守門)", () => {
+  it("量 0 / 價 0 / 無時間 / 非 B|S 一律不畫(共用 fillPoints 的欄位守門)", () => {
     const bad = [
-      futOrder({ filled_qty: 0 }),
-      futOrder({ avg_fill_price: null }),
-      futOrder({ time: null }),
-      futOrder({ buy_sell: null }),
+      futFill({ qty: 0 }),
+      futFill({ price: 0 }),
+      futFill({ time: null }),
+      futFill({ buy_sell: "X" }),
     ];
     expect(alldayFillPoints(bad, "TXFH6", ANCHOR)).toBe(EMPTY_FILLS);
   });
 
-  it("orders undefined → EMPTY_FILLS", () => {
+  it("fills undefined → EMPTY_FILLS", () => {
     expect(alldayFillPoints(undefined, "TXFH6", ANCHOR)).toBe(EMPTY_FILLS);
   });
 });

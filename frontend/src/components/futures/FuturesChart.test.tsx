@@ -70,7 +70,7 @@ let barsBody: unknown;
 /** `tf=D` 的回應(疊線 N042 的資料源;日 K 模式與分時模式共用同一支 query)。
  *  與 `barsBody` 分兩份:分時態下兩支 query 同時在跑,共用一份就分不出誰吃到什麼。 */
 let barsDayBody: unknown;
-let ordersBody: unknown;
+let fillsBody: unknown;
 let oiBody: unknown;
 let oiStatus: number;
 let positionsBody: unknown;
@@ -134,7 +134,7 @@ beforeEach(() => {
   barsUrls = [];
   barsBody = { bars: [], meta: META };
   barsDayBody = { bars: [], meta: META };
-  ordersBody = { orders: [] };
+  fillsBody = { fills: [] };
   oiBody = EMPTY_OI;
   oiStatus = 200;
   positionsBody = { positions: [] };
@@ -149,8 +149,8 @@ beforeEach(() => {
         barsUrls.push(u);
         return new Response(JSON.stringify(u.includes("tf=D") ? barsDayBody : barsBody));
       }
-      if (u.includes("/api/capital/orders")) {
-        return new Response(JSON.stringify(ordersBody));
+      if (u.includes("/api/capital/fills")) {
+        return new Response(JSON.stringify(fillsBody));
       }
       if (u.includes("/api/futures/oi-levels")) {
         return new Response(JSON.stringify(oiBody), { status: oiStatus });
@@ -280,8 +280,8 @@ describe("FuturesChart 分時圖(SC-1;mod/futures-day-1500 15:00 起算)", () =>
     // 載入後都讀 query(08-20),live 點與 22:10 成交在兩態都畫 —— 光等 length 3 可能在日曆落地前就過,
     // 突變(live 改回讀模組集合)只在載入後才分家,紅會靠時序。08-20 09:00 這筆只在 slice 錨定 08-20
     // 之後才畫(載入前 anchorDate 08-19 ≠ 08-20),先等它出現,再同步斷言 live 點。
-    ordersBody = {
-      orders: [futFill({ date: "20260818", time: "22:10:30" }), futFill({ date: "20260820", time: "09:00:30" })],
+    fillsBody = {
+      fills: [futFill({ date: "20260818", time: "22:10:30" }), futFill({ date: "20260820", time: "09:00:30" })],
     };
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 7, 18, 22, 30, 30));
@@ -998,25 +998,14 @@ function futFill(over: Record<string, unknown> = {}) {
   return {
     seq_no: "F1",
     stock_no: "TXFH6", // futExchangeContract("TXF", "202608")
-    name: "臺股期貨",
-    market: "TF",
     buy_sell: "B",
     flag_label: null,
-    book_no: null,
-    status_raw: "0",
-    status_label: "完全成交",
     price: 23_000,
-    avg_fill_price: 23_000,
-    order_qty: 1,
-    filled_qty: 1,
+    qty: 1,
     unit: "口",
     date: "20260821",
     time: "09:00:30",
-    pre_order: false,
-    error_msg: null,
-    actionable: false,
-    price_type: null,
-    raw: "",
+    code: null,
     ...over,
   };
 }
@@ -1094,7 +1083,7 @@ describe("FuturesChart 近全軸成交點(N043/N070)", () => {
   });
 
   it("成交點鈕不再反灰;當日成交畫在對應的軸索引上", async () => {
-    ordersBody = { orders: [futFill()] };
+    fillsBody = { fills: [futFill()] };
     wrap(<FuturesChart product="TXF" state={STATE} resolvedYm="202608" />);
     await findIntraday();
     const btn = await screen.findByRole("button", { name: "成交點" });
@@ -1104,8 +1093,8 @@ describe("FuturesChart 近全軸成交點(N043/N070)", () => {
   });
 
   it("**前一晚(週四夜盤)與當天凌晨的成交**仍畫在本錨定日的夜盤段", async () => {
-    ordersBody = {
-      orders: [
+    fillsBody = {
+      fills: [
         futFill({ date: "20260820", time: "22:00:30", buy_sell: "S" }),
         futFill({ seq_no: "F2", date: "20260821", time: "01:00:30", buy_sell: "S" }),
       ],
@@ -1117,8 +1106,8 @@ describe("FuturesChart 近全軸成交點(N043/N070)", () => {
   });
 
   it("別的錨定日(次一交易日日盤、或本日 15:00 後的夜盤 → 週一)的成交不畫", async () => {
-    ordersBody = {
-      orders: [
+    fillsBody = {
+      fills: [
         futFill({ date: "20260824", time: "09:00:30" }),
         futFill({ seq_no: "F2", date: "20260821", time: "22:00:30" }),
       ],
@@ -1130,7 +1119,7 @@ describe("FuturesChart 近全軸成交點(N043/N070)", () => {
   });
 
   it("合約未解析(resolvedYm null)→ 零標記(不拿 null 去比對 stock_no)", async () => {
-    ordersBody = { orders: [futFill()] };
+    fillsBody = { fills: [futFill()] };
     const { container } = wrap(<FuturesChart product="TXF" state={STATE} resolvedYm={null} />);
     await findIntraday();
     await waitFor(() => expect(screen.getByRole("button", { name: "成交點" })).toBeTruthy());

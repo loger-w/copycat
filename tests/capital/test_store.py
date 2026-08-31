@@ -952,3 +952,30 @@ def test_clear_drops_snapshot_watermark_no_phantom_reapply() -> None:
     s.apply_reply(_evt(typ="D", qty="2000", price="80.0"))  # 重播歷史成交(seeded 關,不套)
     s.set_positions([])  # 重連後首刷:今天已出光,庫存快照為空 = 真相
     assert s.position_for("4989") is None
+
+
+def test_fills_keeps_per_event_price_and_time_today_only() -> None:
+    """成交點精確版(L76):逐筆 D 事件各留一列(價格 / 時間不被均價壓扁);
+    只留當日(跨日長跑 prune);clear(重播前)清空 —— 重播會重建,不清會雙計。"""
+    s = CapitalStore(today=lambda: "20260831")
+    s.set_positions([])
+    s.apply_reply(_evt(typ="D", qty="1000", price="80.0000", time="09:01:00"))
+    s.apply_reply(_evt(typ="D", qty="1000", price="82.0000", time="09:03:00"))
+    fills = s.fills()
+    assert [(f.price, f.qty, f.unit, f.buy_sell, f.time) for f in fills] == [
+        (80.0, 1, "張", "B", "09:01:00"),
+        (82.0, 1, "張", "B", "09:03:00"),
+    ]
+    assert all(f.date == "20260831" for f in fills)
+    s.clear()
+    assert s.fills() == []
+
+
+def test_fills_prune_on_day_change() -> None:
+    day = ["20260831"]
+    s = CapitalStore(today=lambda: day[0])
+    s.set_positions([])
+    s.apply_reply(_evt(seq=SEQ_A, typ="D", qty="1000", price="80.0"))
+    day[0] = "20260901"
+    s.apply_reply(_evt(seq=SEQ_B, typ="D", qty="1000", price="81.0"))
+    assert [f.price for f in s.fills()] == [81.0]

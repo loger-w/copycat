@@ -1,37 +1,23 @@
 /** 分時圖「當日成交點」的純函式層(單檔頁現貨 / 個股期 + 群組圖牆共用;零 React)。
  *
- *  ## 近似版:每張委託一點(D7,user 拍板)
+ *  ## 精確版:每筆成交一點(L76,2026-08-31;取代近似版 D7)
  *
- *  資料源是 `CapitalOrder`(委託列表),它**沒有逐筆成交明細** —— 一張單只留
- *  `avg_fill_price`(均價)與 `time`(**最新事件時間**,不是首筆成交時間)。所以一張委託
- *  折成一個點,座標 = (最新事件分鐘, 均價)。已知的失真:
- *
- *  - 分批成交多筆會被壓成同一點(時間取最後那筆事件)。
- *  - 尾段事件是刪單(部分成交後刪)時,點落在**刪單時刻**而不是成交時刻。
- *  - `date` 同樣是**最新事件日**(`CapitalStore.apply_reply` 每筆回報有值即覆寫)——
- *    昨日部分成交、今日刪單的單,`date` 會變成今日,於是以「今日刪單分鐘 × 昨日均價」
- *    畫上今日圖。日期界怎麼收都躲不掉(它與成交事件本身不同源);唯一乾淨解 = 精確版
- *    逐筆 D 事件(下方 next-time)。
- *
- *  精確版(後端保留逐筆 D 事件 + `GET /api/capital/fills`)記 next-time,不在本輪。
+ *  資料源是 `CapitalFill`(`GET /api/capital/fills`,後端逐筆 D 事件、只留當日):
+ *  每筆帶**自己的**成交價與時刻 —— 近似版(每張委託一點 = 最新事件分鐘 × 均價)的
+ *  三種失真(分批壓成一點 / 刪單時刻蓋成交時刻 / 昨日均價畫今日圖)全數消失。
+ *  同 (分鐘, 側, 價位) 的多筆**無損合併**(qty 相加;同點多個三角只是重疊雜訊),
+ *  不同價位各自一點 —— 「每筆一標記」的語意保住。拿不到 API(舊後端 404)→ 空 =
+ *  不畫(D2 拍板:寧空白不失真)。
  *
  *  ## 與 `lib/ladder-lots.ts::aggregateLots` 的分工
  *
- *  兩者吃同一份 orders,但**聚合的欄位不同,不可互換**:
- *
- *  | | 位置欄位 | 聚合鍵 | 日期界 |
- *  |---|---|---|---|
- *  | `aggregateLots`(閃電梯) | `price`(**委託價**) | 價位 | 活單恆計、終態單看日期集合 |
- *  | 本檔(分時圖) | `avg_fill_price`(**成交均價**)+ `time` | 分鐘 × 買賣側 | 今日 ∨ 昨日活單 |
- *
- *  梯是價格軸、沒有時間軸,所以「昨日建立的幽靈活單」最多多一格徽章;圖有時間軸,幽靈單
- *  會在**今日的圖上畫出一個假成交**(AD-2)。代價不對稱,日期界因此比梯窄。 */
+ *  梯吃 orders(價格軸,委託價聚合);圖自本輪起吃 fills(時間軸,逐筆成交)。
+ *  excludeUnit="股"(現股排零股)兩邊同口徑(AD-3)。 */
 import { alldayIndexOf, anchorDateOf } from "@/lib/allday";
 import { futExchangeContract } from "@/lib/futures-ladder";
-import { ymdOf } from "@/lib/ladder-lots";
 import { minuteKey } from "@/lib/stock-accum";
 import { minuteToX, type XWindow } from "@/lib/stock-intraday-svg";
-import type { CapitalOrder } from "@/types";
+import type { CapitalFill } from "@/types";
 
 export type FillSide = "B" | "S";
 
@@ -69,107 +55,75 @@ export const FILL_MARK: FillMarkStyle = { halfW: 3.5, height: 6, halo: 1 };
 export const EMPTY_FILLS: readonly FillPoint[] = [];
 export const EMPTY_MARKS: readonly FillMark[] = [];
 
-/** 成交點的日期界(YYYYMMDD,與 `CapitalOrder.date` 同格式)。 */
-export interface FillDates {
-  today: string;
-  yesterday: string;
-}
-
-/** `YYYYMMDD` → `{today, yesterday}`。輸入取自 `ymdOf(new Date())`(caller 每 render 算,
- *  跨午夜時字串一變 useMemo 自然失效);減一日交給 `Date` 建構子正規化,與 `ymdWindow` 同源。 */
-export function fillDates(todayYmd: string): FillDates {
-  const y = Number(todayYmd.slice(0, 4));
-  const m = Number(todayYmd.slice(4, 6));
-  const d = Number(todayYmd.slice(6, 8));
-  return { today: todayYmd, yesterday: ymdOf(new Date(y, m - 1, d - 1)) };
-}
-
-/** 過濾通過的單筆(尚未按分鐘 × 側合併);`code` 留著給 `fillsByCode` 分組。 */
+/** 過濾通過的單筆(尚未合併);`code` 留著給 `fillsByCode` 分組(= wire `code` 衍生欄,
+ *  個股期契約碼已反查成股號;反查不到退回 `stock_no`,那筆只會被合約鍵的圖撿到)。 */
 interface RawFill extends FillPoint {
   code: string;
 }
 
-/** 與軸無關的欄位守門(成交量 / 均價 / 側 / 單位)。**兩種軸共用這一份**:
- *  現貨窗(`rawFill`)與近全軸(`alldayRawFill`)只在「哪一天算數 + 分鐘怎麼變成 key」
- *  上不同,其餘條件各寫一次的話,漂掉的樣態是「圖上多一個不該有的三角」而兩邊都不報錯。 */
+/** 與軸無關的欄位守門(量 / 價 / 側 / 單位)。兩種軸(現貨窗 / 近全軸)共用這一份,
+ *  各寫一次的話漂掉的樣態是「圖上多一個不該有的三角」而兩邊都不報錯。 */
 interface FillBase {
   code: string;
   side: FillSide;
   priceMilli: number;
   qty: number;
-  /** YYYYMMDD(最新事件日)/ HH:MM:SS —— 日期界與軸映射由呼叫端各自解讀 */
+  /** YYYYMMDD(成交**到達日**,逐筆自帶)/ HH:MM:SS */
   date: string;
   time: string;
 }
 
-function baseFill(o: CapitalOrder, excludeUnit?: string): FillBase | null {
-  if (o.stock_no === null || o.time === null || o.avg_fill_price === null) return null;
-  if (o.date === null) return null;
-  if (o.filled_qty <= 0) return null;
-  if (excludeUnit !== undefined && o.unit === excludeUnit) return null;
+function baseFill(f: CapitalFill, excludeUnit?: string): FillBase | null {
+  if (f.stock_no === null || f.time === null) return null;
+  if (f.qty <= 0 || !(f.price > 0)) return null;
+  if (excludeUnit !== undefined && f.unit === excludeUnit) return null;
   // 非 B/S 整筆跳過(無側可歸;同 aggregateLots 的紀律)
-  const side: FillSide | null = o.buy_sell === "B" ? "B" : o.buy_sell === "S" ? "S" : null;
+  const side: FillSide | null = f.buy_sell === "B" ? "B" : f.buy_sell === "S" ? "S" : null;
   if (side === null) return null;
   return {
-    code: o.stock_no,
+    code: f.code ?? f.stock_no,
     side,
-    priceMilli: Math.round(o.avg_fill_price * 1000),
-    qty: o.filled_qty,
-    date: o.date,
-    time: o.time,
+    priceMilli: Math.round(f.price * 1000),
+    qty: f.qty,
+    date: f.date,
+    time: f.time,
   };
 }
 
-/** 單筆委託 → `RawFill`,不合條件回 null。
+/** 單筆成交 → `RawFill`,不合條件回 null。
  *
- *  `excludeUnit`:現股(單檔頁現貨態 + 群組卡)傳 `"股"` 把零股單整筆排除 —— 與現股梯同
- *  口徑(AD-3),「我的單」在梯與圖上才一致。個股期不傳(契約碼與股號零碰撞,比對鍵已足)。
- *
- *  日期界(AD-2):`今日` ∨(`actionable` ∧ `昨日`)。`date` 是**最新事件日**
- *  (`CapitalStore.apply_reply` 每筆回報有值即覆寫),**不是委託建立日**(cr1 A-3)——
- *  所以「盤後預約單今日成交」那種單在成交回報進來的同時 `date` 就已經是今日,前半條
- *  就收得到。後半條真正收的是「最後一次回報停在昨日、今日仍 actionable」的單,而
- *  `filled_qty > 0` 意味那筆成交發生在昨日 —— 它會以昨日的均價 × 昨日的分鐘畫在今日
- *  圖上,是明示接受的殘餘風險(理論上收盤即終態,活單不該跨日留著)。
- *  不放寬到「活單恆計」是因為 `CapitalStore` 跨日不清 + prod server 長跑,更早的幽靈
- *  活單會在今日圖上畫出假成交。 */
-function rawFill(o: CapitalOrder, dates: FillDates, excludeUnit?: string): RawFill | null {
-  const b = baseFill(o, excludeUnit);
+ *  `excludeUnit`:現股(單檔頁現貨態 + 群組卡)傳 `"股"` 排零股 —— 與現股梯同口徑(AD-3)。
+ *  日期界 = **今日**(逐筆自帶真實到達日;後端本來只回當日,這裡是防禦性再過濾 ——
+ *  近似版「昨日活單」那半條連同它的殘餘風險一起退役)。 */
+function rawFill(f: CapitalFill, todayYmd: string, excludeUnit?: string): RawFill | null {
+  const b = baseFill(f, excludeUnit);
   if (b === null) return null;
-  if (b.date !== dates.today && !(o.actionable && b.date === dates.yesterday)) return null;
+  if (b.date !== todayYmd) return null;
   return { code: b.code, minute: minuteKey(b.time), priceMilli: b.priceMilli, side: b.side, qty: b.qty };
 }
 
-/** 同分鐘同向合併 → 依 minute 升冪(同分鐘 B 先 S 後)。
+/** 同 (分鐘, 側, **價位**) 無損合併(qty 相加)→ minute 升冪(同分鐘 B 先 S 後、同側價升冪)。
  *
- *  合併價 = **量加權平均**(AD-4):同分鐘同向 100 元@2 與 101 元@1 標在 100 或 101 都是
- *  假陳述,加權是唯一不偏的那一點。分子累加用毫元整數 × 量(市場價格運算一律整數毫元,
- *  同 `market.py` 紀律),最後才 `Math.round` 落回毫元。 */
+ *  精確版不做量加權(AD-4 退役):逐筆自帶真實價,不同價各自一點才是「每筆一標記」;
+ *  完全同點的多筆合併只是去掉重疊的三角,資訊零損。 */
 function aggregate(raws: readonly RawFill[]): readonly FillPoint[] {
   if (raws.length === 0) return EMPTY_FILLS;
-  interface Bucket {
-    minute: number;
-    side: FillSide;
-    qty: number;
-    /** 量加權分子:Σ(毫元 × 量) */
-    amount: number;
-  }
-  const buckets = new Map<string, Bucket>();
+  const buckets = new Map<string, FillPoint & { qty: number }>();
   for (const r of raws) {
-    const k = `${r.minute}|${r.side}`;
-    const cur = buckets.get(k) ?? { minute: r.minute, side: r.side, qty: 0, amount: 0 };
-    cur.qty += r.qty;
-    cur.amount += r.priceMilli * r.qty;
-    buckets.set(k, cur);
+    const k = `${r.minute}|${r.side}|${r.priceMilli}`;
+    const cur = buckets.get(k);
+    if (cur === undefined) {
+      buckets.set(k, { minute: r.minute, side: r.side, priceMilli: r.priceMilli, qty: r.qty });
+    } else {
+      cur.qty += r.qty;
+    }
   }
-  return [...buckets.values()]
-    .map((b) => ({
-      minute: b.minute,
-      priceMilli: Math.round(b.amount / b.qty),
-      side: b.side,
-      qty: b.qty,
-    }))
-    .sort((a, b) => a.minute - b.minute || (a.side === b.side ? 0 : a.side === "B" ? -1 : 1));
+  return [...buckets.values()].sort(
+    (a, b) =>
+      a.minute - b.minute ||
+      (a.side === b.side ? 0 : a.side === "B" ? -1 : 1) ||
+      a.priceMilli - b.priceMilli,
+  );
 }
 
 /** 群益回報的 `date`(`YYYYMMDD`)+ `time`(`HH:MM:SS`)→ 近全軸兩支 helper 各自要的輸入形:
@@ -190,16 +144,16 @@ function splitCapitalStamp(date: string, time: string): { stamp: string; hhmm: s
  *  `key === null` 直接回 `EMPTY_FILLS`(同 `aggregateLots` 的 guard)—— 個股期合約 ym
  *  解不出來時 caller 拿到的就是 null,拿它去比對會對到 `stock_no` 同樣是 null 的單。 */
 export function fillPoints(
-  orders: readonly CapitalOrder[] | undefined,
+  fills: readonly CapitalFill[] | undefined,
   key: string | null,
-  dates: FillDates,
+  todayYmd: string,
   excludeUnit?: string,
 ): readonly FillPoint[] {
   if (key === null) return EMPTY_FILLS;
   const raws: RawFill[] = [];
-  for (const o of orders ?? []) {
-    if (o.stock_no !== key) continue;
-    const r = rawFill(o, dates, excludeUnit);
+  for (const f of fills ?? []) {
+    if (f.stock_no !== key) continue;
+    const r = rawFill(f, todayYmd, excludeUnit);
     if (r !== null) raws.push(r);
   }
   return aggregate(raws);
@@ -221,16 +175,16 @@ export function fillPoints(
  *  `holidays` = caller 算 `anchorDate` 用的**同一份**假日集合(選配;缺 = 模組集合)—— 兩邊不同源時
  *  假日前夜盤的成交會被判成別天而整場不畫。 */
 export function alldayFillPoints(
-  orders: readonly CapitalOrder[] | undefined,
+  fills: readonly CapitalFill[] | undefined,
   key: string | null,
   anchorDate: string,
   holidays?: ReadonlySet<string>,
 ): readonly FillPoint[] {
   if (key === null) return EMPTY_FILLS;
   const raws: RawFill[] = [];
-  for (const o of orders ?? []) {
-    if (o.stock_no !== key) continue;
-    const b = baseFill(o);
+  for (const f of fills ?? []) {
+    if (f.stock_no !== key) continue;
+    const b = baseFill(f);
     if (b === null) continue;
     const { stamp, hhmm } = splitCapitalStamp(b.date, b.time);
     if (anchorDateOf(stamp, holidays) !== anchorDate) continue;
@@ -245,15 +199,16 @@ export function alldayFillPoints(
  *
  *  零筆的 code **不入 map**,caller 以 `?? EMPTY_FILLS` 補 —— 無成交的卡拿到的永遠是
  *  同一個 identity,`GroupCard` 的 memo 不被打穿(W-5)。
- *  只認現股(`excludeUnit="股"` 由 caller 傳):契約碼→股號反查留給精確版。 */
+ *  分組鍵 = wire `code`(個股期契約碼已反查成股號,L444:個股期成交落到該股的卡);
+ *  `excludeUnit="股"` 由 caller 傳 = 排零股(現股口徑)。 */
 export function fillsByCode(
-  orders: readonly CapitalOrder[] | undefined,
-  dates: FillDates,
+  fills: readonly CapitalFill[] | undefined,
+  todayYmd: string,
   excludeUnit?: string,
 ): Map<string, readonly FillPoint[]> {
   const buckets = new Map<string, RawFill[]>();
-  for (const o of orders ?? []) {
-    const r = rawFill(o, dates, excludeUnit);
+  for (const f of fills ?? []) {
+    const r = rawFill(f, todayYmd, excludeUnit);
     if (r === null) continue;
     const arr = buckets.get(r.code);
     if (arr === undefined) buckets.set(r.code, [r]);
