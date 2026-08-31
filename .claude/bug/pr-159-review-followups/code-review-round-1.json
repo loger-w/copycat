@@ -1,0 +1,22 @@
+{
+  "fixed_point": "dfc3cdf2",
+  "branch": "fix/pr-159-review-followups",
+  "reviewers": { "standards": "opus", "spec": "opus" },
+  "standards": [
+    { "id": "S-F1", "kind": "hard", "finding": "docs/next-time.md:21「10 突變體全殺」,但所引 artifact verification.md 突變體表只有 M1–M9 九顆(grep -c '^| M' = 9);bc20cd85 回校了隔壁數字(13→14 條)這格沒動。" },
+    { "id": "S-F2", "kind": "judgement", "finding": "diagnosis.md Phase 5 仍逐字寫 useStockBars 舊 staleTime lambda 與「日 K 才 error → 60 s」—— F-02 後已不存在;Phase 6 卻已補 followups 口徑,同檔兩種口徑。" },
+    { "id": "S-F3", "kind": "hard", "finding": "本 PR 有 🔴 行為改動(retryEmpty 閘),但鏈上唯一 gate artifact(daily-bars-siblings verification.md)只改一句:無 retryEmpty 突變體列、全量仍是 2912 舊快照。" },
+    { "id": "S-F4", "kind": "judgement", "smell": "Duplicated Code", "finding": "useFuturesBars.test 模組層已有 stubDayFetchByWallClock / dayFetchCount,本 PR 兩條新測試都繞過:改名那條手寫 stub、新那條 urls.filter 重複多次。" },
+    { "id": "S-F5", "kind": "judgement", "finding": "market / futures 兩條新測試近逐字(只差 key);next-time 的鷹架留尾條未加註本 PR 又長一對。" },
+    { "id": "S-F6", "kind": "judgement", "smell": "Flag Argument", "finding": "dayBarsRefetchInterval(q, { retryEmpty }) —— 不建議改兩支函式:具名、必填、options 形式已是標準緩解且 doc 給了 true/false 理由;唯一可議是名字說機制,treatEmptyAsFailure 更貼語意。" },
+    { "id": "S-F7", "kind": "judgement", "finding": "stock 的 retryEmpty: false 只被既有「tf=D 空 + ok 前進 60s 仍只打一次」間接鎖住,該測試名/註未提它現在也守這個新決策(翻 true 會紅但零訊號說明)。" },
+    { "id": "S-F8", "kind": "judgement", "finding": "🔵 3b11e7da 內含 useStockBars.test 刪 afterEach(F-04),嚴格說 🔵/🟢 混;commit message 有揭露,低。" }
+  ],
+  "spec": [
+    { "id": "P-DONE", "kind": "coverage", "finding": "F-01~F-08 + 報告收檔 9/9 全 DONE(逐條 file:line 對照);白名單三支分 K 逐字未動;「日 K 不輪詢」fixture 換非空 = 事前預告該變,成立非 §E 違規。" },
+    { "id": "P-F1", "kind": "scope", "finding": "msUntilDayRollover 與 DAY_ERROR_RETRY_MS 一併降私有超出 F-06 點名範圍 —— 判合理:F-02 收線後 grep 全 src/ 兩者零 import,留著 export 正是 F-06 同一個病;同一決議的閉包,非 creep。" },
+    { "id": "P-F2", "kind": "scope", "finding": "新增 interface DayBarsQuery 結構型別為接線所需,tsc 0。" },
+    { "id": "P-LOW", "kind": "known", "finding": "空態閘只加在 refetchInterval,dayBarsStaleTime 那半沒加 —— 期貨退訂 / 失焦期間拿到空快照,切回不立即重抓、要等重排的 60 s interval。上界 60 s、方向安全,屬拍板 (a) 字面範圍,知情即可。" }
+  ],
+  "disposition": "接受:S-F2(diagnosis Phase 5 補「當時實作快照」追記,不重寫歷史)、S-F4(改名條改用 stubDayFetchByWallClock、F-01 條 urls.filter ×4 → dayFetchCount;斷言零改)、S-F5(next-time 鷹架條加註「followups 又長一對」)、S-F7(stock 空+ok 測試補「同時釘 retryEmpty: false;突變體 M-b 實證」註)。反駁:S-F1 —— 「10 突變體」正確:M1–M9 之外 round-1 節 gate 表明載「突變體 M1–M9 重跑 + M4b … 10/10 KILLED」,reviewer 的 grep '^| M' 只數到第一張表,總數證據在同檔;不改。S-F3 —— 精神成立、但對象錯位:本分支自有 artifact `.claude/bug/pr-159-review-followups/verification.md`(retryEmpty 突變體 M-a~M-d 4/4 KILLED、全量 2914、反向驗證)於 review 當下尚未 cp 進 worktree,隨 artifacts commit 補齊;舊 artifact 的 2912 是 #159 當時的歷史快照,不回改。S-F6 —— 拒改名:retryEmpty = 「空就重試」直述行為,與 doc 首句一致;必填 options 已是 flag-argument 緩解,reviewer 自己也判不建議改函式。S-F8 —— 知情,message 已揭露,不重寫歷史。P-LOW 知情項照錄 verification.md。流程事故(自報):S-F4/S-F7 收修第一輪腳本斷言炸掉只套了一半、amend 又打錯目標把測試改動折進 docs commit —— 以 soft reset 拆開重組,最終 refactor commit 含全部測試收修、docs commit 純 docs;教訓 = amend 前先 git log -1 核對 HEAD。"
+}
