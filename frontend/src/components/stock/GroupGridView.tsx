@@ -309,13 +309,13 @@ export function GroupGridView({
   }, [onPick]);
   const pick = useCallback((code: string) => pickRef.current(code), []);
 
-  // 當日成交點(SC-6)。委託列表在**圖牆層取一份**、一次折完所有 code,每卡只取自己
-  // 那個 key —— 卡片各掛一份 hook 的話 50 張卡會各折一次同一份 orders。
+  // 當日成交點(SC-6)。成交列表(fills,L76 精確版)在**圖牆層取一份**、一次折完
+  // 所有 code,每卡只取自己那個 key —— 卡片各掛一份 hook 的話 50 張卡會各折一次同一份 fills。
   //
   // `today` 每 render 現算(AD-9):跨午夜開著頁面時字串一變,下面的 useMemo 自然失效
   // 重算,昨天的成交點跟著消失(deps 放 `new Date()` 物件就永遠失效、放空陣列就永不失效)。
-  // 現股口徑 `excludeUnit="股"` 與現股梯一致(AD-3);群組卡只認現股(契約碼→股號
-  // 反查留給精確版),所以不必分態。
+  // 現股口徑 `excludeUnit="股"` 只排零股(AD-3,與現股梯一致);個股期成交由 wire `code`
+  // 反查落到該股的卡(L444 已到位,見 `fillsByCode` docstring),不再「只認現股」。
   //
   // 位置必須在 `groups.length === 0` 早退**之前**:hook 不可條件化(本 repo 沒裝
   // react-hooks lint,漏了不會被擋)。

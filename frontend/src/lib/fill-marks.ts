@@ -108,7 +108,7 @@ function rawFill(f: CapitalFill, todayYmd: string, excludeUnit?: string): RawFil
  *  完全同點的多筆合併只是去掉重疊的三角,資訊零損。 */
 function aggregate(raws: readonly RawFill[]): readonly FillPoint[] {
   if (raws.length === 0) return EMPTY_FILLS;
-  const buckets = new Map<string, FillPoint & { qty: number }>();
+  const buckets = new Map<string, FillPoint>();
   for (const r of raws) {
     const k = `${r.minute}|${r.side}|${r.priceMilli}`;
     const cur = buckets.get(k);
@@ -200,7 +200,10 @@ export function alldayFillPoints(
  *  零筆的 code **不入 map**,caller 以 `?? EMPTY_FILLS` 補 —— 無成交的卡拿到的永遠是
  *  同一個 identity,`GroupCard` 的 memo 不被打穿(W-5)。
  *  分組鍵 = wire `code`(個股期契約碼已反查成股號,L444:個股期成交落到該股的卡);
- *  `excludeUnit="股"` 由 caller 傳 = 排零股(現股口徑)。 */
+ *  `excludeUnit="股"` 由 caller 傳 = 排零股(現股口徑)。
+ *  已接受的設計代價(pr-167 #21):單檔頁現貨態刻意**不撿**同一筆個股期成交(那邊的
+ *  比對鍵是 `stock_no`)—— 圖牆看得到、點進去看不到;卡上期貨價與現貨價的三角同形
+ *  無區辨。 */
 export function fillsByCode(
   fills: readonly CapitalFill[] | undefined,
   todayYmd: string,
