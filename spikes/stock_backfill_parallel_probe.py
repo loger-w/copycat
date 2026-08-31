@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "spikes" / "TCPY"))
 
 from copycat.live.stock_source import StockQuoteSource  # noqa: E402
-from copycat.live.tc4 import HistoryTimeoutError  # noqa: E402
+from copycat.live.tc4 import HealPolicy, HistoryTimeoutError  # noqa: E402
 
 
 def _codes(n: int) -> list[str]:
@@ -86,7 +86,7 @@ def main() -> int:
     args = ap.parse_args()
 
     codes = _codes(args.codes)
-    src = StockQuoteSource(port=args.port, heal_silence_secs=None, heal_symbol_silence_secs=None)
+    src = StockQuoteSource(port=args.port, heal=HealPolicy(silence_secs=None, symbol_silence_secs=None))
     result: dict = {"codes": codes, "threads": args.threads}
     try:
         result["serial"] = run_serial(src, codes)

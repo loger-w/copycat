@@ -24,6 +24,7 @@ import time
 sys.path.insert(0, os.getcwd())
 
 from copycat.live.stock_source import StockQuoteSource  # noqa: E402
+from copycat.live.tc4 import HealPolicy
 from copycat.server.stock_engine import StockEngine  # noqa: E402
 
 TRADE_DATE = "2026-07-21"
@@ -131,8 +132,7 @@ async def run(
         api=FakeApi(sim.handle),
         session="s1",
         trade_date=TRADE_DATE,
-        heal_silence_secs=None,
-        heal_symbol_silence_secs=None,
+        heal=HealPolicy(silence_secs=None, symbol_silence_secs=None),
         in_trading_hours=lambda: False,  # 不排健檢 timer
     )
     engine = StockEngine(src, trade_date=TRADE_DATE, throttle_secs=60, checkpoint=False)
