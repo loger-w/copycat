@@ -26,7 +26,7 @@
   報告入 `docs/superpowers/specs/pr-159-review.md`(+ .audit.md)。
 - [ ] **三支日 K 跨日測試鷹架逐字三份**(review S-F5,08-31):`rerenderBurst` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D1_ISO` / `stubFetchByWallClock` 在
   `useFuturesBars.test.ts` / `useMarketBars.test.ts` / `useStockBars.test.tsx` 同形。可抽 `hooks/__fixtures__/day-rollover.ts`;動到期指那檔出本案範圍,
-  併 test-hygiene 批。
+  併 test-hygiene 批。(08-31 followups 又長一對:market / futures 各一條近逐字的「午夜 200+空 bars」測試 —— 抽 fixture 時一併收。)
 - [x] ~~**`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**~~(08-31 user 拍板知情不動、結案;render 時重算,**有**日期鍵、風險較低):
   與 08-30 否決的 H3 同構 —— 只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了
   「沒人看就退訂」的閘,跨日會與期貨日 K 同病。記著,不動。
