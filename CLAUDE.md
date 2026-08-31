@@ -252,7 +252,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `get_args(AvgSource)`;pr-129 F-05):後端先加值而前端沒跟,白名單會把新值**靜默**歸 null 退回修前口徑,零訊號。
 - **證券部位 `kind` 的 `daytrade_sell` 值**(2026-08-30 起,fix/borrowless-short-calibration):產生點
   `copycat/capital/balance.py::parse_balance_line`(現股 T 列負股數 → `daytrade_sell`)與 `store.py::_FILL_KIND`(「無券」);
-  讀者 = `frontend/src/lib/ladder-position.ts::positionEcon`(當沖稅減半條件 `cash | daytrade_sell`)、`lib/trade-kinds.ts`
+  讀者 = `frontend/src/lib/ladder-position.ts::positionEcon`(當沖稅減半;種類分支 2026-08-31 起收斂於 `lib/trade-kinds.ts::KIND_TRAITS.halfTaxToday`,未知字串政策 = `UNKNOWN_KIND_TRAITS`)、`lib/trade-kinds.ts`
   (閃電梯 / header / chip 標籤「無券」)、`lib/close-order.ts::KIND_TEXT`(部位面板「無」/ 確認窗「無券」;**鍵集 = `kindOf`
   送 kind 的值域**,與 wire `server/capital_api.py::PositionCloseBody.kind` 同為 `TradeKind` 四值 —— 「標得出來就送得出去」)。
   漂掉的症狀分兩種:後端把負現股列改成**別的字串** → `kindOf` 回 null → 前端減半靜默消失、標籤印原字串 / 空白、平倉退回
