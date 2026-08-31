@@ -4,10 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StockChart } from "@/components/stock/StockChart";
-import { ymdOf } from "@/lib/ladder-lots";
 import type { StockAccum } from "@/lib/stock-accum";
 import type { CapitalFill } from "@/types";
-import { wrap } from "@/test-utils";
+import { fillOf, wrap } from "@/test-utils";
 
 const ACCUM = {
   code: "2330",
@@ -34,21 +33,6 @@ const BARS = [
 
 /** 逐筆成交 fixture(SC-7;精確版 L76)。`date` **必須動態算** —— 寫死日期會在
  *  隔天靜默轉紅。`price` 是**元**;個股期的 `stock_no` 放的是期交所契約碼。 */
-function fillOf(over: Partial<CapitalFill> = {}): CapitalFill {
-  return {
-    seq_no: "s1",
-    stock_no: "2330",
-    buy_sell: "B",
-    flag_label: null,
-    price: 2380,
-    qty: 2,
-    unit: "張",
-    date: ymdOf(new Date()),
-    time: "09:00:30",
-    code: "2330",
-    ...over,
-  };
-}
 
 let barsUrls: string[];
 let fills: CapitalFill[];
@@ -482,7 +466,7 @@ describe("StockChart 成交點比對鍵(SC-7)", () => {
     );
   }
 
-  it("現貨態:只畫股號那筆(同一份 orders 內的個股期契約單不畫)", async () => {
+  it("現貨態:只畫股號那筆(同一份 fills 內的個股期成交不畫)", async () => {
     fills = [SPOT, FUT];
     const { container } = wrap(<StockChart accum={ACCUM} code="2330" />);
     await waitFor(() => expect(marks(container)).toEqual(["fill-B-540"]));

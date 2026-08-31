@@ -8,14 +8,13 @@ import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { STOCK_GROUP_KEY } from "@/lib/constants";
 import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
-import { ymdOf } from "@/lib/ladder-lots";
 import type { Group } from "@/lib/watchlist-model";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
 import { pnlText } from "@/lib/pnl-format";
 import type { CapitalFill, CapitalPosition } from "@/types";
-import { wrap } from "@/test-utils";
+import { fillOf, wrap } from "@/test-utils";
 
 
 /** 測試用外殼:圖牆自 F2 起受控(「現在看哪一組」唯一持有者是 StockPage 的 `useStockGroup`),
@@ -89,24 +88,6 @@ class FakeResizeObserver {
   disconnect(): void {}
 }
 
-/** 委託記錄 fixture(SC-6)。`date` **必須動態算** —— 寫死日期的測試會在隔天靜默
- *  轉綠 / 轉紅(日期界是 `fillPoints` 的過濾條件之一)。
- *  `avg_fill_price` 是**元**(2380 → 毫元 2_380_000);`filled_qty` 現股是張。 */
-function fillOf(over: Partial<CapitalFill> = {}): CapitalFill {
-  return {
-    seq_no: "s1",
-    stock_no: "2330",
-    buy_sell: "B",
-    flag_label: null,
-    price: 2380,
-    qty: 2,
-    unit: "張",
-    date: ymdOf(new Date()),
-    time: "09:00:30",
-    code: "2330",
-    ...over,
-  };
-}
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let states: Record<string, unknown>;
@@ -741,7 +722,7 @@ describe("GroupGridView 窗內無分鐘(edge 9)", () => {
 });
 
 // 🟢 R2 SC-6:群組卡上的當日成交點。圖牆層掛**一份** `useCapitalFills` + 一次
-// `fillsByCode`,每卡只取自己那個 key —— 50 張卡各折一次的話同一份 orders 會被走 50 遍。
+// `fillsByCode`,每卡只取自己那個 key —— 50 張卡各折一次的話同一份 fills 會被走 50 遍。
 //
 // 量法一律 **per-card** `polygon[data-testid^="fill-"]`:兩張卡同一分鐘各有成交時
 // testid 會撞,document 級的 getByTestId 直接拋 multiple-elements(或更糟:數錯)。
@@ -761,7 +742,7 @@ describe("GroupGridView 群組卡成交點(SC-6)", () => {
   });
 
   /** 零股(`unit === "股"`)整筆排除 —— 與現股梯同口徑(AD-3),「我的單」在梯與圖上
-   *  才一致。同一份 orders 內放一筆現股單當**正對照**:少了它,「0 個」在 query 還沒
+   *  才一致。同一份 fills 內放一筆現股成交當**正對照**:少了它,「0 個」在 query 還沒
    *  settle 的時候也成立,測試靜默 vacuous。 */
   it("零股成交(unit「股」)不畫;同一份 fills 內的現股單照畫", async () => {
     fills = [

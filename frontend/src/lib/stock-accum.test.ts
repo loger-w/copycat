@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { trialBadgeText,
+import {
   accumFromGroupSnapshot,
   applyTick,
   extendMinutes,
   fromSnapshot,
+  trialBadgeText,
   type MinuteAgg,
   type StockAccum,
   type StockTickMsg,
@@ -41,6 +42,14 @@ describe("fromSnapshot", () => {
 describe("fromSnapshot 的 trial", () => {
   it("snapshot 帶 trial → 原樣帶入", () => {
     expect(fromSnapshot({ ...SNAP, trial: true }).trial).toBe(true);
+  });
+
+  it("snapshot 帶 disposition → 原樣帶入(pr-167 #16,照 trial 兄弟欄形狀)", () => {
+    expect(fromSnapshot({ ...SNAP, disposition: true }).disposition).toBe(true);
+  });
+
+  it("snapshot 缺 disposition(舊後端)→ false,不是 undefined", () => {
+    expect(fromSnapshot(SNAP).disposition).toBe(false);
   });
 
   it("snapshot 缺 trial(舊後端)→ false,不是 undefined", () => {
