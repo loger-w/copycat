@@ -18,8 +18,12 @@
   **→ 08-31 fix/daily-bars-siblings-rollover 出貨**:兩支 `staleTime` / `refetchInterval` 改吃同一把尺;`useMarketBars` 日 K 分支**整段不吃 `active`**
   (tab hidden 保留不 unmount,切回只會排到下一個午夜;與期指 `subscribed: active` 是同一個界、不同閘形狀 —— review P-F2 / P-F3 知情);
   `useStockBars` 沿 `barsPollInterval` 先判(20 s 空態重試優先於日界);兩支同加午夜失敗 60 s 重試(error 只在 HTTP 非 2xx,TC4 斷線是 200 降級
-  payload 不進 error)。helper 三顆搬 `lib/day-bars-rollover.ts`(user 拍板)。13 條 hook 測試 + 10 突變體全殺。真環境判準 = 09-01 00:01 Network 一發
+  payload 不進 error)。helper 三顆搬 `lib/day-bars-rollover.ts`(user 拍板)。14 條 hook 測試(15 例;pr-159-review F-03 回校)+ 10 突變體全殺。真環境判準 = 09-01 00:01 Network 一發
   `market/bars/*?tf=D` + `stock/bars/<code>?tf=D`、09:00 後末根是 09-01(artifact `.claude/bug/daily-bars-siblings-rollover/verification.md`)。
+  **→ 08-31 /pr-review #159(8 條全 Nice)→ fix/pr-159-review-followups 全收修**:F-01 午夜 200+空 bars 視同失敗 60 s 重試
+  (`dayBarsRefetchInterval` 加 `retryEmpty`,market / futures true、stock false —— stock 的空+ok = 真無資料刻意不輪詢,SC-4);
+  F-02 政策運算式收 `lib/day-bars-rollover.ts`(公開面只剩兩支政策函式,常數全降私有);F-03~F-08 docs / 測試衛生六條。
+  報告入 `docs/superpowers/specs/pr-159-review.md`(+ .audit.md)。
 - [ ] **三支日 K 跨日測試鷹架逐字三份**(review S-F5,08-31):`rerenderBurst` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D1_ISO` / `stubFetchByWallClock` 在
   `useFuturesBars.test.ts` / `useMarketBars.test.ts` / `useStockBars.test.tsx` 同形。可抽 `hooks/__fixtures__/day-rollover.ts`;動到期指那檔出本案範圍,
   併 test-hygiene 批。
