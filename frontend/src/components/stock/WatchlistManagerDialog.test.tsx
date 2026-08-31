@@ -59,15 +59,17 @@ function open(wl: Watchlist = WL) {
 
 /** PUT 卡 gate 逐發放行(成功 echo / 400 失敗可選):製造「第一發在途時做第二個動作」
  *  的視窗。gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
- *  對應 resolver 必已存在,release 不會撲空。每個 describe 各叫一次(閉包各自持 `gated`);
- *  `gatePuts()` 重設佇列並換掉 `fetchMock` 實作,`beforeEach` 的 echo 版在下一條測試自動復原。
+ *  對應 resolver 必已存在,release 不會撲空。隔離靠 `gatePuts()` 每條測試開頭重設 `gated`
+ *  (實測三份閉包收成單例 51/51 仍綠 —— per-describe 各持一份純屬防禦,pr-160 review F-09);
+ *  `gatePuts()` 換掉的 `fetchMock` 實作由 `beforeEach` 的 echo 版在下一條測試自動復原。
  *  原本三個 describe 各抄一份逐字複本(next-time 08-26 A4 留尾)。 */
 function makeGate(): {
   gatePuts: () => void;
   releaseOk: () => void;
   releaseFail: () => void;
 } {
-  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }> = [];
+  // 刻意不給初值:忘了先 gatePuts() 就 release 會炸在 undefined.shift(訊息比吞空 shift 準)
+  let gated: Array<{ body: Watchlist; resolve: (r: Response) => void }>;
   function gatePuts(): void {
     gated = [];
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {

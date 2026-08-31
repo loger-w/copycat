@@ -24,8 +24,6 @@ function sig(id: string): SignalMsg {
   };
 }
 
-/** 同一 tick 的一則:code / time 固定(= 合併鍵 `(code, time)`),kind 與 id 互異。
- *  `sig()` 的 code 帶 id 是為了節流測試分辨「發的是哪一則」,同 tick 案要的正好相反。 */
 /** `sig(id)` 一則的 toast / 通知文案,**逐字寫死**(不再拿 `formatToastText` 當期望值 ——
  *  實作與斷言同一顆函式時文案改壞 mutant 全綠,next-time 08-24 N013 留尾)。
  *  拆解:`代號(= id) 名稱(台積電) 訊號名(surge → 爆拉 +1.50%,pct 1.5 兩位小數帶正號)
@@ -33,6 +31,9 @@ function sig(id: string): SignalMsg {
 function toastText(id: string): string {
   return `${id} 台積電 爆拉 +1.50% 1234.5`;
 }
+
+/** 同一 tick 的一則:code / time 固定(= 合併鍵 `(code, time)`),kind 與 id 互異。
+ *  `sig()` 的 code 帶 id 是為了節流測試分辨「發的是哪一則」,同 tick 案要的正好相反。 */
 
 function tick(id: string, over: Partial<SignalMsg>): SignalMsg {
   return { ...sig(id), code: "2330", ...over };
