@@ -1000,11 +1000,11 @@ class TestRelay:
                 relay(websocket, _one_message(), heartbeat_secs=0.02), timeout=2
             )
         # 只看 relay 自己的 logger:caplog 收的是**整個 root** 的紀錄,全量並行時別的測試
-        # 殘留的背景執行緒(TC4 heal / engine worker)一則 WARNING 落進這 2 秒窗就會誤紅
+        # 殘留的背景執行緒(TC4 heal / engine worker;pr-160 review 實證 `_listen_loop` 會活過測試)一則 WARNING 落進這 2 秒窗就會誤紅
         # (08-27 全量並行 1 紅、單跑 3/3 綠;next-time 08-26 留尾)。
         leaked = [
             r
             for r in caplog.records
-            if r.levelno >= logging.WARNING and r.name.startswith("copycat.server.ws")
+            if r.levelno >= logging.WARNING and r.name == "copycat.server.ws"
         ]
         assert not leaked, caplog.text
