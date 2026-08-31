@@ -107,18 +107,28 @@ describe("StockPage", () => {
   // → TC4 之後開起來也不會自癒,得重啟伺服器)。兩者的 seed 逐值相同,前端分不出來
   // (`/api/health` 刻意不含引擎健康度),所以文案要對**兩態都誠實**:改前那句
   // 「恢復後自動回補」對無 engine 模式是錯的,而使用者只會一直等。
-  // 斷言字串 2026-08-24 two-axis 收修時**事前標為該變**:「server」→「伺服器」(UI 全繁中)。
-  it("TC4 斷線告警列:自癒與需重啟兩態都講得到", () => {
+  // 斷言字串 2026-08-31 L78 分態時**事前標為該變**:engine 欄讓兩態可分辨(N109 真分態),
+  // 單句拆成兩句 —— 各自誠實:一個等自癒、一個叫你去重啟。
+  it("TC4 斷線告警列:engine 在 → 等待自動重連", () => {
     wrap(
       <StockPage
         code="2330"
         onSelect={vi.fn()}
-        stream={stream({ status: { tc4: "down", backfilling: null } })}
+        stream={stream({ status: { tc4: "down", backfilling: null, engine: true } })}
       />,
     );
-    const note = screen.getByText(/達錢 4 未連線/);
-    expect(note.textContent).toContain("自動回補");
-    expect(note.textContent).toContain("重啟伺服器");
+    expect(screen.getByText(/達錢 4 連線中斷 —— 等待自動重連/)).toBeTruthy();
+  });
+
+  it("TC4 斷線告警列:無引擎 → 需重啟伺服器", () => {
+    wrap(
+      <StockPage
+        code="2330"
+        onSelect={vi.fn()}
+        stream={stream({ status: { tc4: "down", backfilling: null, engine: false } })}
+      />,
+    );
+    expect(screen.getByText(/行情引擎未啟動 —— 需重啟伺服器/)).toBeTruthy();
   });
 
   it("伺服器斷線顯示重連告警列(文案不變)", () => {

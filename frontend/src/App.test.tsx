@@ -681,12 +681,10 @@ describe("App 資料流上提(D-3 / D-16)", () => {
     act(() => {
       ws.onmessage?.({ data: JSON.stringify({ type: "status", tc4: "down", backfilling: null }) });
     });
+    // 缺 engine 欄(舊後端)預設 true → 「等待自動重連」:失效方向是使用者多等一會,
+    // 不是被叫去重啟一台其實會自癒的伺服器(L78 分態)
     await waitFor(() =>
-      expect(
-        screen.getByText(
-          /達錢 4 未連線 —— 連線後自動回補;若伺服器啟動時達錢 4 未開,需重啟伺服器/,
-        ),
-      ).toBeTruthy(),
+      expect(screen.getByText(/達錢 4 連線中斷 —— 等待自動重連/)).toBeTruthy(),
     );
   });
 

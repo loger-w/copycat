@@ -1922,7 +1922,11 @@ def create_app(
                 # 無 quote seed:沒有 engine 就沒有現值可種。
                 await relay(
                     websocket,
-                    stock_ws.stream(seed=[{"type": "status", "tc4": "down", "backfilling": None}]),
+                    stock_ws.stream(
+                        # engine=False 是「真分態」的唯一訊號源(N109 / L78):engine 發的
+                        # status 一律 engine=True,前端據此分「等自癒」與「去重啟伺服器」。
+                        seed=[{"type": "status", "tc4": "down", "backfilling": None, "engine": False}]
+                    ),
                 )
             except WebSocketDisconnect:
                 return

@@ -44,7 +44,7 @@ export interface StkfutQuote {
 export interface StockStreamState {
   accum: StockAccum | null;
   watchlist: Record<string, WatchlistQuote>;
-  status: { tc4: string; backfilling: string | null };
+  status: { tc4: string; backfilling: string | null; engine: boolean };
   stkfut: StkfutQuote | null;
   wsStatus: WsStatus;
 }
@@ -112,8 +112,9 @@ export function useStockStream(
   const queryClient = useQueryClient();
   const [accum, setAccum] = useState<StockAccum | null>(null);
   const [watchlist, setWatchlist] = useState<Record<string, WatchlistQuote>>({});
-  const [status, setStatus] = useState<{ tc4: string; backfilling: string | null }>({
+  const [status, setStatus] = useState<{ tc4: string; backfilling: string | null; engine: boolean }>({
     tc4: "up",
+    engine: true,
     backfilling: null,
   });
   const [stkfut, setStkfut] = useState<StkfutQuote | null>(null);
@@ -157,8 +158,9 @@ export function useStockStream(
   };
   // 上一則 status 的**真值**(F-1)。WS handler 是 deps `[]` 的閉包讀不到最新 state,
   // 而把比較塞進 `setStatus` 的 updater 會讓副作用跟著 StrictMode 的 double-invoke 重跑。
-  const statusRef = useRef<{ tc4: string; backfilling: string | null }>({
+  const statusRef = useRef<{ tc4: string; backfilling: string | null; engine: boolean }>({
     tc4: "up",
+    engine: true,
     backfilling: null,
   });
   const codeRef = useRef(code);
@@ -430,6 +432,8 @@ export function useStockStream(
           const next = {
             tc4: String(msg.tc4 ?? "up"),
             backfilling: (msg.backfilling as string | null) ?? null,
+            // 缺欄(舊後端)= true:失效方向是「多等自癒」,不是把會自癒的態叫人去重啟(L78)
+            engine: msg.engine !== false,
           };
           // 比較與 refetch 都在 handler 本體做,**不可搬回 `setStatus` 的 updater 內**
           // (F-1):updater 的契約是純函式,而全站包在 StrictMode 下 dev 會 double-invoke

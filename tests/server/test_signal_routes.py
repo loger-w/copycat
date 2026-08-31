@@ -864,6 +864,9 @@ class TestSignalRoutesWithoutStock:
                     "type": "status",
                     "tc4": "down",
                     "backfilling": None,
+                    # L78 分態:無 engine 的 seed 標 engine=False(engine 發的 status 恆 True),
+                    # 前端據此分「等待自動重連」與「需重啟伺服器」兩句(N109 真分態)
+                    "engine": False,
                 }
 
                 _emit_rule_signal(client, hub, monkeypatch, trade_date=today)
@@ -889,6 +892,9 @@ class TestSignalRoutesWithoutStock:
                     "type": "status",
                     "tc4": "down",
                     "backfilling": None,
+                    # L78 分態:無 engine 的 seed 標 engine=False(engine 發的 status 恆 True),
+                    # 前端據此分「等待自動重連」與「需重啟伺服器」兩句(N109 真分態)
+                    "engine": False,
                 }
                 assert _recv_until(ws, "ping") == {"type": "ping"}
 
