@@ -940,3 +940,15 @@ def test_borrowless_buy_side_fill_does_not_count_into_daytrade_today_qty() -> No
     s.set_positions([row])  # 拒套的成交仍在聚合裡;下一輪快照落地會重算 today_qty —— 這一步才是 finding 顯形點
     ds = s.position_for("8358", "daytrade_sell")
     assert ds is not None and ds.qty == -1 and ds.today_qty == 1
+
+
+def test_clear_drops_snapshot_watermark_no_phantom_reapply() -> None:
+    """clear(重連重播前)必須連水位一起丟:重播的成交是歷史,若被當成
+    「水位後增量」重套,首刷落地會幻影加倉(與 review F-02 同類洞,方向相反)。"""
+    s = CapitalStore()
+    s.set_positions([])  # 開機首刷
+    s.begin_snapshot()  # 鏈出手(水位 = 空單集)
+    s.clear()  # 重連重播前
+    s.apply_reply(_evt(typ="D", qty="2000", price="80.0"))  # 重播歷史成交(seeded 關,不套)
+    s.set_positions([])  # 重連後首刷:今天已出光,庫存快照為空 = 真相
+    assert s.position_for("4989") is None

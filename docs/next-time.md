@@ -58,7 +58,14 @@
 - [ ] **`daytrade_sell` 語意散在六處(review 2026-08-30 F-09,Shotgun Surgery)**:balance.py / client.py / store.py / close.py
   `_CLOSE_MAP` / `ladder-position.ts`,前端另有 PriceLadder / close-order / flash-send / trade-kinds 各自 `=== "daytrade_sell"`
   字串比較,`positionEcon(kind: string)` 收裸 string。候選 = 前端把 kind 收成單一型別 + 一張「稅 / 費 / 方向」表;等下一次再加種類時併做。
-- [ ] **`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。
+- [x] ~~**`/bug` 部位快照不得倒退**(L227 / L498 併;user 08-28:「樂觀更新不該被資料拿到後改動,下單風險太大」)。~~
+  → 08-31 fix/position-snapshot-no-regress 出貨(水位修法,user 拍板只做水位):`store.begin_snapshot()` 記 balance 查詢
+  出手時刻每張單累計成交量,`set_positions` 落地只把水位前標「已套用」、水位後增量經 `_apply_fill_locked` 重套於快照之上;
+  `clear()` 連水位一起丟(重播不幻影加倉)。紅測試 = test_fill_latency `test_chain_landing_does_not_regress_fill_arrived_in_flight`。
+- [ ] **倒退保護(R1 留尾,待實錄再拍)**:成交發生在 balance 查詢出手**前**、但群益報表自身落後(> 0.5 s debounce)
+  → 快照仍舊、水位判不出 → 倒退最長 60 s(L642「少一檔 / 多一檔 60s」樣態)。修法候選 =「近 N 秒內有樂觀成交的鍵」
+  落地若倒退則保留樂觀值 + 立即重查;TTL 要拍板(user 08-31:「這個問題先緩緩」)。下次盤中遇到部位消失 >5 s 時抓
+  `grep "balance 鏈" + 成交樂觀套用` 時序當實錄。
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [x] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
