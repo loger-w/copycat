@@ -110,7 +110,7 @@ docs/superpowers/         # spec 與 implementation plan
 | 種子匯入(一次性) | `.venv\Scripts\python -m copycat import-neigui --src C:\side-project\neigui\backend\data\research\five-tigers` | repo root |
 | Replay | `.venv\Scripts\python -m copycat replay --watchlist watchlists/four_tigers.json` | repo root |
 | Golden 驗證 gate | `.venv\Scripts\python -m copycat validate` | repo root |
-| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;非交易日自動取最近交易日(`configs/trading_holidays.json`,`GET /api/calendar` 可查;`years_loaded` 不含當年 = 日曆過期要更新);`TXO_BACKFILL_DATE` 仍為手動覆寫,TXO 面與交易日盤前冷啟動仍需要它) | repo root |
+| TXO 看盤 server | `.venv\Scripts\python -m copycat.server`(需達錢 4 開啟;port 8721;非交易日自動取最近交易日(`configs/trading_holidays.json`,`GET /api/calendar` 可查;`years_loaded` 不含當年 = 日曆過期要更新);`TXO_BACKFILL_DATE` 只剩手動 ops 覆寫(恆優先);08-31 起 TXO 休市/盤前自動取最近日盤交易日、各面盤前顯前一交易日(stock 08:00 / index 08:30 / TXO 08:45 各自 stage 換今日)) | repo root |
 | 跑著的 server 是哪一版 | `curl -s localhost:8721/api/health` → `{git_sha,...}`;判法與教訓見 skill `ops-discipline` | repo root |
 | Frontend dev / 測試 / build | `npm run dev` / `npm test` / `npm run build` | frontend/ |
 | **看盤日常(prod build)** | `npm run build` 後 `npm run preview`(port 4173;proxy 沿用 dev 的 /api + /ws → 8721)。dev build 的 React Component Performance Track 已由 dev-perf-guard 堵住洩漏,但 props-diff 開銷仍在 —— 整天掛著一律用本列,`npm run dev` 只做開發(2026-08-20) | frontend/ |
