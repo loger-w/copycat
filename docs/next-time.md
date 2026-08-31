@@ -143,8 +143,19 @@
     L1688 `TestFirstTickEnqueuesBackfill` / L1844 `TestBackfillBatchPrepare` / L1933 `TestBackfillFailureIsolation` / L2614
     `TestWatchlistRemovalBookkeeping`;`/pr-review 153` chunk B 觀察,行號為 08-31 master 6c082132 的值)。#154 已把 `_tick_armed` 兩條
     鏡射測試補進既有 `TestWatchlistRemovalBookkeeping`(抑制碎裂的方向);批次整併時以「同一個記帳集合的邊界測試放同一 class」為原則,不動斷言。 **→ 08-31 chore/test-hygiene-batch-2 出貨:TestBackfillTimeoutRetry 搬到 TestFirstTickEnqueuesBackfill 前 + 主題索引節標(AST 全等腳本斷言);Guard 與 RemovalBookkeeping 留原位。**
-- [ ] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
+- [x] **08-31 盤中對帳清單**(agent 做):L101 / L115 / L125 加權 13:25 後;L96 SXF 最長靜默;L513 group-state 分鐘完整性;
   L467 / L471 heal 階梯(壞日子才有);6949 發數(≤ 40);海外腿休市段亂救;13:50 NK225M probe(L430);L84 SC-13 (b)–(e)。
+  **→ 09-01 00:3x 以 08-31 log 對帳(server 只跑 08:10–11:59、build a58e7ac2 含 #145–#157)**:
+  **PASS** = 開盤回補並行(首筆 09:00:03、自選全完成 09:00:22,門檻 09:00:05 / 09:00:30;09 時窗 269 筆 vs 08-28 313)/
+  損益列回填每檔首輪一行(9 筆 5 檔)/ `期貨 1K` **0 筆**(2879 假警報歸零)/ VX 自癒 0 發 / 海外腿休市段無亂救(SGX TWN 開盤前 3 發同 08-28 型)。
+  **FAIL(定性後 = 門檻不切實際,非迴歸,待拍板)** = 6949 自癒 51 發(半天)超 ≤10 / ≤40 兩道門檻:指紋階梯**有效**
+  (attempt a1→a30 無逐發重置),51 發 = **階梯封頂 300 s 的常態節奏**(36/50 間隔 = 300–301 s)+ 盤前試撮 8 發(08:30–08:45)+
+  三次不明重置(10:48 / 11:41 / 11:45 各回 a1;無 backfill 入列、無成交跡象 —— INFO 看不出是 >10 s 遲到 snapshot 清帳還是 book 更新,
+  觀測缺口)。要降到 ≤10/日只能動產品面:冷門檔封頂拉長(300→900 s?)/ 整輪零推播降頻 / 盤前試撮不救 / 6949 剔出 watchlist —— **user 拍板**。
+  **UNTESTABLE、順延下一個全天交易日** = 加權 13:25 閘三問(L101/L115/L125)、13:50 NK225M probe(L430)、SC-13 (b)–(e)(L84)
+  (server 11:59 已關);heal 階梯(L467/L471,08-31 全日零斷線零 index 自癒 = 不是壞日子);
+  L96 SXF 最長靜默(sparse 腿不進 R2 grep,INFO 粒度**永久量不到**,要另加逐筆推播時戳才行 —— 降級為「要量再開觀測」);
+  L513 group-state 分鐘完整性(要**盤中即時**連續 curl,事後 log 補不回 —— 下次盤中做)。
 - [ ] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
 
 ## 2026-08-28(A7 / N037 WS 韌性真環境驗 —— PASS,留尾)
@@ -427,9 +438,16 @@ verification;這裡回填成 backlog。
   Discord 端網路壞掉時 `discord.py` 自己的 timeout 才是上界,超過就擠掉 TC4 的預算。候選 =
   `asyncio.wait_for(signals_close, LIFESPAN_SLACK_SECS)`,但要先確認 hub 落檔在 timeout 內完成
   (jsonl 是真相源,不能被 cancel 半途)。
-- [ ] **run.ps1 finally 內第二次 Ctrl+C 未驗**:PowerShell 5.1 的 finally 在 `WaitForExit` 阻塞時再按
+- [x] **run.ps1 finally 內第二次 Ctrl+C 未驗**:PowerShell 5.1 的 finally 在 `WaitForExit` 阻塞時再按
   Ctrl+C 是否中斷、中斷後 `Stop-Tree` 還跑不跑 —— 跑不到的話 backend 就留著。上限拉到 83 s 之後
   這條路比 15 s 時代更可能被人踩到。盤後用 --verify server 走一次即可驗。 **→ 08-28:今日盤後以 `--verify` server 驗。**
+  **→ 09-01 00:26 stub harness 驗畢(結案)**:複製 run.ps1 try/while/finally 結構 + 無視 Ctrl+C 的 stub backend,
+  AttachConsole 對整個 console 送真 CTRL_C_EVENT 兩次 —— (1) 第一發直跳 finally(while 後那行不跑,與
+  `$backendGotCtrlC` 設計假設一致);(2) **第二發在 `WaitForExit` 阻塞期間被完全無視**:等待仍足秒(30 s 設定值
+  00:26:02.450 → 00:26:32.457)、`Stop-Tree` 照跑、backend 樹收乾淨 —— 「finally 被打斷 → backend 留著」**不成立**;
+  (3) 翻面代價:第二次 Ctrl+C **不能提前放棄等待**,TC4 半死時狂按無效、最壞等滿 83 s 才硬殺(知情即可,run.ps1
+  已印上限與去哪看);(4) finally 之後的語句不會跑(run.ps1 finally 後無語句,無影響)。真 `--verify` server 免跑:
+  問題本體是 PS 5.1 語意,stub 的 finally 結構與 run.ps1 逐字同形。
 - [ ] **上界 83 s 是「TC4 半死」可計段的數字,不是承諾**:半死時 LOGOUT 自己也送不出去,等待只是給
   **健康** session 收尾的機會;真要縮短得在 `close()` 進場時把 socket 的 RCVTIMEO 調短(`api.lock`
   持有下 setsockopt 才安全,而 KeepAlive Pong 共用同一把鎖)—— 動到 wrapper 共用 socket,獨立一輪。
