@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import datetime
 from dataclasses import replace
+
+import datetime
 import json
 import time
 from typing import Callable
