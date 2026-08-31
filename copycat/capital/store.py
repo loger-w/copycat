@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from copycat.capital.mapping import contract_from_fill, is_option_contract
-from copycat.capital.models import AvgSource, Market, OrderRecord, Position, TradeKind
+from copycat.capital.models import AvgSource, FillRecord, Market, OrderRecord, Position, TradeKind
 from copycat.capital.reply import ReplyRecord
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,9 @@ class CapitalStore:
         # qty=-3 的幻影空單、可按平倉。每次 set_positions 落地後把委託標成「已套用到水位」
         # (見 _snapshot_watermark),之後只套快照沒涵蓋的成交;clear()(重連重播前)把旗標關回去。
         self._positions_seeded = False
+        # 當日逐筆成交(L76 成交點精確版):D 事件各留一列,`fills()` 只回當日、
+        # 換日 prune(prod 長跑不累積);clear()(重播前)清空 —— 重播會重建,不清就雙計。
+        self._fills: list[FillRecord] = []
         # 快照涵蓋水位(next-time L57):balance 查詢出手當下每張單的 (累計成交股, 價金)。
         # set_positions 落地時只把水位前的量標「已套用」;水位後才到的成交,快照取數必然
         # 沒看到,落地後重套於快照之上 —— 否則鏈飛行(~2 s)中的成交被吞,部位倒退。
@@ -180,6 +183,7 @@ class CapitalStore:
                     a.filled_qty += rec.qty
                     a.fill_value += rec.price * rec.qty
                     a.fill_date = self._today()
+                    self._append_fill_locked(a, rec)
                 self._refresh_fill_status(a)
                 # 快照未落地(開機 / 重連重播中)只累計不套 —— 見 __init__ 的 _positions_seeded 註解
                 return self._apply_fill_locked(a) if self._positions_seeded else False
@@ -206,6 +210,41 @@ class CapitalStore:
             elif t == "S":
                 self._set_status(a, "退單")
             return False
+
+    def _append_fill_locked(self, a: _Agg, rec: ReplyRecord) -> None:
+        """逐筆成交入帳(L76)。整股市場撮合以張為單位 → `qty // 1000` 除得盡;
+        除不盡(理論上不發生)退回原始股數 + unit="股",不靜默捨小數。"""
+        today = self._today()
+        if self._fills and self._fills[0].date != today:
+            self._fills = [f for f in self._fills if f.date == today]
+        if a.market in _SEC_LOT_MARKETS or a.market is None:
+            div, unit = 1000, "張"
+        elif a.market in _FUT_MARKETS:
+            div, unit = 1, "口"
+        else:  # TL/TC 零股
+            div, unit = 1, "股"
+        qty, u = (rec.qty // div, unit) if rec.qty % div == 0 else (rec.qty, "股")
+        assert rec.price is not None  # caller 守門(無價 D 整筆不採計)
+        self._fills.append(
+            FillRecord(
+                seq_no=a.seq_no,
+                stock_no=a.stock_no,
+                buy_sell=a.buy_sell or "",
+                flag_label=a.flag_label,
+                price=rec.price,
+                qty=qty,
+                unit=u,
+                date=today,
+                time=rec.time or a.time,
+            )
+        )
+
+    def fills(self) -> list[FillRecord]:
+        """當日逐筆成交(到達序)。read 時再過濾一次日期:換日後、下一筆成交來 prune
+        之前的讀取不可把昨日的列端出去。"""
+        with self._lock:
+            today = self._today()
+            return [f for f in self._fills if f.date == today]
 
     def _today_net_lots_locked(self, stock_no: str, kind: TradeKind) -> int:
         """今天同 (股號, 種類) 的成交淨張數(buy − sell,整張)。「今天」看成交**到達日**
@@ -542,6 +581,7 @@ class CapitalStore:
             self._orders.clear()
             self._order_seq.clear()
             self._contract_ym.clear()
+            self._fills.clear()  # 重播會把當日成交再送一輪重建;不清就雙計(L76)
             # 重播會把當日成交再送一輪:關掉樂觀套用直到下一次快照落地(review F-02)
             self._positions_seeded = False
             # 水位一併丟:重播的成交是歷史不是「水位後增量」,留著會在下一次落地被

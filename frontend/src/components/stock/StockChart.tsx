@@ -3,14 +3,14 @@ import { useMemo, useState } from "react";
 import { CandleChart } from "@/components/stock/CandleChart";
 import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
-import { useCapitalOrders } from "@/hooks/useCapital";
+import { useCapitalFills } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { aggregateBars } from "@/lib/candle";
 import { CHART_MODE_KEY } from "@/lib/constants";
 import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
-import { fillDates, fillPoints, stkfutFillKey } from "@/lib/fill-marks";
+import { fillPoints, stkfutFillKey } from "@/lib/fill-marks";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
 import type { StockAccum } from "@/lib/stock-accum";
@@ -77,12 +77,12 @@ export function StockChart({
   // 判準用 `contract !== null` 而不是 `isFut`:兩者等值,但前者讓 TS 直接窄化出 `prod`/`ym`。
   // deps **不放 `contract` 物件**:它是 StockPage 每 render 現造的字面值,放進去等於每輪重算;
   // `key` 是字串,值一樣就不重算。`today` 每 render 現算,跨午夜時字串一變自然失效(AD-9)。
-  const orders = useCapitalOrders().data?.orders;
+  const capFills = useCapitalFills().data?.fills;
   const today = ymdOf(new Date());
   const key = contract !== null ? stkfutFillKey(contract.prod, contract.ym) : code;
   const fills = useMemo(
-    () => fillPoints(orders, key, fillDates(today), isFut ? undefined : "股"),
-    [orders, key, today, isFut],
+    () => fillPoints(capFills, key, today, isFut ? undefined : "股"),
+    [capFills, key, today, isFut],
   );
 
   // 進期貨態前的現貨模式;null = 沒有待還原的偏好(code review A6)。

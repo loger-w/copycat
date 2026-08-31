@@ -98,6 +98,8 @@ export interface CapitalOrder {
   /** 價格別:**本 app 送出才知道**(群益回報無此欄)→ 群益 APP 下的單 / 跨日的單恆 null。 */
   price_type: "limit" | "market" | null;
   raw: string;
+  /** 股號衍生欄(L435:個股期契約碼反查;現股 = stock_no)。**選填**:舊後端不送。 */
+  code?: string | null;
 }
 
 /** 平倉可指定的庫存種類(wire `PositionCloseBody.kind`;後端 TradeKind 同字彙)。
@@ -132,6 +134,23 @@ export interface CapitalPosition {
   /** 後端在 API 邊界附的衍生欄(非 Position dataclass 欄位):sec = stock_no;
    *  fut = 契約碼反查到的股號,反查不到(未知產品 / 除權息調整碼)= null。
    *  前端沒有契約碼→股號的反查,以股號為鍵的顯示只能靠這欄。 */
+  code: string | null;
+}
+
+/** 當日逐筆成交一列(`GET /api/capital/fills`;成交點精確版 L76)。
+ *  `price` 是**這一筆**的成交價(不是委託均價);`qty` 已換算顯示單位(張/口/股);
+ *  `date` = 成交到達本機日(後端只留當日);`code` = 股號衍生欄(個股期契約碼反查,
+ *  反查不到 null —— 與 positions 的 `code` 同語意)。 */
+export interface CapitalFill {
+  seq_no: string;
+  stock_no: string | null;
+  buy_sell: string;
+  flag_label: string | null;
+  price: number;
+  qty: number;
+  unit: string;
+  date: string;
+  time: string | null;
   code: string | null;
 }
 

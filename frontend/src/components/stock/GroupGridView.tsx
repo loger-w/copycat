@@ -2,12 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
-import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
+import { useCapitalFills, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { useFeeDiscount } from "@/lib/fee-discount";
-import { EMPTY_FILLS, fillDates, fillsByCode, type FillPoint } from "@/lib/fill-marks";
+import { EMPTY_FILLS, fillsByCode, type FillPoint } from "@/lib/fill-marks";
 import { fmt, fmtPct } from "@/lib/format";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
 import { ymdOf } from "@/lib/ladder-lots";
@@ -319,9 +319,9 @@ export function GroupGridView({
   //
   // 位置必須在 `groups.length === 0` 早退**之前**:hook 不可條件化(本 repo 沒裝
   // react-hooks lint,漏了不會被擋)。
-  const orders = useCapitalOrders().data?.orders;
+  const capFills = useCapitalFills().data?.fills;
   const today = ymdOf(new Date());
-  const fillsMap = useMemo(() => fillsByCode(orders, fillDates(today), "股"), [orders, today]);
+  const fillsMap = useMemo(() => fillsByCode(capFills, today, "股"), [capFills, today]);
 
   // 倉位(SC-4)同款:圖牆層取一份、一次折完所有 code,每卡只取自己那個 key。
   // 折數在這一層讀一次(primitive)往下傳 —— 每張卡各掛一份 hook 的話,50 張卡會

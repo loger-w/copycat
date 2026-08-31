@@ -70,10 +70,10 @@ def _fut_quote(**over: object) -> dict:
     return q
 
 
-def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000") -> str:
-    """OnNewData 證券委託事件(N)最小治具(欄位對照 test_client 同款)。"""
+def _stock_evt_raw(seq: str, qty: str = "1000", price: str = "90.0000", typ: str = "N") -> str:
+    """OnNewData 證券委託事件(N;`typ="D"` 成交)最小治具(欄位對照 test_client 同款)。"""
     arr = [""] * 48
-    arr[0], arr[1], arr[2], arr[3] = seq, "TS", "N", "N"
+    arr[0], arr[1], arr[2], arr[3] = seq, "TS", typ, "N"
     arr[6], arr[8], arr[11], arr[20] = "B00R2", "3357", price, qty
     return ",".join(arr)
 
@@ -1280,3 +1280,35 @@ class TestPositionCloseTickGate:
             )
             assert res.status_code == 200
             assert len(_sent(com, "stock")) == 1
+
+
+class TestCapitalFills:
+    """成交點精確版(L76):逐筆 D 事件 wire 形 + code 衍生欄。"""
+
+    def test_fills_list_per_event_with_code(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            assert com.on_reply is not None
+            cap.store.set_positions([])
+            com.on_reply(_stock_evt_raw("00000000001", typ="D"))
+            fills = client.get("/api/capital/fills").json()["fills"]
+            assert len(fills) == 1
+            f = fills[0]
+            assert f["seq_no"] == "00000000001"
+            assert f["qty"] == 1 and f["unit"] == "張"
+            assert f["code"] == f["stock_no"]  # 現股:code = 股號
+
+    def test_orders_carry_code_field(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """L435:orders 每列附 `code`(個股期契約碼反查股號;現股 = stock_no)。"""
+        cap, com = _capital_client(tmp_path)
+        with make_client(monkeypatch, capital=cap) as client:
+            _wait_status(cap)
+            assert com.on_reply is not None
+            com.on_reply(_stock_evt_raw("00000000001"))
+            orders = client.get("/api/capital/orders").json()["orders"]
+            assert orders[0]["code"] == orders[0]["stock_no"]

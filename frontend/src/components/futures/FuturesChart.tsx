@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { CandleChart, type ChartHLine } from "@/components/stock/CandleChart";
 import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
-import { useCapitalOrders, useCapitalPositions } from "@/hooks/useCapital";
+import { useCapitalFills, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { useFuturesBars, type FuturesBarsKey } from "@/hooks/useFuturesBars";
@@ -182,7 +182,7 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   );
   const { data: oi } = useOiLevels();
   const { data: positionsData } = useCapitalPositions();
-  const orders = useCapitalOrders().data?.orders;
+  const capFills = useCapitalFills().data?.fills;
   // 全站單一份 toggle 存檔(與個股頁 / 群組圖牆 / 台股綜合共用同一把 localStorage 鍵)
   const { toggles, set } = useChartToggles();
 
@@ -262,8 +262,8 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     () =>
       anchorDate === null
         ? EMPTY_FILLS
-        : alldayFillPoints(orders, contract, anchorDate, holidaySet),
-    [orders, contract, anchorDate, holidaySet],
+        : alldayFillPoints(capFills, contract, anchorDate, holidaySet),
+    [capFills, contract, anchorDate, holidaySet],
   );
   /** slice 尾往前**第一根畫得出來**的 bar 的軸索引(= 舊 `basePoints` 末點的定義)。
    *

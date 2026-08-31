@@ -14,7 +14,7 @@ import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
 import { pnlText } from "@/lib/pnl-format";
-import type { CapitalOrder, CapitalPosition } from "@/types";
+import type { CapitalFill, CapitalPosition } from "@/types";
 import { wrap } from "@/test-utils";
 
 
@@ -92,43 +92,32 @@ class FakeResizeObserver {
 /** 委託記錄 fixture(SC-6)。`date` **必須動態算** —— 寫死日期的測試會在隔天靜默
  *  轉綠 / 轉紅(日期界是 `fillPoints` 的過濾條件之一)。
  *  `avg_fill_price` 是**元**(2380 → 毫元 2_380_000);`filled_qty` 現股是張。 */
-function order(over: Partial<CapitalOrder> = {}): CapitalOrder {
+function fillOf(over: Partial<CapitalFill> = {}): CapitalFill {
   return {
     seq_no: "s1",
     stock_no: "2330",
-    name: "台積電",
-    market: "TS",
     buy_sell: "B",
     flag_label: null,
-    book_no: null,
-    status_raw: null,
-    status_label: null,
     price: 2380,
-    avg_fill_price: 2380,
-    order_qty: 2,
-    filled_qty: 2,
+    qty: 2,
     unit: "張",
     date: ymdOf(new Date()),
     time: "09:00:30",
-    pre_order: false,
-    error_msg: null,
-    actionable: false,
-    price_type: "limit",
-    raw: "",
+    code: "2330",
     ...over,
   };
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
 let states: Record<string, unknown>;
-let orders: CapitalOrder[];
+let fills: CapitalFill[];
 /** 卡片倉位行(SC-4)的部位列。預設空 —— 既有案不該因為多了一條路由而長出內容。 */
 let positions: CapitalPosition[] = [];
 
 beforeEach(() => {
   window.localStorage.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
-  orders = [];
+  fills = [];
   positions = [];
   states = {
     "2330": state(),
@@ -141,10 +130,10 @@ beforeEach(() => {
     if (String(url).includes("/api/stock/overlay/")) {
       return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
     }
-    // 圖牆層掛一份 `useCapitalOrders`(SC-6)。不接這條路由的話它會拿到 group-state
-    // 的殼當委託列表用(`orders` undefined → 恆零標記,SC-6 靜默 vacuous)。
-    if (String(url).includes("/api/capital/orders")) {
-      return new Response(JSON.stringify({ orders }));
+    // 圖牆層掛一份 `useCapitalFills`(SC-6 / L76)。不接這條路由的話它會拿到
+    // group-state 的殼當成交列表用(`fills` undefined → 恆零標記,SC-6 靜默 vacuous)。
+    if (String(url).includes("/api/capital/fills")) {
+      return new Response(JSON.stringify({ fills }));
     }
     // 圖牆層另掛一份 `useCapitalPositions`(SC-4)。不接這條的話它會拿到 group-state
     // 的殼當部位列表用 → 恆無倉,倉位行的斷言全部靜默 vacuous。
@@ -751,14 +740,14 @@ describe("GroupGridView 窗內無分鐘(edge 9)", () => {
   });
 });
 
-// 🟢 R2 SC-6:群組卡上的當日成交點。圖牆層掛**一份** `useCapitalOrders` + 一次
+// 🟢 R2 SC-6:群組卡上的當日成交點。圖牆層掛**一份** `useCapitalFills` + 一次
 // `fillsByCode`,每卡只取自己那個 key —— 50 張卡各折一次的話同一份 orders 會被走 50 遍。
 //
 // 量法一律 **per-card** `polygon[data-testid^="fill-"]`:兩張卡同一分鐘各有成交時
 // testid 會撞,document 級的 getByTestId 直接拋 multiple-elements(或更糟:數錯)。
 describe("GroupGridView 群組卡成交點(SC-6)", () => {
   it("2330 當日成交 → 2330 卡一個三角、同群組的 2317 卡零個", async () => {
-    orders = [order()];
+    fills = [fillOf()];
     wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const c2330 = await screen.findByTestId("group-card-2330");
     await waitFor(() =>
@@ -774,10 +763,10 @@ describe("GroupGridView 群組卡成交點(SC-6)", () => {
   /** 零股(`unit === "股"`)整筆排除 —— 與現股梯同口徑(AD-3),「我的單」在梯與圖上
    *  才一致。同一份 orders 內放一筆現股單當**正對照**:少了它,「0 個」在 query 還沒
    *  settle 的時候也成立,測試靜默 vacuous。 */
-  it("零股委託(unit「股」)不畫;同一份 orders 內的現股單照畫", async () => {
-    orders = [
-      order({ unit: "股", filled_qty: 1000 }),
-      order({ seq_no: "s2", stock_no: "2317", name: "鴻海" }),
+  it("零股成交(unit「股」)不畫;同一份 fills 內的現股單照畫", async () => {
+    fills = [
+      fillOf({ unit: "股", qty: 1000 }),
+      fillOf({ seq_no: "s2", stock_no: "2317", code: "2317" }),
     ];
     wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);
     const c2317 = await screen.findByTestId("group-card-2317");
@@ -791,14 +780,14 @@ describe("GroupGridView 群組卡成交點(SC-6)", () => {
     ).toBe(0);
   });
 
-  /** edge 6:capital 未設定 / endpoint 500 → `orders` undefined → 零標記,圖照畫。
+  /** edge 6:capital 未設定 / endpoint 500 → `fills` undefined → 零標記,圖照畫。
    *  TQ 的 error 不可冒泡成整面卡片消失。 */
-  it("委託列表取數失敗 → 零標記但卡片圖照畫(error 不冒泡)", async () => {
+  it("成交列表取數失敗 → 零標記但卡片圖照畫(error 不冒泡)", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).includes("/api/stock/overlay/")) {
         return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
       }
-      if (String(url).includes("/api/capital/orders")) {
+      if (String(url).includes("/api/capital/fills")) {
         return new Response("{}", { status: 500 });
       }
       const codes = new URL(String(url), "http://x").searchParams.get("codes") ?? "";

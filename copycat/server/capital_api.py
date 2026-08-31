@@ -237,10 +237,36 @@ async def capital_status(request: Request) -> dict:
     return client.status_view()
 
 
+def _fill_code(unit: str, stock_no: str | None) -> str | None:
+    """委託 / 成交列的股號衍生欄(L76 / L435):期貨口 → 契約碼反查股號(個股期);
+    其餘(張 / 股)`stock_no` 就是股號。反查不到回 None(同 positions 的 `code` 語意)。"""
+    if stock_no is None:
+        return None
+    return stock_code_of("fut", stock_no) if unit == "口" else stock_no
+
+
 @router.get("/api/capital/orders")
 async def capital_orders(request: Request) -> dict:
     client = _capital(request)
-    return {"orders": [dataclasses.asdict(o) for o in client.store.orders()]}
+    return {
+        "orders": [
+            {**dataclasses.asdict(o), "code": _fill_code(o.unit, o.stock_no)}
+            for o in client.store.orders()
+        ]
+    }
+
+
+@router.get("/api/capital/fills")
+async def capital_fills(request: Request) -> dict:
+    """當日逐筆成交(成交點精確版,L76)。每列附衍生欄 `code`(同 positions 慣例,
+    邊界 enrich 不進 dataclass);舊前端不打這支、舊後端 404 → 前端不畫(D2 拍板)。"""
+    client = _capital(request)
+    return {
+        "fills": [
+            {**dataclasses.asdict(f), "code": _fill_code(f.unit, f.stock_no)}
+            for f in client.store.fills()
+        ]
+    }
 
 
 @router.get("/api/capital/positions")
