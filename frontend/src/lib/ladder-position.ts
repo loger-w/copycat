@@ -8,6 +8,7 @@
  *  `breakEvenMilli` 是**毫元**(本專案價格通貨)。qty 是**張**(1 張 = 1000 股),
  *  費用一律以 `|qty|` 計、方向只由 qty 符號決定。 */
 import { snapDown, snapNearest, snapUp } from "@/lib/stock-tick";
+import { kindTraits } from "@/lib/trade-kinds";
 import { AVG_SOURCES, type AvgSource, type CapitalPosition } from "@/types";
 
 /** 執行期白名單與 `AvgSource` 型別同源(`AVG_SOURCES`):型別外的值(舊 dist / 舊後端)歸 null,不進 switch。 */
@@ -35,8 +36,8 @@ export interface PositionEconInput {
   /** broker = 均價已含買進手續費(群益損益試算口徑);fill = 純成交價,要再加買費;
    *  null = 來源未知 → 走修前口徑(當純價加買費),明確分支不吞進 else。 */
   avgSource: AvgSource | null;
-  /** 今天成交淨進來的張數;現股(kind === "cash")與無券空單(kind === "daytrade_sell",群益記成
-   *  現股負股數、法規同為現股當沖)這一段賣出稅用 `SELL_TAX_DAYTRADE`。
+  /** 今天成交淨進來的張數;`kindTraits(kind).halfTaxToday` 的種類(現股與無券空單 ——
+   *  後者群益記成現股負股數、法規同為現股當沖)這一段賣出稅用 `SELL_TAX_DAYTRADE`。
    *  後端已 clamp 到 [0, |qty|],這裡**再 clamp 一次是刻意的防禦**:wire 漂了(或缺欄)也不能
    *  把有效稅率壓成負 / NaN —— 兩側都留,別把任一側當贅碼刪掉。 */
   todayQty: number;
@@ -95,10 +96,11 @@ export function positionEcon(
   // 後端未重啟的窗口 payload 沒有 today_qty → undefined 進 Math.max 變 NaN,整條算式毒化印「NaN」;
   // 缺欄退成 0(= 舊口徑 0.3%),與 avg_source 缺欄退成 fill 同一個方向:退回修前行為,不退成假數字
   const todayRaw = Number.isFinite(input.todayQty) ? input.todayQty : 0;
-  const todayLots =
-    kind === "cash" || kind === "daytrade_sell" ? Math.min(lots, Math.max(0, todayRaw)) : 0;
+  // 稅/費的種類分支收斂在 kindTraits(未知字串政策也在那裡),本檔不逐點比字串
+  const traits = kindTraits(kind);
+  const todayLots = traits.halfTaxToday ? Math.min(lots, Math.max(0, todayRaw)) : 0;
   const t = (todayLots * SELL_TAX_DAYTRADE + (lots - todayLots) * SELL_TAX) / lots;
-  const b = kind === "short" ? SHORT_BORROW : 0;
+  const b = traits.borrowFee ? SHORT_BORROW : 0;
   const long = qty > 0;
   const q = lots * 1000;
   // 含買進手續費的每股成本:券商均價已含;純成交價要加;來源未知(null)明確走修前口徑。
@@ -152,15 +154,13 @@ export function clampDiscount(raw: string | number): number | null {
   return v;
 }
 
-/** 顯示順序:cash → margin → short → 其餘(含 daytrade_sell 與未知字串)殿後。 */
-const KIND_ORDER: Record<string, number> = { cash: 0, margin: 1, short: 2 };
-
-/** 當前標的的證券部位列(sec / 同股號 / qty ≠ 0),依 KIND_ORDER 排序。 */
+/** 當前標的的證券部位列(sec / 同股號 / qty ≠ 0),依 `KIND_TRAITS.order` 排序
+ *  (cash → margin → short → 其餘含 daytrade_sell 與未知字串殿後;同序穩定排序保原序)。 */
 export function secPositionsOf(
   positions: CapitalPosition[] | undefined,
   code: string,
 ): CapitalPosition[] {
   return (positions ?? [])
     .filter((p) => p.market === "sec" && p.stock_no === code && p.qty !== 0)
-    .sort((a, b) => (KIND_ORDER[a.kind] ?? 3) - (KIND_ORDER[b.kind] ?? 3));
+    .sort((a, b) => kindTraits(a.kind).order - kindTraits(b.kind).order);
 }

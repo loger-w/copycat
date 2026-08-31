@@ -152,7 +152,7 @@ export interface CapitalStockOrderBody {
   qty: number; // 張
   price_type?: "limit" | "market";
   time_in_force?: "ROD" | "IOC" | "FOK";
-  trade_kind?: "cash" | "margin" | "short" | "daytrade_sell";
+  trade_kind?: PositionKind;
   source?: string;
 }
 

@@ -68,7 +68,7 @@ class StockOrderBody(BaseModel):
     qty: int
     price_type: _PriceType = "limit"
     time_in_force: _Tif = "ROD"
-    trade_kind: Literal["cash", "margin", "short", "daytrade_sell"] = "cash"
+    trade_kind: TradeKind = "cash"  # 值域 = capital.models.TradeKind(單一定義;wire 形不變)
     source: str = "panel"
 
 
