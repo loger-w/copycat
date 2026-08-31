@@ -62,3 +62,19 @@ def session_window(key: SessionKey) -> tuple[str, str]:
     ymd, kind = key
     start_h, end_h = _WINDOWS[kind]
     return (f"{ymd}{start_h}", f"{ymd}{end_h}")
+
+
+def backfill_window(fixed: str | None, auto: str | None, key: SessionKey) -> tuple[str, str]:
+    """TXO 回補窗選擇的**唯一定義**(pr-167 F-04):env 固定日(手動 ops 通道,恆優先)
+    → 自動日(L77,休市段取最近交易日固定日盤窗;盤中 None)→ live session 窗。
+    固定日窗 = UTC 00–06 = 台北 08–14 日盤窗(與 day session 窗字面相同)。
+
+    `tc4.TC4QuoteSource._backfill_window`(真回補)與 app 的 `window_ident_fn`
+    (rollover 判準)共用這一支,ident 就是窗本身 ——「ident 變 ⇔ 窗變」是定義不是
+    巧合。修前 ident 用代理值 (session_key, auto),每交易日 08:00(session ymd 翻、
+    窗仍是前一交易日固定窗)與 13:46(auto None→今日、窗字面不變)各觸發一次
+    窗沒變的冗餘全鏈重交接(agg reset + 280 檔 SubHistory)。"""
+    d = fixed if fixed is not None else auto
+    if d:
+        return (f"{d}00", f"{d}06")
+    return session_window(key)

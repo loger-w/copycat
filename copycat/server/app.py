@@ -83,7 +83,7 @@ from copycat.stock_names import DEFAULT_PATH as NAMES_DEFAULT_PATH
 from copycat.stock_names import load_names as load_stock_names
 from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
-from copycat.live.session import session_key
+from copycat.live.session import backfill_window, session_key
 from copycat.trading_calendar import (
     TradingCalendar,
     resolve_trade_date,
@@ -464,9 +464,9 @@ def _session_date() -> _date:
     06:00 切換:夜盤 05:00 收盤 + 自癒閘的 5 分寬放都在門檻內,日盤 08:45 尚未開。
 
     **判準(不是清單)**:凡是在答「資料屬於哪個交易日」的一律用 `_today()`(含
-    `_calendar_crosscheck`);只有在答「現在是誰的場」時才用本函式,而目前唯一這樣問的
-    是 `_heal_gate`。原本這裡列的是逐個呼叫點,新增一處就漏一處(`_calendar_crosscheck`
-    正是這樣漏掉的),改記判準。
+    `_calendar_crosscheck`);只有在答「現在是誰的場」時才用本函式 —— 呼叫點以
+    `grep -n _session_date copycat/server/app.py` 為準,不在此逐列(逐列新增一處就漏
+    一處:`_calendar_crosscheck` 這樣漏過一次、`_txo_auto_backfill_date` 又一次)。
 
     **近似誤差**:夜盤存在與否其實取決於**次一營業日**(封關夜那類:起始日是交易日
     但隔天休市 → 當晚無夜盤,閘仍為真 → 空 churn)。方向安全(不會該救不救),頻率
@@ -631,10 +631,15 @@ def create_app(
             # 固定日回補模式(休市日)停用時段切換偵測:跨界重跑只會重拿同一份
             # 指定日資料(spec R5)
             session_rollover=os.environ.get("TXO_BACKFILL_DATE") is None,
-            # 窗 identity 併入自動日(L77):盤前固定日 → 開盤 live 窗(08:45)也要
-            # 觸發交接,否則前一交易日的種子會與開盤後 live tick 混同一份 agg
+            # 窗 identity = 回補窗本身(`session.backfill_window`,與 tc4 真回補同源;
+            # pr-167 F-04):盤前固定日 → 開盤 live 窗(08:45)照樣觸發交接(窗真的變),
+            # 而 08:00 session ymd 翻頁與 13:46 auto 落定這兩格窗字面不變 → 不再冗餘重交接。
             window_ident_fn=(
-                (lambda auto=_txo_auto_backfill_date(trading_calendar): (session_key(), auto()))
+                (
+                    lambda auto=_txo_auto_backfill_date(trading_calendar): backfill_window(
+                        None, auto(), session_key()
+                    )
+                )
                 if os.environ.get("TXO_BACKFILL_DATE") is None and trading_calendar is not None
                 else None
             ),
