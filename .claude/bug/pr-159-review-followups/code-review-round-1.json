@@ -3,14 +3,14 @@
   "branch": "fix/pr-159-review-followups",
   "reviewers": { "standards": "opus", "spec": "opus" },
   "standards": [
-    { "id": "S-F1", "kind": "hard", "finding": "docs/next-time.md:21「10 突變體全殺」,但所引 artifact verification.md 突變體表只有 M1–M9 九顆(grep -c '^| M' = 9);bc20cd85 回校了隔壁數字(13→14 條)這格沒動。" },
+    { "id": "S-F1", "kind": "hard", "finding": "docs/next-time.md:21「10 突變體全殺」,但所引 artifact verification.md 突變體表只有 M1–M9 九顆(grep -c '^| M' = 9);8bf709b6 回校了隔壁數字(13→14 條)這格沒動。" },
     { "id": "S-F2", "kind": "judgement", "finding": "diagnosis.md Phase 5 仍逐字寫 useStockBars 舊 staleTime lambda 與「日 K 才 error → 60 s」—— F-02 後已不存在;Phase 6 卻已補 followups 口徑,同檔兩種口徑。" },
     { "id": "S-F3", "kind": "hard", "finding": "本 PR 有 🔴 行為改動(retryEmpty 閘),但鏈上唯一 gate artifact(daily-bars-siblings verification.md)只改一句:無 retryEmpty 突變體列、全量仍是 2912 舊快照。" },
     { "id": "S-F4", "kind": "judgement", "smell": "Duplicated Code", "finding": "useFuturesBars.test 模組層已有 stubDayFetchByWallClock / dayFetchCount,本 PR 兩條新測試都繞過:改名那條手寫 stub、新那條 urls.filter 重複多次。" },
     { "id": "S-F5", "kind": "judgement", "finding": "market / futures 兩條新測試近逐字(只差 key);next-time 的鷹架留尾條未加註本 PR 又長一對。" },
     { "id": "S-F6", "kind": "judgement", "smell": "Flag Argument", "finding": "dayBarsRefetchInterval(q, { retryEmpty }) —— 不建議改兩支函式:具名、必填、options 形式已是標準緩解且 doc 給了 true/false 理由;唯一可議是名字說機制,treatEmptyAsFailure 更貼語意。" },
     { "id": "S-F7", "kind": "judgement", "finding": "stock 的 retryEmpty: false 只被既有「tf=D 空 + ok 前進 60s 仍只打一次」間接鎖住,該測試名/註未提它現在也守這個新決策(翻 true 會紅但零訊號說明)。" },
-    { "id": "S-F8", "kind": "judgement", "finding": "🔵 3b11e7da 內含 useStockBars.test 刪 afterEach(F-04),嚴格說 🔵/🟢 混;commit message 有揭露,低。" }
+    { "id": "S-F8", "kind": "judgement", "finding": "🔵 dbc334e0 內含 useStockBars.test 刪 afterEach(F-04),嚴格說 🔵/🟢 混;commit message 有揭露,低。" }
   ],
   "spec": [
     { "id": "P-DONE", "kind": "coverage", "finding": "F-01~F-08 + 報告收檔 9/9 全 DONE(逐條 file:line 對照);白名單三支分 K 逐字未動;「日 K 不輪詢」fixture 換非空 = 事前預告該變,成立非 §E 違規。" },
