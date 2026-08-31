@@ -103,10 +103,10 @@
 
 - [ ] **`/mod` 群組圖牆逐筆**(C9):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
-- [ ] **`/mod` 緩撮第二段**(L478)。
-- [ ] **`/mod` 成交點精確版**(L439 / L444 / L435)。
-- [ ] **`/mod` 盤前前一交易日 + TXO 自動日期**(L461 / L457)。
-- [ ] **`/mod` 斷線徽章分態**(L296)。
+- [x] ~~**`/mod` 緩撮第二段**(L478)。~~ → 08-31 mod/chart-ux-batch-0831 出貨(見下方詳細條)。
+- [x] ~~**`/mod` 成交點精確版**(L439 / L444 / L435)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。
+- [x] ~~**`/mod` 盤前前一交易日 + TXO 自動日期**(L461 / L457)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。
+- [x] ~~**`/mod` 斷線徽章分態**(L296)。~~ → 08-31 mod/chart-ux-batch-0831 出貨(status 加 engine 欄,兩句分態)。
 - [x] ~~**B2 調研(background research)**:達錢商品資訊欄位還能拿到什麼 —— 暫停交易旗標?當日當沖資格?(L171 / L272);
   證交所當日可當沖名單 API;FinMind 當日更新時刻。~~
   → 08-28 `docs/research/2026-08-28-instrument-flags-survey.md`:達錢**不可**;證交所 `TWTB4U`(含 `Suspension`)/ 櫃買 `tpex_securities` 免 token JSON **可**(盤前公布時刻未證,08:30 打一次);
@@ -457,7 +457,7 @@ seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
   拿它當期望值來源)。現況是**同源同義反覆** —— 實作與斷言同一顆函式,文案改動 mutant 全綠。
   順序不可顛倒:**先**把測試的期望值改成字面量(逐字寫死文案 + 註解寫拆解),lock 生效後
   才刪 `formatToastText`。先刪的話那批斷言只能整條拿掉,等於把文案的守門一起丟了。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:兩筆:先把 useSignalAlerts / signal-model 測試期望值改字面量 `toastText(id)`(拆解註解),再刪函式 + describe + import;formatGroupToastText docstring 改口。**
-- [ ] **N109 的真分態需後端 seed 加欄位**:`status.tc4 === "down"` 的兩個來源(engine 在但
+- [x] ~~**N109 的真分態需後端 seed 加欄位**~~ → 08-31 出貨:status 加 engine 欄(engine 恆 true / 無 engine seed false),前端兩句分態。原文:`status.tc4 === "down"` 的兩個來源(engine 在但
   TC4 斷 / 無 engine 模式)前端沒有可分辨訊號,本輪只能出「對兩態都誠實」的單句。真解 =
   `stock_engine` 的 status seed 加一個「engine 是否存在」欄(`/api/health` 刻意不含引擎
   健康度,不要改那支),前端才分得出「等它自癒」與「去重啟伺服器」。屬後端改動,擇日排。 **→ 08-28 拍板做:小 `/mod`(後端一欄 + 前端兩句話)。**
@@ -605,16 +605,16 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
-- [ ] **成交點精確版 / 群組卡個股期委託標記可直接吃 `code`**(R2 留尾的「契約碼→股號反查」已由本輪後端
+- [x] ~~**成交點精確版 / 群組卡個股期委託標記可直接吃 `code`**~~ → 08-31 出貨(orders/fills 皆附 code;fillsByCode 分組鍵改 code)。原文:(R2 留尾的「契約碼→股號反查」已由本輪後端
   `stock_code_of` 提供;`GET /api/capital/positions` 有欄,orders 尚無 —— 精確版加 `code` 到 orders 同款)。 **→ 08-28:併 L439 精確版。**
 ## 2026-08-17(mod/intraday-fill-marks batch3 R2 留尾)
 
-- [ ] **成交點精確版**(D7 拍板近似版的替代):後端 `CapitalStore` 保留逐筆 D 事件
+- [x] ~~**成交點精確版**(D7 拍板近似版的替代)~~ → 08-31 出貨:FillRecord + GET /api/capital/fills,前端每筆真實價×時刻一點(同點無損合併),近似版三失真消失;舊後端 404 → 不畫(D2 拍板)。store.py 委託建立日註解一併校正於 models.FillRecord docstring。原文:後端 `CapitalStore` 保留逐筆 D 事件
   `(seq_no, time, price, qty, buy_sell, stock_no)`(只留當日)+ `GET /api/capital/fills`,前端每筆一標記;
   近似版已知失真:分批成交壓成一點(最新事件時間 × 均價)、尾段事件是刪單時點落在刪單時刻、
   **昨日部分成交今日刪單的單會以(今日刪單分鐘 × 昨日均價)畫上今日圖**(若 `date` 隨事件變日 —— 未實證,見 08-28 pr-134 F-01 ——
   日期界擋不到;cr1 A-3)。`copycat/capital/store.py:65` 的註解「委託建立日」同樣不精確,精確版一併改。 **→ 08-28 拍板做:`/mod` 成交點精確版(含 L435 orders 加 `code`、L444 群組卡個股期委託)。**
-- [ ] **群組卡個股期委託不標**(契約碼→股號反查留給精確版一起做)。 **→ 08-28:併上條。**
+- [x] ~~**群組卡個股期委託不標**~~ → 08-31 併精確版出貨(fillsByCode 吃 code)。
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
 - [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
@@ -628,11 +628,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
   → 08-28 拍板不做:冷啟動一次性,暖 cache 已量(12–19 ms)。
 ## 2026-08-16(mod/trading-calendar 留尾)
 
-- [ ] **TXO 面的 `backfill_date` 仍是手動 env**:`_default_source` / `session_rollover` /
+- [x] ~~**TXO 面的 `backfill_date` 仍是手動 env**~~ → 08-31 出貨:_txo_auto_backfill_date(場活著 live 窗 / 休市段最近日盤開過的交易日)+ EngineRuntime window identity 讓 08:45 開盤切窗也觸發交接(當時警告的「固定日關 rollover 跨到下週一」洞由此解);env 保留手動覆寫恆優先。原文:`_default_source` / `session_rollover` /
   `live/tc4.py:404` 沒接日曆 —— TXO 有夜盤 session 語意,自動填一個固定日會把 rollover
   關掉並跨到下週一(自動化前要先設計「哪一段夜盤算哪一天」)。休市日要看 TXO 仍靠
   `TXO_BACKFILL_DATE=<上一交易日>`。 **→ 08-28:併下條 `/mod` 一支,TXO 日期沿期貨 tab「錨定日」規則自動算。**
-- [ ] **非開盤日 / 盤前冷啟動,圖表要維持前一交易日資料(2026-08-24 已拍板開做,原 R3b)**:
+- [x] ~~**非開盤日 / 盤前冷啟動,圖表要維持前一交易日資料(2026-08-24 已拍板開做,原 R3b)**~~ → 08-31 出貨:resolve_trade_date_before,stock 08:00 / index 08:30 各沿自家 stage(D3 拍板);breadth streak 06:00 未動(該面本就日別 EOD,無盤前空窗)。原文:
   交易日 00:00–08:30 重啟 → source 日窗 = 今天而今天還沒開盤,空圖到開盤(spec KR-4 / Q3-R8);
   非交易日已由 R3 日曆處理,此案補「交易日盤前」段。要對齊 stock stage1 08:00 / index 08:30 /
   breadth streak 06:00 三個時序。 **→ 08-28 拍板做:`/mod`(與上條同支)。**
@@ -649,7 +649,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
 
-- [ ] **緩撮標示第二段:TradeStatus-based per-code 盤中偵測**(本輪只出時間窗版,
+- [x] ~~**緩撮標示第二段:TradeStatus-based per-code 盤中偵測**~~ → 08-31 出貨:_trial_now 第二段吃 TradeStatus==1(盤中 09:00–13:30 採信)、處置股經 breadth 名單標「(處置)」、tc4-market-facts 已回填。原文:(本輪只出時間窗版,
   **09:00–13:25 盤中暴漲暴跌觸發的暫緩撮合不會亮** → 使用者回饋 backlog 第 3 條
   維持未勾銷):蒐證通道已埋 — engine 對每檔現貨 TradeStatus 轉態記 log,固定前綴
   `trade-status-observe`,窗外事件 WARNING(episode 起訖成對)。等真實延緩撮合樣本
