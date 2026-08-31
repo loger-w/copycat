@@ -3036,6 +3036,33 @@ class TestTrialFlag:
         assert engine._quote_payload("2330")["trial"] is True
         await engine.close()
 
+    async def test_trade_status_flip_pushes_watchlist_quote_without_tick(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-167 F-01:延緩撮合的定義就是期間沒有成交 tick —— tick 驅動的 dirty 路徑
+        整段 episode 不會替這檔發 quote(探針實證 _publish 捕獲 0 則)。TradeStatus
+        轉態且改變 `_trial_now` 答案時必須主動補推一則 trial=True 的 watchlist_quote,
+        否則「(緩)/(處置)」在單檔頁與側欄整段 episode 都不亮(L75 招牌交付項死路徑)。"""
+        engine, src = await _make_with_clock(monkeypatch, "10:30:00.000")
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, status="0"))
+        await _drain(engine)
+        got, task = _tap(engine.stream())
+        await _drain(engine)
+        got.clear()  # 丟掉連線種子與 tick 補推,只看轉態那一則
+        src.on_message(_quote(cum=1, qty="0", status="1"))  # 純簿更新:延緩期間沒有成交 tick
+        await _drain(engine)
+        flips = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
+        assert flips, "TradeStatus 0→1 必須推播(dirty 路徑不會替無成交檔發 quote)"
+        assert flips[-1]["trial"] is True
+        src.on_message(_quote(cum=1, qty="0", status="0"))  # 恢復(1→0)同樣要熄得掉
+        await _drain(engine)
+        flips = [m for m in got if m["type"] == "watchlist_quote" and m["code"] == "2330"]
+        assert flips[-1]["trial"] is False
+        await _untap(task)
+        await engine.close()
+
     async def test_trade_status_recovery_clears_pause(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
