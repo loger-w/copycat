@@ -20,6 +20,25 @@ export function inTradingHours(now: Date = new Date()): boolean {
   return mins >= 9 * 60 + 1 && mins <= 13 * 60 + 35;
 }
 
+/** 距下一個現股交易窗開點(09:01,`inTradingHours` 同一把尺)的毫秒數。
+ *
+ * `refetchInterval` 的盤外值(next-time L71):TQ 對 `false` 不排 timer、之後再也不會
+ * 重新求值 —— 盤外回「距開點的 ms」讓 query 在窗開瞬間醒來打第一發,之後每次落地
+ * 重新求值回盤中節奏。假日集合與 `inTradingHours` 同源(`isTradingDay`);14 天內
+ * 找不到交易日(日曆異常)→ 退回一天後再評估,失效方向是「多等」不是空轉輪詢。 */
+export function msUntilTradingOpen(now: Date = new Date()): number {
+  for (let d = 0; d <= 14; d++) {
+    const day = new Date(now);
+    day.setDate(day.getDate() + d);
+    const open = new Date(day);
+    open.setHours(9, 1, 0, 0);
+    if (open.getTime() <= now.getTime()) continue; // 今天的開點已過 → 看下一天
+    if (!isTradingDay(day)) continue;
+    return open.getTime() - now.getTime();
+  }
+  return 24 * 60 * 60 * 1000;
+}
+
 /** 台指期日盤時段(08:45 開盤 → 首根 1K 是 08:46;13:45 收盤 + 一分鐘餘裕)。
  *
  * 個股那把尺(09:01–13:35)套在期指上,開盤前 15 分與 13:36–13:45 的分 K 不會自動

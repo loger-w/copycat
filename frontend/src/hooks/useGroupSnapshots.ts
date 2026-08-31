@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
 import { minutesFromRecord, type MinuteAgg, type StockMeta, type VpCell } from "@/lib/stock-accum";
-import { inTradingHours } from "@/lib/trading-hours";
+import { inTradingHours, msUntilTradingOpen } from "@/lib/trading-hours";
 
 /** 群組檢視的成員狀態(group-grid SC-4)。
  *
@@ -91,9 +91,13 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
 }
 
 /** 輪詢窗(design R7)。抽成純函式才量得到(沿 `barsPollInterval` 慣例)。
- *  盤外不輪詢:群組成員的分鐘序列收盤後就不會再變,而 50 檔的 batch 不是免費的。 */
-export function groupPollInterval(trading: boolean): number | false {
-  return trading ? POLL_MS : false;
+ *  盤外不輪詢,但**不回 `false`**(next-time L71):TQ 對 false 不排 timer、之後再也
+ *  不會重新求值 —— 08:59 就開著的群組檢視要等別的事件碰這條 query 才開始輪詢。
+ *  改回「距下個交易窗開點的 ms」:窗開瞬間醒來打第一發,之後每次落地重新求值回 60s。
+ *  50 檔 batch 不是免費的這一點不變 —— 盤外整段仍零請求(timer 只在開點醒一次)。 */
+export function groupPollInterval(now: Date = new Date()): number {
+  if (inTradingHours(now)) return POLL_MS;
+  return Math.max(msUntilTradingOpen(now), 1_000);
 }
 
 /** 群組成員狀態 batch。`enabled` 是檢視開關,`codes` 空(空群組 / 零群組)一律不請求
@@ -112,7 +116,8 @@ export function useGroupSnapshots(codes: string[], enabled: boolean) {
     retry: false,
     staleTime: 55_000,
     // 函式形式:TQ 每次 interval 到期都會重新求值 → 開盤 / 收盤的開關不依賴外部
-    // re-render(值形式只在 render 當下求值,群組檢視開著不動就永遠不會開始輪詢)
-    refetchInterval: () => groupPollInterval(inTradingHours()),
+    // re-render。這個性質**只在回數字時成立**,所以盤外回距開點 ms 而不是 false
+    //(見 `groupPollInterval` docstring;next-time L71)。
+    refetchInterval: () => groupPollInterval(),
   });
 }
