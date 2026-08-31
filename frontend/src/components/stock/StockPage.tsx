@@ -256,15 +256,14 @@ export function StockPage({
         {status.tc4 === "down" || wsStatus === "closed" ? (
           <p className="rounded border border-bear bg-bear/10 px-3 py-1 text-sm text-bear">
             {status.tc4 === "down"
-              ? // 一句話要對**兩態**都誠實(N109):`tc4: "down"` 有兩個來源 —— engine 在
-                // 但 TC4 斷(接上就自癒回補),以及 XR-3 之後的**無 engine 模式**
-                // (server 啟動時 TC4 沒開;stock engine 只在 boot 建,TC4 後來開起來也
-                // 不會自己接上,要重啟伺服器)。兩者的 status seed 逐值相同、前端沒有
-                // 可分辨的訊號(`/api/health` 刻意不含引擎健康度),所以不分兩句 ——
-                // 改前只講「恢復後自動回補」,在無 engine 模式下是錯的,而使用者只會一直等。
-                // 用詞全繁中(「伺服器」不是「server」):同一元素的另一支已經是
-                // 「伺服器連線中斷」,兩支混用等於同一個東西在相鄰兩行有兩個名字。
-                "達錢 4 未連線 —— 連線後自動回補;若伺服器啟動時達錢 4 未開,需重啟伺服器"
+              ? // 兩態自 L78 起可分辨(N109 真分態):`status.engine` 由後端標 ——
+                // engine 發的 status 恆 true(TC4 斷了接上就自癒回補);無 engine 模式
+                // (server 啟動時 TC4 沒開,stock engine 只在 boot 建)的 seed 標 false,
+                // 那一態只有重啟伺服器一條路。缺欄(舊後端)預設 true:失效方向是
+                // 「多等自癒」,不是把會自癒的態叫人去重啟。用詞全繁中(「伺服器」)。
+                status.engine
+                ? "達錢 4 連線中斷 —— 等待自動重連"
+                : "行情引擎未啟動 —— 需重啟伺服器"
               : "伺服器連線中斷,重連中…"}
           </p>
         ) : null}
