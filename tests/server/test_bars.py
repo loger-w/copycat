@@ -852,13 +852,12 @@ class TestDailySnapshotFinality:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """墊背窗的週/月 K 仍要走 `_shaped` 聚合(pr-165-review #4):它是 `_shaped`
-        四個呼叫點裡唯一沒被 route 測試蓋的,改壞的失效樣態是墊背窗內週 K 直接回
+        三個呼叫點裡唯一沒被 route 測試蓋的,改壞的失效樣態是墊背窗內週 K 直接回
         未聚合日 bar —— 圖照樣畫得出來、零錯誤訊號。"""
         now = self._mutable_clock(monkeypatch)
-        clock = {"t": 0.0}
         morning = [bar("2026-08-27"), bar("2026-08-28"), bar("2026-08-31", c=100)]
         fetch = _TaggedFetcher([morning, []])
-        cache = BarsCache(clock=lambda: clock["t"])
+        cache = BarsCache()  # 本路徑不吃 TTL,不需注入 clock(review S-3)
         await build_period(fetch, cache, "TXF", self.TODAY, "D")
         now["t"] = _dt.time(22, 0)
         weekly = await build_period(fetch, cache, "TXF", self.TODAY, "W")
@@ -867,9 +866,7 @@ class TestDailySnapshotFinality:
         # 08-27/08-28 同 ISO 週、08-31 次週 → 聚合後 2 桶(右端對齊),不是 3 根日 bar
         assert [b["t"] for b in weekly.bars] == ["2026-08-28", "2026-08-31"]
 
-    async def test_boundary_instant_is_final_side(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_boundary_instant_is_final_side(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """界上(14:00:00 整)屬定稿側(pr-165-review #9):界前快照此刻已過期
         (`daily_get` 的 `>=`),此刻寫入即定稿(`daily_put` 的 `<`)—— 兩個界突變體
         (`>=`→`>`、`<`→`<=`)由本條釘死,「界是否含端點」從此有可執行的答案。"""
