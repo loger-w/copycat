@@ -34,7 +34,7 @@ D+1 00:01:01,斷言 `tf=D` 恰 2 發且 `data.bars` 換成「D 完成 + D+1 部�
 
 無需額外 log:TQ 行為(`useBaseQuery` 每 render `setOptions` → `QueryObserver` 回值一變就 clear + 重排計時器;interval 只在
 `focusManager.isFocused()` 時打;staleTime 以 `dataUpdatedAt` 起算)已於 #151 / #155 讀過 `@tanstack/query-core 5.101.2` 原始碼並記在
-`useFuturesBars.ts::msUntilDayRollover` doc。本案只驗「兩支兄弟走同一條路」:反向驗證 stash 三支 hook → 12 紅 / 27 綠;pop → 39 綠。
+`lib/day-bars-rollover.ts::msUntilDayRollover` doc(pr-159-review F-03 回校:doc 隨搬家在 lib,原句指舊址)。本案只驗「兩支兄弟走同一條路」:反向驗證 stash 三支 hook → 12 紅 / 27 綠;pop → 39 綠。
 
 ## Phase 5 修法
 
@@ -48,13 +48,13 @@ D+1 00:01:01,斷言 `tf=D` 恰 2 發且 `data.bars` 換成「D 完成 + D+1 部�
   HTTP 非 2xx,不是 XR-4 擋的每 60 s SubHistory 成本)。分 K 分支逐字不變。
 - `useStockBars.ts`:`staleTime: isDaily ? (q) => msUntilDayRollover(...) : 0`;`refetchInterval` 先 `barsPollInterval`,`!isDaily || poll !== false`
   原樣回傳,日 K 才 `error → 60 s`、否則到下一個午夜。分 K 分支經 `barsPollInterval` 原樣回傳。
-- 測試:market 7 條 / stock 6 條(含 slack 窗內每 100 ms 重繪 40 s 那條、同一秒重繪 setInterval 零重排、午夜失敗 60 s 重試、
+- 測試:market 8 條(round-1 後含月 K it.each)/ stock 6 條(pr-159-review F-03 回校;含 slack 窗內每 100 ms 重繪 40 s 那條、同一秒重繪 setInterval 零重排、午夜失敗 60 s 重試、
   背景分頁回前景;market 另有週 K 同分支 + active=false 跨午夜再切回;stock 另有 20 s 空態重試優先於日界)。
 
 ## Phase 6 清理
 
 無 `[DEBUG-…]` 儀器、無拋棄式原型(突變體腳本在 scratchpad,還原後 `git status` 乾淨)。Blast radius:`useMarketBars` 唯一 caller
 `MarketChart.tsx:66`(IndexPage / MarketPane 轉 `active`);`useStockBars` 唯一 caller `StockChart.tsx:68`;`DAY_ERROR_RETRY_MS` 新 export
-只有這兩個讀者;`msUntilDayRollover` 讀者由 1 → 3。全量 vitest 2912/2912 含兩個 caller 的既有元件測試。
+讀者三支(含 useFuturesBars 自己;pr-159-review F-03 回校);`msUntilDayRollover` 讀者由 1 → 3(followups 後政策函式收 lib、常數與它全降私有)。全量 vitest 2912/2912 含兩個 caller 的既有元件測試。
 同類結構:`useIndexOverlay` / `useStockOverlay` 有日期鍵(render 時翻鍵),#155 已記 next-time 知情不動;後端 `build_period` 夜盤段
 快照為 handoff §2 另案。

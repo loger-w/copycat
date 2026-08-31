@@ -13,7 +13,7 @@ worktree `C:/side-project/copycat-wt-daily-bars-siblings`,自 master 0b744bb8。
 | eslint | `npx eslint src`(frontend/) | 無輸出 | 0 |
 | react-doctor | `npx react-doctor@latest --scope changed --no-telemetry`(frontend/) | `No issues found!` | 0 |
 | vitest 全量 | `npm test`(frontend/) | 153 files / 2912 passed | 0 |
-| pytest / ruff / pyright / validate | — | **未跑**:零 .py / configs / watchlists diff(`git diff 0b744bb8...HEAD --stat` 只有 frontend/src/hooks 五檔) | skipped(理由如左) |
+| pytest / ruff / pyright / validate | — | **未跑**:零 .py / configs / watchlists diff(diff 全落在 frontend/src 與 docs / artifacts;pr-159-review F-03 回校 —— 原句「只有 frontend/src/hooks 五檔」是搬家 commit 前的快照) | skipped(理由如左) |
 
 ## 突變體(`PYTHONUTF8=1 python scratchpad/mutants.py`;逐一套用 → 兩檔 hook 測試 → `git checkout --` 還原)
 
