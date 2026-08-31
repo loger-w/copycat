@@ -1,28 +1,35 @@
 import { msUntilNextLocalDate } from "@/lib/trading-calendar";
 
 /** 日 K 的新鮮度政策(bug/futures-daily-bars-rollover → bug/daily-bars-siblings-rollover):
- *  「同一個本機日曆日內不過期、跨午夜 + slack 重抓、失敗 60 s 重試」三顆常數 / 函式的唯一住處。
+ *  「同一個本機日曆日內不過期、跨午夜 + slack 重抓、失敗 60 s 重試」——**政策的唯一住處**,
+ *  公開面只有 `dayBarsStaleTime` / `dayBarsRefetchInterval` 兩支,hook 只接線(pr-159-review F-02:
+ *  先前只收常數、兩行政策運算式仍三支 hook 各一份 —— 「改一支、其他兩支測試照綠」正是
+ *  bug/daily-bars-siblings-rollover 的病因,收進來後改政策只改本檔、三支同動)。
+ *  常數與 `msUntilDayRollover` 不 export:整個 src/ 零外部讀者(pr-159-review F-06),
+ *  測試釘界用牆鐘字面值、不 import 常數(frontend-testing 慣例)。
  *
  *  **不併進 `lib/trading-calendar.ts`**:那邊是純日曆算術(下一個午夜幾毫秒);這邊是 TanStack Query
  *  的 staleTime / refetchInterval 政策(slack、render 重排、error 重試),理由不同、變動理由也不同。
  *  **不留在 `hooks/useFuturesBars.ts`**(08-31 user 拍板,review S-F1 / P-F6):三支日 K hook 平行
  *  import,兩支兄弟不該 runtime 依賴期貨 hook 模組。
  *
- *  讀者:`hooks/useFuturesBars.ts`(日 K,`subscribed: active` 退訂即無計時器)、`hooks/useMarketBars.ts`
- *  (日 / 週 / 月 K,日 K 分支整段不吃 `active`)、`hooks/useStockBars.ts`(日 K,`barsPollInterval` 先判)。
+ *  讀者(**唯一清單**,下方函式 doc 不重列 —— pr-159-review F-08):
+ *  - `hooks/useFuturesBars.ts` 日 K:`subscribed: active`,退訂即無計時器,切回靠 staleTime 補;
+ *  - `hooks/useMarketBars.ts` 日 / 週 / 月 K:整段不吃 `active`(tab hidden 保留,理由見該檔);
+ *  - `hooks/useStockBars.ts` 日 K:`barsPollInterval` 先判(SC-4 的 20 s 空態重試優先於日界),
+ *    它回 false 才進本檔;各 hook 的分 K 輪詢另有**自己的**時段閘(見各檔),不經過本檔。
  *  測試在三支 hook 的 `*.test.ts(x)` 跨日 describe(seam = hook;本檔零 React 依賴、無自己的測試檔)。 */
 
 /** 午夜過後再等這麼久才問日 K。**沒有硬依據**:同一台機器上前後端牆鐘無時差,後端
  *  `date.today()` 在 00:00:00 就翻頁;這一分鐘只擋計時器排程誤差與「恰在同一毫秒」那類極端
  *  情況,失效方向安全(最壞是新基準晚一分鐘到)。值由測試釘住(00:00:30 仍不打、00:01:01 打)。
  *  slack 是「界」的一部分、不是加在界之後的等待 —— 推導見 `msUntilDayRollover`。 */
-export const DAY_ROLLOVER_SLACK_MS = 60_000;
+const DAY_ROLLOVER_SLACK_MS = 60_000;
 
 /** 日 K 的有效期 = **同一個本機日曆日**(bug/futures-daily-bars-rollover):`from` 起算,到
  *  它之後的第一個日曆日 00:00 + `DAY_ROLLOVER_SLACK_MS` 的毫秒數。
  *
- *  讀者三支:`useFuturesBars`、`useMarketBars`(日 / 週 / 月 K)、`useStockBars`(日 K)—— 同一個 bug
- *  形狀(bug/daily-bars-siblings-rollover),症狀與界的由來只寫這一處,兩支兄弟的 doc 指過來。
+ *  讀者見檔頭(同一個 bug 形狀 —— bug/daily-bars-siblings-rollover;症狀與界的由來只寫這一處)。
  *
  *  舊碼 `staleTime: Infinity` + 不輪詢:看盤日常是 preview 整天掛著(CLAUDE.md §1),跨過午夜
  *  那份 cache 永不失效 → 新交易日的 CDP / MA 疊線(`lib/futures-overlay.ts`,基準 = 錨定日前
@@ -55,19 +62,39 @@ export const DAY_ROLLOVER_SLACK_MS = 60_000;
  *  再 ceil 到整秒:回值 ≥ 真距離(不會早於界打)、最多晚 1 s;同一秒內重繪回同值。
  *  `staleTime` 吃同一支(以 `dataUpdatedAt` 起算)的連帶:資料若在 00:00–00:01 內落地(error 重試那條路),
  *  stale 點是**今天** 00:01 而不是明天 —— 有界(那一發落地後下一界即明天,不成迴圈)、方向安全(多打一發)。 */
-export function msUntilDayRollover(from: number): number {
+function msUntilDayRollover(from: number): number {
   const ms = msUntilNextLocalDate(new Date(from - DAY_ROLLOVER_SLACK_MS));
   return Math.ceil(ms / 1000) * 1000;
 }
 
 /** 日 K 那一發失敗(`retry: 1` 用完)後的重試節奏。沒有這條的話 interval 會照樣重算成
- *  「到下一個午夜」—— 00:01 那一發碰上 TC4 忙就整個交易日停在昨天的基準,與修前同一個症狀。
- *  與分 K 輪詢 `POLL_MS` 的 60 s **數值相同,但不吃時段閘**(分 K 那條包著 `inFuturesAllDayHours()`),且
+ *  「到下一個午夜」—— 00:01 那一發碰上後端不通就整個交易日停在昨天的基準,與修前同一個症狀。
+ *  與三支 hook 各自分 K 輪詢的 60 s 數值相同但**互不同源**(各檔私有 `POLL_MS`),也不吃它們的時段閘;
  *  `retry: 1` 讓每輪其實是兩發:失效方向選「多打」不選「整天不救」。
- *  **只在 HTTP 非 2xx 才走到這條**(`fetchBars` throw → TQ error):`/api/market/bars` 的 503 只有
- *  `NOT_READY`(index 未就緒);TC4 斷線 / 慢是 200 + `status: disconnected|timeout` 降級 payload,
- *  不進 error,所以「TC4 整個週末沒開」**不會**每分鐘兩發 —— 只有後端沒起來時才會(每個掛著的
- *  日 K query 各兩發 / 分鐘;08-30 記的「期貨 tab 開著 = 每分鐘兩發 503」是那種情況,已知情)。
- *  讀者三支:`useFuturesBars`(退訂即無計時器)、`useMarketBars`(日 / 週 / 月 K,**不吃 `active`**,見該檔)、
- *  `useStockBars`(日 K,本來就無閘)—— bug/daily-bars-siblings-rollover。 */
-export const DAY_ERROR_RETRY_MS = 60_000;
+ *  **只在 HTTP 非 2xx 才走到這條**(各 hook 的 fetch 對非 2xx throw → TQ error;pr-159-review F-07 口徑):
+ *  TC4 斷線 / 慢在 `/api/market/bars` 與 `/api/stock/bars` 都是 200 降級 payload、不進 error
+ *  (`futures_engine.bars_range` / `stock_engine.bars_range` 吞例外回空);非 2xx 的實際來源 =
+ *  引擎未就緒 503、參數類 400(含 stock 的 `BAD_CODE`,永久性錯誤、重試不會自己好,但前端與自選
+ *  同一把 `_CODE_RE` 尺、實務罕見)、全域 exception handler 502。「TC4 整個週末沒開」**不會**每分鐘
+ *  兩發 —— 只有後端沒起來時才會(每個掛著的日 K query 各兩發 / 分鐘,已知情)。
+ *  讀者見檔頭。 */
+const DAY_ERROR_RETRY_MS = 60_000;
+
+/** 三支 hook 的 `staleTime` / `refetchInterval` 都以 TQ 的 Query 物件呼叫;這裡只讀用得到的兩格,
+ *  結構型別、不 import TQ 泛型(呼叫端的 `Query<MarketBars>` / `Query<BarsPayload>` 皆可指派)。 */
+interface DayBarsQuery {
+  state: { status: "pending" | "error" | "success"; dataUpdatedAt: number };
+}
+
+/** 日 K `staleTime`:以「上次落地時刻」算到它之後的第一個午夜。以 `dataUpdatedAt` 起算而不是
+ *  「現在」的理由、與 refetchInterval 恰好相反的理由,都在 `msUntilDayRollover` doc。 */
+export function dayBarsStaleTime(q: DayBarsQuery): number {
+  return msUntilDayRollover(q.state.dataUpdatedAt);
+}
+
+/** 日 K `refetchInterval`:失敗 → 60 s 重試(`DAY_ERROR_RETRY_MS`);否則到下一個午夜——以「現在」算、
+ *  **不吃 `dataUpdatedAt`**(鐵律 (b),推導見 `msUntilDayRollover`)。
+ *  refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。 */
+export function dayBarsRefetchInterval(q: DayBarsQuery): number {
+  return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
+}

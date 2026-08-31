@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
-import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/lib/day-bars-rollover";
+import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollover";
 import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
 import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
 
@@ -53,9 +53,10 @@ async function fetchMarketBars(key: MarketKey, tf: string): Promise<MarketBars> 
 }
 
 /** @param active 使用者是否正看著這張圖所在的 tab。**預設 true**(保守:既有呼叫路徑
- *  不因為新參數而靜默停更)。分 K 那條路在當日段每次都真走 TC4 SubHistory,與 REALTIME
- *  搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發是看不見的成本(review round-2 XR-4;
- *  `FuturesPage` / `LimitListSection` 同慣例)。 */
+ *  不因為新參數而靜默停更)。**只作用於分 K**:日 / 週 / 月 K 的午夜重抓與失敗重試整段不吃
+ *  這道閘(理由見 `refetchInterval` 內註;pr-159-review F-05)。分 K 那條路在當日段每次都真走
+ *  TC4 SubHistory,與 REALTIME 搶同一把 `api.lock` —— tab 切走後還每 60 秒打一發是看不見的
+ *  成本(review round-2 XR-4;`FuturesPage` / `LimitListSection` 同慣例)。 */
 export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
   const tf = tfOf(mode);
   const isMinute = tf === "1";
@@ -69,8 +70,8 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
     queryFn: () => fetchMarketBars(key, tf as string),
     enabled: tf !== null,
     retry: 1,
-    // 日 / 週 / 月 K:以「上次落地時刻」算到它之後的第一個午夜(理由見 `msUntilDayRollover`)
-    staleTime: isMinute ? 0 : (q) => msUntilDayRollover(q.state.dataUpdatedAt),
+    // 日 / 週 / 月 K 的新鮮度政策整組在 `lib/day-bars-rollover.ts`(三支日 K hook 同動,改政策只改那裡)
+    staleTime: isMinute ? 0 : dayBarsStaleTime,
     // 函式形式:TQ 每次 interval 到期**與每次 render** 都重新求值 → 開盤/收盤的開關、日 K 的下一個
     // 午夜都不依賴外部 re-render;回值一變 TQ 就重排計時器,所以日 K 那條回整秒值。
     refetchInterval: (q) => {
@@ -79,10 +80,9 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
         // 不同,知情):台股綜合 tab 是 hidden 保留不 unmount,人在個股頁跨過午夜、早上切回時 K 線
         // 必須已是今天的 —— 切回那次 render 重算 interval 只會排到「下一個」午夜,拿不到「立刻打」。
         // 午夜那發一天一次、每把 key 一發;失敗後的 60 s 重試也不閘(否則午夜失敗恰發生在人不在時,
-        // 就整晚凍結、切回還得再等 60 s),且 error 只在 HTTP 非 2xx(見 `DAY_ERROR_RETRY_MS`),
-        // 都不是 XR-4 擋的那種每 60 s 打 TC4 SubHistory 的成本。
-        // refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。
-        return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
+        // 就整晚凍結、切回還得再等 60 s),且 error 只在 HTTP 非 2xx(量級見 lib 的
+        // `DAY_ERROR_RETRY_MS` doc),都不是 XR-4 擋的那種每 60 s 打 TC4 SubHistory 的成本。
+        return dayBarsRefetchInterval(q);
       }
       return active && inHours() ? POLL_MS : false;
     },

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
-import { DAY_ERROR_RETRY_MS, msUntilDayRollover } from "@/lib/day-bars-rollover";
+import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollover";
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
 import type { FutChartMode } from "@/lib/fut-chart-mode";
 import type { MarketKey } from "@/lib/timeframe";
@@ -107,17 +107,14 @@ export function useFuturesBars(
     // 退訂期間 cache 不能被 gc(理由見 `active` doc);鍵集合有界,Infinity 不會長
     gcTime: Infinity,
     retry: 1,
-    // 日 K:以「上次落地時刻」算到它之後的第一個午夜(理由見 `msUntilDayRollover`)
-    staleTime: isMinute ? 0 : (q) => msUntilDayRollover(q.state.dataUpdatedAt),
+    // 日 K 的新鮮度政策整組在 `lib/day-bars-rollover.ts`(三支日 K hook 同動,改政策只改那裡)
+    staleTime: isMinute ? 0 : dayBarsStaleTime,
     // 函式形式:TQ 每次結果落地**與每次 render** 都重新求值 → 日盤收 / 夜盤開的開關、日 K 的
     // 下一個午夜都不依賴外部 re-render;回值一變 TQ 就重排計時器,所以日 K 那條回整秒值
     //(`msUntilDayRollover`)。`active` 這一維不在這裡:退訂的 observer 根本沒有計時器
     //(`subscribed` 是唯一的閘)。
     refetchInterval: (q) => {
-      if (!isMinute) {
-        // refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)
-        return q.state.status === "error" ? DAY_ERROR_RETRY_MS : msUntilDayRollover(Date.now());
-      }
+      if (!isMinute) return dayBarsRefetchInterval(q);
       return inFuturesAllDayHours() ? POLL_MS : false;
     },
   });
