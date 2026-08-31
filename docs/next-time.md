@@ -356,7 +356,12 @@ verification;這裡回填成 backlog。
 - [x] ~~**worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
   `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。~~ → 08-26 chore/frontend-lockfile-sync `npm install` 更新 lock(diff = @emnapi/* + wasm32-wasi optional 平台包 bundled 項 + yaml peer 旗標)。
 - [x] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
-  (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:斷言改只看 `copycat.server.ws` logger(caplog 收整個 root,他測殘留背景執行緒的 WARNING 落進 2 秒窗即誤紅)。**候選根因未親眼抓到那則紀錄**;再紅時失敗訊息印 caplog.text 可回溯是哪個 logger。**
+  (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。** → 08-31 出貨(部分結案):斷言改只看 `copycat.server.ws` logger(caplog 收整個 root,他測殘留背景執行緒的 WARNING 落進 2 秒窗即誤紅);候選根因未親眼抓到那則紀錄,再紅時失敗訊息印 caplog.text 可回溯。**洩漏源已有實證**:pr-160 review 跑 8 檔後端測試,收尾冒出 `tc4.py _listen_loop` 殘留執行緒的 PytestUnhandledThreadExceptionWarning —— 本測試已免疫,其他 caplog 負向斷言未免疫,follow-up 見下一條。
+- [ ] **TC4 `_listen_loop` 執行緒活過測試(pr-160 review 實證)**:候選修法 = conftest autouse fixture 測後斷言無殘留
+  `_listen_loop` 執行緒(或揪出漏 `close()` 的 fixture)。影響面 = 全套件所有 caplog 負向斷言與執行緒計數斷言。
+- [ ] **空回補免 seq bump(pr-160 review F-04)**:`stock_state.apply_backfill` 對 `ticks=[]` 且倖存集 = 現況時仍 `seq +1001`
+  → 前端跳號規則整片重掛 tbody,純 no-op、開盤 ×N 檔各一次。候選 = 空回補且無變化時不 bump(行為改動,單獨分支;
+  contract 見 CLAUDE.md §4 個股 seq 條「例外已知且刻意」段,改時要同步改口)。
 
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
@@ -396,7 +401,7 @@ verification;這裡回填成 backlog。
 - [x] **flake 候選:`tests/server/test_stock_engine.py::TestStreamAndStatus::test_stream_receives_tick_and_book`**
   (08-26 全套三輪中一輪紅:`tick_msg["seq"]` 拿到 1002 而非 1,像是別的測試灌了 1000 筆 tick 的狀態漏進來;
   單跑 3/3 綠、其餘兩輪全套綠、當輪 diff 只動 tc4 close / capital reply log)。候選 = 找共用 StockState /
-  engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:根因 = 主圖入列的**空回補**照樣 `apply_backfill`(seq +1001),worker thread 先於 tick 落地時首則 tick seq=1002;測試改用 `backfill_gate` 卡住回補讓 tick 必為首事件,斷言不動。不是狀態外漏。**
+  engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。 **→ 08-28:併 D chore/test-hygiene-batch-2。** → 08-31 chore/test-hygiene-batch-2 出貨:根因 = 主圖入列的空回補照樣 `apply_backfill`(seq +1001),worker thread 先於 tick 落地時首則 tick seq=1002;測試改用 `backfill_gate` 卡住回補讓 tick 必為首事件,斷言不動。不是狀態外漏。
 - [ ] **現股當沖 / 信用當沖資格顯示**(user 08-26 提問,未拍板):現股當沖 = FinMind `TaiwanStockDayTrading`
   (`BuyAfterSale` Y/＊ = 僅先買後賣;回測 `backfill_daytrade.py` 已用),信用當沖 = `TaiwanStockMarginPurchaseShortSale`
   資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。 **→ 08-28:併 B2 調研(達錢商品資訊有無當日當沖資格 / 暫停交易;證交所當日名單 API;FinMind 當日更新時刻;順便列達錢還能拿到哪些欄位)。user:不能用前一日名單。**
