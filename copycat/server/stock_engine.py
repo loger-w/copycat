@@ -1304,6 +1304,7 @@ class StockEngine:
         in_window = _observe_window_now()
         prev = self._trade_status.get(code)
         if prev is None:
+            trial_before = self._trial_now(code)
             if status != "0" and not in_window:
                 logger.warning(
                     _TRADE_STATUS_FIRST_FMT, code, status, _now_taipei_time(), in_window, qty
@@ -1311,10 +1312,14 @@ class StockEngine:
                 self._trade_status[code] = (status, True)
             else:
                 self._trade_status[code] = (status, False)
+            # 「訂閱前那一檔就已經在延緩撮合」的首見 1:亮燈與蒐證同一時刻(pr-167 F-01)
+            self._notify_trade_status_flip(code, trial_before)
             return
         prev_status, episode = prev
         if status == prev_status:
             return
+        # 轉態才算(同值已早退):此刻 dict 還是舊值,先取翻轉前答案(熱路徑零成本)
+        trial_before = self._trial_now(code)
         args = (
             code,
             prev_status,
@@ -1335,6 +1340,23 @@ class StockEngine:
         else:
             logger.debug(_TRADE_STATUS_FMT, *args)
         self._trade_status[code] = (status, episode)
+        self._notify_trade_status_flip(code, trial_before)
+
+    def _notify_trade_status_flip(self, code: str, trial_before: bool) -> None:
+        """per-code TradeStatus 轉態的推播接點(pr-167 F-01)。
+
+        延緩撮合的定義就是期間沒有成交 tick —— tick 驅動的 `_dirty_watchlist` 路徑
+        整段 episode 不會替這檔發 quote(flush 的 `state.last is None` skip 也會把
+        盤前 / 無成交檔擋掉),`_trial_now` 第二段的值算對了也推不出去。這裡在
+        「轉態且改變 `_trial_now(code)` 答案」時直接 publish(繞過 dirty 路徑;
+        對任意 code 直發 `watchlist_quote` 是 `_handle_no_data` 的既有先例),
+        收件人沿 `_trial_flip_targets` 同一套規則:自選碼 + 現貨主圖碼。
+        期貨鍵到不了這裡(`_observe_trade_status` 開頭已跳過)。
+        一次轉態最多一則,episode 一天量級是「檔 × 起訖」,不打穿 1s 節流。"""
+        if self._trial_now(code) == trial_before:
+            return
+        if code in self._watchlist or code == self._main:
+            self._publish(self._quote_payload(code))
 
     def _handle_stkfut(self, quote: dict) -> None:
         prod = str(quote.get("Security", ""))
