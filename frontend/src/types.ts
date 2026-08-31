@@ -98,7 +98,9 @@ export interface CapitalOrder {
   /** 價格別:**本 app 送出才知道**(群益回報無此欄)→ 群益 APP 下的單 / 跨日的單恆 null。 */
   price_type: "limit" | "market" | null;
   raw: string;
-  /** 股號衍生欄(L435:個股期契約碼反查;現股 = stock_no)。**選填**:舊後端不送。 */
+  /** 股號衍生欄(L435:個股期契約碼反查;現股 = stock_no)。**選填**:舊後端不送。
+   *  目前前端零讀者(群組卡已改吃 fills、`aggregateLots` 用 stock_no)—— 為 L435
+   *  契約完整性保留(user 拍板),日後有消費者免再加欄。 */
   code?: string | null;
 }
 
