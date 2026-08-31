@@ -972,6 +972,8 @@ def test_fills_keeps_per_event_price_and_time_today_only() -> None:
 
 
 def test_fills_prune_on_day_change() -> None:
+    """prune 守的是長跑記憶體不累積(讀時過濾另有 `fills()` 兜底)—— 斷言私有列表長度,
+    否則把 `_append_fill_locked` 的 prune 拿掉這條照綠(pr-167 F-17 mutation 實證)。"""
     day = ["20260831"]
     s = CapitalStore(today=lambda: day[0])
     s.set_positions([])
@@ -979,6 +981,7 @@ def test_fills_prune_on_day_change() -> None:
     day[0] = "20260901"
     s.apply_reply(_evt(seq=SEQ_B, typ="D", qty="1000", price="81.0"))
     assert [f.price for f in s.fills()] == [81.0]
+    assert len(s._fills) == 1  # 真的被 prune,不是只有讀時過濾
 
 
 def test_boot_watermark_before_backlog_does_not_reapply_replayed_fills() -> None:

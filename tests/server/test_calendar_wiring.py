@@ -502,6 +502,8 @@ class TestPreOpenPrevTradingDay:
         with _client(app):
             assert app.state.stock is not None
             assert app.state.stock.trade_date == FRI_ISO  # stock stage 08:00 前
+            # engine 屬性對了但 source 日窗沒切 = 回補照樣打今日(同檔週六案的教訓)
+            assert stock.trade_dates == [FRI_ISO]
             assert app.state.index is not None
             assert app.state.index._trade_date == FRI_ISO  # index stage 08:30 前
 
@@ -529,6 +531,14 @@ class TestTxoAutoBackfillDate:
 
     def test_weekend_returns_last_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert self._resolve(monkeypatch, SAT, _dt.time(12, 0)) == "20260814"
+
+    def test_saturday_night_session_before_0500_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-167 F-22:週六 02:00 = 週五夜盤還活著(15:00 → 翌 05:00)→ live 窗回 None。
+        把 `_session_date()` 換成 `now.date()` 的 mutant 對既有五案全綠(61 passed 實測)
+        —— prod 樣態是活著的夜盤被改用固定日盤窗,這一例就是那個紅燈。"""
+        assert self._resolve(monkeypatch, SAT, _dt.time(2, 0)) is None
 
     def test_trading_day_preopen_returns_prev_trading_day(
         self, monkeypatch: pytest.MonkeyPatch

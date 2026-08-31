@@ -8,10 +8,9 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
-import datetime as _dt
-
 from datetime import date, timedelta
 from pathlib import Path
 
