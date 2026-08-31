@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import replace
 import logging
 import threading
 import time
@@ -21,13 +22,12 @@ from typing import Any, Callable, Literal, NotRequired, Sequence, TypedDict, cas
 from copycat.live.stock_models import TRIAL_WINDOWS, StockTick, parse_hist_tick
 from copycat.live.tc4 import (
     BARS_POLL_DEADLINE,
+    always_active,
     HEAL_VARIANT_AFTER,
     HealPolicy,
     HistoryTimeoutError,
     TC4QuoteSource,
 )
-from dataclasses import replace
-
 from copycat.tc4common import TC4_DEFAULT_PORT
 
 logger = logging.getLogger(__name__)
@@ -519,7 +519,13 @@ class StockQuoteSource(TC4QuoteSource):
         heal: HealPolicy = STOCK_HEAL,
     ) -> None:
         # 自癒閘沿用既有的盤中判定:個股盤外沒有推播是正常的,churn 沒有意義。
-        # `heal.active` 一律被 `in_trading_hours` 蓋掉(健檢與自癒同一把閘,不另開參數)。
+        # `heal.active` 一律由 `in_trading_hours` 表達(健檢與自癒同一把閘,不另開參數);
+        # caller 另傳 active 必然是誤用 —— 靜默覆蓋會走錯閘且零訊號(pr-126 共用閘同族,
+        # pr-160 review F-06),直接拒收。FuturesQuoteSource 尊重 heal.active,語意差異在此立牌。
+        if heal.active is not always_active:
+            raise ValueError(
+                "StockQuoteSource 的自癒閘走 in_trading_hours 參數;heal.active 會被覆蓋,禁止另傳"
+            )
         super().__init__(
             port,
             api=api,
