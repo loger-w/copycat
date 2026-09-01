@@ -977,6 +977,45 @@ class TestSurgePullback:
         assert det.evaluate("2330", _tick(101_000), _ctx(), _PB) == []  # 狀態已清(回首 tick)
         assert len(det.evaluate("2317", _tick(101_000), _ctx(), _PB)) == 1
 
+    def test_fresh_surge_after_fire_rearms_without_new_high(self) -> None:
+        """S-1(two-axis review):發訊後深跌,之後的**獨立新波**(未過前波峰)也要能
+        重武裝 —— 判式 = 以「發訊時點之後」的窗重跑 surge 同式(基線是發訊後首筆,
+        所以沿跌不可能連發);否則一檔一天只剩「創前高」一條路,深跌日整天啞掉。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)  # 武裝,峰 102.1
+        clock.advance(60)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1  # 發訊(t=120)
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(95_000), _ctx(), _PB) == []  # 深跌
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(96_000), _ctx(), _PB) == []  # 未達新波門檻
+        clock.advance(190)  # t=430:發訊那筆已出窗,發訊後基線 = 95.0
+        events = det.evaluate("2330", _tick(97_000), _ctx(), _PB)
+        assert events == []  # 自 95.0 +2.1%:重武裝(不發),峰 97.0
+        clock.advance(60)
+        fired = det.evaluate("2330", _tick(95_900), _ctx(), _PB)
+        assert len(fired) == 1  # 新波回檔:自 97.0 回落 1.13%
+        assert fired[0].pct is not None
+        assert abs(fired[0].pct - (97_000 - 95_900) * 100 / 97_000) < 1e-9
+
+    def test_downhill_after_fire_never_chain_fires(self) -> None:
+        """S-1 的反面約束:發訊後沿跌不得因「窗尾還掛著起漲點」而重武裝連發 ——
+        發訊後的 surge 判式基線是發訊那一筆(區間內最高的一筆),跌勢永不 +2%。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(104_000), _ctx(), _PB)  # 武裝(+4%),峰 104.0
+        clock.advance(10)
+        assert len(det.evaluate("2330", _tick(102_900), _ctx(), _PB)) == 1  # 發訊 −1.06%
+        # 沿跌每筆 vs 窗最舊 100.0 都還 >= +2%,但發訊後基線是 102.9 → 不得重武裝
+        for price in (102_400, 102_200, 102_000):
+            clock.advance(10)
+            assert det.evaluate("2330", _tick(price), _ctx(), _PB) == []
+
     def test_dingyuan_2426_offline_reference(self) -> None:
         """離線對照組(issue #174):鼎元 2026-09-01 10:08 峰 104.5 → 回落 102。
         1% 卡應於 103.4 發(−1.05%)、2% 卡應於 102.4 發(−2.01%);
