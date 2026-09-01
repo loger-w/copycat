@@ -799,3 +799,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
 - [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價 **→ user 08-28:目前不下選擇權,先放著。**
+
+## 2026-09-02(pr-175 review 留尾,Nice/ask-user 未做組)
+
+- [ ] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。
+- [ ] **盤前篩選放棄後 ~24h 不重武裝**(review F-10,MED→LOW PARTIAL):21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
+- [ ] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
+- [ ] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
+- [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
