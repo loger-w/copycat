@@ -10,9 +10,9 @@
 2. 窗內**收盤鎖板** ≥ 1 次(`close == limit_up(prev_ref)` 毫元精確等值;摸板不算)。
 3. 均量 ≥ 5,000 張 —— 母體 = 基準日(最舊)以外的轉換日(「20 日均量」的 20 天)。
 
-**記憶體紀律**(`limit_streaks` 同款):呼叫端逐日 fetch → 立即餵進來 → 丟棄 raw rows
-的設計不適用於本模組 —— 係數鏈要跨日連乘,必須整窗持有;但只持有 4 位普通股的
-(close, spread, volume) 三元組,~2,000 檔 × 21 日,KB 級。
+**記憶體紀律**(`limit_streaks` 同款關切):係數鏈要跨日連乘,整窗 21 日必須同時在手 ——
+呼叫端(引擎)逐日 fetch 後**立即過 `shrink_rows` 縮列再丟 raw**,縮後才累積整窗
+(全市場單日 ~4.5 萬列 × 21 日全持有是 GB 級;縮後 ~2,000 檔 × 4 欄,MB 級以下)。
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from copycat.market import limit_up_milli
 from copycat.market_breadth import classify_stock_id
+from copycat.trading_calendar import TradingCalendar
 
 #: 窗口交易日數(21 個收盤 = 20 個交易日轉換)—— 引擎抓取天數的單一來源。
 WINDOW_DAYS = 21
@@ -29,6 +30,39 @@ WINDOW_DAYS = 21
 RET_MIN_PCT = 15.0
 #: 20 日均量門檻(張)。
 AVG_LOTS_MIN = 5000.0
+#: 每晚重算時刻(台北牆鐘)—— FinMind 當日 EOD 於晚間已定稿(#173 Q5 拍板 21:00)。
+RUN_TIME = _dt.time(21, 0)
+
+
+def expected_data_date(now: _dt.datetime, cal: TradingCalendar) -> _dt.date:
+    """此刻「應已算完」的資料日:交易日 `RUN_TIME`(含)後 = 當日,其餘 = 前一交易日。
+
+    引擎的補跑判定 = 快取 `data_date` ≠ 本值即重算(server 21:00 沒開著,隔天早上
+    啟動時 expected 已是昨日 → 啟動即補跑)。
+    """
+    today = now.date()
+    if cal.is_trading_day(today) and now.time() >= RUN_TIME:
+        return today
+    return cal.last_trading_day(today - _dt.timedelta(days=1))
+
+
+#: `shrink_rows` 保留欄 —— `hard_candidates` 讀的就是這四欄。
+_KEEP_KEYS = ("stock_id", "close", "spread", "Trading_Volume")
+
+
+def shrink_rows(rows: list[dict]) -> list[dict]:
+    """單日全市場 rows → 只留 4 位普通股與必要四欄(對 `hard_candidates` 結果不變)。
+
+    記憶體紀律:引擎逐日 fetch 後**立即縮列再丟 raw** —— 全市場單日 ~4.5 萬列(含權證)
+    × 21 日全持有是 GB 級,live server 內不可接受;縮後 ~2,000 檔 × 4 欄,MB 級以下。
+    """
+    out: list[dict] = []
+    for row in rows:
+        sid = row.get("stock_id")
+        if not isinstance(sid, str) or classify_stock_id(sid) is not None:
+            continue
+        out.append({k: row.get(k) for k in _KEEP_KEYS})
+    return out
 
 
 @dataclass(frozen=True)

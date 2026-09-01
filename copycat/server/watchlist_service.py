@@ -33,6 +33,7 @@ from copycat.stock_watchlist import (
     load_watchlist,
     normalize,
     save_watchlist,
+    with_group_replaced,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,21 @@ class WatchlistService:
                 if g["name"] == src:
                     g["name"] = dst
             pending = self._commit({"codes": list(current["codes"]), "groups": groups})
+        return await self._settle(pending)
+
+    async def replace_group(self, name: str, codes: list[str]) -> tuple[Watchlist, bool]:
+        """整組覆蓋(盤前篩選 nightly 寫入,#173):該群組成員 = `codes`(不存在自動建);
+        原成員若不再屬於**任何**群組,同時自 wl codes 移除 —— 不移的話每晚淘汰的檔會
+        堆積在未分組桶,一週就把上限塞滿。
+
+        邊界刻意接受:使用者手動把某檔留在未分組桶、而它恰好也在本群組 —— 覆蓋時該檔
+        自本群組淘汰即一併離開自選(「本群組每日覆蓋、手動增刪會被洗掉」的知情語意,
+        #173 Q6 拍板)。轉換語意單一份在 `stock_watchlist.with_group_replaced`
+        (CLI `screen --write` 同用);其他群組的成員不受影響(仍在群組 = 不移)。
+        """
+        async with self._lock:
+            current = self._require_current()
+            pending = self._commit(with_group_replaced(current, name, codes))
         return await self._settle(pending)
 
     async def ungroup(self, code: str, group: str) -> tuple[Watchlist, bool]:

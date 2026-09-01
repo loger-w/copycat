@@ -64,6 +64,27 @@ def union(groups: list[Group]) -> list[str]:
     return seen
 
 
+def with_group_replaced(wl: Watchlist, name: str, codes: list[str]) -> Watchlist:
+    """整組覆蓋的純轉換(未 normalize;#173 盤前篩選 nightly 寫入的共用語意)。
+
+    該群組成員 = `codes`(不存在自動建);原成員若不再屬於**任何**群組,同時自
+    wl codes 移除 —— 不移的話每晚淘汰的檔會堆積在未分組桶。其他群組成員不受影響。
+    呼叫端 = `WatchlistService.replace_group`(server 路徑,同鎖)與 CLI `screen --write`
+    (server 未跑時的直接落檔)。
+    """
+    target = name.strip()
+    groups: list[Group] = [{"name": g["name"], "codes": list(g["codes"])} for g in wl["groups"]]
+    found = next((g for g in groups if g["name"] == target), None)
+    old = set(found["codes"]) if found is not None else set()
+    if found is None:
+        groups.append({"name": target, "codes": list(codes)})
+    else:
+        found["codes"] = list(codes)
+    still = {c for g in groups for c in g["codes"]}
+    kept = [c for c in wl["codes"] if c not in old or c in still]
+    return {"codes": kept, "groups": groups}
+
+
 def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
     if not path.exists():
         return {"codes": [], "groups": []}

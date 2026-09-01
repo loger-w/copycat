@@ -84,7 +84,9 @@ from copycat.stock_names import load_names as load_stock_names
 from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
 from copycat.live.session import backfill_window, session_key
+from copycat.server.screen_engine import ScreenEngine
 from copycat.trading_calendar import (
+    WEEKEND_ONLY,
     TradingCalendar,
     resolve_trade_date,
     resolve_trade_date_before,
@@ -104,7 +106,17 @@ MARKET_SESSIONS = ("day", "allday")
 
 #: lifespan 關機各段的**輸出序**(彙總行用;不是執行序 —— 執行序見 lifespan finally 的註解:
 #: 前三段序列、中間四條 TC4 lane 並行、capital 最後)。
-_SHUTDOWN_SEGMENTS: Final = ("breadth", "signals", "corr", "futures", "index", "stock", "txo", "capital")
+_SHUTDOWN_SEGMENTS: Final = (
+    "screen",
+    "breadth",
+    "signals",
+    "corr",
+    "futures",
+    "index",
+    "stock",
+    "txo",
+    "capital",
+)
 
 #: `/api/stock/overlay/{code}` 單檔取數的時間上界(group-grid review B2)。
 #: TC4 對「查無此檔」不是快速失敗 —— `fetch_daily_bars` 內部兩段 deadline 各
@@ -321,6 +333,7 @@ class _Booted:
     futures: FuturesEngine | None = None
     corr: CorrelationEngine | None = None
     breadth: BreadthEngine | None = None
+    screen: ScreenEngine | None = None
     #: SC-7 的背景交叉檢查(不是引擎,但關機一樣要 cancel —— 沒人 await 的 task
     #: 會在 loop 關閉時留下「Task was destroyed but it is pending」)
     crosscheck_task: asyncio.Task[None] | None = None
@@ -659,6 +672,7 @@ def create_app(
         app.state.futures = None
         app.state.corr = None
         app.state.breadth = None
+        app.state.screen = None
         app.state.calendar_crosscheck = None  # SC-7 背景 task(有日曆時才建)
         # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
         # AttributeError → 被全域 handler 轉成 502
@@ -1066,6 +1080,41 @@ def create_app(
             app.state.breadth = breadth
             booted.breadth = breadth
 
+            # 盤前選股篩選(#173):交易日 21:00 重算 + 啟動補跑,覆寫自選群組。
+            # 只在 prod 路徑建(DEFAULT_BREADTH sentinel 慣例 —— 測試注入 fetchers 的
+            # 是 breadth 專用四元組,篩選不共用那個注入面)。
+            def _make_screen() -> ScreenEngine | None:
+                if breadth_fetchers is not DEFAULT_BREADTH:
+                    return None
+                token = finmind_token.resolve_token()
+                if token is None:
+                    logger.info("盤前篩選停用(FINMIND_TOKEN 未設)")
+                    return None
+                service = app.state.watchlist_service
+                if service is None:
+                    # 名單的唯一產出就是自選群組;沒有寫入路徑時跑了也落不了地。
+                    # 下次(stock engine 在場的)啟動由補跑機制追上。
+                    logger.info("盤前篩選停用(stock engine 未啟動,無自選寫入路徑)")
+                    return None
+                return ScreenEngine(
+                    token=token,
+                    calendar=trading_calendar if trading_calendar is not None else WEEKEND_ONLY,
+                    daily_fetch=breadth_fetch.fetch_daily_prices,
+                    day_trading_fetch=breadth_fetch.fetch_day_trading,
+                    disposition_fetch=breadth_fetch.fetch_disposition,
+                    service=service,
+                )
+
+            screen = await _boot(
+                "screen",
+                "screen engine 初始化非預期失敗,盤前篩選停用(其餘不受影響)",
+                _make_screen,
+                lambda o: o.start(),
+                lambda o: o.close(),
+            )
+            app.state.screen = screen
+            booted.screen = screen
+
             # 序列尾段:合約目錄預熱一次(A3)。放在**最後**而不是接線當下 —— 它是
             # 秒級查詢,插在引擎序列中間會把後面每一段都往後推(capital 登入、corr
             # 訂閱都吃啟動時序)。留在 boot task 內而不另起 detached task:關機取消與
@@ -1149,6 +1198,9 @@ def create_app(
                     # close → TC4 session / COM 執行緒 / hub worker 一次全洩漏。
                     # 這條旁支是「只讀 index 歷史的 log 任務」,更沒有資格擋關機。
                     logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
+            if booted.screen is not None:
+                # breadth 之前收:純 task cancel,無外部 session,秒內完成
+                await _close_segment("screen", booted.screen.close)
             if booted.breadth is not None:
                 await _close_segment("breadth", booted.breadth.close)
             if booted.signals is not None and booted.signals_close is not None:
