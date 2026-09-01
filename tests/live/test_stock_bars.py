@@ -475,12 +475,17 @@ class TestDkWindowVariant:
         assert all(o["Param"]["EndTime"] == "2026072823" for o in subs)
 
     def test_tagged_daily_variant_head_extension_not_leaked(self) -> None:
-        """variant 窗多收的 start_date 前頭部 bar 不外洩(「含端點」契約)。"""
+        """variant 窗多收的 start_date 前頭部 bar 不外洩(「含端點」契約)。
+
+        界上列(= start_date 當日)必須活著:過濾器唯一宣稱的性質就是端點包含,
+        `>=` → `>` 的突變體曾全量存活(pr-171-review F-01)—— 靜默丟區間首根的
+        失效樣態是週/月 K 首桶少一根、圖照畫零訊號。"""
         pages = {
             "DK": {
                 "0": [
                     dk("20260630", "90", "91", "89", "90.5", qi="1"),
-                    dk("20260724", "100", "101", "99", "100.5", qi="2"),
+                    dk("20260701", "95", "96", "94", "95.5", qi="2"),
+                    dk("20260724", "100", "101", "99", "100.5", qi="3"),
                 ],
                 "1": [],
             }
@@ -489,7 +494,32 @@ class TestDkWindowVariant:
         src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
         bars, tag, _status = src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
         assert tag == "tc4_dk"
-        assert [b["t"] for b in bars] == ["2026-07-24"]
+        assert [b["t"] for b in bars] == ["2026-07-01", "2026-07-24"]
+
+    def test_1k_refetch_keeps_window(self) -> None:
+        """variant 只屬 DK(futures 側同名條的 stock 對應,pr-171-review F-02):
+        1K 已有自己一套 end-hour 階梯 variant(`fetch_day_minutes(window_variant=)`,
+        有 CAP),DK 的 start 日期無上限 variant 洩進 1K 熱路徑(每日 ~270 列)=
+        兩套互不知情的逃逸機制疊在同一 key 空間。"""
+        sent: list[dict] = []
+        pages = {"1K": {"0": [k1("20260724", "10100", "100", "101", "99", "100")], "1": []}}
+        src = _src(_pager(pages, sent))
+        src.fetch_bars_range_tagged("2330", "1", "2026-07-01", "2026-07-28")
+        src.fetch_bars_range_tagged("2330", "1", "2026-07-01", "2026-07-28")
+        subs = self._subs(sent, "1K")
+        assert subs[0]["Param"]["StartTime"] == subs[1]["Param"]["StartTime"]
+
+    def test_empty_dk_refetch_still_uses_new_window(self) -> None:
+        """空手那一刷也要消耗 variant(pr-171-review F-03):「空結果 → 負向 TTL →
+        重試靠換窗才有意義」是 `_next_dk_start` 序號不設上界的核心理由 ——
+        「空手退還序號」型的成本優化會讓 DK 空 → 重試永遠重用同一把凍結成空的
+        key,把修掉的病在最高頻路徑原地復發,零訊號。"""
+        sent: list[dict] = []
+        src = _src(_pager({"DK": {}, "1K": {}}, sent))
+        src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        subs = self._subs(sent)
+        assert [o["Param"]["StartTime"] for o in subs] == ["2026070100", "2026063000"]
 
     def test_fetch_daily_bars_refetch_uses_new_window_string(self) -> None:
         """SignalHub 的日 K(`fetch_daily_bars`)同一條 DK 鏈:重查也要換窗。"""
@@ -505,9 +535,12 @@ class TestDkWindowVariant:
         assert subs[0]["Param"]["EndTime"] == subs[1]["Param"]["EndTime"]
 
     def test_variant_seq_is_per_window_not_per_symbol(self) -> None:
-        """序號按 (symbol, 窗) 記,不是按 symbol:同 symbol 兩個 base 窗(180 日 K 與
-        40 日 SignalHub 窗)交錯取數時,若按 symbol 記,交錯會讓「重置 / 前移」互相
-        污染 —— 最壞是兩個 caller 輪流拿回**同一把舊 key** 的凍結快照。"""
+        """序號按 (symbol, 窗) 記,兩個維度各自要被釘住:(a) 同 symbol 兩個 base 窗
+        (180 日 K 與 40 日 SignalHub 窗)交錯取數不互相污染 —— 按 symbol 記的話
+        最壞是兩個 caller 輪流拿回**同一把舊 key** 的凍結快照;(b) 同 base 窗下
+        第二檔股票首查仍是原窗(pr-171-review F-06:key 拿掉 symbol 維度的突變體
+        曾全量存活 —— 拿掉後第二檔起首查即 variant n>0,「首查 = 原窗」的安全性
+        主張對第一檔以外全部靜默失效)。"""
         sent: list[dict] = []
         pages = {"DK": {"0": [dk("20260724", "100", "101", "99", "100.5")], "1": []}}
         src = _src(_pager(pages, sent))
@@ -515,4 +548,13 @@ class TestDkWindowVariant:
         src.fetch_daily_bars("2330")  # 另一個 base 窗,不影響下面的序列
         src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
         subs = [o for o in self._subs(sent) if o["Param"]["EndTime"] == "2026072823"]
-        assert [o["Param"]["StartTime"] for o in subs] == ["2026070100", "2026063000"]
+        by_2330 = [o for o in subs if o["Param"]["Symbol"] == "TC.S.TWS.2330"]
+        assert [o["Param"]["StartTime"] for o in by_2330] == ["2026070100", "2026063000"]
+        # (b) 第二檔同 base 窗:序號不接著 2330 往下走,首查 = 原窗
+        src.fetch_bars_range_tagged("2454", "D", "2026-07-01", "2026-07-28")
+        by_2454 = [
+            o
+            for o in self._subs(sent)
+            if o["Param"]["Symbol"] == "TC.S.TWS.2454" and o["Param"]["EndTime"] == "2026072823"
+        ]
+        assert [o["Param"]["StartTime"] for o in by_2454] == ["2026070100"]

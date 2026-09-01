@@ -276,15 +276,29 @@ class TestDkWindowVariant:
     def test_variant_head_extension_not_leaked_to_caller(self) -> None:
         """variant 窗多收的 start_date 之前頭部 bar 要被過濾 ——「start/end 含端點」
         契約對 caller 不可見地維持(build_period 的 [-MAX:] 切尾擋不住頭部多收改變
-        週/月 K 聚合的首桶)。"""
+        週/月 K 聚合的首桶)。界上列(= start_date 當日)必須活著:`>=` → `>` 的
+        突變體曾全量存活(pr-171-review F-01),靜默丟區間首根零訊號。"""
         rows = [
             _dk_row("20260630", "22000", "22100", "21900", "22050", qi="1"),
-            _dk_row("20260729", "23000", "23200", "22900", "23100", qi="2"),
+            _dk_row("20260701", "22100", "22200", "22000", "22150", qi="2"),
+            _dk_row("20260729", "23000", "23200", "22900", "23100", qi="3"),
         ]
         src = _source(rows)
         src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
         second = src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
-        assert [b["t"] for b in second] == ["2026-07-29"]
+        assert [b["t"] for b in second] == ["2026-07-01", "2026-07-29"]
+
+    def test_empty_dk_refetch_still_uses_new_window(self) -> None:
+        """空手那一刷也要消耗 variant(pr-171-review F-03;stock 側同名條同意圖):
+        空頁 → 首頁逾時 raise,但 SUBQUOTE 已送出、TC4 端 key 已建立 ——
+        重試若重用同窗,拿回的是那把 key 建立時點的空,retry 形同虛設。"""
+        sent: list[dict] = []
+        src = _source([], sent)
+        for _ in range(2):
+            with pytest.raises(HistoryTimeoutError):
+                src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
+        subs = self._subs(sent)
+        assert [o["Param"]["StartTime"] for o in subs] == ["2026070100", "2026063000"]
 
     def test_1k_refetch_keeps_window(self) -> None:
         """variant 只屬 DK:1K 重查維持同窗(1K 有自己的凍結 stub 自癒維度,
