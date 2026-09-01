@@ -377,12 +377,30 @@ async def build_daily(
     fetched, raw_status = await fetch(code, "D", start.isoformat(), today.isoformat())
     status = _coerce_status(raw_status)
     bars = fetched[-DAILY_MAX_BARS:]
+    _warn_if_not_advanced(cache, code, today.isoformat(), bars)
     cache.daily_put(code, today.isoformat(), bars)
     if bars:
         cache.empty_clear(code, "D", 0)
         return BarsResult(bars, status)
     cache.empty_mark(code, "D", 0, status)
     return _daily_stale_or_empty(cache, code, today.isoformat(), status)
+
+
+def _warn_if_not_advanced(cache: BarsCache, key: str, day: str, bars: list[Bar]) -> None:
+    """refetch 成功但今日 bar 與作廢前快照相同 → 固定字串 WARNING(fix/dk-frozen-snapshot)。
+
+    TC4 DK 凍結快照(同 session 同窗重查回訂閱時點內容)的失效是「成功 + 非空 + 錯值」
+    全靜默 ——「墊背舊快照」INFO 只蓋空手那條路,凍結值靠 payload 對帳才抓得到。修法
+    本體(source 層 DK 窗口 variant)失效時,這行是唯一可 grep 的訊號(錨「值未前進」)。
+
+    只在「有作廢前快照可比」時才可能鳴(= 定稿界後那一刷;boot 首抓 stale 為 None);
+    末根不是今日(休市 / 該檔今日真沒 bar)重查同值是預期,不比。冷門標的作廢前快照
+    之後真零成交會誤鳴,字面留「疑似」;頻率上限 = 每次日 K refetch 一行(稀疏)。"""
+    stale = cache.daily_stale(key, day)
+    if stale and bars and bars[-1] == stale[-1] and bars[-1]["t"] == day:
+        logger.warning(
+            "bars %s: 日 K refetch 值未前進(今日 bar 與作廢前快照相同,疑似 TC4 凍結快照)", key
+        )
 
 
 def _daily_stale_or_empty(cache: BarsCache, code: str, day: str, status: BarsStatus) -> BarsResult:
@@ -505,6 +523,7 @@ async def build_period(
     start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
     daily, tag = await fetch(code, "D", start.isoformat(), day)
     daily = daily[-DAILY_LONG_MAX_BARS:]
+    _warn_if_not_advanced(cache, key, day, daily)
     cache.daily_put(key, day, daily)
     if daily:
         cache.daily_tag_put(key, day, tag)

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import re
@@ -386,6 +387,12 @@ class TC4QuoteSource:
         self._auto_backfill_date = auto_backfill_date
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscribed: set[str] = set()
+        #: DK 取數序號,鍵 = (symbol, base start, end) —— 見 `_dk_start_variant`。
+        #: 按窗記不按 symbol:同 symbol 兩個 base 窗交錯取數時,按 symbol 記會讓序號
+        #: 互相污染,最壞是兩個 caller 輪流拿回同一把舊 key 的凍結快照。條目數 ≈
+        #: 每 symbol 每日每種窗形一筆,不清理(server 以日為壽命尺度,量級無虞)。
+        self._dk_fetch_seq: dict[tuple[str, str, str], int] = {}
+        self._dk_seq_lock = threading.Lock()
         self._listener: threading.Thread | None = None
         self._stop = threading.Event()
         self._last_msg = time.monotonic()
@@ -922,6 +929,29 @@ class TC4QuoteSource:
             },
             strip_prefix=True,
         )
+
+    def _dk_start_variant(self, sym: str, start: str, end: str) -> str:
+        """DK 取數的窗口 variant:同 (symbol, 窗) 第 n 次取數把 start 日期前移 n−1 日。
+
+        TC4 對 DK history 訂閱 key(symbol|DK|Start|End)的內容**凍結在 key 建立時點**,
+        同 session 同窗重查(含 UNSUB 後重訂)永遠回建立時點快照(2026-09-01 受控 probe:
+        150 秒行情 263 口,同窗重查逐字節同且 elapsed 0.001s = 端上快取直回;見
+        tc4-market-facts 歷史回補節)——「14:00 定稿界作廢後 refetch」因此拿回 boot 時點
+        的今日 bar 且被當定稿釘到午夜。1K 家族實證的逃逸維度只有換窗口字串 / 換 session,
+        DK 同(start −1 日立刻取到前進值),故每次取數都用沒用過的 start。
+
+        首查(n=0)= 原窗,行為與修前完全相同;新的一天 base 窗字串本來就換 → 序號
+        天然按日重置。前移維度選 start **日期**(probe 實證)而非 end hour(未驗、一天
+        只有 24 值會繞回舊 key)。頭部因此多收的 bar 由 caller 以 start_date 過濾
+        (「含端點」契約);成本 = 每次 refetch 都是新訂閱,DK 熱取數實測 0.02–0.3s。
+        """
+        with self._dk_seq_lock:
+            n = self._dk_fetch_seq.get((sym, start, end), 0)
+            self._dk_fetch_seq[(sym, start, end)] = n + 1
+        if n == 0:
+            return start
+        base = _dt.date(int(start[:4]), int(start[4:6]), int(start[6:8]))
+        return f"{base - _dt.timedelta(days=n):%Y%m%d}{start[8:]}"
 
     def _collect_history(
         self,
