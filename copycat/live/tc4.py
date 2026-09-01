@@ -951,8 +951,11 @@ class TC4QuoteSource:
         換窗才有意義(同窗重試回的是建立時點的空)。代價記帳:窗寬度隨當日取數次數
         線性 +1 日(DK 一天一列,數列成本可忽略)、TC4 session 上每刷留一把 DK 訂閱
         (隨 session 消滅);已知最重的驅動 = overlay don't-cache-empty 對 DK 空標的的
-        輪詢。跨 base 撞窗(個股 40 日與 180 日窗差 140 日,同 symbol 同日取數達 140 次
-        才可能)撞上的代價 = 拿到幾小時前快照,由 bars.py「值未前進」WARNING 兜底。
+        輪詢(overlay 前端 staleTime Infinity 非輪詢,實際頻率遠低於曾估的量級)。
+        跨 base 撞窗(個股 40 日與 180 日窗差 140 日,同 symbol 同日取數達 140 次
+        才可能)撞上的代價 = 拿到幾小時前快照;兜底**僅** build_daily / build_period
+        路徑有 bars.py「值未前進」WARNING —— `fetch_daily_bars` 走 OverlayCache 不經
+        BarsCache,該路徑無兜底(pr-171-review F-08;序號跨閾值亦無 log,接受)。
         """
         with self._dk_seq_lock:
             n = self._dk_fetch_seq.get((sym, start, end), 0)
