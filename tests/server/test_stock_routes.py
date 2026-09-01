@@ -212,7 +212,7 @@ class TestWatchlistRoutes:
         """
         client, _ = make_client(tmp_path)
         with client:
-            codes = [f"{1000 + i}" for i in range(50)]
+            codes = [f"{1000 + i}" for i in range(150)]
             r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
             assert r.status_code == 200
             assert r.json()["codes"] == codes
@@ -220,8 +220,8 @@ class TestWatchlistRoutes:
     def test_put_over_limit_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            # 字面 51:與 test_put_at_limit_ok 的字面 50 成對釘死邊界 50/51
-            codes = [f"{1000 + i}" for i in range(51)]
+            # 字面 151:與 test_put_at_limit_ok 的字面 150 成對釘死邊界 150/151
+            codes = [f"{1000 + i}" for i in range(151)]
             r = client.put("/api/stock/watchlist", json={"groups": [{"name": "a", "codes": codes}]})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "WATCHLIST_FULL"
@@ -802,18 +802,18 @@ class TestGroupStateRoute:
         assert states["2330"]["vp"] == fixture["expected"]
 
     def test_group_state_at_limit_ok(self, tmp_path: Path) -> None:
-        """字面 50 相異碼 → 200(與 test_too_many_codes_400 的字面 51 成對釘死邊界)。"""
+        """字面 150 相異碼 → 200(與 test_too_many_codes_400 的字面 151 成對釘死邊界)。"""
         client, _ = make_client(tmp_path)
         with client:
-            codes = ",".join(f"{9000 + i}" for i in range(50))
+            codes = ",".join(f"{9000 + i}" for i in range(150))
             r = client.get("/api/stock/group-state", params={"codes": codes})
             assert r.status_code == 200
-            assert len(r.json()["states"]) == 50
+            assert len(r.json()["states"]) == 150
 
     def test_too_many_codes_400(self, tmp_path: Path) -> None:
         client, _ = make_client(tmp_path)
         with client:
-            codes = ",".join(f"{9000 + i}" for i in range(51))  # 自選上限 50(與 at-limit 成對)
+            codes = ",".join(f"{9000 + i}" for i in range(151))  # 自選上限 150(與 at-limit 成對)
             r = client.get("/api/stock/group-state", params={"codes": codes})
             assert r.status_code == 400
             assert r.json()["detail"]["error"] == "BAD_CODES"

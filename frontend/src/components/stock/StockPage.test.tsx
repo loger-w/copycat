@@ -526,7 +526,7 @@ describe("StockPage 加入自選(round4 項 4)", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "加入自選" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "加入自選" }));
     fireEvent.click(screen.getByLabelText("加入 2317 到未分組"));
-    await waitFor(() => expect(screen.getByText("自選已達 50 檔上限")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("自選已達 150 檔上限")).toBeTruthy());
   });
 });
 
