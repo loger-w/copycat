@@ -37,8 +37,13 @@
   但 `day-bars-rollover.ts` 的 staleTime 到午夜才過期,掛著不動的 preview 要到 00:01 才重問):候選 = `useFuturesBars` 日 K 的界改
   min(午夜, 15:00 錨定翻頁 + slack)。**只有期貨那支該吃 15:00 界**(market / stock 的日 K 沒有錨定日概念),而政策的單一住處在
   `lib/day-bars-rollover.ts` 三支同源 —— 怎麼開這個分岔是設計題,/mod + grilling 一輪再動。
-- [ ] **`DAILY_FINAL_TIME = 14:00` 的前提(TC4 DK 定稿寫入時點)未實測**:交易日 14:00 後首刷 `bars/TXF?tf=D` 實錄一次,末根與
-  期交所日盤收盤對照(`.claude/bug/futures-daily-cache-night/verification.md` 判準 5)。若 14:00 仍非定稿 → 界往後調。
+- [x] ~~**`DAILY_FINAL_TIME = 14:00` 的前提(TC4 DK 定稿寫入時點)未實測**~~ **→ 09-01 已實測、判準 FAIL、根因確診
+  (「界往後調」的處方作廢)**:15:02(server 08:57 起)首刷拿到凍在 10:08 的 09-01 bar(h 46955 < 1K 日盤實收 47209、
+  v 與早上逐字節同);15:16 user 重啟(新 TC4 session)首刷 171 ms 直接定稿(c 47209 / v 82698,MXF 同)——
+  **TC4 DK 同 session 同窗口重查 = 訂閱時點凍結快照**(1K 凍結 stub 家族的 DK 版),#165 的界有觸發、refetch 被
+  TC4 回舊值架空後標成定稿釘到午夜。→ 開 /bug:handoff `%TEMP%\copycat-handoff-2026-09-01-dk-frozen-snapshot.md`
+  (修法方向 = DK refetch 帶窗口 variant(index engine 窗口階梯 pattern)+「refetch 成功但值未前進」訊號;
+  順帶把 DK 凍結語意入 tc4-market-facts)。詳細證據鏈:memory `futures-daily-cache-final-boundary-shipped` 09-01 節。
 - [ ] **`BarsCache` 的 `_daily` / `_daily_tag` / `_daily_pre_final` 三份同鍵平行結構**(two-axis review J3):第三份起收成
   `DailyEntry(bars, tag, pre_final)` 的效益已高於單點改動成本 —— 🔵 refactor 候選,動時連 `daily_*` 五個方法一起收。
 

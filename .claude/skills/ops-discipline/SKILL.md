@@ -130,6 +130,11 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
 
 ## 驗證迴圈
 
+- **本機 HTTP 量測一律打 `127.0.0.1`,不打 `localhost`**(2026-09-01 真踩到):Windows 上
+  `localhost` 先解 IPv6 `::1`、server 只綁 IPv4 → 每請求固定 +2 s connect 逾時才 fallback ——
+  連 `/api/health` 都恰 2 s、三連發穩定同值,長得像「server 每請求固定開銷」。實測對照:
+  health 2052→45 ms、日 K memo 2046→14 ms。判法:全端點延遲趨同且 ≈2 s 整 = 先換 127.0.0.1
+  再懷疑 server。(Trigger:curl/urllib 量本機 server 延遲 / 「每個端點都慢」的回報)
 - **mutation 驗證的同秒 pycache 陷阱**(2026-08-05 真踩到):「改壞→跑測試→還原」同一秒內完成,
   pyc 只比對 `int(mtime)`+size 視為 fresh → 還原後不重編,出現與改動無關的假紅。還原後 `sleep 1`
   或清 `__pycache__`。(Trigger:快速 mutation 驗證迴圈)
