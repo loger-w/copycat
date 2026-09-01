@@ -30,6 +30,8 @@ WINDOW_DAYS = 21
 RET_MIN_PCT = 15.0
 #: 20 日均量門檻(張)。
 AVG_LOTS_MIN = 5000.0
+#: 漲幅界比較前的量化位數(review J4)—— 精度是判準的一部分,與 `RET_MIN_PCT` 同級具名。
+RET_QUANT_DIGITS = 6
 #: 每晚重算時刻(台北牆鐘)—— FinMind 當日 EOD 於晚間已定稿(#173 Q5 拍板 21:00)。
 RUN_TIME = _dt.time(21, 0)
 
@@ -144,7 +146,7 @@ def hard_candidates(days: list[tuple[_dt.date, list[dict]]]) -> list[ScreenCandi
         avg_lots = vol_sum / (n_days - 1) / 1000.0
         # 界比較先量化(review F-04):裸 float 下數學恰 +15% 的鏈可落 14.999…被剔、
         # 也可落 15.000…01 被收 —— 界上行為變浮點運氣。與鎖板判定「毫元整數再比」同精神。
-        if round(ret_pct, 6) < RET_MIN_PCT or avg_lots < AVG_LOTS_MIN:
+        if round(ret_pct, RET_QUANT_DIGITS) < RET_MIN_PCT or avg_lots < AVG_LOTS_MIN:
             continue
         lock_dates.reverse()  # 新→舊
         out.append(
