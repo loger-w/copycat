@@ -101,8 +101,8 @@ def hard_candidates(days: list[tuple[_dt.date, list[dict]]]) -> list[ScreenCandi
     if n_days < 2:
         return []
     dates = [d for d, _ in days]
-    # per stock: {day_index: (close, spread_or_None, volume_shares)},index 0 = 最新
-    series: dict[str, dict[int, tuple[float, float | None, float]]] = {}
+    # per stock: {day_index: (close, spread_or_None, volume_or_None)},index 0 = 最新
+    series: dict[str, dict[int, tuple[float, float | None, float | None]]] = {}
     for idx, (_, rows) in enumerate(days):
         for row in rows:
             sid = row.get("stock_id")
@@ -112,7 +112,7 @@ def hard_candidates(days: list[tuple[_dt.date, list[dict]]]) -> list[ScreenCandi
             if close is None or close <= 0:
                 continue
             spread = _to_float(row.get("spread"))
-            volume = _to_float(row.get("Trading_Volume")) or 0.0
+            volume = _to_float(row.get("Trading_Volume"))
             series.setdefault(sid, {})[idx] = (close, spread, volume)
 
     out: list[ScreenCandidate] = []
@@ -126,7 +126,8 @@ def hard_candidates(days: list[tuple[_dt.date, list[dict]]]) -> list[ScreenCandi
         # 由舊到新走轉換日(最舊 = 基準日,只出 close,量也不計)
         for idx in range(n_days - 2, -1, -1):
             close, spread, volume = per_day[idx]
-            if spread is None:
+            # 量缺值與價缺值同口徑「不判」(review F6)—— 靜默當 0 會被均量條件無聲剔除
+            if spread is None or volume is None:
                 usable = False
                 break
             prev_ref = close - spread

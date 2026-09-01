@@ -133,11 +133,22 @@ def test_missing_day_excluded() -> None:
     assert hard_candidates(days) == []
 
 
+def test_missing_volume_excluded_not_zeroed() -> None:
+    """轉換日量欄缺值與價缺值同口徑「不判」(review F6)—— 當 0 會被均量條件無聲剔除,
+    「資料髒」與「真的量不足」在畫面上同形。"""
+    days = _days(
+        [{"stock_id": "1234", "close": 116.0, "spread": 6.0}],  # 無 Trading_Volume
+        [_row("1234", 110.0, 10.0)],
+        [_row("1234", 100.0, 0.0)],
+    )
+    assert hard_candidates(days) == []
+
+
 def test_unusable_transition_row_excluded() -> None:
     """轉換日 spread 缺 / prev_ref <= 0 → 係數鏈斷,整檔不判。"""
     days = _days(
         [_row("1234", 116.0, 6.0)],
-        [{"stock_id": "1234", "close": 110.0, "Trading_Volume": 5_000_000}],  # 無 spread
+        [{"stock_id": "1234", "close": 110.0, "Trading_Volume": 5_000_000.0}],  # 無 spread
         [_row("1234", 100.0, 0.0)],
     )
     assert hard_candidates(days) == []

@@ -362,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         from copycat.stock_watchlist import (
             DEFAULT_PATH,
             WatchlistError,
+            fit_group_codes,
             load_watchlist,
             save_watchlist,
             with_group_replaced,
@@ -390,13 +391,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"{len(c.lock_dates):>5}  {c.lock_dates[0]}\n"
             )
         if args.write:
+            wl = load_watchlist(DEFAULT_PATH)
+            # 截位與 server 引擎同一份語意(review F5)—— 不截的話超限直接 WATCHLIST_FULL
+            # 整次寫入失敗,兩條路徑對同一份名單一個成一個敗
+            fitted, dropped = fit_group_codes(wl, SCREEN_GROUP, [c.code for c in final])
+            if dropped:
+                sys.stderr.write(f"超出自選上限,截掉排序尾段 {dropped} 檔\n")
             try:
-                saved = save_watchlist(
-                    DEFAULT_PATH,
-                    with_group_replaced(
-                        load_watchlist(DEFAULT_PATH), SCREEN_GROUP, [c.code for c in final]
-                    ),
-                )
+                saved = save_watchlist(DEFAULT_PATH, with_group_replaced(wl, SCREEN_GROUP, fitted))
             except WatchlistError as e:
                 sys.stderr.write(f"寫入自選失敗:{e}\n")
                 return 1
