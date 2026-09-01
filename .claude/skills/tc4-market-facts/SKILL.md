@@ -146,6 +146,21 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   「rows 非空但解析後全域外」grep `疑似凍結 stub`。**姊妹 ready-check(river_backfill /
   stock backfill / _fetch_symbol_ticks)未收緊**,見 docs/next-time.md 2026-08-14 節。
   (Trigger:任何 SubHistory/GETHISDATA 輪詢迴圈 / 空窗訂閱重試設計 / 排查「回補回垃圾」)
+- **DK 歷史訂閱的內容凍結在 key 建立時點:同 session 同窗口重查(含 UNSUB 後同窗重訂)
+  永遠回建立時點快照** —— 上條 1K 凍結家族的 DK 版,但**不需要**「窗內無資料時建立」的
+  前置:健康建立的 DK 訂閱照樣凍結(2026-09-01 受控 probe,TXF 夜盤:150 秒行情 263 口,
+  同窗兩查逐字節同且 elapsed 0.001s = 端上快取直回、重送 SUBQUOTE 回 `Fail`;UNSUB 後
+  同窗重訂 SUBQUOTE 回 OK 但資料仍是凍結值)。逃逸維度與 1K 同 = 換窗口字串(start −1 日
+  即全新訂閱,立即取到前進值)或換 session。prod 事故形狀:server 早上起、跨 14:00 定稿界
+  作廢後 refetch 同窗 → 拿回 boot 時點的今日 bar(非空、非 timeout、全靜默)→ 被
+  `daily_put` 當定稿釘到午夜(2026-09-01 15:02 實錄:D bar 與 10:08 快照逐字節同,
+  h 46955 < 1K 實收 47209)。修法 = `tc4._dk_start_variant`(per (symbol, 窗) 序號,每刷
+  start 前移一日,caller 以 start_date 濾頭部);凍結再現的訊號 = `server/bars.py` grep 錨
+  「值未前進」。**附帶窗口語意事實:D+1 交易日的夜盤 bar 要窗 end ≥ D+1 才收得到**
+  (end=D 的窗看不到當晚夜盤 bar —— 這是窗口排除,不是「D+1 bar 幾小時後才出現在新訂閱」;
+  09-01 15:16 新 session 缺 09-02 bar 與 16:33 end=0902 窗有 09-02 bar 同日對照)。
+  probe / 收修證據:`.claude/bug/dk-frozen-snapshot/`。
+  (Trigger:任何 DK 取數 / 日 K refetch 設計 / 排查「日 K 不更新但沒有任何錯誤」)
 - **TICKS 歷史訂閱盤前(窗內無資料時)建立只會 30 s 逾時,**不**進凍結 stub 態;同窗口盤中重送 SubHistory 即取回全量**(2026-08-28 prod 實錄:主圖 6207 08:15 入列 → 逾時 ×2 → 08:16「放棄」,09:02 同窗再訂 117 筆;與上條 1K 的行為不同)。代價是每檔佔單工 worker 30 s —— 「訂閱當下就入列」對 40 檔自選 = 20 分鐘必敗 REQ,回補入列要等「有成交」的正面訊號(stock_engine 首筆當日成交 tick 入列,perf/opening-backfill-parallel)。另:**個股回補一秒一檔不是 TC4 慢**——SubHistory 後首頁備妥約 0.2 s(probe 08-28:20 檔逐檔 1.16 s/檔 vs 先全訂再收割 0.17 s/檔,tick 逐檔相等零逾時;真資料成本 3481 44k ticks 0.98 s),整批 SubHistory 40 檔 TC4 吃得下。(Trigger:設計個股 / 合約 TICKS 回補的入列時機或批次)
 
 ## 指數與期指
