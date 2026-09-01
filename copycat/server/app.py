@@ -539,7 +539,7 @@ def create_app(
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
     # overlay 的 TC4 歷史取數節流(group-grid AD-5 amendment R5)。群組檢視的 `cdp`
     # 預設是開的 → 一進群組就對整組(上限 150 檔)同時打 `/api/stock/overlay`,而
-    # `daily_bars` 走 `to_thread` 沒有上限、50 條請求共用同一條 TC4 歷史通道。
+    # `daily_bars` 走 `to_thread` 沒有上限、整組(上限 150 條)請求共用同一條 TC4 歷史通道。
     # 擋在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的 basis
     # 取數在用(signal_hub.py:662),節流下沉到引擎會連訊號的 basis 一起拖慢。
     overlay_sem = asyncio.Semaphore(4)

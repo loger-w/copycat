@@ -27,7 +27,8 @@ description: FinMind 接入慣例與配額真相。接新 FinMind dataset、寫 
   內可有重複列(要去重);缺 `sub_industry` 的列 neigui 口徑是整列丟不是進 "" 桶;靜態表
   7 天 disk cache 即可。
 - 本專案接入樣板:`copycat/server/breadth_fetch.py`(urllib + Bearer、402 不重試、
-  TimeoutError 獨立列;四支 fetch = snapshot / stock_info / disposition / daily_prices)+
+  TimeoutError 與 http.client.HTTPException(IncompleteRead 斷流)獨立列;五支 fetch =
+  snapshot / stock_info / disposition / daily_prices / day_trading)+
   `server/finmind_token.py`(token 解析單一份)+
   `breadth_engine`(退避 10→60s、quota 300s、map 失敗保前值不動 TTL)。
 - 盤中驗證走側車 server(CLAUDE.md §8 2026-08-06 條)。

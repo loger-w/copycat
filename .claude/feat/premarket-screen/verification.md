@@ -12,7 +12,10 @@
 
 - 21 個交易日全市場 EOD 取齊(2026-08-04..09-01),硬條件 **64 檔 → 資格後 60 檔**(非當沖 0 / 處置剔 4)。
 - 排序驗證:2426 鼎元(+76.8%,6 次鎖板,最近 09-01)> 2455 全新 > 3105 穩懋 > … —— 最近鎖板日新→舊、同日比還原漲幅,與拍板一致;user 當日盤中點名的鼎元/合晶/穩懋/全新全數在榜。
-- probe 實證:`TaiwanStockDayTrading` / `TaiwanStockPriceAdj` data_id 必填(無 data_id 回空 200);2330 樣本含當日列。
+- ~~probe 實證:`TaiwanStockDayTrading` / `TaiwanStockPriceAdj` data_id 必填(無 data_id 回空 200);2330 樣本含當日列。~~
+  **勘誤(2026-09-02,pr-175 review F-02)**:上句是**週六**(08-29)探測拿到非交易日空回應的誤判 ——
+  交易日全市場單日查詢兩個 dataset 都通(DayTrading 2,076 列 / PriceAdj 2,812 列)。資格查已於
+  fix/pr-175-review-followups 收斂為單次全市場查詢;逐檔 vs 全市場一致性抽驗 5/5(2426/6182/8111/3406/2330)。
 
 ## Prod 重啟後判準(server 路徑,merge 後下次啟動)
 
