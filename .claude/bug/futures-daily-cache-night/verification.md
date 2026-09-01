@@ -59,3 +59,22 @@ Spec 收 S-1/S-2(各補一條測試:「作廢一次」的 discard 突變體現�
 4. **未改功能抽查**:期指 tf=1 分時照常;個股頁分時(build_minute 路徑)照常。
 5. **開放問題(界值 14:00 的前提)**:TC4 DK 定稿寫入時點未實測 —— 若 14:00 首刷拿到的
    當日 bar 仍非定稿(與期交所收盤不符),界要往後調,記 next-time。
+
+## 09-01 真環境結果(時段判準;主場景 FAIL 的根因見 memory futures-daily-cache-final-boundary-shipped)
+
+- 00:23(prod 9f30c123)/ 10:08(fee0ad56):判準 3(memo 14–15 ms 不重付)、判準 4 PASS;
+  TC4 DK 夜盤即時寫 D+1 partial bar 實錄。
+- 15:02(server 08:57 起):**判準 2 主場景 FAIL** —— 14:00 後首刷 09-01 bar 凍在 ~10:08 值
+  (h 46955 < 1K 實收 47209,v 逐字節同早上);非墊背非空手。15:16 重啟(f3326c4e)後首刷
+  171 ms 直接定稿(c 47209/h 47220/v 82698)。根因 = TC4 DK 同 session 凍結快照,修法待
+  /bug(DK refetch 帶窗口 variant + 「refetch 成功但值未前進」訊號)。
+- **22:06 夜盤複核(15:16 台,排程 session)**:
+  - API:09-01 bar 仍定稿(c 47209/h 47220/v 82698 逐字同 15:16);09-02 夜盤 partial bar
+    不在序列(coverage_to 09-01)—— 定稿 memo 同日曆日不再打 DK 的設計行為 + 訂閱時點
+    快照語意旁證。`meta.partial_last: True` 但 bar 已定稿 = pr-165-review #5 留尾的誤標常態實錄。
+  - 畫面(新開分頁 = F5 等價,判準 1):期貨 tab 疊線基準印 **2026-09-01**;TXF CDP 線
+    46857\*(= compute_cdp(47220,45788,47209) 46856.5 經 fmtIndexPts round)、TMF 46859\*
+    (= TMF 自家 D bar 算的 46859.25)—— 兩合約各對各的 09-01 完整 D bar,**判準 1 PASS**
+    (15:01–24:00 F5 路徑;「同 session 不重啟跨 14:00」的 FAIL 路徑不受此影響,另案)。
+  - 順帶:SC-13(e)(futures-day-1500)個股頁台指期疊線夜盤時段仍在 —— 2455 單檔開
+    台指期 toggle,橙線 + 「台指期 -0.28%」標籤正常,PASS。

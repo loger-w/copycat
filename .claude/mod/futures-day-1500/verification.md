@@ -52,6 +52,12 @@ prod 8721 當時未跑(user 08-27 收工後未重起);從 worktree 起一台後�
 **待 user 過目 / 待窗口**(SC-13 b–e):15:01 翻頁那一刻、次一交易日 08:46 的水平橋 + 跳價、CDP 值對 APP、
 個股頁台指期線夜盤時段仍在(本輪 00:2x 個股頁未截:index engine trade_date 深夜語意另案)。
 
+**09-01 回填**:(b) 資料面 PASS(09-01 盤中補驗,見 next-time f3326c4e);(d) 機器半邊 PASS
+(22:06 夜盤:TXF CDP 46857\* = 09-01 完整 D bar 算的 46856.5 經 fmtIndexPts round、TMF 46859\* 同構
+各對各家 bar,疊線基準 2026-09-01)—— **對達錢 4 APP 的數字仍待 user 眼**;(e) **PASS**(22:06
+夜盤 2455 單檔開台指期 toggle,橙線 + 標籤正常)。剩 (c) 次一交易日 08:46 水平橋 + 跳價(server
+需 08:45 前起)與 (d) 的 APP 對照。
+
 ## 4. 白名單核對(W1–W13)
 
 - W2 後端零 diff:`git diff origin/master...HEAD -- copycat/ tests/` 空。

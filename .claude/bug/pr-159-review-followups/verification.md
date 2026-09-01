@@ -38,7 +38,7 @@ worktree `C:/side-project/copycat-wt-pr159-followups`,自 origin/master dfc3cdf2
 | 3 | 切 tab 不重抓 | **PASS**:日 K 載入後兩輪切換(→個股→回→期貨→回),`tf=D` 全程 1 發 |
 | 5 | 後端關 → 60 s 重試 | **PASS**:F5 冷 mount 後 66 s 窗恰 4 發 500 = t0 一對(本體+retry:1)+ 60 s 後一對 |
 | 6 | 達錢 4 關 → 空態 60 s 輪替 → 自癒 | **PASS(全鏈)**:user 真殺達錢 4 process + run.ps1 冷啟動 → 後端 200+空(`source: unavailable`)→ 前端「無 K 線資料」空態 → 60 s 輪替(74 s 窗恰 2 發 200)→ user 開回達錢 4 → 後端 15:51:00 TC4 reconnected → 前端載回完整日 K(末根 09-01)→ **之後 70 s 零新請求(輪詢停)**。唯一縫:「輪詢中不重載自動撿到資料」那一刻未實錄(觀測分頁中途被切走),該環節由 hook 測試 + 突變體 M-a~M-d 釘住 |
-| 1 / 4 | 00:01 準時那發(+ 個股頁跨午夜照打) | **未驗**:09-01 凌晨 00:01 無 server 在跑(00:23 / 01:14 才起)。交接新 session 排程驗(handoff `%TEMP%\copycat-handoff-2026-09-02-daily-bars-realenv.md`);判準 = server log(`logs/server-*.log`)00:01 鄰域出現 `GET /api/market/bars/TWSE?tf=D`(access 行無時戳、以上下帶時戳的 app log 行錨定分鐘);前置 = run.ps1 + preview 分頁掛過午夜且**分頁可見**(TQ 在 hidden 分頁暫停 retry/interval;被蓋住則回前景補抓、亦算修好) |
+| 1 / 4 | 00:01 準時那發(+ 個股頁跨午夜照打) | **判準 1 PASS(節流變體;09-02 00:16 排程 session 實錄)**:server-20260901-1531.log L3812 `GET /api/market/bars/TWSE?tf=D` 恰一發,錨定 [00:06:18 .. 00:08:44] —— 比 00:01±1 晚 5–7 分,分頁整晚掛著但螢幕鎖定/遮蔽,歸因 Chrome occluded 視窗計時器節流(推定,未另實證);設計目標全達成:跨日恰一輪、翻日重問、**全夜零 60 s 連發**(log 唯一 tf=D 連發段 = 15:32–15:52 判準 6 實驗,已知)。同鄰域 L3813 `TMF?tf=D` 亦恰一發 = `useFuturesBars` 同鉤同法 —— **順帶收掉 #151/#155 的「某晚掛過 00:01 翌晨 grep」跨午夜窗口**(TMF 實錄,TXF 同 hook)。**判準 4 未上演**:全 log 零 `stock/bars/*?tf=D` —— 分頁整晚停在期貨 tab(00:06 的 TMF 發即證據),且個股頁日 K query 要「單檔 + 日 K 模式」才掛(22:19 個股頁預設江波圖零發)。續驗 = 某晚個股單檔切日 K 掛過午夜;或接受 hook 測試 + 突變體覆蓋結案 —— 留 user 拍板 |
 
 實測撈到的操作事實(已入 ops-discipline):關達錢 4 視窗不殺 process 家族;TQ hidden 分頁全暫停(觀測必須可見);bash nohup 起的測試 server 收不到 console Ctrl+C。
 
