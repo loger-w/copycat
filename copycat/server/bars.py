@@ -409,10 +409,21 @@ def _warn_if_not_advanced(cache: BarsCache, key: str, day: str, bars: list[Bar])
     全靜默 ——「墊背舊快照」INFO 只蓋空手那條路,凍結值靠 payload 對帳才抓得到。修法
     本體(source 層 DK 窗口 variant)失效時,這行是唯一可 grep 的訊號(錨「值未前進」)。
 
-    只在「有作廢前快照可比、且快照寫入於盤中(< `_INTRADAY_SNAPSHOT_END`)」時才可能鳴
-    (boot 首抓 stale 為 None;13:30–14:00 寫入的已是定稿值,同值是預期 —— spec review #2);
+    只在「定稿界後、有作廢前快照可比、且快照寫入於盤中(< `_INTRADAY_SNAPSHOT_END`)」
+    時才可能鳴(boot 首抓 stale 為 None;13:30–14:00 寫入的已是定稿值,同值是預期 ——
+    spec review #2)。界前一律不比(pr-171-review F-05):tripwire 語意是「作廢後的
+    refetch」,界前唯一走得到「有 stale 可比」的是同 key 併發首抓(build_* 無 inflight
+    dedup),後完成者比對先完成者剛寫的快照必同值 —— 不早退就 boot 併發都誤鳴。
     末根不是今日(休市 / 該檔今日真沒 bar)重查同值也是預期,不比。冷門標的盤中快照
-    之後真零成交仍會誤鳴,字面留「疑似」;頻率上限 = 每次日 K refetch 一行(稀疏)。"""
+    之後真零成交仍會誤鳴,字面留「疑似」;頻率上限 = 每次日 K refetch 一行(稀疏)。
+
+    **已知盲區(記帳,pr-171-review F-04 拍板只記不封)**:`bars[-1]["t"] == day` 使
+    「今日 bar 從頭到尾沒出現」型凍結恆不鳴 —— 現貨 / 加權在盤前開機(今日 DK bar 尚
+    不存在)建立的 key 若凍結,refetch 末根仍是前一交易日,症狀 = 當日 D bar 整天缺席、
+    本訊號安靜。期指不受影響(夜盤先行,08:00 已有今日 bar),已實錄的 prod 事故形狀
+    有覆蓋;grep「值未前進」判準只蓋「今日 bar 有但沒前進」這一型。"""
+    if _now_time() < DAILY_FINAL_TIME:
+        return
     written = cache.pre_final_written_at(key, day)
     if written is None or written >= _INTRADAY_SNAPSHOT_END:
         return
