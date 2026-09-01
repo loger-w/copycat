@@ -736,7 +736,7 @@ class StockEngine:
     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
         """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
 
-        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘 50 次
+        不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘上百次
         會把主圖搶走 → 主圖分時線凍結。
 
         payload = `light_snapshot()` **整份展開** + 兩個旗標(A1):`ticks` 是數千筆,
@@ -1099,7 +1099,9 @@ class StockEngine:
     def _handle_reconnect(self) -> None:
         """TC4 重連:status 推播 + 主圖自癒重回補(design §2.4)。"""
         self.tc4_status = "up"
-        self._publish({"type": "status", "tc4": "up", "backfilling": self._backfilling, "engine": True})
+        self._publish(
+            {"type": "status", "tc4": "up", "backfilling": self._backfilling, "engine": True}
+        )
         # reconnect **不** bump generation(實碼事實)→ 記帳不會被 generation 作廢帶走,
         # 得顯式清。漏清的話斷線那段的缺口整天補不回來:主圖靠下一行自癒,主圖以外的
         # 成員全靠這次清空才有機會再被 `group_snapshot` / 重連後的首筆成交 tick 入列(R4)。
@@ -1503,7 +1505,9 @@ class StockEngine:
             self._backfill_settled(code)
             return
         self._backfilling = code
-        self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": code, "engine": True})
+        self._publish(
+            {"type": "status", "tc4": self.tc4_status, "backfilling": code, "engine": True}
+        )
         try:
             ticks = await asyncio.to_thread(self._source.backfill, code)
         except HistoryTimeoutError:
@@ -1519,7 +1523,9 @@ class StockEngine:
                 # 把 release 清掉的記帳寫回去(2026-08-22 review;判準 = 訂閱池 `_refs`)。
                 logger.info("backfill %s timeout 但已退訂,不重排", code)
                 # 補推與其他離開路徑同款:不推的話「回補中…」徽章永遠掛著(TQ-4)
-                self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
+                self._publish(
+                    {"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True}
+                )
                 return
             tries = self._backfill_timeouts.get(code, 0) + 1
             if tries <= _BACKFILL_TIMEOUT_MAX_RETRIES:
@@ -1546,7 +1552,9 @@ class StockEngine:
                 # 借 `_backfilled`(pr-164 F-01):後者是 set_main 去重 guard 的判準,
                 # 混記會讓放棄檔連使用者顯式切主圖都叫不動回補。
                 self._backfill_gave_up.add(code)
-            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
+            self._publish(
+                {"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True}
+            )
             return
         except ConnectionError:
             # 全域 `tc4_status` **只由主圖的失敗決定**(A2)。群組檢視把非主圖成員
@@ -1574,7 +1582,9 @@ class StockEngine:
                 # `_backfill_wanted` 自然擋下,不會重演逾時路徑那種毫秒燒盡(那條靠 timer 節奏)。
                 self._tick_armed.discard(code)
             # 兩條路都要補推:不推的話「回補中…」徽章永遠掛著而內部態早就清了(TQ-4)
-            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
+            self._publish(
+                {"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True}
+            )
             return
         except Exception:
             # CR4:非連線類例外(壞電文 JSONDecodeError 等)不得殺死 worker —
@@ -1587,7 +1597,9 @@ class StockEngine:
             # `_backfilled`、不武裝 timer,點火權不還回就是當日 tick 通道死掉;預算同由
             # `_BACKFILL_MAX_FAILS` 封口。主圖本來就不走 tick 路徑,discard 對它是 no-op。
             self._tick_armed.discard(code)
-            self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
+            self._publish(
+                {"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True}
+            )
             return
         self._backfilling = None
         # 套用 guard:rollover 作廢 in-flight 回補 → 丟棄(design §2.3);
@@ -1601,7 +1613,9 @@ class StockEngine:
                 self._backfill_gave_up.discard(code)  # 補回來了,放棄冷卻解除
         # 在途記帳一律在此結清(套用 / 失敗 / 丟棄三條路都經過)
         self._backfill_settled(code)
-        self._publish({"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True})
+        self._publish(
+            {"type": "status", "tc4": self.tc4_status, "backfilling": None, "engine": True}
+        )
 
     # ---- 廣播 ----
 
@@ -1661,7 +1675,8 @@ class StockEngine:
         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
         # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
-        # (後者會打到所有 client);150 檔(上限;50 時代量級的 3×,queue 餘裕未重新量測)對 queue maxsize 仍有餘裕。
+        # (後者會打到所有 client);上限已放大到 150 檔 = 50 時代量級的 3×,
+        # queue maxsize 餘裕未重新量測(pr-175 review J5;風險敘述,非安全宣告)。
         return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
 
     def _publish(self, msg: dict) -> None:
