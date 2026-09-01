@@ -12,6 +12,7 @@ from copycat.stock_watchlist import (
     Group,
     Watchlist,
     WatchlistError,
+    fit_group_codes,
     load_watchlist,
     normalize,
     save_watchlist,
@@ -283,3 +284,31 @@ class TestUnion:
 
     def test_union_empty(self) -> None:
         assert union([]) == []
+
+
+class TestFitGroupCodes:
+    """盤前篩選截位(review F5/B3):兩條寫入路徑共用、與 with_group_replaced 同源。"""
+
+    def test_trims_new_codes_beyond_capacity(self) -> None:
+        wl: Watchlist = {"codes": ["2330", "2317"], "groups": []}
+        fitted, dropped = fit_group_codes(wl, "盤前篩選", ["1111", "2222", "3333"], limit=3)
+        # 留存 2 檔 + 額度 1 → 只收排序最前的 1111
+        assert fitted == ["1111"]
+        assert dropped == 2
+
+    def test_codes_already_in_watchlist_are_free(self) -> None:
+        # 2330 已在自選(其他來源)→ 不吃額度、就算額度歸零也入列
+        wl: Watchlist = {"codes": ["2330", "2317"], "groups": []}
+        fitted, dropped = fit_group_codes(wl, "盤前篩選", ["9999", "2330"], limit=2)
+        assert fitted == ["2330"]
+        assert dropped == 1
+
+    def test_old_group_members_release_their_slots(self) -> None:
+        # 昨晚名單佔的位子今晚先釋放再計(基底 = 覆蓋成空組後的自選)
+        wl: Watchlist = {
+            "codes": ["1111", "2222"],
+            "groups": [{"name": "盤前篩選", "codes": ["1111", "2222"]}],
+        }
+        fitted, dropped = fit_group_codes(wl, "盤前篩選", ["3333", "4444"], limit=2)
+        assert fitted == ["3333", "4444"]
+        assert dropped == 0

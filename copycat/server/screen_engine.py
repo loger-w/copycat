@@ -32,7 +32,7 @@ from copycat.screening import (
 )
 from copycat.server.breadth_fetch import BreadthFetchError
 from copycat.server.watchlist_service import WatchlistService
-from copycat.stock_watchlist import WATCHLIST_LIMIT, WatchlistError
+from copycat.stock_watchlist import WATCHLIST_LIMIT, WatchlistError, fit_group_codes
 from copycat.trading_calendar import TradingCalendar
 
 logger = logging.getLogger(__name__)
@@ -159,6 +159,11 @@ class ScreenEngine:
         d = data_date
         floor = data_date - _dt.timedelta(days=_SCAN_CAL_DAYS)
         while d >= floor and len(days) < WINDOW_DAYS:
+            if not self._cal.is_trading_day(d):
+                # 日曆先剔(review F2):非交易日的空請求一天一發,21 個交易日的窗要多
+                # 燒 ~10 次。空回應 fallback 仍在(無日曆年份只擋週末、臨時休市)。
+                d -= _dt.timedelta(days=1)
+                continue
             rows = await asyncio.to_thread(self._daily_fetch, self._token, d)
             await asyncio.sleep(_REQ_GAP_SECS)
             if rows:
@@ -205,30 +210,18 @@ class ScreenEngine:
         self._write_cache(data_date, final, written)
 
     async def _write_group(self, final: list[ScreenCandidate]) -> list[str]:
-        """截到上限後覆寫群組。截位以「寫入後總檔數 ≤ WATCHLIST_LIMIT」計 ——
-        已在其他群組的候選不吃新額度(normalize 聯集去重)。"""
+        """截到上限後覆寫群組(截位語意單一份 `fit_group_codes`,CLI `--write` 同用)。"""
         service = self._service
         if service is None:  # pragma: no cover - prod 接線恆帶 service
             return [c.code for c in final]
         wl = await service.current()
-        old = next(
-            (set(g["codes"]) for g in wl["groups"] if g["name"] == SCREEN_GROUP), set[str]()
-        )
-        still = {c for g in wl["groups"] if g["name"] != SCREEN_GROUP for c in g["codes"]}
-        retained = {c for c in wl["codes"] if c not in old or c in still}
-        codes_out: list[str] = []
-        dropped = 0
-        for cand in final:
-            if cand.code in retained:
-                codes_out.append(cand.code)
-            elif len(retained) < WATCHLIST_LIMIT:
-                codes_out.append(cand.code)
-                retained.add(cand.code)
-            else:
-                dropped += 1
+        codes_out, dropped = fit_group_codes(wl, SCREEN_GROUP, [c.code for c in final])
         if dropped:
             logger.warning(
-                "盤前篩選 %d 檔因自選上限 %d 被截掉(保留排序前段)", dropped, WATCHLIST_LIMIT
+                "盤前篩選 %d 檔因自選上限 %d 被截掉(截的是排序尾段中尚不在自選的新檔;"
+                "已在自選者不吃額度、無條件入列)",
+                dropped,
+                WATCHLIST_LIMIT,
             )
         try:
             _, changed = await service.replace_group(SCREEN_GROUP, codes_out)

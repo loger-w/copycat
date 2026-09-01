@@ -85,6 +85,30 @@ def with_group_replaced(wl: Watchlist, name: str, codes: list[str]) -> Watchlist
     return {"codes": kept, "groups": groups}
 
 
+def fit_group_codes(
+    wl: Watchlist, name: str, codes: list[str], limit: int = WATCHLIST_LIMIT
+) -> tuple[list[str], int]:
+    """`with_group_replaced` 前置的截位:把 `codes` 截到「覆蓋後總檔數 ≤ limit」。
+
+    回 (入列 codes, 截掉數)。留存基底 = 覆蓋成**空組**後的自選(以 `with_group_replaced`
+    自身算 —— 截位與轉換語意同源,漂不開;review F5/B3);已在基底裡的候選不吃新額度、
+    無條件入列,截掉的是**排序尾段中尚不在自選**的新檔。兩條寫入路徑
+    (`WatchlistService.replace_group` 的引擎端、CLI `screen --write`)共用這一份。
+    """
+    retained = set(with_group_replaced(wl, name, [])["codes"])
+    out: list[str] = []
+    dropped = 0
+    for code in codes:
+        if code in retained:
+            out.append(code)
+        elif len(retained) < limit:
+            out.append(code)
+            retained.add(code)
+        else:
+            dropped += 1
+    return out, dropped
+
+
 def load_watchlist(path: Path = DEFAULT_PATH) -> Watchlist:
     if not path.exists():
         return {"codes": [], "groups": []}
