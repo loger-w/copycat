@@ -705,6 +705,17 @@ class _TaggedFetcher:
         return TaggedBars(bars, self._tag)
 
 
+def _make_mutable_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
+    """回可變 handle(`now["t"] = ...` 即翻牆鐘);起始值 = 檔頭 `_DAYTIME`。
+
+    定稿界兩個 class 共用的唯一一份(pr-171-review F-12:曾複製成 `_clock` 逐字副本,
+    名字不同讓改凍結點語意的人 grep 不到同類);`TestMidnightMemoRace._freeze` 是
+    **不可變**凍結版,語意不同、刻意不收進來。"""
+    now = {"t": _DAYTIME}
+    monkeypatch.setattr(bars_mod, "_now_time", lambda: now["t"])
+    return now
+
+
 class TestDailySnapshotFinality:
     """bug/futures-daily-cache-night:`_daily` memo 以日曆日為鍵且無失效 → 早上首抓的
     部分 bar 快照釘到午夜。期貨 15:00 錨定日翻頁後,`futures-overlay` 要前一交易日的
@@ -714,10 +725,7 @@ class TestDailySnapshotFinality:
     TODAY = _dt.date(2026, 8, 31)
 
     def _mutable_clock(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
-        """回可變 handle(`now["t"] = ...` 即翻牆鐘);起始值 = 檔頭 `_DAYTIME`。"""
-        now = {"t": _DAYTIME}
-        monkeypatch.setattr(bars_mod, "_now_time", lambda: now["t"])
-        return now
+        return _make_mutable_clock(monkeypatch)
 
     async def test_period_morning_snapshot_not_served_after_close(
         self, monkeypatch: pytest.MonkeyPatch
@@ -890,9 +898,7 @@ class TestFrozenRefetchSignal:
     TODAY = _dt.date(2026, 8, 31)
 
     def _clock(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
-        now = {"t": _DAYTIME}
-        monkeypatch.setattr(bars_mod, "_now_time", lambda: now["t"])
-        return now
+        return _make_mutable_clock(monkeypatch)
 
     async def test_period_frozen_refetch_warns(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -981,3 +987,42 @@ class TestFrozenRefetchSignal:
         with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
             await build_daily(fetch, cache, "2330", self.TODAY)
         assert "值未前進" in caplog.text
+
+    async def test_snapshot_written_at_boundary_instant_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """13:30 整(`_INTRADAY_SNAPSHOT_END`)寫入屬「已定稿」側(早退條件 `>=`)——
+        「界是否含端點」從此有可執行答案,與同檔 `test_boundary_instant_is_final_side`
+        對 `DAILY_FINAL_TIME` 的標準一致(pr-171-review F-07:`>=` → `>` 突變體曾
+        全量存活)。"""
+        now = self._clock(monkeypatch)
+        now["t"] = bars_mod._INTRADAY_SNAPSHOT_END
+
+        def snap() -> list[Bar]:
+            return [bar("2026-08-28"), bar("2026-08-31", c=100, v=5)]
+
+        fetch = _TaggedFetcher([snap(), snap()])
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert "值未前進" not in caplog.text
+
+    async def test_pre_final_comparison_never_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """界前不鳴(pr-171-review F-05):tripwire 語意是「作廢後的 refetch」,而
+        界前唯一會走到「有 stale 可比」的情境是同 key **並發首抓**(`build_daily` /
+        `build_period` 無 inflight dedup)—— 後完成者眼中 stale = 先完成者剛寫的
+        快照,兩趟間無成交即逐字節同,不早退就每次 boot 併發首抓都誤鳴一行
+        「疑似 TC4 凍結快照」,誘導人追不存在的 TC4 迴歸。直呼 helper 模擬後完成者
+        (循序 build_* 走不到這條路:界前有 entry 就 memo 命中不 fetch)。"""
+        self._clock(monkeypatch)  # 凍在 _DAYTIME 09:00(界前)
+        cache = BarsCache()
+        cache.daily_put("TXF|L", "2026-08-31", [bar("2026-08-31", c=100, v=5)])  # 併發中 A 先寫
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            bars_mod._warn_if_not_advanced(
+                cache, "TXF|L", "2026-08-31", [bar("2026-08-31", c=100, v=5)]
+            )
+        assert "值未前進" not in caplog.text
