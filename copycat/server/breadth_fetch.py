@@ -1,12 +1,13 @@
 """FinMind 全市場取數層(market-overview R2 design §4)— 阻塞,呼叫端丟 to_thread。
 
-四個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
+五個取數點,錯誤分類與 `oi_levels._fetch_rows` 同款:
 - `fetch_snapshot`:全市場即時快照(專屬 endpoint,**無 query 參數**),每輪都打。
 - `fetch_stock_info`:代碼 → 名稱 / 市場別 / 產業別對照(24h TTL,一天打幾次)。
 - `fetch_disposition`:近 60 日處置股期間表(參數名 **start_date / end_date**)。
 - `fetch_daily_prices`:單日全市場 EOD(連板數回看用)。一天只武裝一輪,掃描窗上限
   25 個日曆日,而**已成功取得的日跨重試由引擎的 memo 重用** → 成功取數 ≤ 25 次;
   每次失敗的嘗試最多多打 1 次(嘗試上限 10)→ 一天上界 ≈ 35 次。
+- `fetch_day_trading`:單日全市場當沖成交統計(盤前篩選資格查,每晚一次)。
 
 **402 不重試**:配額用盡時重打只會燒更多且必然同樣失敗 —— 以 `BreadthFetchError.quota`
 標記讓呼叫端改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開。
@@ -19,9 +20,9 @@ import json
 import logging
 import urllib.error
 import urllib.parse
+import http.client
 from datetime import date as _date
 from datetime import timedelta
-from http.client import HTTPException
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -70,10 +71,11 @@ def _get_rows(url: str, token: str, *, label: str, timeout: float = _TIMEOUT) ->
             if e.code == 402:
                 raise BreadthFetchError(f"FinMind 配額用盡(HTTP 402):{label}", quota=True) from e
             last = e
-        except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as e:
-            # HTTPException 涵蓋 `IncompleteRead`(MB 級回應讀到一半斷線)等 http.client
-            # 層錯誤 —— **不是 OSError 子類**,漏接會炸穿重試(2026-09-02 盤前篩選 CLI
-            # 真環境實錄:4.5MB 全市場回應截斷)。與連線失敗同樣可重試。
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+            # http.client.HTTPException 涵蓋 `IncompleteRead`(MB 級回應讀到一半斷線)等
+            # —— **不是 OSError 子類**,漏接會炸穿重試(2026-09-02 盤前篩選 CLI 真環境
+            # 實錄:4.5MB 全市場回應截斷)。模組限定寫法避免與 fastapi 的 HTTPException
+            # 撞名(review J3)。與連線失敗同樣可重試。
             last = e
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             # 配額燒乾時 FinMind 會回非 JSON 內容 —— 與連線失敗同樣可重試

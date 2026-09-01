@@ -160,8 +160,19 @@ class ScreenEngine:
 
     # ---- 單次重算 ----
 
+    @staticmethod
+    def _require_date_echo(rows: list[dict], day: _dt.date, label: str) -> None:
+        """資料日回聲閘(review F-07,breadth 第二道守門同款;J1 收單份):上游忽略
+        日期參數 / 回錯日快取時回應是別日的列 —— 日 K 窗格會整批同一天(ratio 把單日
+        漲幅複利 20 次)、當沖名單會是別日集合,兩者都與正常結果同形零訊號。
+        `shrink_rows` 後 date 欄已丟,只能在 fetch 當下驗。"""
+        if rows[0].get("date") != day.isoformat():
+            raise BreadthFetchError(
+                f"盤前篩選 {day} {label}資料日回聲不符({rows[0].get('date')!r}),視同取數失敗"
+            )
+
     async def compute(self, data_date: _dt.date) -> list[ScreenCandidate]:
-        """抓窗 → 三硬條件 → 逐檔資格 → 處置剔除。純結果,不落檔不寫群組(CLI 共用)。"""
+        """抓窗 → 三硬條件 → 全市場當沖資格 → 處置剔除。純結果,不落檔不寫群組(CLI 共用)。"""
         days: list[tuple[_dt.date, list[dict]]] = []
         d = data_date
         floor = data_date - _dt.timedelta(days=_SCAN_CAL_DAYS)
@@ -179,13 +190,7 @@ class ScreenEngine:
                         f"盤前篩選 {d} 只有 {len(rows)} 列(門檻 {_DAILY_MIN_ROWS}),"
                         "視同取數失敗"
                     )
-                if rows[0].get("date") != d.isoformat():
-                    # 資料日回聲閘(review F-07,breadth 第二道守門同款):上游忽略日期
-                    # 參數 / 回錯日快取時,21 個窗格會是同一天 → ratio 把單日漲幅複利
-                    # 20 次,整份名單全假且與正常同形。shrink 後 date 欄已丟,只能在此驗。
-                    raise BreadthFetchError(
-                        f"盤前篩選 {d} 資料日回聲不符({rows[0].get('date')!r}),視同取數失敗"
-                    )
+                self._require_date_echo(rows, d, "")
                 days.append((d, shrink_rows(rows)))
             elif d == data_date:
                 # 最新一天必須有資料:FinMind 當日 EOD 未落檔時,靜默拿更舊的日子湊窗
@@ -205,10 +210,7 @@ class ScreenEngine:
             # 空集合拿去過濾會把**全部**候選當非當沖標的誤剔,群組被清空還零訊號 ——
             # 當日名單未發布視同取數失敗,走重試
             raise BreadthFetchError(f"盤前篩選 {data_date} 當沖名單尚無資料(FinMind 未更新?)")
-        if dt_rows[0].get("date") != data_date.isoformat():
-            raise BreadthFetchError(
-                f"盤前篩選 {data_date} 當沖名單資料日回聲不符({dt_rows[0].get('date')!r})"
-            )
+        self._require_date_echo(dt_rows, data_date, "當沖名單")
         daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
         disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, data_date)
         disposed = parse_active_disposition(disp_rows, data_date)
