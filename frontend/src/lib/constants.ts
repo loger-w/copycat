@@ -99,7 +99,7 @@ export const WL_UNGROUPED_KEY = "copycat-stock-wl-ungrouped-collapsed";
  *
  *  (不是 localStorage key,放這裡是因為本檔是既有跨元件常數的聚集地,且契約註解需要
  *  一個可 grep 的錨點。) */
-export const WATCHLIST_LIMIT = 50;
+export const WATCHLIST_LIMIT = 150;
 
 /** 個股頁檢視("single" / "group")— components/stock/StockPage.tsx */
 export const STOCK_VIEW_KEY = "copycat-stock-view";

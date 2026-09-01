@@ -164,7 +164,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `server/capital_api.py::_fill_code`(`unit == "口"` 當期貨判準代理 → 個股期契約碼反查
   股號;改「口」字面值 = 反查靜默死,圖牆個股期三角全滅)。改字面值 = 改契約要同時改
   各邊;`tests/capital/test_store.py` 有 lock。
-- **自選上限常數雙邊同值**(2026-08-13 起 = 50):產生點 `copycat/stock_watchlist.py::
+- **自選上限常數雙邊同值**(2026-09-01 起 = 150,容納盤前篩選群組;2026-08-13 起原 50):產生點 `copycat/stock_watchlist.py::
   WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
   WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
   已同源)。改值 = 改契約要同時改兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
