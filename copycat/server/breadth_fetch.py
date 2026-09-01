@@ -140,26 +140,26 @@ def fetch_daily_prices(token: str, day: _date) -> list[dict]:
     )
 
 
-#: 當沖資格回看日曆天數:資格幾乎不逐日變動,查小區間而非單日 —— 單日查在 dataset
-#: 當日尚未落檔時會把當沖標的誤判成不可當沖(靜默剔除,榜上少一檔零訊號)。
-_DAY_TRADING_LOOKBACK_DAYS = 7
+def fetch_day_trading(token: str, day: _date) -> list[dict]:
+    """單日**全市場**當沖成交統計(`TaiwanStockDayTrading`,start == end == `day`,
+    無 data_id;Sponsor tier 一次可得 —— 2026-09-02 交易日 re-probe 2,076 列)。
 
-
-def fetch_day_trading(token: str, stock_id: str, day: _date) -> list[dict]:
-    """單檔當沖成交統計(`TaiwanStockDayTrading`,**data_id 必填** —— 無 data_id 的
-    全市場單日查詢回空、無日期參數 400,2026-09-01 probe 實證)。
-
-    回看 `day` 往前 7 日曆天:**有列 = 該檔為當沖標的**(非當沖標的無列)。
-    `BuyAfterSale` 'Y'/'＊' = 僅可先買後賣 —— 呼叫端做多照收(#173 Q15 拍板),
-    本函式只如實回傳。
+    先前「data_id 必填」是**週六**探測拿到空回應的誤判(pr-175 review F-02),逐檔
+    fan-out 已收斂成本函式一次查詢。無日期參數仍 400。非交易日 / 當日尚未發布回
+    **空陣列**(合法回應)—— 空集合拿去做資格過濾會把全部候選誤剔,引擎視同取數
+    失敗重試,本函式只如實回傳。`BuyAfterSale` 值域見 finmind-conventions skill
+    (盤前篩選做多不讀此欄,有列即當沖標的)。
     """
-    start = day - timedelta(days=_DAY_TRADING_LOOKBACK_DAYS)
     query = urllib.parse.urlencode(
         {
             "dataset": _DAY_TRADING_DATASET,
-            "data_id": stock_id,
-            "start_date": start.isoformat(),
+            "start_date": day.isoformat(),
             "end_date": day.isoformat(),
         }
     )
-    return _get_rows(f"{_DATA_API}?{query}", token, label=f"day_trading {stock_id}")
+    return _get_rows(
+        f"{_DATA_API}?{query}",
+        token,
+        label=f"day_trading {day.isoformat()}",
+        timeout=_DAILY_TIMEOUT,
+    )

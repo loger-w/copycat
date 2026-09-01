@@ -142,7 +142,9 @@ def hard_candidates(days: list[tuple[_dt.date, list[dict]]]) -> list[ScreenCandi
             continue
         ret_pct = (ratio - 1.0) * 100.0
         avg_lots = vol_sum / (n_days - 1) / 1000.0
-        if ret_pct < RET_MIN_PCT or avg_lots < AVG_LOTS_MIN:
+        # 界比較先量化(review F-04):裸 float 下數學恰 +15% 的鏈可落 14.999…被剔、
+        # 也可落 15.000…01 被收 —— 界上行為變浮點運氣。與鎖板判定「毫元整數再比」同精神。
+        if round(ret_pct, 6) < RET_MIN_PCT or avg_lots < AVG_LOTS_MIN:
             continue
         lock_dates.reverse()  # 新→舊
         out.append(
