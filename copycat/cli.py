@@ -143,6 +143,14 @@ def main(argv: list[str] | None = None) -> int:
     p_nt.add_argument("--message", default="copycat notify-test")
     p_nt.add_argument("--title", default=None)
 
+    p_sc = sub.add_parser("screen", help="盤前選股篩選(#173):印候選名單")
+    p_sc.add_argument("--date", default=None, help="資料日 YYYY-MM-DD(預設依牆鐘推)")
+    p_sc.add_argument(
+        "--write",
+        action="store_true",
+        help="覆寫自選群組「盤前篩選」(直接落檔 —— server 跑著時別用,它讀不到這次變更)",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -344,6 +352,56 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         sys.stderr.write("Discord webhook 發送失敗(詳見 log)\n")
         return 1
+    if args.command == "screen":
+        import asyncio
+        import datetime as _dt
+
+        from copycat.screening import expected_data_date
+        from copycat.server import breadth_fetch
+        from copycat.server.screen_engine import SCREEN_GROUP, ScreenEngine
+        from copycat.stock_watchlist import (
+            DEFAULT_PATH,
+            WatchlistError,
+            load_watchlist,
+            save_watchlist,
+            with_group_replaced,
+        )
+        from copycat.trading_calendar import load_trading_calendar
+
+        cal = load_trading_calendar()
+        data_date = (
+            _dt.date.fromisoformat(args.date)
+            if args.date
+            else expected_data_date(_dt.datetime.now(), cal)
+        )
+        engine = ScreenEngine(
+            token=_resolve_finmind_token(),
+            calendar=cal,
+            daily_fetch=breadth_fetch.fetch_daily_prices,
+            day_trading_fetch=breadth_fetch.fetch_day_trading,
+            disposition_fetch=breadth_fetch.fetch_disposition,
+        )
+        final = asyncio.run(engine.compute(data_date))
+        sys.stdout.write(f"盤前篩選 {data_date}:{len(final)} 檔\n")
+        sys.stdout.write(f"{'代號':<6}{'還原20日%':>9}{'均量(張)':>10}{'鎖板次':>5}  最近鎖板\n")
+        for c in final:
+            sys.stdout.write(
+                f"{c.code:<6}{c.ret_pct:>9.1f}{c.avg_lots:>10.0f}"
+                f"{len(c.lock_dates):>5}  {c.lock_dates[0]}\n"
+            )
+        if args.write:
+            try:
+                saved = save_watchlist(
+                    DEFAULT_PATH,
+                    with_group_replaced(
+                        load_watchlist(DEFAULT_PATH), SCREEN_GROUP, [c.code for c in final]
+                    ),
+                )
+            except WatchlistError as e:
+                sys.stderr.write(f"寫入自選失敗:{e}\n")
+                return 1
+            sys.stdout.write(f"已覆寫群組「{SCREEN_GROUP}」(自選共 {len(saved['codes'])} 檔)\n")
+        return 0
     if args.command == "refresh-stkfut-map":
         from copycat.stkfut_map import refresh
 

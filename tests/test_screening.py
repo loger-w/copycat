@@ -12,11 +12,15 @@ import datetime as _dt
 from copycat.screening import (
     AVG_LOTS_MIN,
     RET_MIN_PCT,
+    RUN_TIME,
     WINDOW_DAYS,
     ScreenCandidate,
     apply_eligibility,
+    expected_data_date,
     hard_candidates,
+    shrink_rows,
 )
+from copycat.trading_calendar import WEEKEND_ONLY
 
 D0 = _dt.date(2026, 9, 1)  # 最新交易日
 D1 = _dt.date(2026, 8, 31)
@@ -214,3 +218,57 @@ def test_apply_eligibility_filters_and_preserves_order() -> None:
         disposed={"4444"},  # 4444 處置中
     )
     assert [c.code for c in got] == ["1111", "3333"]
+
+
+# ---------------------------------------------------------------------------
+# expected_data_date —— 排程 / 補跑判定
+# ---------------------------------------------------------------------------
+
+
+def test_expected_data_date_flips_at_run_time_on_trading_day() -> None:
+    assert RUN_TIME == _dt.time(21, 0)
+    # 2026-08-31 = 週一(交易日):21:00 起 = 當日,之前 = 前一交易日(週五 08-28)
+    assert expected_data_date(_dt.datetime(2026, 8, 31, 21, 0), WEEKEND_ONLY) == _dt.date(
+        2026, 8, 31
+    )
+    assert expected_data_date(_dt.datetime(2026, 8, 31, 20, 59), WEEKEND_ONLY) == _dt.date(
+        2026, 8, 28
+    )
+
+
+def test_expected_data_date_non_trading_day_ignores_clock() -> None:
+    # 週六深夜也不會指到週六 —— 非交易日整天 = 前一交易日(週五)
+    assert expected_data_date(_dt.datetime(2026, 8, 29, 23, 0), WEEKEND_ONLY) == _dt.date(
+        2026, 8, 28
+    )
+    assert expected_data_date(_dt.datetime(2026, 8, 30, 8, 0), WEEKEND_ONLY) == _dt.date(
+        2026, 8, 28
+    )
+
+
+# ---------------------------------------------------------------------------
+# shrink_rows —— 記憶體縮列(對 hard_candidates 結果不變)
+# ---------------------------------------------------------------------------
+
+
+def test_shrink_rows_drops_non_universe_and_extra_fields() -> None:
+    rows = [
+        {**_row("1234", 116.0, 6.0), "open": 1.0, "max": 2.0, "Trading_money": 3.0},
+        _row("0050", 116.0, 6.0),  # ETF
+        _row("030171", 116.0, 6.0),  # 權證
+    ]
+    got = shrink_rows(rows)
+    assert [r["stock_id"] for r in got] == ["1234"]
+    assert set(got[0]) == {"stock_id", "close", "spread", "Trading_Volume"}
+
+
+def test_shrink_rows_preserves_hard_candidates_result() -> None:
+    per_day = [
+        [_row("1234", 116.0, 6.0), _row("0050", 116.0, 6.0)],
+        [_row("1234", 110.0, 10.0), _row("0050", 110.0, 10.0)],
+        [_row("1234", 100.0, 0.0), _row("0050", 100.0, 0.0)],
+    ]
+    raw = hard_candidates(_days(*per_day))
+    shrunk = hard_candidates(_days(*[shrink_rows(rows) for rows in per_day]))
+    assert shrunk == raw
+    assert [c.code for c in shrunk] == ["1234"]

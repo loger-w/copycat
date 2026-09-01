@@ -693,3 +693,48 @@ class TestSettleMissingSeq:
         assert engine.published == []
         assert len(caplog.records) == 1
         assert "定序號" in caplog.text
+
+
+class TestReplaceGroup:
+    """盤前篩選 nightly 覆寫(#173):整組取代 + 淘汰檔不堆積未分組桶。"""
+
+    async def test_creates_group_when_missing(self, tmp_path: Path) -> None:
+        service, engine, path = _service(tmp_path)
+        await service.add("2330")
+
+        result, changed = await service.replace_group("盤前篩選", ["1111", "2222"])
+
+        assert changed is True
+        assert result["groups"] == [{"name": "盤前篩選", "codes": ["1111", "2222"]}]
+        # 既有未分組檔保留,新成員由 normalize 併入 codes
+        assert result["codes"] == ["2330", "1111", "2222"]
+        assert load_watchlist(path) == result
+        assert engine.set_calls[-1] == ["2330", "1111", "2222"]
+
+    async def test_replaced_out_codes_leave_watchlist_unless_grouped_elsewhere(
+        self, tmp_path: Path
+    ) -> None:
+        service, _engine, _path = _service(tmp_path)
+        await service.replace_group("盤前篩選", ["1111", "2222"])
+        # 2222 同時屬於使用者自己的群組 → 淘汰後仍留在自選;1111 只在篩選組 → 一併離開
+        await service.add("2222", group="主力")
+
+        result, changed = await service.replace_group("盤前篩選", ["3333"])
+
+        assert changed is True
+        assert result["groups"] == [
+            {"name": "盤前篩選", "codes": ["3333"]},
+            {"name": "主力", "codes": ["2222"]},
+        ]
+        assert result["codes"] == ["2222", "3333"]  # 1111 已離開
+
+    async def test_same_codes_is_noop(self, tmp_path: Path) -> None:
+        service, engine, _path = _service(tmp_path)
+        await service.replace_group("盤前篩選", ["1111"])
+        calls = len(engine.set_calls)
+
+        result, changed = await service.replace_group("盤前篩選", ["1111"])
+
+        assert changed is False
+        assert result["codes"] == ["1111"]
+        assert len(engine.set_calls) == calls  # 零寫早退:不訂閱不廣播
