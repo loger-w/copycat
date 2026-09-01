@@ -46,7 +46,7 @@ interface Props {
    *  仍然有用,拿一句錯誤訊息換掉它是拿走使用者唯一看得到的東西。 */
   wlError?: boolean;
   /** 加權 / 櫃買即時序列(F1;App 持有)。只在指數 toggle 開著時往卡片傳 —— 序列每秒換
-   *  identity,關著也傳的話 50 張卡每秒全部重畫,memo 形同虛設。 */
+   *  identity,關著也傳的話整牆卡(上限 150)每秒全部重畫,memo 形同虛設。 */
   indexSeries?: IndexOverlaySeries | null;
   /** 「現在看哪一組」(F2)**受控、唯一持有者是 `StockPage`**(`useStockGroup`,含 localStorage
    *  記憶);側欄點列與圖牆 pill 兩個入口都寫那一份。本元件不自持第二份(review R1:雙模式
@@ -113,7 +113,7 @@ function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined })
 
 /** 單張卡片(review A6-1)。抽成 `memo` 子元件而不是留在父層的 `card()`:
  *  `quotes` 每秒整份換 identity → 父層每秒 re-render 一次,而每張卡片都要重跑
- *  `buildIntradayGeometry`(當日最多 271 分鐘 × 50 檔)。memo 之後只有 quote 真的
+ *  `buildIntradayGeometry`(當日最多 271 分鐘 × 上限 150 檔)。memo 之後只有 quote 真的
  *  變了的那幾張會重畫。
  *
  *  `onPick` 由父層以穩定參照傳入(StockPage 的 handler 每次 render 都是新的,但那層
@@ -147,7 +147,7 @@ const GroupCard = memo(function GroupCard({
   syncHoverMin: number | null;
   onHoverMinute: (minute: number | null) => void;
   /** 這一檔今天的成交點(SC-6)。無成交的卡一律拿到同一個 `EMPTY_FILLS` ——
-   *  每卡各建一個 `[]` 的話 memo 每輪都比不過,50 張卡照樣每秒全部重畫(W-5)。 */
+   *  每卡各建一個 `[]` 的話 memo 每輪都比不過,整牆卡(上限 150)照樣每秒全部重畫(W-5)。 */
   fills: readonly FillPoint[];
   /** 這一檔的部位列(SC-4)。無倉的卡一律拿到同一個 `EMPTY_POSITIONS` —— 理由同
    *  `fills`:每卡各建一個 `[]` 的話 memo 每輪都比不過。 */
@@ -290,7 +290,7 @@ export function GroupGridView({
   // 所以這裡的 setState 頻率 = 游標跨分鐘的頻率,不是 mousemove 頻率。
   const [syncMin, setSyncMin] = useState<number | null>(null);
   // **一份**在圖牆層(W-7 的 localStorage key 不變):卡片各持一份的話,同一面牆上
-  // 最多 50 張卡會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
+  // 最多 150 張卡(上限)會各自讀寫同一個 key,而且按哪一張的鈕都只有那一張會變。
   const { toggles, set } = useChartToggles();
   // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
   // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
@@ -300,7 +300,7 @@ export function GroupGridView({
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
   // 給卡片的**穩定** onPick(review A6-1)。`quotes` 每秒換一次 → 本元件每秒 render,
   // 而父層傳進來的 handler 是 inline arrow(每次都是新參照)—— 直接往下傳的話
-  // `memo` 每一輪都比不過,50 張卡片照樣全部重畫,memo 形同虛設。
+  // `memo` 每一輪都比不過,整牆卡(上限 150)照樣全部重畫,memo 形同虛設。
   // latest-ref 而不是要求父層 useCallback:這是葉節點自己的效能問題,不該讓每個
   // 呼叫端記得配合;ref 在 commit 後才更新,而 click 只會發生在 commit 之後。
   const pickRef = useRef(onPick);
@@ -310,7 +310,7 @@ export function GroupGridView({
   const pick = useCallback((code: string) => pickRef.current(code), []);
 
   // 當日成交點(SC-6)。成交列表(fills,L76 精確版)在**圖牆層取一份**、一次折完
-  // 所有 code,每卡只取自己那個 key —— 卡片各掛一份 hook 的話 50 張卡會各折一次同一份 fills。
+  // 所有 code,每卡只取自己那個 key —— 卡片各掛一份 hook 的話整牆卡(上限 150)會各折一次同一份 fills。
   //
   // `today` 每 render 現算(AD-9):跨午夜開著頁面時字串一變,下面的 useMemo 自然失效
   // 重算,昨天的成交點跟著消失(deps 放 `new Date()` 物件就永遠失效、放空陣列就永不失效)。
@@ -324,7 +324,7 @@ export function GroupGridView({
   const fillsMap = useMemo(() => fillsByCode(capFills, today, "股"), [capFills, today]);
 
   // 倉位(SC-4)同款:圖牆層取一份、一次折完所有 code,每卡只取自己那個 key。
-  // 折數在這一層讀一次(primitive)往下傳 —— 每張卡各掛一份 hook 的話,50 張卡會
+  // 折數在這一層讀一次(primitive)往下傳 —— 每張卡各掛一份 hook 的話,整牆卡(上限 150)會
   // 各訂閱一次同一個 store。位置同樣必須在 `groups.length === 0` 早退**之前**。
   const positions = useCapitalPositions().data?.positions;
   const posMap = useMemo(() => positionsByCode(positions), [positions]);
@@ -394,7 +394,7 @@ export function GroupGridView({
       ) : isPending ? (
         // 首載未回前**不畫卡片**:卡片的三態全是**終態宣告**,而「無資料」是其中最強的
         // 一句(「這檔今天沒東西可看」)。載入中就先鋪一整面「無資料」再逐格翻回圖,
-        // 既是閃爍也是說謊 —— 50 檔的群組會有整整一輪 batch 的時間停在錯的答案上。
+        // 既是閃爍也是說謊 —— 大群組(如盤前篩選 ~60 檔)會有整整一輪 batch 的時間停在錯的答案上。
         // 錯誤終態不走這條(`isPending` 只涵蓋首載):整批失敗時卡片照畫、答「無資料」。
         <div className="flex flex-1 items-center justify-center">
           <p className="text-sm text-ink-muted">載入群組…</p>

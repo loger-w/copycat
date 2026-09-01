@@ -235,7 +235,7 @@ class WatchlistService:
         收斂範圍要誠實:X-3 解掉的是 **service 這把鎖**的堆積(`current()` 讀路、
         群組操作的驗證與落檔不再排在訂閱迴圈後面);N111 再把 engine 端 `_pool_lock`
         從「整段迴圈一鎖」改成**逐檔取鎖**,第二個寫入者的等待上界從「整段迴圈」
-        (50 檔 × 10 s)降到「當下這一檔」(≤ 10 s)。**仍不是零等待**:ZMQ IO 還在
+        (150 檔 × 10 s,上限)降到「當下這一檔」(≤ 10 s)。**仍不是零等待**:ZMQ IO 還在
         鎖內,要完全移出得引進 per-code in-flight 狀態(新的不變式),見 next-time。
         """
         saved, changed, seq = pending

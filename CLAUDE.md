@@ -119,7 +119,7 @@ docs/superpowers/         # spec 與 implementation plan
 | **看盤日常(prod build)** | `npm run build` 後 `npm run preview`(port 4173;proxy 沿用 dev 的 /api + /ws → 8721)。dev build 的 React Component Performance Track 已由 dev-perf-guard 堵住洩漏,但 props-diff 開銷仍在 —— 整天掛著一律用本列,`npm run dev` 只做開發(2026-08-20) | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
-| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定資料日;`--write` 直接落檔覆寫群組 —— **server 跑著時別用**,它讀不到這次變更,prod 的寫入走 server 內 21:00 task + 啟動補跑) | repo root |
+| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定資料日;`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內 21:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 
 完成前 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過
@@ -168,12 +168,16 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `server/capital_api.py::_fill_code`(`unit == "口"` 當期貨判準代理 → 個股期契約碼反查
   股號;改「口」字面值 = 反查靜默死,圖牆個股期三角全滅)。改字面值 = 改契約要同時改
   各邊;`tests/capital/test_store.py` 有 lock。
-- **自選上限常數雙邊同值**(2026-09-01 起 = 150,容納盤前篩選群組;2026-08-13 起原 50):產生點 `copycat/stock_watchlist.py::
+- **自選上限常數多邊同值**(2026-09-01 起 = 150,容納盤前篩選群組;2026-08-13 起原 50):產生點 `copycat/stock_watchlist.py::
   WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
   WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
   已同源)+ **`stock_watchlist.fit_group_codes` 預設值**(盤前篩選 nightly 截位 —— 唯一會
-  因上限**靜默截掉候選**的讀者,截掉時 screen_engine 印 WARNING)。改值 = 改契約要同時改
-  兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
+  因上限**靜默截掉候選**的讀者,截掉時 screen_engine 印 WARNING)+ **`server/app.py::
+  stock_group_state` 批次上限**(引常數的行為讀者 —— 改值即放寬群組檢視單次批量,pr-175
+  review F-08)。第二類讀者 = 以「檔數 × 單價」推理的效能預算註解(stock_engine /
+  watchlist_service / stock_state / GroupGridView 各處,已於 2026-09-02 改寫成引用上限表述)
+  —— 改值時它們的最壞值跟著變,量測判準要重算。改值 = 改契約要同時改各邊;漂掉的症狀是
+  文案數字與實際擋人的數字不符,零錯誤訊號。
 - **WS 心跳契約**(2026-08-19 起):後端每條 WS 每 `WS_HEARTBEAT_SECS`(10 s)送
   `{"type":"ping"}`(產生點 `copycat/server/ws.py::WS_HEARTBEAT_SECS`,relay 直送不經
   per-client queue);讀者 = 前端 `frontend/src/lib/ws-reconnect.ts::WS_SILENCE_TIMEOUT_MS`

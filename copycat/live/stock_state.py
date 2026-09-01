@@ -59,7 +59,7 @@ class StockDayState:
     _volume: int = 0
     #: 價位別成交量直方圖(VP):key = `snap_down_milli` 後的檔位,value = [總張, 外, 內]。
     #: **逐 tick 增量維護,不在請求時掃 `ticks`**(change-spec AD-1 amendment R6):
-    #: 群組 batch 對最多 50 檔各要一次,請求時全掃最壞是 50 × 20k 的同步迴圈跑在事件
+    #: 群組 batch 對最多 150 檔(上限)各要一次,請求時全掃最壞是 150 × 20k 的同步迴圈跑在事件
     #: 迴圈上 → WS fanout 被卡住,而畫面上只表現為「圖偶爾頓一下」。
     #: 附帶好處是不受 `ticks` deque 的 20k 截斷影響(前端折的是不截斷的全量)。
     _vp: dict[int, list[int]] = field(default_factory=dict)
@@ -237,7 +237,7 @@ class StockDayState:
     def light_snapshot(self) -> dict:
         """群組 batch 專用的輕量 payload(code review A1)。
 
-        `group_snapshot` 對最多 50 檔、每 60s 各要一次;走全量 `snapshot()` 等於把
+        `group_snapshot` 對最多 150 檔(上限)、每 60s 各要一次;走全量 `snapshot()` 等於把
         當日數千筆 tick 逐筆組成 dict 之後整份丟掉,而卡片只畫得到這幾鍵。
 
         `vwap` / `high` / `low` / `vp` 是「卡片圖與單檔頁完全同款」的必要輸入

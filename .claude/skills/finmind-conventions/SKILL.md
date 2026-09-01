@@ -63,15 +63,20 @@ description: FinMind 接入慣例與配額真相。接新 FinMind dataset、寫 
 - **`TaiwanStockPrice` 無 data_id 全市場回傳含權證等**,一天 ~3 萬 rows;334 天真跑灌了 4.2M
   rows 進 prices.csv。`backfill_finmind` 已內建 known_ids 過濾(冷啟動空檔會 warning),別移除。
   (2026-07-07,Trigger:碰 backfill / 新增 FinMind dataset)
-- **`TaiwanStockDayTrading` 的 `BuyAfterSale` 欄位 'Y' 或 '＊' = 僅可先買後賣** — 對先賣後買的
-  **空方**策略即不可交易,空方資格過濾必須把這類標記視為 excluded;**多方(先買後賣)口徑照收**
-  — 盤前篩選(#173 Q15,2026-09-01 拍板)走多方口徑,兩個口徑並存不是矛盾,看策略方向選。
-  (2026-07-10 空方;2026-09-01 補多方,Trigger:當沖資格 proxy / DayTrading 過濾)
-- **`TaiwanStockDayTrading` 與 `TaiwanStockPriceAdj` 都是 data_id 必填**(2026-09-01 probe):
-  無 data_id 的單日全市場查詢回**空 data 陣列**(HTTP 200,零錯誤訊號)、DayTrading 無日期參數
-  直接 400。全市場當沖資格沒有單次端點 → 對「已縮小的候選集」逐檔查(盤前篩選 ~60 檔/晚);
-  全市場還原價同理不可行 → 還原用 `close − spread` 係數鏈自算(`copycat/screening.py`)。
-  (Trigger:接 DayTrading / PriceAdj、設計全市場 fan-out)
+- **`TaiwanStockDayTrading` 的 `BuyAfterSale` 值域**(2026-09-02 依官方 `llms-full.txt` 校正,
+  來源 `docs/research/2026-08-28-instrument-flags-survey.md` §190-196;**2026-07-10 舊條
+  「'Y' 或 '＊' = 僅可先買後賣」方向錯誤,已廢**):**`＊` = 停先賣後買(仍可先買後賣);
+  `Y` 或空白 = 兩方向皆可**。空方(先賣後買)資格過濾只剔 `＊`;多方不受此欄影響
+  (盤前篩選 #173 Q15:有列即當沖標的,不讀此欄)。⚠ 下游 `copycat/data/backfill_daytrade.py`
+  `_ban` 邏輯(任何非空值即 banned)仍照舊錯規則實作,`Y` 被誤剔 —— 修正另案(pr-175 review
+  F-01 留尾)。(Trigger:當沖資格 proxy / DayTrading 過濾)
+- **`TaiwanStockDayTrading` 與 `TaiwanStockPriceAdj` 全市場單日查詢可行(Sponsor)**
+  (2026-09-02 交易日 re-probe:無 data_id 各回 2,076 / 2,812 列;**2026-09-01「data_id 必填」
+  是拿週六探測、把非交易日空回應誤判成參數缺失 —— probe 日期必須是交易日,教訓入檔**)。
+  DayTrading 無日期參數仍 400。盤前篩選資格查已收斂為單次全市場查詢
+  (`breadth_fetch.fetch_day_trading`);還原價維持 `close − spread` 係數鏈自算
+  (`copycat/screening.py` —— 同 21 次請求零額外流量,PriceAdj 直查為可行備案)。
+  (Trigger:接 DayTrading / PriceAdj、設計全市場 fan-out、寫任何 FinMind probe)
 - **`TaiwanOptionDaily` 口徑**(2026-08-05 真樣本):每契約/履約價/CP 有 `trading_session ∈
   {position, after_market}` 兩列,**OI 只在 position 列**;`contract_date` 值域含月(202608)、
   週(202608W1)、每日(202608F1)→ 月契約用精確等值 filter 自然排除;**全域 max OI 會選到

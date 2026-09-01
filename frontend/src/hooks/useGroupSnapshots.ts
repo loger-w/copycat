@@ -7,10 +7,10 @@ import { inTradingHours, msUntilTradingOpen } from "@/lib/trading-hours";
 /** 群組檢視的成員狀態(group-grid SC-4)。
  *
  *  **單一 batch 端點,不是 per-code query**:`/api/stock/state/{code}` 會 `set_main`,
- *  群組檢視每分鐘對最多 50 檔各要一次 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結
+ *  群組檢視每分鐘對整組(上限 150 檔)各要一次 = 每分鐘把主圖搶走上百次,主圖分時線就此凍結
  *  而畫面上只表現為「圖不動了」,沒有任何錯誤訊號(design R1)。
  *
- *  payload 沒有 `ticks`(數千筆,50 檔一起送等於把 batch 端點變成頻寬炸彈),但帶
+ *  payload 沒有 `ticks`(數千筆,整組上限檔數一起送等於把 batch 端點變成頻寬炸彈),但帶
  *  它的**聚合**:`vwap` / `high` / `low` / `vp` —— 卡片圖要與單檔頁「完全同款」
  *  (VWAP 白線 / 日高低圈 / VP 條 + POC),而由 minutes 在前端近似會畫出與單檔頁
  *  對不上的圖,兩份數字都看起來對(change-spec AD-1)。
@@ -54,7 +54,7 @@ interface RawState {
  *  對它永遠 miss —— VP 條整排消失,而沒有任何型別或測試會抗議(`Map.get` 的鍵型別
  *  在 `Map<number, …>` 宣告下由 TS 擋,但這份 Map 是從 JSON 現建的)。
  *
- *  緊湊陣列而不是 `{t,o,i}` 物件是 wire 形的選擇(50 檔 × 數百檔位 × 三個鍵名);
+ *  緊湊陣列而不是 `{t,o,i}` 物件是 wire 形的選擇(上限 150 檔 × 數百檔位 × 三個鍵名);
  *  展開成具名欄位就在這裡一次做完,消費端看到的與 `foldVp` 的產物同形。 */
 function vpFromRecord(
   rec: Record<string, [number, number, number]> | undefined | null,
@@ -94,7 +94,7 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
  *  盤外不輪詢,但**不回 `false`**(next-time L71):TQ 對 false 不排 timer、之後再也
  *  不會重新求值 —— 08:59 就開著的群組檢視要等別的事件碰這條 query 才開始輪詢。
  *  改回「距下個交易窗開點的 ms」:窗開瞬間醒來打第一發,之後每次落地重新求值回 60s。
- *  50 檔 batch 不是免費的這一點不變 —— 盤外整段仍零請求(timer 只在開點醒一次)。 */
+ *  整組 batch(上限 150 檔)不是免費的這一點不變 —— 盤外整段仍零請求(timer 只在開點醒一次)。 */
 export function groupPollInterval(now: Date = new Date()): number {
   if (inTradingHours(now)) return POLL_MS;
   // 秒級量化(day-bars-rollover 鐵律 (c),全 repo 函式形 refetchInterval 同款):毫秒精度
