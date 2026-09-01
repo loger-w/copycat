@@ -95,6 +95,20 @@ def test_return_below_threshold_excluded() -> None:
     assert hard_candidates(days) == []
 
 
+def test_close_one_tick_below_limit_is_not_a_lock() -> None:
+    """收在漲停**下一檔**(109.5 vs 110.0)不算收盤鎖板(review F-05)。
+
+    「毫元精確等值、摸板不算」最容易被善意放寬成「差一檔也算」—— 放寬後榜單混進
+    非鎖板檔零紅燈。全檔其他非鎖樣本離漲停都 ≥4 檔,這條專釘容差突變體。
+    """
+    days = _days(
+        [_row("1234", 116.0, 6.5)],  # prev_ref 109.5,漲停 120.0,非鎖
+        [_row("1234", 109.5, 9.5)],  # prev_ref 100,漲停 110.0,差一檔 → 非鎖
+        [_row("1234", 100.0, 0.0)],
+    )
+    assert hard_candidates(days) == []  # 漲幅 +16%、量足,但零鎖板日
+
+
 def test_no_close_lock_excluded() -> None:
     # 漲 +16% 但沒有任何一天收盤鎖板(108 對 prev_ref 100 的漲停 110 未到;
     # 116 對 prev_ref 108 的漲停 118.8 未到)
@@ -117,13 +131,19 @@ def test_volume_below_threshold_excluded() -> None:
 
 
 def test_baseline_day_volume_not_counted() -> None:
-    """反向釘死:基準日灌天量也救不了(上一測試的對照組)。"""
+    """基準日量不進均量母體:灌天量後 avg 仍 = 轉換日均(review F-15 改真對照組)。
+
+    舊版 fixture 用 0 量 + 只斷言 len,「基準日也計量」的突變體照綠(鑑別力寄生在
+    鄰居的 avg 斷言);改灌天量 + 直接斷 avg_lots,本條自己就殺得掉。
+    """
     days = _days(
         [_row("1234", 116.0, 6.0, vol_shares=5_000_000)],
         [_row("1234", 110.0, 10.0, vol_shares=5_000_000)],
-        [_row("1234", 100.0, 0.0, vol_shares=0.0)],  # 基準日 0 量,不影響
+        [_row("1234", 100.0, 0.0, vol_shares=999_999_000)],  # 基準日天量,不得影響
     )
-    assert len(hard_candidates(days)) == 1
+    got = hard_candidates(days)
+    assert len(got) == 1
+    assert got[0].avg_lots == 5000.0
 
 
 def test_adjustment_chain_neutralizes_ex_dividend() -> None:
