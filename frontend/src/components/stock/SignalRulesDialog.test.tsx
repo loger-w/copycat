@@ -164,13 +164,14 @@ describe("SignalRulesDialog 刪除", () => {
 });
 
 describe("SignalRulesDialog 編輯表單", () => {
-  it("新增規則 → 表單出現,種類 select 四類中文", () => {
+  it("新增規則 → 表單出現,種類 select 五類中文", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
     const select = screen.getByLabelText("種類") as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual([
       "CDP 穿越",
       "爆拉爆跌",
+      "爆拉回檔",
       "爆量",
       "鎖漲跌停",
     ]);

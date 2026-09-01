@@ -45,12 +45,13 @@ const FIXTURE_PATH = path.resolve(HERE, "../../../tests/fixtures/signal_param_sp
 describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一份)", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as Fixture;
 
-  it("fixture 自身健檢:四種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
+  it("fixture 自身健檢:五種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
     // 沒有這條的話 fixture 被改瘦(只剩一個 kind)時 parity 仍然全綠 = 空談
     expect(Object.keys(fixture.specs).sort()).toEqual([
       "cdp_cross",
       "limit_lock",
       "surge_crash",
+      "surge_pullback",
       "vol_burst",
     ]);
     expect(fixture.specs.limit_lock).toEqual({});
@@ -80,6 +81,11 @@ describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一�
   it("「新規則」預設值字面 golden(review round-1 ST1:∈ [min,max] 擋不住 3 → 30 這種漂)", () => {
     expect(paramDefaults("cdp_cross")).toEqual({ rearm_ticks: "2", rearm_dwell_secs: "300" });
     expect(paramDefaults("surge_crash")).toEqual({ pct: "1.5", window_secs: "60" });
+    expect(paramDefaults("surge_pullback")).toEqual({
+      surge_pct: "2",
+      window_secs: "300",
+      pct: "1",
+    });
     expect(paramDefaults("vol_burst")).toEqual({
       ratio: "3",
       window_secs: "60",

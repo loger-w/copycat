@@ -132,6 +132,9 @@ def _kind_text(row: dict[str, Any]) -> str:
     value = float(pct) if isinstance(pct, (int, float)) else 0.0
     if kind in ("surge", "crash"):
         return f"{'爆拉' if kind == 'surge' else '爆跌'} {value:+.2f}%"
+    if kind == "surge_pullback":
+        # pct = 自峰值回落幅度(正數);與前端 `signal-model.kindLabel` 逐字對齊(design §7)
+        return f"爆拉回檔 {value:.2f}%"
     if kind == "vol_burst":
         return f"爆量 {value:.1f} 倍"
     if kind == "limit_lock":

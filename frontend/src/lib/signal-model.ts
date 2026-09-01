@@ -11,6 +11,7 @@ export type SignalKind =
   | "cdp_cross"
   | "surge"
   | "crash"
+  | "surge_pullback"
   | "vol_burst"
   | "limit_lock"
   | "limit_open";
@@ -67,6 +68,10 @@ export function kindLabel(sig: SignalMsg): string {
     const name = kind === "surge" ? "爆拉" : "爆跌";
     // pct 缺值不印 NaN:壞行 / 舊後端的訊號寧可少一段數字也不要顯示 "爆拉 NaN%"
     return sig.pct === null ? name : `${name} ${fmtPct(sig.pct)}`;
+  }
+  if (kind === "surge_pullback") {
+    // pct = 自峰值回落幅度(正數);與後端 `signal_hub._kind_text` 逐字對齊(design §7)
+    return sig.pct === null ? "爆拉回檔" : `爆拉回檔 ${sig.pct.toFixed(2)}%`;
   }
   if (kind === "vol_burst") {
     return sig.pct === null ? "爆量" : `爆量 ${sig.pct.toFixed(1)} 倍`;

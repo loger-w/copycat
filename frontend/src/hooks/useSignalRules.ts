@@ -11,7 +11,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseError } from "@/lib/api-error";
 
 /** 與後端 `signal_rules.RULE_KINDS` 逐字對應(改一邊要改兩邊)。 */
-export const RULE_KINDS = ["cdp_cross", "surge_crash", "vol_burst", "limit_lock"] as const;
+export const RULE_KINDS = [
+  "cdp_cross",
+  "surge_crash",
+  "surge_pullback",
+  "vol_burst",
+  "limit_lock",
+] as const;
 export type RuleKind = (typeof RULE_KINDS)[number];
 
 /** 與後端 `signal_rules.CDP_LEVELS` 同序 —— 送出的 `cdp_levels` 依此固定序,

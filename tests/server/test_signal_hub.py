@@ -24,7 +24,7 @@ from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
-from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RULE_KINDS, RuleError, load_rules
+from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RuleError, load_rules
 from copycat.signals_config import SignalsConfig
 from copycat.stock_watchlist import Group
 
@@ -52,6 +52,7 @@ _SIGNAL_KEYS = {
 _RULE_PARAMS: dict[str, dict[str, float]] = {
     "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
+    "surge_pullback": {"surge_pct": 2.0, "window_secs": 300, "pct": 1.0},
     "vol_burst": {
         "ratio": 3,
         "window_secs": 300,
@@ -80,9 +81,13 @@ def _rule(kind: str, rid: str, **over: Any) -> dict[str, Any]:
 
 
 def _write_rules(tmp_path: Path, rules: list[dict[str, Any]]) -> None:
-    """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。"""
+    """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。
+
+    寫**當前版本 v3**:寫舊版會觸發遷移鏈 append surge_pullback 種子卡,
+    「注入的集合 = 受測的集合」這個前提就破了(遷移行為由 test_signal_rules 專測)。
+    """
     (tmp_path / _RULES_FILE).write_text(
-        json.dumps({"_cache_version": 1, "rules": rules}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_cache_version": 3, "rules": rules}, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -1978,7 +1983,15 @@ class TestRuleEngine:
         """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。"""
         h = _Harness(tmp_path, clock)
         rules = h.hub.rules()
-        assert [r["kind"] for r in rules] == list(RULE_KINDS)
+        # surge_pullback 種子是兩張卡(1% / 2%,spec #174)
+        assert [r["kind"] for r in rules] == [
+            "cdp_cross",
+            "surge_crash",
+            "surge_pullback",
+            "surge_pullback",
+            "vol_burst",
+            "limit_lock",
+        ]
         assert all(r["enabled"] for r in rules)
         assert all(r["notify_discord"] for r in rules)
         assert load_rules(tmp_path / _RULES_FILE) == rules
@@ -1992,6 +2005,7 @@ class TestRuleEngine:
         assert {r["kind"]: r["enabled"] for r in h.hub.rules()} == {
             "cdp_cross": True,
             "surge_crash": True,
+            "surge_pullback": True,  # 晚於開關檔時代 → 恆走缺鍵 fail-open
             "vol_burst": False,
             "limit_lock": True,
         }

@@ -71,6 +71,7 @@ function hhmm(time: string): string {
 function toneOf(sig: SignalMsg): string {
   if (sig.kind === "surge") return "text-bull";
   if (sig.kind === "crash") return "text-bear";
+  if (sig.kind === "surge_pullback") return "text-bear"; // 自峰值回落,方向向下
   if (sig.kind === "limit_lock" || sig.kind === "limit_open") {
     return sig.direction === "down" ? "text-bear" : "text-bull";
   }

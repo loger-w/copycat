@@ -39,13 +39,20 @@ __all__ = [
     "save_rules",
 ]
 
-RULE_KINDS: tuple[str, ...] = ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
+RULE_KINDS: tuple[str, ...] = (
+    "cdp_cross",
+    "surge_crash",
+    "surge_pullback",
+    "vol_burst",
+    "limit_lock",
+)
 CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
 COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
 #: REST 可寫入的無界量要有上限(R11)—— 熱路徑是 per-tick N × evaluate。
 MAX_RULES = 30
-#: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`(見 `load_rules` 的遷移)。
-_CACHE_VERSION = 2
+#: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`;v3 = append 兩張
+#: surge_pullback 種子卡(spec #174;見 `load_rules` 的遷移鏈)。
+_CACHE_VERSION = 3
 #: v1→v2 補值。刻意是模組常數而非 `cfg.cdp_rearm_dwell_secs`:`load_rules(path)` 的簽名
 #: 不吃 config,為了遷移多接一個參數會讓所有呼叫端跟著改。與種子路徑(`_seed_params` 走
 #: cfg)的分歧在 `configs/signals.json` 覆寫該鍵時才會出現 —— 所以補值要 log 出來。
@@ -56,6 +63,7 @@ _DEFAULT_REARM_DWELL_SECS = 300.0
 PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
     "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
     "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
+    "surge_pullback": {"surge_pct": (0.1, 50), "window_secs": (10, 3600), "pct": (0.1, 50)},
     "vol_burst": {
         "ratio": (1, 100),
         "window_secs": (10, 3600),
@@ -76,6 +84,11 @@ _DEFAULT_NAMES: dict[str, str] = {
     "vol_burst": "爆量",
     "limit_lock": "鎖漲跌停",
 }
+
+#: surge_pullback 種子兩張卡(spec #174 拍板:5 分鐘 +2% 武裝,回檔 1% / 2%)。
+#: `pct` 是卡的**身分**(綁名稱)—— 不吃 config,否則覆寫 `pullback_pct` 會讓
+#: 「爆拉回檔 1%」這個名字與實際門檻悄悄對不上。
+_PULLBACK_SEEDS: tuple[tuple[str, float], ...] = (("爆拉回檔 1%", 1.0), ("爆拉回檔 2%", 2.0))
 
 
 class RuleError(ValueError):
@@ -247,24 +260,58 @@ def _seed_cooldown(kind: str, cfg: SignalsConfig) -> int:
     source = {
         "cdp_cross": cfg.cdp_cooldown_secs,
         "surge_crash": cfg.surge_cooldown_secs,
+        "surge_pullback": cfg.pullback_cooldown_secs,
         "vol_burst": cfg.vol_cooldown_secs,
         "limit_lock": cfg.limit_cooldown_secs,
     }[kind]
     return int(_clamp(f"{kind}.cooldown_secs", float(int(source)), COOLDOWN_MIN, COOLDOWN_MAX))
 
 
+def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig) -> Rule:
+    """一張 surge_pullback 種子卡:武裝參數沿 surge 全域設定(夾制同 `_seed_params`),
+    `pct` 為卡的字面身分。`default_rules` 與 v2→v3 遷移共用 —— 兩條種子路徑分家會漂。
+    """
+    spec = PARAM_SPECS["surge_pullback"]
+    return {
+        "id": rule_id,
+        "name": name,
+        "kind": "surge_pullback",
+        "enabled": True,
+        "notify_discord": True,
+        "cooldown_secs": _seed_cooldown("surge_pullback", cfg),
+        "params": {
+            "surge_pct": _clamp(
+                "surge_pullback.surge_pct", float(cfg.surge_pct), *spec["surge_pct"]
+            ),
+            "window_secs": _clamp(
+                "surge_pullback.window_secs", float(cfg.surge_window_secs), *spec["window_secs"]
+            ),
+            "pct": pct,  # 拍板字面值,恆在值域內
+        },
+        "cdp_levels": [],
+    }
+
+
 def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rule]:
-    """遷移種子:每 kind 一條,參數 / 冷卻取自現行全域 `SignalsConfig`。
+    """遷移種子:每 kind 一條(surge_pullback 例外 = 兩張卡),參數 / 冷卻取自現行
+    全域 `SignalsConfig`。
 
     `legacy_flags` = 舊 `signals_enabled.json` 的四鍵;**缺鍵 = True**(fail-open,
-    與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉)。
+    與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉;
+    surge_pullback 晚於開關檔時代,恆走缺鍵那條)。
     """
     epoch = int(time.time())
     rules: list[Rule] = []
-    for seq, kind in enumerate(RULE_KINDS):
+    for kind in RULE_KINDS:
+        if kind == "surge_pullback":
+            for name, pct in _PULLBACK_SEEDS:
+                rule = _pullback_seed_rule(name, pct, new_rule_id(epoch, len(rules)), cfg)
+                rule["enabled"] = legacy_flags.get(kind, True)
+                rules.append(rule)
+            continue
         rules.append(
             {
-                "id": new_rule_id(epoch, seq),
+                "id": new_rule_id(epoch, len(rules)),
                 "name": _DEFAULT_NAMES[kind],
                 "kind": kind,
                 "enabled": legacy_flags.get(kind, True),
@@ -306,19 +353,58 @@ def _migrate_v1(items: list[Any]) -> list[Any]:
     return out
 
 
+def _migrate_v2(items: list[Any]) -> list[Any]:
+    """v2 → v3:append 兩張 surge_pullback 種子卡(spec #174 一次性注入)。
+
+    武裝參數 / 冷卻走 `SignalsConfig()` **預設值**(= 拍板值):`load_rules(path)` 的
+    簽名不吃 config(v1 補值同理由),與 `default_rules` 種子路徑的分歧只在
+    `configs/signals.json` 覆寫 surge 鍵時出現,append 內容 log 出來可對帳。
+    撞名 → 跳過該卡(使用者已有同名規則,重命名等於替使用者做決定);
+    會超過 `MAX_RULES` → 跳過並 WARNING(遷移不得讓載入 raise → routes 503)。
+    輸入不就地修改;v2 **空陣列也照塞**(一次性升級注入,不是復活 v3 世界的刪除)。
+    """
+    existing = [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
+    names = {str(obj.get("name", "")).strip() for obj in existing}
+    ids = {obj.get("id") for obj in existing}
+    cfg = SignalsConfig()
+    epoch = int(time.time())
+    seq = len(items)
+    out: list[Any] = list(items)
+    for name, pct in _PULLBACK_SEEDS:
+        if name in names:
+            logger.info("訊號規則檔 v2→v3:已有同名規則,跳過種子卡 %r", name)
+            continue
+        if len(out) >= MAX_RULES:
+            logger.warning("訊號規則檔 v2→v3:規則數已達上限 %s,跳過種子卡 %r", MAX_RULES, name)
+            continue
+        rule_id = new_rule_id(epoch, seq)
+        while rule_id in ids:
+            seq += 1
+            rule_id = new_rule_id(epoch, seq)
+        seq += 1
+        ids.add(rule_id)
+        rule = _pullback_seed_rule(name, pct, rule_id, cfg)
+        logger.info("訊號規則檔 v2→v3:append 種子卡 %r params=%s", name, rule["params"])
+        out.append(rule)
+    return out
+
+
 def load_rules(path: Path) -> list[Rule] | None:
     """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
 
-    「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設。
+    「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設
+    (在當前版本 v3 上原樣成立;v2 空檔照樣拿到 v3 的種子卡 —— 那是升級注入,見下)。
     壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
     無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
 
-    **v1 → v2 遷移(D6)**:`_cache_version == 1` 的檔案在記憶體裡補上 cdp 規則的
-    `rearm_dwell_secs`(= `_DEFAULT_REARM_DWELL_SECS`)後照常驗證;**載入時不回寫檔案**,
-    磁碟要到第一次 upsert 才以 v2 落檔 —— 這段就是回退窗:期間舊碼可直接讀原檔。
-    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`,刪掉每條 cdp
-    規則的 `rearm_dwell_secs` 鍵、`_cache_version` 改回 1 → 起舊碼。
-    v2 檔缺該鍵不走遷移(是壞檔,不是舊檔);1 / 2 以外的版本一律 raise(既有語意)。
+    **遷移鏈(D6 + spec #174)**:v1 → `_migrate_v1` 補 cdp 的 `rearm_dwell_secs` →
+    v2;v2(含補完的 v1)→ `_migrate_v2` append 兩張 surge_pullback 種子卡 → v3,
+    之後照常驗證;**載入時不回寫檔案**,磁碟要到第一次 upsert 才以 v3 落檔 ——
+    這段就是回退窗:期間舊碼可直接讀原檔。
+    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`,刪掉兩張
+    surge_pullback 種子卡、(要退到 v1 再)刪 cdp 的 `rearm_dwell_secs` 鍵、
+    `_cache_version` 改回 2(或 1)→ 起舊碼。
+    v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1 / 2 / 3 以外的版本一律 raise。
     """
     if not path.exists():
         return None
@@ -332,7 +418,7 @@ def load_rules(path: Path) -> list[Rule] | None:
         raise _bad()
     obj = cast(dict[str, Any], payload)
     version = obj.get("_cache_version")
-    if version not in (_CACHE_VERSION, 1):
+    if version not in (_CACHE_VERSION, 2, 1):
         # 版本 bump 屬開發期動作,屆時必須同時寫轉換 —— 沒寫就該在啟動時被發現。
         logger.error("訊號規則檔版本不符(%s):%r", path, version)
         raise _bad()
@@ -345,7 +431,9 @@ def load_rules(path: Path) -> list[Rule] | None:
         logger.error("訊號規則檔 %s 條超過上限 %s:%s", len(items), MAX_RULES, path)
         raise _bad()
     if version != _CACHE_VERSION:
-        items = _migrate_v1(items)
+        if version == 1:
+            items = _migrate_v1(items)
+        items = _migrate_v2(items)
     rules: dict[str, Rule] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -399,6 +487,16 @@ def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
             surge_pct=params["pct"],
             surge_window_secs=params["window_secs"],
             surge_cooldown_secs=cooldown,
+        )
+    if kind == "surge_pullback":
+        # 武裝參數借 surge 欄(per-rule config 讓回檔卡與 surge_crash 卡各自獨立,
+        # 與 vol_burst 借窗同一模式);回檔門檻 / 冷卻落 pullback 專屬欄。
+        return replace(
+            base,
+            surge_pct=params["surge_pct"],
+            surge_window_secs=params["window_secs"],
+            pullback_pct=params["pct"],
+            pullback_cooldown_secs=cooldown,
         )
     if kind == "vol_burst":
         return replace(
