@@ -1,0 +1,18 @@
+{
+  "fixed_point": "origin/master 1a9bfafc(merge-base)",
+  "reviewed_commits": ["a06a8ada test 紅先行", "c7b9ff9d feat surge_pullback"],
+  "standards": [
+    "L-1(輕度違反):frontend/src/lib/signal-model.ts pct 欄 doc 註解沒補 surge_pullback 半邊(後端對稱行有補)—— 違反 §4「改契約同時改兩邊」精神(註解層)。",
+    "Duplicated Code(後端,建議修):_eval_pullback 武裝分支逐字複製 _eval_surge 的窗內 pct 公式;「同式」只靠註解成立,且同方法內出現 /oldest*100 與 *100/peak 兩形。建議抽 _window_gain_pct 共用。",
+    "Duplicated Code(測試):種子 kind 序列字面在 tests/test_signal_rules.py / tests/server/test_signal_routes.py / tests/server/test_signal_hub.py 三處各寫一份。",
+    "Repeated Switch(判斷題):default_rules 為 surge_pullback 單一 kind 破例 if/continue,破例外溢到三個測試檔。",
+    "低價值記錄:_migrate_v2 while 碰撞迴圈略帶 Speculative Generality;_pullback tuple 的 Primitive Obsession 與既有 _side 同形不算偏離。"
+  ],
+  "spec": [
+    "S-1(Should):發訊後唯一重武裝路徑 = 嚴格創前高 → 深跌後同日的獨立新波(未過前波峰)再符合 +2%/5min 也整天不武裝不發訊;plan #3 的 rationale 只論證發訊後數分鐘的連發問題,卻連幾小時後的新波一併關掉。建議允許衰減 / 發訊後重新武裝,或請 user 追認代價。",
+    "S-2(參考用):驗證判準「盤中對榜上股觀察實發」尚無實錄;離線對照半邊已由 test_dingyuan_2426_offline_reference 蓋掉。",
+    "N-1(Nice):SignalsConfig.pullback_pct 是死旋鈕 —— 種子卡不吃 cfg、rule_config 恆以 params['pct'] 覆寫,configs/signals.json 覆寫零效果零訊號;要嘛刪欄要嘛註明僅映射載體。",
+    "N-2(Nice):兩條種子路徑參數來源不一致(default_rules 走 cfg、_migrate_v2 走 SignalsConfig() 硬預設),同一份 signals.json 下新機與升級機種子卡門檻可能不同;docstring 已自陳但未留對帳判準。"
+  ],
+  "disposition": "S-1 接受:已發態記 fired_at,重武裝判式改「發訊時點之後的窗重跑 surge 同式」(基線=發訊筆→沿跌不可能連發;獨立新波接得回來);紅先行 8c06484a → 修 4ad4470c,另加反面約束測試(沿跌不得連發)。2426 離線 replay 對照:僅 2% 卡多出 10:04:30 一則真實 2.91% 回檔(正是 S-1 案型),無連發。PR 說明列為 user 追認點(修訂了 plan 初版「唯一路徑」的實作期解讀;spec 原文未排除)。Standards 重複碼(後端)接受:抽 _window_change_pct 單源(refactor affb0875),「同式」成機驗事實。L-1 接受:註解補半邊(4ad4470c)。N-1 接受(註解版):signals_config 講明 pullback_pct 僅映射載體非旋鈕;不刪欄(rule_config 需要落點)。N-2 部分退回:_migrate_v2 的 INFO log 逐卡印出 append 的 params 即對帳判準(review 說「未留」不成立);來源分歧本身沿 v1 遷移前例(load_rules 簽名不吃 config),docstring 已自陳。測試字面三份退回:字面鎖刻意各自獨立(改壞哪邊哪邊紅),與跨語言 fixture 服務的題不同。default_rules 破例分支退回:seeds-dict 整改超出本輪範圍,現形可讀;若日後加第三張種子卡再收。S-2 屬盤中 user 過目項,verification.md 已列。"
+}
