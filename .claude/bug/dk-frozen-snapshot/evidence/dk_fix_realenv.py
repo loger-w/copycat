@@ -1,7 +1,10 @@
-"""fix/dk-frozen-snapshot 真環境驗證:worktree 的 FuturesQuoteSource 直連 TC4,
-同參數兩刷夾行情 —— 修前第二刷 = 凍結快照,修後(_dk_start_variant)= 前進值。
+"""fix/dk-frozen-snapshot 真環境驗證:本 repo 的 FuturesQuoteSource 直連 TC4,
+同參數兩刷夾行情 —— 修前第二刷 = 凍結快照,修後(_next_dk_start,原名
+_dk_start_variant、收修改名)= 前進值。
 
 自己的 session;base 窗 start=today−30d / end=明日(≠ prod 的 −1825d/today),不訂 REALTIME。
+原始實跑(2026-09-01 16:52,PASS)在出貨用的臨時 worktree 上執行;路徑已改為由檔案
+位置回推 repo root(pr-171-review F-10:舊寫法硬綁已刪除的 worktree,重跑必炸)。
 """
 
 from __future__ import annotations
@@ -10,8 +13,9 @@ import datetime as dt
 import json
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, r"C:\side-project\copycat-wt-dk-frozen-snapshot")
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from copycat.live.futures_source import FuturesQuoteSource  # noqa: E402
 

@@ -43,7 +43,8 @@ timeout)→ `daily_put` 界後寫入視為定稿 → 錯值釘到午夜。
 
 1. **DK 每次取數帶窗口 variant**(選「每次都 variant」不選「僅定稿界後那一刷」:免從
    cache 層向下鑿參數,source 層自含;成本 = 熱取數 0.001s → 0.3s,可忽略):
-   - 產生點:`tc4.py` 基底新 helper `_dk_start_variant(sym, start, end)` —— per
+   - 產生點:`tc4.py` 基底新 helper `_dk_start_variant(sym, start, end)`(收修後改名
+     `_next_dk_start`,standards review #2;pr-171-review F-10 補記)—— per
      (sym, start, end) 單調計數,第 n 次取數把 start 日期前移 n−1 日(首查 = 原窗,行為不變;
      新的一天窗字串本來就換 → 計數天然按日重置)。變體維度 = start 日期(probe V1 實證);
      end-hour 維度未驗且一天只有 24 值會繞回,不用。

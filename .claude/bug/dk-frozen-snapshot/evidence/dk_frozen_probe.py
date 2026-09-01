@@ -132,12 +132,13 @@ def main() -> int:
     api.context.setsockopt(zmq.SNDTIMEO, _REQ_TIMEOUT_MS)
     api.context.setsockopt(zmq.LINGER, 0)
     opened: list[tuple[str, str]] = []
+    session: str | None = None  # login 失敗時 finally 不得 NameError(pr-171-review F-14)
     try:
         q = api.Connect(args.port)
         if q.get("Success") != "OK":
             print(f"login failed: {q}")
             return 1
-        session = q["SessionKey"]
+        session = str(q["SessionKey"])
         print(f"connected session={session[:8]}", flush=True)
 
         w1 = query_dk(api, session, win_w, "W1(t0 同窗首查)")
@@ -189,12 +190,13 @@ def main() -> int:
             print(json.dumps(out["verdict"], ensure_ascii=False, indent=1), flush=True)
     finally:
         try:
-            for win in opened:
-                unsub(api, session, win)
-            r = req(api, {"Request": "LOGOUT", "SessionKey": session})
-            print(f"LOGOUT: {r.get('Success')}", flush=True)
+            if session is not None:  # login 沒成功就沒有 key 可退、也沒票可 LOGOUT
+                for win in opened:
+                    unsub(api, session, win)
+                r = req(api, {"Request": "LOGOUT", "SessionKey": session})
+                print(f"LOGOUT: {r.get('Success')}", flush=True)
         except Exception as exc:  # 收工 best-effort,Disconnect 必走
-            print(f"cleanup error: {exc}", flush=True)
+            print(f"cleanup error: {type(exc).__name__}: {exc}", flush=True)
         api.Disconnect()
         print("disconnected", flush=True)
 
