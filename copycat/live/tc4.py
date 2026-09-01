@@ -387,7 +387,7 @@ class TC4QuoteSource:
         self._auto_backfill_date = auto_backfill_date
         self._on_tick: Callable[[Tick], None] | None = None
         self._subscribed: set[str] = set()
-        #: DK 取數序號,鍵 = (symbol, base start, end) —— 見 `_dk_start_variant`。
+        #: DK 取數序號,鍵 = (symbol, base start, end) —— 見 `_next_dk_start`。
         #: 按窗記不按 symbol:同 symbol 兩個 base 窗交錯取數時,按 symbol 記會讓序號
         #: 互相污染,最壞是兩個 caller 輪流拿回同一把舊 key 的凍結快照。條目數 ≈
         #: 每 symbol 每日每種窗形一筆,不清理(server 以日為壽命尺度,量級無虞)。
@@ -930,8 +930,9 @@ class TC4QuoteSource:
             strip_prefix=True,
         )
 
-    def _dk_start_variant(self, sym: str, start: str, end: str) -> str:
+    def _next_dk_start(self, sym: str, start: str, end: str) -> str:
         """DK 取數的窗口 variant:同 (symbol, 窗) 第 n 次取數把 start 日期前移 n−1 日。
+        **有副作用**(每呼叫一次序號 +1),每次 DK 取數恰呼叫一次。
 
         TC4 對 DK history 訂閱 key(symbol|DK|Start|End)的內容**凍結在 key 建立時點**,
         同 session 同窗重查(含 UNSUB 後重訂)永遠回建立時點快照(2026-09-01 受控 probe:
@@ -944,6 +945,14 @@ class TC4QuoteSource:
         天然按日重置。前移維度選 start **日期**(probe 實證)而非 end hour(未驗、一天
         只有 24 值會繞回舊 key)。頭部因此多收的 bar 由 caller 以 start_date 過濾
         (「含端點」契約);成本 = 每次 refetch 都是新訂閱,DK 熱取數實測 0.02–0.3s。
+
+        **序號刻意不設上界**(review 兩軸各自問過):上界 = 繞回已用過的窗字串 = 拿回
+        那把 key 的凍結內容,病復發;「空結果 → 負向 TTL → 重試」那條路也正是靠每次
+        換窗才有意義(同窗重試回的是建立時點的空)。代價記帳:窗寬度隨當日取數次數
+        線性 +1 日(DK 一天一列,數列成本可忽略)、TC4 session 上每刷留一把 DK 訂閱
+        (隨 session 消滅);已知最重的驅動 = overlay don't-cache-empty 對 DK 空標的的
+        輪詢。跨 base 撞窗(個股 40 日與 180 日窗差 140 日,同 symbol 同日取數達 140 次
+        才可能)撞上的代價 = 拿到幾小時前快照,由 bars.py「值未前進」WARNING 兜底。
         """
         with self._dk_seq_lock:
             n = self._dk_fetch_seq.get((sym, start, end), 0)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from typing import Any
 
@@ -492,17 +493,15 @@ class TestDkWindowVariant:
 
     def test_fetch_daily_bars_refetch_uses_new_window_string(self) -> None:
         """SignalHub 的日 K(`fetch_daily_bars`)同一條 DK 鏈:重查也要換窗。"""
-        import datetime as _dtm
-
         sent: list[dict] = []
         pages = {"DK": {"0": [dk("20260724", "100", "101", "99", "100.5")], "1": []}}
         src = _src(_pager(pages, sent))
         src.fetch_daily_bars("2330")
         src.fetch_daily_bars("2330")
         subs = self._subs(sent)
-        first = _dtm.datetime.strptime(subs[0]["Param"]["StartTime"][:8], "%Y%m%d").date()
-        second = _dtm.datetime.strptime(subs[1]["Param"]["StartTime"][:8], "%Y%m%d").date()
-        assert second == first - _dtm.timedelta(days=1)
+        first = _dt.datetime.strptime(subs[0]["Param"]["StartTime"][:8], "%Y%m%d").date()
+        second = _dt.datetime.strptime(subs[1]["Param"]["StartTime"][:8], "%Y%m%d").date()
+        assert second == first - _dt.timedelta(days=1)
         assert subs[0]["Param"]["EndTime"] == subs[1]["Param"]["EndTime"]
 
     def test_variant_seq_is_per_window_not_per_symbol(self) -> None:

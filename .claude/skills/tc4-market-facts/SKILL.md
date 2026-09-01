@@ -154,9 +154,9 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   即全新訂閱,立即取到前進值)或換 session。prod 事故形狀:server 早上起、跨 14:00 定稿界
   作廢後 refetch 同窗 → 拿回 boot 時點的今日 bar(非空、非 timeout、全靜默)→ 被
   `daily_put` 當定稿釘到午夜(2026-09-01 15:02 實錄:D bar 與 10:08 快照逐字節同,
-  h 46955 < 1K 實收 47209)。修法 = `tc4._dk_start_variant`(per (symbol, 窗) 序號,每刷
+  h 46955 < 1K 實收 47209)。修法 = `tc4._next_dk_start`(per (symbol, 窗) 序號,每刷
   start 前移一日,caller 以 start_date 濾頭部);凍結再現的訊號 = `server/bars.py` grep 錨
-  「值未前進」。**附帶窗口語意事實:D+1 交易日的夜盤 bar 要窗 end ≥ D+1 才收得到**
+  「值未前進」(只對 13:30 前寫入的盤中快照鳴)。**附帶窗口語意事實:D+1 交易日的夜盤 bar 要窗 end ≥ D+1 才收得到**
   (end=D 的窗看不到當晚夜盤 bar —— 這是窗口排除,不是「D+1 bar 幾小時後才出現在新訂閱」;
   09-01 15:16 新 session 缺 09-02 bar 與 16:33 end=0902 窗有 09-02 bar 同日對照)。
   probe / 收修證據:`.claude/bug/dk-frozen-snapshot/`。
