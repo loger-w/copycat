@@ -24,7 +24,8 @@ from copycat.trading_calendar import WEEKEND_ONLY
 
 D0 = _dt.date(2026, 9, 1)  # 最新交易日
 D1 = _dt.date(2026, 8, 31)
-D2 = _dt.date(2026, 8, 28)  # 最舊(基準日,只出 close)
+D2 = _dt.date(2026, 8, 28)  # 三天窗的最舊(基準日,只出 close)
+D3 = _dt.date(2026, 8, 27)  # 四天窗用(界值鏈需要三段轉換)
 
 
 def _row(sid: str, close: float, spread: float, vol_shares: float = 5_000_000) -> dict:
@@ -33,8 +34,8 @@ def _row(sid: str, close: float, spread: float, vol_shares: float = 5_000_000) -
 
 
 def _days(*per_day: list[dict]) -> list[tuple[_dt.date, list[dict]]]:
-    """新→舊組裝(per_day[0] = D0)。"""
-    dates = [D0, D1, D2]
+    """新→舊組裝(per_day[0] = D0;給 3 或 4 天)。"""
+    dates = [D0, D1, D2, D3]
     return [(dates[i], rows) for i, rows in enumerate(per_day)]
 
 
@@ -64,6 +65,24 @@ def test_pass_all_three_conditions() -> None:
     assert round(cand.ret_pct, 6) == 16.0
     assert cand.avg_lots == 5000.0
     assert cand.lock_dates == (D1,)
+
+
+def test_exact_boundary_chain_included_despite_float_dust() -> None:
+    """數學上恰 +15% 的鏈必須入榜,即使 float 積落在 15 之下(review F-04)。
+
+    100 → 110(鎖板)→ 112 → 115 的裸 float 積 = 14.999999999999968 —— 量化前
+    `ret_pct < RET_MIN_PCT` 會把界上檔剔掉,「恰在界上要收」就成了浮點運氣不是決策。
+    本測試同時釘住反向突變體:量化後改 `<=` 會把 15.0 剔掉,這裡紅。
+    """
+    days = _days(
+        [_row("1234", 115.0, 3.0)],
+        [_row("1234", 112.0, 2.0)],
+        [_row("1234", 110.0, 10.0)],  # 鎖板日(prev_ref 100 → 漲停 110.0)
+        [_row("1234", 100.0, 0.0)],
+    )
+    got = hard_candidates(days)
+    assert [c.code for c in got] == ["1234"]
+    assert round(got[0].ret_pct, 6) == 15.0
 
 
 def test_return_below_threshold_excluded() -> None:
