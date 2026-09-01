@@ -1,0 +1,25 @@
+{
+  "round": 1,
+  "mode": "two-axis (standards=opus / spec=opus, parallel sub-agents)",
+  "fixed_point": "origin/master d6655611",
+  "spec": "GitHub issue #173",
+  "findings": [
+    {"id": "A1", "axis": "standards", "severity": "P2", "summary": "finmind-conventions skill 的 BuyAfterSale『必須 excluded』與 #173 Q15 多方照收對打", "disposition": "accepted", "resolution": "skill 改寫為空方/多方兩口徑並存,標 #173 Q15 出處"},
+    {"id": "A2", "axis": "standards", "severity": "P2", "summary": "CLAUDE.md §4 自選上限契約讀者清單缺新讀者(截位)", "disposition": "accepted", "resolution": "補 fit_group_codes 讀者 + 靜默截掉症狀"},
+    {"id": "A3", "axis": "standards", "severity": "P3", "summary": "CLAUDE.md 目錄樹 / §1 指令表缺 screening.py 與 screen CLI(含 --write 陷阱)", "disposition": "accepted", "resolution": "兩處補列"},
+    {"id": "A4", "axis": "standards", "severity": "P3", "summary": "DayTrading data_id 必填 probe 事實只在 docstring 未回填 skill", "disposition": "accepted", "resolution": "回填 finmind-conventions 全市場 dataset 節"},
+    {"id": "B1", "axis": "standards", "severity": "P2", "summary": "_DAILY_MIN_ROWS 第三份字面值無機驗釘住", "disposition": "accepted", "resolution": "tests/server/test_screen_engine.py parity 斷言"},
+    {"id": "B2", "axis": "standards", "severity": "P3", "summary": "universe 守門 shrink_rows / hard_candidates 兩份(Duplicated Code)", "disposition": "rejected", "resolution": "刻意:hard_candidates 必須獨立正確(shrink 只是縮列最佳化),test_shrink_rows_preserves_hard_candidates_result 釘等價"},
+    {"id": "B3", "axis": "standards", "severity": "P2", "summary": "_write_group 重算 with_group_replaced 集合代數(截位語意可能漂開)", "disposition": "accepted", "resolution": "抽 stock_watchlist.fit_group_codes,留存基底以 with_group_replaced 自身算(同源)"},
+    {"id": "B4", "axis": "standards", "severity": "P3", "summary": "token + 三 fetch callable Data Clump", "disposition": "rejected", "resolution": "單一建構點,打包是儀式;breadth 四元組是注入面需求,screen 無測試注入面"},
+    {"id": "B5", "axis": "standards", "severity": "P3", "summary": "screen_engine 排程/放棄/補跑行為零測試", "disposition": "rejected", "resolution": "#173 seam 拍板:薄接線不另測;排程判定已抽 expected_data_date 純函式在 seam 內測"},
+    {"id": "B6", "axis": "standards", "severity": "P3", "summary": "T3 上限 bump 的 commit 順序非紅先行", "disposition": "noted", "resolution": "契約 bump 非 TDD 情境,三類分開有守住;歷史不改寫"},
+    {"id": "F1", "axis": "spec", "severity": "MEDIUM", "summary": "當沖判準 7 日回看寬於 spec『最近交易日有列』", "disposition": "rejected-flagged", "resolution": "刻意放寬:嚴判會把『合格但當日零當沖成交』誤剔;資格暫停主路徑(處置)已由 disposition 過濾涵蓋。留 user 過目表追認"},
+    {"id": "F2", "axis": "spec", "severity": "LOW", "summary": "compute 逐日曆天回掃,非交易日空請求 ~10 次/晚", "disposition": "accepted", "resolution": "迴圈先過 calendar.is_trading_day,空回應 fallback 保留"},
+    {"id": "F3", "axis": "spec", "severity": "MEDIUM", "summary": "淘汰檔自 codes 移除超出 spec『只動該群組』字面授權", "disposition": "rejected-flagged", "resolution": "必要設計(否則淘汰檔堆積未分組桶塞滿上限);已 docstring 明載,留 user 過目表追認"},
+    {"id": "F4", "axis": "spec", "severity": "LOW", "summary": "『保留排序前段』註解不精確(已在自選者無條件入列)", "disposition": "accepted", "resolution": "WARNING 文案與 docstring 改精確"},
+    {"id": "F5", "axis": "spec", "severity": "MEDIUM", "summary": "CLI --write 不截位,超限整次失敗與 engine 路徑語意分歧", "disposition": "accepted", "resolution": "兩路徑共用 fit_group_codes"},
+    {"id": "F6", "axis": "spec", "severity": "LOW", "summary": "量欄缺值靜默當 0 與『缺日不判』口徑不一致", "disposition": "accepted", "resolution": "volume None → 整檔不判 + 測試"}
+  ],
+  "post_fix": "pytest 3295 passed / ruff PASS / pyright 0 errors(收修 commit 169617e4 + cae4f86a)"
+}
