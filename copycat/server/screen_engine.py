@@ -65,7 +65,7 @@ class ScreenEngine:
         token: str,
         calendar: TradingCalendar,
         daily_fetch: Callable[[str, _dt.date], list[dict]],
-        day_trading_fetch: Callable[[str, str, _dt.date], list[dict]],
+        day_trading_fetch: Callable[[str, _dt.date], list[dict]],
         disposition_fetch: Callable[[str, _dt.date], list[dict]],
         service: WatchlistService | None = None,
         data_dir: Path | None = None,
@@ -77,7 +77,13 @@ class ScreenEngine:
         self._day_trading_fetch = day_trading_fetch
         self._disposition_fetch = disposition_fetch
         self._service = service
-        self._dir = data_dir if data_dir is not None else Path("data") / "market"
+        # repo-root 錨定(review F-11,breadth `_DEFAULT_DATA_DIR` 同款):CWD 相對路徑
+        # 在非 repo root 起 server 時會讓快取恆 miss → 每次 boot 整輪重跑,零訊號。
+        self._dir = (
+            data_dir
+            if data_dir is not None
+            else Path(__file__).resolve().parents[2] / "data" / "market"
+        )
         self._now_fn = now_fn
         self._task: asyncio.Task[None] | None = None
         self._gave_up_for: _dt.date | None = None
@@ -141,6 +147,7 @@ class ScreenEngine:
                     data_date,
                     attempt,
                     _MAX_ATTEMPTS,
+                    wait,
                 )
             if attempt < _MAX_ATTEMPTS:
                 await asyncio.sleep(wait)
@@ -172,6 +179,13 @@ class ScreenEngine:
                         f"盤前篩選 {d} 只有 {len(rows)} 列(門檻 {_DAILY_MIN_ROWS}),"
                         "視同取數失敗"
                     )
+                if rows[0].get("date") != d.isoformat():
+                    # 資料日回聲閘(review F-07,breadth 第二道守門同款):上游忽略日期
+                    # 參數 / 回錯日快取時,21 個窗格會是同一天 → ratio 把單日漲幅複利
+                    # 20 次,整份名單全假且與正常同形。shrink 後 date 欄已丟,只能在此驗。
+                    raise BreadthFetchError(
+                        f"盤前篩選 {d} 資料日回聲不符({rows[0].get('date')!r}),視同取數失敗"
+                    )
                 days.append((d, shrink_rows(rows)))
             elif d == data_date:
                 # 最新一天必須有資料:FinMind 當日 EOD 未落檔時,靜默拿更舊的日子湊窗
@@ -183,14 +197,19 @@ class ScreenEngine:
                 f"盤前篩選 {data_date} 往回 {_SCAN_CAL_DAYS} 日曆天僅湊到 {len(days)} 交易日"
             )
         cands = hard_candidates(days)
-        daytrade_ok: set[str] = set()
-        for cand in cands:
-            rows = await asyncio.to_thread(
-                self._day_trading_fetch, self._token, cand.code, data_date
+        # 當沖資格 = 單次全市場查詢(review F-02:「data_id 必填」是週六探測誤判,
+        # 逐檔 fan-out ~60 次收斂成 1 次;口徑同 spec「最近交易日有列」,7 日回看退役)
+        dt_rows = await asyncio.to_thread(self._day_trading_fetch, self._token, data_date)
+        await asyncio.sleep(_REQ_GAP_SECS)
+        if not dt_rows:
+            # 空集合拿去過濾會把**全部**候選當非當沖標的誤剔,群組被清空還零訊號 ——
+            # 當日名單未發布視同取數失敗,走重試
+            raise BreadthFetchError(f"盤前篩選 {data_date} 當沖名單尚無資料(FinMind 未更新?)")
+        if dt_rows[0].get("date") != data_date.isoformat():
+            raise BreadthFetchError(
+                f"盤前篩選 {data_date} 當沖名單資料日回聲不符({dt_rows[0].get('date')!r})"
             )
-            await asyncio.sleep(_REQ_GAP_SECS)
-            if rows:
-                daytrade_ok.add(cand.code)
+        daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
         disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, data_date)
         disposed = parse_active_disposition(disp_rows, data_date)
         final = apply_eligibility(cands, daytrade_ok=daytrade_ok, disposed=disposed)
