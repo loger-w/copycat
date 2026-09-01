@@ -303,6 +303,19 @@ class TestFitGroupCodes:
         assert fitted == ["2330"]
         assert dropped == 1
 
+    def test_default_limit_is_watchlist_limit(self) -> None:
+        """prod 兩條寫入路徑(screen_engine / cli --write)都不帶 limit —— 預設綁定
+        就是每晚實際截位值,漂回 50 全套照綠(review F-06 突變體實證)。字面 50 是
+        刻意的鑑別力來源:舊上限殘影只有在 50 < 現況 < WATCHLIST_LIMIT 的水位才現形。"""
+        wl50: Watchlist = {"codes": [f"{1000 + i}" for i in range(50)], "groups": []}
+        fitted, dropped = fit_group_codes(wl50, "盤前篩選", ["9999"])
+        assert fitted == ["9999"]  # 預設若是舊值 50,這裡會被截
+        assert dropped == 0
+        full: Watchlist = {"codes": [f"{1000 + i}" for i in range(WATCHLIST_LIMIT)], "groups": []}
+        fitted, dropped = fit_group_codes(full, "盤前篩選", ["9999"])
+        assert fitted == []
+        assert dropped == 1
+
     def test_old_group_members_release_their_slots(self) -> None:
         # 昨晚名單佔的位子今晚先釋放再計(基底 = 覆蓋成空組後的自選)
         wl: Watchlist = {

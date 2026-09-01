@@ -710,6 +710,11 @@ class TestReplaceGroup:
         assert result["codes"] == ["2330", "1111", "2222"]
         assert load_watchlist(path) == result
         assert engine.set_calls[-1] == ["2330", "1111", "2222"]
+        # 廣播斷言(review F-17):replace_group 是唯一由後台 task 觸發的寫入路徑,
+        # 漏廣播的症狀是側欄整晚不知道群組換過 —— 不只靠 _settle 共用段間接護。
+        # 前面的 add 已廣播一次,故驗「多了一則且尾筆是 watchlist_changed」
+        assert len(engine.published) == 2
+        assert engine.published[-1] == {"type": "watchlist_changed"}
 
     async def test_replaced_out_codes_leave_watchlist_unless_grouped_elsewhere(
         self, tmp_path: Path
@@ -732,9 +737,11 @@ class TestReplaceGroup:
         service, engine, _path = _service(tmp_path)
         await service.replace_group("盤前篩選", ["1111"])
         calls = len(engine.set_calls)
+        published = len(engine.published)
 
         result, changed = await service.replace_group("盤前篩選", ["1111"])
 
         assert changed is False
         assert result["codes"] == ["1111"]
-        assert len(engine.set_calls) == calls  # 零寫早退:不訂閱不廣播
+        assert len(engine.set_calls) == calls  # 零寫早退:不訂閱
+        assert len(engine.published) == published  # 也不廣播(review F-17)
