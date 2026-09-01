@@ -19,6 +19,9 @@
 
 紅先行證據:commit a06a8ada 當下 `pytest tests/live/test_signal_state.py::TestSurgePullback tests/test_signal_rules.py` = **30 failed, 114 passed**(狀態機/遷移/契約全紅),實作 commit c7b9ff9d 後轉綠。
 
+Rebase 到 origin/master 6ef6b913(#176 併入)後複跑:`pytest -q` **3344 passed, 3 skipped**、
+ruff / pyright 0、前端 `npm test -- --run` 2925 passed + tsc / eslint 乾淨(exit 0)。
+
 ## 真資料驗證(盤後可做的部分)
 
 1. **prod 規則檔遷移 dry-run**(唯讀複本 `%TEMP%\claude-sr-copy.json`):prod `data/signal_rules.json`
