@@ -226,6 +226,22 @@ class TestErrorClassification:
         assert len(rows) == 2
         assert http.calls == 2
 
+    def test_incomplete_read_retries_once_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """回應斷流的 `http.client.IncompleteRead` **不是 OSError 子類**,漏接會炸穿
+        重試直接殺掉 caller(2026-09-02 盤前篩選 CLI 真環境實錄 —— MB 級全市場回應
+        被截斷,4.5MB 讀到一半斷線)。"""
+        import http.client as _hc
+
+        http = FakeHttp(_hc.IncompleteRead(b"x" * 10, 20), _payload(_snapshot_rows(2)))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        rows = bf.fetch_snapshot("tok")
+
+        assert len(rows) == 2
+        assert http.calls == 2
+
     def test_non_json_retries_once_then_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """配額燒乾時 FinMind 會回非 JSON 內容 —— 與連線失敗同樣可重試。"""
         http = FakeHttp(b"<html>oops</html>", _payload(_snapshot_rows()))
