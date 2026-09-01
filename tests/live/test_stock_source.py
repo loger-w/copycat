@@ -481,6 +481,10 @@ class TestFetchDailyBars:
 
         def _run(n: int) -> None:
             seen.clear()
+            # fix/dk-frozen-snapshot 起,同 (symbol, 窗) 重查 DK 會逐次前移 start(凍結
+            # 快照逃逸)。本測試斷言的是 **base 窗尺寸**(N024),歸零序號取 variant 0;
+            # variant 行為本身由 tests/live/test_stock_bars.py::TestDkWindowVariant 釘。
+            src._dk_fetch_seq.clear()
             with pytest.raises(HistoryTimeoutError):
                 src.fetch_daily_bars("2330", n=n)
 

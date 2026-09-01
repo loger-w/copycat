@@ -853,8 +853,10 @@ class StockQuoteSource(TC4QuoteSource):
             rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
             return parse_1k_bars(rows), "tc4_1k", ("timeout" if timed_out else "ok")
 
-        dk_rows, dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
-        bars = parse_dk_bars(dk_rows)
+        dk_start = self._dk_start_variant(sym, start, end)
+        dk_rows, dk_timed_out = self._collect_history(sym, "DK", dk_start, end, BARS_POLL_DEADLINE)
+        # variant 窗頭部多收的 bar 濾掉(「含端點」契約;理由見 `_dk_start_variant`)
+        bars = [b for b in parse_dk_bars(dk_rows) if b["t"] >= start_date]
         if bars:
             return bars, "tc4_dk", "ok"
         fb_start = max(
@@ -898,7 +900,8 @@ class StockQuoteSource(TC4QuoteSource):
         end_d = _dt.date.today()
         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
-        dk_rows, _dk_timed_out = self._collect_history(sym, "DK", start, end, BARS_POLL_DEADLINE)
+        dk_start = self._dk_start_variant(sym, start, end)
+        dk_rows, _dk_timed_out = self._collect_history(sym, "DK", dk_start, end, BARS_POLL_DEADLINE)
         bars = _parse_dk_rows(dk_rows)
         if not bars:
             fb_start_d = end_d - _dt.timedelta(days=_daily_fallback_window_days(n))
