@@ -119,6 +119,23 @@ def _sign(value: int) -> int:
     return (value > 0) - (value < 0)
 
 
+def _window_change_pct(
+    window: deque[tuple[float, int, int]], price: int, since: float = 0.0
+) -> float | None:
+    """窗內基準點到現價的漲跌幅(%);不可算(基準 ≤ 0 / 窗內無合格點)→ None。
+
+    基準 = 窗內第一筆 `ts >= since` 的價(預設 since=0 即窗最舊點)。surge 偵測與
+    爆拉回檔的武裝共用**同一支**:spec #174「沿 surge 偵測同式」由此成為機驗事實,
+    而不是兩份手抄公式靠註解對齊。
+    """
+    for ts, base, _qty in window:
+        if ts >= since:
+            if base <= 0:
+                return None
+            return (price - base) / base * 100
+    return None
+
+
 class SignalDetector:
     def __init__(
         self,
@@ -446,10 +463,9 @@ class SignalDetector:
     ) -> list[SignalEvent]:
         if "surge_crash" not in enabled or len(window) < 2:
             return []
-        oldest = window[0][1]
-        if oldest <= 0:
+        pct = _window_change_pct(window, price)
+        if pct is None:
             return []
-        pct = (price - oldest) / oldest * 100
         if pct >= self._cfg.surge_pct:
             kind = "surge"
         elif pct <= -self._cfg.surge_pct:
@@ -504,10 +520,8 @@ class SignalDetector:
             # 未武裝:surge 同式判定(窗內自最舊點漲幅);峰值自武裝當筆起算
             if len(window) < 2:
                 return []
-            oldest = window[0][1]
-            if oldest <= 0:
-                return []
-            if (price - oldest) / oldest * 100 >= self._cfg.surge_pct:
+            gain = _window_change_pct(window, price)
+            if gain is not None and gain >= self._cfg.surge_pct:
                 self._pullback[code] = (True, price)
             return []
         armed, peak = entry
