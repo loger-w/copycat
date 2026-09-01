@@ -36,13 +36,23 @@ from copycat.server import signal_hub as hub_mod
 from copycat.server import ws as ws_mod
 from copycat.server.app import create_app
 from copycat.server.signal_hub import SignalHub
-from copycat.signal_rules import RULE_KINDS, Rule
+from copycat.signal_rules import Rule
 from tests.helpers.boot import BootedClient, wait_boot
 from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
 from tests.server.test_stock_routes import FakeStockSource
 
 _RULES_FILE = "signal_rules.json"
+
+#: 缺檔遷移的種子 kind 序:surge_pullback 兩張卡(1% / 2%,spec #174)
+_SEEDED_KINDS = [
+    "cdp_cross",
+    "surge_crash",
+    "surge_pullback",
+    "surge_pullback",
+    "vol_burst",
+    "limit_lock",
+]
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
     "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
@@ -574,7 +584,7 @@ class TestSignalRulesRoutes:
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
             rules = _rules(client)
-            assert [r["kind"] for r in rules] == list(RULE_KINDS)
+            assert [r["kind"] for r in rules] == _SEEDED_KINDS
             assert rules == app.state.signal_hub.rules()
 
     def test_post_creates_201_and_hot_reloads(self, tmp_path: Path) -> None:
@@ -797,7 +807,7 @@ class TestSignalRoutesWithoutStock:
         """SC-3:GET 200(預設規則)/ POST 201 / PUT 200 / DELETE 204,today 200。"""
         app, _ = make_app(tmp_path, with_stock=False)
         with BootedClient(app, raise_server_exceptions=False) as client:
-            assert [r["kind"] for r in _rules(client)] == list(RULE_KINDS)
+            assert [r["kind"] for r in _rules(client)] == _SEEDED_KINDS
 
             created = client.post("/api/stock/signals/rules", json=_rule_body("limit_lock", "新"))
             assert created.status_code == 201

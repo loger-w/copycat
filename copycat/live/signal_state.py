@@ -57,28 +57,35 @@ _SESSION_START = _dt.time(9, 0)
 _SESSION_END = _dt.time(13, 30)  # end-exclusive:13:30 起是收盤撮合
 _EPOCH = _dt.datetime(1970, 1, 1)
 
-#: 事件 kind → enabled 開關鍵(四鍵制,design §4.4)。
+#: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵)。
 KIND_SWITCH: dict[str, str] = {
     "cdp_cross": "cdp_cross",
     "surge": "surge_crash",
     "crash": "surge_crash",
+    "surge_pullback": "surge_pullback",
     "vol_burst": "vol_burst",
     "limit_lock": "limit_lock",
     "limit_open": "limit_lock",
 }
-SWITCH_KEYS: tuple[str, ...] = ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
+SWITCH_KEYS: tuple[str, ...] = (
+    "cdp_cross",
+    "surge_crash",
+    "surge_pullback",
+    "vol_burst",
+    "limit_lock",
+)
 
 
 @dataclass(frozen=True)
 class SignalEvent:
-    kind: str  # cdp_cross | surge | crash | vol_burst | limit_lock | limit_open
+    kind: str  # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open
     code: str
     price_milli: int
     time: str  # 台北 HH:MM:SS(= time_key[:8];顯示用)
     time_key: str  # 台北 HH:MM:SS.fff;tick 路 = tick.time、簿路 = now_fn 毫秒時刻
     levels: tuple[str, ...]  # cdp_cross:同 tick 穿越的全部線(固定序);其他 kind 空
     direction: str | None  # cdp_cross:from_below|from_above;limit_*:up|down
-    pct: float | None  # surge/crash 實際漲跌幅(%);vol_burst 實際倍率
+    pct: float | None  # surge/crash 實際漲跌幅(%);vol_burst 實際倍率;surge_pullback 回落幅度(正)
     touch_count: int  # 當日計數;合併事件取 levels[0] 的計數
 
 
@@ -133,6 +140,9 @@ class SignalDetector:
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
+        # 爆拉回檔波狀態:code → (armed, 峰值 milli)。缺鍵 = 尚未武裝(等 surge 條件);
+        # armed=False = 本波已發過(或停用期間被消耗),等創新高重武裝。
+        self._pullback: dict[str, tuple[bool, int]] = {}
 
     # ---- 基準(CDP)----
 
@@ -192,6 +202,7 @@ class SignalDetector:
         self._cooldown.clear()
         self._touch.clear()
         self._latch.clear()
+        self._pullback.clear()
 
     def drop_code(self, code: str) -> None:
         self._basis.pop(code, None)
@@ -203,6 +214,7 @@ class SignalDetector:
         self._cooldown = {k: v for k, v in self._cooldown.items() if k[0] != code}
         self._touch = {k: v for k, v in self._touch.items() if k[0] != code}
         self._latch = {k: v for k, v in self._latch.items() if k[0] != code}
+        self._pullback.pop(code, None)
 
     # ---- 主入口 ----
 
@@ -238,6 +250,7 @@ class SignalDetector:
         key = tick.time or _clock_key(now)
         events.extend(self._eval_cdp(code, prev, price, key, mono, enabled))
         events.extend(self._eval_surge(code, price, key, window, mono, enabled))
+        events.extend(self._eval_pullback(code, price, key, window, mono, enabled))
         events.extend(self._eval_volume(code, ctx, key, window, now, mono, enabled))
         events.extend(self._eval_limit_tick(code, price, ctx, key, mono, enabled))
         return events
@@ -460,6 +473,71 @@ class SignalDetector:
                 direction=None,
                 pct=pct,
                 touch_count=self._bump((code, kind, "")),
+            )
+        ]
+
+    # ---- 爆拉回檔(spec #174)----
+
+    def _eval_pullback(
+        self,
+        code: str,
+        price: int,
+        key: str,
+        window: deque[tuple[float, int, int]],
+        mono: float,
+        enabled: frozenset[str],
+    ) -> list[SignalEvent]:
+        """surge 同式武裝 → 追蹤波峰 → 回落 ≥ `pullback_pct` 一波一則。
+
+        - **重武裝唯一路徑 = 創該波新高**(嚴格 > 峰值):發訊後 window 內漲幅往往仍
+          ≥ `surge_pct`(窗尾還掛著起漲點),拿 surge 條件重武裝會讓回檔卡沿路連發 ——
+          「創新高重武裝」正是 grilling 拍板要擋的這條。代價是深跌後的新一波要先過
+          前波峰才會再武裝(拍板接受:目標場景是攻板股,創高是常態)。
+        - **狀態轉移沿 latch 紀律無條件推進**(design R2):停用期間武裝 / 消耗照走,
+          重開不補發;cooldown 同樣只 gate 事件產出(被擋的那一波不延後補發)。
+        - 0 價 tick(壞資料)整段跳過:否則 (peak−0)/peak 是一記假 100% 回檔。
+        """
+        if price <= 0:
+            return []
+        entry = self._pullback.get(code)
+        if entry is None:
+            # 未武裝:surge 同式判定(窗內自最舊點漲幅);峰值自武裝當筆起算
+            if len(window) < 2:
+                return []
+            oldest = window[0][1]
+            if oldest <= 0:
+                return []
+            if (price - oldest) / oldest * 100 >= self._cfg.surge_pct:
+                self._pullback[code] = (True, price)
+            return []
+        armed, peak = entry
+        if price > peak:
+            self._pullback[code] = (True, price)  # 創波高:峰值前推,發過的波重武裝
+            return []
+        if not armed:
+            return []
+        # (peak−price)*100/peak 而非 /peak*100:讓「恰好整除」的門檻值浮點精確(邊界含)
+        drop = (peak - price) * 100.0 / peak
+        if drop < self._cfg.pullback_pct:
+            return []
+        self._pullback[code] = (False, peak)  # 消耗本波(無條件,先於 enabled/cooldown gate)
+        if "surge_pullback" not in enabled:
+            return []
+        bucket = (code, "surge_pullback", "")
+        if self._cooling(bucket, mono):
+            return []
+        self._arm(bucket, mono, self._cfg.pullback_cooldown_secs)
+        return [
+            SignalEvent(
+                kind="surge_pullback",
+                code=code,
+                price_milli=price,
+                time=key[:8],
+                time_key=key,
+                levels=(),
+                direction=None,
+                pct=drop,
+                touch_count=self._bump(bucket),
             )
         ]
 

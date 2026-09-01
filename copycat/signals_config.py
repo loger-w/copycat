@@ -28,6 +28,10 @@ class SignalsConfig:
     surge_pct: float = 2.0  # 窗內漲跌幅門檻(%)
     surge_window_secs: float = 300.0  # 滾動窗長度(爆量共用)
     surge_cooldown_secs: float = 1800.0  # per (code, kind) 冷卻
+    # --- 爆拉回檔(spec #174)---
+    # 武裝參數沿用 surge_pct / surge_window_secs(per-rule config 讓兩者獨立,同 vol_burst 借窗)
+    pullback_pct: float = 1.0  # 自波峰回落幅度門檻(%)
+    pullback_cooldown_secs: float = 60.0  # per code 冷卻(一波一則已由重武裝把關,這裡只防 flapping)
     # --- 爆量(SC-3)---
     vol_ratio: float = 3.0  # 窗內量 / 全日均量的倍數門檻
     vol_min_elapsed_min: float = 15.0  # 開盤未滿此分鐘數不評估(均量不穩)

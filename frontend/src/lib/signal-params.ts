@@ -50,6 +50,12 @@ export const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
     { key: "pct", label: "漲跌幅 %", step: "0.1", min: 0.1, max: 50, integer: false, default: "1.5" },
     { key: "window_secs", label: "時間窗(秒)", step: "1", min: 10, max: 3600, integer: false, default: "60" },
   ],
+  surge_pullback: [
+    // 武裝兩參數(surge 同式)在前、回檔門檻在後 —— 「N 秒內漲 X% 後,自峰值回落 Y%」是一句話
+    { key: "surge_pct", label: "武裝漲幅 %", step: "0.1", min: 0.1, max: 50, integer: false, default: "2" },
+    { key: "window_secs", label: "時間窗(秒)", step: "1", min: 10, max: 3600, integer: false, default: "300" },
+    { key: "pct", label: "回檔 %", step: "0.1", min: 0.1, max: 50, integer: false, default: "1" },
+  ],
   vol_burst: [
     { key: "ratio", label: "量能倍率", step: "0.1", min: 1, max: 100, integer: false, default: "3" },
     { key: "window_secs", label: "時間窗(秒)", step: "1", min: 10, max: 3600, integer: false, default: "60" },

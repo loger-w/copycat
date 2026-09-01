@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 const KIND_LABEL: Record<RuleKind, string> = {
   cdp_cross: "CDP 穿越",
   surge_crash: "爆拉爆跌",
+  surge_pullback: "爆拉回檔",
   vol_burst: "爆量",
   limit_lock: "鎖漲跌停",
 };
@@ -100,6 +101,9 @@ function ruleSummary(rule: SignalRule): string {
   }
   if (rule.kind === "surge_crash") {
     return `±${num(p.pct)}% / ${num(p.window_secs)} 秒 · ${cooldown}`;
+  }
+  if (rule.kind === "surge_pullback") {
+    return `+${num(p.surge_pct)}% / ${num(p.window_secs)} 秒武裝 · 回檔 ${num(p.pct)}% · ${cooldown}`;
   }
   if (rule.kind === "vol_burst") {
     return `${num(p.ratio)} 倍 / ${num(p.window_secs)} 秒 · 開盤後 ${num(p.min_elapsed_min)} 分 · ${cooldown}`;
