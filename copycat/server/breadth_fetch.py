@@ -31,6 +31,7 @@ _SNAPSHOT_API = f"{_BASE}/taiwan_stock_tick_snapshot"
 _INFO_DATASET = "TaiwanStockInfo"
 _DISPOSITION_DATASET = "TaiwanStockDispositionSecuritiesPeriod"
 _PRICE_DATASET = "TaiwanStockPrice"
+_DAY_TRADING_DATASET = "TaiwanStockDayTrading"
 _DISPOSITION_LOOKBACK_DAYS = 60
 _TIMEOUT = 30.0
 #: 單日全市場 EOD 專用:回應是 MB 級(~3 萬列含權證),秒級輪詢用的 30s 會在正常日
@@ -137,3 +138,28 @@ def fetch_daily_prices(token: str, day: _date) -> list[dict]:
         label=f"daily_prices {day.isoformat()}",
         timeout=_DAILY_TIMEOUT,
     )
+
+
+#: 當沖資格回看日曆天數:資格幾乎不逐日變動,查小區間而非單日 —— 單日查在 dataset
+#: 當日尚未落檔時會把當沖標的誤判成不可當沖(靜默剔除,榜上少一檔零訊號)。
+_DAY_TRADING_LOOKBACK_DAYS = 7
+
+
+def fetch_day_trading(token: str, stock_id: str, day: _date) -> list[dict]:
+    """單檔當沖成交統計(`TaiwanStockDayTrading`,**data_id 必填** —— 無 data_id 的
+    全市場單日查詢回空、無日期參數 400,2026-09-01 probe 實證)。
+
+    回看 `day` 往前 7 日曆天:**有列 = 該檔為當沖標的**(非當沖標的無列)。
+    `BuyAfterSale` 'Y'/'＊' = 僅可先買後賣 —— 呼叫端做多照收(#173 Q15 拍板),
+    本函式只如實回傳。
+    """
+    start = day - timedelta(days=_DAY_TRADING_LOOKBACK_DAYS)
+    query = urllib.parse.urlencode(
+        {
+            "dataset": _DAY_TRADING_DATASET,
+            "data_id": stock_id,
+            "start_date": start.isoformat(),
+            "end_date": day.isoformat(),
+        }
+    )
+    return _get_rows(f"{_DATA_API}?{query}", token, label=f"day_trading {stock_id}")
