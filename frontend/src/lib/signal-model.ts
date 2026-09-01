@@ -36,7 +36,8 @@ export interface SignalMsg {
   levels: string[];
   /** cdp_cross:from_below|from_above;limit_*:up|down;其他 null。 */
   direction: string | null;
-  /** surge/crash 實際漲跌幅(%);vol_burst 實際倍率;其他 null。 */
+  /** surge/crash 實際漲跌幅(%);vol_burst 實際倍率;surge_pullback 自峰值回落幅度(正);
+   *  其他 null。 */
   pct: number | null;
   touch_count: number;
   /** 產生這則訊號的規則(signal-rules SC-8)。**選填**:升級當日已存 jsonl 的舊行
