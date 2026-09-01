@@ -780,3 +780,224 @@ class TestLifecycle:
         det.drop_code("2330")
         assert det.evaluate("2330", _tick(80_500), _ctx(), _ALL) == []  # 回到首 tick
         assert len(det.evaluate("2317", _tick(80_500), _ctx(), _ALL)) == 1
+
+
+# 只開 surge_pullback:同一批 tick 的漲跌幅同時滿足 surge/crash,混開會把 surge 一起數進去。
+_PB = frozenset({"surge_pullback"})
+
+
+class TestSurgePullback:
+    """爆拉回檔(spec #174):surge 同式武裝 → 追蹤波峰 → 回落 ≥ pct 發一則 →
+    創該波新高才重武裝(唯一重武裝路徑);狀態轉移沿 latch 紀律無條件推進,
+    `enabled` 與 cooldown 只 gate 事件產出。"""
+
+    def test_pullback_fires_after_surge_and_retracement(self) -> None:
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(102_100), _ctx(), _PB) == []  # 武裝(+2.1%),不發
+        clock.advance(60)
+        events = det.evaluate("2330", _tick(101_000), _ctx(), _PB)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.kind == "surge_pullback"
+        assert ev.code == "2330"
+        assert ev.levels == ()
+        assert ev.direction is None
+        assert ev.price_milli == 101_000
+        assert ev.touch_count == 1
+        assert ev.pct is not None
+        assert abs(ev.pct - (102_100 - 101_000) * 100 / 102_100) < 1e-9  # 自峰值回落幅度(正數)
+
+    def test_no_event_without_arming(self) -> None:
+        """未達 surge 門檻 → 從未武裝,之後的下跌不是「回檔」。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(101_900), _ctx(), _PB) == []  # +1.9% < 2%
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(100_800), _ctx(), _PB) == []
+
+    def test_peak_tracks_new_highs_while_armed(self) -> None:
+        """武裝後峰值隨創高更新;回檔幅度以**最新**峰值起算。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)  # 武裝,峰 102.1
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(103_000), _ctx(), _PB) == []  # 創高,峰 103.0
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_100), _ctx(), _PB) == []  # 自 103.0 僅 −0.87%
+        clock.advance(10)
+        events = det.evaluate("2330", _tick(101_900), _ctx(), _PB)
+        assert len(events) == 1
+        assert events[0].pct is not None
+        assert abs(events[0].pct - (103_000 - 101_900) * 100 / 103_000) < 1e-9
+
+    def test_one_signal_per_wave(self) -> None:
+        """發過一則後同一波繼續走低不再發(冷卻 0 隔離:唯一擋它的是波 latch)。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)
+        clock.advance(60)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(100_500), _ctx(), _PB) == []
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(99_000), _ctx(), _PB) == []
+
+    def test_new_high_rearms_and_fires_again(self) -> None:
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)
+        clock.advance(60)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_200), _ctx(), _PB) == []  # 創波高 → 重武裝
+        clock.advance(10)
+        events = det.evaluate("2330", _tick(101_000), _ctx(), _PB)
+        assert len(events) == 1
+        assert events[0].touch_count == 2
+        assert events[0].pct is not None
+        assert abs(events[0].pct - (102_200 - 101_000) * 100 / 102_200) < 1e-9
+
+    def test_recovery_below_peak_does_not_rearm(self) -> None:
+        """發訊後反彈但**未過**波峰 → 不重武裝;再跌也不發(否則 1% 卡會沿路連發)。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)
+        clock.advance(60)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_000), _ctx(), _PB) == []  # 反彈未過 102.1
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(100_900), _ctx(), _PB) == []  # 自 102.0 跌 >1% 也不發
+
+    def test_threshold_boundary_inclusive(self) -> None:
+        """峰 102.5:回落恰 1.0%(101.475)要發,0.999%(101.476)不發。
+        數值取整除盡的組合((peak−price)×100 恰為 peak 的整數倍)避開浮點邊緣。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_500), _ctx(), _PB)  # 武裝,峰 102.5
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(101_476), _ctx(), _PB) == []
+        clock.advance(10)
+        events = det.evaluate("2330", _tick(101_475), _ctx(), _PB)
+        assert len(events) == 1
+        assert events[0].pct == 1.0
+
+    def test_disabled_kind_consumes_wave_without_emitting(self) -> None:
+        """停用期間狀態照常轉移(latch 紀律):波被消耗、重開後不補發;
+        創新高重武裝後照常發。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        off: frozenset[str] = frozenset()
+        det.evaluate("2330", _tick(100_000), _ctx(), off)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), off)  # 停用中武裝
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(101_000), _ctx(), off) == []  # 停用中「發訊」→ 消耗
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(100_900), _ctx(), _PB) == []  # 重開不補發
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_200), _ctx(), _PB) == []  # 創高重武裝
+        clock.advance(10)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1
+
+    def test_cooldown_gates_emission_but_wave_still_consumed(self) -> None:
+        """冷卻期內觸發:事件被擋且該波照樣消耗(不延後補發);冷卻過後要再創新高
+        才有下一則。預設冷卻 60s。"""
+        clock = _Clock()
+        det = _det(clock)  # pullback_cooldown_secs 預設 60
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)
+        clock.advance(60)
+        assert len(det.evaluate("2330", _tick(101_000), _ctx(), _PB)) == 1  # 冷卻起算
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_200), _ctx(), _PB) == []  # 重武裝
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(101_000), _ctx(), _PB) == []  # 冷卻中 → 擋且消耗
+        clock.advance(100)  # 冷卻已過
+        assert det.evaluate("2330", _tick(100_500), _ctx(), _PB) == []  # 波已消耗,不補發
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(102_300), _ctx(), _PB) == []  # 再創高
+        clock.advance(10)
+        events = det.evaluate("2330", _tick(101_100), _ctx(), _PB)
+        assert len(events) == 1
+        assert events[0].touch_count == 2
+
+    def test_zero_price_tick_ignored(self) -> None:
+        """壞資料 0 價 tick 不得觸發假 100% 回檔,也不得汙染峰值狀態。"""
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)  # 武裝,峰 102.1
+        clock.advance(10)
+        assert det.evaluate("2330", _tick(0), _ctx(), _PB) == []
+        clock.advance(10)
+        events = det.evaluate("2330", _tick(101_000), _ctx(), _PB)
+        assert len(events) == 1  # 峰仍是 102.1,正常回檔照發
+        assert events[0].pct is not None
+        assert abs(events[0].pct - (102_100 - 101_000) * 100 / 102_100) < 1e-9
+
+    def test_reset_day_clears_wave_state(self) -> None:
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)  # 武裝
+        det.reset_day()
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)  # 首 tick 只初始化
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(101_000), _ctx(), _PB) == []  # 未武裝
+
+    def test_drop_code_clears_wave_state(self) -> None:
+        clock = _Clock()
+        det = _det(clock, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        det.evaluate("2317", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(102_100), _ctx(), _PB)
+        det.evaluate("2317", _tick(102_100), _ctx(), _PB)
+        det.drop_code("2330")
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(101_000), _ctx(), _PB) == []  # 狀態已清(回首 tick)
+        assert len(det.evaluate("2317", _tick(101_000), _ctx(), _PB)) == 1
+
+    def test_dingyuan_2426_offline_reference(self) -> None:
+        """離線對照組(issue #174):鼎元 2026-09-01 10:08 峰 104.5 → 回落 102。
+        1% 卡應於 103.4 發(−1.05%)、2% 卡應於 102.4 發(−2.01%);
+        1% 卡在 102.4 時已消耗不重發。"""
+        clock = _Clock()
+        det1 = _det(clock, pullback_pct=1.0, pullback_cooldown_secs=0.0)
+        det2 = _det(clock, pullback_pct=2.0, pullback_cooldown_secs=0.0)
+        for det in (det1, det2):
+            det.evaluate("2426", _tick(102_000), _ctx(), _PB)
+        clock.advance(60)
+        for det in (det1, det2):
+            assert det.evaluate("2426", _tick(104_500), _ctx(), _PB) == []  # +2.45% 武裝
+        clock.advance(60)
+        ev1 = det1.evaluate("2426", _tick(103_400), _ctx(), _PB)
+        assert [e.kind for e in ev1] == ["surge_pullback"]
+        assert ev1[0].pct is not None
+        assert abs(ev1[0].pct - (104_500 - 103_400) * 100 / 104_500) < 1e-9
+        assert det2.evaluate("2426", _tick(103_400), _ctx(), _PB) == []  # 未達 2%
+        clock.advance(60)
+        assert det1.evaluate("2426", _tick(102_400), _ctx(), _PB) == []  # 一波一則
+        ev2 = det2.evaluate("2426", _tick(102_400), _ctx(), _PB)
+        assert [e.kind for e in ev2] == ["surge_pullback"]
+        assert ev2[0].pct is not None
+        assert abs(ev2[0].pct - (104_500 - 102_400) * 100 / 104_500) < 1e-9
