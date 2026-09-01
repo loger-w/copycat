@@ -170,7 +170,7 @@ class TestAddCommand:
         [
             ("BAD_CODE", "股號格式不正確"),
             ("BAD_GROUP", "群組名稱不合法"),
-            ("WATCHLIST_FULL", "自選已達 50 檔上限"),
+            ("WATCHLIST_FULL", "自選已達 150 檔上限"),
         ],
     )
     async def test_watchlist_error_maps_to_chinese_text(
