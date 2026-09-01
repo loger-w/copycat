@@ -148,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     p_sc.add_argument(
         "--write",
         action="store_true",
-        help="覆寫自選群組「盤前篩選」(直接落檔 —— server 跑著時別用,它讀不到這次變更)",
+        help="覆寫自選群組「盤前篩選」(直接落檔 —— server 跑著時別用:它讀得到檔,但訂閱池與前端廣播不會跟上,症狀 = 群組出現但整排空卡片)",
     )
 
     args = parser.parse_args(argv)

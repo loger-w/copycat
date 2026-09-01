@@ -481,7 +481,7 @@ class StockEngine:
 
         **逐項取鎖,不是整段一鎖**(N111,照同檔 `_retry_round`):TC4 故障時單檔
         SUBQUOTE 要等 `_REQ_TIMEOUT_MS`(10 s)才失敗,整段持鎖會讓第二個寫入者
-        (PUT / Discord `/watch` 的 `_settle`、切主圖)等**整段**迴圈走完 —— 50 檔
+        (PUT / Discord `/watch` 的 `_settle`、切主圖)等**整段**迴圈走完 —— 150 檔(上限)
         就是 500 s —— Discord `/watch` 已 defer(token 15 分鐘,見 `watchlist_service.py` /
         `discord_bot.py`)未必逾時,但前端 PUT / 切主圖的使用者就是等整段。逐項取鎖之後,
         等待上界降到「當下這一檔」(≈ `_api_lock` 等待 + `_REQ_TIMEOUT_MS` ≈ 20 s)。ZMQ IO
@@ -740,7 +740,7 @@ class StockEngine:
         會把主圖搶走 → 主圖分時線凍結。
 
         payload = `light_snapshot()` **整份展開** + 兩個旗標(A1):`ticks` 是數千筆,
-        50 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是白燒 CPU;
+        上限 150 檔每 60s 各建一份全量 snapshot 再整份丟掉,既是頻寬炸彈也是白燒 CPU;
         而鍵名沿 `StockDayState` 的單一對映(直接丟 dataclass 會讓前端 `meta.ref`
         undefined → hasRef=false → 紅綠面積靜默消失)。`vp` 是 tick 的**聚合**
         (O(當日成交過的檔位數)),與 tick 筆數脫鉤,故它進得了 light 而 `ticks` 不行。
@@ -853,7 +853,7 @@ class StockEngine:
 
         **`set_trade_date` 隨重掛一起下沉到背景 to_thread**(review SP1):N052 之後它
         含一批同步 UNSUBQUOTE(舊窗歸零),而本方法跑在 event loop 上 —— TC4 半死時
-        50 檔各等 `_REQ_TIMEOUT_MS`(10 s)= 整條 loop 停擺幾分鐘(WS 心跳、廣播、
+        150 檔(上限)各等 `_REQ_TIMEOUT_MS`(10 s)= 整條 loop 停擺可達二十餘分鐘(WS 心跳、廣播、
         route 全卡)。同檔 `_resubscribe_all` 的「ZMQ REQ 全程 to_thread」是同一個
         不變式,這裡只是把漏網那一支收進去,順序(換窗 → 重掛)也因此仍在同一條
         worker thread 上依序執行。
@@ -1661,7 +1661,7 @@ class StockEngine:
         # 「quote 只有 tick 驅動的生產點」—— 新 client 連上時沒有任何歷史訊息可收,
         # 而不是節流太慢。修在這個接點,開頁與重連都天然自癒(與 ws_corr / ws_river
         # 「連線先送快照」的既成慣例一致)。種子走 `stream(seed=...)` 而非 `publish`
-        # (後者會打到所有 client);50 檔對 queue maxsize 安全。
+        # (後者會打到所有 client);150 檔(上限;50 時代量級的 3×,queue 餘裕未重新量測)對 queue maxsize 仍有餘裕。
         return self._ws.stream([self._quote_payload(code) for code in self._watchlist])
 
     def _publish(self, msg: dict) -> None:

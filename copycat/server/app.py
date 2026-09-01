@@ -123,7 +123,7 @@ _SHUTDOWN_SEGMENTS: Final = (
 #: `BARS_POLL_DEADLINE` = **10s**(bug/history-timeout-propagation 起兩段皆顯式帶;
 #: 原本是預設的 `poll_wait*30` ≈ 30s × 2 = 最壞 60s)→ 現在最壞 **20s**。空結果依
 #: `overlay.py` 規則不進 cache,於是每次請求都重付一次。配上 route 層 `Semaphore(4)`,
-#: 四檔這種股號就足以把整個端點凍住(head-of-line):進群組時 50 張卡的 CDP/MA 全排在
+#: 四檔這種股號就足以把整個端點凍住(head-of-line):進群組時整牆卡(上限 150)的 CDP/MA 全排在
 #: 後面,而畫面上只是「疊線一直沒出來」,零錯誤訊號。
 #: 15s > 正常取數(實測 <1s)一個數量級,又短於 source 的最壞 20s —— 也就是說
 #: `asyncio.wait_for` 幾乎恆先到期,route 那條 `except (TimeoutError,
@@ -538,7 +538,7 @@ def create_app(
     names_path = stock_names_path if stock_names_path is not None else NAMES_DEFAULT_PATH
     overlay_cache = OverlayCache()  # per-app 實例(impl-spec R9:module-level 跨測試汙染)
     # overlay 的 TC4 歷史取數節流(group-grid AD-5 amendment R5)。群組檢視的 `cdp`
-    # 預設是開的 → 一進群組就對最多 50 檔同時打 `/api/stock/overlay`,而
+    # 預設是開的 → 一進群組就對整組(上限 150 檔)同時打 `/api/stock/overlay`,而
     # `daily_bars` 走 `to_thread` 沒有上限、50 條請求共用同一條 TC4 歷史通道。
     # 擋在 **route 層**而不是 `engine.daily_bars`:後者另有 `signal_hub` 的 basis
     # 取數在用(signal_hub.py:662),節流下沉到引擎會連訊號的 basis 一起拖慢。
@@ -799,7 +799,7 @@ def create_app(
                 if engine is None:
                     # `None` = 沒有日 K 來源(N110):hub 的 `request_basis` 整批早退,
                     # 一行 INFO 交代「CDP 全域停用」。改動前是塞一個恆回空清單的替身,
-                    # 那讓 hub 逐檔印「無已完成日 K,CDP 停用」(自選 50 檔 = 50 行),
+                    # 那讓 hub 逐檔印「無已完成日 K,CDP 停用」(自選滿載 150 檔 = 150 行),
                     # 還得為它把 `basis_gap_secs` 歸零(假取數也會回 True 讓 worker 付
                     # 0.2s/檔)—— 兩個症狀同一個根因,一起消失。
                     daily_bars: Callable[[str, int], Awaitable[list[DailyBar]]] | None = None
@@ -1688,7 +1688,7 @@ def create_app(
         """群組檢視的唯讀 batch(group-grid SC-4)。
 
         **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
-        對最多 50 檔各要一次狀態 = 每分鐘把主圖搶走 50 次,主圖分時線就此凍結,而畫面
+        對整組(上限 150 檔;批次上限即 WATCHLIST_LIMIT)各要一次狀態 = 每分鐘把主圖搶走上百次,主圖分時線就此凍結,而畫面
         上只表現為「圖不動了」沒有任何錯誤訊號。
 
         逗號分隔的 codes 自行解析(不用 `list[str]` query):FastAPI 的重複參數形對

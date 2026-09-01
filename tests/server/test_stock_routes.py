@@ -206,7 +206,7 @@ class TestWatchlistRoutes:
             assert r.json()["detail"]["error"] == "BAD_GROUP"
 
     def test_put_at_limit_ok(self, tmp_path: Path) -> None:
-        """字面 50 與 test_put_over_limit_400 的字面 51 成對釘死邊界 = 50。
+        """字面 150 與 test_put_over_limit_400 的字面 151 成對釘死邊界 = 150。
 
         兩支都引常數的話,上限值本身就沒有任何測試錨點(改常數兩支自動跟著綠)。
         """
