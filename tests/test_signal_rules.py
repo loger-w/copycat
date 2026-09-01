@@ -28,6 +28,7 @@ from copycat.signals_config import SignalsConfig
 VALID_PARAMS: dict[str, dict[str, float]] = {
     "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
+    "surge_pullback": {"surge_pct": 2.0, "window_secs": 300, "pct": 1.0},
     "vol_burst": {
         "ratio": 3,
         "window_secs": 300,
@@ -57,7 +58,7 @@ def make(kind: str = "cdp_cross", **over: Any) -> Any:
 
 class TestConstants:
     def test_kinds_and_levels(self) -> None:
-        assert RULE_KINDS == ("cdp_cross", "surge_crash", "vol_burst", "limit_lock")
+        assert RULE_KINDS == ("cdp_cross", "surge_crash", "surge_pullback", "vol_burst", "limit_lock")
         assert CDP_LEVELS == ("ah", "nh", "cdp", "nl", "al")
         assert (COOLDOWN_MIN, COOLDOWN_MAX) == (60, 86_400)
         assert MAX_RULES == 30
@@ -76,6 +77,11 @@ class TestConstants:
         assert PARAM_SPECS == {
             "cdp_cross": {"rearm_ticks": (0, 50), "rearm_dwell_secs": (0, 3600)},
             "surge_crash": {"pct": (0.1, 50), "window_secs": (10, 3600)},
+            "surge_pullback": {
+                "surge_pct": (0.1, 50),
+                "window_secs": (10, 3600),
+                "pct": (0.1, 50),
+            },
             "vol_burst": {
                 "ratio": (1, 100),
                 "window_secs": (10, 3600),
@@ -330,10 +336,21 @@ class TestNewRuleId:
         assert new_rule_id(1, 1234) == "r-1-1234"
 
 
+#: default_rules / v2→v3 遷移的種子 kind 序:surge_pullback 兩張卡(1% / 2%,spec #174)。
+SEEDED_KINDS = [
+    "cdp_cross",
+    "surge_crash",
+    "surge_pullback",
+    "surge_pullback",
+    "vol_burst",
+    "limit_lock",
+]
+
+
 class TestDefaultRules:
     def test_one_rule_per_kind_all_valid(self) -> None:
         rules = default_rules(SignalsConfig(), {})
-        assert [r["kind"] for r in rules] == list(RULE_KINDS)
+        assert [r["kind"] for r in rules] == SEEDED_KINDS
         assert len({r["id"] for r in rules}) == len(rules)
         assert len({r["name"] for r in rules}) == len(rules)
         by_id = {r["id"]: r for r in rules}
@@ -348,6 +365,7 @@ class TestDefaultRules:
         assert flags["cdp_cross"] is True
         assert flags["surge_crash"] is True  # 缺鍵 = fail-open 全開
         assert flags["limit_lock"] is True
+        assert flags["surge_pullback"] is True  # 舊開關檔沒有這一鍵 → 恆開
 
     def test_params_seeded_from_config(self) -> None:
         cfg = SignalsConfig(
@@ -374,17 +392,29 @@ class TestDefaultRules:
         }
         assert by_kind["limit_lock"]["params"] == {}
 
+    def test_pullback_seed_cards_pinned_to_names(self) -> None:
+        """兩張卡的 pct 是卡的身分(綁名稱,不吃 config);武裝參數沿 surge 全域設定。"""
+        cfg = SignalsConfig(surge_pct=3.5, surge_window_secs=120.0, pullback_pct=9.9)
+        by_name = {r["name"]: r for r in default_rules(cfg, {})}
+        one = by_name["爆拉回檔 1%"]
+        two = by_name["爆拉回檔 2%"]
+        assert one["params"] == {"surge_pct": 3.5, "window_secs": 120.0, "pct": 1.0}
+        assert two["params"] == {"surge_pct": 3.5, "window_secs": 120.0, "pct": 2.0}
+        assert one["cdp_levels"] == [] and two["cdp_levels"] == []
+
     def test_cooldowns_seeded_per_kind(self) -> None:
         cfg = SignalsConfig(
             cdp_cooldown_secs=300.0,
             surge_cooldown_secs=900.0,
             vol_cooldown_secs=1200.0,
             limit_cooldown_secs=180.0,
+            pullback_cooldown_secs=240.0,
         )
         by_kind = {r["kind"]: r["cooldown_secs"] for r in default_rules(cfg, {})}
         assert by_kind == {
             "cdp_cross": 300,
             "surge_crash": 900,
+            "surge_pullback": 240,
             "vol_burst": 1200,
             "limit_lock": 180,
         }
@@ -420,7 +450,7 @@ class TestLoadSaveRules:
         path = tmp_path / "rules.json"
         save_rules(path, [])
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 2
+        assert payload["_cache_version"] == 3
         assert payload["rules"] == []
 
     def test_bad_json_raises(self, tmp_path: Path) -> None:
@@ -519,9 +549,11 @@ class TestMigrationV1ToV2:
 
         loaded = load_rules(path)
 
-        assert loaded is not None and len(loaded) == 2
+        # v1 → v2 補鍵之外,遷移鏈尾端(v2 → v3)另 append 兩張 surge_pullback 種子卡
+        assert loaded is not None and len(loaded) == 4
         assert loaded[0]["params"] == {"rearm_ticks": 5.0, "rearm_dwell_secs": 300.0}
         assert loaded[1]["params"] == {}
+        assert [r["kind"] for r in loaded[2:]] == ["surge_pullback", "surge_pullback"]
 
     def test_v1_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
         """不回寫 = upsert 前還留著回退窗(§7):舊碼可以直接讀回原檔。"""
@@ -577,22 +609,110 @@ class TestMigrationV1ToV2:
         with pytest.raises(RuleError, match="INVALID_RULE"):
             load_rules(path)
 
-    def test_save_after_v1_load_lands_v2(self, tmp_path: Path) -> None:
+    def test_save_after_v1_load_lands_v3(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
         self._write(path, 1, [self._v1_cdp()])
         loaded = load_rules(path)
         assert loaded is not None
         save_rules(path, loaded)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 2
+        assert payload["_cache_version"] == 3
         assert payload["rules"][0]["params"]["rearm_dwell_secs"] == 300.0
 
-    def test_version_zero_and_three_still_raise(self, tmp_path: Path) -> None:
+    def test_version_zero_and_four_still_raise(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        for version in (0, 3):
+        for version in (0, 4):
             self._write(path, version, [])
             with pytest.raises(RuleError, match="INVALID_RULE"):
                 load_rules(path)
+
+
+class TestMigrationV2ToV3:
+    """spec #174 種子注入:v2(或 v1 補鍵後)檔在載入期 append 兩張 surge_pullback
+    種子卡,不回寫檔案(回退窗同 v1→v2;第一次 upsert 才以 v3 落檔)。
+
+    「空陣列不得復活預設」的既有語意只約束 **v3** 檔:v2→v3 是一次性升級注入,
+    使用者在 v3 世界刪掉種子卡後(save 已落 v3)不再回來。
+    """
+
+    def _write(self, path: Path, version: int, rules: list[Any]) -> None:
+        path.write_text(
+            json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def test_v2_file_gets_two_seed_cards_appended(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
+        loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 3
+        seeds = loaded[1:]
+        assert [r["name"] for r in seeds] == ["爆拉回檔 1%", "爆拉回檔 2%"]
+        assert seeds[0]["params"] == {"surge_pct": 2.0, "window_secs": 300.0, "pct": 1.0}
+        assert seeds[1]["params"] == {"surge_pct": 2.0, "window_secs": 300.0, "pct": 2.0}
+        for seed in seeds:
+            assert seed["kind"] == "surge_pullback"
+            assert seed["enabled"] is True
+            assert seed["notify_discord"] is True
+            assert seed["cdp_levels"] == []
+        assert len({r["id"] for r in loaded}) == 3  # id 不得撞既有
+
+    def test_v2_empty_file_still_gets_seeds(self, tmp_path: Path) -> None:
+        """一次性升級注入:v2 空檔(v2 世界刪光的)也拿到新功能的種子。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [])
+        loaded = load_rules(path)
+        assert loaded is not None
+        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%"]
+
+    def test_v2_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [])
+        before = path.read_text(encoding="utf-8")
+        load_rules(path)
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_v3_file_never_reseeded(self, tmp_path: Path) -> None:
+        """v3 檔刪光就是刪光 —— 既有「空陣列 ≠ 缺檔」語意在 v3 上原樣成立。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 3, [])
+        assert load_rules(path) == []
+
+    def test_seed_skipped_on_name_collision(self, tmp_path: Path) -> None:
+        """使用者已有同名規則 → 跳過那一張(不 raise、不重複名稱)。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉回檔 1%")])
+        loaded = load_rules(path)
+        assert loaded is not None
+        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%"]
+        assert loaded[0]["kind"] == "surge_crash"  # 既有那條原樣保留
+
+    def test_seed_skipped_when_would_exceed_max_rules(self, tmp_path: Path) -> None:
+        """29 條 → 只塞得下 1% 卡;30 條 → 兩張都跳過(不得讓 load raise)。"""
+        path = tmp_path / "rules.json"
+        many = [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(29)]
+        self._write(path, 2, many)
+        loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 30
+        assert loaded[-1]["name"] == "爆拉回檔 1%"
+
+        full = [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(30)]
+        self._write(path, 2, full)
+        loaded_full = load_rules(path)
+        assert loaded_full is not None and len(loaded_full) == 30
+        assert all(r["kind"] == "limit_lock" for r in loaded_full)
+
+    def test_save_after_v2_load_lands_v3_and_stable(self, tmp_path: Path) -> None:
+        """load → save → load 不再增生(v3 檔不重播種)。"""
+        path = tmp_path / "rules.json"
+        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
+        loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 3
+        save_rules(path, loaded)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["_cache_version"] == 3
+        again = load_rules(path)
+        assert again == loaded
 
 
 class TestRuleConfig:
@@ -651,6 +771,23 @@ class TestRuleConfig:
         assert cfg.vol_min_day_lots == 800
         assert isinstance(cfg.vol_min_day_lots, int)
         assert cfg.vol_cooldown_secs == 1200
+
+    def test_surge_pullback_mapping(self) -> None:
+        """武裝參數映既有 surge 欄(per-rule config,與 vol_burst 借窗同一模式);
+        回檔門檻與冷卻映 pullback 專屬欄。"""
+        rule = normalize_rule(
+            make(
+                "surge_pullback",
+                cooldown_secs=900,
+                params={"surge_pct": 3.0, "window_secs": 120, "pct": 1.5},
+            ),
+            {},
+        )
+        cfg = rule_config(rule, SignalsConfig())
+        assert cfg.surge_pct == 3.0
+        assert cfg.surge_window_secs == 120.0
+        assert cfg.pullback_pct == 1.5
+        assert cfg.pullback_cooldown_secs == 900
 
     def test_limit_lock_mapping(self) -> None:
         rule = normalize_rule(make("limit_lock", cooldown_secs=180), {})

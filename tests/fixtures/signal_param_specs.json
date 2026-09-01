@@ -9,6 +9,11 @@
       "pct": [0.1, 50],
       "window_secs": [10, 3600]
     },
+    "surge_pullback": {
+      "surge_pct": [0.1, 50],
+      "window_secs": [10, 3600],
+      "pct": [0.1, 50]
+    },
     "vol_burst": {
       "ratio": [1, 100],
       "window_secs": [10, 3600],
