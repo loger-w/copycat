@@ -17,8 +17,10 @@ Handoff:`%TEMP%\copycat-handoff-2026-09-02-surge-pullback.md`。grilling 已於�
    遷移參數 = `SignalsConfig()` 預設值(= spec 拍板值;load_rules 簽名不吃 config,v1 同理)。
 2. **狀態機語意沿 latch 紀律**:狀態轉移(武裝/峰值/發訊消耗)無條件推進;`enabled` 與
    cooldown 只 gate 事件產出(停用期間波被消耗、重開不補發 —— 與 limit_lock 同)。
-3. **重武裝唯一路徑 = 創該波新高**(嚴格 >峰值)。發訊後 window 內 pct 仍 ≥ surge_pct 不算
-   重武裝 —— 否則 1% 卡會沿路重複發(spec「創新高重武裝」正是為此)。
+3. **重武裝兩條路**(two-axis review S-1 修訂初版「唯一路徑 = 創前高」):(1) 創該波新高
+   (嚴格 > 峰值,grilling 拍板);(2) 已發後以「發訊時點之後」的窗重跑 surge 同式 ——
+   基線 = 發訊那筆,沿跌不可能連發;深跌後的獨立新波(未過前高)接得回來。
+   ※ 此為實作期補拍板,PR 說明列為 user 追認點。
 4. **事件 `pct` = 自峰值回落幅度(正數)**;文案「爆拉回檔 {pct:.2f}%」前後端逐字同式。
 5. **冷卻桶 `(code, "surge_pullback", "")` per-rule detector 天然獨立**;種子冷卻 60s
    (= COOLDOWN_MIN;一則/波已由重武裝把關,冷卻只防極端 flapping)。

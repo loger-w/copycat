@@ -157,9 +157,10 @@ class SignalDetector:
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
-        # 爆拉回檔波狀態:code → (armed, 峰值 milli)。缺鍵 = 尚未武裝(等 surge 條件);
-        # armed=False = 本波已發過(或停用期間被消耗),等創新高重武裝。
-        self._pullback: dict[str, tuple[bool, int]] = {}
+        # 爆拉回檔波狀態:code → (armed, 峰值 milli, 發訊時點 mono)。缺鍵 = 尚未武裝
+        # (等 surge 條件);armed=False = 本波已發過(或停用期間被消耗),等重武裝;
+        # 第三欄只在已發態有意義(重武裝判式的窗基線),武裝態恆 0.0。
+        self._pullback: dict[str, tuple[bool, int, float]] = {}
 
     # ---- 基準(CDP)----
 
@@ -505,10 +506,10 @@ class SignalDetector:
     ) -> list[SignalEvent]:
         """surge 同式武裝 → 追蹤波峰 → 回落 ≥ `pullback_pct` 一波一則。
 
-        - **重武裝唯一路徑 = 創該波新高**(嚴格 > 峰值):發訊後 window 內漲幅往往仍
-          ≥ `surge_pct`(窗尾還掛著起漲點),拿 surge 條件重武裝會讓回檔卡沿路連發 ——
-          「創新高重武裝」正是 grilling 拍板要擋的這條。代價是深跌後的新一波要先過
-          前波峰才會再武裝(拍板接受:目標場景是攻板股,創高是常態)。
+        - **重武裝兩條路**:(1) 創該波新高(嚴格 > 峰值,grilling 拍板);(2) 已發之後,
+          以「發訊時點之後」的窗重跑 surge 同式(S-1)—— 基線是發訊那一筆(該時點起
+          區間內最高的一筆),沿跌永遠不會 +surge_pct,所以不可能連發;深跌後的獨立
+          新波(未過前高)則接得回來,不會一檔一天啞掉。
         - **狀態轉移沿 latch 紀律無條件推進**(design R2):停用期間武裝 / 消耗照走,
           重開不補發;cooldown 同樣只 gate 事件產出(被擋的那一波不延後補發)。
         - 0 價 tick(壞資料)整段跳過:否則 (peak−0)/peak 是一記假 100% 回檔。
@@ -522,19 +523,24 @@ class SignalDetector:
                 return []
             gain = _window_change_pct(window, price)
             if gain is not None and gain >= self._cfg.surge_pct:
-                self._pullback[code] = (True, price)
+                self._pullback[code] = (True, price, 0.0)
             return []
-        armed, peak = entry
+        armed, peak, fired_at = entry
         if price > peak:
-            self._pullback[code] = (True, price)  # 創波高:峰值前推,發過的波重武裝
+            self._pullback[code] = (True, price, 0.0)  # 創波高:峰值前推,發過的波重武裝
             return []
         if not armed:
+            # 已發:surge 同式重武裝,但窗基線只取發訊之後(S-1;見 docstring)
+            gain = _window_change_pct(window, price, since=fired_at)
+            if gain is not None and gain >= self._cfg.surge_pct:
+                self._pullback[code] = (True, price, 0.0)
             return []
         # (peak−price)*100/peak 而非 /peak*100:讓「恰好整除」的門檻值浮點精確(邊界含)
         drop = (peak - price) * 100.0 / peak
         if drop < self._cfg.pullback_pct:
             return []
-        self._pullback[code] = (False, peak)  # 消耗本波(無條件,先於 enabled/cooldown gate)
+        # 消耗本波(無條件,先於 enabled/cooldown gate);mono 同筆 = 重武裝基線含發訊價
+        self._pullback[code] = (False, peak, mono)
         if "surge_pullback" not in enabled:
             return []
         bucket = (code, "surge_pullback", "")

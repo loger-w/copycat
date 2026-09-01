@@ -29,8 +29,11 @@ class SignalsConfig:
     surge_window_secs: float = 300.0  # 滾動窗長度(爆量共用)
     surge_cooldown_secs: float = 1800.0  # per (code, kind) 冷卻
     # --- 爆拉回檔(spec #174)---
-    # 武裝參數沿用 surge_pct / surge_window_secs(per-rule config 讓兩者獨立,同 vol_burst 借窗)
-    pullback_pct: float = 1.0  # 自波峰回落幅度門檻(%)
+    # 武裝參數沿用 surge_pct / surge_window_secs(per-rule config 讓兩者獨立,同 vol_burst 借窗)。
+    # pullback_pct 是 rule_config 的映射載體:detector 只透過 per-rule config 讀到它,而該欄
+    # 恆由規則 params["pct"] 覆寫(種子卡的 pct 又是綁名稱的字面值)—— 在 configs/signals.json
+    # 覆寫本鍵**沒有任何效果**,不是可調門檻(two-axis review N-1,刻意留欄不留旋鈕)。
+    pullback_pct: float = 1.0  # 自波峰回落幅度門檻(%);僅 per-rule 映射載體,見上
     pullback_cooldown_secs: float = 60.0  # per code 冷卻(一波一則已由重武裝把關,這裡只防 flapping)
     # --- 爆量(SC-3)---
     vol_ratio: float = 3.0  # 窗內量 / 全日均量的倍數門檻
