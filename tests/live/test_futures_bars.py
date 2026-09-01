@@ -245,3 +245,53 @@ class TestAlldaySession:
         src = _source(rows)
         bars = src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
         assert [b["t"] for b in bars] == ["2026-07-30 08:46"]
+
+
+class TestDkWindowVariant:
+    """fix/dk-frozen-snapshot:TC4 對 DK history 訂閱 key(symbol|DK|Start|End)的內容
+    凍結在 key 建立時點 —— 同 session 同窗重查(含 UNSUB 後重訂)永遠回建立時點快照
+    (2026-09-01 受控 probe:150 秒行情 263 口,同窗重查逐字節同、start −1 日立刻取到
+    前進值)。「14:00 定稿界作廢後 refetch」因此被架空:拿回 boot 時點的今日 bar 且被
+    當定稿釘到午夜。修法 = 每次 DK 取數都用沒用過的 start(首查 = 原窗)。
+    """
+
+    def _subs(self, sent: list[dict]) -> list[dict]:
+        return [o for o in sent if o["Request"] == "SUBQUOTE"]
+
+    def test_same_params_refetch_uses_new_window_string(self) -> None:
+        """同參數第 2、3 次 fetch 的 StartTime 逐次 −1 日(= 全新訂閱 key);
+        EndTime 不動 —— end 是「今日」語意,動它會改到收哪些 bar。"""
+        sent: list[dict] = []
+        src = _source([_dk_row("20260729", "23000", "23200", "22900", "23100")], sent)
+        for _ in range(3):
+            src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
+        subs = self._subs(sent)
+        assert [o["Param"]["StartTime"] for o in subs] == [
+            "2026070100",
+            "2026063000",
+            "2026062900",
+        ]
+        assert all(o["Param"]["EndTime"] == "2026073023" for o in subs)
+
+    def test_variant_head_extension_not_leaked_to_caller(self) -> None:
+        """variant 窗多收的 start_date 之前頭部 bar 要被過濾 ——「start/end 含端點」
+        契約對 caller 不可見地維持(build_period 的 [-MAX:] 切尾擋不住頭部多收改變
+        週/月 K 聚合的首桶)。"""
+        rows = [
+            _dk_row("20260630", "22000", "22100", "21900", "22050", qi="1"),
+            _dk_row("20260729", "23000", "23200", "22900", "23100", qi="2"),
+        ]
+        src = _source(rows)
+        src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
+        second = src.fetch_bars_range("TXF", "D", "2026-07-01", "2026-07-30")
+        assert [b["t"] for b in second] == ["2026-07-29"]
+
+    def test_1k_refetch_keeps_window(self) -> None:
+        """variant 只屬 DK:1K 重查維持同窗(1K 有自己的凍結 stub 自癒維度,
+        在這裡順手 variant 是未經驗證的行為改動)。"""
+        sent: list[dict] = []
+        src = _source([_k1_row("20260730", "010100", "1", "1", "1", "1")], sent)
+        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        src.fetch_bars_range("TXF", "1", "2026-07-30", "2026-07-30")
+        subs = self._subs(sent)
+        assert subs[0]["Param"]["StartTime"] == subs[1]["Param"]["StartTime"]

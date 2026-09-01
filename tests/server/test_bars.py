@@ -879,3 +879,85 @@ class TestDailySnapshotFinality:
         third = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 界上寫入 = 定稿
         assert third.bars[-1]["c"] == 200
         assert len(fetch.calls) == 2
+
+
+class TestFrozenRefetchSignal:
+    """fix/dk-frozen-snapshot 的訊號面:TC4 DK 凍結快照的失效是「refetch 成功 + 非空 +
+    錯值」全靜默(#168 的墊背 INFO 只蓋空手),payload 對帳才抓得到 —— refetch 後今日
+    bar 與作廢前快照相同就要有一行可 grep 的 WARNING(錨「值未前進」)。修法本體
+    (DK 窗口 variant)在 source 層;這行是它失效時的唯一訊號。"""
+
+    TODAY = _dt.date(2026, 8, 31)
+
+    def _clock(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
+        now = {"t": _DAYTIME}
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: now["t"])
+        return now
+
+    async def test_period_frozen_refetch_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        now = self._clock(monkeypatch)
+
+        def snap() -> list[Bar]:
+            return [bar("2026-08-28"), bar("2026-08-31", c=100, v=5)]
+
+        fetch = _TaggedFetcher([snap(), snap()])  # refetch 逐字節同 = 凍結
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert "值未前進" in caplog.text
+
+    async def test_period_advanced_refetch_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """健康路徑(定稿值前進)不得鳴 —— 這行的價值就在它只有病時才出現。"""
+        now = self._clock(monkeypatch)
+        fetch = _TaggedFetcher(
+            [
+                [bar("2026-08-28"), bar("2026-08-31", c=100, v=5)],
+                [bar("2026-08-28"), bar("2026-08-31", c=200, v=9)],
+            ]
+        )
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert "值未前進" not in caplog.text
+
+    async def test_period_yesterday_tail_refetch_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """末根不是今日(休市 / 該檔今日真沒 bar)→ 重查同值是預期,不得誤鳴。"""
+        now = self._clock(monkeypatch)
+
+        def snap() -> list[Bar]:
+            return [bar("2026-08-27"), bar("2026-08-28", c=100)]
+
+        fetch = _TaggedFetcher([snap(), snap()])
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert "值未前進" not in caplog.text
+
+    async def test_daily_frozen_refetch_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`build_daily`(個股 / index 日 K)同病同訊號。"""
+        now = self._clock(monkeypatch)
+
+        def snap() -> list[Bar]:
+            return [bar("2026-08-31", c=100, v=5)]
+
+        fetch = _Fetcher([snap(), snap()])
+        cache = BarsCache()
+        await build_daily(fetch, cache, "2330", self.TODAY)
+        now["t"] = _dt.time(20, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_daily(fetch, cache, "2330", self.TODAY)
+        assert "值未前進" in caplog.text
