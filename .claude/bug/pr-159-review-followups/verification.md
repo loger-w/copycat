@@ -30,6 +30,18 @@ worktree `C:/side-project/copycat-wt-pr159-followups`,自 origin/master dfc3cdf2
 6. 後端開著、達錢 4 關著跨 00:00 → 00:01 拿到空回應後,Network 每 60 s 一發 `tf=D` 直到達錢 4 開起來;
    開起來後下一發即載回完整日 K,之後回到「下一個午夜」節奏(不再每 60 s)。
 
+### 09-01 真環境實測結果(preview 4173 prod bundle + claude-in-chrome 實錄)
+
+| # | 判準 | 結果 |
+|---|---|---|
+| 2 | 末根 = 當日 | **PASS(個股/期指)**:盤中 2330 與 TXF 末根即 09-01(期指夜盤歸次一交易日口徑正確)。加權盤中(08:57 冷啟動的 server)整個上午末根 08-31、15:15 重啟後末根 09-01 —— **成因未分辨**(`market_bars` 無 `refresh` 參數、無法跳 cache:是日曆日 cache 鎖住 08:57 快照、還是 TC4 指數 DK 盤中不給部分日 bar,兩可),歸 #165 `DAILY_FINAL_TIME` 線對帳,非本 PR 範圍(前端拿到 200+非空即照規矩今晚 00:01 再問) |
+| 3 | 切 tab 不重抓 | **PASS**:日 K 載入後兩輪切換(→個股→回→期貨→回),`tf=D` 全程 1 發 |
+| 5 | 後端關 → 60 s 重試 | **PASS**:F5 冷 mount 後 66 s 窗恰 4 發 500 = t0 一對(本體+retry:1)+ 60 s 後一對 |
+| 6 | 達錢 4 關 → 空態 60 s 輪替 → 自癒 | **PASS(全鏈)**:user 真殺達錢 4 process + run.ps1 冷啟動 → 後端 200+空(`source: unavailable`)→ 前端「無 K 線資料」空態 → 60 s 輪替(74 s 窗恰 2 發 200)→ user 開回達錢 4 → 後端 15:51:00 TC4 reconnected → 前端載回完整日 K(末根 09-01)→ **之後 70 s 零新請求(輪詢停)**。唯一縫:「輪詢中不重載自動撿到資料」那一刻未實錄(觀測分頁中途被切走),該環節由 hook 測試 + 突變體 M-a~M-d 釘住 |
+| 1 / 4 | 00:01 準時那發(+ 個股頁跨午夜照打) | **未驗**:09-01 凌晨 00:01 無 server 在跑(00:23 / 01:14 才起)。交接新 session 排程驗(handoff `%TEMP%\copycat-handoff-2026-09-02-daily-bars-realenv.md`);判準 = server log(`logs/server-*.log`)00:01 鄰域出現 `GET /api/market/bars/TWSE?tf=D`(access 行無時戳、以上下帶時戳的 app log 行錨定分鐘);前置 = run.ps1 + preview 分頁掛過午夜且**分頁可見**(TQ 在 hidden 分頁暫停 retry/interval;被蓋住則回前景補抓、亦算修好) |
+
+實測撈到的操作事實(已入 ops-discipline):關達錢 4 視窗不殺 process 家族;TQ hidden 分頁全暫停(觀測必須可見);bash nohup 起的測試 server 收不到 console Ctrl+C。
+
 ## Review round 1(two-axis,fixed point dfc3cdf2;12 條,見 `code-review-round-1.json`)
 
 Spec 軸:F-01~F-08 + 報告收檔 9/9 全 DONE;降私有擴及判 F-02 閉包非 creep;四個可疑點(undefined 誤判 /

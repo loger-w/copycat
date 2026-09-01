@@ -98,6 +98,20 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   db0e6d48 當基準(六顆全 yes 但全不在 master);收修 F-13 第一版照抄回填,round-1 review 才抓到。正解 = master SHA +
   「第 n 筆 + subject」(08-27 拍板),例:`a7156aac(第 1 筆 perf(live) 退避)`。
   (Trigger:worktree 分支 merge 後清理 / 回填 commit SHA 進 docs 或 artifacts)
+- **前端「輪詢 / 重試節奏」的真環境觀測,分頁必須 visible**(2026-09-01 daily-bars 真環境驗實測):TanStack Query 的
+  retryer 與 refetchInterval tick 在 `document.hidden` 分頁**整個暫停**(focusManager 閘),hidden 下白等 75 s 零請求;
+  claude-in-chrome 的 MCP 分頁常落在**另一個 Chrome 視窗**、預設 hidden(連 `tabs_create_mcp` 新開的也一樣),
+  `resize_window` 不會 raise 視窗 —— 要請 user 點到前景,並先用 `javascript_tool` 查 `document.visibilityState` 再開始計時;
+  network 追蹤從第一次 `read_network_requests` 才開始,mount 那發要「先武裝再 reload」才拍得到 t0。
+  (Trigger:用 claude-in-chrome 驗任何輪詢 / 重試 / interval 行為)
+- **「關達錢 4 視窗」不等於關達錢 4**(2026-09-01 實測):關主視窗後 TOUCHANCE / QuoteZMQService / TradeZMQService /
+  TCore64 process 家族照活,ZMQ 照服務,冷啟動的 server 照樣連上拿全量 —— 要製造「TC4 斷線」測試態必須整組結束
+  process(工作管理員或 tray 結束);判斷法 = `Get-Process | ? ProcessName -match 'touchance|TCore|ZMQService'` 歸零才算關。
+  (Trigger:設計任何需要「達錢 4 關閉」前置的測試 / 驗證)
+- **bash `nohup` 起的測試 server 收不到 console Ctrl+C**(2026-09-01 實測):detach 後 `AttachConsole+GenerateConsoleCtrlEvent`
+  打不進去,最後只能 `Stop-Process -Force` 強殺(lifespan 清理被跳過 → TC4 端 session 殘留 ~60 s)。測試用 server 要嘛
+  用 Start-Process 留 console(配 send_ctrl_c.py),要嘛 CREATE_NEW_PROCESS_GROUP 起、之後送 CTRL_BREAK。
+  (Trigger:起任何要事後優雅停掉的臨時 server)
 - **突變體迴圈的還原手段決定它能不能在未 commit 的改動上跑**(2026-08-31 fix/daily-bars-siblings-rollover 踩到):腳本用
   `git checkout -- <file>` 還原 = 還原到 **HEAD**,在「review 收修寫好、還沒 commit」的樹上跑會把收修整個洗掉 —— 症狀是第一個突變體之後
   下一個突變體找不到字串(assert 0 命中)、接著全量 vitest 紅在收修新加的那條測試,零其他訊號。正解:收修**先 commit 再跑**突變體;
