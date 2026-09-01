@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 from datetime import date as _date
 from datetime import timedelta
+from http.client import HTTPException
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,10 @@ def _get_rows(url: str, token: str, *, label: str, timeout: float = _TIMEOUT) ->
             if e.code == 402:
                 raise BreadthFetchError(f"FinMind 配額用盡(HTTP 402):{label}", quota=True) from e
             last = e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, OSError, HTTPException) as e:
+            # HTTPException 涵蓋 `IncompleteRead`(MB 級回應讀到一半斷線)等 http.client
+            # 層錯誤 —— **不是 OSError 子類**,漏接會炸穿重試(2026-09-02 盤前篩選 CLI
+            # 真環境實錄:4.5MB 全市場回應截斷)。與連線失敗同樣可重試。
             last = e
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             # 配額燒乾時 FinMind 會回非 JSON 內容 —— 與連線失敗同樣可重試
