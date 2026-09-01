@@ -81,6 +81,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   finmind_token、__main__(port env TXO_SERVER_PORT 預設 8721)
 │                         #   /api/trade/* 已刪(2026-08-04)→ 404,下單全走群益 capital
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
+├── screening.py          #   盤前選股篩選純函式(#173:三硬條件/還原係數鏈自算/排程判定
+│                         #   expected_data_date/shrink_rows 縮列;引擎 = server/screen_engine
+│                         #   交易日 21:00 + 啟動補跑,覆寫自選群組「盤前篩選」)
 ├── market_breadth.py     #   全市場廣度純函式(零 IO;parity oracle fixture 對照)
 ├── limit_streaks.py      #   連板數純函式(prev_close = close − spread)
 ├── trading_calendar.py   #   台股交易日曆純判定(configs/trading_holidays.json;檔缺=只擋
@@ -116,6 +119,7 @@ docs/superpowers/         # spec 與 implementation plan
 | **看盤日常(prod build)** | `npm run build` 後 `npm run preview`(port 4173;proxy 沿用 dev 的 /api + /ws → 8721)。dev build 的 React Component Performance Track 已由 dev-perf-guard 堵住洩漏,但 props-diff 開銷仍在 —— 整天掛著一律用本列,`npm run dev` 只做開發(2026-08-20) | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
+| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定資料日;`--write` 直接落檔覆寫群組 —— **server 跑著時別用**,它讀不到這次變更,prod 的寫入走 server 內 21:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 
 完成前 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過
@@ -167,7 +171,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **自選上限常數雙邊同值**(2026-09-01 起 = 150,容納盤前篩選群組;2026-08-13 起原 50):產生點 `copycat/stock_watchlist.py::
   WATCHLIST_LIMIT`(唯一擋人的地方),讀者 = 前端 `frontend/src/lib/constants.ts::
   WATCHLIST_LIMIT`(只餵 `errText` 文案)+ bot `discord_bot.py::_ERROR_TEXT`(f-string
-  已同源)。改值 = 改契約要同時改兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
+  已同源)+ **`stock_watchlist.fit_group_codes` 預設值**(盤前篩選 nightly 截位 —— 唯一會
+  因上限**靜默截掉候選**的讀者,截掉時 screen_engine 印 WARNING)。改值 = 改契約要同時改
+  兩邊;漂掉的症狀是文案數字與實際擋人的數字不符,零錯誤訊號。
 - **WS 心跳契約**(2026-08-19 起):後端每條 WS 每 `WS_HEARTBEAT_SECS`(10 s)送
   `{"type":"ping"}`(產生點 `copycat/server/ws.py::WS_HEARTBEAT_SECS`,relay 直送不經
   per-client queue);讀者 = 前端 `frontend/src/lib/ws-reconnect.ts::WS_SILENCE_TIMEOUT_MS`

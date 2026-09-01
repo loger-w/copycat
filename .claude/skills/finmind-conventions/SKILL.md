@@ -64,8 +64,14 @@ description: FinMind 接入慣例與配額真相。接新 FinMind dataset、寫 
   rows 進 prices.csv。`backfill_finmind` 已內建 known_ids 過濾(冷啟動空檔會 warning),別移除。
   (2026-07-07,Trigger:碰 backfill / 新增 FinMind dataset)
 - **`TaiwanStockDayTrading` 的 `BuyAfterSale` 欄位 'Y' 或 '＊' = 僅可先買後賣** — 對先賣後買的
-  空方策略即不可交易,當沖資格過濾必須把這類標記視為 excluded。(2026-07-10,Trigger:當沖資格
-  proxy / DayTrading 過濾)
+  **空方**策略即不可交易,空方資格過濾必須把這類標記視為 excluded;**多方(先買後賣)口徑照收**
+  — 盤前篩選(#173 Q15,2026-09-01 拍板)走多方口徑,兩個口徑並存不是矛盾,看策略方向選。
+  (2026-07-10 空方;2026-09-01 補多方,Trigger:當沖資格 proxy / DayTrading 過濾)
+- **`TaiwanStockDayTrading` 與 `TaiwanStockPriceAdj` 都是 data_id 必填**(2026-09-01 probe):
+  無 data_id 的單日全市場查詢回**空 data 陣列**(HTTP 200,零錯誤訊號)、DayTrading 無日期參數
+  直接 400。全市場當沖資格沒有單次端點 → 對「已縮小的候選集」逐檔查(盤前篩選 ~60 檔/晚);
+  全市場還原價同理不可行 → 還原用 `close − spread` 係數鏈自算(`copycat/screening.py`)。
+  (Trigger:接 DayTrading / PriceAdj、設計全市場 fan-out)
 - **`TaiwanOptionDaily` 口徑**(2026-08-05 真樣本):每契約/履約價/CP 有 `trading_session ∈
   {position, after_market}` 兩列,**OI 只在 position 列**;`contract_date` 值域含月(202608)、
   週(202608W1)、每日(202608F1)→ 月契約用精確等值 filter 自然排除;**全域 max OI 會選到
