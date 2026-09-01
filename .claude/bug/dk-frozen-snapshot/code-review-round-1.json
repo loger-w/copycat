@@ -1,0 +1,17 @@
+{
+  "standards": [
+    "硬違規:無(future annotations / type hints / logger / catch 具體 / line-length / monkeypatch 姿態 / 三類 commit 皆核過;fix commit 夾帶 test_stock_source.py 序號清理屬必要適配)",
+    "S1 Duplicated Code:futures_source 與 stock_source 的頭部過濾 comprehension 連註解逐字重複;第三個 DK caller fetch_daily_bars 靠 bars[-n:] 隱式吃頭部且零註記 —— 建議抽 tc4._dk_trim_head 或第三處明寫理由",
+    "S2 Mysterious Name / CQS:_dk_start_variant 名字像純查詢實則每呼一次序號 +1,建議 _next_dk_start",
+    "S3 序號無上界:註解只談條目數,沒談窗口隨當日 refetch 次數線性回推、payload 變胖,建議加上界或記帳",
+    "S4 Data Clumps:(sym, start, end) 三件套可收小型別(低優先)",
+    "S5 tests/live/test_stock_bars.py 函式內 import datetime,移檔頭較一致"
+  ],
+  "spec": [
+    "核對通過:三個 DK 消費點全接上、IX0001 同鏈、grep DK 無遺漏、n==0 首刷逐字不變、ISO 字典序過濾成立、WARNING 兩條路徑都有、序號 per 窗不互污",
+    "P1(缺/半套):fetch_daily_bars 沒接 diagnosis 的頭部過濾,只靠 bars[-n:];bar 數 < n 時重查比首刷多回頭部 bar —— 建議補濾或 docstring 記帳",
+    "P2(疑似錯):WARNING 誤鳴面比 docstring 寬 —— 13:30–14:00 之間建立的快照已是定稿值,過界首刷必然逐字節同,每日可達的常態噪音會稀釋 grep 判準",
+    "P3(疑似錯):序號無上限 + _collect_history 從不 UNSUB,每刷留一把 DK 訂閱、窗單向變長;個股兩 base 窗實際 gap = 140 日(非 diagnosis 寫的 ~180 次),撞窗殘餘比記帳近;建議 clamp 或 docstring 記帳"
+  ],
+  "disposition": "S2/S5 接受照修(改名 _next_dk_start;import 移檔頭)。S1/P1 接受一半:抽 helper 會造成 tc4 → stock_source Bar 型別逆依賴,兩行 comprehension 維持,fetch_daily_bars 補 docstring 記帳(尾切下頭部多收的是更舊真實 bar,bar 數 < n 時是補滿不是錯值)。P2 接受照修(每日可達誤鳴成立):_daily_pre_final 改記寫入時刻,WARNING 只對 < 13:30(_INTRADAY_SNAPSHOT_END)寫入的盤中快照鳴,13:30–13:45 期貨盲區記在常數註解;紅先行 test_period_snapshot_written_after_close_no_warning。S3/P3 拒絕 clamp(上界 = 窗字串重用 = 凍結復發;空結果 retry 正是靠換窗才有意義,clamp 會廢掉 retry),接受記帳:_next_dk_start docstring 補訂閱累積 / 窗放大 / overlay don't-cache-empty 驅動 / 140 日撞窗代價與兜底;diagnosis.md 距離校正 140。S4 拒絕(reviewer 自評低優先,現況可讀)。收修後 gate:受影響四檔 203 passed、ruff / pyright 全綠、全量 pytest 3267 passed(見 verification.md)。"
+}

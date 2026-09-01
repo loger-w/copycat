@@ -1,0 +1,255 @@
+{
+  "probed_at": "2026-09-01 16:33:04",
+  "records": [
+    {
+      "label": "W1(t0 同窗首查)",
+      "at": "16:33:04",
+      "win": [
+        "2026080200",
+        "2026090223"
+      ],
+      "sub_success": "OK",
+      "rows": 23,
+      "tail": [
+        {
+          "Date": "20260831",
+          "Time": "54500",
+          "UpTick": "29886",
+          "UpVolume": "42647",
+          "DownTick": "31830",
+          "DownVolume": "46115",
+          "UnchVolume": "0",
+          "Open": "46438",
+          "High": "46613",
+          "Low": "45415",
+          "Close": "45983",
+          "Volume": "88762",
+          "OI": "104409",
+          "QryIndex": "21"
+        },
+        {
+          "Date": "20260901",
+          "Time": "54500",
+          "UpTick": "29166",
+          "UpVolume": "43220",
+          "DownTick": "27575",
+          "DownVolume": "39478",
+          "UnchVolume": "0",
+          "Open": "46126",
+          "High": "47220",
+          "Low": "45788",
+          "Close": "47209",
+          "Volume": "82698",
+          "OI": "104368",
+          "QryIndex": "22"
+        },
+        {
+          "Date": "20260902",
+          "Time": "54500",
+          "UpTick": "2532",
+          "UpVolume": "3330",
+          "DownTick": "3155",
+          "DownVolume": "4545",
+          "UnchVolume": "0",
+          "Open": "47201",
+          "High": "47343",
+          "Low": "46862",
+          "Close": "46897",
+          "Volume": "7875",
+          "OI": "",
+          "QryIndex": "23"
+        }
+      ],
+      "elapsed": 0.303
+    },
+    {
+      "label": "W2(同窗重查)",
+      "at": "16:35:34",
+      "win": [
+        "2026080200",
+        "2026090223"
+      ],
+      "sub_success": "Fail",
+      "rows": 23,
+      "tail": [
+        {
+          "Date": "20260831",
+          "Time": "54500",
+          "UpTick": "29886",
+          "UpVolume": "42647",
+          "DownTick": "31830",
+          "DownVolume": "46115",
+          "UnchVolume": "0",
+          "Open": "46438",
+          "High": "46613",
+          "Low": "45415",
+          "Close": "45983",
+          "Volume": "88762",
+          "OI": "104409",
+          "QryIndex": "21"
+        },
+        {
+          "Date": "20260901",
+          "Time": "54500",
+          "UpTick": "29166",
+          "UpVolume": "43220",
+          "DownTick": "27575",
+          "DownVolume": "39478",
+          "UnchVolume": "0",
+          "Open": "46126",
+          "High": "47220",
+          "Low": "45788",
+          "Close": "47209",
+          "Volume": "82698",
+          "OI": "104368",
+          "QryIndex": "22"
+        },
+        {
+          "Date": "20260902",
+          "Time": "54500",
+          "UpTick": "2532",
+          "UpVolume": "3330",
+          "DownTick": "3155",
+          "DownVolume": "4545",
+          "UnchVolume": "0",
+          "Open": "47201",
+          "High": "47343",
+          "Low": "46862",
+          "Close": "46897",
+          "Volume": "7875",
+          "OI": "",
+          "QryIndex": "23"
+        }
+      ],
+      "elapsed": 0.001
+    },
+    {
+      "label": "V1(窗口 variant 首查)",
+      "at": "16:35:34",
+      "win": [
+        "2026080100",
+        "2026090223"
+      ],
+      "sub_success": "OK",
+      "rows": 23,
+      "tail": [
+        {
+          "Date": "20260831",
+          "Time": "54500",
+          "UpTick": "29886",
+          "UpVolume": "42647",
+          "DownTick": "31830",
+          "DownVolume": "46115",
+          "UnchVolume": "0",
+          "Open": "46438",
+          "High": "46613",
+          "Low": "45415",
+          "Close": "45983",
+          "Volume": "88762",
+          "OI": "104409",
+          "QryIndex": "21"
+        },
+        {
+          "Date": "20260901",
+          "Time": "54500",
+          "UpTick": "29166",
+          "UpVolume": "43220",
+          "DownTick": "27575",
+          "DownVolume": "39478",
+          "UnchVolume": "0",
+          "Open": "46126",
+          "High": "47220",
+          "Low": "45788",
+          "Close": "47209",
+          "Volume": "82698",
+          "OI": "104368",
+          "QryIndex": "22"
+        },
+        {
+          "Date": "20260902",
+          "Time": "54500",
+          "UpTick": "2618",
+          "UpVolume": "3484",
+          "DownTick": "3226",
+          "DownVolume": "4654",
+          "UnchVolume": "0",
+          "Open": "47201",
+          "High": "47343",
+          "Low": "46862",
+          "Close": "46895",
+          "Volume": "8138",
+          "OI": "",
+          "QryIndex": "23"
+        }
+      ],
+      "elapsed": 0.302
+    },
+    {
+      "label": "U1(UNSUB 後同窗重查)",
+      "at": "16:35:35",
+      "win": [
+        "2026080200",
+        "2026090223"
+      ],
+      "sub_success": "OK",
+      "rows": 23,
+      "tail": [
+        {
+          "Date": "20260831",
+          "Time": "54500",
+          "UpTick": "29886",
+          "UpVolume": "42647",
+          "DownTick": "31830",
+          "DownVolume": "46115",
+          "UnchVolume": "0",
+          "Open": "46438",
+          "High": "46613",
+          "Low": "45415",
+          "Close": "45983",
+          "Volume": "88762",
+          "OI": "104409",
+          "QryIndex": "21"
+        },
+        {
+          "Date": "20260901",
+          "Time": "54500",
+          "UpTick": "29166",
+          "UpVolume": "43220",
+          "DownTick": "27575",
+          "DownVolume": "39478",
+          "UnchVolume": "0",
+          "Open": "46126",
+          "High": "47220",
+          "Low": "45788",
+          "Close": "47209",
+          "Volume": "82698",
+          "OI": "104368",
+          "QryIndex": "22"
+        },
+        {
+          "Date": "20260902",
+          "Time": "54500",
+          "UpTick": "2532",
+          "UpVolume": "3330",
+          "DownTick": "3155",
+          "DownVolume": "4545",
+          "UnchVolume": "0",
+          "Open": "47201",
+          "High": "47343",
+          "Low": "46862",
+          "Close": "46897",
+          "Volume": "7875",
+          "OI": "",
+          "QryIndex": "23"
+        }
+      ],
+      "elapsed": 0.302
+    }
+  ],
+  "verdict": {
+    "W_frozen(同窗兩查逐字節同)": true,
+    "V_escapes(variant 取到不同值)": true,
+    "U_escapes(UNSUB 後取到不同值)": false,
+    "note": "frozen=True 且 v_diff=True → 紅迴圈成立 + variant 逃逸驗證通過;v_diff=False 先看行情有沒有動(V1 末根 vs W1 末根)"
+  }
+}
