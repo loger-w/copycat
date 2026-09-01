@@ -154,6 +154,29 @@ class TestRequestShape:
         assert http.headers[0]["Authorization"] == "Bearer tok"
         assert http.timeouts[0] == 60.0
 
+    def test_day_trading_single_day_whole_market_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """全市場當沖名單:start_date == end_date == 該日、**無 data_id**;timeout 60s。
+
+        query 形是 F-02 收斂的核心 —— 混回 data_id 就退回逐檔 fan-out,漂掉零訊號
+        (review S4)。回應同為 MB 級(~2,000 列),沿 EOD 的長 timeout。
+        """
+        http = FakeHttp(_payload([{"stock_id": "2330", "date": "2026-08-05"}]))
+        monkeypatch.setattr(bf, "urlopen", http)
+
+        rows = bf.fetch_day_trading("tok", _TODAY)
+
+        assert rows == [{"stock_id": "2330", "date": "2026-08-05"}]
+        assert http.calls == 1
+        assert http.path() == "/api/v4/data"
+        assert http.query() == {
+            "dataset": ["TaiwanStockDayTrading"],
+            "start_date": ["2026-08-05"],
+            "end_date": ["2026-08-05"],
+        }
+        assert http.timeouts[0] == 60.0
+
     def test_other_fetchers_keep_default_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`timeout` 是 keyword-only 且**只有 EOD 帶 60**;秒級輪詢的三支維持 30s。"""
         http = FakeHttp(_payload(_snapshot_rows()))

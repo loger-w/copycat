@@ -85,6 +85,20 @@ def test_exact_boundary_chain_included_despite_float_dust() -> None:
     assert round(got[0].ret_pct, 6) == 15.0
 
 
+def test_just_below_boundary_excluded() -> None:
+    """界下最近可及樣本 +14.875% 不收(review SP1:F-04 的界下對照)。
+
+    tick 粒度限制下貼不到 +14.999(base 40 段 tick 0.05,步進 0.125%);本條把
+    「門檻被放寬」型突變體的存活帶自 +14% 收窄到 +14.875%。
+    """
+    days = _days(
+        [_row("1234", 45.95, 1.95)],  # prev_ref 44,非鎖;ret = 45.95/40 = +14.875%
+        [_row("1234", 44.0, 4.0)],  # prev_ref 40,漲停 44.0 = 鎖板日
+        [_row("1234", 40.0, 0.0)],
+    )
+    assert hard_candidates(days) == []
+
+
 def test_return_below_threshold_excluded() -> None:
     # 116 → 114:漲幅 +14% < 15%,即使有鎖板日與量也不收
     days = _days(
