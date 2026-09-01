@@ -807,3 +807,4 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
 - [ ] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
 - [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
+- [ ] **盤前篩選當沖名單「部分落檔」不可偵測**(收修 review SP5):單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。

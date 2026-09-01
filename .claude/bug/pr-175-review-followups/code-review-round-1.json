@@ -1,0 +1,23 @@
+{
+  "round": 1,
+  "mode": "two-axis (standards=opus / spec=opus, parallel sub-agents)",
+  "fixed_point": "origin/master 1a9bfafc",
+  "spec": "pr-175-review.audit.md 的 user 拍板收修範圍(2026-09-02)",
+  "findings": [
+    {"id": "S1", "axis": "standards", "severity": "MED", "summary": "breadth_fetch docstring 與 skill 樣板行仍寫四個取數點,漏 fetch_day_trading", "disposition": "accepted", "resolution": "兩處補第五支"},
+    {"id": "S2", "axis": "standards", "severity": "LOW", "summary": "compute docstring「逐檔資格」與收斂後實作矛盾", "disposition": "accepted", "resolution": "改「全市場當沖資格」"},
+    {"id": "S3", "axis": "standards", "severity": "MED", "summary": "compute 三道新閘(日 K 回聲/空當沖/當沖回聲)零測試", "disposition": "accepted", "resolution": "fake fetcher 三條(seam 豁免只涵蓋排程,資料完整性閘屬行為分歧點)"},
+    {"id": "S4", "axis": "standards", "severity": "LOW", "summary": "fetch_day_trading query 形零測試", "disposition": "accepted", "resolution": "URL 形測試(dataset/start=end/無 data_id/timeout 60)"},
+    {"id": "J1", "axis": "standards", "severity": "LOW", "summary": "回聲閘 screen_engine 內兩份逐字重複", "disposition": "accepted", "resolution": "抽 _require_date_echo 單份(breadth 那份不動 —— 跨模組統一另案)"},
+    {"id": "J2", "axis": "standards", "severity": "LOW", "summary": "parents[2] repo-root 錨點四份字面", "disposition": "rejected", "resolution": "breadth/__main__ 既有慣例,搬層機率低;統一 = 動多模組,另案"},
+    {"id": "J3", "axis": "standards", "severity": "LOW", "summary": "from http.client import HTTPException 與 fastapi 同名撞名", "disposition": "accepted", "resolution": "改模組限定 http.client.HTTPException"},
+    {"id": "J4", "axis": "standards", "severity": "LOW", "summary": "量化精度 6 裸字面", "disposition": "accepted", "resolution": "具名 RET_QUANT_DIGITS(測試斷言保留字面 = 獨立對照)"},
+    {"id": "J5", "axis": "standards", "severity": "LOW", "summary": "queue 註解「未量測」+「仍有餘裕」自相矛盾", "disposition": "accepted", "resolution": "改純風險敘述"},
+    {"id": "SP1", "axis": "spec", "severity": "LOW", "summary": "F-04 界下對照缺(報告要求 +14.999)", "disposition": "accepted-partial", "resolution": "tick 粒度限制下補最近可及 +14.875%(base 40 段),存活帶自 +14% 收窄;+14.9x 需非 tick prev_ref 造假 fixture,不做"},
+    {"id": "SP2", "axis": "spec", "severity": "LOW", "summary": "F-08(c) 核可檔內兩處漏改(app.py:542 / stock_engine.py:739)", "disposition": "accepted", "resolution": "補改;bars.py/signal_hub/App.tsx 不在核可清單維持不動"},
+    {"id": "SP3", "axis": "spec", "severity": "MED", "summary": "F-02 抽驗未落證據 + 舊 verification.md 仍寫 data_id 必填(與 F-01 同型)", "disposition": "accepted", "resolution": "抽驗 5/5 已做並記錄;舊 artifact 附勘誤不改史"},
+    {"id": "SP4", "axis": "spec", "severity": "INFO", "summary": "fetch_day_trading 新增 timeout=_DAILY_TIMEOUT 未明列於核可清單", "disposition": "noted", "resolution": "F-02 全市場 MB 級回應的必要配套,PR body 註明"},
+    {"id": "SP5", "axis": "spec", "severity": "INFO", "summary": "單日查只擋全空,dataset 部分落檔時靜默少剔(原 7 日回看的保守面)", "disposition": "noted", "resolution": "入 next-time 觀察(與 F-10 樣本累積同批)"}
+  ],
+  "post_fix": "受影響 42 條 + ruff + pyright 全綠;push 前全量重跑見 verification.md"
+}
