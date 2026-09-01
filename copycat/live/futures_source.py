@@ -209,11 +209,11 @@ class FuturesQuoteSource(TC4QuoteSource):
                 return parse_1k_bars(rows, FUTURES_MINUTE_DOMAIN)
             bars = parse_1k_bars(rows, FUTURES_ALLDAY_DOMAIN)
             return [b for b in bars if start_date <= b["t"][:10] <= end_date]
-        dk_start = self._dk_start_variant(sym, start, end)
+        dk_start = self._next_dk_start(sym, start, end)
         dk_rows, dk_timed_out = self._collect_history(sym, "DK", dk_start, end, BARS_POLL_DEADLINE)
         if dk_timed_out:
             raise HistoryTimeoutError(f"futures bars {sym}(DK):首頁未備妥")
-        # variant 窗(`_dk_start_variant`)頭部多收的 bar 要濾掉:「start/end 含端點」
+        # variant 窗(`_next_dk_start`)頭部多收的 bar 要濾掉:「start/end 含端點」
         # 契約對 caller 不可見地維持(build_period 的 [-MAX:] 切尾擋不住頭部多收)
         return [b for b in parse_dk_bars(dk_rows) if b["t"] >= start_date]
 

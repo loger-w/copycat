@@ -78,6 +78,13 @@ MIDNIGHT_BUFFER_END = _dt.time(0, 10)
 #: 先看對方(pr-165-review #1)。
 DAILY_FINAL_TIME = _dt.time(14, 0)
 
+#: 「今日 bar 必然還在進行」的快照寫入時刻上界(現貨 13:30 收盤)。「值未前進」WARNING
+#: 只對這之前寫入的界前快照鳴 —— 13:30–14:00 之間建立的快照(現貨已定稿)過界重查必然
+#: 逐字節同,不閘的話每個在那半小時開過頁的日子都鳴一行,grep 判準被常態噪音稀釋
+#: (spec review #2)。代價 = 期貨日盤 13:30–13:45 建立的快照若凍結,tripwire 不鳴
+#: (修法本體 `_next_dk_start` 仍在,只損失一行訊號)—— 換每日可達的誤鳴歸零。
+_INTRADAY_SNAPSHOT_END = _dt.time(13, 30)
+
 
 def _now_time() -> _dt.time:
     """本機牆鐘時刻(server 跑在台北)。**獨立成 module 級函式 = 測試唯一的凍結點**
@@ -206,11 +213,13 @@ class BarsCache:
         #: 「還在等 TC4」就被快取洗成「這檔沒資料」(SC-5)。
         self._empty: dict[tuple[str, str, int], tuple[float, BarsStatus]] = {}
         #: 定稿界(`DAILY_FINAL_TIME`)**之前**寫入的 `_daily` 鍵:過界後 `daily_get`
-        #: 視為過期(entry 本體保留,`daily_stale` 當墊背)。用集合不改 `_daily` 值型別
+        #: 視為過期(entry 本體保留,`daily_stale` 當墊背)。獨立存不改 `_daily` 值型別
         #: —— 與 `_daily_tag` 分開存的同一條理由(個股路徑呼叫點都吃 `list[Bar]`)。
+        #: 值 = 界前寫入的牆鐘時刻:「值未前進」WARNING 只對盤中(< `_INTRADAY_SNAPSHOT_END`)
+        #: 寫入的快照鳴,13:30–14:00 寫入的已是定稿值,過界重查同值是預期(spec review #2)。
         #: 注意:本 class 從此有**兩把鐘** —— 注入的 `clock`(monotonic,TTL 用)與
         #: module 級 `_now_time()`(牆鐘,定稿界用;測試凍結點與午夜緩衝同一支)。
-        self._daily_pre_final: set[tuple[str, str]] = set()
+        self._daily_pre_final: dict[tuple[str, str], _dt.time] = {}
         self._ttl = ttl
         self._clock = clock
 
@@ -311,7 +320,9 @@ class BarsCache:
             del self._daily[key]
         for key in [k for k in self._daily_tag if k[1] != today_iso]:
             del self._daily_tag[key]
-        self._daily_pre_final = {k for k in self._daily_pre_final if k[1] == today_iso}
+        self._daily_pre_final = {
+            k: t for k, t in self._daily_pre_final.items() if k[1] == today_iso
+        }
         now = self._clock()
         for key in [
             k
@@ -333,6 +344,10 @@ class BarsCache:
             return None  # 界前快照過界即過期;entry 留給 `daily_stale` 墊背
         return entry
 
+    def pre_final_written_at(self, code: str, today: str) -> _dt.time | None:
+        """界前快照的寫入時刻(無界前標記 → None)。`_warn_if_not_advanced` 專用。"""
+        return self._daily_pre_final.get((code, today))
+
     def daily_stale(self, code: str, today: str) -> list[Bar] | None:
         """過不過期都回 —— 過期後 refetch 拿空手(TC4 關/忙)時的墊背。
 
@@ -345,11 +360,12 @@ class BarsCache:
         if not bars:
             return  # don't-cache-empty
         self._daily[(code, today)] = bars
-        # 界前寫入 → 記下「今日 bar 可能還在進行」;界後寫入 → 定稿(含覆寫舊標記)
-        if _now_time() < DAILY_FINAL_TIME:
-            self._daily_pre_final.add((code, today))
+        # 界前寫入 → 記下「今日 bar 可能還在進行」+ 寫入時刻;界後寫入 → 定稿(含覆寫舊標記)
+        now = _now_time()
+        if now < DAILY_FINAL_TIME:
+            self._daily_pre_final[(code, today)] = now
         else:
-            self._daily_pre_final.discard((code, today))
+            self._daily_pre_final.pop((code, today), None)
 
     # ---- 資料源標籤(大盤 meta;cache hit 也要還原正確 tag)----
 
@@ -393,9 +409,13 @@ def _warn_if_not_advanced(cache: BarsCache, key: str, day: str, bars: list[Bar])
     全靜默 ——「墊背舊快照」INFO 只蓋空手那條路,凍結值靠 payload 對帳才抓得到。修法
     本體(source 層 DK 窗口 variant)失效時,這行是唯一可 grep 的訊號(錨「值未前進」)。
 
-    只在「有作廢前快照可比」時才可能鳴(= 定稿界後那一刷;boot 首抓 stale 為 None);
-    末根不是今日(休市 / 該檔今日真沒 bar)重查同值是預期,不比。冷門標的作廢前快照
-    之後真零成交會誤鳴,字面留「疑似」;頻率上限 = 每次日 K refetch 一行(稀疏)。"""
+    只在「有作廢前快照可比、且快照寫入於盤中(< `_INTRADAY_SNAPSHOT_END`)」時才可能鳴
+    (boot 首抓 stale 為 None;13:30–14:00 寫入的已是定稿值,同值是預期 —— spec review #2);
+    末根不是今日(休市 / 該檔今日真沒 bar)重查同值也是預期,不比。冷門標的盤中快照
+    之後真零成交仍會誤鳴,字面留「疑似」;頻率上限 = 每次日 K refetch 一行(稀疏)。"""
+    written = cache.pre_final_written_at(key, day)
+    if written is None or written >= _INTRADAY_SNAPSHOT_END:
+        return
     stale = cache.daily_stale(key, day)
     if stale and bars and bars[-1] == stale[-1] and bars[-1]["t"] == day:
         logger.warning(

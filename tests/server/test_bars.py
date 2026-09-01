@@ -945,6 +945,26 @@ class TestFrozenRefetchSignal:
             await build_period(fetch, cache, "TXF", self.TODAY, "D")
         assert "值未前進" not in caplog.text
 
+    async def test_period_snapshot_written_after_close_no_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """13:30(現貨收盤)後、14:00 界前建立的快照**已是定稿值**,過界重查必然
+        逐字節同 —— 天天鳴會稀釋 grep 判準(spec 軸 review #2)。只對「寫入 <
+        `_INTRADAY_SNAPSHOT_END`(今日 bar 必然還在進行)」的快照鳴。"""
+        now = self._clock(monkeypatch)
+        now["t"] = _dt.time(13, 50)
+
+        def snap() -> list[Bar]:
+            return [bar("2026-08-28"), bar("2026-08-31", c=100, v=5)]
+
+        fetch = _TaggedFetcher([snap(), snap()])
+        cache = BarsCache()
+        await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        now["t"] = _dt.time(22, 0)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.bars"):
+            await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert "值未前進" not in caplog.text
+
     async def test_daily_frozen_refetch_warns(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:

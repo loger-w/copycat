@@ -853,9 +853,9 @@ class StockQuoteSource(TC4QuoteSource):
             rows, timed_out = self._collect_history(sym, "1K", start, end, BARS_POLL_DEADLINE)
             return parse_1k_bars(rows), "tc4_1k", ("timeout" if timed_out else "ok")
 
-        dk_start = self._dk_start_variant(sym, start, end)
+        dk_start = self._next_dk_start(sym, start, end)
         dk_rows, dk_timed_out = self._collect_history(sym, "DK", dk_start, end, BARS_POLL_DEADLINE)
-        # variant 窗頭部多收的 bar 濾掉(「含端點」契約;理由見 `_dk_start_variant`)
+        # variant 窗頭部多收的 bar 濾掉(「含端點」契約;理由見 `_next_dk_start`)
         bars = [b for b in parse_dk_bars(dk_rows) if b["t"] >= start_date]
         if bars:
             return bars, "tc4_dk", "ok"
@@ -894,13 +894,18 @@ class StockQuoteSource(TC4QuoteSource):
 
         **DK 段窗逐字 40 日;只有 1K fallback 段隨 `n` 縮**(N024,見
         `_daily_fallback_window_days`)。
+
+        DK 段每次取數換窗(`_next_dk_start`)但**刻意不做頭部過濾**(與
+        `fetch_bars_range_tagged` 不同):本函式沒有 caller 指定的 start_date 契約,
+        variant 頭部多收的是**更舊的真實日 bar**,`bars[-n:]` 尾切後不可見;bar 總數
+        < n 時多出的舊 bar 對「近 n 根」語意只是補得更滿,不是錯值(spec review #1)。
         """
         self._ensure_connected()
         sym = stock_symbol(code)
         end_d = _dt.date.today()
         start_d = end_d - _dt.timedelta(days=_DAILY_WINDOW_DAYS)
         start, end = f"{start_d:%Y%m%d}00", f"{end_d:%Y%m%d}23"
-        dk_start = self._dk_start_variant(sym, start, end)
+        dk_start = self._next_dk_start(sym, start, end)
         dk_rows, _dk_timed_out = self._collect_history(sym, "DK", dk_start, end, BARS_POLL_DEADLINE)
         bars = _parse_dk_rows(dk_rows)
         if not bars:
