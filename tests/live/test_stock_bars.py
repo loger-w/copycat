@@ -447,3 +447,73 @@ class TestCollectHistoryWaiting:
         assert out == ([], "timeout")
         # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束
         assert sum(slept) <= 20.0
+
+
+class TestDkWindowVariant:
+    """fix/dk-frozen-snapshot:DK 同 session 同窗重查回訂閱時點凍結快照(機制與斷言
+    意圖見 tests/live/test_futures_bars.py 同名 class;個股 / index(IX0001 走同 class)
+    的 DK 取數同一條 `_collect_history` 鏈,同病同修)。"""
+
+    def _subs(self, sent: list[dict], dtype: str = "DK") -> list[dict]:
+        return [
+            o for o in sent if o["Request"] == "SUBQUOTE" and o["Param"]["SubDataType"] == dtype
+        ]
+
+    def test_tagged_daily_refetch_uses_new_window_string(self) -> None:
+        sent: list[dict] = []
+        pages = {"DK": {"0": [dk("20260724", "100", "101", "99", "100.5")], "1": []}}
+        src = _src(_pager(pages, sent))
+        for _ in range(3):
+            src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        subs = self._subs(sent)
+        assert [o["Param"]["StartTime"] for o in subs] == [
+            "2026070100",
+            "2026063000",
+            "2026062900",
+        ]
+        assert all(o["Param"]["EndTime"] == "2026072823" for o in subs)
+
+    def test_tagged_daily_variant_head_extension_not_leaked(self) -> None:
+        """variant 窗多收的 start_date 前頭部 bar 不外洩(「含端點」契約)。"""
+        pages = {
+            "DK": {
+                "0": [
+                    dk("20260630", "90", "91", "89", "90.5", qi="1"),
+                    dk("20260724", "100", "101", "99", "100.5", qi="2"),
+                ],
+                "1": [],
+            }
+        }
+        src = _src(_pager(pages))
+        src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        bars, tag, _status = src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        assert tag == "tc4_dk"
+        assert [b["t"] for b in bars] == ["2026-07-24"]
+
+    def test_fetch_daily_bars_refetch_uses_new_window_string(self) -> None:
+        """SignalHub 的日 K(`fetch_daily_bars`)同一條 DK 鏈:重查也要換窗。"""
+        import datetime as _dtm
+
+        sent: list[dict] = []
+        pages = {"DK": {"0": [dk("20260724", "100", "101", "99", "100.5")], "1": []}}
+        src = _src(_pager(pages, sent))
+        src.fetch_daily_bars("2330")
+        src.fetch_daily_bars("2330")
+        subs = self._subs(sent)
+        first = _dtm.datetime.strptime(subs[0]["Param"]["StartTime"][:8], "%Y%m%d").date()
+        second = _dtm.datetime.strptime(subs[1]["Param"]["StartTime"][:8], "%Y%m%d").date()
+        assert second == first - _dtm.timedelta(days=1)
+        assert subs[0]["Param"]["EndTime"] == subs[1]["Param"]["EndTime"]
+
+    def test_variant_seq_is_per_window_not_per_symbol(self) -> None:
+        """序號按 (symbol, 窗) 記,不是按 symbol:同 symbol 兩個 base 窗(180 日 K 與
+        40 日 SignalHub 窗)交錯取數時,若按 symbol 記,交錯會讓「重置 / 前移」互相
+        污染 —— 最壞是兩個 caller 輪流拿回**同一把舊 key** 的凍結快照。"""
+        sent: list[dict] = []
+        pages = {"DK": {"0": [dk("20260724", "100", "101", "99", "100.5")], "1": []}}
+        src = _src(_pager(pages, sent))
+        src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        src.fetch_daily_bars("2330")  # 另一個 base 窗,不影響下面的序列
+        src.fetch_bars_range_tagged("2330", "D", "2026-07-01", "2026-07-28")
+        subs = [o for o in self._subs(sent) if o["Param"]["EndTime"] == "2026072823"]
+        assert [o["Param"]["StartTime"] for o in subs] == ["2026070100", "2026063000"]
