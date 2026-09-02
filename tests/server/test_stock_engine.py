@@ -168,6 +168,15 @@ async def _make() -> tuple[StockEngine, FakeSource]:
     return engine, src
 
 
+def _tick_items(got: list[dict]) -> list[dict]:
+    """`ticks` 打包訊息攤平成 item 列(mod/group-grid-ticks)。
+
+    逐筆成交自此只走 0.1 s 打包(`{"type":"ticks","items":[…]}`),不再有單筆 `tick` 型別;
+    既有斷言只關心「哪些成交、什麼欄位、什麼 seq」,攤平後逐字不動。
+    """
+    return [item for m in got if m["type"] == "ticks" for item in m["items"]]
+
+
 class TestRefcountPool:
     async def test_two_owners_one_real_subscribe(self) -> None:
         engine, src = await _make()
@@ -470,9 +479,9 @@ class TestStreamAndStatus:
         except (TimeoutError, asyncio.TimeoutError):
             pass
         types = {m["type"] for m in got}
-        assert "tick" in types
+        assert "ticks" in types
         assert "book" in types
-        tick_msg = next(m for m in got if m["type"] == "tick")
+        tick_msg = _tick_items(got)[0]
         assert tick_msg["code"] == "2330"
         assert tick_msg["p"] == 2_380_000
         assert tick_msg["seq"] == 1
@@ -501,7 +510,7 @@ class TestStreamAndStatus:
                 got.append(await asyncio.wait_for(anext(stream), timeout=0.3))
         except (TimeoutError, asyncio.TimeoutError):
             pass
-        ticks = [m for m in got if m["type"] == "tick"]
+        ticks = _tick_items(got)
         assert ticks[-1]["h"] == 2_410_000  # 新高跟著推
         assert ticks[-1]["l"] == 2_380_000
         await engine.close()
@@ -2258,7 +2267,7 @@ class TestInstrumentRouting:
         src.on_message(_fut_quote(cum=7))
         await _drain(engine)
         got = await _collect(stream)
-        tick = next(m for m in got if m["type"] == "tick")
+        tick = _tick_items(got)[0]
         assert tick["code"] == _CONTRACT  # WS code = instrument key,不是 Security
         assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 7
         await engine.close()
@@ -2340,7 +2349,7 @@ class TestInstrumentRouting:
         await _drain(engine)
         got = await _collect(stream)
         assert any(m["type"] == "stkfut" for m in got)
-        assert "F:CDF" not in {m.get("code") for m in got if m["type"] == "tick"}
+        assert "F:CDF" not in {item["code"] for item in _tick_items(got)}
         await engine.close()
 
 
@@ -2538,7 +2547,7 @@ class TestRolloverIsolationForContracts:
         assert engine._pending_date is None
         assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 1  # 觸發的那一則自己也進狀態
         got = await _collect(stream)
-        assert any(m["type"] == "tick" and m["code"] == _CONTRACT for m in got)
+        assert any(item["code"] == _CONTRACT for item in _tick_items(got))
         await engine.close()
 
     async def test_daytime_contract_tick_stage2_resets_the_spot_pool(self) -> None:
@@ -4008,3 +4017,118 @@ class TestRolloverStageOneOffLoop:
             assert order == ["set_trade_date", "subscribe:2330"]
         finally:
             await engine.close()
+
+
+# ---- ticks 打包 + 收件人集合(mod/group-grid-ticks T1,#180)----
+
+
+def _bundles(got: list[dict]) -> list[dict]:
+    return [m for m in got if m["type"] == "ticks"]
+
+
+class TestTickBundle:
+    """逐筆改 0.1 s 打包:一則 `ticks` 含「主圖 ∪ 各連線登記的檢視集合」的全部成交,
+    逐筆不合併、逐筆不少;收件人集合與訂閱池正交(群組成員本來就在自選池全天訂著)。"""
+
+    async def test_watchlist_member_is_not_bundled_until_a_view_registers_it(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "2317"])
+        # 卡住回補(主圖 set_main 的空回補 + 成員首筆 tick 的 S2 入列都會 `apply_backfill`
+        # 把 seq 跳 +1001):這裡要的是可讀的 1 / 2 / 3。
+        src.backfill_gate = threading.Event()
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert src.on_message is not None
+        # 每個階段各開一條 stream:`_collect` 逾時時 `wait_for` 取消 `anext` 會把該
+        # generator 關掉(queue 除名),同一條不能收第二輪。
+        stream = engine.stream()
+        src.on_message(_quote(code="2317", cum=1))
+        await _drain(engine)
+        assert [it["code"] for it in _tick_items(await _collect(stream))] == []
+
+        token = object()
+        engine.set_view(token, ["2317"])
+        stream = engine.stream()
+        src.on_message(_quote(code="2317", cum=2))
+        await _drain(engine)
+        items = _tick_items(await _collect(stream))
+        assert [(it["code"], it["seq"]) for it in items] == [("2317", 2)]
+
+        engine.clear_view(token)
+        stream = engine.stream()
+        src.on_message(_quote(code="2317", cum=3))
+        await _drain(engine)
+        assert _tick_items(await _collect(stream)) == []
+        src.backfill_gate.set()
+        await engine.close()
+
+    async def test_main_and_view_codes_share_one_bundle_with_per_code_seq(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "2317"])
+        # 卡住主圖的空回補:`apply_backfill` 會把 seq 跳到 1002(同 TestStreamAndStatus 的
+        # flake 教訓),這裡要的是「兩檔各自從 1 起算」的可讀斷言。
+        src.backfill_gate = threading.Event()
+        await engine.set_main("2330")
+        await _drain(engine)
+        engine.set_view(object(), ["2317"])
+        stream = engine.stream()
+        assert src.on_message is not None
+        # 同步連發(無 await)= 同一個 flush 窗
+        src.on_message(_quote(code="2330", cum=1, price="2380"))
+        src.on_message(_quote(code="2317", cum=1, price="100"))
+        src.on_message(_quote(code="2330", cum=2, price="2385"))
+        src.on_message(_quote(code="2317", cum=2, price="101"))
+        await _drain(engine)
+        got = await _collect(stream)
+        bundles = _bundles(got)
+        assert len(bundles) == 1
+        items = bundles[0]["items"]
+        assert [(it["code"], it["seq"]) for it in items] == [
+            ("2330", 1),
+            ("2317", 1),
+            ("2330", 2),
+            ("2317", 2),
+        ]
+        # item 欄位與舊單筆 tick 逐字相同(少 `type`)
+        assert set(items[0]) == {"code", "t", "p", "q", "side", "b", "a", "h", "l", "seq"}
+        # 單筆 `tick` 型別退役
+        assert not any(m["type"] == "tick" for m in got)
+        src.backfill_gate.set()
+        await engine.close()
+
+    async def test_set_view_does_not_touch_the_subscription_pool(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        await _drain(engine)
+        before = (list(src.subscribed), list(src.unsubscribed))
+        token = object()
+        engine.set_view(token, ["2330", "9999"])  # 9999 不在池:登記無害
+        engine.clear_view(token)
+        await _drain(engine)
+        assert (list(src.subscribed), list(src.unsubscribed)) == before
+        await engine.close()
+
+    async def test_pressure_50_codes_20_ticks_each_land_in_few_bundles_seq_contiguous(self) -> None:
+        """50 檔 × 20 筆同窗灌入(開盤瞬間的形狀):打包則數遠小於成交數、逐檔 seq 連續。"""
+        codes = [str(1001 + i) for i in range(50)]
+        engine, src = await _make()
+        await engine.set_watchlist(codes)
+        await _drain(engine)
+        engine.set_view(object(), codes)
+        stream = engine.stream()
+        assert src.on_message is not None
+        for cum in range(1, 21):
+            for code in codes:
+                src.on_message(_quote(code=code, cum=cum, price=str(100 + cum)))
+        await _drain(engine)
+        got = await _collect(stream)
+        bundles = _bundles(got)
+        items = _tick_items(got)
+        assert len(items) == 1000
+        assert len(bundles) <= 3
+        by_code: dict[str, list[int]] = {}
+        for it in items:
+            by_code.setdefault(it["code"], []).append(it["seq"])
+        assert set(by_code) == set(codes)
+        assert all(seqs == list(range(1, 21)) for seqs in by_code.values())
+        await engine.close()
