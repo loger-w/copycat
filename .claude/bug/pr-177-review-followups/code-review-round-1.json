@@ -1,0 +1,16 @@
+{
+  "fixed_point": "origin/master e93b0afe(merge-base)",
+  "standards": [
+    "HARD(已重現):O(1) 改寫的 tie 等價破裂 —— 同 mono 多筆 tick 且發訊筆非該刻首筆時,舊掃描基線 = 該刻首筆的價、新碼 = 發訊價;300 seeds 差分 + 具體序列重現多發一則;datetime.now 高頻取樣 20k 次僅 3001 distinct → tie 在 burst 下常見;落在自稱行為不變的 refactor commit(三類紀律)。",
+    "判斷:sentinel 0 兼「無基線」與「壞資料」語意混用,None 較誠實;`base` 一名兩義。",
+    "Nice:test_downhill docstring 仍寫「區間內最高的一筆」(已被推翻的敘述);test_seed_id_collision 用 SimpleNamespace 換掉整個 time 模組,建議只 patch time.time。",
+    "文件面:ruff/pyright 全過;signal_hub/test_signal_rules 未 format 屬 master 既有,正確未動。"
+  ],
+  "spec": [
+    "15 項拍板全落地(F-16 依決策 no-op),F-01 無行為偷渡已以 master 實作實證(V 反彈序列兩版同輸出);F-12 已重現。",
+    "邊界:F-02 等價性在「窗內時間戳嚴格遞增」前提下才成立(人造 20% 同刻率跑出 2310 筆分歧),verification 等價宣稱宜收窄。",
+    "偏離字面:F-14 第三處(test_params_seeded_from_config)是濾掉 surge_pullback 靠既有 by_name 測試覆蓋,非改 by_name —— 值得追認。",
+    "範圍外:verification artifact 新檔;replay 腳本兩處格式重排;F-08 副作用 = 死旋鈕出界時會多一聲 clamp WARNING,與 F-13 剛校正的敘述略打架。"
+  ],
+  "disposition": "tie 等價破裂(兩軸同源)接受並修:改「發訊當下一次 O(k) 掃描存基線」——同 mono 批次整批同裁,窗頭判定 ⇔ 基線筆在窗,逐案例精確等價(含 tie);紅先行 test_same_mono_tick_before_fire_keeps_scan_baseline(對存發訊價版 FAILED)→ 修後 74 綠 + replay 數字不變;sentinel/命名一併消(rearm_base 欄語意單一、無 0 sentinel 分支)。test_downhill docstring 改實。verification.md 等價句改寫為精確等價 + tie 修訂紀錄。F-08 死旋鈕 WARN:接受 —— 設定檔寫無效鍵的出界值叫一聲比靜默好,佔位語意已加註(_seed_params)。F-14 第三處偏離:維持濾除寫法(該測本就不斷言 pullback,by_name 測試才是它的鎖),報告註記待 user 順手追認。SimpleNamespace 退回:patch time.time 動的是全域 time 模組(monkeypatch 期間全 process 可見),namespace-scoped 替換才是隔離正解。replay 格式重排 = formatter hook 自動,接受;verification artifact = verify-gate 契約要求,非 creep。"
+}

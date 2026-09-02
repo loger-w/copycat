@@ -11,9 +11,13 @@ F-12 補 commit、其餘一輪修;F-16 維持 no-op 不動)。
   seam 類 docstring 同步(F-06);新增 `test_v_bounce_below_peak_rearms_and_refires_accepted`
   以 review 的實例數列(104.5 → 102.4 發 → 反彈 104.45 重武裝 → 102.36 再發)釘住接受
   的行為 —— 日後要改嚴,這條就是「該變」的那條。
-- **F-02**:重武裝基線 O(1) 化 —— 波狀態加存發訊價,`窗頭早於發訊時點 ⇔ 發訊筆還在窗內
-  → 基線 = 發訊價`,免逐格掃窗;公式收斂到 `_change_pct` 單源(surge / 武裝 / 重武裝同式)。
-  等價性:72→73 條狀態機測試全綠 + 鼎元 replay 數字逐字不變。
+- **F-02**:重武裝基線 O(1) 化。初版「存發訊價」被本批 two-axis review 抓到 tie 等價邊界
+  (同 mono 多筆 tick、發訊筆非該刻首筆時,舊掃描基線 = 該刻首筆的價 ≠ 發訊價;Standards
+  軸以 300 seeds 差分重現多發)→ 改為**發訊當下一次 O(k) 掃描**存「首筆 ts ≥ 發訊時點」
+  的價,之後每 tick O(1);同 mono 批次整批同裁 → 「窗頭 ts ≤ fired_at ⇔ 基線筆還在窗內」,
+  **逐案例與舊逐格掃描精確等價(含 tie)**。公式收斂 `_change_pct` 單源。
+  紅先行:`test_same_mono_tick_before_fire_keeps_scan_baseline`(凍結時鐘同刻案例,
+  對「存發訊價」版 FAILED → 修後綠)。等價性:74 條狀態機測試綠 + 鼎元 replay 數字逐字不變。
 - **F-03**:routes `_RULE_PARAMS` 補 kind + `test_post_surge_pullback_round_trips`(wire 鏈)。
 - **F-04**:`test_seed_id_collision_with_existing_dedups`(凍 epoch 造撞);**突變體驗證**:
   移除 `while rule_id in ids` 迴圈 → 該測 FAILED,還原 → 149 passed(KILLED)。
