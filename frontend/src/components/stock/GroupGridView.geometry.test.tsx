@@ -8,7 +8,7 @@
  *  量法 = 把 `buildIntradayGeometry` 換成計次的同一份實作(`importOriginal` 保留行為)。
  *  `vi.mock` 是檔案級 + hoisted → 獨立檔。 */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type React from "react";
@@ -16,6 +16,7 @@ import { GroupGridView } from "@/components/stock/GroupGridView";
 import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { buildIntradayGeometry } from "@/lib/stock-intraday-svg";
+import { emitTicks } from "@/lib/tick-stream";
 import type { Group } from "@/lib/watchlist-model";
 import { wrap } from "@/test-utils";
 
@@ -157,16 +158,22 @@ describe("GroupGridView hover 不重算幾何(SC-6d)", () => {
     }
     const counted = vi.mocked(buildIntradayGeometry);
 
-    // 自檢:報價**真的**通到幾何(值變 → 重算)。少了這一段,下面那句「次數不變」
-    // 在卡片根本沒接上 `quotes` 時也會綠。
+    // 自檢:成交**真的**通到幾何(tick → 該檔 accum 換 identity → 重算)。少了這一段,
+    // 下面那句「次數不變」在卡片根本沒接上 tick 匯流排時也會綠。
+    // T4 #185 起圖的末點由 tick 驅動(fixture 無 seq → 播種 seq 0 → 第一筆 seq 1 連續);
+    // 舊版是拿每秒報價 `quotes[code].p` 延伸,那條路已明文退役。
     const beforeLive = counted.mock.calls.length;
     expect(beforeLive).toBeGreaterThan(0);
-    rerender({ "2330": quote(2_400_000) });
+    act(() => {
+      emitTicks([{ code: "2330", t: "10:30:00.000", p: 2_400_000, q: 1, side: "outer", seq: 1 }]);
+    });
     expect(counted.mock.calls.length).toBeGreaterThan(beforeLive);
 
-    // 字面上新建、值完全相同 —— useMemo 的 deps(code / snap / liveP)一個都沒變
+    // 每秒報價重送(新物件;值變不變都一樣):卡片頭重畫,圖的 accum identity 不變 →
+    // 幾何零重算。舊版「值變 → 重算」的自檢在此反轉為「值變也不重算」。
     const before = counted.mock.calls.length;
     rerender({ "2330": quote(2_400_000) });
+    rerender({ "2330": quote(2_410_000) });
 
     expect(counted.mock.calls.length).toBe(before);
   });

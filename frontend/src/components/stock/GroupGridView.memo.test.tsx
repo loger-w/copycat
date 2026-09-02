@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type React from "react";
@@ -8,6 +8,7 @@ import { GroupGridView } from "@/components/stock/GroupGridView";
 import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { ymdOf } from "@/lib/ladder-lots";
+import { emitTicks } from "@/lib/tick-stream";
 import type { Group } from "@/lib/watchlist-model";
 import type { CapitalFill, CapitalPosition } from "@/types";
 
@@ -34,17 +35,19 @@ const hoisted = vi.hoisted(() => ({
   byCode: [] as { code: string; fills: number }[],
 }));
 
+// T4 #185:卡片圖自此吃 live `accum`(不再是 snap + liveP);計次改記 `accum.last?.p`,
+// 「哪張卡重畫、拿到什麼價」兩件事仍量得到。
 vi.mock("@/components/stock/CardIntradayChart", () => ({
   CardIntradayChart: ({
     code,
-    liveP,
+    accum,
     fills,
   }: {
     code: string;
-    liveP: number | null;
+    accum: { last: { p: number } | null };
     fills: readonly unknown[];
   }) => {
-    hoisted.renders.push(liveP);
+    hoisted.renders.push(accum.last?.p ?? null);
     hoisted.byCode.push({ code, fills: fills.length });
     return <span data-testid="mini-stub" />;
   },
@@ -146,6 +149,32 @@ describe("GroupGridView 卡片 memo(review A6-1)", () => {
     rerender(ui({ ...q1, "2317": quote({ p: 2_010_000 }) }));
 
     expect(hoisted.renders.length).toBe(before + 1);
+    // T4 起 quote 只餵卡片頭的價格區,不再每秒改寫圖的末點:重畫的是 2317 那張卡,而
+    // 它的 accum 仍是播種時的那份(2_000_000)。「哪張卡」由 byCode 認。
+    expect(hoisted.byCode[hoisted.byCode.length - 1]?.code).toBe("2317");
+    expect(hoisted.renders[hoisted.renders.length - 1]).toBe(2_000_000);
+  });
+
+  /** T4 #185 [lock]:逐筆的重畫邊界。一則打包只含 2317 的成交 → 只有 2317 那張卡拿到新
+   *  accum(末點 = tick 價);2330 的 accum identity 不變,memo 擋住。 */
+  it("一則只含一檔的 tick → 只有那張卡重畫,且圖拿到 tick 價", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const q1 = { "2330": quote({ p: 2_380_000 }), "2317": quote({ p: 2_000_000 }) };
+    const ui = (quotes: Record<string, WatchlistQuote>) => (
+      <QueryClientProvider client={client}>
+        <Grid groups={GROUPS} quotes={quotes} onPick={() => {}} active={null} />
+      </QueryClientProvider>
+    );
+    render(ui(q1));
+    await waitFor(() => expect(screen.getAllByTestId("mini-stub")).toHaveLength(2));
+    const count = (code: string) => hoisted.byCode.filter((r) => r.code === code).length;
+    const [b2330, b2317] = [count("2330"), count("2317")];
+    // fixture 的 state() 無 seq → 播種 seq 0 → 第一筆 seq 1 連續
+    act(() => {
+      emitTicks([{ code: "2317", t: "09:05:00.000", p: 2_010_000, q: 2, side: "outer", seq: 1 }]);
+    });
+    expect(count("2317") - b2317).toBe(1);
+    expect(count("2330") - b2330).toBe(0);
     expect(hoisted.renders[hoisted.renders.length - 1]).toBe(2_010_000);
   });
 

@@ -468,6 +468,37 @@ describe("accumFromGroupSnapshot", () => {
     expect(acc.vp.get(2_330_000)).toEqual({ t: 10, o: 6, i: 4 });
   });
 
+  // T4 #185:卡片自此吃 tick → 播種要帶 seq 錨點與增量 VWAP 的分子 / 分母,否則第一筆
+  // tick 後 `applyTick` 的 `amountMilli / volume` 會退化成「那一筆的價」= VWAP 線瞬間跳掉
+  it("seq / vwapVol 齊 → seq 錨定、amountMilli = vwap × vwapVol、volume = vwapVol(增量 VWAP 可續算)", () => {
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: MIN(), meta: META, noData: false, vwap: 2_333_000, seq: 42, vwapVol: 15 },
+      null,
+    );
+    expect(acc.seq).toBe(42);
+    expect(acc.volume).toBe(15);
+    expect(acc.amountMilli).toBe(2_333_000 * 15);
+    expect(acc.last?.cum_vol).toBe(15);
+    // 續算:再來一筆 2_363_000 × 5 → (2_333_000×15 + 2_363_000×5) / 20 = 2_340_500
+    const next = applyTick(acc, {
+      code: "2330", t: "09:02:00.000", p: 2_363_000, q: 5, side: "outer", seq: 43,
+    });
+    expect(next.vwap).toBe(2_340_500);
+    expect(next.seq).toBe(43);
+  });
+
+  it("vwap 缺(舊後端)但 vwapVol 在 → amountMilli 取 0(不冒充分子)", () => {
+    const acc = accumFromGroupSnapshot(
+      "2330",
+      { minutes: MIN(), meta: META, noData: false, seq: 3, vwapVol: 9 },
+      null,
+    );
+    expect(acc.amountMilli).toBe(0);
+    expect(acc.volume).toBe(9);
+    expect(acc.seq).toBe(3);
+  });
+
   it("noData 原樣帶入(卡片三態的判準之一)", () => {
     const acc = accumFromGroupSnapshot(
       "9999",
