@@ -57,6 +57,7 @@ _SEEDED_KINDS = [
 _RULE_PARAMS: dict[str, dict[str, float]] = {
     "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
     "surge_crash": {"pct": 2.0, "window_secs": 300},
+    "surge_pullback": {"surge_pct": 2.0, "window_secs": 300, "pct": 1.0},
     "vol_burst": {
         "ratio": 3,
         "window_secs": 300,
@@ -601,6 +602,21 @@ class TestSignalRulesRoutes:
             assert created["cdp_levels"] == ["ah", "nh"]
             assert [r["id"] for r in app.state.signal_hub.rules()][-1] == created["id"]
             assert _rules(client)[-1] == created
+
+    def test_post_surge_pullback_round_trips(self, tmp_path: Path) -> None:
+        """新 kind 的 wire 鏈(body → normalize 三參數精確集合 → save → GET)——
+        使用者實際會從 Dialog 新增的就是這種卡(pr-177 review F-03 補洞)。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            r = client.post(
+                "/api/stock/signals/rules", json=_rule_body("surge_pullback", "回檔 1.5%")
+            )
+            assert r.status_code == 201
+            created = r.json()
+            assert created["kind"] == "surge_pullback"
+            assert created["params"] == {"surge_pct": 2.0, "window_secs": 300.0, "pct": 1.0}
+            assert created["cdp_levels"] == []
+            assert [x for x in _rules(client) if x["id"] == created["id"]] == [created]
 
     def test_put_edits_in_place_and_hot_reloads(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)
