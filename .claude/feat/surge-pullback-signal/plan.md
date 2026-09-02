@@ -24,9 +24,11 @@ Handoff:`%TEMP%\copycat-handoff-2026-09-02-surge-pullback.md`。grilling 已於�
 4. **事件 `pct` = 自峰值回落幅度(正數)**;文案「爆拉回檔 {pct:.2f}%」前後端逐字同式。
 5. **冷卻桶 `(code, "surge_pullback", "")` per-rule detector 天然獨立**;種子冷卻 60s
    (= COOLDOWN_MIN;一則/波已由重武裝把關,冷卻只防極端 flapping)。
-6. `SignalsConfig` 新欄 `pullback_pct=1.0` / `pullback_cooldown_secs=60.0`(rule_config 映射載體;
-   configs/signals.json 可覆寫)。武裝參數映既有 `surge_pct` / `surge_window_secs`(per-rule
-   config,與 vol_burst 借 surge_window_secs 同一模式)。
+6. `SignalsConfig` 新欄 `pullback_pct=1.0` / `pullback_cooldown_secs=60.0`(僅 rule_config
+   映射載體 —— `pullback_pct` 恆被規則 params["pct"] 覆寫,**configs/signals.json 覆寫它
+   零效果**,非可調旋鈕;pr-177 review F-13 校正本句,詳 signals_config.py 註解)。
+   武裝參數映既有 `surge_pct` / `surge_window_secs`(per-rule config,與 vol_burst 借
+   surge_window_secs 同一模式)。
 
 ## 變更面(檔案)
 
