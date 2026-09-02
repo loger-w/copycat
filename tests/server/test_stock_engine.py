@@ -1344,6 +1344,8 @@ class TestGroupSnapshot:
             "high",
             "low",
             "vp",
+            "seq",  # #182:卡片逐筆的錨點與增量 VWAP 分母(additive)
+            "vwap_vol",
             "no_data",
             "backfilling",
         }
@@ -1499,6 +1501,8 @@ class TestGroupSnapshot:
             "high": None,
             "low": None,
             "vp": {},
+            "seq": 0,
+            "vwap_vol": 0,
             "no_data": True,
             "backfilling": False,
         }
