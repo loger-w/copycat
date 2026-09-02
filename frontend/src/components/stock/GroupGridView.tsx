@@ -4,6 +4,7 @@ import { CardIntradayChart } from "@/components/stock/CardIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalFills, useCapitalPositions } from "@/hooks/useCapital";
 import { useChartToggles, type ChartToggles } from "@/hooks/useChartToggles";
+import { useGroupLiveAccums } from "@/hooks/useGroupLiveAccums";
 import { useGroupSnapshots, type GroupSnapshot } from "@/hooks/useGroupSnapshots";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { useFeeDiscount } from "@/lib/fee-discount";
@@ -20,7 +21,9 @@ import {
   positionsByCode,
   secSummary,
 } from "@/lib/position-summary";
+import type { StockAccum } from "@/lib/stock-accum";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
+import { setTickView } from "@/lib/tick-stream";
 import { cn } from "@/lib/utils";
 import type { Group } from "@/lib/watchlist-model";
 import type { CapitalPosition } from "@/types";
@@ -121,6 +124,7 @@ function QuoteCell({ code, q }: { code: string; q: WatchlistQuote | undefined })
 const GroupCard = memo(function GroupCard({
   code,
   snap,
+  accum,
   quote,
   active,
   toggles,
@@ -134,7 +138,12 @@ const GroupCard = memo(function GroupCard({
   onPick,
 }: {
   code: string;
+  /** 三態旗標(回補中 / 無資料 / 有無窗內分鐘)的來源;圖本身吃下面的 `accum` */
   snap: GroupSnapshot | undefined;
+  /** 這一檔的 live accum(T4 #185:圖牆層 `useGroupLiveAccums` 一份;只有收到成交的卡換 identity)。
+   *  與 `snap` 同源同批(同一份快照播種),`snap` 在則它在。 */
+  accum: StockAccum | undefined;
+  /** 只餵卡片頭的價格區與損益現算;**不再**每秒延伸圖的末點(T4 起末點由 tick 驅動) */
   quote: WatchlistQuote | undefined;
   active: boolean;
   /** 圖牆頂那一份(**不含 `set`**:toggle 鈕不在卡片內,卡片只讀 —— 沒有理由把寫入口
@@ -236,11 +245,10 @@ const GroupCard = memo(function GroupCard({
         // 而幾何的 priceLine 仍是空的。卡片自己接住:進 StockIntradayChart 會撞它自己
         // 那個帶 border/bg 的早退框,在卡片裡就是框中框。
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">尚無成交</span>
-      ) : (
+      ) : accum === undefined ? null : (
         <CardIntradayChart
           code={code}
-          snap={snap}
-          liveP={quote?.p ?? null}
+          accum={accum}
           toggles={toggles}
           fills={fills}
           indexSeries={indexSeries}
@@ -298,6 +306,17 @@ export function GroupGridView({
   const selected = groups.find((g) => g.name === selectedGroup) ?? groups[0] ?? null;
   const codes = selected?.codes ?? [];
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
+  // 逐筆(T4 #185):快照播種 + tick 匯流排;只有收到成交的卡換 accum identity。
+  // `quotes` 只在播種當下讀一次(hook 內走 ref),每秒的報價不再重播種整牆。
+  const accums = useGroupLiveAccums(codes, data, quotes);
+  // 告訴後端「我正在看這些檔」(CLAUDE.md §4 view 契約):後端只把這些檔(+ 主圖)的成交
+  // 打包給瀏覽器。換組 = 換集合;卸載 = 清空(後端才除名,否則關掉的圖牆還在收整組成交)。
+  // deps 用 csv:`codes` 在無群組時是每 render 新建的 `[]`,直接進 deps 會每輪重送。
+  const csv = codes.join(",");
+  useEffect(() => {
+    setTickView(csv === "" ? [] : csv.split(","));
+  }, [csv]);
+  useEffect(() => () => setTickView([]), []);
   // 給卡片的**穩定** onPick(review A6-1)。`quotes` 每秒換一次 → 本元件每秒 render,
   // 而父層傳進來的 handler 是 inline arrow(每次都是新參照)—— 直接往下傳的話
   // `memo` 每一輪都比不過,整牆卡(上限 150)照樣全部重畫,memo 形同虛設。
@@ -418,6 +437,7 @@ export function GroupGridView({
               key={code}
               code={code}
               snap={data?.[code]}
+              accum={accums[code]}
               quote={quotes[code]}
               active={code === active}
               toggles={toggles}

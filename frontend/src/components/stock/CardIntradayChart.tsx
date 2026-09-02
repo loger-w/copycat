@@ -1,25 +1,25 @@
-import { useMemo } from "react";
-
 import { IntradayChartCore } from "@/components/stock/StockIntradayChart";
 import type { ChartToggles } from "@/hooks/useChartToggles";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { cardSvgBox } from "@/lib/chart-frame";
 import type { FillPoint } from "@/lib/fill-marks";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
-import { accumFromGroupSnapshot, type GroupLikeSnapshot } from "@/lib/stock-accum";
+import type { StockAccum } from "@/lib/stock-accum";
 
 /** 群組卡片內的分時圖 = **單檔頁同一份渲染碼**的 card 變體(D4)。
  *
- *  這一層只做三件事:量卡片圖區、把 group-state 的精簡 snapshot 折成 `StockAccum`、
- *  把量到的尺寸換成主 / 副圖的 viewBox。圖形語彙(價線 / VP / 高低標 / hover 十字線)
- *  一律由 `IntradayChartCore` 供給 —— 卡片另寫一份小尺寸幾何的代價是「同一檔股票在
- *  卡片與單檔頁上是兩張不一樣的圖」,而且沒有任何測試比得到兩者。 */
+ *  這一層只做兩件事:量卡片圖區、把量到的尺寸換成主 / 副圖的 viewBox。圖形語彙(價線 /
+ *  VP / 高低標 / hover 十字線)一律由 `IntradayChartCore` 供給 —— 卡片另寫一份小尺寸幾何
+ *  的代價是「同一檔股票在卡片與單檔頁上是兩張不一樣的圖」,而且沒有任何測試比得到兩者。
+ *
+ *  T4 #185 起 `accum` 由圖牆層的 `useGroupLiveAccums` 供給(快照播種 + 逐筆 applyTick),
+ *  本層不再自己折 snapshot、也不再每秒拿報價延伸末點:identity 由那支 hook 管,只有收到
+ *  成交的卡才換 —— 這正是 core 內幾何 useMemo 護欄成立的前提。 */
 
 interface Props {
   code: string;
-  snap: GroupLikeSnapshot;
-  /** `watchlist_quote` 的現價(毫元);末點延伸與現價圈同源(AD-9) */
-  liveP: number | null;
+  /** 該檔的 live accum(圖牆層一份;沒動的卡拿到同一個物件) */
+  accum: StockAccum;
   /** 圖牆頂那一份(SC-2)。**卡片不持有 storage 狀態** —— 50 張卡各持一份會同時讀寫
    *  同一個 localStorage key,而 `set` 每次 render 都是新 identity,傳進來還會打穿 memo。 */
   toggles: ChartToggles;
@@ -35,9 +35,7 @@ interface Props {
 }
 
 export function CardIntradayChart({
-  code,
-  snap,
-  liveP,
+  accum,
   toggles,
   fills,
   indexSeries,
@@ -46,10 +44,6 @@ export function CardIntradayChart({
 }: Props) {
   const [ref, size] = useContainerSize<HTMLDivElement>();
   const box = cardSvgBox(size);
-  // **必經 useMemo**(review R4):就地建一個 accum 的話,父層每秒隨報價 re-render 時
-  // `accum` 每輪都是新 identity → core 內所有吃 accum 的 useMemo(幾何 / 量副圖 / VP)
-  // 全部重算,memo 護欄形同虛設。deps 只列真正的輸入。
-  const accum = useMemo(() => accumFromGroupSnapshot(code, snap, liveP), [code, snap, liveP]);
   return (
     // 恆存 wrapper(useContainerSize 契約 1):量測分支與繪圖分支都掛在它底下,
     // 只掛「量到之後」那一支的話冷載入會永遠停在 0×0。

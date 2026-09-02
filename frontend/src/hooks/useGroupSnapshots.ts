@@ -31,6 +31,11 @@ export interface GroupSnapshot {
   /** 價位別成交量(key = 已 snap 的毫元檔位)。**必填**:缺鍵降級成空 Map 而不是
    *  undefined —— 消費端對兩者的分支不同,而漏帶不會有任何錯誤訊號。 */
   vp: Map<number, VpCell>;
+  /** tick 套用錨點(#182 加鍵;T4 卡片逐筆用):下一筆 `seq === this + 1` 才連續,否則
+   *  該檔重拉。缺鍵(舊後端)→ 0 = 與後端空態同值;undefined 會讓每筆 tick 都判跳號。 */
+  seq: number;
+  /** 增量 VWAP 的分母(去重剔試撮後 Σqty,語意 = 主圖 snapshot 的 `vwap_vol`);缺鍵 → 0 */
+  vwapVol: number;
 }
 
 const POLL_MS = 60_000;
@@ -46,6 +51,9 @@ interface RawState {
   low?: number | null;
   /** 緊湊陣列形 `{ "<毫元檔位>": [總張, 外, 內] }`(JSON 物件鍵只能是字串) */
   vp?: Record<string, [number, number, number]>;
+  /** #182 加鍵(additive):tick 錨點 / 增量 VWAP 分母 */
+  seq?: number;
+  vwap_vol?: number;
 }
 
 /** 後端 vp(字串鍵 + 緊湊陣列)→ 前端 Map。
@@ -66,7 +74,10 @@ function vpFromRecord(
   return vp;
 }
 
-async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapshot>> {
+/** 打 batch 端點並解析。**export 給 `useGroupLiveAccums` 的單檔重拉共用**(T4 #185):
+ *  跳號那一檔重拉 `?codes=X` 走的是同一支解析,兩處各寫一份的漂移樣態是其中一邊少解一鍵、
+ *  卡片在重拉之後靜默少一層。 */
+export async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapshot>> {
   const res = await fetch(`/api/stock/group-state?codes=${csv}`);
   if (!res.ok) throw new Error(await parseError(res));
   const body = (await res.json()) as { states?: Record<string, RawState> };
@@ -85,6 +96,8 @@ async function fetchGroupState(csv: string): Promise<Record<string, GroupSnapsho
       high: raw.high ?? null,
       low: raw.low ?? null,
       vp: vpFromRecord(raw.vp),
+      seq: raw.seq ?? 0,
+      vwapVol: raw.vwap_vol ?? 0,
     };
   }
   return out;
