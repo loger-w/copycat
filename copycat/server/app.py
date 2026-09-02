@@ -2054,7 +2054,9 @@ def create_app(
         # 語意):壞 JSON / 非物件 / 非 view 型別 / codes 非字串列 → WARNING 一則後忽略,
         # 連線不斷 —— 這是 client 輸入,不是不懂的錯。
         token = object()
-        engine = stock
+        # 不是多餘的別名(review std F-05 否決):`stock` 的型別是 `StockEngine | None`,上面的
+        # None 早退窄化**不進巢狀函式**,閉包內直接用 `stock.set_view` pyright 會報 Optional。
+        engine: StockEngine = stock
 
         def _on_client_message(text: str) -> None:
             try:

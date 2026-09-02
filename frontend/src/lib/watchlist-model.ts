@@ -66,12 +66,17 @@ export function ungroupedCodes(wl: Watchlist): string[] {
  *
  *  **唯一一份解析**:GroupGridView 的 pill 選中態與 StockPage 的「訊號切組」都問這裡 ——
  *  各寫一份的漂移樣態是 pill 選中 A、訊號卻以 B 當「現群組」判要不要切。 */
+/** 群組檢視看得到的群組 = 扣掉「盤前篩選」;兩個解析共用這一條過濾(review std F-03)。 */
+function visibleGroups(groups: readonly Group[]): Group[] {
+  return groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
+}
+
 export function resolveGroupPick(
   groups: readonly Group[],
   ungrouped: readonly string[],
   picked: string | null,
 ): { name: string; codes: readonly string[] } | null {
-  const visible = groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
+  const visible = visibleGroups(groups);
   const ungroupedOn = ungrouped.length > 0;
   if (picked === UNGROUPED_PICK && ungroupedOn) return { name: UNGROUPED_PICK, codes: ungrouped };
   const hit = picked === null ? undefined : visible.find((g) => g.name === picked);
@@ -91,7 +96,7 @@ export function groupForCode(
   current: string | null,
   code: string,
 ): string | null {
-  const visible = groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
+  const visible = visibleGroups(groups);
   const inUngrouped = ungrouped.includes(code);
   if (current !== null) {
     const cur = current === UNGROUPED_PICK ? inUngrouped : visible.some((g) => g.name === current && g.codes.includes(code));
