@@ -58,6 +58,12 @@ prod 8721 當時未跑(user 08-27 收工後未重起);從 worktree 起一台後�
 夜盤 2455 單檔開台指期 toggle,橙線 + 標籤正常)。剩 (c) 次一交易日 08:46 水平橋 + 跳價(server
 需 08:45 前起)與 (d) 的 APP 對照。
 
+**09-02 回填:(c) PASS**(server 08:10 起 < 08:45,窗口成立;08:47–08:49 排程實錄,
+`evidence/SC-13c_bridge_2026-09-02_0849.jpg`):05:00 → 08:45 綠色水平橋落在夜盤收價位、
+日盤首筆(1K 終點標記 08:46,o 46701)起畫、live 點接在日盤側連續無斷;今日開盤價 ≈ 夜盤收
+→ 跳價幅度天然趨零,「跳價正常呈現」= 無假縫無假跳。`bars/TXF?tf=1&session=allday` 尾根
+08:49、`meta.status: ok`。SC-13 僅剩 (d) 的達錢 4 APP 數字對照(user 眼)。
+
 ## 4. 白名單核對(W1–W13)
 
 - W2 後端零 diff:`git diff origin/master...HEAD -- copycat/ tests/` 空。
