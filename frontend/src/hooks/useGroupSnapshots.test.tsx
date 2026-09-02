@@ -21,6 +21,9 @@ const BODY = {
       high: 2_385_000,
       low: 2_375_000,
       vp: { "2380000": [10, 7, 3], "2375000": [4, 1, 3] },
+      // #182 加鍵:tick 套用錨點 + 增量 VWAP 分母(去重剔試撮後 Σqty)
+      seq: 7,
+      vwap_vol: 14,
       no_data: false,
       backfilling: false,
     },
@@ -88,6 +91,19 @@ describe("useGroupSnapshots", () => {
     expect(a.vp.get(2_380_000)).toEqual({ t: 10, o: 7, i: 3 });
     expect(a.vp.get(2_375_000)).toEqual({ t: 4, o: 1, i: 3 });
     expect(a.vp.size).toBe(2);
+  });
+
+  it("seq / vwap_vol 帶出(卡片逐筆的錨點與增量 VWAP 分母);舊後端缺鍵 → 0(T4 #185)", async () => {
+    const hook = renderHook(() => useGroupSnapshots(["2330", "2317"], true), { wrapper });
+    await waitFor(() => expect(hook.result.current.data).toBeTruthy());
+    const a = hook.result.current.data!["2330"]!;
+    expect(a.seq).toBe(7);
+    expect(a.vwapVol).toBe(14);
+    // 缺鍵降級成 0 而不是 undefined:seq 0 = 「下一筆 seq 1 才連續」,與後端空態同值;
+    // undefined 會讓 `seq === acc.seq + 1` 永遠 false → 每筆 tick 都觸發重拉
+    const b = hook.result.current.data!["2317"]!;
+    expect(b.seq).toBe(0);
+    expect(b.vwapVol).toBe(0);
   });
 
   it("舊後端缺四鍵 → null / 空 Map 降級(不是 undefined)", async () => {
