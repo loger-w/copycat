@@ -8,6 +8,7 @@ import { useStockStream, type StockStreamState } from "@/hooks/useStockStream";
 import { onSignal, onWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
+import { resetTickStream, setTickView, subscribeTicks } from "@/lib/tick-stream";
 
 class FakeWS {
   static instances: FakeWS[] = [];
@@ -16,6 +17,8 @@ class FakeWS {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  /** hook 透過 `handle.send()` 真的送出的原文(T3:檢視集合 `view` 訊息) */
+  sent: string[] = [];
 
   constructor(public url: string) {
     FakeWS.instances.push(this);
@@ -23,6 +26,10 @@ class FakeWS {
 
   close(): void {
     this.closed = true;
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
   }
 
   emit(obj: unknown): void {
@@ -46,8 +53,11 @@ function snap(seq: number, ticks: { t: string; p: number; q: number; side: strin
   };
 }
 
+/** 逐筆自 #180 起只走 0.1 s 打包 `ticks`(單筆 `tick` 退役):一則含多檔多筆 items。
+ *  既有案每則一筆,語意(seq 連續 / 跳號 / pending 重放)逐字不動。 */
 const T = (seq: number) => ({
-  type: "tick", code: "2330", t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
+  type: "ticks",
+  items: [{ code: "2330", t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq }],
 });
 
 const TICK1 = { t: "09:00:01.000", p: 2_370_000, q: 1, side: "inner" };
@@ -583,7 +593,8 @@ describe("useStockStream(合約態:instrument key vs REST 路徑)", () => {
   const C9 = { prod: "CDF", ym: "202609", mini: false, unit: 2000 };
   const FUT_KEY = "F:CDF:202609";
   const FT = (seq: number, code: string) => ({
-    type: "tick", code, t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
+    type: "ticks",
+    items: [{ code, t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq }],
   });
 
   type Sel = StkfutSelection | null;
@@ -968,5 +979,98 @@ describe("useStockStream(disposition 補寫,pr-167 #8)", () => {
     act(() => { resolveRefetch(new Response(JSON.stringify(snap(4, [TICK1])))); }); // snap 缺欄 → false
     await waitFor(() => expect(hook.result.current.accum?.seq).toBe(4));
     expect(hook.result.current.accum?.disposition).toBe(true);
+  });
+});
+
+// mod/group-grid-ticks T3(#183):一則 `ticks` 打包 = 一次 commit;非主圖 items 丟給 tick 匯流排
+// (群組卡片的 live accum 在那頭吃);「我正在看哪些檔」經同一條 WS 送 `view`,重連 onopen 重送。
+describe("useStockStream(ticks 打包 + 檢視集合,T3)", () => {
+  const item = (code: string, seq: number) => ({
+    code, t: "09:10:00.000", p: 2_380_000, q: 1, side: "outer", seq,
+  });
+
+  beforeEach(() => {
+    resetTickStream();
+  });
+
+  it("一則含主圖 3 筆 → 依序套用到 seq 4,整則只 commit 一次", async () => {
+    let renders = 0;
+    const hook = renderHook(() => {
+      renders += 1;
+      return useStockStream("2330");
+    }, { wrapper });
+    await waitFor(() => expect(hook.result.current.accum).not.toBeNull());
+    const ws = FakeWS.instances[0]!;
+    const before = renders;
+    act(() => ws.emit({ type: "ticks", items: [item("2330", 2), item("2330", 3), item("2330", 4)] }));
+    expect(hook.result.current.accum?.seq).toBe(4);
+    expect(hook.result.current.accum?.ticks.length).toBe(4);
+    expect(renders - before).toBe(1);
+  });
+
+  it("打包內夾雜非主圖 items → 主圖只套自己的;其他整批丟給 tick 匯流排(原序)", async () => {
+    const { hook, ws } = await setup();
+    const seen: unknown[][] = [];
+    const off = subscribeTicks((items) => seen.push([...items]));
+    act(() =>
+      ws.emit({ type: "ticks", items: [item("2330", 2), item("2317", 9), item("2330", 3), item("2454", 1)] }),
+    );
+    expect(hook.result.current.accum?.seq).toBe(3);
+    expect(seen).toEqual([[item("2317", 9), item("2454", 1)]]);
+    off();
+  });
+
+  it("只有主圖 items 的打包不打匯流排(零訂閱者噪音)", async () => {
+    const { ws } = await setup();
+    const cb = vi.fn();
+    const off = subscribeTicks(cb);
+    act(() => ws.emit(T(2)));
+    expect(cb).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("跳號落在打包中間 → refetch 一次,其後 items 進 pending 並於 snapshot 落地後重放", async () => {
+    const { hook, ws } = await setup();
+    let resolveRefetch: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((res) => { resolveRefetch = res; }),
+    );
+    const calls = fetchMock.mock.calls.length;
+    // seq 2 套用;5 跳號(漏 3,4)→ refetch;6 跟著進 pending
+    act(() => ws.emit({ type: "ticks", items: [item("2330", 2), item("2330", 5), item("2330", 6)] }));
+    expect(fetchMock.mock.calls.length).toBe(calls + 1);
+    act(() => {
+      resolveRefetch(new Response(JSON.stringify(snap(4, [
+        TICK1,
+        { t: "09:01:00.000", p: 2_375_000, q: 1, side: "outer" },
+        { t: "09:02:00.000", p: 2_380_000, q: 1, side: "outer" },
+        { t: "09:03:00.000", p: 2_380_000, q: 1, side: "outer" },
+      ]))));
+    });
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(6));
+    expect(hook.result.current.accum?.ticks.length).toBe(6); // snapshot 4 + 重放 5、6
+  });
+
+  it("setTickView → 對 socket 送 view;同集合不重送;onopen(重連)重送當下集合", async () => {
+    const { ws } = await setup();
+    act(() => ws.onopen?.()); // open 之後 send 才會真的送出(ws-reconnect 的 open 守門)
+    expect(ws.sent).toEqual([]); // 空集合不送
+    act(() => setTickView(["2330", "2317"]));
+    expect(ws.sent).toEqual([JSON.stringify({ type: "view", codes: ["2330", "2317"] })]);
+    act(() => setTickView(["2330", "2317"]));
+    expect(ws.sent.length).toBe(1);
+    act(() => ws.onopen?.()); // 重連:後端是新 token,必須重送
+    expect(ws.sent.length).toBe(2);
+    expect(ws.sent[1]).toBe(JSON.stringify({ type: "view", codes: ["2330", "2317"] }));
+    act(() => setTickView([]));
+    expect(ws.sent[2]).toBe(JSON.stringify({ type: "view", codes: [] })); // 清空要告知(後端才除名)
+  });
+
+  it("unmount 後 setTickView 不再送(訂閱已解除)", async () => {
+    const { hook, ws } = await setup();
+    act(() => ws.onopen?.());
+    hook.unmount();
+    act(() => setTickView(["2330"]));
+    expect(ws.sent).toEqual([]);
   });
 });

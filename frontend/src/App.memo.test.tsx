@@ -374,14 +374,19 @@ describe("App railCtx memo 邊界(S1)", () => {
     const stateCalls = fetchUrls().filter((u) => u.includes("/api/stock/state/")).length;
 
     act(() => {
+      // 逐筆自 #180 起只走 0.1 s 打包 `ticks`(單筆 `tick` 退役)
       send("/ws/stock", {
-        type: "tick",
-        code: "2330",
-        t: "09:10:00.000",
-        p: 2_390_000,
-        q: 3,
-        side: "outer",
-        seq: 2,
+        type: "ticks",
+        items: [
+          {
+            code: "2330",
+            t: "09:10:00.000",
+            p: 2_390_000,
+            q: 3,
+            side: "outer",
+            seq: 2,
+          },
+        ],
       });
     });
 
