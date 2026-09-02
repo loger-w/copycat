@@ -18,7 +18,7 @@ import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
-import { STOCK_VIEW_KEY } from "@/lib/constants";
+import { STOCK_VIEW_KEY, UNGROUPED_PICK } from "@/lib/constants";
 import { trialBadgeText } from "@/lib/stock-accum";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
@@ -29,7 +29,7 @@ import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/l
 import { limitState } from "@/lib/stock-tick";
 import { writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-import { addCode, assignToGroup } from "@/lib/watchlist-model";
+import { addCode, assignToGroup, ungroupedCodes } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。
@@ -125,6 +125,10 @@ export function StockPage({
   // 「還在載」「載入失敗」「真的零群組」壓成同一個空陣列,而空態文案會叫使用者去
   // 建群組 —— 把「後端出事」講成「你沒建群組」。
   const { data: wl, isPending: wlPending, isError: wlError } = useStockWatchlist();
+  // 未分組成員(T5 #181):圖牆的虛擬「未分組」選項 + 訊號切組的判定都吃這份;由自選現算、
+  // 不落檔(另存一份會產生「同一檔同時在未分組與群組」的可違反不變式)。memo 在 wl 上:
+  // 每 render 新陣列會讓 GroupGridView 的 csv / effect deps 白動。
+  const ungrouped = useMemo(() => (wl === undefined ? [] : ungroupedCodes(wl)), [wl]);
   const [saveError, setSaveError] = useState<string | null>(null);
   // 寫入走跨元件共用佇列(N117):側欄拖曳 / 管理窗與本入口序列化在同一條 chain 上。
   const { commit: enqueue, isPending: savePending } = useWatchlistCommit({ onError: setSaveError });
@@ -245,11 +249,13 @@ export function StockPage({
       />
       <WatchlistSidebar
         active={code}
-        // F2:群組檢視下點群組區段的列 → 圖牆同時切到那一組(未分組列 / 搜尋預覽不切);
+        // F2:群組檢視下點群組區段的列 → 圖牆同時切到那一組;未分組列 → 切到虛擬「未分組」
+        // (T5 #181 明文翻轉原「未分組列不切」:未分組現在是可選的一組);搜尋預覽(undefined)不切;
         // 單檔檢視行為不變。右欄標的照舊換成該檔。
         onSelect={(next, group) => {
           onSelect(next);
-          if (view === "group" && group !== undefined && group !== null) selectGroup(group);
+          if (view !== "group" || group === undefined) return;
+          selectGroup(group === null ? UNGROUPED_PICK : group);
         }}
         quotes={watchlist}
       />
@@ -300,6 +306,7 @@ export function StockPage({
             indexSeries={indexSeries}
             selectedGroup={pickedGroup}
             onSelectGroup={selectGroup}
+            ungrouped={ungrouped}
             // 點卡片 = **只換右欄閃電梯的標的**,檢視停在群組(SC-3 / D3)。卡片上已是
             // 單檔同款的完整分時圖,細節就在圖牆上看得完;自動切回單檔的舊行為會讓每次
             // 換標的都得再點一次「群組」回來,而盯盤時圖牆本身就是主畫面。

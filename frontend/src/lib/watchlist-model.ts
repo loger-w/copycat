@@ -7,6 +7,8 @@
  *  全部純函數;**無變化時回原物件**(呼叫端據此早退,避免送出內容相同的 PUT ——
  *  那會讓後端重設整個訂閱池、TC4 全量 UNSUB/SUB,而且無錯誤訊號、無測試會紅)。 */
 
+import { SCREEN_GROUP_NAME, UNGROUPED_PICK } from "@/lib/constants";
+
 export interface Group {
   name: string;
   codes: string[];
@@ -53,6 +55,29 @@ function reinsertIntoCodes(wl: Watchlist, code: string, slot: number): string[] 
 export function ungroupedCodes(wl: Watchlist): string[] {
   const grouped = new Set(wl.groups.flatMap((g) => g.codes));
   return wl.codes.filter((code) => !grouped.has(code));
+}
+
+/** 群組檢視實際選中的一組(mod/group-grid-ticks T5,#181)。
+ *
+ *  可選集合 = 群組扣掉「盤前篩選」(`SCREEN_GROUP_NAME`;~60 檔不是圖牆要看的,側欄照舊)+
+ *  虛擬「未分組」(`UNGROUPED_PICK`,**有成員才可選**;成員即時算不落檔)。`picked` 是
+ *  localStorage 記住的名字:不在集合內(被刪 / 是盤前篩選 / 未分組已空)→ fallback 第一個
+ *  可見群組,再退未分組,什麼都沒有 → null(呼叫端顯示「尚無群組」空態)。
+ *
+ *  **唯一一份解析**:GroupGridView 的 pill 選中態與 StockPage 的「訊號切組」都問這裡 ——
+ *  各寫一份的漂移樣態是 pill 選中 A、訊號卻以 B 當「現群組」判要不要切。 */
+export function resolveGroupPick(
+  groups: readonly Group[],
+  ungrouped: readonly string[],
+  picked: string | null,
+): { name: string; codes: readonly string[] } | null {
+  const visible = groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
+  const ungroupedOn = ungrouped.length > 0;
+  if (picked === UNGROUPED_PICK && ungroupedOn) return { name: UNGROUPED_PICK, codes: ungrouped };
+  const hit = picked === null ? undefined : visible.find((g) => g.name === picked);
+  const group = hit ?? visible[0];
+  if (group !== undefined) return { name: group.name, codes: group.codes };
+  return ungroupedOn ? { name: UNGROUPED_PICK, codes: ungrouped } : null;
 }
 
 /** 加進自選(落未分組);已在自選 → 原物件。 */
