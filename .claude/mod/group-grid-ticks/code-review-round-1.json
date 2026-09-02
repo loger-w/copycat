@@ -1,0 +1,19 @@
+{
+  "fixed_point": "a344da9f (merge-base master..HEAD)",
+  "reviewed_head": "314d6e3d",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "finding": "useGroupLiveAccums 手寫 fetch + refetching/pending/retryAfter/mounted 五支 ref 的取數狀態機,違反 frontend-conventions「Server state 一律走 TanStack Query」;useStockStream 有同型前例但未寫成書面例外。修法:改 queryClient.fetchQuery,或在 skill 明列例外。"},
+    {"id": "F-02", "severity": "MED", "finding": "Duplicated Code:跳號重拉狀態機 useStockStream ticks case 與 useGroupLiveAccums startRefetch/refetch 同形(Shotgun Surgery 風險)。修法:抽 lib/seq-gap.ts 共用。"},
+    {"id": "F-03", "severity": "LOW", "finding": "watchlist-model.ts `groups.filter((g) => g.name !== SCREEN_GROUP_NAME)` 逐字兩處。修法:抽 visibleGroups()。"},
+    {"id": "F-04", "severity": "LOW", "finding": "Mysterious Name:GroupGridView `NO_UNGROUPED` 同時當 ungrouped 預設與 codes 空表。修法:改名 EMPTY_CODES。"},
+    {"id": "F-05", "severity": "LOW", "finding": "Middle Man:app.py ws_stock `engine = stock` 無由來別名。修法:刪別名直接用 stock。"},
+    {"id": "F-06", "severity": "LOW", "finding": "TDZ 脆弱:useStockStream `subscribeTickView(sendView)` 寫在 `const conn` 之前,靠不同步 dispatch 才不炸。修法:移到 conn 之後。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "HIGH", "finding": "主圖那一檔的群組卡片收不到逐筆(useStockStream ticks case 只把非主圖 items 丟匯流排;SC-3 點卡片只換右欄、檢視停在群組 → 被點的卡從逐筆退回 60 s 輪詢),違反 US1「每張卡片」/ US2「同一則同一次重繪」。修法:emitTicks(items) 整則原序;補測試。"},
+    {"id": "F-02", "severity": "LOW", "finding": "#181 AC「(a) 藏盤前篩選 🔴 與 (b) 未分組 🟢 分開 commit」未做到(08c31ae0 單一 commit)。修法:回溯拆兩筆,或 verification.md 明文記偏離。"},
+    {"id": "F-03", "severity": "LOW", "finding": "useGroupLiveAccums refetch 的 `snap === undefined` 早退路徑無冷卻,可能每 0.1 s 重打。修法:早退分支也設 retryAfter。"},
+    {"id": "F-04", "severity": "LOW", "finding": "GroupGridView `accum === undefined ? null` 在 W7 三態外多一種無文案空白(目前不可達)。修法:收進「無資料」或加註不可達。"}
+  ],
+  "disposition": "standards F-01 接受一半:不改 fetchQuery(TQ retry/staleTime/dedup 會與 seq 對齊協定打架、且冷卻語意要自管),改在 frontend-conventions 明文列為書面例外(兩處限定)。F-02 拒絕本輪做:主圖那份帶 F-2/IC-3 三道時序保護,抽共用屬 /refactor(codebase-design seam 先議),已入 next-time。F-03 修(visibleGroups)。F-04 修(EMPTY_CODES)。F-05 否決:別名是 pyright 窄化不進巢狀函式的必要品,改為 `engine: StockEngine = stock` 並加註理由。F-06 修(subscribeTickView 移到 conn 之後)。spec F-01 修(emitTicks 整則 + useStockStream 兩案改寫:夾雜案斷言整則、主圖-only 案改為「也上匯流排、空打包不發」)。F-02 接受為明文偏離:兩件都經 resolveGroupPick 同一份解析,拆 commit 要把同一函式切兩半,verification.md §1 註記。F-03 修(早退分支設冷卻)。F-04 修(accum undefined 收進「無資料」分支)。收修 commit:見 verification.md §1 末兩列。"
+}
