@@ -21,11 +21,12 @@ import {
   positionsByCode,
   secSummary,
 } from "@/lib/position-summary";
+import { SCREEN_GROUP_NAME, UNGROUPED_PICK } from "@/lib/constants";
 import type { StockAccum } from "@/lib/stock-accum";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
 import { setTickView } from "@/lib/tick-stream";
 import { cn } from "@/lib/utils";
-import type { Group } from "@/lib/watchlist-model";
+import { resolveGroupPick, type Group } from "@/lib/watchlist-model";
 import type { CapitalPosition } from "@/types";
 
 /** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
@@ -56,7 +57,13 @@ interface Props {
    *  = 死狀態 + 兩個持有者)。記住的名字不在 `groups` 內時由本元件 fallback 第一個(edge 5)。 */
   selectedGroup: string | null;
   onSelectGroup: (name: string) => void;
+  /** 未分組成員(T5 #181;`StockPage` 以 `ungroupedCodes(wl)` 現算)。有成員才多一顆「未分組」pill,
+   *  選它時 `selectedGroup` = `UNGROUPED_PICK`(sentinel,不落檔)。optional:既有呼叫端零改動。 */
+  ungrouped?: readonly string[];
 }
+
+/** `ungrouped` 未傳時的**單一** identity:每 render 新建 `[]` 會讓下面的 csv / effect deps 白動。 */
+const NO_UNGROUPED: readonly string[] = [];
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
  *  同一群組每次打開都是同一個版面,眼睛才記得住哪張卡片在哪。
@@ -293,6 +300,7 @@ export function GroupGridView({
   indexSeries = null,
   selectedGroup,
   onSelectGroup,
+  ungrouped = NO_UNGROUPED,
 }: Props) {
   // 同步十字線(F3):所有卡片共同的 hover 分鐘。被 hover 的卡只在**分鐘變化**時回報,
   // 所以這裡的 setState 頻率 = 游標跨分鐘的頻率,不是 mousemove 頻率。
@@ -303,8 +311,9 @@ export function GroupGridView({
   // 群組可能在另一個分頁 / Discord 被刪掉,localStorage 留著舊名(edge 5)——
   // fallback 第一個而不是停在空態,否則畫面會說「這個群組還沒有成員」而使用者
   // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
-  const selected = groups.find((g) => g.name === selectedGroup) ?? groups[0] ?? null;
-  const codes = selected?.codes ?? [];
+  // 解析只有一份(`resolveGroupPick`,T5):藏盤前篩選、未分組有成員才可選、fallback 第一個可見群組。
+  const selected = resolveGroupPick(groups, ungrouped, selectedGroup);
+  const codes = selected?.codes ?? NO_UNGROUPED;
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
   // 逐筆(T4 #185):快照播種 + tick 匯流排;只有收到成交的卡換 accum identity。
   // `quotes` 只在播種當下讀一次(hook 內走 ref),每秒的報價不再重播種整牆。
@@ -351,7 +360,8 @@ export function GroupGridView({
 
   // 空態三分(review A4)。**只在真的沒有群組可畫時**才走這三條:`groups` 一旦有內容
   // (含 TQ 失敗但仍握著上一份 cache)就照畫,錯誤不遮既有資料。
-  if (groups.length === 0) {
+  // 「沒有東西可畫」= 解析不到任何一組(可見群組空**且**未分組空;只剩盤前篩選也算沒有)。
+  if (selected === null) {
     const empty = wlPending ? "載入群組…" : wlError ? "自選載入失敗" : "尚無群組 — 到自選欄建立群組";
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -374,9 +384,15 @@ export function GroupGridView({
         ariaLabel="選擇群組"
         className="flex flex-wrap items-center gap-2 text-xs text-ink-muted"
         leading={<span>群組</span>}
-        value={selected?.name ?? ""}
+        value={selected.name}
         onChange={onSelectGroup}
-        items={groups.map((g) => ({ value: g.name, label: g.name }))}
+        // T5:藏「盤前篩選」;未分組有成員才多一顆(排最後);label 是字面「未分組」、value 是 sentinel
+        items={[
+          ...groups
+            .filter((g) => g.name !== SCREEN_GROUP_NAME)
+            .map((g) => ({ value: g.name, label: g.name })),
+          ...(ungrouped.length > 0 ? [{ value: UNGROUPED_PICK, label: "未分組" }] : []),
+        ]}
         pillClass={(_item, checked) =>
           cn(
             "rounded border px-2 py-0.5 text-xs",

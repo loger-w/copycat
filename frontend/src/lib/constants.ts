@@ -107,6 +107,17 @@ export const STOCK_VIEW_KEY = "copycat-stock-view";
  *  **與 `WL_COLLAPSED_KEY` 無關**:那支記的是側欄折疊,兩者同時存在且語意不同。 */
 export const STOCK_GROUP_KEY = "copycat-stock-group";
 
+/** 盤前篩選群組名 —— 後端 `copycat/server/screen_engine.py::SCREEN_GROUP` 的**鏡像**
+ *  (mod/group-grid-ticks T5,#181;CLAUDE.md §4 契約)。群組檢視的 pill 藏這一組(~60 檔不是
+ *  圖牆要看的),側欄照舊顯示。後端改名而這裡沒跟 → 圖牆又會列出 60 張卡,零錯誤訊號 ——
+ *  `tests/server/test_screen_engine.py::test_screen_group_name_parity_with_frontend` 直讀本檔字面釘住。 */
+export const SCREEN_GROUP_NAME = "盤前篩選";
+
+/** 群組檢視「未分組」虛擬選項的 `selectedGroup` 值(T5)。成員 = 自選 − ∪群組,即時算、**不落檔**
+ *  (另存一份會產生「同一檔同時在未分組與群組」的可違反不變式,見 `lib/watchlist-model.ts`)。
+ *  sentinel 而非「未分組」字面:群組名是使用者自由字串,字面撞名會讓真群組被虛擬項蓋掉。 */
+export const UNGROUPED_PICK = "__ungrouped__";
+
 /** 訊號提示音開關("on" / "off")— hooks/useSignalSound.ts */
 export const SOUND_KEY = "copycat-signal-sound";
 

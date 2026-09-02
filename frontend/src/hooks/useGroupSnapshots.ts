@@ -119,7 +119,7 @@ export function groupPollInterval(now: Date = new Date()): number {
 
 /** 群組成員狀態 batch。`enabled` 是檢視開關,`codes` 空(空群組 / 零群組)一律不請求
  *  —— 打了只會拿回 `{"states":{}}`,沒有任何卡片可畫卻每 60s 燒一次來回(R17)。 */
-export function useGroupSnapshots(codes: string[], enabled: boolean) {
+export function useGroupSnapshots(codes: readonly string[], enabled: boolean) {
   // query key 用逗號串而不是陣列:陣列每次 render 都是新 identity,TQ 的結構化比對
   // 雖然吃得下,但 URL 本來就是這個字串,兩處各拼一次反而多一個會漂的地方
   const csv = codes.join(",");
