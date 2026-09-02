@@ -29,7 +29,13 @@ import { instrumentKeyOf, selectionOf, ymLabel, type StkfutSelection } from "@/l
 import { limitState } from "@/lib/stock-tick";
 import { writeLocal } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-import { addCode, assignToGroup, ungroupedCodes } from "@/lib/watchlist-model";
+import {
+  addCode,
+  assignToGroup,
+  groupForCode,
+  resolveGroupPick,
+  ungroupedCodes,
+} from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
  *  閃電梯 / 委託 / 部位已移到常駐右欄(RightRail);主檔與資料流由 App 持有(D-3)。
@@ -232,7 +238,15 @@ export function StockPage({
         toggleError={saveRule.error?.message ?? null}
         onToggleRule={toggleRule}
         onOpenManager={() => setRulesOpen(true)}
-        onSelect={onSelect}
+        // T6 #184:群組檢視下點訊號 → 右欄照舊換標的;圖牆切到含該檔的群組(現群組已含不切、
+        // 不在自選不切)。「現群組」問 `resolveGroupPick`(與圖牆 pill 同一份解析,含 fallback)。
+        onSelect={(next) => {
+          onSelect(next);
+          if (view !== "group" || wl === undefined) return;
+          const current = resolveGroupPick(wl.groups, ungrouped, pickedGroup)?.name ?? null;
+          const target = groupForCode(wl.groups, ungrouped, current, next);
+          if (target !== null && target !== current) selectGroup(target);
+        }}
         notifPermission={notifPermission}
         onRequestNotif={requestNotif}
         soundOn={soundOn}
