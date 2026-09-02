@@ -318,6 +318,9 @@ export interface GroupLikeSnapshot {
   high?: number | null;
   low?: number | null;
   vp?: Map<number, VpCell>;
+  /** T4 #185:tick 套用錨點與增量 VWAP 分母(#182 加鍵);缺 → 0 */
+  seq?: number;
+  vwapVol?: number;
 }
 
 function pad2(n: number): string {
@@ -330,11 +333,14 @@ function pad2(n: number): string {
  *  畫面上會與單檔頁的同一檔對不上(單檔頁走後端逐筆),而兩個數字都「看起來對」——
  *  沒有任何錯誤訊號。少畫一層是誠實的降級。
  *
- *  `ticks` 恆空(group-state 刻意不送:50 檔 × 數千筆 = 頻寬炸彈),故 `amountMilli`
- *  / `volume` / `seq` 全取零值 —— 這份 accum 是**唯讀渲染輸入**,不會再吃 `applyTick`。
+ *  `ticks` 恆空(group-state 刻意不送:50 檔 × 數千筆 = 頻寬炸彈)。T4 #185 起這份 accum
+ *  是**播種**而非唯讀:之後由 tick 匯流排逐筆 `applyTick` —— 所以 `seq` 取快照錨點、
+ *  `volume` 取 `vwapVol`、`amountMilli` 由 `vwap × vwapVol` 還原,增量 VWAP 才續得下去
+ *  (三者取零的話第一筆 tick 後 VWAP 線會瞬間跳成那一筆的價)。vwap 不可得時分子取 0
+ *  (不冒充)。
  *
- *  `last` 兩分支(edge 10):`liveP` 是每秒更新的那一份,現價圈與末點同源;不可得時
- *  退回**最大分鐘鍵**那格的收盤(不是第一格,也不是 null —— 60s 快照間的空窗照樣要有
+ *  `last` 兩分支(edge 10):`liveP` 是播種當下側欄的現價,現價圈與末點同源;不可得時
+ *  退回**最大分鐘鍵**那格的收盤(不是第一格,也不是 null —— 首筆 tick 到之前照樣要有
  *  現價圈)。 */
 export function accumFromGroupSnapshot(
   code: string,
@@ -342,22 +348,27 @@ export function accumFromGroupSnapshot(
   liveP: number | null,
 ): StockAccum {
   const minutes = extendMinutes(snap.minutes, liveP);
+  const volume = snap.vwapVol ?? 0;
   let last: StockAccum["last"] = null;
   if (liveP !== null && liveP > 0) {
     const now = new Date();
     last = {
       p: liveP,
       t: `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
-      cum_vol: 0,
+      cum_vol: volume,
     };
   } else if (minutes.size > 0) {
     const lastMin = Math.max(...minutes.keys());
     const agg = minutes.get(lastMin)!;
-    last = { p: agg.c, t: `${pad2(Math.floor(lastMin / 60))}:${pad2(lastMin % 60)}:00`, cum_vol: 0 };
+    last = {
+      p: agg.c,
+      t: `${pad2(Math.floor(lastMin / 60))}:${pad2(lastMin % 60)}:00`,
+      cum_vol: volume,
+    };
   }
   return {
     code,
-    seq: 0,
+    seq: snap.seq ?? 0,
     last,
     vwap: snap.vwap ?? null,
     minutes,
@@ -371,8 +382,8 @@ export function accumFromGroupSnapshot(
     tapeOmitted: false,
     high: snap.high ?? null,
     low: snap.low ?? null,
-    amountMilli: 0,
-    volume: 0,
+    amountMilli: snap.vwap != null ? snap.vwap * volume : 0,
+    volume,
   };
 }
 
