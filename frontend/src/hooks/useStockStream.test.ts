@@ -1008,24 +1008,27 @@ describe("useStockStream(ticks 打包 + 檢視集合,T3)", () => {
     expect(renders - before).toBe(1);
   });
 
-  it("打包內夾雜非主圖 items → 主圖只套自己的;其他整批丟給 tick 匯流排(原序)", async () => {
+  it("打包內夾雜非主圖 items → 主圖只套自己的;**整則原序**丟給 tick 匯流排(含主圖檔)", async () => {
     const { hook, ws } = await setup();
     const seen: unknown[][] = [];
     const off = subscribeTicks((items) => seen.push([...items]));
-    act(() =>
-      ws.emit({ type: "ticks", items: [item("2330", 2), item("2317", 9), item("2330", 3), item("2454", 1)] }),
-    );
+    const items = [item("2330", 2), item("2317", 9), item("2330", 3), item("2454", 1)];
+    act(() => ws.emit({ type: "ticks", items }));
     expect(hook.result.current.accum?.seq).toBe(3);
-    expect(seen).toEqual([[item("2317", 9), item("2454", 1)]]);
+    // 主圖檔的 items 也要進匯流排(review spec F-01):主圖那一檔在群組裡也有一張卡,
+    // 群組卡片的 accum 與主圖 accum 是兩份,少送就是那張卡凍在播種值
+    expect(seen).toEqual([items]);
     off();
   });
 
-  it("只有主圖 items 的打包不打匯流排(零訂閱者噪音)", async () => {
+  it("只有主圖 items 的打包也上匯流排(群組卡片同檔要動);空打包不發", async () => {
     const { ws } = await setup();
     const cb = vi.fn();
     const off = subscribeTicks(cb);
     act(() => ws.emit(T(2)));
-    expect(cb).not.toHaveBeenCalled();
+    expect(cb).toHaveBeenCalledTimes(1);
+    act(() => ws.emit({ type: "ticks", items: [] }));
+    expect(cb).toHaveBeenCalledTimes(1);
     off();
   });
 

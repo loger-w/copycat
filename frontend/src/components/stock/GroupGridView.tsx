@@ -62,8 +62,9 @@ interface Props {
   ungrouped?: readonly string[];
 }
 
-/** `ungrouped` 未傳時的**單一** identity:每 render 新建 `[]` 會讓下面的 csv / effect deps 白動。 */
-const NO_UNGROUPED: readonly string[] = [];
+/** 空碼表的**單一** identity(`ungrouped` 未傳 / 解析不到任何一組):每 render 新建 `[]` 會讓
+ *  下面的 csv / effect deps 白動。 */
+const EMPTY_CODES: readonly string[] = [];
 
 /** 檔數 → 格線 class(SC-1)。欄數不由容器寬決定而由檔數決定「最小可容納矩陣」:
  *  同一群組每次打開都是同一個版面,眼睛才記得住哪張卡片在哪。
@@ -244,7 +245,9 @@ const GroupCard = memo(function GroupCard({
       ) : null}
       {backfilling ? (
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">回補中…</span>
-      ) : snap === undefined || snap.noData ? (
+      ) : snap === undefined || accum === undefined || snap.noData ? (
+        // `accum` 與 `snap` 同源同批(同一份快照播種),`snap` 在則它在;把 `undefined` 收進
+        // 「無資料」而不是另開一種無文案空白(review spec F-04:三態之外不多一態)
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">無資料</span>
       ) : !hasBars ? (
         // edge 9:已訂閱、有 meta,但**窗內**一格分鐘都沒有(盤前只有 08:59 的試撮分鐘、
@@ -252,7 +255,7 @@ const GroupCard = memo(function GroupCard({
         // 而幾何的 priceLine 仍是空的。卡片自己接住:進 StockIntradayChart 會撞它自己
         // 那個帶 border/bg 的早退框,在卡片裡就是框中框。
         <span className="flex h-20 grow items-center justify-center text-xs text-ink-dim">尚無成交</span>
-      ) : accum === undefined ? null : (
+      ) : (
         <CardIntradayChart
           code={code}
           accum={accum}
@@ -300,7 +303,7 @@ export function GroupGridView({
   indexSeries = null,
   selectedGroup,
   onSelectGroup,
-  ungrouped = NO_UNGROUPED,
+  ungrouped = EMPTY_CODES,
 }: Props) {
   // 同步十字線(F3):所有卡片共同的 hover 分鐘。被 hover 的卡只在**分鐘變化**時回報,
   // 所以這裡的 setState 頻率 = 游標跨分鐘的頻率,不是 mousemove 頻率。
@@ -313,7 +316,7 @@ export function GroupGridView({
   // 根本沒有那一組。衍生值不入 state:同步 state 與 props 正是 effect anti-pattern。
   // 解析只有一份(`resolveGroupPick`,T5):藏盤前篩選、未分組有成員才可選、fallback 第一個可見群組。
   const selected = resolveGroupPick(groups, ungrouped, selectedGroup);
-  const codes = selected?.codes ?? NO_UNGROUPED;
+  const codes = selected?.codes ?? EMPTY_CODES;
   const { data, isPending } = useGroupSnapshots(codes, codes.length > 0);
   // 逐筆(T4 #185):快照播種 + tick 匯流排;只有收到成交的卡換 accum identity。
   // `quotes` 只在播種當下讀一次(hook 內走 ref),每秒的報價不再重播種整牆。
