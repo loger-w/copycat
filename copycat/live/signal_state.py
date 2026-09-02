@@ -156,10 +156,10 @@ class SignalDetector:
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
-        # 爆拉回檔波狀態:code → (armed, 峰值 milli, 發訊時點 mono, 發訊價 milli)。
+        # 爆拉回檔波狀態:code → (armed, 峰值 milli, 發訊時點 mono, 重武裝基線價 milli)。
         # 缺鍵 = 尚未武裝(等 surge 條件);armed=False = 本波已發過(或停用期間被
-        # 消耗),等重武裝;後兩欄只在已發態有意義(重武裝判式的 O(1) 基線),
-        # 武裝態恆 (0.0, 0)。
+        # 消耗),等重武裝;後兩欄只在已發態有意義(發訊當下掃描存下的舊式基線,
+        # 讓之後每 tick O(1)),武裝態恆 (0.0, 0)。
         self._pullback: dict[str, tuple[bool, int, float, int]] = {}
 
     # ---- 基準(CDP)----
@@ -531,18 +531,17 @@ class SignalDetector:
             if gain is not None and gain >= self._cfg.surge_pct:
                 self._pullback[code] = (True, price, 0.0, 0)
             return []
-        armed, peak, fired_at, fired_price = entry
+        armed, peak, fired_at, rearm_base = entry
         if price > peak:
             self._pullback[code] = (True, price, 0.0, 0)  # 創波高:峰值前推,發過的波重武裝
             return []
         if not armed:
-            # 已發:surge 同式重武裝,基線 = 發訊之後第一筆(review F-02:發訊筆還在
-            # 窗內 ⇔ 窗頭早於發訊時點,此時基線就是發訊價本身 —— O(1),免逐格掃窗)
-            base = fired_price if window and window[0][0] < fired_at else 0
-            if not base:
-                gain = _window_change_pct(window, price)
-            else:
-                gain = _change_pct(base, price)
+            # 已發:surge 同式重武裝(review F-02 改 O(1))。基線 = 「首筆 ts ≥ 發訊
+            # 時點」的價 —— 發訊當下已掃描存進 rearm_base;同 mono 批次(TC4 burst /
+            # 凍結時鐘)一起被裁,所以「窗頭 ts ≤ fired_at ⇔ 那筆還在窗內」,
+            # 出窗後退回窗最舊點,逐案例與舊逐格掃描精確等價。
+            base = rearm_base if window[0][0] <= fired_at else window[0][1]
+            gain = _change_pct(base, price)
             if gain is not None and gain >= self._cfg.surge_pct:
                 self._pullback[code] = (True, price, 0.0, 0)
             return []
@@ -550,8 +549,11 @@ class SignalDetector:
         drop = (peak - price) * 100.0 / peak
         if drop < self._cfg.pullback_pct:
             return []
-        # 消耗本波(無條件,先於 enabled/cooldown gate);記發訊時點與發訊價當重武裝基線
-        self._pullback[code] = (False, peak, mono, price)
+        # 消耗本波(無條件,先於 enabled/cooldown gate)。重武裝基線在此一次掃描存下:
+        # 首筆 ts ≥ 本刻 —— 同 mono 批次時是該批**首筆**的價,不是發訊價(舊掃描語意,
+        # 收修 review 抓到的 tie 等價邊界);每次發訊 O(k) 一次,換每 tick O(1)。
+        snap = next((p for ts, p, _q in window if ts >= mono), price)
+        self._pullback[code] = (False, peak, mono, snap)
         if "surge_pullback" not in enabled:
             return []
         bucket = (code, "surge_pullback", "")

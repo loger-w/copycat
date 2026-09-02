@@ -249,7 +249,9 @@ def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
     elif kind == "surge_pullback":
         raw = {
             # 武裝參數借 surge 欄(per-rule config 讓兩者獨立,同 vol_burst 借窗);
-            # `pct` 是卡的字面身分(_PULLBACK_SEEDS),由 `_pullback_seed_rule` 覆上
+            # `pct` 是卡的字面身分(_PULLBACK_SEEDS),由 `_pullback_seed_rule` 覆上 ——
+            # 這格只是佔位,cfg.pullback_pct 出界時的 clamp WARNING 對死旋鈕發聲屬可接受
+            # 邊緣(設定檔寫了無效鍵的出界值,叫一聲比整段靜默好)
             "surge_pct": float(cfg.surge_pct),
             "window_secs": float(cfg.surge_window_secs),
             "pct": float(cfg.pullback_pct),
