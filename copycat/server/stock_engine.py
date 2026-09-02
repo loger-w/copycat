@@ -16,7 +16,7 @@ import asyncio
 import datetime as _dt
 import logging
 from collections.abc import Set as AbstractSet
-from typing import AsyncGenerator, Callable, Protocol
+from typing import AsyncGenerator, Callable, Iterable, Protocol
 
 from copycat.live.stock_models import (
     TRIAL_WINDOWS,
@@ -245,6 +245,7 @@ class StockEngine:
         *,
         trade_date: str,
         throttle_secs: float = 1.0,
+        tick_flush_secs: float = 0.1,
         checkpoint: bool = True,
         stkfut_map: dict[str, dict] | None = None,
         resub_interval_secs: float = 10.0,
@@ -259,6 +260,19 @@ class StockEngine:
         self._trade_date = trade_date
         self._pending_date: str | None = None
         self._throttle = throttle_secs
+        # 逐筆打包(mod/group-grid-ticks,#180):成交不再一筆一則,累積到 `_pending_ticks`,
+        # 首筆到貨時排一支 `call_later(tick_flush_secs)`,到期把整批以**一則** `ticks` 送出
+        # (沿 futures_engine 的 dirty + 單一 flush timer 樣板;閒時零喚醒)。逐筆不合併、
+        # 逐筆不少 —— 打包只降低訊息數(50 檔開盤每秒數百筆 → 每秒 ≤ 10 則),per-client
+        # queue 因此能撐 100 s 而不是幾秒。收件人 = 主圖 ∪ 各連線登記的檢視集合
+        # (`_views`,token = 一條 WS 連線;`_tick_targets` 是其聯集快取,改動時重算)。
+        # 與訂閱池**正交**:群組成員本來就以 "watchlist" owner 全天訂著,登記只決定
+        # 「誰的成交要送到瀏覽器」,不碰 `_refs` / TC4 SUB。
+        self._tick_flush_secs = tick_flush_secs
+        self._pending_ticks: list[dict] = []
+        self._tick_flush_timer: asyncio.TimerHandle | None = None
+        self._views: dict[object, frozenset[str]] = {}
+        self._tick_targets: frozenset[str] = frozenset()
         self._checkpoint_enabled = checkpoint
         # 交易日曆注入(mod/trading-calendar SC-4)。**預設 = 現行 `weekday() < 5` 逐字**
         # (W9):engine 直接建構的既有 caller 行為不得有一絲變化,真日曆只由 app 層在
@@ -411,6 +425,12 @@ class StockEngine:
         # → 這裡是唯一的取消點。留著的話 callback 會在已關閉的 engine 上起
         # `_backfill_pending` 帳並塞一筆永遠沒有 worker 會取的 job。
         self._cancel_backfill_timeout_retries()
+        # 逐筆打包的 flush timer 同理是 `call_later` handle:不取消的話 close 之後醒來
+        # 會對已除名的 broadcaster publish 一則沒人收的打包(無害但是殘骸)。
+        if self._tick_flush_timer is not None:
+            self._tick_flush_timer.cancel()
+            self._tick_flush_timer = None
+        self._pending_ticks.clear()
         # 快照:cancel/await 期間 rollover 仍可能 append(`_tasks` 是唯一持有點),
         # 迭代中被改動會漏取消或炸 RuntimeError
         tasks = list(self._tasks)
@@ -1244,10 +1264,11 @@ class StockEngine:
             if self._backfill_wanted(code):
                 self._enqueue_backfill(code)
         if tick is not None and state.ingest(tick):
-            if code == self._main:
-                self._publish(
+            # 收件人 = 主圖 ∪ 登記的檢視集合(#180)。**不進打包 ≠ 不處理**:下面的
+            # watchlist_quote dirty / 訊號層照跑,打包只管「哪些逐筆要送到瀏覽器」。
+            if code == self._main or code in self._tick_targets:
+                self._pending_ticks.append(
                     {
-                        "type": "tick",
                         "code": code,
                         "t": tick.time,
                         "p": tick.price_milli,
@@ -1256,14 +1277,20 @@ class StockEngine:
                         "b": tick.bid_milli,
                         "a": tick.ask_milli,
                         # 當日高低掛 tick 而不另立 meta 訊息型別:engine 只發
-                        # tick / book / watchlist_quote 三種,而高低本來就只在成交時
+                        # ticks / book / watchlist_quote 三種,而高低本來就只在成交時
                         # 才會變,與 tick 同步天然正確。ingest 為真必已跑過 _apply,
                         # 所以這兩個在此必不為 None。
                         "h": state.high_milli,
                         "l": state.low_milli,
+                        # per-code 序號(CLAUDE.md §4「seq 兩口徑」):前端逐檔以
+                        # `seq == acc.seq + 1` 判連續,跳號即該檔重拉快照。
                         "seq": state.seq,
                     }
                 )
+                if self._tick_flush_timer is None and self._loop is not None:
+                    self._tick_flush_timer = self._loop.call_later(
+                        self._tick_flush_secs, self._flush_ticks
+                    )
             # **只收自選碼**(D16):`watchlist_quote` 的消費端是側欄,它以 code 對照
             # 自選名單 —— 合約鍵(或任何非自選的主圖檔)混進去就是一則對不上任何項目
             # 的訊息,而側欄不會報錯,只會多出一格幽靈卡片。
@@ -1681,6 +1708,38 @@ class StockEngine:
 
     def _publish(self, msg: dict) -> None:
         self._ws.publish(msg)
+
+    # ---- 逐筆打包 + 檢視集合(mod/group-grid-ticks,#180)----
+
+    def set_view(self, token: object, codes: Iterable[str]) -> None:
+        """登記一條連線「正在看」的檔(群組檢視的成員);主圖不必登記(恆為收件人)。
+
+        **event loop 上呼叫**(route 的 `on_message` 回呼即在 loop 上):`_tick_targets` 與
+        `_handle_quote` 同執行緒讀寫,不需鎖。不碰訂閱池:未訂閱的 code 登記了也不會有
+        tick 進來(`_handle_quote` 以 `_symbol_to_key` 路由,池外推播早退),無害。
+        """
+        self._views[token] = frozenset(codes)
+        self._recompute_tick_targets()
+
+    def clear_view(self, token: object) -> None:
+        """連線收尾(斷線 / 關閉)時除名;未登記過的 token 是 no-op。"""
+        if self._views.pop(token, None) is not None:
+            self._recompute_tick_targets()
+
+    def _recompute_tick_targets(self) -> None:
+        self._tick_targets = frozenset().union(*self._views.values())
+
+    def _flush_ticks(self) -> None:
+        """把這一窗累積的成交以**一則** `ticks` 送出(插入序 = 到貨序,同檔 seq 遞增)。
+
+        首行先卸 timer(沿 futures `_flush` 的 SC-0 不變式):之後任何早退都不留殘骸,
+        下一筆到貨照排。`_loop is None` = close 已開始 → 丟棄不送。
+        """
+        self._tick_flush_timer = None
+        if self._loop is None or not self._pending_ticks:
+            return
+        items, self._pending_ticks = self._pending_ticks, []
+        self._publish({"type": "ticks", "items": items})
 
     def _trial_flip_targets(self) -> list[str]:
         """窗翻轉要補推的收件人:自選全碼 + **現貨**主圖碼(D3)。
