@@ -318,8 +318,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `_pending_ticks`)+ `_flush_ticks`(`tick_flush_secs` 0.1 s `call_later`,非空才發**一則**
   `{"type":"ticks","items":[{code,t,p,q,side,b,a,h,l,seq},…]}`;item 欄位與舊單筆逐字同名、無 `type`)。逐筆**不合併不少**,
   打包只降訊息數(50 檔開盤每秒數百筆 → ≤ 10 則/s,per-client queue 1000 撐 100 s)。讀者 = `frontend/src/hooks/
-  useStockStream.ts` `case "ticks"`(主圖 items 依序走 pending / 跳號 refetch,整則一次 commit;非主圖 items 丟
-  `lib/tick-stream.ts::emitTicks`)與 `hooks/useGroupLiveAccums.ts`(群組卡片 per-code `seq === acc.seq + 1` 才套用,
+  useStockStream.ts` `case "ticks"`(主圖 items 依序走 pending / 跳號 refetch,整則一次 commit;**整則原序**丟
+  `lib/tick-stream.ts::emitTicks` —— 含主圖檔,因為主圖那一檔在群組裡也有一張卡,兩份 accum 各自獨立;09-03 review
+  spec F-01)與 `hooks/useGroupLiveAccums.ts`(群組卡片以檢視集合過濾後 per-code `seq === acc.seq + 1` 才套用,
   跳號那一檔重拉 `group-state?codes=X`)。主圖最多晚 0.1 s(user 拍板接受)。後端改回單筆 / 改欄名 → 前端 `default` 分支
   靜默丟棄,主圖與圖牆同時凍在快照,零錯誤訊號;`tests/server/test_stock_engine.py::TestTickBundle` +
   `useStockStream.test.ts`「ticks 打包」節釘住。丟包可觀測:`ws.py::WsBroadcaster.dropped` + 60 s 節流 WARNING「佇列滿」——
