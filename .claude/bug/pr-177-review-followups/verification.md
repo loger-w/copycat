@@ -41,7 +41,7 @@ F-12 補 commit、其餘一輪修;F-16 維持 no-op 不動)。
 
 | Gate | 結果 |
 |---|---|
-| `pytest -q` 全量 | **3348 passed, 3 skipped**(exit 0) |
+| `pytest -q` 全量 | **3348 passed, 3 skipped**(exit 0);tie 修後複跑 **3349 passed, 3 skipped** |
 | `ruff check copycat tests` | All checks passed |
 | `pyright` | 0 errors |
 | `copycat validate`(four/five replay 先行) | 42/42 PASS |
