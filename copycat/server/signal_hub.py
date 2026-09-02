@@ -1093,11 +1093,14 @@ class SignalHub:
         return self._data_dir / _ENABLED_FILE
 
     def _legacy_flags(self) -> dict[str, bool]:
-        """舊四鍵開關檔(遷移專用來源;fail-open 全開)。
+        """舊開關檔(遷移專用來源;fail-open 全開)。
 
-        規則化之後這份**只在「規則檔不存在」時被讀一次**,用來決定四條種子規則的
-        `enabled`;之後永遠不再回頭讀它。setter 與 route 已隨開關家族退役,這個檔
-        從此唯讀 —— 留著只為了讓既有部署的關閉態能跟著遷移過來。
+        規則化之後這份**只在「規則檔不存在」時被讀一次**,用來決定種子規則(現六條,
+        含 surge_pullback 兩卡)的 `enabled`;之後永遠不再回頭讀它。flags 以
+        `SWITCH_KEYS`(現五鍵)起手 → 每鍵恆在,檔案值逐鍵覆蓋(手寫
+        `"surge_pullback": false` 會關掉兩張種子卡 —— 逐鍵覆蓋語意,刻意如實)。
+        setter 與 route 已隨開關家族退役,這個檔從此唯讀 —— 留著只為了讓既有部署的
+        關閉態能跟著遷移過來。
         """
         flags = dict.fromkeys(SWITCH_KEYS, True)  # 缺檔 = 全開
         path = self._enabled_path()
