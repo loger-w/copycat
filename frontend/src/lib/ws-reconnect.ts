@@ -76,6 +76,11 @@ function isPing(value: unknown): boolean {
 export interface WsHandle {
   /** 停止重連 + 關 socket,之後所有回呼不再觸發。 */
   close(): void;
+  /** 對**當代且已 open** 的 socket 送原文(mod/group-grid-ticks T3)。握手中 / 斷線退避中 /
+   *  `close()` 後一律回 `false` 靜默丟 —— 呼叫端該在 `onOpen` 重送它要的狀態(useStockStream
+   *  的檢視集合就是這樣補),所以丟掉不是遺失。不用 `readyState`:測試的 FakeWS 沒有它,
+   *  而 open/close 事件本來就經過本 helper,自己記一份最準。 */
+  send(data: string): boolean;
 }
 
 /** 建立 WS 連線並在斷線後以指數退避重連。`url` 傳函式 = 每次重連當下重算。 */
@@ -94,6 +99,8 @@ export function connectWithRetry(
   const jitterMs = opts.watchdogJitterMs ?? WS_WATCHDOG_JITTER_MS;
 
   let current: WebSocket | null = null;
+  /** 當代且已 open 的 socket(`send` 的唯一守門);onopen 設、任何關閉路徑清。 */
+  let openSock: WebSocket | null = null;
   let timer: number | undefined;
   let backoff = startMs;
   let stopped = false;
@@ -167,6 +174,7 @@ export function connectWithRetry(
       sock.onclose = null;
       sock.onerror = null;
       clearWatchdog();
+      if (openSock === sock) openSock = null; // 放棄路徑不會再有 onclose,這裡就要收 send 的門
       sock.close(); // 不等 onclose(Chromium closing handshake 逾時 60 s)
       if (stopped) return;
       scheduleReconnect(jitterMs);
@@ -186,6 +194,7 @@ export function connectWithRetry(
 
     sock.onopen = () => {
       openedAt = Date.now();
+      openSock = sock; // 先開門再回呼:onOpen 內的 `handle.send()`(重送檢視集合)才送得出去
       arm(); // N035:open 即武裝,寬限 = 完整 silenceTimeout
       handlers.onOpen?.();
     };
@@ -210,6 +219,7 @@ export function connectWithRetry(
     };
     sock.onclose = () => {
       clearWatchdog();
+      if (openSock === sock) openSock = null;
       if (stopped) return;
       scheduleReconnect();
     };
@@ -223,8 +233,14 @@ export function connectWithRetry(
   connect();
 
   return {
+    send: (data: string): boolean => {
+      if (openSock === null || openSock !== current) return false;
+      openSock.send(data);
+      return true;
+    },
     close: (): void => {
       stopped = true;
+      openSock = null;
       window.clearTimeout(timer);
       stopWatchdog();
       if (current !== null) {

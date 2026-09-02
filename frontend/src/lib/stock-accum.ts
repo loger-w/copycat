@@ -3,19 +3,21 @@
 import { X_END_MIN, X_START_MIN } from "@/lib/stock-intraday-svg";
 import { isMarketLevel, snapDown } from "@/lib/stock-tick";
 
-export interface StockTickMsg {
-  type: "tick";
+/** 一筆成交(WS `ticks` 打包訊息的 item;mod/group-grid-ticks #180 起單筆 `tick` 型別退役,
+ *  故 item 自身不帶 `type`)。欄位與後端 `stock_engine._handle_quote` 組的 dict 逐字同名。 */
+export interface StockTickItem {
   code: string;
   t: string; // 台北 HH:MM:SS.fff
   p: number; // 毫元
   q: number;
   side: "outer" | "inner" | "neutral";
+  /** per-code 序號(CLAUDE.md §4「seq 兩口徑」):`seq === acc.seq + 1` 才連續,否則該檔重拉快照 */
   seq: number;
   /** 成交當下最佳買賣價;缺欄位(舊後端)一律當 null */
   b?: number | null;
   a?: number | null;
   /** 當日高低(毫元)。掛在 tick 而不是另立 meta 訊息型別:engine 只發
-   *  tick / book / watchlist_quote 三種,而當日高低本來就只在成交時才會變 */
+   *  ticks / book / watchlist_quote 三種,而當日高低本來就只在成交時才會變 */
   h?: number | null;
   l?: number | null;
 }
@@ -374,7 +376,7 @@ export function accumFromGroupSnapshot(
   };
 }
 
-export function applyTick(acc: StockAccum, msg: StockTickMsg): StockAccum {
+export function applyTick(acc: StockAccum, msg: StockTickItem): StockAccum {
   const key = minuteKey(msg.t);
   const minutes = new Map(acc.minutes);
   const prev = minutes.get(key) ?? { c: 0, v: 0, i: 0, o: 0, u: 0 };

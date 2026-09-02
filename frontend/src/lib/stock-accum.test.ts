@@ -8,7 +8,7 @@ import {
   trialBadgeText,
   type MinuteAgg,
   type StockAccum,
-  type StockTickMsg,
+  type StockTickItem,
   VP_TICK_CAP,
 } from "@/lib/stock-accum";
 import { sideSummary } from "@/lib/stock-intraday-svg";
@@ -60,7 +60,7 @@ describe("fromSnapshot 的 trial", () => {
   it("applyTick 保留 trial(tick 不帶這個欄位,spread 不可漏)", () => {
     const acc = fromSnapshot({ ...SNAP, trial: true });
     const next = applyTick(acc, {
-      type: "tick", code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
+      code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
     });
     expect(next.trial).toBe(true);
   });
@@ -68,7 +68,7 @@ describe("fromSnapshot 的 trial", () => {
   it("applyTick 保留 tapeOmitted(同 trial:tick 不帶這個欄位,spread 不可漏)", () => {
     const acc = fromSnapshot({ ...SNAP, ticks: [], tape_omitted: true });
     const next = applyTick(acc, {
-      type: "tick", code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
+      code: "2330", t: "09:02:00.000", p: 2_385_000, q: 1, side: "outer", seq: 4,
     });
     expect(next.tapeOmitted).toBe(true);
   });
@@ -99,7 +99,7 @@ describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
   it("tick 的 h / l 增量更新當日高低(WS 不發 meta 型別訊息)", () => {
     let acc = fromSnapshot({ ...SNAP, high: 2_380_000, low: 2_380_000 });
     acc = applyTick(acc, {
-      type: "tick", code: "2330", t: "09:02:00.000", p: 2_395_000, q: 1, side: "outer",
+      code: "2330", t: "09:02:00.000", p: 2_395_000, q: 1, side: "outer",
       seq: 4, b: 2_394_000, a: 2_395_000, h: 2_395_000, l: 2_380_000,
     });
     expect(acc.high).toBe(2_395_000);
@@ -111,7 +111,7 @@ describe("當日高低與逐筆買賣價(round5 §🔴-11)", () => {
   it("tick 缺 h / l(舊後端)→ 保留原值,不打成 null", () => {
     let acc = fromSnapshot({ ...SNAP, high: 2_390_000, low: 2_370_000 });
     acc = applyTick(acc, {
-      type: "tick", code: "2330", t: "09:02:00.000", p: 2_380_000, q: 1, side: "outer", seq: 4,
+      code: "2330", t: "09:02:00.000", p: 2_380_000, q: 1, side: "outer", seq: 4,
     });
     expect(acc.high).toBe(2_390_000);
     expect(acc.low).toBe(2_370_000);
@@ -138,11 +138,11 @@ describe("per-minute 高低(round4 項 1)", () => {
 
   it("applyTick 在同一分鐘內滾動 h / l", () => {
     let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:10.000", p: 2_380_000, q: 1, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:10.000", p: 2_380_000, q: 1, side: "outer", seq: 4 });
     expect(acc.minutes.get(541)?.h).toBe(2_380_000);
     expect(acc.minutes.get(541)?.l).toBe(2_380_000); // 單筆分鐘:高 = 低 = 該筆
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_395_000, q: 1, side: "outer", seq: 5 });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:50.000", p: 2_370_000, q: 1, side: "inner", seq: 6 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:30.000", p: 2_395_000, q: 1, side: "outer", seq: 5 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:50.000", p: 2_370_000, q: 1, side: "inner", seq: 6 });
     expect(acc.minutes.get(541)?.h).toBe(2_395_000);
     expect(acc.minutes.get(541)?.l).toBe(2_370_000);
     expect(acc.minutes.get(541)?.c).toBe(2_370_000); // 收盤與高低分離
@@ -151,7 +151,7 @@ describe("per-minute 高低(round4 項 1)", () => {
   it("舊 snapshot 來的分鐘(h=null 且 v>0)再吃 tick → h 仍為 null", () => {
     // 只用「本次載入後看到的 tick」算出來的高低不是整分鐘的高低,不可冒充
     let acc = fromSnapshot(SNAP); // 541 有量、無 h/l
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:55.000", p: 2_390_000, q: 1, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:55.000", p: 2_390_000, q: 1, side: "outer", seq: 4 });
     expect(acc.minutes.get(541)?.h).toBeNull();
     expect(acc.minutes.get(541)?.l).toBeNull();
   });
@@ -161,9 +161,9 @@ describe("applyTick", () => {
   it("accumulates minutes, vwap and inner/outer(與後端 StockDayState 等值)", () => {
     // 後端 tests/live/test_stock_state.py::TestAggregation 同一組數字
     let acc: StockAccum = fromSnapshot({ ...SNAP, seq: 1, minutes: {}, ticks: [], last: null, vwap: null });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer", seq: 2 });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:01:59.000", p: 2_390_000, q: 4, side: "inner", seq: 3 });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:02:10.000", p: 2_400_000, q: 6, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:30.000", p: 2_380_000, q: 10, side: "outer", seq: 2 });
+    acc = applyTick(acc, { code: "2330", t: "09:01:59.000", p: 2_390_000, q: 4, side: "inner", seq: 3 });
+    acc = applyTick(acc, { code: "2330", t: "09:02:10.000", p: 2_400_000, q: 6, side: "outer", seq: 4 });
     const m1 = acc.minutes.get(541);
     expect(m1?.c).toBe(2_390_000);
     expect(m1?.v).toBe(14);
@@ -176,7 +176,7 @@ describe("applyTick", () => {
 
   it("continues vwap from snapshot baseline", () => {
     let acc = fromSnapshot(SNAP); // vwap 2380, cum_vol 10
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
     // (2380*10 + 2400*10) / 20 = 2390.0 元
     expect(acc.vwap).toBe(2_390_000);
   });
@@ -187,7 +187,7 @@ describe("applyTick", () => {
     // 欄名 `vwap_vol` 不可退回 `vol`(FC-2):WS `watchlist_quote` 的 `vol` 正是
     // 累積量,同名反義的兩個欄位同時在前端手上就是誤用的溫床。
     let acc = fromSnapshot({ ...SNAP, vwap: 100_000, last: { p: 100_000, t: "09:01:30.000", cum_vol: 80 }, vwap_vol: 50 });
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 200_000, q: 10, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:03:00.000", p: 200_000, q: 10, side: "outer", seq: 4 });
     // 正確:(100_000×50 + 200_000×10) / (50+10) = 116_667
     // 讀 cum_vol 的錯誤實作:(100_000×80 + 200_000×10) / 90 = 111_111
     expect(acc.vwap).toBe(Math.round((100_000 * 50 + 200_000 * 10) / 60));
@@ -195,14 +195,14 @@ describe("applyTick", () => {
 
   it("snapshot 無 vwap_vol(舊後端)→ fallback last.cum_vol", () => {
     let acc = fromSnapshot(SNAP); // vwap 2380, cum_vol 10, 無 vwap_vol
-    acc = applyTick(acc, { type: "tick", code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
+    acc = applyTick(acc, { code: "2330", t: "09:03:00.000", p: 2_400_000, q: 10, side: "outer", seq: 4 });
     expect(acc.vwap).toBe(2_390_000);
   });
 
   it("keeps tick tape bounded to latest 200 rows", () => {
     let acc = fromSnapshot({ ...SNAP, ticks: [] });
     for (let i = 0; i < 250; i++) {
-      acc = applyTick(acc, { type: "tick", code: "2330", t: "09:05:00.000", p: 2_380_000, q: 1, side: "neutral", seq: 10 + i });
+      acc = applyTick(acc, { code: "2330", t: "09:05:00.000", p: 2_380_000, q: 1, side: "neutral", seq: 10 + i });
     }
     expect(acc.ticks.length).toBe(200);
   });
@@ -213,8 +213,7 @@ describe("applyTick", () => {
  *  fold **先於 tape 截斷**:tape 只留最後 200 筆是顯示需求,VP 要的是「全日」。
  *  兩者共用同一批 tick,所以測試同時鎖住「vp 收到 300 筆」與「ticks 仍是 200 筆」。 */
 describe("vp(價位別成交量 fold,SC-1)", () => {
-  const tick = (over: Partial<StockTickMsg> = {}): StockTickMsg => ({
-    type: "tick",
+  const tick = (over: Partial<StockTickItem> = {}): StockTickItem => ({
     code: "2330",
     t: "09:01:30.000",
     p: 2_380_000,
@@ -321,13 +320,13 @@ describe("vp(價位別成交量 fold,SC-1)", () => {
     //   (a) foldVp 的窗與 windowedEntries / sideSummary 不會各漂各的;
     //   (b) 後端 20k tick deque 截斷時,snapshot 的 minutes 完整而 ticks 缺角 →
     //       兩數岔開,說明列與 VP 對不上就會被這條的同構造版本間接暴露。
-    const batch: StockTickMsg[] = [
-      { type: "tick", code: "2330", t: "08:59:00.000", p: 2_380_000, q: 50, side: "outer", seq: 1 },
-      { type: "tick", code: "2330", t: "09:00:00.000", p: 2_380_000, q: 10, side: "outer", seq: 2 },
-      { type: "tick", code: "2330", t: "09:01:30.000", p: 2_385_000, q: 4, side: "inner", seq: 3 },
-      { type: "tick", code: "2330", t: "10:00:00.000", p: 2_390_000, q: 6, side: "neutral", seq: 4 },
-      { type: "tick", code: "2330", t: "13:30:00.000", p: 2_400_000, q: 3, side: "outer", seq: 5 },
-      { type: "tick", code: "2330", t: "13:35:00.000", p: 2_400_000, q: 90, side: "outer", seq: 6 },
+    const batch: StockTickItem[] = [
+      { code: "2330", t: "08:59:00.000", p: 2_380_000, q: 50, side: "outer", seq: 1 },
+      { code: "2330", t: "09:00:00.000", p: 2_380_000, q: 10, side: "outer", seq: 2 },
+      { code: "2330", t: "09:01:30.000", p: 2_385_000, q: 4, side: "inner", seq: 3 },
+      { code: "2330", t: "10:00:00.000", p: 2_390_000, q: 6, side: "neutral", seq: 4 },
+      { code: "2330", t: "13:30:00.000", p: 2_400_000, q: 3, side: "outer", seq: 5 },
+      { code: "2330", t: "13:35:00.000", p: 2_400_000, q: 90, side: "outer", seq: 6 },
     ];
     let acc = fromSnapshot({ ...SNAP, minutes: {}, ticks: [], last: null, vwap: null });
     for (const m of batch) acc = applyTick(acc, m);
@@ -588,7 +587,6 @@ describe("fromSnapshot 的 vpTruncated(VP 折入來源被截斷的旗標)", () =
 describe("TickRow.n 單調序號(N120)", () => {
   function tickAt(seq: number) {
     return {
-      type: "tick" as const,
       code: "2330",
       t: "09:01:30.000",
       p: 2_380_000,

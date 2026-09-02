@@ -10,8 +10,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
-import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickMsg } from "@/lib/stock-accum";
+import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickItem } from "@/lib/stock-accum";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
+import { emitTicks, getTickView, subscribeTickView } from "@/lib/tick-stream";
 import { connectWithRetry } from "@/lib/ws-reconnect";
 import type { WsStatus } from "@/types";
 
@@ -128,7 +129,7 @@ export function useStockStream(
   const accumRef = useRef<StockAccum | null>(null);
   const refetchingRef = useRef(false);
   const pendingRefetchRef = useRef(false);
-  const pendingRef = useRef<StockTickMsg[]>([]);
+  const pendingRef = useRef<StockTickItem[]>([]);
   // refetch 進行中收到的**最新一份**簿(F-2),套完 snapshot 之後蓋回去。
   //
   // 「推播比 snapshot 新」是**近似恆定不是恆定**(review A-3):snapshot 凍結在後端
@@ -344,23 +345,42 @@ export function useStockStream(
       // 期貨態下 `2330` 的推播仍在跑(自選池),用股號比對會把現貨 tick 混進合約圖。
       const current = instrumentKeyRef.current;
       switch (msg.type) {
-        case "tick": {
-          if (msg.code !== current) return;
-          const tick = msg as unknown as StockTickMsg;
-          if (refetchingRef.current) {
-            pendingRef.current.push(tick);
-            return;
+        case "ticks": {
+          // 0.1 s 打包(#180;單筆 `tick` 退役):一則含「主圖 ∪ 檢視集合」的全部成交,逐筆
+          // 不合併。主圖 items 依序走既有 tick 邏輯(refetch 中進 pending / 跳號 → 全量
+          // 對齊 + 進 pending),**整則只 commit 一次**;非主圖 items 原序丟給 tick 匯流排
+          // (群組卡片的 live accum 在那頭吃),主圖 accum 不碰。
+          //
+          // 跳號後同則的後續 items:`refetch()` 在第一個 await 之前就把 `refetchingRef`
+          // 設 true 並清空 pending,所以它們在下一輪迭代全部走「refetch 中 → pending」,
+          // 落地後以 `seq > snap.seq` 重放 —— 與單筆時代逐則到達的語意逐字相同。
+          const items = (msg.items as StockTickItem[] | undefined) ?? [];
+          const others: StockTickItem[] = [];
+          let acc = accumRef.current;
+          let touched = false;
+          for (const item of items) {
+            if (item.code !== current) {
+              others.push(item);
+              continue;
+            }
+            if (refetchingRef.current) {
+              pendingRef.current.push(item);
+              continue;
+            }
+            if (acc === null) continue; // snapshot 未就緒
+            if (item.seq !== acc.seq + 1) {
+              void refetch(); // 跳號(含回退)→ 全量對齊
+              pendingRef.current.push(item);
+              continue;
+            }
+            acc = applyTick(acc, item);
+            touched = true;
           }
-          const acc = accumRef.current;
-          if (acc === null) return; // snapshot 未就緒
-          if (tick.seq !== acc.seq + 1) {
-            void refetch(); // 跳號(含回退)→ 全量對齊
-            pendingRef.current.push(tick);
-            return;
+          if (touched && acc !== null) {
+            accumRef.current = acc;
+            setAccum(acc);
           }
-          const next = applyTick(acc, tick);
-          accumRef.current = next;
-          setAccum(next);
+          emitTicks(others); // 空陣列不發(匯流排自己守門)
           return;
         }
         case "book": {
@@ -484,6 +504,15 @@ export function useStockStream(
     // `onopen` 到達 —— 旗標若被清成 false 就**再也回不去**(新 socket 的 onopen 已經發生
     // 過了),scheduleRetry 的第三道檢查永遠早退 = F-3 自癒整條失效。
     // unmount 語意不受影響:cleanup 自己會清旗標。
+    //
+    // 檢視集合 → 後端(T3 #183):`{"type":"view","codes"}` 走同一條 WS(CLAUDE.md §4)。
+    // `conn` 在下面才建,但 sendView 只會在 onOpen / store 變化時被呼叫(皆晚於建立)。
+    // 送不出去(握手中 / 退避中)靜默丟:onOpen 會重送當下集合,所以不是遺失。
+    const sendView = (codes: readonly string[]): void => {
+      conn.send(JSON.stringify({ type: "view", codes: [...codes] }));
+    };
+    // store 變化即送(含清空 `[]`:後端才會除名);cleanup 解除,unmount 後不再送。
+    const unsubView = subscribeTickView(sendView);
     const conn = connectWithRetry(
       () => {
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -496,6 +525,10 @@ export function useStockStream(
           setWsStatus("open");
           void refetch(); // 重連後對齊(WS 斷線期間漏訊息)
           emitWsOpen(); // 訊號 feed 的自癒鉤:斷線期間丟的訊號由當日 jsonl 補回
+          // 檢視集合重送(T3 #183):後端以**連線**為 token 登記,重連 = 新 token,不重送
+          // 的話群組卡片在斷線後就只剩 60 s 輪詢、逐筆靜默消失。空集合不送(沒東西可登記)。
+          const codes = getTickView();
+          if (codes.length > 0) sendView(codes);
         },
         onMessage: (msg) => handle(msg as WsMsg),
         onClose: () => {
@@ -510,6 +543,7 @@ export function useStockStream(
       mountedRef.current = false;
       wsOpenRef.current = false;
       cancelRetry(); // in-flight 的 refetch 事後失敗時才不會排到已卸載的元件上
+      unsubView();
       conn.close();
     };
   }, []);
