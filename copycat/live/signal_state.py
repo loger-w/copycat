@@ -1,6 +1,6 @@
 """個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6)。
 
-四類訊號:CDP 五線穿越 / 爆拉跌 / 爆量 / 鎖漲跌停與打開。設計要點:
+五類訊號:CDP 五線穿越 / 爆拉跌 / 爆拉回檔 / 爆量 / 鎖漲跌停與打開。設計要點:
 
 - **零 IO、時鐘可注入**:窗判定、elapsed、cooldown、rearm 全部讀 `now_fn()`
   (台北牆鐘,恆單調);`SignalEvent.time` 只放 tick 時刻,純顯示用。兩條時間軸
@@ -119,21 +119,20 @@ def _sign(value: int) -> int:
     return (value > 0) - (value < 0)
 
 
-def _window_change_pct(
-    window: deque[tuple[float, int, int]], price: int, since: float = 0.0
-) -> float | None:
-    """窗內基準點到現價的漲跌幅(%);不可算(基準 ≤ 0 / 窗內無合格點)→ None。
+def _change_pct(base: int, price: int) -> float | None:
+    """基準點到現價的漲跌幅(%);基準 ≤ 0(壞資料)→ None。
 
-    基準 = 窗內第一筆 `ts >= since` 的價(預設 since=0 即窗最舊點)。surge 偵測與
-    爆拉回檔的武裝共用**同一支**:spec #174「沿 surge 偵測同式」由此成為機驗事實,
-    而不是兩份手抄公式靠註解對齊。
+    surge 偵測與爆拉回檔武裝(含發訊後重武裝)共用**同一支**:spec #174
+    「沿 surge 偵測同式」由此成為機驗事實,而不是幾份手抄公式靠註解對齊。
     """
-    for ts, base, _qty in window:
-        if ts >= since:
-            if base <= 0:
-                return None
-            return (price - base) / base * 100
-    return None
+    if base <= 0:
+        return None
+    return (price - base) / base * 100
+
+
+def _window_change_pct(window: deque[tuple[float, int, int]], price: int) -> float | None:
+    """窗最舊點到現價的漲跌幅(%);窗空 / 基準 ≤ 0 → None。"""
+    return _change_pct(window[0][1], price) if window else None
 
 
 class SignalDetector:
@@ -157,10 +156,11 @@ class SignalDetector:
         self._cooldown: dict[tuple[str, str, str], float] = {}
         self._touch: dict[tuple[str, str, str], int] = {}
         self._latch: dict[tuple[str, str], bool] = {}
-        # 爆拉回檔波狀態:code → (armed, 峰值 milli, 發訊時點 mono)。缺鍵 = 尚未武裝
-        # (等 surge 條件);armed=False = 本波已發過(或停用期間被消耗),等重武裝;
-        # 第三欄只在已發態有意義(重武裝判式的窗基線),武裝態恆 0.0。
-        self._pullback: dict[str, tuple[bool, int, float]] = {}
+        # 爆拉回檔波狀態:code → (armed, 峰值 milli, 發訊時點 mono, 發訊價 milli)。
+        # 缺鍵 = 尚未武裝(等 surge 條件);armed=False = 本波已發過(或停用期間被
+        # 消耗),等重武裝;後兩欄只在已發態有意義(重武裝判式的 O(1) 基線),
+        # 武裝態恆 (0.0, 0)。
+        self._pullback: dict[str, tuple[bool, int, float, int]] = {}
 
     # ---- 基準(CDP)----
 
@@ -507,12 +507,18 @@ class SignalDetector:
         """surge 同式武裝 → 追蹤波峰 → 回落 ≥ `pullback_pct` 一波一則。
 
         - **重武裝兩條路**:(1) 創該波新高(嚴格 > 峰值,grilling 拍板);(2) 已發之後,
-          以「發訊時點之後」的窗重跑 surge 同式(S-1)—— 基線是發訊那一筆(該時點起
-          區間內最高的一筆),沿跌永遠不會 +surge_pct,所以不可能連發;深跌後的獨立
-          新波(未過前高)則接得回來,不會一檔一天啞掉。
+          自「發訊之後」的基線重跑 surge 同式(S-1)—— 基線 = 發訊價(發訊筆還在窗內
+          時),發訊筆出窗後退回窗最舊點。**已知且接受的代價**(pr-177 review F-01,
+          2026-09-02 拍板接受):同一波的 V 型反彈自發訊價 +surge_pct(即使未過前高)
+          也構成重武裝、峰值可能因此下移,回落後再發一則近重複 —— 跟鎖漲停場景下
+          「反彈未過前高 = 力竭」,該則回檔訊號仍有資訊價值。沿跌不會連發(基線是
+          發訊價,跌勢永遠不 +surge_pct);深跌後的獨立新波(未過前高)接得回來,
+          不會一檔一天啞掉。
         - **狀態轉移沿 latch 紀律無條件推進**(design R2):停用期間武裝 / 消耗照走,
           重開不補發;cooldown 同樣只 gate 事件產出(被擋的那一波不延後補發)。
-        - 0 價 tick(壞資料)整段跳過:否則 (peak−0)/peak 是一記假 100% 回檔。
+        - 0 價 tick(壞資料)跳過峰值 / 回檔判定:否則 (peak−0)/peak 是一記假 100%
+          回檔。(0 價仍會進 `evaluate` 的共用窗;成為窗頭時武裝判式拿到 None 靜默
+          —— `_eval_surge` 既有盲點,另題不在此蓋。)
         """
         if price <= 0:
             return []
@@ -523,24 +529,29 @@ class SignalDetector:
                 return []
             gain = _window_change_pct(window, price)
             if gain is not None and gain >= self._cfg.surge_pct:
-                self._pullback[code] = (True, price, 0.0)
+                self._pullback[code] = (True, price, 0.0, 0)
             return []
-        armed, peak, fired_at = entry
+        armed, peak, fired_at, fired_price = entry
         if price > peak:
-            self._pullback[code] = (True, price, 0.0)  # 創波高:峰值前推,發過的波重武裝
+            self._pullback[code] = (True, price, 0.0, 0)  # 創波高:峰值前推,發過的波重武裝
             return []
         if not armed:
-            # 已發:surge 同式重武裝,但窗基線只取發訊之後(S-1;見 docstring)
-            gain = _window_change_pct(window, price, since=fired_at)
+            # 已發:surge 同式重武裝,基線 = 發訊之後第一筆(review F-02:發訊筆還在
+            # 窗內 ⇔ 窗頭早於發訊時點,此時基線就是發訊價本身 —— O(1),免逐格掃窗)
+            base = fired_price if window and window[0][0] < fired_at else 0
+            if not base:
+                gain = _window_change_pct(window, price)
+            else:
+                gain = _change_pct(base, price)
             if gain is not None and gain >= self._cfg.surge_pct:
-                self._pullback[code] = (True, price, 0.0)
+                self._pullback[code] = (True, price, 0.0, 0)
             return []
         # (peak−price)*100/peak 而非 /peak*100:讓「恰好整除」的門檻值浮點精確(邊界含)
         drop = (peak - price) * 100.0 / peak
         if drop < self._cfg.pullback_pct:
             return []
-        # 消耗本波(無條件,先於 enabled/cooldown gate);mono 同筆 = 重武裝基線含發訊價
-        self._pullback[code] = (False, peak, mono)
+        # 消耗本波(無條件,先於 enabled/cooldown gate);記發訊時點與發訊價當重武裝基線
+        self._pullback[code] = (False, peak, mono, price)
         if "surge_pullback" not in enabled:
             return []
         bucket = (code, "surge_pullback", "")

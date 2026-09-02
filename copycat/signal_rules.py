@@ -53,6 +53,9 @@ MAX_RULES = 30
 #: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`;v3 = append 兩張
 #: surge_pullback 種子卡(spec #174;見 `load_rules` 的遷移鏈)。
 _CACHE_VERSION = 3
+#: 可載入版本 = 1.._CACHE_VERSION 推導(review F-10):bump 時白名單自動跟上,
+#: 忘了寫轉換會在 `load_rules` 的遷移鏈斷點炸出來,而不是所有舊檔靜默變壞檔 503。
+_SUPPORTED_VERSIONS: tuple[int, ...] = tuple(range(1, _CACHE_VERSION + 1))
 #: v1→v2 補值。刻意是模組常數而非 `cfg.cdp_rearm_dwell_secs`:`load_rules(path)` 的簽名
 #: 不吃 config,為了遷移多接一個參數會讓所有呼叫端跟著改。與種子路徑(`_seed_params` 走
 #: cfg)的分歧在 `configs/signals.json` 覆寫該鍵時才會出現 —— 所以補值要 log 出來。
@@ -243,6 +246,14 @@ def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
         }
     elif kind == "surge_crash":
         raw = {"pct": float(cfg.surge_pct), "window_secs": float(cfg.surge_window_secs)}
+    elif kind == "surge_pullback":
+        raw = {
+            # 武裝參數借 surge 欄(per-rule config 讓兩者獨立,同 vol_burst 借窗);
+            # `pct` 是卡的字面身分(_PULLBACK_SEEDS),由 `_pullback_seed_rule` 覆上
+            "surge_pct": float(cfg.surge_pct),
+            "window_secs": float(cfg.surge_window_secs),
+            "pct": float(cfg.pullback_pct),
+        }
     elif kind == "vol_burst":
         raw = {
             "ratio": float(cfg.vol_ratio),
@@ -268,10 +279,9 @@ def _seed_cooldown(kind: str, cfg: SignalsConfig) -> int:
 
 
 def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig) -> Rule:
-    """一張 surge_pullback 種子卡:武裝參數沿 surge 全域設定(夾制同 `_seed_params`),
-    `pct` 為卡的字面身分。`default_rules` 與 v2→v3 遷移共用 —— 兩條種子路徑分家會漂。
+    """一張 surge_pullback 種子卡:武裝參數走 `_seed_params`(單源,夾制同其他 kind),
+    `pct` 為卡的字面身分覆上。`default_rules` 與 v2→v3 遷移共用 —— 兩條種子路徑分家會漂。
     """
-    spec = PARAM_SPECS["surge_pullback"]
     return {
         "id": rule_id,
         "name": name,
@@ -279,15 +289,8 @@ def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig)
         "enabled": True,
         "notify_discord": True,
         "cooldown_secs": _seed_cooldown("surge_pullback", cfg),
-        "params": {
-            "surge_pct": _clamp(
-                "surge_pullback.surge_pct", float(cfg.surge_pct), *spec["surge_pct"]
-            ),
-            "window_secs": _clamp(
-                "surge_pullback.window_secs", float(cfg.surge_window_secs), *spec["window_secs"]
-            ),
-            "pct": pct,  # 拍板字面值,恆在值域內
-        },
+        # 拍板字面 pct 恆在值域內;覆在 _seed_params 之後 —— 卡的身分不吃 config
+        "params": {**_seed_params("surge_pullback", cfg), "pct": pct},
         "cdp_levels": [],
     }
 
@@ -296,9 +299,11 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
     """遷移種子:每 kind 一條(surge_pullback 例外 = 兩張卡),參數 / 冷卻取自現行
     全域 `SignalsConfig`。
 
-    `legacy_flags` = 舊 `signals_enabled.json` 的四鍵;**缺鍵 = True**(fail-open,
-    與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉;
-    surge_pullback 晚於開關檔時代,恆走缺鍵那條)。
+    `legacy_flags` = 舊 `signals_enabled.json` 的鍵值;**缺鍵 = True**(fail-open,
+    與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉)。
+    注意 hub 的 `_legacy_flags` 以 `SWITCH_KEYS`(現五鍵)起手 → surge_pullback 鍵
+    **恆在**:真舊檔沒這鍵 → True;手改過的檔寫 false 則兩張種子卡照關(review F-07,
+    刻意如實 —— 開關檔語意就是逐鍵覆蓋)。
     """
     epoch = int(time.time())
     rules: list[Rule] = []
@@ -418,7 +423,7 @@ def load_rules(path: Path) -> list[Rule] | None:
         raise _bad()
     obj = cast(dict[str, Any], payload)
     version = obj.get("_cache_version")
-    if version not in (_CACHE_VERSION, 2, 1):
+    if version not in _SUPPORTED_VERSIONS:
         # 版本 bump 屬開發期動作,屆時必須同時寫轉換 —— 沒寫就該在啟動時被發現。
         logger.error("訊號規則檔版本不符(%s):%r", path, version)
         raise _bad()
