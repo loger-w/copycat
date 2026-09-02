@@ -1,12 +1,12 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type React from "react";
 import { GroupGridView, gridShape } from "@/components/stock/GroupGridView";
 import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
-import { STOCK_GROUP_KEY } from "@/lib/constants";
+import { SCREEN_GROUP_NAME, STOCK_GROUP_KEY, UNGROUPED_PICK } from "@/lib/constants";
 import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
 import type { Group } from "@/lib/watchlist-model";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
@@ -198,6 +198,64 @@ describe("GroupGridView 自選三態前置(review A4)", () => {
 // pill 列容器保留 `role="radiogroup" aria-label="選擇群組"`,StockPage.test.tsx 的
 // 671/713/746/750 四處 `ByLabelText("選擇群組")` 靠它接住(改成別的名字 = 那四條
 // 斷言靜默 vacuous:查不到元素與「群組檢視沒渲染」在 queryBy 下長得一模一樣)。
+// mod/group-grid-ticks T5(#181):pill 藏「盤前篩選」(~60 檔,不是圖牆要看的)、加虛擬「未分組」。
+describe("GroupGridView pill:藏盤前篩選 + 未分組(T5)", () => {
+  const WITH_SCREEN: Group[] = [
+    ...GROUPS,
+    { name: SCREEN_GROUP_NAME, codes: ["1101", "1102"] },
+  ];
+
+  it("pill 列不含「盤前篩選」;側欄不歸本元件管", () => {
+    wrap(<Grid groups={WITH_SCREEN} quotes={{}} onPick={vi.fn()} active={null} />);
+    const rail = screen.getByLabelText("選擇群組");
+    expect(within(rail).queryByRole("radio", { name: SCREEN_GROUP_NAME })).toBeNull();
+    expect(within(rail).getByRole("radio", { name: "半導體" })).toBeTruthy();
+    expect(within(rail).getByRole("radio", { name: "金融" })).toBeTruthy();
+  });
+
+  it("localStorage 記住的是「盤前篩選」→ fallback 第一個可見群組,不開 60 張卡", async () => {
+    window.localStorage.setItem(STOCK_GROUP_KEY, SCREEN_GROUP_NAME);
+    wrap(<Grid groups={WITH_SCREEN} quotes={{}} onPick={vi.fn()} active={null} />);
+    expect((screen.getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(groupCalls()).toHaveLength(1));
+    expect(groupCalls()[0]).toContain("codes=2330,2317");
+    expect(groupCalls()[0]).not.toContain("1101");
+  });
+
+  it("有未分組成員 → 多一顆「未分組」pill;選它 → 卡片 = 未分組成員、記住 sentinel", async () => {
+    wrap(<Grid groups={GROUPS} ungrouped={["3231", "2454"]} quotes={{}} onPick={vi.fn()} active={null} />);
+    const rail = screen.getByLabelText("選擇群組");
+    fireEvent.click(within(rail).getByRole("radio", { name: "未分組" }));
+    await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
+    expect(screen.getByTestId("group-card-2454")).toBeTruthy();
+    expect(screen.queryByTestId("group-card-2330")).toBeNull();
+    expect(groupCalls().some((u) => u.includes("codes=3231,2454"))).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe(UNGROUPED_PICK);
+  });
+
+  it("未分組空 → 沒有那顆 pill;記住 sentinel 也 fallback 第一個群組", () => {
+    window.localStorage.setItem(STOCK_GROUP_KEY, UNGROUPED_PICK);
+    wrap(<Grid groups={GROUPS} ungrouped={[]} quotes={{}} onPick={vi.fn()} active={null} />);
+    const rail = screen.getByLabelText("選擇群組");
+    expect(within(rail).queryByRole("radio", { name: "未分組" })).toBeNull();
+    expect((within(rail).getByRole("radio", { name: "半導體" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("只有盤前篩選一組但有未分組 → 圖牆可用(未分組),不是「尚無群組」空態", async () => {
+    wrap(
+      <Grid
+        groups={[{ name: SCREEN_GROUP_NAME, codes: ["1101"] }]}
+        ungrouped={["3231"]}
+        quotes={{}}
+        onPick={vi.fn()}
+        active={null}
+      />,
+    );
+    expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
+  });
+});
+
 describe("GroupGridView 群組切換 pill", () => {
   it("預設第一個群組;成員卡片全數渲染", async () => {
     wrap(<Grid groups={GROUPS} quotes={{}} onPick={vi.fn()} active={null} />);

@@ -10,7 +10,7 @@ import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
-import { FEE_DISCOUNT_KEY, STOCK_GROUP_KEY, STOCK_VIEW_KEY } from "@/lib/constants";
+import { FEE_DISCOUNT_KEY, STOCK_GROUP_KEY, STOCK_VIEW_KEY, UNGROUPED_PICK } from "@/lib/constants";
 import type { StockView } from "@/lib/stock-view";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
@@ -738,7 +738,7 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   // 而盯盤時圖牆本身就是主畫面。進單檔的路徑只剩檢視 pill(D3)。
   // 🟢 F2(chart-ux-batch-0826):群組檢視下點側欄「某群組區段」的列 → 圖牆切到那一組;
   // 點未分組列不切;單檔檢視下側欄行為不變(只換主檔)。
-  it("群組檢視下點側欄群組列 → 圖牆切到該組;未分組列不切;單檔檢視不動群組", async () => {
+  it("群組檢視下點側欄群組列 → 圖牆切到該組;未分組列切到「未分組」;單檔檢視不動群組", async () => {
     const TWO = {
       codes: ["2330", "2317", "2881", "3231"],
       groups: [
@@ -774,10 +774,13 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     expect((within(rail).getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
     expect(onSelect).toHaveBeenLastCalledWith("2881");
-    // 未分組列(3231 不屬任何組)→ 群組不動
+    // 未分組列(3231 不屬任何組)→ 圖牆切到「未分組」(T5 #181 明文翻轉原 F2「未分組列不切」:
+    // 未分組現在是可選的一組,與群組列同一套行為);記住的是 sentinel,不是「未分組」字面
     fireEvent.click(screen.getByTestId("wl-select-3231"));
-    expect((within(rail).getByRole("radio", { name: "金融" }) as HTMLInputElement).checked).toBe(true);
+    expect((within(rail).getByRole("radio", { name: "未分組" }) as HTMLInputElement).checked).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe(UNGROUPED_PICK);
     expect(onSelect).toHaveBeenLastCalledWith("3231");
+    await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
   });
 
   it("點卡片 → onSelect 該股,檢視仍停在群組", async () => {

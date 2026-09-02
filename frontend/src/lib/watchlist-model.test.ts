@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SCREEN_GROUP_NAME, UNGROUPED_PICK } from "@/lib/constants";
 import {
   addCode,
   addGroup,
@@ -11,6 +12,7 @@ import {
   removeFromGroup,
   renameGroup,
   reorderUngrouped,
+  resolveGroupPick,
   ungroupedCodes,
   type Watchlist,
 } from "@/lib/watchlist-model";
@@ -302,5 +304,45 @@ describe("deleteGroup", () => {
     const out = deleteGroup(w, "主力");
     expect(out.groups).toEqual([]);
     expect(ungroupedCodes(out)).toEqual(["2330", "5483"]);
+  });
+});
+
+// mod/group-grid-ticks T5(#181):群組檢視的選項 = 群組(藏「盤前篩選」)+ 虛擬「未分組」。
+// 「現在看哪一組」的解析只有這一份(GroupGridView 的 pill 與 StockPage 的訊號切組共用),
+// 各寫一份的漂移樣態是 pill 選中 A、訊號卻以 B 當「現群組」判要不要切。
+describe("resolveGroupPick(T5)", () => {
+  const groups = [
+    { name: "半導體", codes: ["2330", "2317"] },
+    { name: SCREEN_GROUP_NAME, codes: ["1101", "1102"] },
+    { name: "金融", codes: ["2881"] },
+  ];
+
+  it("記住的群組在 → 沿用;盤前篩選不在可選集合內", () => {
+    expect(resolveGroupPick(groups, ["3231"], "金融")).toEqual({ name: "金融", codes: ["2881"] });
+    expect(resolveGroupPick(groups, ["3231"], SCREEN_GROUP_NAME)).toEqual({
+      name: "半導體",
+      codes: ["2330", "2317"],
+    });
+  });
+
+  it("記住的名字已被刪 / null → fallback 第一個可見群組", () => {
+    expect(resolveGroupPick(groups, [], "已刪")?.name).toBe("半導體");
+    expect(resolveGroupPick(groups, [], null)?.name).toBe("半導體");
+  });
+
+  it("未分組:有成員才可選;選它時 codes = 未分組成員(即時算,不落檔)", () => {
+    expect(resolveGroupPick(groups, ["3231", "2454"], UNGROUPED_PICK)).toEqual({
+      name: UNGROUPED_PICK,
+      codes: ["3231", "2454"],
+    });
+    // 未分組空 → 記住的 UNGROUPED_PICK 也 fallback 第一個可見群組
+    expect(resolveGroupPick(groups, [], UNGROUPED_PICK)?.name).toBe("半導體");
+  });
+
+  it("只有盤前篩選一組 + 有未分組 → 未分組;什麼都沒有 → null", () => {
+    const onlyScreen = [{ name: SCREEN_GROUP_NAME, codes: ["1101"] }];
+    expect(resolveGroupPick(onlyScreen, ["3231"], null)).toEqual({ name: UNGROUPED_PICK, codes: ["3231"] });
+    expect(resolveGroupPick(onlyScreen, [], null)).toBeNull();
+    expect(resolveGroupPick([], [], null)).toBeNull();
   });
 });

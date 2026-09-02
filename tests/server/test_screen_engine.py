@@ -9,19 +9,32 @@
 from __future__ import annotations
 
 import datetime as _dt
+import re
 
 import pytest
 
 from copycat.server import breadth_engine, screen_engine
 from copycat.server.breadth_fetch import BreadthFetchError
-from copycat.server.screen_engine import ScreenEngine
+from copycat.server.screen_engine import SCREEN_GROUP, ScreenEngine
 from copycat.trading_calendar import WEEKEND_ONLY
+from tests.helpers.frontend_source import read_frontend_source
 
 
 def test_daily_min_rows_parity_with_breadth() -> None:
     """單日全市場列數守門與 breadth 同值:兩邊守的是同一個上游(TaiwanStockPrice 分頁
     截斷),漂開的症狀是一邊當髒資料重試、另一邊照收 → 篩選候選無聲少一截。"""
     assert screen_engine._DAILY_MIN_ROWS == breadth_engine._DAILY_MIN_ROWS
+
+
+def test_screen_group_name_parity_with_frontend() -> None:
+    """跨語言契約(CLAUDE.md §4「盤前篩選群組名」;mod/group-grid-ticks T5 #181):後端
+    `SCREEN_GROUP` 是產生點(nightly 寫進自選的群組名),前端 `lib/constants.ts::SCREEN_GROUP_NAME`
+    是群組檢視 pill 的**過濾鍵**。後端改名而前端沒跟 → 圖牆又列出 ~60 張卡,兩側各自的測試全綠,
+    零錯誤訊號。同 `test_avg_source_parity_with_frontend` 姿態:直讀前端原始碼字面。"""
+    text = read_frontend_source("lib/constants.ts")
+    m = re.search(r'export const SCREEN_GROUP_NAME = "([^"]+)";', text)
+    assert m, 'constants.ts 找不到 `export const SCREEN_GROUP_NAME = "...";` 字面'
+    assert m.group(1) == SCREEN_GROUP
 
 
 # ---------------------------------------------------------------------------
