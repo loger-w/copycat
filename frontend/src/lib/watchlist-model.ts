@@ -80,6 +80,28 @@ export function resolveGroupPick(
   return ungroupedOn ? { name: UNGROUPED_PICK, codes: ungrouped } : null;
 }
 
+/** 群組檢視下點訊號 → 圖牆該停在哪一組(mod/group-grid-ticks T6,#184)。
+ *
+ *  `current` 已含該檔 → 回 `current`(不切:使用者正在看的那組本來就有它);否則群組序第一個
+ *  含它的可見群組,再退未分組(`UNGROUPED_PICK`);盤前篩選不算(圖牆選不到它)、不在自選 → null
+ *  = 呼叫端只換右欄標的、群組不動。一檔可多組時「群組序第一個」是刻意的簡單規則,不猜偏好。 */
+export function groupForCode(
+  groups: readonly Group[],
+  ungrouped: readonly string[],
+  current: string | null,
+  code: string,
+): string | null {
+  const visible = groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
+  const inUngrouped = ungrouped.includes(code);
+  if (current !== null) {
+    const cur = current === UNGROUPED_PICK ? inUngrouped : visible.some((g) => g.name === current && g.codes.includes(code));
+    if (cur) return current;
+  }
+  const first = visible.find((g) => g.codes.includes(code));
+  if (first !== undefined) return first.name;
+  return inUngrouped ? UNGROUPED_PICK : null;
+}
+
 /** 加進自選(落未分組);已在自選 → 原物件。 */
 export function addCode(wl: Watchlist, code: string): Watchlist {
   if (wl.codes.includes(code)) return wl;
