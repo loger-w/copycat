@@ -348,21 +348,19 @@ export function useStockStream(
         case "ticks": {
           // 0.1 s 打包(#180;單筆 `tick` 退役):一則含「主圖 ∪ 檢視集合」的全部成交,逐筆
           // 不合併。主圖 items 依序走既有 tick 邏輯(refetch 中進 pending / 跳號 → 全量
-          // 對齊 + 進 pending),**整則只 commit 一次**;非主圖 items 原序丟給 tick 匯流排
-          // (群組卡片的 live accum 在那頭吃),主圖 accum 不碰。
+          // 對齊 + 進 pending),**整則只 commit 一次**;**整則原序**丟給 tick 匯流排(群組
+          // 卡片的 live accum 在那頭吃,自己以檢視集合過濾)—— 主圖那一檔在群組裡也有一張卡
+          // (SC-3 點卡片只換右欄、檢視停在群組),只送非主圖 items 會讓那張卡凍在播種值
+          // (two-axis review spec F-01);兩份 accum 各自獨立,不會重複套用。
           //
           // 跳號後同則的後續 items:`refetch()` 在第一個 await 之前就把 `refetchingRef`
           // 設 true 並清空 pending,所以它們在下一輪迭代全部走「refetch 中 → pending」,
           // 落地後以 `seq > snap.seq` 重放 —— 與單筆時代逐則到達的語意逐字相同。
           const items = (msg.items as StockTickItem[] | undefined) ?? [];
-          const others: StockTickItem[] = [];
           let acc = accumRef.current;
           let touched = false;
           for (const item of items) {
-            if (item.code !== current) {
-              others.push(item);
-              continue;
-            }
+            if (item.code !== current) continue;
             if (refetchingRef.current) {
               pendingRef.current.push(item);
               continue;
@@ -380,7 +378,7 @@ export function useStockStream(
             accumRef.current = acc;
             setAccum(acc);
           }
-          emitTicks(others); // 空陣列不發(匯流排自己守門)
+          emitTicks(items); // 空陣列不發(匯流排自己守門)
           return;
         }
         case "book": {
@@ -511,8 +509,6 @@ export function useStockStream(
     const sendView = (codes: readonly string[]): void => {
       conn.send(JSON.stringify({ type: "view", codes: [...codes] }));
     };
-    // store 變化即送(含清空 `[]`:後端才會除名);cleanup 解除,unmount 後不再送。
-    const unsubView = subscribeTickView(sendView);
     const conn = connectWithRetry(
       () => {
         const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -538,6 +534,9 @@ export function useStockStream(
       },
       { label: "stock ws" },
     );
+    // store 變化即送(含清空 `[]`:後端才會除名);放 `conn` 之後(TDZ 不靠「不同步 dispatch」
+    // 撐);cleanup 解除,unmount 後不再送。
+    const unsubView = subscribeTickView(sendView);
 
     return () => {
       mountedRef.current = false;

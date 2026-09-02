@@ -109,7 +109,13 @@ export function useGroupLiveAccums(
       try {
         const states = await fetchGroupState(code);
         const snap = states[code];
-        if (!mountedRef.current || snap === undefined || !codesRef.current.includes(code)) return;
+        if (!mountedRef.current || !codesRef.current.includes(code)) return;
+        if (snap === undefined) {
+          // 後端回應缺該檔(理論上不會:未知 code 也回 no_data 空表)—— 同樣要冷卻,否則下一則
+          // 打包再判跳號、再打一發,與下面 catch 的意圖相違(review spec F-03)
+          retryAfterRef.current.set(code, Date.now() + REFETCH_COOLDOWN_MS);
+          return;
+        }
         let acc = accumFromGroupSnapshot(code, snap, quotesRef.current[code]?.p ?? null);
         for (const item of pendingRef.current.get(code) ?? []) {
           if (item.seq > snap.seq) acc = applyTick(acc, item);
