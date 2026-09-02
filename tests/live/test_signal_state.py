@@ -787,9 +787,13 @@ _PB = frozenset({"surge_pullback"})
 
 
 class TestSurgePullback:
-    """爆拉回檔(spec #174):surge 同式武裝 → 追蹤波峰 → 回落 ≥ pct 發一則 →
-    創該波新高才重武裝(唯一重武裝路徑);狀態轉移沿 latch 紀律無條件推進,
-    `enabled` 與 cooldown 只 gate 事件產出。"""
+    """爆拉回檔(spec #174):surge 同式武裝 → 追蹤波峰 → 回落 ≥ pct 一波一則。
+
+    重武裝**兩條路**(與 `_eval_pullback` docstring 對齊):(1) 創該波新高;
+    (2) 已發後自發訊價重跑 surge 同式(S-1)—— 已知且接受的代價是同波 V 型反彈
+    (未過前高)也重武裝、可再發一則近重複(2026-09-02 拍板接受,
+    見 test_v_bounce_below_peak_rearms_and_refires_accepted)。
+    狀態轉移沿 latch 紀律無條件推進,`enabled` 與 cooldown 只 gate 事件產出。"""
 
     def test_pullback_fires_after_surge_and_retracement(self) -> None:
         clock = _Clock()
@@ -1000,6 +1004,29 @@ class TestSurgePullback:
         assert len(fired) == 1  # 新波回檔:自 97.0 回落 1.13%
         assert fired[0].pct is not None
         assert abs(fired[0].pct - (97_000 - 95_900) * 100 / 97_000) < 1e-9
+
+    def test_v_bounce_below_peak_rearms_and_refires_accepted(self) -> None:
+        """pr-177 review F-01 實錄、2026-09-02 拍板**接受**:同一波 V 型反彈自發訊價
+        +surge_pct(未過前高)→ 重武裝且峰值下移 → 回落再發一則近重複。
+        跟鎖漲停場景下「反彈未過前高 = 力竭」,該則訊號仍有資訊價值。
+        本測釘住接受的現況 —— 日後改嚴(波谷基線 / 低於發訊價條件)時,這是該變的那條。"""
+        clock = _Clock()
+        det = _det(clock, pullback_pct=2.0, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(104_500), _ctx(), _PB)  # 武裝(+4.5%),峰 104.5
+        clock.advance(60)
+        first = det.evaluate("2330", _tick(102_400), _ctx(), _PB)
+        assert len(first) == 1  # 自 104.5 回落 2.01%
+        clock.advance(60)
+        # 反彈 104.45:未過前高 104.5,但自發訊價 102.4 起 +2.00% ≥ surge_pct → 重武裝
+        assert det.evaluate("2330", _tick(104_450), _ctx(), _PB) == []
+        clock.advance(60)
+        second = det.evaluate("2330", _tick(102_360), _ctx(), _PB)
+        assert len(second) == 1  # 自新峰 104.45 回落 2.00% —— 接受的近重複
+        assert second[0].touch_count == 2
+        assert second[0].pct is not None
+        assert abs(second[0].pct - (104_450 - 102_360) * 100 / 104_450) < 1e-9
 
     def test_downhill_after_fire_never_chain_fires(self) -> None:
         """S-1 的反面約束:發訊後沿跌不得因「窗尾還掛著起漲點」而重武裝連發 ——

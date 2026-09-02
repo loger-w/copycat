@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import types
 from pathlib import Path
 from typing import Any
 
@@ -348,7 +349,8 @@ SEEDED_KINDS = [
 
 
 class TestDefaultRules:
-    def test_one_rule_per_kind_all_valid(self) -> None:
+    def test_seeded_rules_all_valid(self) -> None:
+        """六條種子(四 kind 各一 + surge_pullback 兩卡)全部過 normalize、id/name 唯一。"""
         rules = default_rules(SignalsConfig(), {})
         assert [r["kind"] for r in rules] == SEEDED_KINDS
         assert len({r["id"] for r in rules}) == len(rules)
@@ -359,13 +361,15 @@ class TestDefaultRules:
             assert normalize_rule(r, others) == r
 
     def test_legacy_flags_map_to_enabled(self) -> None:
+        # by name 不 by kind(review F-14):kind 已非唯一鍵,dict 會把兩張回檔卡塌成一張
         rules = default_rules(SignalsConfig(), {"vol_burst": False, "cdp_cross": True})
-        flags = {r["kind"]: r["enabled"] for r in rules}
-        assert flags["vol_burst"] is False
-        assert flags["cdp_cross"] is True
-        assert flags["surge_crash"] is True  # 缺鍵 = fail-open 全開
-        assert flags["limit_lock"] is True
-        assert flags["surge_pullback"] is True  # 舊開關檔沒有這一鍵 → 恆開
+        flags = {r["name"]: r["enabled"] for r in rules}
+        assert flags["爆量"] is False
+        assert flags["CDP 穿越"] is True
+        assert flags["爆拉爆跌"] is True  # 缺鍵 = fail-open 全開
+        assert flags["鎖漲跌停"] is True
+        assert flags["爆拉回檔 1%"] is True  # 真舊開關檔沒有這一鍵 → 兩卡各自恆開
+        assert flags["爆拉回檔 2%"] is True
 
     def test_params_seeded_from_config(self) -> None:
         cfg = SignalsConfig(
@@ -378,7 +382,9 @@ class TestDefaultRules:
             vol_min_window_lots=200,
             vol_min_day_lots=900,
         )
-        by_kind = {r["kind"]: r for r in default_rules(cfg, {})}
+        # 回檔兩卡另由 test_pullback_seed_cards_pinned_to_names 按 name 鎖;這裡先濾掉,
+        # 免得 by-kind dict 靜默塌卡讓人誤以為有斷到(review F-14)
+        by_kind = {r["kind"]: r for r in default_rules(cfg, {}) if r["kind"] != "surge_pullback"}
         assert by_kind["cdp_cross"]["params"]["rearm_ticks"] == 7
         assert by_kind["cdp_cross"]["params"]["rearm_dwell_secs"] == 180.0
         assert by_kind["cdp_cross"]["cdp_levels"] == list(CDP_LEVELS)
@@ -410,13 +416,15 @@ class TestDefaultRules:
             limit_cooldown_secs=180.0,
             pullback_cooldown_secs=240.0,
         )
-        by_kind = {r["kind"]: r["cooldown_secs"] for r in default_rules(cfg, {})}
-        assert by_kind == {
-            "cdp_cross": 300,
-            "surge_crash": 900,
-            "surge_pullback": 240,
-            "vol_burst": 1200,
-            "limit_lock": 180,
+        # by name(review F-14):兩張回檔卡各自斷言,不讓 dict 塌卡
+        by_name = {r["name"]: r["cooldown_secs"] for r in default_rules(cfg, {})}
+        assert by_name == {
+            "CDP 穿越": 300,
+            "爆拉爆跌": 900,
+            "爆拉回檔 1%": 240,
+            "爆拉回檔 2%": 240,
+            "爆量": 1200,
+            "鎖漲跌停": 180,
         }
 
     def test_out_of_domain_config_cooldown_clamped_not_raised(self) -> None:
@@ -525,18 +533,21 @@ class TestLoadSaveRules:
             save_rules(blocker / "rules.json", [])
 
 
-class TestMigrationV1ToV2:
-    """SC-8:既有 v1 規則檔在載入期補 `rearm_dwell_secs`,不回寫檔案(§7 回退窗)。
+def _write_versioned(path: Path, version: int, rules: list[Any]) -> None:
+    """預寫指定版本的規則檔(兩個遷移測試類共用 —— review F-15 收單源)。"""
+    path.write_text(
+        json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+class TestMigrationFromV1:
+    """SC-8 + 遷移鏈:既有 v1 規則檔在載入期補 `rearm_dwell_secs` 並走完 v2→v3
+    種子注入,不回寫檔案(§7 回退窗;save 落當前版本 v3)。
 
     沒有這條轉換,升級後第一次啟動就是 `load_rules` raise → hub None →
     `/api/stock/signals/*` 全數 503,而且盤中才會發現。
     """
-
-    def _write(self, path: Path, version: int, rules: list[Any]) -> None:
-        path.write_text(
-            json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
-            encoding="utf-8",
-        )
 
     def _v1_cdp(self) -> dict[str, Any]:
         rule = make("cdp_cross", id="r-1-000", name="舊 CDP")
@@ -545,7 +556,7 @@ class TestMigrationV1ToV2:
 
     def test_v1_file_loads_with_dwell_backfilled(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        self._write(path, 1, [self._v1_cdp(), make("limit_lock", id="r-1-001", name="鎖停")])
+        _write_versioned(path, 1, [self._v1_cdp(), make("limit_lock", id="r-1-001", name="鎖停")])
 
         loaded = load_rules(path)
 
@@ -558,7 +569,7 @@ class TestMigrationV1ToV2:
     def test_v1_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
         """不回寫 = upsert 前還留著回退窗(§7):舊碼可以直接讀回原檔。"""
         path = tmp_path / "rules.json"
-        self._write(path, 1, [self._v1_cdp()])
+        _write_versioned(path, 1, [self._v1_cdp()])
         before = path.read_text(encoding="utf-8")
 
         load_rules(path)
@@ -570,7 +581,7 @@ class TestMigrationV1ToV2:
     ) -> None:
         """補值與種子路徑(`cfg.cdp_rearm_dwell_secs`)可能不同 → 補了什麼要留痕(§7 已知分歧)。"""
         path = tmp_path / "rules.json"
-        self._write(path, 1, [self._v1_cdp()])
+        _write_versioned(path, 1, [self._v1_cdp()])
         with caplog.at_level("INFO"):
             load_rules(path)
         assert "r-1-000" in caplog.text
@@ -579,13 +590,13 @@ class TestMigrationV1ToV2:
     def test_v2_file_missing_new_key_rejected(self, tmp_path: Path) -> None:
         """精確集合仍在(W9):v2 檔缺鍵不是「舊檔」,是壞檔 —— 不得順手補。"""
         path = tmp_path / "rules.json"
-        self._write(path, 2, [self._v1_cdp()])
+        _write_versioned(path, 2, [self._v1_cdp()])
         with pytest.raises(RuleError, match="INVALID_RULE"):
             load_rules(path)
 
     def test_v2_file_with_new_key_loads(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        self._write(path, 2, [make("cdp_cross", id="r-1-000", name="新 CDP")])
+        _write_versioned(path, 2, [make("cdp_cross", id="r-1-000", name="新 CDP")])
         loaded = load_rules(path)
         assert loaded is not None
         assert loaded[0]["params"]["rearm_dwell_secs"] == 300.0
@@ -595,7 +606,7 @@ class TestMigrationV1ToV2:
         path = tmp_path / "rules.json"
         rule = make("cdp_cross", id="r-1-000", name="手改")
         rule["params"] = {"rearm_ticks": 5, "rearm_dwell_secs": 60}
-        self._write(path, 1, [rule])
+        _write_versioned(path, 1, [rule])
         loaded = load_rules(path)
         assert loaded is not None
         assert loaded[0]["params"]["rearm_dwell_secs"] == 60.0
@@ -605,13 +616,13 @@ class TestMigrationV1ToV2:
         path = tmp_path / "rules.json"
         bad = self._v1_cdp()
         bad["cooldown_secs"] = 5
-        self._write(path, 1, [bad])
+        _write_versioned(path, 1, [bad])
         with pytest.raises(RuleError, match="INVALID_RULE"):
             load_rules(path)
 
     def test_save_after_v1_load_lands_v3(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        self._write(path, 1, [self._v1_cdp()])
+        _write_versioned(path, 1, [self._v1_cdp()])
         loaded = load_rules(path)
         assert loaded is not None
         save_rules(path, loaded)
@@ -622,7 +633,7 @@ class TestMigrationV1ToV2:
     def test_version_zero_and_four_still_raise(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
         for version in (0, 4):
-            self._write(path, version, [])
+            _write_versioned(path, version, [])
             with pytest.raises(RuleError, match="INVALID_RULE"):
                 load_rules(path)
 
@@ -635,16 +646,13 @@ class TestMigrationV2ToV3:
     使用者在 v3 世界刪掉種子卡後(save 已落 v3)不再回來。
     """
 
-    def _write(self, path: Path, version: int, rules: list[Any]) -> None:
-        path.write_text(
-            json.dumps({"_cache_version": version, "rules": rules}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    def test_v2_file_gets_two_seed_cards_appended(self, tmp_path: Path) -> None:
+    def test_v2_file_gets_two_seed_cards_appended(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         path = tmp_path / "rules.json"
-        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
-        loaded = load_rules(path)
+        _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
+        with caplog.at_level("INFO"):
+            loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 3
         seeds = loaded[1:]
         assert [r["name"] for r in seeds] == ["爆拉回檔 1%", "爆拉回檔 2%"]
@@ -655,19 +663,53 @@ class TestMigrationV2ToV3:
             assert seed["enabled"] is True
             assert seed["notify_discord"] is True
             assert seed["cdp_levels"] == []
-        assert len({r["id"] for r in loaded}) == 3  # id 不得撞既有
+        # 撞既有 id 的去重見 test_seed_id_collision_with_existing_dedups(這裡 id 空間不相交)
+        assert len({r["id"] for r in loaded}) == 3
+        # append 內容要留痕(對帳判準,v1 遷移 log 前例同款;review F-05)
+        assert caplog.text.count("append 種子卡") == 2
+
+    def test_seed_id_collision_with_existing_dedups(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_migrate_v2` 的 while 去重迴圈(review F-04):既有規則恰佔走種子要配的 id
+        (`r-<epoch>-001`)時要往前找,不得產出重複 id —— 沒有迴圈的症狀是
+        `load_rules` 對重複 id raise → 開機 hub None → signals routes 整組 503。"""
+        import copycat.signal_rules as signal_rules_mod
+
+        epoch = 1_700_000_000
+        monkeypatch.setattr(signal_rules_mod, "time", types.SimpleNamespace(time=lambda: epoch))
+        path = tmp_path / "rules.json"
+        # len(items)=1 → 種子 seq 自 1 起 → 第一張卡想配 r-1700000000-001,恰被佔走
+        occupied = make("surge_crash", id=f"r-{epoch}-001", name="爆拉爆跌")
+        _write_versioned(path, 2, [occupied])
+        loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 3  # 沒有去重迴圈時這裡是 raise
+        assert len({r["id"] for r in loaded}) == 3
+
+    def test_seed_skip_on_max_rules_logs_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """跳卡 WARNING 是滿載使用者「沒拿到那張卡」的唯一訊號(review F-05)。"""
+        path = tmp_path / "rules.json"
+        _write_versioned(
+            path, 2, [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(30)]
+        )
+        with caplog.at_level("WARNING"):
+            loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 30
+        assert caplog.text.count("跳過種子卡") == 2
 
     def test_v2_empty_file_still_gets_seeds(self, tmp_path: Path) -> None:
         """一次性升級注入:v2 空檔(v2 世界刪光的)也拿到新功能的種子。"""
         path = tmp_path / "rules.json"
-        self._write(path, 2, [])
+        _write_versioned(path, 2, [])
         loaded = load_rules(path)
         assert loaded is not None
         assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%"]
 
     def test_v2_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        self._write(path, 2, [])
+        _write_versioned(path, 2, [])
         before = path.read_text(encoding="utf-8")
         load_rules(path)
         assert path.read_text(encoding="utf-8") == before
@@ -675,13 +717,13 @@ class TestMigrationV2ToV3:
     def test_v3_file_never_reseeded(self, tmp_path: Path) -> None:
         """v3 檔刪光就是刪光 —— 既有「空陣列 ≠ 缺檔」語意在 v3 上原樣成立。"""
         path = tmp_path / "rules.json"
-        self._write(path, 3, [])
+        _write_versioned(path, 3, [])
         assert load_rules(path) == []
 
     def test_seed_skipped_on_name_collision(self, tmp_path: Path) -> None:
         """使用者已有同名規則 → 跳過那一張(不 raise、不重複名稱)。"""
         path = tmp_path / "rules.json"
-        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉回檔 1%")])
+        _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉回檔 1%")])
         loaded = load_rules(path)
         assert loaded is not None
         assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%"]
@@ -691,13 +733,13 @@ class TestMigrationV2ToV3:
         """29 條 → 只塞得下 1% 卡;30 條 → 兩張都跳過(不得讓 load raise)。"""
         path = tmp_path / "rules.json"
         many = [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(29)]
-        self._write(path, 2, many)
+        _write_versioned(path, 2, many)
         loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 30
         assert loaded[-1]["name"] == "爆拉回檔 1%"
 
         full = [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(30)]
-        self._write(path, 2, full)
+        _write_versioned(path, 2, full)
         loaded_full = load_rules(path)
         assert loaded_full is not None and len(loaded_full) == 30
         assert all(r["kind"] == "limit_lock" for r in loaded_full)
@@ -705,7 +747,7 @@ class TestMigrationV2ToV3:
     def test_save_after_v2_load_lands_v3_and_stable(self, tmp_path: Path) -> None:
         """load → save → load 不再增生(v3 檔不重播種)。"""
         path = tmp_path / "rules.json"
-        self._write(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
+        _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
         loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 3
         save_rules(path, loaded)
