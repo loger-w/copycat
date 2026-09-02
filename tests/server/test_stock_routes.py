@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -741,6 +742,9 @@ class TestGroupStateRoute:
                 "high",
                 "low",
                 "vp",
+                # #182:卡片逐筆的錨點(`seq`)與增量 VWAP 分母(`vwap_vol`),additive
+                "seq",
+                "vwap_vol",
                 "no_data",
                 "backfilling",
             }
@@ -938,7 +942,101 @@ class TestStockWs:
                 )
                 got = [ws.receive_json(), ws.receive_json()]
                 types = {m["type"] for m in got}
-                assert {"tick", "book"} & types
+                # 逐筆自 #180 起只走 `ticks` 打包(單筆 `tick` 退役)
+                assert {"ticks", "book"} & types
+
+
+def _spot_quote(code: str, *, cum: int, price: str = "2380") -> dict:
+    return {
+        "Symbol": f"TC.S.TWS.{code}",
+        "Security": code,
+        "SecurityName": "台積電",
+        "TradingPrice": price,
+        "TradeQuantity": "1",
+        "TradeVolume": str(cum),
+        "TradeDate": "20260721",
+        "FilledTime": "25751",
+        "PreciseTime": "25751000000",
+        "Bid": "2375",
+        "Ask": "2380",
+        "BidVolume": "10",
+        "AskVolume": "10",
+        "ReferencePrice": "2320",
+        "UpperLimitPrice": "2550",
+        "LowerLimitPrice": "2090",
+        "YClosedPrice": "2320",
+        "YTradeVolume": "100",
+        "OpenTime": "90000",
+        "CloseTime": "133000",
+        "TradeStatus": "0",
+    }
+
+
+def _next_of_type(ws, kind: str, *, limit: int = 12) -> dict:
+    """跳過 seed(watchlist_quote)/ book 等,取第一則指定型別;超過 `limit` 則視為沒到。"""
+    for _ in range(limit):
+        msg = ws.receive_json()
+        if msg["type"] == kind:
+            return msg
+    raise AssertionError(f"{limit} 則內沒有 {kind}")
+
+
+class TestStockWsView:
+    """`/ws/stock` 入站 `view` 訊息(mod/group-grid-ticks T2,#182):瀏覽器告訴後端
+    「我正在看這些檔」,後端以該連線為 token 登記;斷線自動除名;壞輸入只記 WARNING。"""
+
+    def _put(self, client: TestClient, codes: list[str]) -> None:
+        r = client.put("/api/stock/watchlist", json={"codes": codes, "groups": []})
+        assert r.status_code == 200
+
+    def test_view_message_registers_codes_and_close_clears_them(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        with client:
+            self._put(client, ["2330", "2317"])
+            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+            with client.websocket_connect("/ws/stock") as ws:
+                assert fake.on_message is not None
+                ws.send_json({"type": "view", "codes": ["2317"]})
+                # 登記走 `_recv` task,與下面的推播分屬兩條路徑;給它一拍落地
+                time.sleep(0.1)
+                fake.on_message(_spot_quote("2317", cum=1))
+                bundle = _next_of_type(ws, "ticks")
+                assert [it["code"] for it in bundle["items"]] == ["2317"]
+                assert stock._views, "連線期間應有一份登記"
+            # 斷線 → 除名(否則圖牆關掉後該連線的檔還會一直打包給別的連線)
+            for _ in range(50):
+                if not stock._views:
+                    break
+                time.sleep(0.02)
+            assert stock._views == {}
+
+    def test_view_does_not_touch_the_subscription_pool(self, tmp_path: Path) -> None:
+        client, fake = make_client(tmp_path)
+        with client:
+            self._put(client, ["2330"])
+            before = list(fake.subscribed)
+            with client.websocket_connect("/ws/stock") as ws:
+                ws.send_json({"type": "view", "codes": ["2330", "9999"]})
+                time.sleep(0.1)
+            assert list(fake.subscribed) == before
+
+    def test_bad_client_message_is_logged_and_connection_survives(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client, fake = make_client(tmp_path)
+        with client:
+            client.get("/api/stock/state/2330")  # 主圖 = 恆為收件人
+            with client.websocket_connect("/ws/stock") as ws, caplog.at_level(logging.WARNING):
+                ws.send_text("{oops")  # 非 JSON
+                ws.send_json({"type": "nope"})  # 未知型別
+                ws.send_json(["not", "a", "dict"])
+                time.sleep(0.1)
+                assert fake.on_message is not None
+                fake.on_message(_spot_quote("2330", cum=1))
+                bundle = _next_of_type(ws, "ticks")  # 連線還活著、推播照收
+                assert bundle["items"][0]["code"] == "2330"
+            warned = [r for r in caplog.records if "ws/stock 入站" in r.getMessage()]
+            assert len(warned) == 3
 
 
 class TestBarsRoute:

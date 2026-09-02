@@ -377,7 +377,9 @@ class TestLightSnapshot:
         light = self._filled().light_snapshot()
         # 🔴 group-grid-full-chart:卡片要畫「完全同款」的分時圖 → VWAP 白線 / 日高低圈 /
         # VP 水平條所需的四鍵一併帶出。由 minutes 在前端近似會畫出與單檔頁不同的圖。
-        assert set(light) == {"minutes", "meta", "vwap", "high", "low", "vp"}
+        # #182(mod/group-grid-ticks):卡片改逐筆 → 要 `seq` 當套用錨點、`vwap_vol` 當
+        # 增量 VWAP 的分母(前端以 vwap × vwap_vol 還原分子);兩鍵 additive
+        assert set(light) == {"minutes", "meta", "vwap", "high", "low", "vp", "seq", "vwap_vol"}
         # ticks 仍是本輪要省掉的那一份(50 檔 × 數千筆 = 頻寬與 CPU 雙重浪費);
         # vp 是**它的聚合**(O(當日成交檔位數),與 tick 筆數脫鉤)才進得了 light
         assert "ticks" not in light
@@ -398,6 +400,9 @@ class TestLightSnapshot:
         assert light["vwap"] is not None  # 同上:三個 None 互等是 vacuous
         assert light["high"] == 2_400_000
         assert light["low"] == 2_380_000
+        # #182:兩個新鍵同樣走「單一定義」—— 與全量 snapshot 逐字同值
+        assert light["seq"] == full["seq"] == 2
+        assert light["vwap_vol"] == full["vwap_vol"] == 15  # 10 + 5(去重剔試撮後 Σqty)
 
     def test_light_snapshot_without_meta_is_none_not_missing(self) -> None:
         """缺 meta 回 `None` 而不是漏鍵:前端 `raw.meta ?? null` 對兩者同解,但
@@ -413,6 +418,8 @@ class TestLightSnapshot:
             "high": None,
             "low": None,
             "vp": {},
+            "seq": 0,
+            "vwap_vol": 0,
         }
 
 
