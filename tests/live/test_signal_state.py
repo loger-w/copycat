@@ -1005,6 +1005,26 @@ class TestSurgePullback:
         assert fired[0].pct is not None
         assert abs(fired[0].pct - (97_000 - 95_900) * 100 / 97_000) < 1e-9
 
+    def test_same_mono_tick_before_fire_keeps_scan_baseline(self) -> None:
+        """O(1) 改寫的等價邊界(收修 review 抓到):同一 mono 時刻多筆 tick、發訊筆
+        不是該時刻首筆時,重武裝基線 = 該時刻**首筆**的價(舊掃描語意),不是發訊價。
+        凍結時鐘下 102.6 與 102.4(發訊)同刻:基線 102.6 → 反彈 104.45 僅 +1.80%
+        (< 2%)不得重武裝、不得再發 —— 用發訊價當基線會是 +2.00% 而誤重武裝。"""
+        clock = _Clock()
+        det = _det(clock, pullback_pct=2.0, pullback_cooldown_secs=0.0)
+        det.evaluate("2330", _tick(100_000), _ctx(), _PB)
+        clock.advance(60)
+        det.evaluate("2330", _tick(104_500), _ctx(), _PB)  # 武裝,峰 104.5
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(102_600), _ctx(), _PB) == []  # −1.82%,未達 2%
+        # 不 advance:下一筆與 102.6 同 mono(TC4 burst / 測試凍結時鐘都會出現)
+        fired = det.evaluate("2330", _tick(102_400), _ctx(), _PB)
+        assert len(fired) == 1  # −2.01% 發訊;同刻首筆是 102.6
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(104_450), _ctx(), _PB) == []  # 自 102.6 僅 +1.80%
+        clock.advance(60)
+        assert det.evaluate("2330", _tick(102_360), _ctx(), _PB) == []  # 未重武裝 → 不再發
+
     def test_v_bounce_below_peak_rearms_and_refires_accepted(self) -> None:
         """pr-177 review F-01 實錄、2026-09-02 拍板**接受**:同一波 V 型反彈自發訊價
         +surge_pct(未過前高)→ 重武裝且峰值下移 → 回落再發一則近重複。
@@ -1030,7 +1050,7 @@ class TestSurgePullback:
 
     def test_downhill_after_fire_never_chain_fires(self) -> None:
         """S-1 的反面約束:發訊後沿跌不得因「窗尾還掛著起漲點」而重武裝連發 ——
-        發訊後的 surge 判式基線是發訊那一筆(區間內最高的一筆),跌勢永不 +2%。"""
+        重武裝基線 ≥ 發訊價(發訊當刻掃描存下),沿跌價恆低於它,永不 +surge_pct。"""
         clock = _Clock()
         det = _det(clock, pullback_cooldown_secs=0.0)
         det.evaluate("2330", _tick(100_000), _ctx(), _PB)
