@@ -42,6 +42,18 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   WS_HEARTBEAT_SECS`(CLAUDE.md §4)。**hook 測試若在 onopen 後推進 ≥ 35 s 而不餵訊息,連線會被判半死重連**
   (寫測試時餵 `{type:"ping"}` 或把推進量拆段);測放棄後的重連要多推 `WS_WATCHDOG_JITTER_MS`(或 stub `Math.random`)。
   Trigger:新增 / 改任何 WS hook;想調 WS 重連節奏;hook 測試用 fake timers 長推進。
+- **個股逐筆只有一條 WS、多個消費端 → 走 `lib/tick-stream.ts` 匯流排,不把 tick state 提到 App 穿 props**
+  (2026-09-03 mod/group-grid-ticks 沉澱):`useStockStream` 吃 `ticks` 打包(CLAUDE.md §4),主圖 items 自己套、
+  其餘 `emitTicks`;群組卡片由 `useGroupLiveAccums` 訂閱 —— 一則打包 = 一次 setState,只有收到成交的檔換 accum
+  identity(50 張卡 memo 的前提)。反向「我正在看哪些檔」走同一個 store 的 `setTickView`,hook 訂閱後經
+  `WsHandle.send` 送 `view`,**onopen 必重送**(後端以連線為 token)。要送東西給後端的 WS hook 一律用 helper 的
+  `send`(當代 open 守門,握手中 / 退避中回 false 靜默丟,由 onOpen 重送補)。
+  兩個踩過的坑:(1) 「快照換了 → live 覆蓋層作廢」**不要**在 render 期 `setState` 重設 —— 呼叫端 / mock 讓 seeded 每
+  render 換 identity 時就是 Too many re-renders;改成合成時以 `live.base !== seeded` 忽略舊層即可。(2) tick handler 是
+  deps `[]` 閉包,要讀「當下」的 codes / quotes / merged 走 ref,但 **ref 在 effect 同步、不在 render 期寫**
+  (doctor `no-ref-current-in-render` 會抓;useStockStream 的 codeRef 是 08-11 triage 的既存例外,新 code 不沿用);
+  播種 memo 刻意不把每秒換 identity 的 `quotes` 進 deps,讀 `quotesRef.current`(舊一拍不改語意)。
+  Trigger:新增任何吃逐筆 / 打包訊息的 hook;要對後端 WS 送訊息;寫「快照 + 增量覆蓋」形的 hook。
 
 # 前端版面 / 響應式慣例
 

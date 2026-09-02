@@ -142,8 +142,17 @@
 - [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。
 - [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
 
-- [ ] **`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
-  畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。
+- [x] ~~**`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
+  畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。~~
+  → **09-03 mod/group-grid-ticks 出貨**(spec #179;T1–T6 = #180 / #182 / #183 / #185 / #181 / #184;grilling 09-02 拍板):後端逐筆改
+  0.1 s `ticks` 打包(單筆 `tick` 退役,逐筆不合併不少)+ `/ws/stock` 入站 `view` 登記檢視集合(主圖 ∪ 群組成員,不動訂閱池)+
+  broadcaster 丟包計數與節流 WARNING + group-state additive `seq` / `vwap_vol`;前端 `lib/tick-stream` 匯流排、`useGroupLiveAccums`
+  (快照播種 → per-code seq 守門 → 跳號單檔重拉)、卡片圖改吃 live accum(**quote 每秒延伸末點退役**,末點由 tick 驅動);
+  群組 pill 藏「盤前篩選」+ 虛擬「未分組」+ 群組檢視點訊號切組。**不做 rAF 合批**(打包已把 commit 釘在 ≤ 10 次/s;量到 long task 才加)。
+  **盤中判準(prod 重啟 + dist 重 build 後)**:① 群組檢視卡片線與量隨成交動、與右欄主圖同步(動機);② 盤後 `grep "佇列滿"
+  logs/server-*.log` 為 0;③ 開盤 5 分鐘 DevTools performance trace 無 > 50 ms long task(截圖入 `.claude/mod/group-grid-ticks/evidence/`);
+  ④ 三件 UI 過目(pill 無盤前篩選 / 未分組 pill / 點訊號切組)。留尾:50 檔壓測是單元(FakeSource),真環境 50 檔開盤的
+  `dropped` 只能盤中看;`_CLIENT_QUEUE_MAX` 1000 的餘裕在打包後 = 100 s,J5 的「未重新量測」可就此結案(打包後訊息數與檔數脫鉤)。
 - [x] ~~**`/mod` 緩撮第二段**(L478)。~~ → 08-31 mod/chart-ux-batch-0831 出貨(見下方詳細條)。
 - [x] ~~**`/mod` 成交點精確版**(L439 / L444 / L435)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。
 - [x] ~~**`/mod` 盤前前一交易日 + TXO 自動日期**(L461 / L457)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。

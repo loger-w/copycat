@@ -313,6 +313,31 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   值被收緊 → 加權 stale 徽章 13:2x 提早熄滅。`tests/server/test_index_engine.py::
   test_watch_end_is_the_index_heal_gate_boundary` 鎖住(放依賴方 server 側,pr-128 F-06);`tests/server/test_main_wiring.py::
   test_stock_and_index_heal_gates_are_two_different_clocks` 鎖「兩把不同 callable」。
+- **個股逐筆 = `ticks` 打包訊息,單筆 `tick` 型別已退役**(2026-09-03 起,mod/group-grid-ticks #180):產生點
+  `copycat/server/stock_engine.py::_handle_quote`(ingest 為真且 `code == _main or code in _tick_targets` → 累積
+  `_pending_ticks`)+ `_flush_ticks`(`tick_flush_secs` 0.1 s `call_later`,非空才發**一則**
+  `{"type":"ticks","items":[{code,t,p,q,side,b,a,h,l,seq},…]}`;item 欄位與舊單筆逐字同名、無 `type`)。逐筆**不合併不少**,
+  打包只降訊息數(50 檔開盤每秒數百筆 → ≤ 10 則/s,per-client queue 1000 撐 100 s)。讀者 = `frontend/src/hooks/
+  useStockStream.ts` `case "ticks"`(主圖 items 依序走 pending / 跳號 refetch,整則一次 commit;非主圖 items 丟
+  `lib/tick-stream.ts::emitTicks`)與 `hooks/useGroupLiveAccums.ts`(群組卡片 per-code `seq === acc.seq + 1` 才套用,
+  跳號那一檔重拉 `group-state?codes=X`)。主圖最多晚 0.1 s(user 拍板接受)。後端改回單筆 / 改欄名 → 前端 `default` 分支
+  靜默丟棄,主圖與圖牆同時凍在快照,零錯誤訊號;`tests/server/test_stock_engine.py::TestTickBundle` +
+  `useStockStream.test.ts`「ticks 打包」節釘住。丟包可觀測:`ws.py::WsBroadcaster.dropped` + 60 s 節流 WARNING「佇列滿」——
+  盤後 `grep "佇列滿" logs/server-*.log` 為 0 = 沒丟(政策仍是丟最舊保最新)。
+- **`/ws/stock` 入站 `view` 訊息 = 瀏覽器告知「正在看哪些檔」**(2026-09-03 起,#182 / #183):前端產生點
+  `lib/tick-stream.ts::setTickView`(群組檢視掛載 / 換組送成員、卸載送 `[]`)→ `useStockStream` 經 `WsHandle.send`
+  送 `{"type":"view","codes":[…]}`,**每次 onopen 重送**(後端以連線為 token 登記,重連 = 新 token);後端讀者
+  `server/app.py::ws_stock`(`relay(on_message=…)` 文字 frame 原文回呼,route 解 JSON + 驗形)→ `stock_engine.set_view /
+  clear_view`(斷線 `finally` 除名;`_tick_targets` = 各連線聯集)。主圖恆為收件人,前端不必塞。**不碰訂閱池**(群組成員本來
+  就以 watchlist owner 全天訂著)。壞輸入 WARNING「ws/stock 入站」一則後忽略、連線不斷。漂掉的症狀:前端忘了 onopen 重送 →
+  斷線重連後圖牆只剩 60 s 輪詢、逐筆靜默消失;後端改型別名 → 圖牆整場零逐筆,主圖照常(它不靠 view)。
+  `tests/server/test_stock_routes.py::TestStockWsView` + `useStockStream.test.ts`「setTickView」案釘住。
+- **「盤前篩選」群組名前後端同字面**(2026-09-03 起,#181):產生點 `copycat/server/screen_engine.py::SCREEN_GROUP`
+  (nightly 寫進自選的群組名),讀者 = 前端 `lib/constants.ts::SCREEN_GROUP_NAME`(群組檢視 pill 的**過濾鍵**,
+  `lib/watchlist-model.ts::resolveGroupPick / groupForCode` 藏這一組;側欄照舊顯示)。後端改名前端沒跟 → 圖牆又列出
+  ~60 張卡、訊號切組可能切進去,零錯誤訊號;`tests/server/test_screen_engine.py::test_screen_group_name_parity_with_frontend`
+  直讀前端字面釘住。虛擬「未分組」的 `selectedGroup` 值是 sentinel `UNGROUPED_PICK`(`__ungrouped__`,不落檔),
+  與後端無契約。
 
 ## 5. 資料源
 

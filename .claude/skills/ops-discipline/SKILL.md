@@ -127,6 +127,16 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
   `git worktree add` 或把 commit 打在 detached HEAD 再 `git branch` 指過去;(2) push / PR / merge 全
   用 branch ref(`git push origin <br>`、`gh pr merge <br>`),不需要 checkout;(3) 切回去後再查一次
   status 確認改動還在。(Trigger:主 tree 開分支、多 session 並行)
+- **EnterWorktree 的 `symlinkDirectories` 在 Windows 沒建成(2026-09-02 mod/group-grid-ticks 實測):worktree 一開
+  `.venv` / `frontend/node_modules` 都缺**。處置:後端一律用主 tree venv 的絕對路徑
+  (`C:/side-project/copycat/.venv/Scripts/python -m pytest …`,pyproject `pythonpath=["."]` 讓 worktree 的 `copycat` 蓋過
+  .pth 的主 tree),前端 `cd frontend && npm ci`(~1 分鐘,背景跑);**不要 junction**(三險第一條)。
+  `copycat validate` 需要 `out/` replay 產物(gitignored,worktree 沒有)→ `--run-five / --run-four` 指向主 tree 的
+  `C:/side-project/copycat/out/{five,four}_tigers`,程式碼仍是 worktree 的。另一個坑:Bash 工具的 cwd 會**跨呼叫殘留**
+  上一次 `cd frontend`,之後在錯的目錄下 `npx vitest` 會用 npx 快取裡的 vitest、報 `Cannot find package 'jsdom'`,
+  而在 worktree 根跑 `npx` 還會長出一個 root-level `node_modules/`(untracked)—— 每個前端指令都寫絕對路徑
+  `cd <worktree>/frontend && …`,收尾 `git status` 看到 root `node_modules/` 就刪。(Trigger:開 worktree 做前後端工作、
+  worktree 內跑 validate、Bash 跑前端指令)
 
 ## 驗證迴圈
 
