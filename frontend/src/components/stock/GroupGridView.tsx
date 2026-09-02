@@ -388,9 +388,9 @@ export function GroupGridView({
         onChange={onSelectGroup}
         // T5:藏「盤前篩選」;未分組有成員才多一顆(排最後);label 是字面「未分組」、value 是 sentinel
         items={[
-          ...groups
-            .filter((g) => g.name !== SCREEN_GROUP_NAME)
-            .map((g) => ({ value: g.name, label: g.name })),
+          ...groups.flatMap((g) =>
+            g.name === SCREEN_GROUP_NAME ? [] : [{ value: g.name, label: g.name }],
+          ),
           ...(ungrouped.length > 0 ? [{ value: UNGROUPED_PICK, label: "未分組" }] : []),
         ]}
         pillClass={(_item, checked) =>

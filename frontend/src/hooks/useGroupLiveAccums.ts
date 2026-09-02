@@ -42,28 +42,30 @@ export function useGroupLiveAccums(
   snapshots: Record<string, GroupSnapshot> | undefined,
   quotes: Record<string, WatchlistQuote>,
 ): AccumMap {
-  // render 期同步(沿 useStockStream 的 codeRef 慣例):tick handler 是 deps `[]` 的閉包,
-  // 讀的必須是「當下」的 codes / quotes,而不是掛載當時那份。
+  // tick handler 是 deps `[]` 的閉包,讀的必須是「當下」的 codes / quotes / seeded / merged,
+  // 而不是掛載當時那份 → 走 ref;**在 effect 同步**(不在 render 期寫 ref:doctor
+  // no-ref-current-in-render)。effect 在 commit 後、任何後續 WS 事件之前跑完,handler 讀到的
+  // 恆是最新一次 commit 的值;同一則打包內的連續套用另靠 `overlay` 即時回寫 mergedRef。
   const codesRef = useRef(codes);
-  codesRef.current = codes;
   const quotesRef = useRef(quotes);
-  quotesRef.current = quotes;
 
-  // 播種:只在快照 identity / 成員變時重算;quotes 走 ref 刻意不進 deps(見檔頭)。
+  // 播種:只在快照 identity / 成員變時重算。報價走 `quotesRef`(上一次 commit 的那份,最多舊
+  // 一拍)而**不是** `quotes` prop 進 deps:每秒換 identity 的報價若進 deps,整牆每秒重播種、
+  // memo 形同虛設。播種要的本來就是「快照換的那一刻」的現價,舊一拍不改語意。
   const csv = codes.join(",");
   const seeded = useMemo<AccumMap>(() => {
     const out: AccumMap = {};
     if (snapshots === undefined) return out;
+    const liveQuotes = quotesRef.current;
     for (const code of csv.split(",")) {
       if (code === "") continue;
       const snap = snapshots[code];
       if (snap === undefined) continue;
-      out[code] = accumFromGroupSnapshot(code, snap, quotesRef.current[code]?.p ?? null);
+      out[code] = accumFromGroupSnapshot(code, snap, liveQuotes[code]?.p ?? null);
     }
     return out;
   }, [snapshots, csv]);
   const seededRef = useRef(seeded);
-  seededRef.current = seeded;
 
   const [live, setLive] = useState<Live>({ base: seeded, map: {} });
   // 快照換了 → live 整層作廢:**不 setState、只在合成時忽略**(`live.base !== seeded` 就當空層)。
@@ -78,7 +80,13 @@ export function useGroupLiveAccums(
   // handler 讀「最新已套用」的 accum:同一個 act 內連來兩則打包,第二則要接在第一則之後,
   // 不能等 re-render(否則第二則對舊 seq 判跳號、白打一次重拉)。
   const mergedRef = useRef(merged);
-  mergedRef.current = merged;
+  // 四支 ref 的唯一同步點(每次 commit 後;見上方說明)
+  useEffect(() => {
+    codesRef.current = codes;
+    quotesRef.current = quotes;
+    seededRef.current = seeded;
+    mergedRef.current = merged;
+  });
 
   const refetchingRef = useRef(new Set<string>());
   const pendingRef = useRef(new Map<string, StockTickItem[]>());
