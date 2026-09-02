@@ -7,6 +7,7 @@ start/close,COM 執行緒消化命令佇列);factory 單例以 monkeypatch _clie
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -1093,6 +1094,41 @@ class TestWsBroadcasterBackpressure:
         finally:
             await slow.aclose()
             await fast.aclose()
+
+    async def test_drops_are_counted_and_warned_once_per_window(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#182(mod/group-grid-ticks):丟最舊從**靜默**改成有帳可查 —— 逐筆改打包後
+        「不丟」的證據就是這個計數;盤後 `grep 佇列滿` 為 0 = 沒丟。政策本身不變。
+        WARNING 節流:首次丟包記一則,之後同一窗(60 s)內只累計不洗版。"""
+        b = WsBroadcaster(maxsize=3)
+        gen = b.stream()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+                for i in range(10):
+                    b.publish({"i": i})
+            assert b.dropped == 7
+            warned = [r for r in caplog.records if "佇列滿" in r.getMessage()]
+            assert len(warned) == 1
+            assert "maxsize=3" in warned[0].getMessage()
+            got = [await gen.__anext__() for _ in range(3)]
+            assert got == [{"i": 7}, {"i": 8}, {"i": 9}]  # 政策不變:丟最舊保最新
+        finally:
+            await gen.aclose()
+
+    async def test_no_drop_means_zero_count_and_no_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        b = WsBroadcaster(maxsize=5)
+        gen = b.stream()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+                for i in range(5):
+                    b.publish({"i": i})
+            assert b.dropped == 0
+            assert not [r for r in caplog.records if "佇列滿" in r.getMessage()]
+        finally:
+            await gen.aclose()
 
 
 class TestWebSockets:

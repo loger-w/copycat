@@ -685,6 +685,24 @@ class _FakeWebSocket:
             self.disconnected.set_result({"type": "websocket.disconnect", "code": 1006})
 
 
+class _TalkingWebSocket(_FakeWebSocket):
+    """client 會說話的 WS:`receive` 依序吐出預排的 frame,吐完設 `drained`,之後掛在
+    `disconnected` future 上(與 `_FakeWebSocket` 同一套斷線控制)。"""
+
+    def __init__(self, frames: list[dict]) -> None:
+        super().__init__()
+        self._frames = list(frames)
+        self.drained = asyncio.Event()
+
+    async def receive(self) -> dict:
+        if self._frames:
+            frame = self._frames.pop(0)
+            if not self._frames:
+                self.drained.set()
+            return frame
+        return await self.disconnected
+
+
 class _RaisingWebSocket(_FakeWebSocket):
     """send 側炸掉的 WS;用來釘住 relay 的例外分流(吞 WebSocketDisconnect、其餘 re-raise)。"""
 
@@ -794,6 +812,43 @@ class TestRelay:
 
         websocket.disconnect()
         await asyncio.wait_for(task, timeout=2)
+
+    async def test_on_message_gets_text_frames_and_ignores_binary(self) -> None:
+        """#182(mod/group-grid-ticks):`on_message` 選配 —— 有給就把 client **文字** frame
+        原文回呼(解析 / 驗證是 route 的事,relay 不懂訊息語意);binary frame 照舊忽略;
+        不給時 client 訊息一律忽略(既有案零改動 = 舊行為)。"""
+        websocket = _TalkingWebSocket(
+            [
+                {"type": "websocket.receive", "text": '{"type":"view","codes":["2317"]}'},
+                {"type": "websocket.receive", "bytes": b"\x00"},
+                {"type": "websocket.receive", "text": "{oops"},
+            ]
+        )
+        seen: list[str] = []
+
+        async def _idle() -> AsyncGenerator[dict, None]:
+            await asyncio.sleep(3600)
+            yield {}
+
+        task = asyncio.ensure_future(relay(websocket, _idle(), on_message=seen.append))
+        await asyncio.wait_for(websocket.drained.wait(), timeout=2)
+        websocket.disconnect()
+        await asyncio.wait_for(task, timeout=2)
+        assert seen == ['{"type":"view","codes":["2317"]}', "{oops"]
+
+    async def test_on_message_exception_propagates(self) -> None:
+        """回呼炸掉 = 不懂的錯,不吞:relay 以該例外收尾(連線斷),不靜默續跑。"""
+        websocket = _TalkingWebSocket([{"type": "websocket.receive", "text": "x"}])
+
+        def _boom(_text: str) -> None:
+            raise RuntimeError("handler boom")
+
+        async def _idle() -> AsyncGenerator[dict, None]:
+            await asyncio.sleep(3600)
+            yield {}
+
+        with pytest.raises(RuntimeError, match="handler boom"):
+            await asyncio.wait_for(relay(websocket, _idle(), on_message=_boom), timeout=2)
 
     async def test_broadcaster_client_is_deregistered(self) -> None:
         """與真 `WsBroadcaster` 組合:斷線後該 client 的 queue 必須從 fanout 名單除名。
