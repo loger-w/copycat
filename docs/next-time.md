@@ -153,6 +153,10 @@
   logs/server-*.log` 為 0;③ 開盤 5 分鐘 DevTools performance trace 無 > 50 ms long task(截圖入 `.claude/mod/group-grid-ticks/evidence/`);
   ④ 三件 UI 過目(pill 無盤前篩選 / 未分組 pill / 點訊號切組)。留尾:50 檔壓測是單元(FakeSource),真環境 50 檔開盤的
   `dropped` 只能盤中看;`_CLIENT_QUEUE_MAX` 1000 的餘裕在打包後 = 100 s,J5 的「未重新量測」可就此結案(打包後訊息數與檔數脫鉤)。
+- [ ] **跳號重拉狀態機兩份(主圖 `useStockStream` / 群組 `useGroupLiveAccums`)候選抽共用 `lib/seq-gap.ts`**(09-03 two-axis review
+  std F-02,拍板不順手做):兩邊形狀同(`refetching` / `pending` / `seq !== acc.seq + 1` → 單飛取快照 → 重放 `seq > snap.seq`),
+  差在 per-code 與主圖的 book / trial 交錯保護(F-2 / IC-3)。主圖那份是硬化過的,抽共用要連那三道時序保護一起搬,
+  屬 `/refactor`(codebase-design seam 先議);改重放判準前先做,否則要動兩處。
 - [x] ~~**`/mod` 緩撮第二段**(L478)。~~ → 08-31 mod/chart-ux-batch-0831 出貨(見下方詳細條)。
 - [x] ~~**`/mod` 成交點精確版**(L439 / L444 / L435)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。
 - [x] ~~**`/mod` 盤前前一交易日 + TXO 自動日期**(L461 / L457)。~~ → 08-31 mod/chart-ux-batch-0831 出貨。

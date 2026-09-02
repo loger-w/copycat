@@ -53,6 +53,10 @@ description: React / TypeScript 基本風格 + 前端版面與響應式慣例。
   deps `[]` 閉包,要讀「當下」的 codes / quotes / merged 走 ref,但 **ref 在 effect 同步、不在 render 期寫**
   (doctor `no-ref-current-in-render` 會抓;useStockStream 的 codeRef 是 08-11 triage 的既存例外,新 code 不沿用);
   播種 memo 刻意不把每秒換 identity 的 `quotes` 進 deps,讀 `quotesRef.current`(舊一拍不改語意)。
+  **「Server state 一律走 TanStack Query」的書面例外**(two-axis review std F-01 明文化):WS 驅動的 seq 對齊
+  refetch(主圖 `useStockStream.refetch` / 群組 `useGroupLiveAccums` 單檔重拉)是逐筆協定的一部分 —— 跳號 → 單飛
+  取快照 → pending 重放 `seq > snap.seq` → 失敗冷卻;TQ 的 retry / staleTime / dedup 語意會與它打架,所以自寫。
+  例外只到這兩處,別的取數照走 TQ。
   Trigger:新增任何吃逐筆 / 打包訊息的 hook;要對後端 WS 送訊息;寫「快照 + 增量覆蓋」形的 hook。
 
 # 前端版面 / 響應式慣例
