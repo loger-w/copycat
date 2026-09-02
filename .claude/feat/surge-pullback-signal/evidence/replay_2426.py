@@ -2,6 +2,8 @@
 
 bar `t` 是終點標記;每根依 o→h/l(依漲跌序)→c 展成 4 筆 tick,時鐘取 bar 終點。
 兩顆 detector = 種子兩張卡(5 分鐘 +2% 武裝,回檔 1% / 2%)。
+可重跑:輸入 `bars_2426.json` 同目錄入版控;repo root 由本檔位置推導
+(pr-177 review F-12 —— 初版硬編一個收尾即刪的 worktree 絕對路徑)。
 """
 
 from __future__ import annotations
@@ -12,17 +14,16 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-sys.path.insert(
-    0, r"C:\side-project\copycat\.claude\worktrees\feat-surge-pullback-signal"
-)
+# parents: [0]=evidence [1]=surge-pullback-signal [2]=feat [3]=.claude [4]=repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from copycat.live.signal_state import SignalDetector, TickContext  # noqa: E402
 from copycat.live.stock_models import StockTick  # noqa: E402
 from copycat.signals_config import SignalsConfig  # noqa: E402
 
-bars = json.loads(
-    (Path(__file__).parent / "bars_2426.json").read_text(encoding="utf-8-sig")
-)["bars"]
+bars = json.loads((Path(__file__).parent / "bars_2426.json").read_text(encoding="utf-8-sig"))[
+    "bars"
+]
 day = [b for b in bars if b["t"].startswith("2026-09-01")]
 print(f"2026-09-01 bars: {len(day)}")
 
@@ -51,9 +52,7 @@ class Clock:
 
 def run(pct: float) -> list[str]:
     clock = Clock()
-    cfg = replace(
-        SignalsConfig(), surge_pct=2.0, surge_window_secs=300.0, pullback_pct=pct
-    )
+    cfg = replace(SignalsConfig(), surge_pct=2.0, surge_window_secs=300.0, pullback_pct=pct)
     det = SignalDetector(cfg, now_fn=clock)
     out: list[str] = []
     for bar in day:
