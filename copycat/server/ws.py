@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, Iterable, Mapping, Protocol
+import time
+from typing import Any, AsyncGenerator, Callable, Iterable, Mapping, Protocol
 
 from fastapi import WebSocketDisconnect
 
@@ -36,12 +37,25 @@ WS_HEARTBEAT_SECS: float = 10.0
 PING: dict[str, str] = {"type": "ping"}
 
 
+#: 丟包 WARNING 的節流窗(秒):首次丟包記一則,同窗內只累計。開盤瞬間慢 client 可能
+#: 一秒丟上百則,逐則記會把 log 洗掉;而「有沒有丟」這個事實一則就夠,量看 `dropped`。
+DROP_WARN_WINDOW_SECS: float = 60.0
+
+
 class WsBroadcaster:
-    """per-client 有界 queue fanout;`publish` 必須在 event loop 上呼叫。"""
+    """per-client 有界 queue fanout;`publish` 必須在 event loop 上呼叫。
+
+    丟包**可觀測**(mod/group-grid-ticks #182):逐筆改 0.1 s 打包後,「資料不丟」的證據
+    就是這裡的 `dropped` 恆為 0 —— 政策(滿了丟最舊、保最新)逐字不變,只是從靜默改成
+    有帳可查。盤後判準:`grep "佇列滿" logs/server-*.log` 零命中。
+    """
 
     def __init__(self, maxsize: int = CLIENT_QUEUE_MAX) -> None:
         self._maxsize = maxsize
         self._clients: set[asyncio.Queue[dict]] = set()
+        #: 累計丟掉的訊息數(所有 client 合計)。唯讀給測試 / 診斷;不重置。
+        self.dropped = 0
+        self._drop_warned_at: float | None = None
 
     def publish(self, msg: dict) -> None:
         for queue in self._clients:
@@ -57,6 +71,21 @@ class WsBroadcaster:
                     queue.put_nowait(msg)
                 except asyncio.QueueFull:
                     pass
+                self._note_drop()
+
+    def _note_drop(self) -> None:
+        self.dropped += 1
+        now = time.monotonic()
+        if self._drop_warned_at is not None and now - self._drop_warned_at < DROP_WARN_WINDOW_SECS:
+            return
+        self._drop_warned_at = now
+        logger.warning(
+            "ws 佇列滿:丟最舊保最新(累計 dropped=%d,maxsize=%d,clients=%d)—— 慢 client"
+            "跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
+            self.dropped,
+            self._maxsize,
+            len(self._clients),
+        )
 
     def stream(self, seed: Iterable[dict] = ()) -> AsyncGenerator[dict, None]:
         """新 client 的訊息流;`seed` 逐則在**呼叫當下同步**入該 client 的佇列。
@@ -142,8 +171,14 @@ async def relay(
     stream: AsyncGenerator[dict, None],
     *,
     heartbeat_secs: float | None = None,
+    on_message: Callable[[str], None] | None = None,
 ) -> None:
     """stream → WS 送出,並行 receive 偵測 client 斷線(review B3)+ 定時心跳。
+
+    `on_message`(#182,選配):client **文字** frame 的原文回呼,在 `_recv` task 上
+    (= event loop)同步執行;binary frame 照舊忽略。**不傳 = 舊行為逐字不變**(client
+    訊息一律忽略),其餘七個 accept 點零改動。relay 不解 JSON、不懂訊息語意 —— 解析與
+    驗證是 route 的事;回呼拋例外視為不懂的錯,relay 以該例外收尾(不吞)。
 
     無推播流量時 send 側永遠掛在 queue.get,察覺不到 client 斷線 →
     per-client queue 洩漏;receive task 在斷線時收到 `websocket.disconnect` 收尾。
@@ -188,11 +223,17 @@ async def relay(
     async def _recv() -> None:
         while True:
             message = await websocket.receive()
-            # client 送來的訊息一律忽略;收到 disconnect 即結束 → FIRST_COMPLETED 收尾。
+            # 收到 disconnect 即結束 → FIRST_COMPLETED 收尾。
             # 用 `receive()` 不用 `receive_text()`:斷線在此是回傳值不是例外,而且
             # client 送 binary frame 不該被當成錯誤炸掉整條連線。
             if message.get("type") == "websocket.disconnect":
                 return
+            # client 訊息:未掛 `on_message` 一律忽略(舊行為);掛了只轉**文字** frame。
+            if on_message is None:
+                continue
+            text = message.get("text")
+            if isinstance(text, str):
+                on_message(text)
 
     tasks: list[asyncio.Task[None]] = [
         asyncio.ensure_future(_send()),

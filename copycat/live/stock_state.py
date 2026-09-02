@@ -255,6 +255,12 @@ class StockDayState:
             "low": self.low_milli,
             # JSON 物件的鍵只能是字串;前端 `useGroupSnapshots` 轉回 number key 的 Map
             "vp": {str(price): list(cell) for price, cell in sorted(self._vp.items())},
+            # #182(mod/group-grid-ticks):卡片改逐筆 → `seq` 是 tick 套用的錨點(前端逐檔
+            # 以 `seq == acc.seq + 1` 判連續),`vwap_vol` 是增量 VWAP 的分母(語意與
+            # `snapshot()` 的同名鍵逐字相同:去重剔試撮後的 Σqty,**不是** `cum_vol`)。
+            # additive:舊鍵讀者零改動。
+            "seq": self.seq,
+            "vwap_vol": self._volume,
         }
 
     def snapshot(self, *, tape: bool = True) -> dict:

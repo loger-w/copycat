@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -2046,10 +2047,36 @@ def create_app(
                 return
             return
         await websocket.accept()
+        # 檢視集合登記(mod/group-grid-ticks #182):token = 這條連線;瀏覽器送
+        # `{"type":"view","codes":[…]}` 告知「正在看哪些檔」,engine 據此決定哪些逐筆要
+        # 打包給瀏覽器(主圖恆為收件人,前端不必塞)。**斷線 / 任何收尾路徑都除名**,
+        # 否則關掉的圖牆會讓那些檔的成交一直打包給別的連線。輸入驗證在這裡(relay 不懂
+        # 語意):壞 JSON / 非物件 / 非 view 型別 / codes 非字串列 → WARNING 一則後忽略,
+        # 連線不斷 —— 這是 client 輸入,不是不懂的錯。
+        token = object()
+        engine = stock
+
+        def _on_client_message(text: str) -> None:
+            try:
+                msg = json.loads(text)
+            except ValueError:
+                logger.warning("ws/stock 入站訊息非 JSON(忽略):%.80r", text)
+                return
+            if not isinstance(msg, dict) or msg.get("type") != "view":
+                logger.warning("ws/stock 入站訊息非 view 型別(忽略):%.80r", text)
+                return
+            codes = msg.get("codes")
+            if not isinstance(codes, list) or not all(isinstance(c, str) for c in codes):
+                logger.warning("ws/stock 入站 view 的 codes 非字串列(忽略):%.80r", text)
+                return
+            engine.set_view(token, codes)
+
         try:
-            await relay(websocket, stock.stream())
+            await relay(websocket, stock.stream(), on_message=_on_client_message)
         except WebSocketDisconnect:
             return
+        finally:
+            engine.clear_view(token)
 
     # ---- capital 沿用的例外映射(capital_api.py:7,270 明文依賴這兩個 handler) ----
     # 舊 TC4 trade 路連同 _TRADE_ERROR_MAP 已整段除役;下列兩者由群益下單路徑 raise,
