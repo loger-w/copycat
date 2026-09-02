@@ -25,6 +25,8 @@ class FakeWS {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  /** `handle.send()` 真的送到 socket 的原文(mod/group-grid-ticks T3) */
+  sent: string[] = [];
 
   constructor(public url: string) {
     FakeWS.instances.push(this);
@@ -33,6 +35,10 @@ class FakeWS {
   close(): void {
     this.closed = true;
     this.onclose?.();
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
   }
 
   emit(obj: unknown): void {
@@ -108,6 +114,32 @@ describe("connectWithRetry", () => {
     latest().onclose?.();
     expect(onClose).toHaveBeenCalledTimes(1);
     handle.close();
+  });
+
+  // mod/group-grid-ticks T3(#183):hook 要能對後端送「我正在看哪些檔」。`send` 只在
+  // 這一代 socket **open 期間**真的送出,其餘一律回 false 靜默丟 —— 呼叫端(useStockStream)
+  // 在 onOpen 重送當下的檢視集合補上,所以丟掉不是遺失。
+  it("send():open 前 / 斷線後 / close() 後回 false 不送;open 期間送到當代 socket", () => {
+    const handle = connectWithRetry("ws://host/ws/x", { onMessage: () => {} });
+    expect(handle.send("a")).toBe(false);
+    expect(latest().sent).toEqual([]);
+
+    latest().onopen?.();
+    expect(handle.send("b")).toBe(true);
+    expect(latest().sent).toEqual(["b"]);
+
+    const first = latest();
+    first.onclose?.();
+    expect(handle.send("c")).toBe(false);
+    vi.advanceTimersByTime(WS_BACKOFF_START_MS);
+    expect(handle.send("d")).toBe(false); // 新世代還沒 open
+    latest().onopen?.();
+    expect(handle.send("e")).toBe(true);
+    expect(latest().sent).toEqual(["e"]);
+    expect(first.sent).toEqual(["b"]); // 舊世代不會再收到
+
+    handle.close();
+    expect(handle.send("f")).toBe(false);
   });
 
   it("重連延遲倍增並在 30 s 封頂(W8;未 open 的連線 backoff 不歸零)", () => {
