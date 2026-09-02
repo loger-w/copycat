@@ -783,6 +783,68 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
   });
 
+  // mod/group-grid-ticks T6(#184):群組檢視下點訊號列 → 右欄照舊換標的;圖牆若現群組已含該檔
+  // 則不切,否則切到含它的第一個群組(含未分組);不在自選 → 只換右欄。單檔檢視只換標的(既有案)。
+  it("群組檢視下點訊號列 → 切到含該檔的群組;現群組已含不切;不在自選只換右欄", async () => {
+    const WL = {
+      codes: ["2330", "2317", "2881", "3231"],
+      groups: [
+        { name: "半導體", codes: ["2330", "2317"] },
+        { name: "金融", codes: ["2881"] },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).includes("/api/stock/watchlist")) return new Response(JSON.stringify(WL));
+        if (String(url).includes("/api/stock/group-state")) {
+          return new Response(JSON.stringify({ states: {} }));
+        }
+        if (String(url).includes("/api/stock/signals/rules")) {
+          return new Response(JSON.stringify({ rules: [] }));
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+    const sigOf = (id: string, code: string, pct: number): SignalMsg => ({
+      type: "signal", id, kind: "surge", code, name: code, price: 1_000_000,
+      time: "09:15:03", levels: [], direction: null, pct, touch_count: 1,
+    });
+    const onSelect = vi.fn();
+    wrap(<StockPage code="2330" onSelect={onSelect} stream={stream()} />);
+    await waitFor(() => expect(screen.getByTestId("wl-group-金融")).toBeTruthy());
+    fireEvent.click(screen.getByRole("radio", { name: "群組" }));
+    const rail = await screen.findByLabelText("選擇群組");
+    const checked = (name: string) =>
+      (within(rail).getByRole("radio", { name }) as HTMLInputElement).checked;
+    expect(checked("半導體")).toBe(true);
+
+    // 現群組(半導體)已含 2317 → 不切
+    act(() => emitSignal(sigOf("s-a", "2317", 2.5)));
+    fireEvent.click((await screen.findByText("爆拉 +2.50%")).closest("button")!);
+    expect(onSelect).toHaveBeenLastCalledWith("2317");
+    expect(checked("半導體")).toBe(true);
+
+    // 2881 只在金融 → 切到金融
+    act(() => emitSignal(sigOf("s-b", "2881", 3.1)));
+    fireEvent.click((await screen.findByText("爆拉 +3.10%")).closest("button")!);
+    expect(onSelect).toHaveBeenLastCalledWith("2881");
+    expect(checked("金融")).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe("金融");
+
+    // 3231 未分組 → 切到未分組
+    act(() => emitSignal(sigOf("s-c", "3231", 4.2)));
+    fireEvent.click((await screen.findByText("爆拉 +4.20%")).closest("button")!);
+    expect(onSelect).toHaveBeenLastCalledWith("3231");
+    expect(checked("未分組")).toBe(true);
+
+    // 9999 不在自選 → 只換右欄,群組不動
+    act(() => emitSignal(sigOf("s-d", "9999", 5.3)));
+    fireEvent.click((await screen.findByText("爆拉 +5.30%")).closest("button")!);
+    expect(onSelect).toHaveBeenLastCalledWith("9999");
+    expect(checked("未分組")).toBe(true);
+  });
+
   it("點卡片 → onSelect 該股,檢視仍停在群組", async () => {
     mockGroupApi();
     const onSelect = vi.fn();

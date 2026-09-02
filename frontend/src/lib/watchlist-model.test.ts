@@ -7,6 +7,7 @@ import {
   assignToGroup,
   deleteGroup,
   detachFromGroups,
+  groupForCode,
   moveToGroup,
   removeCode,
   removeFromGroup,
@@ -344,5 +345,36 @@ describe("resolveGroupPick(T5)", () => {
     expect(resolveGroupPick(onlyScreen, ["3231"], null)).toEqual({ name: UNGROUPED_PICK, codes: ["3231"] });
     expect(resolveGroupPick(onlyScreen, [], null)).toBeNull();
     expect(resolveGroupPick([], [], null)).toBeNull();
+  });
+});
+
+// mod/group-grid-ticks T6(#184):群組檢視下點訊號 → 圖牆要不要切組、切到哪一組。
+describe("groupForCode(T6)", () => {
+  const groups = [
+    { name: "半導體", codes: ["2330", "2317"] },
+    { name: "電子", codes: ["2317", "2454"] },
+    { name: SCREEN_GROUP_NAME, codes: ["1101"] },
+  ];
+  const ungrouped = ["3231"];
+
+  it("現群組已含該檔 → 不切(回現群組名)", () => {
+    expect(groupForCode(groups, ungrouped, "電子", "2317")).toBe("電子");
+    expect(groupForCode(groups, ungrouped, UNGROUPED_PICK, "3231")).toBe(UNGROUPED_PICK);
+  });
+
+  it("現群組不含 → 群組序第一個含它的;未分組最後", () => {
+    expect(groupForCode(groups, ungrouped, "電子", "2330")).toBe("半導體");
+    expect(groupForCode(groups, ungrouped, "半導體", "2454")).toBe("電子");
+    expect(groupForCode(groups, ungrouped, "半導體", "3231")).toBe(UNGROUPED_PICK);
+  });
+
+  it("只在盤前篩選裡 / 不在自選 → null(只換右欄,不切)", () => {
+    expect(groupForCode(groups, ungrouped, "半導體", "1101")).toBeNull();
+    expect(groupForCode(groups, ungrouped, "半導體", "9999")).toBeNull();
+    expect(groupForCode(groups, ungrouped, null, "9999")).toBeNull();
+  });
+
+  it("現群組為 null(尚未解析)→ 直接找第一個含它的", () => {
+    expect(groupForCode(groups, ungrouped, null, "2454")).toBe("電子");
   });
 });
