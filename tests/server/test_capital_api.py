@@ -1181,21 +1181,29 @@ class TestWsBroadcasterBackpressure:
         finally:
             await gen.aclose()
 
-    async def test_drop_warning_first_of_window_then_window_total(
-        self, caplog: pytest.LogCaptureFixture
+    async def test_single_drop_window_settles_without_second_warning(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """同窗內丟 7 筆:第一筆記一則(開窗),窗內其餘只累計;`window_dropped` 可讀出本窗量
-        (runtime 讀出口:`/api/health` 刻意不含引擎健康度,量走 log + 屬性)。"""
-        b = WsBroadcaster(maxsize=3)
+        """pr-188 review F-04 / F-05:「窗內只丟一筆就不另印」是 `_settle_drop_window` docstring 明寫的
+        刻意規則(窗首那則已經說過了),但兩個結算場景的 `window_dropped` 都是 7 —— `> 1` 改 `> 0` 全綠。
+        本案整窗只丟一筆 → 窗到期 → 只該有窗首那一則、`window_dropped` 歸零。
+        (原 `test_drop_warning_first_of_window_then_window_total` 與
+        `test_drops_are_counted_and_warned_once_per_window` 劇本逐字重複,改寫成本案。)"""
+        b = WsBroadcaster(maxsize=1)
         gen = b.stream()
         try:
             with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(10):
-                    b.publish({"i": i})
-            assert b.dropped == 7
-            assert b.window_dropped == 7
-            warned = [r for r in caplog.records if "佇列滿" in r.getMessage()]
+                b.publish({"i": 0})
+                b.publish({"i": 1})  # 佇列滿:丟 {"i": 0},窗首那一則 WARNING
+                assert b.window_dropped == 1
+                await gen.__anext__()  # client 追上:清空 queue
+                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+                b.publish({"i": 2})  # 窗到期結算:整窗只丟一筆 → 不另印
+            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
             assert len(warned) == 1
+            assert "上一窗" not in warned[0]
+            assert b.window_dropped == 0
+            assert b.dropped == 1
         finally:
             await gen.aclose()
 

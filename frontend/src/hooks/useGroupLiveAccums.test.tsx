@@ -143,6 +143,16 @@ describe("useGroupLiveAccums", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // pr-188 review F-09:seq 是 per-code 計數器,跨檔撞號很正常 —— `seqsByCode` 按檔分群,別檔的
+  // acc.seq 不算「本檔快照已含」。全域 Set 的突變體會把 2317 的 rollover 回退當重複吞掉、只重拉一次。
+  it("同一則打包跨檔撞號:別檔含本檔的 acc.seq 不算重複 → 回退仍重拉(兩檔各一次)", () => {
+    const snaps = { "2330": snap({ seq: 3 }), "2317": snap({ seq: 12 }) };
+    renderHook(() => useGroupLiveAccums(["2330", "2317"], snaps, {}));
+    // 2330:3 → 12 前向跳號 → 重拉;2317:12 → 3 回退且本檔那串不含 12 → 也是跳號 → 重拉
+    act(() => emitTicks([item("2330", 12), item("2317", 3)]));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("跳號 → 只重拉那一檔(group-state?codes=X),落地後重放 seq > snap.seq 的 pending", async () => {
     const snaps = { "2330": snap(), "2317": snap({ seq: 3 }) };
     const hook = renderHook(() => useGroupLiveAccums(["2330", "2317"], snaps, {}));
