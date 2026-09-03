@@ -4191,7 +4191,9 @@ class TestTickBundle:
         await asyncio.sleep(0.01)  # item 進 pending、timer 已排、尚未到期
         src.backfill_gate.set()
         await engine.close()
-        await asyncio.sleep(0.1)  # 讓原本 0.05 s 的 timer 有機會醒來
+        # 斷言在 sleep **之前**(review r1 spec F-02):timer 若自己燒完也會在 `_flush_ticks` 首行歸
+        # None、`_loop is None` 又擋 publish,放後面會讓「刪掉 close 的 cancel 區塊」突變體全綠
         assert engine._tick_flush_timer is None
         assert engine._pending_ticks == []
+        await asyncio.sleep(0.1)  # 讓原本 0.05 s 的 timer 有機會醒來
         assert _tick_items(await _collect(stream)) == []

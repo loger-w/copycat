@@ -1134,21 +1134,50 @@ class TestWsBroadcasterBackpressure:
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """pr-187 review #8:節流不能讓「量」消失 —— 開盤瞬間一窗內丟 200 筆,log 只說
-        `dropped=1` 等於看不到規模;窗到期後也要再記(否則盤中第二段塞車再也不出現在 log,
-        而判準正是 `grep 佇列滿`)。把窗設 0 讓每次都「過窗」,斷言第二則 WARNING 出現且帶
-        上一窗的筆數。"""
-        monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
-        b = WsBroadcaster(maxsize=2)
+        `dropped=1` 等於看不到規模;窗到期要**結算**上一窗的筆數(掛在 publish 入口,不等下一次
+        丟包 —— 爆一窗後轉安靜也要印得出來),之後再塞車也要再記(否則盤中第二段塞車再也不出現
+        在 log,而判準正是 `grep 佇列滿`)。"""
+        b = WsBroadcaster(maxsize=3)
         gen = b.stream()
         try:
             with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(5):  # 丟 3 筆,每筆都過窗 → 每筆一則
+                for i in range(10):  # 一窗內丟 7 筆:窗首一則 WARNING、其餘只累計
                     b.publish({"i": i})
+                assert b.window_dropped == 7
+                # 窗到期(把窗縮成 0 = 立即到期)→ 下一則 publish 入口結算;queue 仍滿,這則也會
+                # 被丟,於是同時開新窗 —— 兩件事各一則 WARNING、順序固定
+                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+                b.publish({"i": 10})
             warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
             assert len(warned) == 3
-            # 第二則起要帶「上一窗丟了幾筆」(這裡窗 = 一筆),不只累計
-            assert "本窗" in warned[1] or "上一窗" in warned[1]
-            assert "累計 dropped=3" in warned[2]
+            assert "丟最舊保最新" in warned[0] and "累計 dropped=1" in warned[0]
+            # 結算那則帶**字面值** 7,不是累計 —— 把上一窗筆數換成累計值的突變體不得全綠(review r1 F-02)
+            assert "上一窗共丟 7 則" in warned[1] and "累計 dropped=7" in warned[1]
+            assert "丟最舊保最新" in warned[2] and "累計 dropped=8" in warned[2]
+            assert b.window_dropped == 1  # 新窗從這一筆重新起算
+        finally:
+            await gen.aclose()
+
+    async def test_drop_window_settles_on_quiet_publish_without_new_drop(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """爆一窗後轉安靜(client 追上了、之後的 publish 不再丟):結算仍要發生 —— 這正是
+        review #8 的原始症狀(單窗爆量規模永遠停在 dropped=1)。"""
+        b = WsBroadcaster(maxsize=3)
+        gen = b.stream()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+                for i in range(10):
+                    b.publish({"i": i})
+                for _ in range(3):  # client 追上:清空 queue
+                    await gen.__anext__()
+                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+                b.publish({"i": 10})  # 有位子、不丟 → 只有結算
+            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
+            assert len(warned) == 2
+            assert "上一窗共丟 7 則" in warned[1]
+            assert b.window_dropped == 0
+            assert b.dropped == 7
         finally:
             await gen.aclose()
 
