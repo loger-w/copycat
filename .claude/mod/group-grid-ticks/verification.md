@@ -121,7 +121,11 @@ ruff format:`stock_engine.py` / `ws.py` / `stock_state.py` 已 formatted;`app.py
   RunTask 148,274 個、**>50 ms = 0**(最大 36.7 ms 一次,常態尖峰 ~18 ms)。
 - **④ PASS**:群組檢視 pill 列 = 玻璃/光通/MLCC/矽晶圓/CCL/ALL IN/**未分組**,無「盤前篩選」
   (側欄自選清單顯示「盤前篩選 43」群組屬正常 —— 判準只管 pill 列)。
-- ② 佇列滿 grep 留盤後(14:07 排程)。
+- **② PASS(14:07 盤後)**:全交易日 `grep 佇列滿` = **0 命中**(#187 上線首個完整日盤,零丟包)。
+  **①②③④ 全過,#187 真環境結案**。順帶:`grep 值未前進` 0(#171 哨兵靜默);#171 主場景
+  第二次天然 PASS(server 08:23 同 session 跨 14:00,首刷 09-03 bar c 45837 = 1K 13:45 收逐字等)。
+  pr-187-review 報告在 repo root(收修尚未出貨,出貨時另查判準)。墊背判準今日 user 未動
+  達錢 4,記跳過(改天口頭發起)。
 - 附註:「版本落差」badge 亮著 = dist(08:59 build,含 33aba77e docs commits)比 backend
   (8d42098d)新兩筆 docs-only commit,功能等價,下次重啟自然消。前置事故一則:08:41 發現
   dist 仍是 09-01 舊 build(#187 後端已把單筆 tick 退役 → 舊前端聽不懂新格式),08:59 由排程
