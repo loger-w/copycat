@@ -1749,7 +1749,9 @@ class StockEngine:
         下一筆到貨照排。`_loop is None` = close 已開始 → 丟棄不送。
         """
         if self._tick_flush_timer is not None:
-            # 由快照路徑提前呼叫時 timer 仍在飛:取消它,否則到期再跑一次(空 → 早退,無害但多一次喚醒)
+            # 由快照路徑提前呼叫時 timer 仍在飛:必須取消 —— 不取消的話它變孤兒 handle:flush 後欄位設 None,
+            # 下一筆成交會再排一支新 timer,孤兒到期時 pending 已非空、提早把新窗送出去,打包週期靜默漂掉
+            # (pr-188 review F-06;timer 回呼內取消自己是安全 no-op)
             self._tick_flush_timer.cancel()
             self._tick_flush_timer = None
         if self._loop is None or not self._pending_ticks:
