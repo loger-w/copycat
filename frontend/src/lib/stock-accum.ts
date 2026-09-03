@@ -409,8 +409,9 @@ export function seqsByCode(items: readonly StockTickItem[]): Map<string, Set<num
  *  `acc.seq` 本人或跨過它),rollover 的那串從 1 起、碰不到昨天的 `acc.seq`。
  *  所以:`item.seq ≤ acc.seq` 且該檔在同一則內含 `acc.seq` → 重複、丟;否則 → 回退 = 跳號,交給重拉。
  *  唯一盲點是「昨天恰好只有 acc.seq 筆、且今天的第一則打包同時含 seq 1..acc.seq」= 昨日總筆數落在
- *  單則 0.1 s 打包內的薄股跨日;群組卡片由 60 s 輪詢重播種修正,主圖無週期重播種、靠重連 / 切檔 /
- *  `watchlist_changed` 的全量 refetch 自癒(review r1 spec F-03)。重複若跨兩則打包(前一則只含
+ *  單則 0.1 s 打包內的薄股跨日;群組卡片由 60 s 輪詢重播種修正,主圖無週期重播種、只靠重連 / 切檔
+ *  的全量 refetch 自癒(review r1 spec F-03;`watchlist_changed` 只 invalidate 側欄清單 query、不重取
+ *  主圖,pr-188 review F-08)。重複若跨兩則打包(前一則只含
  *  ≤ acc.seq 的項、不含 acc.seq 本人)前一則仍會重拉 —— 後端快照前已 flush,窗只剩一則深,可接受。 */
 export function isSeededDuplicate(
   seqsInBundle: ReadonlySet<number> | undefined,
