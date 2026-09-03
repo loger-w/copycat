@@ -43,6 +43,9 @@
 全量 `pytest -q` **3367 passed, 3 skipped**(221.73 s,exit 0)。
 **rebase onto origin/master `33aba77e`(上游只動一行文件)後再重跑**:pytest 3367 passed / pyright 0 / ruff 0 / validate 42/42 /
 vitest 2965 passed / tsc 0 / eslint 0(全部 exit 0)。
+**二次 rebase onto origin/master `97ab0600`(上游 3 筆只動 `.claude/mod/group-grid-ticks/` 文件與證據檔,零衝突;新 session 接手收尾)後重跑(`385dc99f` 工作樹)**:
+pytest **3367 passed, 3 skipped**(222.89 s)/ ruff 0 / pyright 0 / validate **42/42** / vitest **154 files / 2965 passed** / tsc 0 / eslint 0 /
+react-doctor 僅 `StockPage.tsx:79` 既有基準(全部 exit 0)。之後唯一 commit `57ab085b` = `ws.py` 註解三行 + review JSON 追記(零行為),`ruff check ws.py` 0。
 
 ## 4. 真實環境
 
@@ -55,3 +58,4 @@ vitest 2965 passed / tsc 0 / eslint 0(全部 exit 0)。
 - spec 軸 5 條(MED 2 / LOW 3):F-01 窗到期在 publish 入口結算(#8 才算修完)/ F-02 close 斷言搬到 sleep 前(#7 突變殺)/ F-03 / F-04 / F-05 → 全修。
 - 收修 commit:`03ed3227`(🟢 test)/ `d48713fc`(🔴 fix)/ `8ac2ab81`(🟢 docs)。收修後 gate:後端三檔 **358 passed**、ruff / pyright 0;前端六檔 passed、tsc / eslint 0;全量重跑見 §3 末列。
 - 逐條原文與處置:`code-review-round-1.json`。
+- review 後增量(收修三筆)main-agent 機械快篩:I-01 LOW(`window_dropped` 註解仍是結算搬到 publish 入口前的口徑)已修;記於 JSON `increment_screen`。
