@@ -1024,11 +1024,7 @@ class TestStockWsView:
                 assert [it["code"] for it in bundle["items"]] == ["2317"]
                 assert stock._views, "連線期間應有一份登記"
             # 斷線 → 除名(否則圖牆關掉後該連線的檔還會一直打包給別的連線)
-            for _ in range(50):
-                if not stock._views:
-                    break
-                time.sleep(0.02)
-            assert stock._views == {}
+            assert _wait_until(lambda: not stock._views), "除名未落地"
 
     def test_view_does_not_touch_the_subscription_pool(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
