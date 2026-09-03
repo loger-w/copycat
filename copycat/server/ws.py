@@ -55,13 +55,15 @@ class WsBroadcaster:
         self._clients: set[asyncio.Queue[dict]] = set()
         #: 累計丟掉的訊息數(所有 client 合計)。唯讀給測試 / 診斷;不重置。
         self.dropped = 0
-        #: 本節流窗內丟掉的筆數(pr-187 review #8):開盤瞬間一窗丟兩百筆時,log 只有窗首那一則、
-        #: 累計值還是 1 —— 規模要看得到:窗到期後下一則 WARNING 印「上一窗丟了幾筆」,屬性可直讀。
-        #: `/api/health` 刻意不含引擎健康度(其 docstring),所以量走 log + 本屬性,不進 health。
+        #: **最後一個有丟包的窗**的筆數(pr-187 review #8;窗過後不歸零,下一次丟包才開新窗):開盤
+        #: 瞬間一窗丟兩百筆時,log 只有窗首那一則、累計值還是 1 —— 規模要看得到:下一窗的 WARNING
+        #: 印「上一窗共丟 n 則」。`/api/health` 刻意不含引擎健康度(其 docstring),量走 log,本屬性
+        #: 給測試 / 診斷直讀,prod 無讀者。
         self.window_dropped = 0
         self._drop_warned_at: float | None = None
 
     def publish(self, msg: dict) -> None:
+        self._settle_drop_window(time.monotonic())
         for queue in self._clients:
             try:
                 queue.put_nowait(msg)
@@ -77,32 +79,42 @@ class WsBroadcaster:
                     pass
                 self._note_drop()
 
+    def _settle_drop_window(self, now: float) -> None:
+        """節流窗到期 → 結算「上一窗共丟幾筆」(pr-187 review #8 收修 spec F-01)。
+
+        掛在 `publish()` 每則入口(便宜:兩個比較)而不是只在下一次丟包 —— 開盤爆一窗後轉安靜,
+        若只靠下一次丟包才印,那一窗的規模永遠停在窗首那則的 `dropped=1`。窗內只有一筆時不另印
+        (窗首那則已經說過了)。結算後歸零、`_drop_warned_at` 清掉 = 下一次丟包開新窗。
+        """
+        if self._drop_warned_at is None or now - self._drop_warned_at < DROP_WARN_WINDOW_SECS:
+            return
+        if self.window_dropped > 1:
+            logger.warning(
+                "ws 佇列滿:上一窗共丟 %d 則(累計 dropped=%d,maxsize=%d,clients=%d)",
+                self.window_dropped,
+                self.dropped,
+                self._maxsize,
+                len(self._clients),
+            )
+        self.window_dropped = 0
+        self._drop_warned_at = None
+
     def _note_drop(self) -> None:
         self.dropped += 1
         now = time.monotonic()
-        if self._drop_warned_at is not None and now - self._drop_warned_at < DROP_WARN_WINDOW_SECS:
-            self.window_dropped += 1  # 窗內只累計不洗版;量在下一則 WARNING 印出
+        self._settle_drop_window(now)
+        if self._drop_warned_at is not None:
+            self.window_dropped += 1  # 窗內只累計不洗版;量在窗到期結算時印出
             return
-        prev_window = self.window_dropped
         self.window_dropped = 1
         self._drop_warned_at = now
-        if prev_window:
-            logger.warning(
-                "ws 佇列滿:上一窗共丟 %d 則、本窗又開始丟(累計 dropped=%d,maxsize=%d,clients=%d)"
-                "—— 慢 client 跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
-                prev_window,
-                self.dropped,
-                self._maxsize,
-                len(self._clients),
-            )
-        else:
-            logger.warning(
-                "ws 佇列滿:丟最舊保最新(累計 dropped=%d,maxsize=%d,clients=%d)—— 慢 client"
-                "跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
-                self.dropped,
-                self._maxsize,
-                len(self._clients),
-            )
+        logger.warning(
+            "ws 佇列滿:丟最舊保最新(累計 dropped=%d,maxsize=%d,clients=%d)—— 慢 client 跟不上推播;"
+            "逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流;本窗規模在窗到期結算那則",
+            self.dropped,
+            self._maxsize,
+            len(self._clients),
+        )
 
     def stream(self, seed: Iterable[dict] = ()) -> AsyncGenerator[dict, None]:
         """新 client 的訊息流;`seed` 逐則在**呼叫當下同步**入該 client 的佇列。
