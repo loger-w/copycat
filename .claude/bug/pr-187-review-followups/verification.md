@@ -41,6 +41,8 @@
 **收修後最終重跑(`8ac2ab81` 工作樹)**:`npx vitest run` **154 files / 2965 tests passed**(exit 0);`npx eslint src` 0;
 `react-doctor --scope changed` 只剩 `StockPage.tsx:79` 基準既有複雜度(exit 0);ruff / pyright 0;
 全量 `pytest -q` **3367 passed, 3 skipped**(221.73 s,exit 0)。
+**rebase onto origin/master `33aba77e`(上游只動一行文件)後再重跑**:pytest 3367 passed / pyright 0 / ruff 0 / validate 42/42 /
+vitest 2965 passed / tsc 0 / eslint 0(全部 exit 0)。
 
 ## 4. 真實環境
 
