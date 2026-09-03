@@ -328,7 +328,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   「上一窗共丟 n 則」(窗內 > 1 筆才印,爆一窗後轉安靜也印得出規模),`window_dropped` 屬性給測試 / 診斷,`/api/health` 刻意不含;
   **結算只掛 `publish` 入口**,收盤前最後一分鐘內開的窗要等該 broadcaster 下一次推播(stock 軸 = 翌日試撮翻轉)才印、
   當晚重啟就沒了 —— 知情接受,前端資料早已靠 seq 跳號自癒,那一行只是事後統計(pr-188 review F-02))。
-  **快照與打包的 seq 對齊是雙邊不變式**(09-03 pr-187 review #1 收修):後端 `engine.snapshot()` / `group_snapshot()` 取值前必
+  **快照與打包的 seq 對齊 = 同一個 race 的兩道閘(兩邊都要在)**(09-03 pr-187 review #1 收修):後端 `engine.snapshot()` / `group_snapshot()` 取值前必
   `_flush_ticks()`(快照 seq 恆 = 已送出的最後一則打包尾筆;`test_snapshot_flushes_pending_ticks_first…` 釘住),前端
   `lib/stock-accum.ts::isSeededDuplicate`(同一則打包內含 `acc.seq` 本人的 `seq ≤ acc.seq` 項 = 快照已含的重複 → 丟;
   否則回退視為 rollover 型跳號 → 重拉)是第三條分支,兩支 hook 共用。兩者是**同一個 race 的兩道閘**,不是各自獨立的必要
