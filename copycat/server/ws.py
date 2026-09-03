@@ -85,9 +85,9 @@ class WsBroadcaster:
         掛在 `publish()` 每則入口(便宜:兩個比較)而不是只在下一次丟包 —— 開盤爆一窗後轉安靜,
         若只靠下一次丟包才印,那一窗的規模永遠停在窗首那則的 `dropped=1`。窗內只有一筆時不另印
         (窗首那則已經說過了)。結算後歸零、`_drop_warned_at` 清掉 = 下一次丟包開新窗。
-        **唯一呼叫點 = `publish()` 入口**:`_note_drop` 只在同一次 publish 內被叫到、跨不過窗界,
-        在那裡再結算一次是死碼(pr-188 review F-03 已刪);且 `dropped += 1` 排在前面,若真結算會把
-        新窗這一筆算進上一窗的「累計 dropped」。
+        **唯一呼叫點 = `publish()` 入口**:`_note_drop` 只在同一次 publish 內被叫到,幾乎不可能跨窗界
+        (真被排程搶佔跨了,也只是延到下一則 publish 結算),在那裡再結算一次是死碼(pr-188 review
+        F-03 已刪);且 `dropped += 1` 排在前面,若真結算會把新窗這一筆算進上一窗的「累計 dropped」。
         """
         if self._drop_warned_at is None or now - self._drop_warned_at < DROP_WARN_WINDOW_SECS:
             return
