@@ -1,0 +1,20 @@
+{
+  "fixed_point": "55295c65 (master merge-base)",
+  "reviewed_head": "bbbbf663",
+  "standards": [
+    {"id": "F-01", "severity": "LOW", "file": "copycat/server/ws.py:88-89", "finding": "絕對句過強:「`_note_drop` 只在同一次 publish 內被叫到、跨不過窗界」—— 入口取時(:66)與 `_note_drop` 取時(:107)之間若被 GC / 排程搶佔滿剩餘窗長仍可跨界。", "fix": "改「幾乎不可能跨窗界;真跨了也只是延到下一則 publish 結算」。"},
+    {"id": "F-02", "severity": "MED", "file": "copycat/server/app.py:1664-1666, :1692-1694", "finding": "知識重複(Shotgun Surgery):「非唯讀 → 取值前 `_flush_ticks()`」現存 6 份(stock_engine.py:716-719 / :765-766 / :798-799、兩條 route、CLAUDE.md:328-338),口徑再改要同動六處。", "fix": "route docstring 收成一行「**非唯讀**,理由見 `StockEngine.snapshot()`」。"},
+    {"id": "F-03", "severity": "LOW", "file": "CLAUDE.md:335-337 vs frontend/src/lib/stock-accum.ts:414-415", "finding": "兩份文件對同一不變式權重相反:前者說拿掉後端 flush「前端仍攔得住」,後者殘餘盲點論證仍靠「後端快照前已 flush,窗只剩一則深,可接受」。", "fix": "stock-accum 補「(後端 flush 只把窗壓到一則深,非必要條件)」。"},
+    {"id": "F-04", "severity": "LOW", "file": "tests/server/test_capital_api.py:1190-1191", "finding": "測試 docstring 誇大:「逐字重複」不成立 —— 被刪案另有 `window_dropped == 7`,存活案(:1098-1112)沒有,該覆蓋由 :1146 承接。", "fix": "改述為「窗內累計由 `test_drop_warning_reports_window_count…` 承接」。"},
+    {"id": "F-05", "severity": "LOW", "file": "tests/server/test_stock_routes.py:993-995", "finding": "搬移留下三行空白;ruff 預設不含 E303 不擋。", "fix": "刪一行。"},
+    {"id": "F-06", "severity": "LOW", "file": "tests/server/test_capital_api.py:1184-1208", "finding": "Duplicated Code(判斷題):第 5 份 `WsBroadcaster(...) + stream() + try/finally aclose()` + caplog 骨架(:1098 / :1119 / :1133 / :1161)。", "fix": "抽 fixture `broadcaster(maxsize)`。"},
+    {"id": "F-07", "severity": "LOW", "file": "frontend/src/components/stock/GroupGridView.test.tsx:297", "finding": "144 字元行尾註解承載突變體理由;同檔 :261-263 與 useGroupLiveAccums.test.tsx:146-147 都寫在 `it` 上方;無 prettier 故工具不擋。", "fix": "移到 `it` 上方。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "LOW", "file": "frontend/src/components/stock/GroupGridView.test.tsx:269", "finding": "spec #10 fix「這兩支 it 標了 async 但沒 await,可拿掉」只做了 285 那支;269 的 `it(\"掛載送成員…\", async () => {` 仍掛 async 且全域無 await。", "fix": "拿掉 269 的 async。"},
+    {"id": "F-02", "severity": "LOW", "file": "tests/server/test_stock_routes.py:994", "finding": "scope creep:`_next_of_type` 與 `_wait_until` 之間多插一行空白(2→3 空行),不對應任何 finding。", "fix": "刪該行。"},
+    {"id": "F-03", "severity": "LOW", "file": "CLAUDE.md:327", "finding": "粗體標題仍寫「快照與打包的 seq 對齊是**雙邊不變式**」,內文卻改成「不是各自獨立的必要條件、拿掉後端那半前端仍攔得住」—— 讀者可能據此刪掉後端 flush。", "fix": "標題改為「同一 race 的兩道閘(兩邊都要在)」。"},
+    {"note": "逐條對帳 F-01..F-11 全到位;F-04 / F-09 / F-10 三個突變體由 reviewer 自行重跑、皆被指名的新案殺掉;F-07 兩站皆補;F-11 落在 class TestStockWs 內;無行為面 scope creep。"}
+  ],
+  "disposition": "spec F-01 修(拿掉 269 行 async)。spec F-02 修(空白行收成 2 行)。spec F-03 修(§4 標題改「同一個 race 的兩道閘(兩邊都要在)」)。→ commit ec73e7e7。標準 F-01 修(絕對句改「幾乎不可能跨窗界,真跨了也只是延到下一則 publish 結算」)。標準 F-02 修(兩條 route docstring 各收成一行指回 StockEngine.snapshot() / group_snapshot() docstring;pr-review F-07 要的「route 層要講非唯讀」仍滿足)。標準 F-03 修(stock-accum 殘餘句補「後端 flush 是壓窗、不是本判定的必要條件,見 CLAUDE.md §4」)。標準 F-04 修(docstring 改述為同劇本、唯一增量由 relogs_after_window 承接)。標準 F-05 = spec F-02,已修。標準 F-06 否決:抽 fixture 要動四支既有測試(:1098 / :1119 / :1133 / :1161),屬鐵則 B 順手 refactor,入 docs/next-time.md 2026-09-04 節另開 🔵 test-hygiene 批。標準 F-07 修(註解移到 it 上方、行內只留斷言)。收修後:ruff 0 / TestWsBroadcasterBackpressure + TestWebSockets 13 passed / GroupGridView + stock-accum 125 passed;全量 gate 重跑見 verification.md §3。"
+}
