@@ -18,7 +18,7 @@ import { errText, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { useWatchlistCommit } from "@/hooks/useWatchlistCommit";
 import type { StockStreamState } from "@/hooks/useStockStream";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
-import { SCREEN_GROUP_NAME, STOCK_VIEW_KEY, UNGROUPED_PICK } from "@/lib/constants";
+import { STOCK_VIEW_KEY, UNGROUPED_PICK } from "@/lib/constants";
 import { trialBadgeText } from "@/lib/stock-accum";
 import { readStockView, type StockView } from "@/lib/stock-view";
 import { useFeeDiscount } from "@/lib/fee-discount";
@@ -35,6 +35,7 @@ import {
   groupForCode,
   resolveGroupPick,
   ungroupedCodes,
+  visibleGroups,
 } from "@/lib/watchlist-model";
 
 /** 個股頁中間主區(SC-6):報價 header → 圖表(江波圖 / K 線)→ 下半 五檔 | 明細。
@@ -265,12 +266,13 @@ export function StockPage({
         active={code}
         // F2:群組檢視下點群組區段的列 → 圖牆同時切到那一組;未分組列 → 切到虛擬「未分組」
         // (T5 #181 明文翻轉原「未分組列不切」:未分組現在是可選的一組);搜尋預覽(undefined)不切;
-        // 盤前篩選區段的列**不切**(pr-187 review #2:圖牆選不到那一組,切了只會 fallback 跳到第一個
-        // 群組、還記住一個永遠解析不到的名字 —— 與訊號路徑 `groupForCode` 排除盤前篩選同一政策);
-        // 單檔檢視行為不變。右欄標的照舊換成該檔。
+        // 圖牆看不到的群組(盤前篩選)的列**不切**(pr-187 review #2:切了只會 fallback 跳到第一個
+        // 群組、還記住一個永遠解析不到的名字 —— 與訊號路徑 `groupForCode` 同一政策);判定走
+        // `visibleGroups`,不再第三處寫字面比較(review r1 spec F-05)。單檔檢視行為不變。右欄標的照舊換成該檔。
         onSelect={(next, group) => {
           onSelect(next);
-          if (view !== "group" || group === undefined || group === SCREEN_GROUP_NAME) return;
+          if (view !== "group" || group === undefined) return;
+          if (group !== null && !visibleGroups(wl?.groups ?? []).some((g) => g.name === group)) return;
           selectGroup(group === null ? UNGROUPED_PICK : group);
         }}
         quotes={watchlist}
