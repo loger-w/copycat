@@ -387,6 +387,37 @@ export function accumFromGroupSnapshot(
   };
 }
 
+/** 一則打包內各檔的 seq 集合(`isSeededDuplicate` 的第一參)。 */
+export function seqsByCode(items: readonly StockTickItem[]): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  for (const item of items) {
+    let set = out.get(item.code);
+    if (set === undefined) {
+      set = new Set<number>();
+      out.set(item.code, set);
+    }
+    set.add(item.seq);
+  }
+  return out;
+}
+
+/** 「快照已含的重複」判定(pr-187 review #1)。
+ *
+ *  快照與打包走兩條通道(HTTP / WS),快照回來時它已含的那幾筆可能還在路上 → 下一則打包首筆
+ *  `seq ≤ acc.seq`。這**不是**跳號,重拉是白打。可是「seq 回退」也是 rollover(新的一天 seq 歸零)
+ *  的樣態,不能一律當重複丟 —— 差別在:重複的那串必然**接得上**已套用的最後一筆(打包內含
+ *  `acc.seq` 本人或跨過它),rollover 的那串從 1 起、碰不到昨天的 `acc.seq`。
+ *  所以:`item.seq ≤ acc.seq` 且該檔在同一則內含 `acc.seq` → 重複、丟;否則 → 回退 = 跳號,交給重拉。
+ *  唯一盲點是「昨天恰好只有 acc.seq 筆而今天前 acc.seq 筆與之重疊」= acc.seq 極小的薄股跨日,
+ *  60 s 輪詢重播種會在一分鐘內修正。 */
+export function isSeededDuplicate(
+  seqsInBundle: ReadonlySet<number> | undefined,
+  itemSeq: number,
+  accSeq: number,
+): boolean {
+  return itemSeq <= accSeq && seqsInBundle !== undefined && seqsInBundle.has(accSeq);
+}
+
 export function applyTick(acc: StockAccum, msg: StockTickItem): StockAccum {
   const key = minuteKey(msg.t);
   const minutes = new Map(acc.minutes);
