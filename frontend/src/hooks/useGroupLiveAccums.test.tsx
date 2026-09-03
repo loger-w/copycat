@@ -121,6 +121,28 @@ describe("useGroupLiveAccums", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // pr-187 review #1:快照 seq 可能領先尚未 flush 的打包窗(播種 seq=10 時那筆 10 還在後端
+  // pending),下一則打包首筆就是 seq ≤ acc.seq 的「已含在快照裡」重複 —— 不是跳號,不能重拉。
+  it("seq ≤ acc.seq 的小幅回退 = 快照已含的重複 → 靜默丟棄、不重拉、accum 不動", () => {
+    const snaps = { "2330": snap() }; // seq 10
+    const hook = renderHook(() => useGroupLiveAccums(["2330"], snaps, {}));
+    const before = hook.result.current["2330"];
+    act(() => emitTicks([item("2330", 9), item("2330", 10)]));
+    expect(hook.result.current["2330"]).toBe(before);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // 重複之後接上的 11 照常套用(丟棄不會把「下一筆該是誰」弄壞)
+    act(() => emitTicks([item("2330", 10), item("2330", 11)]));
+    expect(hook.result.current["2330"]?.seq).toBe(11);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("大幅回退(rollover 歸零)仍是跳號 → 重拉", () => {
+    const snaps = { "2330": snap({ seq: 5000 }) };
+    renderHook(() => useGroupLiveAccums(["2330"], snaps, {}));
+    act(() => emitTicks([item("2330", 1)]));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("跳號 → 只重拉那一檔(group-state?codes=X),落地後重放 seq > snap.seq 的 pending", async () => {
     const snaps = { "2330": snap(), "2317": snap({ seq: 3 }) };
     const hook = renderHook(() => useGroupLiveAccums(["2330", "2317"], snaps, {}));

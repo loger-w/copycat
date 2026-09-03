@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type React from "react";
@@ -8,6 +9,7 @@ import { useStockGroup } from "@/hooks/useStockGroup";
 import type { WatchlistQuote } from "@/hooks/useStockStream";
 import { SCREEN_GROUP_NAME, STOCK_GROUP_KEY, UNGROUPED_PICK } from "@/lib/constants";
 import { minuteToX, SPOT_WINDOW } from "@/lib/stock-intraday-svg";
+import { resetTickStream, subscribeTickView } from "@/lib/tick-stream";
 import type { Group } from "@/lib/watchlist-model";
 import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { fmtPct } from "@/lib/format";
@@ -253,6 +255,49 @@ describe("GroupGridView pill:藏盤前篩選 + 未分組(T5)", () => {
     );
     expect(screen.queryByText("尚無群組 — 到自選欄建立群組")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
+  });
+});
+
+// pr-187 review #3:圖牆 → 後端「我正在看哪些檔」這條線是整個逐筆 feature 的唯一開關
+// (CLAUDE.md §4 view 契約);少了它 prod 症狀 = 圖牆只剩 60 s 輪詢、逐筆靜默消失、零錯誤訊號。
+// 消費端(useStockStream 送 view)已在該 hook 測試釘住,這裡釘的是**產生端**。
+describe("GroupGridView → setTickView(檢視集合登記)", () => {
+  beforeEach(() => {
+    resetTickStream();
+  });
+
+  it("掛載送成員、換組換集合、卸載送 []", async () => {
+    const seen: string[][] = [];
+    const off = subscribeTickView((codes) => seen.push([...codes]));
+    const { unmount } = wrap(
+      <Grid groups={GROUPS} ungrouped={["3231"]} quotes={{}} onPick={vi.fn()} active={null} />,
+    );
+    expect(seen.at(-1)).toEqual(["2330", "2317"]);
+    fireEvent.click(screen.getByRole("radio", { name: "金融" }));
+    expect(seen.at(-1)).toEqual(["2881"]);
+    fireEvent.click(screen.getByRole("radio", { name: "未分組" }));
+    expect(seen.at(-1)).toEqual(["3231"]);
+    unmount();
+    expect(seen.at(-1)).toEqual([]);
+    off();
+  });
+
+  it("同一組不重送(每秒報價 re-render 不能變成每秒一則 view)", async () => {
+    const seen: string[][] = [];
+    const off = subscribeTickView((codes) => seen.push([...codes]));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const q1 = { "2330": quote({ p: 2_380_000 }) };
+    const ui = (quotes: Record<string, WatchlistQuote>) => (
+      <QueryClientProvider client={client}>
+        <Grid groups={GROUPS} quotes={quotes} onPick={vi.fn()} active={null} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(q1));
+    const before = seen.length;
+    rerender(ui({ ...q1 }));
+    rerender(ui({ ...q1 }));
+    expect(seen.length).toBe(before);
+    off();
   });
 });
 

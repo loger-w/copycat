@@ -1130,6 +1130,46 @@ class TestWsBroadcasterBackpressure:
         finally:
             await gen.aclose()
 
+    async def test_drop_warning_reports_window_count_and_relogs_after_window(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-187 review #8:節流不能讓「量」消失 —— 開盤瞬間一窗內丟 200 筆,log 只說
+        `dropped=1` 等於看不到規模;窗到期後也要再記(否則盤中第二段塞車再也不出現在 log,
+        而判準正是 `grep 佇列滿`)。把窗設 0 讓每次都「過窗」,斷言第二則 WARNING 出現且帶
+        上一窗的筆數。"""
+        monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+        b = WsBroadcaster(maxsize=2)
+        gen = b.stream()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+                for i in range(5):  # 丟 3 筆,每筆都過窗 → 每筆一則
+                    b.publish({"i": i})
+            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
+            assert len(warned) == 3
+            # 第二則起要帶「上一窗丟了幾筆」(這裡窗 = 一筆),不只累計
+            assert "本窗" in warned[1] or "上一窗" in warned[1]
+            assert "累計 dropped=3" in warned[2]
+        finally:
+            await gen.aclose()
+
+    async def test_drop_warning_first_of_window_then_window_total(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """同窗內丟 7 筆:第一筆記一則(開窗),窗內其餘只累計;`window_dropped` 可讀出本窗量
+        (runtime 讀出口:`/api/health` 刻意不含引擎健康度,量走 log + 屬性)。"""
+        b = WsBroadcaster(maxsize=3)
+        gen = b.stream()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+                for i in range(10):
+                    b.publish({"i": i})
+            assert b.dropped == 7
+            assert b.window_dropped == 7
+            warned = [r for r in caplog.records if "佇列滿" in r.getMessage()]
+            assert len(warned) == 1
+        finally:
+            await gen.aclose()
+
 
 class TestWebSockets:
     def test_prod_wiring_keeps_default_flush_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
