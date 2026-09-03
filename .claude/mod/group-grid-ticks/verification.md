@@ -111,3 +111,18 @@ ruff format:`stock_engine.py` / `ws.py` / `stock_state.py` 已 formatted;`app.py
 | 不做 rAF | change-spec §2.6 | doctor / 全量 vitest 綠;量到 long task 才加(③) |
 
 未完成 = 真環境 ①②③④(需 prod 重啟 + dist 重 build + 盤中),明列於收尾回報與 next-time C9 條。
+
+## 09-03 開盤真環境驗證(排程 session;prod 8d42098d 08:23 起、dist 08:59 重 build)
+
+- **① PASS**:群組檢視(玻璃)四卡 12 秒對比 readout 全前進(51.6→51.7 / 113.5→115 /
+  107.5→107 / 140→139.5),卡片線與量隨成交動。截圖 `evidence/group_grid_live_2026-09-03_0905.jpeg`;
+  「與右欄主圖同步」的目視半邊請 user 過目。
+- **③ PASS**:09:01–09:03 devtools performance trace 93 s(`evidence/trace_2026-09-03_0902.json.json.gz`),
+  RunTask 148,274 個、**>50 ms = 0**(最大 36.7 ms 一次,常態尖峰 ~18 ms)。
+- **④ PASS**:群組檢視 pill 列 = 玻璃/光通/MLCC/矽晶圓/CCL/ALL IN/**未分組**,無「盤前篩選」
+  (側欄自選清單顯示「盤前篩選 43」群組屬正常 —— 判準只管 pill 列)。
+- ② 佇列滿 grep 留盤後(14:07 排程)。
+- 附註:「版本落差」badge 亮著 = dist(08:59 build,含 33aba77e docs commits)比 backend
+  (8d42098d)新兩筆 docs-only commit,功能等價,下次重啟自然消。前置事故一則:08:41 發現
+  dist 仍是 09-01 舊 build(#187 後端已把單筆 tick 退役 → 舊前端聽不懂新格式),08:59 由排程
+  session 代跑 `npm run build` 補上。
