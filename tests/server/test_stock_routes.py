@@ -991,7 +991,6 @@ def _next_of_type(ws, kind: str, *, limit: int = 12) -> dict:
     raise AssertionError(f"{limit} 則內沒有 {kind}")
 
 
-
 def _wait_until(pred: Callable[[], bool], *, rounds: int = 100, step: float = 0.02) -> bool:
     """對 TestClient 背景 loop 的狀態 poll(pr-187 review #5):固定 sleep 在慢機器上沒落地
     → 之後的 `receive_json()` 無 timeout、整個 suite hang 而不是紅;poll 上界 2 s 後回 False

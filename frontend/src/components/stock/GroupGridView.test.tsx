@@ -266,7 +266,7 @@ describe("GroupGridView → setTickView(檢視集合登記)", () => {
     resetTickStream();
   });
 
-  it("掛載送成員、換組換集合、卸載送 []", async () => {
+  it("掛載送成員、換組換集合、卸載送 []", () => {
     const seen: string[][] = [];
     const off = subscribeTickView((codes) => seen.push([...codes]));
     const { unmount } = wrap(
