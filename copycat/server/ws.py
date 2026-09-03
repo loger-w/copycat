@@ -55,9 +55,9 @@ class WsBroadcaster:
         self._clients: set[asyncio.Queue[dict]] = set()
         #: 累計丟掉的訊息數(所有 client 合計)。唯讀給測試 / 診斷;不重置。
         self.dropped = 0
-        #: **最後一個有丟包的窗**的筆數(pr-187 review #8;窗過後不歸零,下一次丟包才開新窗):開盤
-        #: 瞬間一窗丟兩百筆時,log 只有窗首那一則、累計值還是 1 —— 規模要看得到:下一窗的 WARNING
-        #: 印「上一窗共丟 n 則」。`/api/health` 刻意不含引擎健康度(其 docstring),量走 log,本屬性
+        #: **本節流窗內**丟掉的筆數(pr-187 review #8;窗到期後第一次 `publish` / 丟包時結算並歸零,
+        #: 見 `_settle_drop_window`):開盤瞬間一窗丟兩百筆時,log 只有窗首那一則、累計值還是 1 ——
+        #: 規模要看得到:結算那則 WARNING 印「上一窗共丟 n 則」。`/api/health` 刻意不含引擎健康度(其 docstring),量走 log,本屬性
         #: 給測試 / 診斷直讀,prod 無讀者。
         self.window_dropped = 0
         self._drop_warned_at: float | None = None
