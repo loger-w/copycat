@@ -10,7 +10,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { emitSignal, emitWsOpen } from "@/lib/signal-bus";
 import type { SignalMsg } from "@/lib/signal-model";
-import { applyTick, fromSnapshot, type StockAccum, type StockBook, type StockTickItem } from "@/lib/stock-accum";
+import {
+  applyTick,
+  fromSnapshot,
+  isSeededDuplicate,
+  seqsByCode,
+  type StockAccum,
+  type StockBook,
+  type StockTickItem,
+} from "@/lib/stock-accum";
 import { instrumentKeyOf, type StkfutSelection } from "@/lib/stkfut";
 import { emitTicks, getTickView, subscribeTickView } from "@/lib/tick-stream";
 import { connectWithRetry } from "@/lib/ws-reconnect";
@@ -357,6 +365,8 @@ export function useStockStream(
           // 設 true 並清空 pending,所以它們在下一輪迭代全部走「refetch 中 → pending」,
           // 落地後以 `seq > snap.seq` 重放 —— 與單筆時代逐則到達的語意逐字相同。
           const items = (msg.items as StockTickItem[] | undefined) ?? [];
+          // 快照已含的重複(pr-187 review #1;判定見 `isSeededDuplicate`):不是跳號、不重拉
+          const mineSeqs = current === null ? undefined : seqsByCode(items).get(current);
           let acc = accumRef.current;
           let touched = false;
           for (const item of items) {
@@ -366,8 +376,9 @@ export function useStockStream(
               continue;
             }
             if (acc === null) continue; // snapshot 未就緒
+            if (isSeededDuplicate(mineSeqs, item.seq, acc.seq)) continue;
             if (item.seq !== acc.seq + 1) {
-              void refetch(); // 跳號(含回退)→ 全量對齊
+              void refetch(); // 跳號(含 rollover 型回退)→ 全量對齊
               pendingRef.current.push(item);
               continue;
             }

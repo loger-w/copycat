@@ -711,7 +711,12 @@ class StockEngine:
 
     def snapshot(self, code: str, *, tape: bool = True) -> dict:
         """`tape=False` 只轉發給 state(見 `StockDayState.snapshot`):群組檢視點卡片
-        時沒有明細讀者,兩萬筆逐筆 dict 純浪費。其餘附加欄與全量完全相同。"""
+        時沒有明細讀者,兩萬筆逐筆 dict 純浪費。其餘附加欄與全量完全相同。
+
+        **取值前先 flush 逐筆打包**(pr-187 review #1):`ingest` 先推 `state.seq`、item 才進 pending
+        等 0.1 s 送出,窗內回的快照 seq 會領先瀏覽器已收到的打包 → 下一則打包首筆 `seq ≤ acc.seq`
+        被判跳號、白打一份全量 refetch(含 tape)。先送出 pending,快照 seq 恆 = 已送出的最後一筆。"""
+        self._flush_ticks()
         state = self._states.get(code)
         snap = (
             state.snapshot(tape=tape) if state is not None else StockDayState().snapshot(tape=tape)
@@ -785,7 +790,11 @@ class StockEngine:
         不下沉到 `_enqueue_backfill`:另外四個入列點(set_main / rollover / reconnect /
         漲跌停值變)都是低頻且對應「使用者當下在看的那一檔」或「日別重來」,被冷卻擋掉
         會變成主圖整天補不回來。
+
+        取值前先 `_flush_ticks()`(pr-187 review #1;理由見 `snapshot()`):群組卡片每 60 s 用這份
+        快照重播種,快照 seq 若領先已送出的打包,活躍檔每輪都會白打一趟單檔重拉。
         """
+        self._flush_ticks()
         out: dict[str, dict] = {}
         for code in codes:
             state = self._states.get(code)
@@ -1735,7 +1744,10 @@ class StockEngine:
         首行先卸 timer(沿 futures `_flush` 的 SC-0 不變式):之後任何早退都不留殘骸,
         下一筆到貨照排。`_loop is None` = close 已開始 → 丟棄不送。
         """
-        self._tick_flush_timer = None
+        if self._tick_flush_timer is not None:
+            # 由快照路徑提前呼叫時 timer 仍在飛:取消它,否則到期再跑一次(空 → 早退,無害但多一次喚醒)
+            self._tick_flush_timer.cancel()
+            self._tick_flush_timer = None
         if self._loop is None or not self._pending_ticks:
             return
         items, self._pending_ticks = self._pending_ticks, []

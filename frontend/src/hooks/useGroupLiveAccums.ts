@@ -21,6 +21,8 @@ import type { WatchlistQuote } from "@/hooks/useStockStream";
 import {
   accumFromGroupSnapshot,
   applyTick,
+  isSeededDuplicate,
+  seqsByCode,
   type StockAccum,
   type StockTickItem,
 } from "@/lib/stock-accum";
@@ -141,6 +143,9 @@ export function useGroupLiveAccums(
 
     const off = subscribeTicks((items) => {
       const allowed = new Set(codesRef.current);
+      // 快照已含的重複(pr-187 review #1;判定見 `isSeededDuplicate`):重播種後首則打包常見,
+      // 不是跳號、不重拉
+      const seqs = seqsByCode(items);
       const next: AccumMap = {};
       for (const item of items) {
         if (!allowed.has(item.code)) continue;
@@ -150,6 +155,7 @@ export function useGroupLiveAccums(
         }
         const acc = next[item.code] ?? mergedRef.current[item.code];
         if (acc === undefined) continue; // 尚未播種(快照未到):等快照,不重拉
+        if (isSeededDuplicate(seqs.get(item.code), item.seq, acc.seq)) continue;
         if (item.seq !== acc.seq + 1) {
           if (startRefetch(item.code)) pendingRef.current.get(item.code)?.push(item);
           continue;

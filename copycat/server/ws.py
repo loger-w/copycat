@@ -55,6 +55,10 @@ class WsBroadcaster:
         self._clients: set[asyncio.Queue[dict]] = set()
         #: 累計丟掉的訊息數(所有 client 合計)。唯讀給測試 / 診斷;不重置。
         self.dropped = 0
+        #: 本節流窗內丟掉的筆數(pr-187 review #8):開盤瞬間一窗丟兩百筆時,log 只有窗首那一則、
+        #: 累計值還是 1 —— 規模要看得到:窗到期後下一則 WARNING 印「上一窗丟了幾筆」,屬性可直讀。
+        #: `/api/health` 刻意不含引擎健康度(其 docstring),所以量走 log + 本屬性,不進 health。
+        self.window_dropped = 0
         self._drop_warned_at: float | None = None
 
     def publish(self, msg: dict) -> None:
@@ -77,15 +81,28 @@ class WsBroadcaster:
         self.dropped += 1
         now = time.monotonic()
         if self._drop_warned_at is not None and now - self._drop_warned_at < DROP_WARN_WINDOW_SECS:
+            self.window_dropped += 1  # 窗內只累計不洗版;量在下一則 WARNING 印出
             return
+        prev_window = self.window_dropped
+        self.window_dropped = 1
         self._drop_warned_at = now
-        logger.warning(
-            "ws 佇列滿:丟最舊保最新(累計 dropped=%d,maxsize=%d,clients=%d)—— 慢 client"
-            "跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
-            self.dropped,
-            self._maxsize,
-            len(self._clients),
-        )
+        if prev_window:
+            logger.warning(
+                "ws 佇列滿:上一窗共丟 %d 則、本窗又開始丟(累計 dropped=%d,maxsize=%d,clients=%d)"
+                "—— 慢 client 跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
+                prev_window,
+                self.dropped,
+                self._maxsize,
+                len(self._clients),
+            )
+        else:
+            logger.warning(
+                "ws 佇列滿:丟最舊保最新(累計 dropped=%d,maxsize=%d,clients=%d)—— 慢 client"
+                "跟不上推播;逐筆已打包,這裡非 0 = 瀏覽器凍住或分頁被節流",
+                self.dropped,
+                self._maxsize,
+                len(self._clients),
+            )
 
     def stream(self, seed: Iterable[dict] = ()) -> AsyncGenerator[dict, None]:
         """新 client 的訊息流;`seed` 逐則在**呼叫當下同步**入該 client 的佇列。
