@@ -2,19 +2,81 @@
   "fixed_point": "8d42098d (origin/master)",
   "reviewed_head": "ccd39ed2",
   "standards": [
-    {"id": "F-01", "severity": "MED", "finding": "CLAUDE.md §4 ticks 契約未跟上:後端快照前 flush + 前端 isSeededDuplicate 是新的雙邊不變式,契約文字仍只寫 seq === acc.seq + 1 才套用;任一邊單獨拿掉零錯誤訊號。修:§4 補一句列兩邊產生點 / 讀者 / 漂掉症狀。"},
-    {"id": "F-02", "severity": "MED", "finding": "#8 的「量」沒被測試釘住:只斷言含「本窗/上一窗」不驗數字,prev_window 換成 dropped 的突變體全綠。修:斷言字面值。"},
-    {"id": "F-03", "severity": "LOW", "finding": "_wait_until 導入後同一 test function 內舊 for/sleep poll 迴圈未遷移,一 class 兩種 idiom。修:改 _wait_until。"},
-    {"id": "F-04", "severity": "LOW", "finding": "_note_drop 兩段逐字近似的 logger.warning。修:head 變數 + 單一 warning。"},
-    {"id": "F-05", "severity": "LOW", "finding": "window_dropped 註解「本節流窗內」名實不符(窗過後不歸零、prod 零讀者)。修:改述。"},
-    {"id": "F-06", "severity": "LOW", "finding": "useStockStream 為單一主圖檔建整則全碼 seqsByCode Map 再 .get,其餘 Set 即丟。修:單碼取法或註明刻意共用。"}
+    {
+      "id": "F-01",
+      "severity": "MED",
+      "finding": "CLAUDE.md §4 ticks 契約未跟上:後端快照前 flush + 前端 isSeededDuplicate 是新的雙邊不變式,契約文字仍只寫 seq === acc.seq + 1 才套用;任一邊單獨拿掉零錯誤訊號。修:§4 補一句列兩邊產生點 / 讀者 / 漂掉症狀。"
+    },
+    {
+      "id": "F-02",
+      "severity": "MED",
+      "finding": "#8 的「量」沒被測試釘住:只斷言含「本窗/上一窗」不驗數字,prev_window 換成 dropped 的突變體全綠。修:斷言字面值。"
+    },
+    {
+      "id": "F-03",
+      "severity": "LOW",
+      "finding": "_wait_until 導入後同一 test function 內舊 for/sleep poll 迴圈未遷移,一 class 兩種 idiom。修:改 _wait_until。"
+    },
+    {
+      "id": "F-04",
+      "severity": "LOW",
+      "finding": "_note_drop 兩段逐字近似的 logger.warning。修:head 變數 + 單一 warning。"
+    },
+    {
+      "id": "F-05",
+      "severity": "LOW",
+      "finding": "window_dropped 註解「本節流窗內」名實不符(窗過後不歸零、prod 零讀者)。修:改述。"
+    },
+    {
+      "id": "F-06",
+      "severity": "LOW",
+      "finding": "useStockStream 為單一主圖檔建整則全碼 seqsByCode Map 再 .get,其餘 Set 即丟。修:單碼取法或註明刻意共用。"
+    }
   ],
   "spec": [
-    {"id": "F-01", "severity": "MED", "finding": "#8 部分未達:單一窗內爆量後轉安靜,規模永遠停在 dropped=1(量只在下一次丟包才印)。修:窗到期時結算(掛 publish 入口),印「上一窗共丟 N 則」並歸零。"},
-    {"id": "F-02", "severity": "MED", "finding": "#7 後半突變仍存活:test_close_cancels_flush 的 timer is None 斷言放在 sleep 之後,timer 自己燒完也歸 None;刪掉 close 的 cancel 區塊全綠。修:斷言移到 close() 正下方。"},
-    {"id": "F-03", "severity": "LOW", "finding": "isSeededDuplicate 註解稱盲點靠 60 s 輪詢修正,只對群組成立;主圖無週期重播種。修:改述為主圖靠重連 / 切檔 / watchlist_changed 自癒;另記跨兩則打包的殘留限制。"},
-    {"id": "F-04", "severity": "LOW", "finding": "snapshot()/group_snapshot() 現在會 publish 且只能在 event loop 上呼叫,docstring 仍寫「唯讀 batch」。修:補前提、修字樣。"},
-    {"id": "F-05", "severity": "LOW", "finding": "#2 與 #4 互相抵銷:StockPage 新增第三處 group === SCREEN_GROUP_NAME 字面比較,正是 #4 要消滅的兩份過濾形狀。修:改判 visibleGroups 是否含該組。"}
+    {
+      "id": "F-01",
+      "severity": "MED",
+      "finding": "#8 部分未達:單一窗內爆量後轉安靜,規模永遠停在 dropped=1(量只在下一次丟包才印)。修:窗到期時結算(掛 publish 入口),印「上一窗共丟 N 則」並歸零。"
+    },
+    {
+      "id": "F-02",
+      "severity": "MED",
+      "finding": "#7 後半突變仍存活:test_close_cancels_flush 的 timer is None 斷言放在 sleep 之後,timer 自己燒完也歸 None;刪掉 close 的 cancel 區塊全綠。修:斷言移到 close() 正下方。"
+    },
+    {
+      "id": "F-03",
+      "severity": "LOW",
+      "finding": "isSeededDuplicate 註解稱盲點靠 60 s 輪詢修正,只對群組成立;主圖無週期重播種。修:改述為主圖靠重連 / 切檔 / watchlist_changed 自癒;另記跨兩則打包的殘留限制。"
+    },
+    {
+      "id": "F-04",
+      "severity": "LOW",
+      "finding": "snapshot()/group_snapshot() 現在會 publish 且只能在 event loop 上呼叫,docstring 仍寫「唯讀 batch」。修:補前提、修字樣。"
+    },
+    {
+      "id": "F-05",
+      "severity": "LOW",
+      "finding": "#2 與 #4 互相抵銷:StockPage 新增第三處 group === SCREEN_GROUP_NAME 字面比較,正是 #4 要消滅的兩份過濾形狀。修:改判 visibleGroups 是否含該組。"
+    }
   ],
-  "disposition": "standards F-01 修(CLAUDE.md §4 補雙邊不變式 + 窗結算語意)。F-02 修(字面值 7 / 累計 dropped=8)。F-03 修(舊迴圈改 _wait_until)。F-04 修(先 head 變數;spec F-01 結算改寫後窗首那則只剩一種,head 內聯、結算另一則獨立字串)。F-05 修(註解改述「最後一個有丟包的窗」)。F-06 否決:兩支 hook 刻意共用同一 helper(seqsByCode)—— 主圖多建幾個 Set 的代價是每則 O(items),遠小於 applyTick;單碼取法會變成第二份 helper,正是 next-time seq-gap 共用候選要收斂的方向。spec F-01 修(publish 入口 _settle_drop_window:窗到期且 window_dropped > 1 印「上一窗共丟 N 則」後歸零;新增轉安靜結算測試)。F-02 修(斷言移到 close 正下方)。F-03 修(註解改述 + 跨兩則打包殘留限制)。F-04 修(兩處 docstring)。F-05 修(visibleGroups(wl.groups).some)。收修 commit:03ed3227(🟢 test)/ d48713fc(🔴 fix)/ 8ac2ab81(🟢 docs)。"
+  "disposition": "standards F-01 修(CLAUDE.md §4 補雙邊不變式 + 窗結算語意)。F-02 修(字面值 7 / 累計 dropped=8)。F-03 修(舊迴圈改 _wait_until)。F-04 修(先 head 變數;spec F-01 結算改寫後窗首那則只剩一種,head 內聯、結算另一則獨立字串)。F-05 修(註解改述「最後一個有丟包的窗」)。F-06 否決:兩支 hook 刻意共用同一 helper(seqsByCode)—— 主圖多建幾個 Set 的代價是每則 O(items),遠小於 applyTick;單碼取法會變成第二份 helper,正是 next-time seq-gap 共用候選要收斂的方向。spec F-01 修(publish 入口 _settle_drop_window:窗到期且 window_dropped > 1 印「上一窗共丟 N 則」後歸零;新增轉安靜結算測試)。F-02 修(斷言移到 close 正下方)。F-03 修(註解改述 + 跨兩則打包殘留限制)。F-04 修(兩處 docstring)。F-05 修(visibleGroups(wl.groups).some)。收修 commit:03ed3227(🟢 test)/ d48713fc(🔴 fix)/ 8ac2ab81(🟢 docs)。",
+  "increment_screen": {
+    "range": "252fb239..20205a05(review r1 收修三筆 + rebase 後 SHA)",
+    "method": "main agent 機械快篩(branch-lifecycle 收尾節 3:review 後增量只補篩不重跑)",
+    "findings": [
+      {
+        "id": "I-01",
+        "severity": "LOW",
+        "file": "copycat/server/ws.py",
+        "summary": "window_dropped 屬性註解「窗過後不歸零,下一次丟包才開新窗」是 spec F-01 把結算搬到 publish 入口之前的口徑;現碼 _settle_drop_window 結算後歸零(test_capital_api.py:1179 斷言 == 0)。",
+        "disposition": "修:註解改述為「本窗內筆數、窗到期後首次 publish / 丟包結算歸零」,零行為。"
+      }
+    ],
+    "clean": [
+      "stock_engine.py docstring 補副作用與 loop 限制:與 _flush_ticks 實作一致",
+      "StockPage.tsx visibleGroups 判定:null(未分組)仍走 UNGROUPED_PICK、盤前篩選由 visibleGroups 過濾,測試覆蓋",
+      "stock-accum.ts 註解改述:與 isSeededDuplicate 實作一致"
+    ]
+  }
 }
