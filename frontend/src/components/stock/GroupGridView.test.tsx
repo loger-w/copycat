@@ -282,7 +282,7 @@ describe("GroupGridView → setTickView(檢視集合登記)", () => {
     off();
   });
 
-  it("同一組不重送(每秒報價 re-render 不能變成每秒一則 view)", async () => {
+  it("同一組不重送(每秒報價 re-render 不能變成每秒一則 view)", () => {
     const seen: string[][] = [];
     const off = subscribeTickView((codes) => seen.push([...codes]));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -294,6 +294,7 @@ describe("GroupGridView → setTickView(檢視集合登記)", () => {
     );
     const { rerender } = render(ui(q1));
     const before = seen.length;
+    expect(before).toBe(1); // 掛載那一次有送;沒這行,兩支 effect 整個刪掉 before 與結尾都是 0 照樣綠(pr-188 review F-10)
     rerender(ui({ ...q1 }));
     rerender(ui({ ...q1 }));
     expect(seen.length).toBe(before);
