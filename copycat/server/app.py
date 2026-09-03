@@ -1662,8 +1662,7 @@ def create_app(
         `code` 回 instrument key(前端 WS 比對鍵)、`underlying` 回股號:兩者在現貨態
         相同,期貨態才分岔,前端因此有單一讀法(不必自己從 key 反推股號)。
 
-        **非唯讀**(pr-187 review #1 收修起):`engine.snapshot()` 取值前 `_flush_ticks()`,pending 非空時
-        會對所有 WS client 送出一則 `ticks`(快照 seq 才不會領先打包)。
+        **非唯讀**:取值前會 flush 逐筆打包,理由與副作用見 `StockEngine.snapshot()` docstring。
         """
         stock = _stock(request)
         _valid_code(code)  # 代號閘優先(既有優先序)
@@ -1689,9 +1688,8 @@ def create_app(
 
     @app.get("/api/stock/group-state")
     async def stock_group_state(request: Request, codes: str = "") -> dict:
-        """群組檢視的 batch 快照(group-grid SC-4)。**非唯讀**(pr-187 review #1 收修起):
-        `engine.group_snapshot()` 取值前 `_flush_ticks()`,pending 非空時會對所有 WS client 送出一則
-        `ticks`,每打一次就切一次 0.1 s 打包窗 —— 不要拿這條當健康檢查輪詢(pr-188 review F-07)。
+        """群組檢視的 batch 快照(group-grid SC-4)。**非唯讀**:取值前會 flush 逐筆打包,理由與副作用見
+        `StockEngine.group_snapshot()` docstring —— 不要拿這條當健康檢查輪詢。
 
         **刻意不重用 `/api/stock/state/{code}`**:那條路會 `set_main`,群組檢視每分鐘
         對整組(上限 150 檔;批次上限即 WATCHLIST_LIMIT)各要一次狀態 = 每分鐘把主圖搶走上百次,主圖分時線就此凍結,而畫面

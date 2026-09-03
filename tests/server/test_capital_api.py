@@ -1188,7 +1188,8 @@ class TestWsBroadcasterBackpressure:
         刻意規則(窗首那則已經說過了),但兩個結算場景的 `window_dropped` 都是 7 —— `> 1` 改 `> 0` 全綠。
         本案整窗只丟一筆 → 窗到期 → 只該有窗首那一則、`window_dropped` 歸零。
         (原 `test_drop_warning_first_of_window_then_window_total` 與
-        `test_drops_are_counted_and_warned_once_per_window` 劇本逐字重複,改寫成本案。)"""
+        `test_drops_are_counted_and_warned_once_per_window` 同劇本,其唯一增量 `window_dropped == 7`
+        由 `test_drop_warning_reports_window_count_and_relogs_after_window` 承接,故改寫成本案。)"""
         b = WsBroadcaster(maxsize=1)
         gen = b.stream()
         try:
