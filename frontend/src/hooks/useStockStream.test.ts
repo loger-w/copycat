@@ -1054,6 +1054,30 @@ describe("useStockStream(ticks 打包 + 檢視集合,T3)", () => {
     expect(hook.result.current.accum?.ticks.length).toBe(6); // snapshot 4 + 重放 5、6
   });
 
+  // pr-187 review #1:快照 seq 可能領先尚未 flush 的打包窗 —— 快照回 seq=3 時那兩筆(2、3)
+  // 還在後端 pending,下一則打包首筆 seq=2 ≤ acc.seq;這是快照已含的重複、不是跳號,
+  // 舊寫法會白打一份全量 snapshot(含 tape,MB 級)。
+  it("seq ≤ acc.seq 的小幅回退 = 快照已含的重複 → 丟棄、不 refetch;接上的下一筆照常", async () => {
+    const { hook, ws } = await setup(); // snapshot seq 1
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(snap(3, [TICK1, TICK1, TICK1]))));
+    act(() => ws.emit(T(5))); // 1→5 跳號 → refetch 回 seq 3
+    await waitFor(() => expect(hook.result.current.accum?.seq).toBe(5)); // 5 由 pending 重放
+    const calls = fetchMock.mock.calls.length;
+    act(() => ws.emit({ type: "ticks", items: [item("2330", 4), item("2330", 5), item("2330", 6)] }));
+    expect(fetchMock.mock.calls.length).toBe(calls); // 4、5 是重複,不 refetch
+    expect(hook.result.current.accum?.seq).toBe(6);
+  });
+
+  it("大幅回退(rollover 歸零)仍是跳號 → refetch", async () => {
+    const { ws } = await setup();
+    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify(snap(5000, [TICK1]))));
+    act(() => ws.emit(T(5000))); // 1→5000 跳號 → refetch 回 5000
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+    const calls = fetchMock.mock.calls.length;
+    act(() => ws.emit(T(1))); // 5000 → 1:新的一天
+    expect(fetchMock.mock.calls.length).toBe(calls + 1);
+  });
+
   it("setTickView → 對 socket 送 view;同集合不重送;onopen(重連)重送當下集合", async () => {
     const { ws } = await setup();
     act(() => ws.onopen?.()); // open 之後 send 才會真的送出(ws-reconnect 的 open 守門)

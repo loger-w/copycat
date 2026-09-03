@@ -981,6 +981,17 @@ def _next_of_type(ws, kind: str, *, limit: int = 12) -> dict:
     raise AssertionError(f"{limit} 則內沒有 {kind}")
 
 
+def _wait_until(pred: Callable[[], bool], *, rounds: int = 100, step: float = 0.02) -> bool:
+    """對 TestClient 背景 loop 的狀態 poll(pr-187 review #5):固定 sleep 在慢機器上沒落地
+    → 之後的 `receive_json()` 無 timeout、整個 suite hang 而不是紅;poll 上界 2 s 後回 False
+    讓斷言紅。"""
+    for _ in range(rounds):
+        if pred():
+            return True
+        time.sleep(step)
+    return pred()
+
+
 class TestStockWsView:
     """`/ws/stock` 入站 `view` 訊息(mod/group-grid-ticks T2,#182):瀏覽器告訴後端
     「我正在看這些檔」,後端以該連線為 token 登記;斷線自動除名;壞輸入只記 WARNING。"""
@@ -988,6 +999,15 @@ class TestStockWsView:
     def _put(self, client: TestClient, codes: list[str]) -> None:
         r = client.put("/api/stock/watchlist", json={"codes": codes, "groups": []})
         assert r.status_code == 200
+
+    def test_prod_wiring_keeps_default_tick_flush_interval(self, tmp_path: Path) -> None:
+        """pr-187 review #7(沿 `test_prod_wiring_keeps_default_flush_interval` 先例):`create_app`
+        出的 stock 引擎不覆寫逐筆打包週期(prod = 0.1 s)。接線處若順手傳個 1.0,圖牆逐筆會慢
+        一秒而測試全綠 —— 這條把預設釘在接線層。"""
+        client, _ = make_client(tmp_path)
+        with client:
+            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
+            assert stock._tick_flush_secs == 0.1
 
     def test_view_message_registers_codes_and_close_clears_them(self, tmp_path: Path) -> None:
         client, fake = make_client(tmp_path)
@@ -997,8 +1017,8 @@ class TestStockWsView:
             with client.websocket_connect("/ws/stock") as ws:
                 assert fake.on_message is not None
                 ws.send_json({"type": "view", "codes": ["2317"]})
-                # 登記走 `_recv` task,與下面的推播分屬兩條路徑;給它一拍落地
-                time.sleep(0.1)
+                # 登記走 `_recv` task,與下面的推播分屬兩條路徑;poll 到落地再灌報價
+                assert _wait_until(lambda: "2317" in stock._tick_targets), "view 未落地"
                 fake.on_message(_spot_quote("2317", cum=1))
                 bundle = _next_of_type(ws, "ticks")
                 assert [it["code"] for it in bundle["items"]] == ["2317"]
@@ -1015,10 +1035,14 @@ class TestStockWsView:
         with client:
             self._put(client, ["2330"])
             before = list(fake.subscribed)
+            stock = cast("StockEngine", client.app.state.stock)  # type: ignore[attr-defined]
             with client.websocket_connect("/ws/stock") as ws:
                 ws.send_json({"type": "view", "codes": ["2330", "9999"]})
-                time.sleep(0.1)
+                # 正控(pr-187 review #6):先確認 view **真的被處理**,否則整段 on_message 拿掉
+                # 這條照樣綠(池本來就不會變)
+                assert _wait_until(lambda: "9999" in stock._tick_targets), "view 未落地"
             assert list(fake.subscribed) == before
+            assert "9999" not in fake.subscribed
 
     def test_bad_client_message_is_logged_and_connection_survives(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -1030,7 +1054,10 @@ class TestStockWsView:
                 ws.send_text("{oops")  # 非 JSON
                 ws.send_json({"type": "nope"})  # 未知型別
                 ws.send_json(["not", "a", "dict"])
-                time.sleep(0.1)
+                # 三則壞 frame 走 `_recv` task;poll 到三則 WARNING 都落地再灌報價(review #5 同病)
+                assert _wait_until(
+                    lambda: sum("ws/stock 入站" in r.getMessage() for r in caplog.records) >= 3
+                ), "壞 frame 的 WARNING 未落地"
                 assert fake.on_message is not None
                 fake.on_message(_spot_quote("2330", cum=1))
                 bundle = _next_of_type(ws, "ticks")  # 連線還活著、推播照收

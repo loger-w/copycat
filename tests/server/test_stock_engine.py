@@ -4136,3 +4136,62 @@ class TestTickBundle:
         assert set(by_code) == set(codes)
         assert all(seqs == list(range(1, 21)) for seqs in by_code.values())
         await engine.close()
+
+    async def test_snapshot_flushes_pending_ticks_first_so_seq_never_leads_the_bundle(self) -> None:
+        """pr-187 review #1:`ingest` 先推 `state.seq`、item 才進 pending 等 0.1 s 送出 —— 窗內回的
+        快照 seq 會**領先**瀏覽器已收到的打包,下一則打包首筆 `seq ≤ acc.seq` 被前端判跳號 → 白打
+        一輪重拉。修法 = 快照(`snapshot` / `group_snapshot`)取值前先 flush:快照 seq 恆等於
+        「已送出的最後一筆」。用大 flush 週期讓「窗內取快照」必然成立。"""
+        src = FakeSource()
+        src.backfill_gate = threading.Event()  # 卡住回補,seq 從 1 起算可讀
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, tick_flush_secs=10.0, checkpoint=False
+        )
+        await engine.start()
+        await engine.set_watchlist(["2330", "2317"])
+        await engine.set_main("2330")
+        await _drain(engine)
+        engine.set_view(object(), ["2317"])
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_quote(code="2317", cum=1))
+        src.on_message(_quote(code="2330", cum=1))
+        await _drain(engine)  # 0.2 s ≪ 10 s:兩筆都還在 pending
+        # 群組快照:取值當下 pending 先送出 → 快照 seq 與已送出的打包一致
+        light = engine.group_snapshot(["2317"])["2317"]
+        got = await _collect(stream)
+        items = _tick_items(got)
+        assert [(it["code"], it["seq"]) for it in items] == [("2317", 1), ("2330", 1)]
+        assert light["seq"] == 1
+        # 主圖快照同一把尺
+        stream2 = engine.stream()
+        src.on_message(_quote(code="2330", cum=2))
+        await _drain(engine)
+        full = engine.snapshot("2330")
+        got2 = await _collect(stream2)
+        assert [(it["code"], it["seq"]) for it in _tick_items(got2)] == [("2330", 2)]
+        assert full["seq"] == 2
+        src.backfill_gate.set()
+        await engine.close()
+
+    async def test_close_cancels_flush_and_never_publishes_pending(self) -> None:
+        """pr-187 review #7(後半):close 取消 flush timer 並清 pending —— 之後 timer 醒來不得
+        對已除名的 broadcaster 送一則沒人收的打包。"""
+        src = FakeSource()
+        src.backfill_gate = threading.Event()
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, tick_flush_secs=0.05, checkpoint=False
+        )
+        await engine.start()
+        await engine.set_main("2330")
+        await _drain(engine)
+        stream = engine.stream()
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await asyncio.sleep(0.01)  # item 進 pending、timer 已排、尚未到期
+        src.backfill_gate.set()
+        await engine.close()
+        await asyncio.sleep(0.1)  # 讓原本 0.05 s 的 timer 有機會醒來
+        assert engine._tick_flush_timer is None
+        assert engine._pending_ticks == []
+        assert _tick_items(await _collect(stream)) == []

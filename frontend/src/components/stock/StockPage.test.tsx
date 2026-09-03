@@ -10,7 +10,13 @@ import type { SignalMsg } from "@/lib/signal-model";
 import type { StkfutSelection } from "@/lib/stkfut";
 import type { StockAccum } from "@/lib/stock-accum";
 import { wrap } from "@/test-utils";
-import { FEE_DISCOUNT_KEY, STOCK_GROUP_KEY, STOCK_VIEW_KEY, UNGROUPED_PICK } from "@/lib/constants";
+import {
+  FEE_DISCOUNT_KEY,
+  SCREEN_GROUP_NAME,
+  STOCK_GROUP_KEY,
+  STOCK_VIEW_KEY,
+  UNGROUPED_PICK,
+} from "@/lib/constants";
 import type { StockView } from "@/lib/stock-view";
 import { fmtPct } from "@/lib/format";
 import { FEE_DISCOUNT_DEFAULT, positionEcon } from "@/lib/ladder-position";
@@ -740,10 +746,11 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
   // 點未分組列不切;單檔檢視下側欄行為不變(只換主檔)。
   it("群組檢視下點側欄群組列 → 圖牆切到該組;未分組列切到「未分組」;單檔檢視不動群組", async () => {
     const TWO = {
-      codes: ["2330", "2317", "2881", "3231"],
+      codes: ["2330", "2317", "2881", "3231", "1101"],
       groups: [
         { name: "半導體", codes: ["2330", "2317"] },
         { name: "金融", codes: ["2881"] },
+        { name: SCREEN_GROUP_NAME, codes: ["1101"] },
       ],
     };
     vi.stubGlobal(
@@ -781,6 +788,15 @@ describe("StockPage 群組檢視(group-grid SC-3)", () => {
     expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe(UNGROUPED_PICK);
     expect(onSelect).toHaveBeenLastCalledWith("3231");
     await waitFor(() => expect(screen.getByTestId("group-card-3231")).toBeTruthy());
+    // 盤前篩選區段的列(pr-187 review #2):圖牆選不到那一組(pill 藏它)→ 只換右欄、群組不動,
+    // 與訊號路徑 `groupForCode` 排除盤前篩選的政策一致;舊寫法會 selectGroup("盤前篩選") →
+    // fallback 跳到第一個群組、記住一個永遠解析不到的名字
+    fireEvent.click(
+      within(screen.getByTestId(`wl-group-${SCREEN_GROUP_NAME}`)).getByTestId("wl-select-1101"),
+    );
+    expect(onSelect).toHaveBeenLastCalledWith("1101");
+    expect((within(rail).getByRole("radio", { name: "未分組" }) as HTMLInputElement).checked).toBe(true);
+    expect(window.localStorage.getItem(STOCK_GROUP_KEY)).toBe(UNGROUPED_PICK);
   });
 
   // mod/group-grid-ticks T6(#184):群組檢視下點訊號列 → 右欄照舊換標的;圖牆若現群組已含該檔
