@@ -21,12 +21,12 @@ import {
   positionsByCode,
   secSummary,
 } from "@/lib/position-summary";
-import { SCREEN_GROUP_NAME, UNGROUPED_PICK } from "@/lib/constants";
+import { UNGROUPED_PICK } from "@/lib/constants";
 import type { StockAccum } from "@/lib/stock-accum";
 import { hasWindowedMinutes } from "@/lib/stock-intraday-svg";
 import { setTickView } from "@/lib/tick-stream";
 import { cn } from "@/lib/utils";
-import { resolveGroupPick, type Group } from "@/lib/watchlist-model";
+import { resolveGroupPick, visibleGroups, type Group } from "@/lib/watchlist-model";
 import type { CapitalPosition } from "@/types";
 
 /** 群組檢視:自選群組成員的分時圖牆(group-grid SC-3)。
@@ -389,11 +389,10 @@ export function GroupGridView({
         leading={<span>群組</span>}
         value={selected.name}
         onChange={onSelectGroup}
-        // T5:藏「盤前篩選」;未分組有成員才多一顆(排最後);label 是字面「未分組」、value 是 sentinel
+        // T5:藏「盤前篩選」走 `visibleGroups`(與 resolveGroupPick 同一份過濾,review #4);
+        // 未分組有成員才多一顆(排最後);label 是字面「未分組」、value 是 sentinel
         items={[
-          ...groups.flatMap((g) =>
-            g.name === SCREEN_GROUP_NAME ? [] : [{ value: g.name, label: g.name }],
-          ),
+          ...visibleGroups(groups).map((g) => ({ value: g.name, label: g.name })),
           ...(ungrouped.length > 0 ? [{ value: UNGROUPED_PICK, label: "未分組" }] : []),
         ]}
         pillClass={(_item, checked) =>

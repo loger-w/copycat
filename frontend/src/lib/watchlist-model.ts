@@ -57,20 +57,22 @@ export function ungroupedCodes(wl: Watchlist): string[] {
   return wl.codes.filter((code) => !grouped.has(code));
 }
 
-/** 群組檢視實際選中的一組(mod/group-grid-ticks T5,#181)。
- *
- *  可選集合 = 群組扣掉「盤前篩選」(`SCREEN_GROUP_NAME`;~60 檔不是圖牆要看的,側欄照舊)+
- *  虛擬「未分組」(`UNGROUPED_PICK`,**有成員才可選**;成員即時算不落檔)。`picked` 是
- *  localStorage 記住的名字:不在集合內(被刪 / 是盤前篩選 / 未分組已空)→ fallback 第一個
- *  可見群組,再退未分組,什麼都沒有 → null(呼叫端顯示「尚無群組」空態)。
- *
- *  **唯一一份解析**:GroupGridView 的 pill 選中態與 StockPage 的「訊號切組」都問這裡 ——
- *  各寫一份的漂移樣態是 pill 選中 A、訊號卻以 B 當「現群組」判要不要切。 */
-/** 群組檢視看得到的群組 = 扣掉「盤前篩選」;兩個解析共用這一條過濾(review std F-03)。 */
-function visibleGroups(groups: readonly Group[]): Group[] {
+/** 群組檢視看得到的群組 = 扣掉「盤前篩選」(`SCREEN_GROUP_NAME`;~60 檔不是圖牆要看的,側欄照舊)。
+ *  **唯一一份過濾**:`resolveGroupPick` / `groupForCode` 與 GroupGridView 的 pill 清單都吃這裡
+ *  (pr-187 review #4:pill 自己再濾一次 = 兩份實作,改成「藏兩組」只改一邊時 pill 列 A、解析回 B,
+ *  兩邊都不報錯)。 */
+export function visibleGroups(groups: readonly Group[]): Group[] {
   return groups.filter((g) => g.name !== SCREEN_GROUP_NAME);
 }
 
+/** 群組檢視實際選中的一組(mod/group-grid-ticks T5,#181)。
+ *
+ *  可選集合 = `visibleGroups` + 虛擬「未分組」(`UNGROUPED_PICK`,**有成員才可選**;成員即時算
+ *  不落檔)。`picked` 是 localStorage 記住的名字:不在集合內(被刪 / 是盤前篩選 / 未分組已空)→
+ *  fallback 第一個可見群組,再退未分組,什麼都沒有 → null(呼叫端顯示「尚無群組」空態)。
+ *
+ *  **唯一一份解析**:GroupGridView 的 pill 選中態與 StockPage 的「訊號切組」都問這裡 ——
+ *  各寫一份的漂移樣態是 pill 選中 A、訊號卻以 B 當「現群組」判要不要切。 */
 export function resolveGroupPick(
   groups: readonly Group[],
   ungrouped: readonly string[],
