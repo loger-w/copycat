@@ -715,7 +715,8 @@ class StockEngine:
 
         **取值前先 flush 逐筆打包**(pr-187 review #1):`ingest` 先推 `state.seq`、item 才進 pending
         等 0.1 s 送出,窗內回的快照 seq 會領先瀏覽器已收到的打包 → 下一則打包首筆 `seq ≤ acc.seq`
-        被判跳號、白打一份全量 refetch(含 tape)。先送出 pending,快照 seq 恆 = 已送出的最後一筆。"""
+        被判跳號、白打一份全量 refetch(含 tape)。先送出 pending,快照 seq 恆 = 已送出的最後一筆。
+        副作用 = 可能 publish 一則打包,且**只能在 event loop 上呼叫**(`_flush_ticks` 動 timer handle)。"""
         self._flush_ticks()
         state = self._states.get(code)
         snap = (
@@ -759,7 +760,10 @@ class StockEngine:
         return out
 
     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
-        """群組檢視的唯讀 batch(SC-4)。**不 set_main、不改訂閱池。**
+        """群組檢視的 batch 快照(SC-4)。**不 set_main、不改訂閱池。**
+
+        自 pr-187 review #1 收修起**不再純唯讀**:取值前 `_flush_ticks()` 會 publish 一則打包,且與
+        `_flush_ticks` 同理**只能在 event loop 上呼叫**(現況兩個 caller 都是 async route;同 `set_view`)。
 
         不得重用 `/api/stock/state/{code}`:那條路會 `set_main`,群組檢視每分鐘上百次
         會把主圖搶走 → 主圖分時線凍結。

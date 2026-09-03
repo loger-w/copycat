@@ -324,7 +324,14 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   跳號那一檔重拉 `group-state?codes=X`)。主圖最多晚 0.1 s(user 拍板接受)。後端改回單筆 / 改欄名 → 前端 `default` 分支
   靜默丟棄,主圖與圖牆同時凍在快照,零錯誤訊號;`tests/server/test_stock_engine.py::TestTickBundle` +
   `useStockStream.test.ts`「ticks 打包」節釘住。丟包可觀測:`ws.py::WsBroadcaster.dropped` + 60 s 節流 WARNING「佇列滿」——
-  盤後 `grep "佇列滿" logs/server-*.log` 為 0 = 沒丟(政策仍是丟最舊保最新)。
+  盤後 `grep "佇列滿" logs/server-*.log` 為 0 = 沒丟(政策仍是丟最舊保最新;09-03 收修起窗到期即在 `publish` 入口**結算**
+  「上一窗共丟 n 則」(窗內 > 1 筆才印,爆一窗後轉安靜也印得出規模),`window_dropped` 屬性給測試 / 診斷,`/api/health` 刻意不含)。
+  **快照與打包的 seq 對齊是雙邊不變式**(09-03 pr-187 review #1 收修):後端 `engine.snapshot()` / `group_snapshot()` 取值前必
+  `_flush_ticks()`(快照 seq 恆 = 已送出的最後一則打包尾筆;`test_snapshot_flushes_pending_ticks_first…` 釘住),前端
+  `lib/stock-accum.ts::isSeededDuplicate`(同一則打包內含 `acc.seq` 本人的 `seq ≤ acc.seq` 項 = 快照已含的重複 → 丟;
+  否則回退視為 rollover 型跳號 → 重拉)是第三條分支,兩支 hook 共用。任一邊單獨拿掉都零錯誤訊號:後端不 flush → 每 60 s
+  重播種後活躍檔各白打一趟單檔重拉 / 主圖白打全量 refetch;前端不判 → 同左。已知盲點 = 昨日恰好只有 `acc.seq` 筆的薄股跨日,
+  60 s 輪詢重播種一分鐘內修正。
 - **`/ws/stock` 入站 `view` 訊息 = 瀏覽器告知「正在看哪些檔」**(2026-09-03 起,#182 / #183):前端產生點
   `lib/tick-stream.ts::setTickView`(群組檢視掛載 / 換組送成員、卸載送 `[]`)→ `useStockStream` 經 `WsHandle.send`
   送 `{"type":"view","codes":[…]}`,**每次 onopen 重送**(後端以連線為 token 登記,重連 = 新 token);後端讀者
