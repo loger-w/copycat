@@ -3,8 +3,8 @@
  *  兩個 container 原本各留一份逐字相同的 `aggregateLots`(stkfut-contracts R2-4 抽
  *  LadderView 時的遺留),本檔把它合一後擴充「已成交量」。
  *
- *  期貨梯不走這裡(`lib/futures-ladder.ts::splitMyLots`)。兩邊的 **qty / filled 算式**
- *  與 **seqs 收集規則**必須一致 —— 改一邊就要改另一邊 —— 但有兩處刻意的差異:
+ *  期貨梯不走這裡(`lib/futures-ladder.ts::splitMyLots`)。兩邊的 **qty / seqs 算式**
+ *  必須一致 —— 改一邊就要改另一邊 —— 但有三處刻意的差異:
  *
  *  1. 本函式分買賣側輸出兩張 map;`splitMyLots` 不分側(期貨梯是單一紅方格,
  *     spec auto-default 第 4 條)。
@@ -12,14 +12,19 @@
  *     可歸);`splitMyLots` 根本不看 `buy_sell`。該態僅在「刪單失敗回報先到、原單
  *     欄位尚未補齊」的極罕留 null 情形出現,現股梯少一個刪單入口(委託列表仍在)
  *     優於歸錯側。
+ *  3. **filled 的落格**(2026-09-05 起):本函式接 `fills` 時已成交量落**成交價**列
+ *     (見 `aggregateLots` doc);`splitMyLots` 仍落委託價(期貨梯本輪不接 fills)。
+ *     不傳 fills 時兩邊 filled 算式仍逐字一致。
  */
 import type { CapitalFill, CapitalOrder } from "@/types";
 
 /** 同價位聚合。`qty` = 活單殘量、`filled` = 已成交量、`seqs` = **活單** seq。
  *
  *  三者刻意分開:`seqs` 是刪單入口(只有活單刪得掉),`filled` 是既成事實(終態單、
- *  部分成交後刪單都算)。`qty === 0 && seqs.length === 0 && filled > 0` = 全成交,
- *  畫面轉不可點徽章;`seqs` 非空一律維持可點紅方格(actionable 殘 0 的單也刪得掉)。 */
+ *  部分成交後刪單都算)。`seqs` 非空一律維持可點紅方格(actionable 殘 0 的單也刪得掉);
+ *  `qty === 0 && seqs.length === 0 && filled > 0` 畫面轉不可點徽章 —— 它代表「這一格只有
+ *  既成的成交」:終態全成交單,**或**活單 / 市價單在**別的價位**(成交價 ≠ 委託價)成交的
+ *  那部分;該活單的刪單入口在它的委託價列。 */
 export interface LadderLot {
   qty: number;
   filled: number;
@@ -68,14 +73,20 @@ export function ymdWindow(now: Date, offsets: readonly number[]): Set<string> {
  *  是 catch-all),寬於「排除零股」的字面承認面;現股梯靠第一道股號比對鍵二次擋住
  *  未知 market 的契約碼單,所以擴大的那一塊落不到畫面上。
  *
- *  `fills`(選傳,現股梯傳):**已成交量以成交價落格**。該單在 fills 表有同 seq 的成交時,
- *  每筆成交落在**它自己的成交價**那格(`filled += fill.qty`,不取均價 —— 均價可能落在不存在的
- *  檔位),該單的 `filled_qty` 就不再落委託價列;殘量與 `seqs`(刪單入口)恆留委託價列。
- *  動機 = user 實遇「掛 98.5 買、成交 98.3,徽章卡 98.5 而成本線在 98.3」—— 成本 / 打平線本就吃
- *  成交均價,梯上的成交徽章要跟它同一把尺。**成交價不明時退回委託價**(不傳 fills = 個股期梯;
- *  舊後端 404 → `[]`;query 載入前的一拍;fills 表沒有該 seq)= 過去的算式一字不改。
- *  市價單(`limitPriceOf` 回 null)沒有委託價列:成交靠這條路上梯,殘量沒有價位可掛、不上梯,
- *  成交價不明時零 entry(與過去相同)。日期界與 `excludeUnit` 仍在**單**上判(fills 只是量的來源)。 */
+ *  `fills`(選傳,現股梯傳):**已成交量以成交價落格**。該單在 fills 表的成交能**完整解釋**
+ *  `filled_qty`(可用列的量總和恰等於它)時,每筆成交落在**它自己的成交價**那格
+ *  (`filled += fill.qty`,不取均價 —— 均價可能落在不存在的檔位),`filled_qty` 就不再落委託價列;
+ *  殘量與 `seqs`(刪單入口)恆留委託價列。動機 = user 實遇「掛 98.5 買、成交 98.3,徽章卡 98.5 而
+ *  成本線在 98.3」—— 成本 / 打平線本就吃成交均價,梯上的成交徽章要跟它同一把尺。
+ *  **成交價不明時整張退回委託價**(= 過去的算式一字不改):不傳 fills(個股期梯)/ 舊後端 404 → `[]` /
+ *  query 載入前的一拍 / fills 表沒有該 seq / **總量對不上**(orders 與 fills 是兩支獨立 query,
+ *  同一 WS 事件 invalidate 但各自解析,fills 先到會比 `filled_qty` 多、orders 先到會少 —— 照 fills 畫
+ *  會膨脹或短計,退回委託價等下一拍對齊)。可用列 = `qty > 0`、`price > 0`、側別 B/S、且不是
+ *  `excludeUnit`(store 除不盡退回 `unit="股"` 的列,張梯不能把股數當張數;同 `fill-marks` AD-3 口徑);
+ *  異常列被濾掉後總量對不上,也就自然退回委託價。市價單(`limitPriceOf` 回 null)沒有委託價列:
+ *  成交靠這條路上梯,殘量沒有價位可掛、不上梯,成交價不明時零 entry(與過去相同)。
+ *  日期界仍在**單**上判(fills 只是量的來源)。已知畫面態:活單全成交但 N 未到(actionable 仍真)且
+ *  成交價 ≠ 委託價 → 委託價列紅方格印 `0(0)`(刪單入口保留)+ 成交價列 `(n)`。 */
 export function aggregateLots(
   orders: CapitalOrder[] | undefined,
   key: string | null,
@@ -88,24 +99,30 @@ export function aggregateLots(
   if (key === null) return { buy, sell };
   const sideOf = (bs: string | null): Map<number, LadderLot> | null =>
     bs === "B" ? buy : bs === "S" ? sell : null;
-  const bump = (map: Map<number, LadderLot>, priceMilli: number, qty: number, filled: number, seq?: string) => {
+  const addToLot = (
+    map: Map<number, LadderLot>,
+    priceMilli: number,
+    part: { qty: number; filled: number; seq?: string },
+  ): void => {
     const cur = map.get(priceMilli) ?? { qty: 0, filled: 0, seqs: [] };
-    cur.qty += qty;
-    cur.filled += filled;
-    if (seq !== undefined) cur.seqs.push(seq);
+    cur.qty += part.qty;
+    cur.filled += part.filled;
+    if (part.seq !== undefined) cur.seqs.push(part.seq);
     map.set(priceMilli, cur);
   };
-  const fillsBySeq = groupFillsBySeq(fills);
+  const fillsBySeq = groupUsableFillsBySeq(fills, excludeUnit);
   for (const o of orders ?? []) {
     if (o.stock_no !== key) continue;
     if (excludeUnit !== undefined && o.unit === excludeUnit) continue;
     // 終態單只認日期界內的(活單恆計);失敗 / 退單 filled_qty 恆 0 → 自然零痕跡
     const countFilled = o.actionable || (o.date !== null && filledDates.has(o.date));
     const seqFills = countFilled ? fillsBySeq.get(o.seq_no) : undefined;
-    if (seqFills !== undefined) {
+    const fillsExplainAll =
+      seqFills !== undefined && seqFills.reduce((s, f) => s + f.qty, 0) === o.filled_qty;
+    if (fillsExplainAll) {
       for (const f of seqFills) {
-        const map = sideOf(f.buy_sell);
-        if (map !== null && f.qty > 0) bump(map, Math.round(f.price * 1000), 0, f.qty);
+        // 側別已在 groupUsableFillsBySeq 過濾為 B/S,sideOf 不會回 null
+        addToLot(sideOf(f.buy_sell) ?? buy, Math.round(f.price * 1000), { qty: 0, filled: f.qty });
       }
     }
     const limitPrice = limitPriceOf(o);
@@ -114,19 +131,30 @@ export function aggregateLots(
     if (map === null) continue;
     // 活單:殘量 + seq(殘量可能是 0 —— P/U 先到 N 未到,刪單入口仍必須在)
     const addQty = o.actionable ? Math.max(0, o.order_qty - o.filled_qty) : 0;
-    // 成交價不明才把 filled_qty 落委託價(有 fills 的已在上面逐筆落格)
-    const addFilled = countFilled && seqFills === undefined ? o.filled_qty : 0;
+    // 成交價不明才把 filled_qty 落委託價(fills 能完整解釋的已在上面逐筆落格)
+    const addFilled = countFilled && !fillsExplainAll ? o.filled_qty : 0;
     if (!o.actionable && addFilled === 0) continue; // 不產生 entry
-    bump(map, Math.round(limitPrice * 1000), addQty, addFilled, o.actionable ? o.seq_no : undefined);
+    addToLot(map, Math.round(limitPrice * 1000), {
+      qty: addQty,
+      filled: addFilled,
+      seq: o.actionable ? o.seq_no : undefined,
+    });
   }
   return { buy, sell };
 }
 
-/** seq → 該單的成交列(只收 qty > 0 的);空 / 未傳 → 空 map(每張單都「成交價不明」)。 */
-function groupFillsBySeq(fills: readonly CapitalFill[] | undefined): Map<string, CapitalFill[]> {
+/** seq → 該單**可用**的成交列:`qty > 0`、`price > 0`(0 不是價格,同 `fill-marks` 的 `!(f.price > 0)`
+ *  守門與本檔 `limitPriceOf`)、側別 B/S(store 寫 `a.buy_sell or ""`,空字串無側可歸)、非 `excludeUnit`。
+ *  空 / 未傳 → 空 map(每張單都「成交價不明」)。 */
+function groupUsableFillsBySeq(
+  fills: readonly CapitalFill[] | undefined,
+  excludeUnit: string | undefined,
+): Map<string, CapitalFill[]> {
   const out = new Map<string, CapitalFill[]>();
   for (const f of fills ?? []) {
-    if (f.qty <= 0) continue;
+    if (f.qty <= 0 || !(f.price > 0)) continue;
+    if (f.buy_sell !== "B" && f.buy_sell !== "S") continue;
+    if (excludeUnit !== undefined && f.unit === excludeUnit) continue;
     const cur = out.get(f.seq_no);
     if (cur === undefined) out.set(f.seq_no, [f]);
     else cur.push(f);
@@ -136,9 +164,9 @@ function groupFillsBySeq(fills: readonly CapitalFill[] | undefined): Map<string,
 
 /** 可當梯列鍵的委託價;`null` = 沒有(市價單)。本 app 送出的市價單帶 `price_type === "market"`
  *  (回報可能帶名目價,仍不能拿來定位);群益 APP 下的 `price_type` 恆 null,唯一線索是委託價
- *  0(送單 bstrPrice="0" 的回聲)或空(解析失敗)。`price: 0` 不是價格 —— 同
- *  `stock-tick::isMarketLevel` 與後端 `_best_limit_price` 的口徑。 */
+ *  0(送單 bstrPrice="0" 的回聲)或空(解析失敗)。`price <= 0` 不是價格 —— 同
+ *  `stock-tick::isMarketLevel`(`priceMilli <= 0`)與後端 `_best_limit_price` 的口徑。 */
 function limitPriceOf(o: CapitalOrder): number | null {
-  if (o.price_type === "market" || o.price === null || o.price === 0) return null;
+  if (o.price_type === "market" || o.price === null || o.price <= 0) return null;
   return o.price;
 }
