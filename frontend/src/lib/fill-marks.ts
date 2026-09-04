@@ -11,10 +11,11 @@
  *
  *  ## 與 `lib/ladder-lots.ts::aggregateLots` 的分工
  *
- *  梯吃 orders(價格軸,委託價聚合);圖自本輪起吃 fills(時間軸,逐筆成交)。
- *  excludeUnit="股"(現股排零股)兩邊同口徑(AD-3)。例外:**市價單**沒有委託價,現股梯
- *  對它們也吃 fills(同 seq 的逐筆成交價落格,2026-09-05 mod/ladder-market-fill-marker)——
- *  兩邊對市價單畫的是同一筆資料,價格軸與時間軸各自一份投影。 */
+ *  梯吃 orders 定**殘量 / 刪單入口**(價格軸,委託價);圖自本輪起吃 fills(時間軸,逐筆成交)。
+ *  2026-09-05(mod/ladder-market-fill-marker)起現股梯的**已成交量**也吃 fills:同 seq 的逐筆
+ *  成交價落格(限價 / 市價同一把尺,與成本線同尺;fills 解釋不了 `filled_qty` 時退回委託價)——
+ *  兩邊對成交畫的是同一筆資料,價格軸與時間軸各自一份投影。excludeUnit="股"(現股排零股)
+ *  與 `price > 0` 守門兩邊同口徑(AD-3)。 */
 import { alldayIndexOf, anchorDateOf } from "@/lib/allday";
 import { futExchangeContract } from "@/lib/futures-ladder";
 import { minuteKey } from "@/lib/stock-accum";

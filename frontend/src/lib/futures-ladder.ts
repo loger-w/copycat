@@ -15,10 +15,11 @@ export interface FutDepthLevel {
 /** 我方同價位聚合(splitMyLots 產物)。`qty` = 活單殘量、`filled` = 已成交量、
  *  `seqNos` = **活單** seq(全撤與點刪的唯一來源;filled-only 條目恆空)。
  *
- *  qty / filled 算式與 seq 收集規則和 `lib/ladder-lots.ts::aggregateLots` 一致 ——
- *  改一邊要改另一邊 —— 但有兩處刻意的差異:aggregateLots 分買賣側輸出兩張 map 且
- *  對 `buy_sell` 非 B/S 的單整筆跳過(連 seq 都不收);本函式不分側、也不看
- *  `buy_sell`(期貨梯是單一紅方格,spec auto-default 第 4 條)。 */
+ *  qty / seq 收集規則和 `lib/ladder-lots.ts::aggregateLots` 一致 —— 改一邊要改另一邊 ——
+ *  但有三處刻意的差異:aggregateLots 分買賣側輸出兩張 map 且對 `buy_sell` 非 B/S 的單
+ *  整筆跳過(連 seq 都不收);本函式不分側、也不看 `buy_sell`(期貨梯是單一紅方格,
+ *  spec auto-default 第 4 條);**filled 落格**:aggregateLots 接 fills 時已成交量落成交價列
+ *  (2026-09-05 起,現股梯),本函式仍落委託價(期貨梯不接 fills;不傳 fills 時兩邊逐字一致)。 */
 export interface MyFutLot {
   priceMilli: number;
   qty: number;

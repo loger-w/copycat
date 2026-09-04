@@ -30,7 +30,7 @@ TanStack Query 共用 cache;`capital_order` WS 事件同時 invalidate orders �
 |---|---|---|
 | SC-1 | `aggregateLots(orders, key, dates, excludeUnit, fills)`:**任何單**只要 fills 表有同 seq 的成交,已成交量改由逐筆決定:每筆成交在 `round(fill.price × 1000)` 那格累加 `filled += fill.qty`(側取 fill 的 `buy_sell`);該單的 `filled_qty` 不再落委託價列。市價單(委託價缺:`price === null` / `0`,或 `price_type === "market"`)沒有委託價列,只有這條路 | `ladder-lots.test.ts`:市價單 2 張成交 100 / 100.5 各 1 → 兩格各 `{qty:0,filled:1,seqs:[]}`;限價 98.5 買成交 98.3 → 98.3 列 `(1)`、98.5 列無 entry |
 | SC-1b | 未成交殘量與 `seqs`(刪單入口)**留在委託價列**:活單部分成交於較優價 → 委託價列 `{qty:殘, filled:0, seqs:[seq]}` + 成交價列 `{qty:0, filled:n, seqs:[]}`;市價單殘量沒有價位可掛,不上梯(現況相同) | 新案:活單 98.5 買 2 張、成交 98.3 × 1 |
-| SC-2 | **成交價不明時退回委託價**:該 seq 在 fills 表找不到成交(fills 未傳 = 個股期梯;舊後端 404 → `[]`;或 query 尚未載入)→ `filled_qty` 照舊落委託價列(= 現況);市價單此時零 entry(現況相同) | 既有 12 案(不傳 fills)全綠 = 這條;新案:fills 給了但 seq 不符 → 限價單退回委託價、市價單零 entry |
+| SC-2 | **成交價不明時退回委託價**:該 seq 的**可用** fills(`qty > 0`、`price > 0`、側別 B/S、非 `excludeUnit`)總量**不恰等於** `filled_qty` —— 含 fills 未傳(個股期梯)、舊後端 404 → `[]`、query 尚未載入、表中無該 seq、**orders / fills 兩支 query 不同步**(review spec F-02:fills 先到會膨脹、orders 先到會短計)、異常列被濾掉 —— → `filled_qty` 照舊落委託價列(= 現況);市價單此時零 entry(現況相同) | 既有 12 案(不傳 fills)全綠 = 這條;新案:seq 不符 / 總量不等(兩向)/ 異常列(unit 股、price 0、側別空)三案 |
 | SC-3 | 日期界與零股閘沿用單的判準:`countFilled`(活單恆計 / 終態看 `date`)與 `excludeUnit` 先在單上過,過了才看 fills | 新案:終態市價單 date 昨日 → 零 entry;零股市價單(unit 股)→ 零 entry |
 | SC-4 | `PriceLadder` 接 `useCapitalFills()` 餵進 `aggregateLots`;市價買單 2 張成交 100 / 100.5 各 1 → 兩列各一顆 `(1)` 徽章(`data-testid="ladder-filled-lot"`),不可點、無刪單 aria | `PriceLadder.test.tsx` 新案 |
 | SC-5(UI 可指認) | 真環境:下一筆閃電梯市價單成交後,梯上成交價那列出現 muted 邊框 `(n)` 徽章(與限價全成交徽章同款);委託列表「市價」標籤照舊 | prod 重啟 + 重 build 後 user 過目;09-04 已無 server 可回放,無法本輪親驗 |
@@ -57,6 +57,9 @@ TanStack Query 共用 cache;`capital_order` WS 事件同時 invalidate orders �
 - fills query 載入前的一拍(`fillsData` undefined)= 退回委託價路徑,載入後徽章移到成交價 —— 只在
   「成交價 ≠ 委託價」時可見一次位移,同 orders query 本身的載入拍。
 - 成本 / 損益平衡線(`positionRows` 吃部位 `avg_price`)本就是成交均價,不在本輪範圍、不動。
+- 已知畫面態(review spec F-03):活單全成交但 N 未到(`actionable` 仍真)且成交價 ≠ 委託價 →
+  委託價列紅方格印 `0(0)`(刪單入口保留)+ 成交價列 `(n)`;修前印 `0(n)`。罕見(store 收 D 即
+  `_refresh_fill_status` 轉終態),知情接受,LadderView 不動(W7)。
 
 ## 5. 實作順序
 
