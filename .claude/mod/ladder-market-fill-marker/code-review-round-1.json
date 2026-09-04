@@ -1,0 +1,25 @@
+{
+  "fixed_point": "0b73e5120b17c20dd329ef98e765a944800dd359",
+  "reviewed_head": "d01b19e2",
+  "method": "code-review-two-axis(Standards / Spec 各一 sub-agent,model opus;白名單 W1–W8 附進兩個 prompt)",
+  "standards": [
+    {"id": "F-01", "severity": "P2", "file": "frontend/src/lib/fill-marks.ts:14-17", "finding": "分工 docstring 失準:寫「例外:市價單也吃 fills」,但 d01b19e2 後限價單也吃 fills;chore 74dd0b64 早於追加拍板未回校。"},
+    {"id": "F-02", "severity": "P2", "file": "frontend/src/lib/ladder-lots.ts:21-22", "finding": "LadderLot doc「qty===0 && seqs 空 && filled>0 = 全成交」已不成立:活單於他價部分成交、市價單皆產生同形 entry。"},
+    {"id": "F-03", "severity": "P2", "file": "frontend/src/lib/ladder-lots.ts:6-8 ↔ futures-ladder.ts:18-19", "finding": "兩邊互指「qty / filled 算式必須一致」,本輪 filled 單邊改吃 fills,兩處敘述未回校 = 口徑漂移零訊號。"},
+    {"id": "F-04", "severity": "P2", "file": "frontend/src/lib/ladder-lots.ts:108", "finding": "fills 路徑無價格守門(對照 fill-marks.ts:80 `!(f.price > 0)`),price 0 會長出 key=0 entry。"},
+    {"id": "F-05", "severity": "P3", "file": "frontend/src/lib/ladder-lots.ts:108,129", "finding": "Duplicated Code:`f.qty > 0` 與 groupFillsBySeq 的 `qty <= 0` 重複,前者死條件。"},
+    {"id": "F-06", "severity": "P3", "file": "frontend/src/lib/ladder-lots.ts:139-140", "finding": "doc 稱同 isMarketLevel 口徑,但該函式是 `<= 0`,limitPriceOf 只擋 `=== 0`。"},
+    {"id": "F-07", "severity": "P3", "file": "frontend/src/lib/ladder-lots.ts:91", "finding": "Mysterious Name / 5 位置參數:`bump` → `addToLot(map, priceMilli, {qty, filled, seq})`。"},
+    {"id": "F-08", "severity": "P3", "file": "commit d01b19e2", "finding": "🔴 fix 夾帶 🔵「PriceLadder 接線收成兩行」。"},
+    {"id": "F-09", "severity": "P3", "file": "frontend/src/lib/ladder-lots.test.ts:272 / PriceLadder.test.tsx:604", "finding": "多一行空白;rowOf 由 priceMilli/1000 推 label 非字面量(可接受)。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "P2", "file": "frontend/src/lib/ladder-lots.ts:104-109", "finding": "fills 未過 excludeUnit 閘:store 除不盡退回 unit=股 的列會以股數當張數累進張梯,與同 diff 新寫的「兩邊同口徑」docstring 矛盾。"},
+    {"id": "F-02", "severity": "P2", "file": "frontend/src/lib/ladder-lots.ts:104,116-118", "finding": "orders / fills 兩支獨立 query 不同步時膨脹(fills 先到:成交價列 2 + 委託價殘 1 = 3 > order_qty 2)或短計;§4 只公告了載入前一拍。"},
+    {"id": "F-03", "severity": "P3", "file": "frontend/src/components/stock/LadderView.tsx:39-40", "finding": "新畫面態 `0(0)`:活單全成交但 actionable 仍真且成交價 ≠ 委託價。"},
+    {"id": "F-04", "severity": "P3", "file": "frontend/src/lib/ladder-lots.ts:104-110", "finding": "fill 側別非 B/S 時整筆量蒸發且 fallback 被關(seqFills 已定義 → addFilled 歸 0)。"},
+    {"id": "F-05", "severity": "P3", "file": "frontend/src/lib/ladder-lots.ts:108", "finding": "f.price 0 長出 key 0 幽靈 entry,與 limitPriceOf 口徑不一致。"},
+    {"id": "note", "severity": "info", "file": "-", "finding": "鐵則 E 合規:唯一改的既有斷言是 spec 預告的「市價 price=null 全排除」;SC-4 元件案確實證明接線(不傳 fills 必 reject);scope creep 僅 qty<=0 防禦濾。"}
+  ],
+  "disposition": "Standards 9 條:F-01/02/03/04/05/06/07/09 全修(F-01/03 → 74dd 之後的 chore 收修 commit;F-02/04/05/06/07/09 → fix 收修 commit);F-08 rejected —— 接線收兩行是同一組新加行為避 react-doctor 新報 no-giant-component 的格式收斂,不是既有 code 的重構,commit message 已寫明,不拆。Spec 5 條:F-01 修(可用列加 excludeUnit 閘);F-02 修(規則改為「可用 fills 總量恰等於 filled_qty 才用成交價,否則整張退回委託價」,雙向測案);F-04/F-05 由 F-02 的可用列過濾 + 總量不等退回同一修法收掉(異常列測案三種);F-03 知情接受入 change-spec §4 已知畫面態,LadderView 不動(W7)。收修後觸及 7 檔 288 綠、tsc / eslint / react-doctor 過;收修 commit:fix(ladder-lots.ts + test)/ chore(futures-ladder.ts、fill-marks.ts、change-spec)。"
+}
