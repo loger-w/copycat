@@ -269,11 +269,44 @@ describe("aggregateLots 市價單:成交量以 fills 表逐筆成交價落格", 
     expect(odd.buy.size).toBe(0);
   });
 
-  it("限價單不看 fills:委託價 100、fills 記 99.5 成交 → 徽章仍在委託價 100(白名單 W1)", () => {
+});
+
+/** user 實遇:掛 98.5 買、成交 98.3,梯上徽章卡在 98.5 而成本線在 98.3 —— 兩條線說的不是同一件事。
+ *  統一口徑:已成交量一律標在成交價;殘量與 seqs(刪單入口)留在委託價。 */
+describe("aggregateLots 限價單:已成交量同樣以 fills 成交價落格,殘量留委託價", () => {
+  it("限價 98.5 買全成交於 98.3 → 98.3 列 (1)、98.5 列無 entry", () => {
+    const limit = filledOrder({ seq_no: "L1", price: 98.5, order_qty: 1, filled_qty: 1 });
+    const r = aggregateLots([limit], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 98.3 })]);
+    expect([...r.buy.keys()]).toEqual([98_300]);
+    expect(buyAt(r, 98_300)).toEqual({ qty: 0, filled: 1, seqs: [] });
+  });
+
+  it("活單 98.5 買 2 張、成交 98.3 × 1 → 委託價列 {qty 1, filled 0, seqs [L1]} + 成交價列 {qty 0, filled 1}", () => {
+    const active = order({ seq_no: "L1", price: 98.5, order_qty: 2, filled_qty: 1 });
+    const r = aggregateLots([active], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 98.3 })]);
+    expect(buyAt(r, 98_500)).toEqual({ qty: 1, filled: 0, seqs: ["L1"] });
+    expect(buyAt(r, 98_300)).toEqual({ qty: 0, filled: 1, seqs: [] });
+  });
+
+  it("成交價 = 委託價(絕大多數限價成交)→ 與不傳 fills 完全同一格(白名單 W1)", () => {
+    const active = order({ seq_no: "L1", price: 100, order_qty: 2, filled_qty: 1 });
+    const withFills = aggregateLots([active], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 100 })]);
+    const without = aggregateLots([active], "2330", STRICT, "股");
+    expect(buyAt(withFills)).toEqual({ qty: 1, filled: 1, seqs: ["L1"] });
+    expect(buyAt(withFills)).toEqual(buyAt(without));
+  });
+
+  it("成交價不明(fills 給了但無同 seq 成交)→ 限價單退回委託價列(舊後端 / 載入中同此)", () => {
     const limit = filledOrder({ seq_no: "L1", price: 100, order_qty: 1, filled_qty: 1 });
-    const r = aggregateLots([limit], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 99.5 })]);
+    const r = aggregateLots([limit], "2330", STRICT, "股", [fill({ seq_no: "OTHER", price: 99 })]);
     expect([...r.buy.keys()]).toEqual([100_000]);
     expect(buyAt(r)).toEqual({ qty: 0, filled: 1, seqs: [] });
+  });
+
+  it("終態限價單 date 昨日 → 即使 fills 有同 seq 成交也零 entry(日期界在單上判)", () => {
+    const stale = filledOrder({ seq_no: "L1", price: 98.5, filled_qty: 1, date: YESTERDAY });
+    const r = aggregateLots([stale], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 98.3 })]);
+    expect(r.buy.size).toBe(0);
   });
 });
 
