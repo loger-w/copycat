@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { aggregateLots, ymdOf, ymdWindow, type LadderLot } from "@/lib/ladder-lots";
-import type { CapitalOrder } from "@/types";
+import type { CapitalFill, CapitalOrder } from "@/types";
 
 const TODAY = "20260813";
 const YESTERDAY = "20260812";
@@ -47,6 +47,28 @@ function filledOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
   });
 }
 
+/** 一筆成交(fills 表列;`price` 是這一筆的成交價、`qty` 已是顯示單位)。 */
+function fill(over: Partial<CapitalFill> = {}): CapitalFill {
+  return {
+    seq_no: "M1",
+    stock_no: "2330",
+    buy_sell: "B",
+    flag_label: "現股",
+    price: 100,
+    qty: 1,
+    unit: "張",
+    date: TODAY,
+    time: "09:01:30",
+    code: "2330",
+    ...over,
+  };
+}
+
+/** 現股市價單(送群益 bstrPrice="0" → 回報委託價 0;本 app 送出的才有 `price_type`)。 */
+function marketOrder(over: Partial<CapitalOrder> = {}): CapitalOrder {
+  return filledOrder({ seq_no: "M1", price: 0, price_type: "market", ...over });
+}
+
 const buyAt = (
   r: { buy: Map<number, LadderLot> },
   priceMilli = 100_000,
@@ -86,10 +108,12 @@ describe("aggregateLots 價位聚合(未成交 / 已成交)", () => {
     expect([...r.buy.keys()]).toEqual([100_100]);
   });
 
-  it("他檔 / 市價(price=null)/ key=null 全排除", () => {
+  it("他檔 / 委託價缺(null、0)且無 fills / key=null 全排除", () => {
     const orders = [
       order({ seq_no: "X", stock_no: "2317" }),
       order({ seq_no: "W", price: null }),
+      // 委託價 0 不是價格(市價單回報)—— 過去會長出一格 key=0 的幽靈 entry(對不到任何列)
+      order({ seq_no: "Z", price: 0, filled_qty: 1 }),
     ];
     const r = aggregateLots(orders, "2330", STRICT);
     expect(r.buy.size).toBe(0);
@@ -169,6 +193,87 @@ describe("aggregateLots 價位聚合(未成交 / 已成交)", () => {
     expect(aggregateLots(orders, "2330", STRICT, "股").buy.size).toBe(0);
     // 不傳 excludeUnit(期貨 / 個股期梯)→ 不設單位閘
     expect(aggregateLots(orders, "2330", STRICT).buy.size).toBe(1);
+  });
+});
+
+/** 市價單沒有委託價可當梯列鍵 → 已成交量改由 fills 表(逐筆真實成交價)落格;
+ *  限價單路徑不看 fills(白名單 W1)。 */
+describe("aggregateLots 市價單:成交量以 fills 表逐筆成交價落格", () => {
+  it("市價買 2 張成交 100 / 100.5 各 1 → 兩格各 filled 1、qty 0、seqs 空(不取均價)", () => {
+    const fills = [
+      fill({ price: 100, qty: 1 }),
+      fill({ price: 100.5, qty: 1, time: "09:01:31" }),
+    ];
+    const r = aggregateLots([marketOrder({ order_qty: 2, filled_qty: 2 })], "2330", STRICT, "股", fills);
+    expect([...r.buy.keys()].sort((a, b) => a - b)).toEqual([100_000, 100_500]);
+    expect(buyAt(r, 100_000)).toEqual({ qty: 0, filled: 1, seqs: [] });
+    expect(buyAt(r, 100_500)).toEqual({ qty: 0, filled: 1, seqs: [] });
+    expect(r.sell.size).toBe(0);
+  });
+
+  it("市價賣 → 側取 fill 的 buy_sell 進 sell;同價兩筆成交累加", () => {
+    const fills = [
+      fill({ buy_sell: "S", price: 99.5, qty: 1 }),
+      fill({ buy_sell: "S", price: 99.5, qty: 2, time: "09:01:31" }),
+    ];
+    const r = aggregateLots(
+      [marketOrder({ buy_sell: "S", order_qty: 3, filled_qty: 3 })],
+      "2330",
+      STRICT,
+      "股",
+      fills,
+    );
+    expect(r.buy.size).toBe(0);
+    expect(r.sell.get(99_500)).toEqual({ qty: 0, filled: 3, seqs: [] });
+  });
+
+  it("price_type 未知(手機 APP 下的市價單)但委託價 0 → 同樣走 fills", () => {
+    const r = aggregateLots(
+      [marketOrder({ price_type: null })],
+      "2330",
+      STRICT,
+      "股",
+      [fill({ price: 100, qty: 2 })],
+    );
+    expect(buyAt(r)).toEqual({ qty: 0, filled: 2, seqs: [] });
+  });
+
+  it("price_type=market 但回報帶了名目價 → 仍以 fills 落格,不用名目價", () => {
+    const r = aggregateLots(
+      [marketOrder({ price: 98.4 })],
+      "2330",
+      STRICT,
+      "股",
+      [fill({ price: 98.35, qty: 2 })],
+    );
+    expect([...r.buy.keys()]).toEqual([98_350]);
+  });
+
+  it("fills 無同 seq 成交 / 他檔的 fills → 零 entry(未成交殘量沒有價位可掛)", () => {
+    const active = marketOrder({ actionable: true, status_label: "已委託", filled_qty: 0 });
+    const r = aggregateLots([active], "2330", STRICT, "股", [fill({ seq_no: "OTHER" })]);
+    expect(r.buy.size).toBe(0);
+  });
+
+  it("日期界與零股閘沿用單的判準:終態 date 昨日 → 零 entry;unit 股 → 零 entry", () => {
+    const fills = [fill({ price: 100, qty: 1 })];
+    const stale = aggregateLots([marketOrder({ date: YESTERDAY })], "2330", STRICT, "股", fills);
+    expect(stale.buy.size).toBe(0);
+    const odd = aggregateLots(
+      [marketOrder({ unit: "股", order_qty: 500, filled_qty: 500 })],
+      "2330",
+      STRICT,
+      "股",
+      [fill({ unit: "股", qty: 500 })],
+    );
+    expect(odd.buy.size).toBe(0);
+  });
+
+  it("限價單不看 fills:委託價 100、fills 記 99.5 成交 → 徽章仍在委託價 100(白名單 W1)", () => {
+    const limit = filledOrder({ seq_no: "L1", price: 100, order_qty: 1, filled_qty: 1 });
+    const r = aggregateLots([limit], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 99.5 })]);
+    expect([...r.buy.keys()]).toEqual([100_000]);
+    expect(buyAt(r)).toEqual({ qty: 0, filled: 1, seqs: [] });
   });
 });
 
