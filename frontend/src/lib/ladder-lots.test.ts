@@ -268,7 +268,6 @@ describe("aggregateLots 市價單:成交量以 fills 表逐筆成交價落格", 
     );
     expect(odd.buy.size).toBe(0);
   });
-
 });
 
 /** user 實遇:掛 98.5 買、成交 98.3,梯上徽章卡在 98.5 而成本線在 98.3 —— 兩條線說的不是同一件事。
@@ -301,6 +300,37 @@ describe("aggregateLots 限價單:已成交量同樣以 fills 成交價落格,�
     const r = aggregateLots([limit], "2330", STRICT, "股", [fill({ seq_no: "OTHER", price: 99 })]);
     expect([...r.buy.keys()]).toEqual([100_000]);
     expect(buyAt(r)).toEqual({ qty: 0, filled: 1, seqs: [] });
+  });
+
+  /** orders / fills 是兩支獨立 query(同一 WS 事件 invalidate、各自解析):fills 先到 2 筆而 orders
+   *  仍 filled_qty 1 時,若照 fills 畫會變成 成交價列 2 + 委託價列殘 1 = 3 張(該單只有 2 張)。
+   *  規則:fills 總量要**恰等於** `filled_qty` 才拿它定位,否則整張退回委託價(review spec F-02)。 */
+  it("fills 總量 ≠ filled_qty(兩支 query 不同步)→ 整張退回委託價,不膨脹", () => {
+    const ahead = order({ seq_no: "L1", price: 98.5, order_qty: 2, filled_qty: 1 });
+    const twoFills = [fill({ seq_no: "L1", price: 98.3 }), fill({ seq_no: "L1", price: 98.3, time: "09:01:31" })];
+    const r = aggregateLots([ahead], "2330", STRICT, "股", twoFills);
+    expect([...r.buy.keys()]).toEqual([98_500]);
+    expect(buyAt(r, 98_500)).toEqual({ qty: 1, filled: 1, seqs: ["L1"] });
+    // 反向:orders 先到(filled_qty 2)、fills 只有 1 筆 → 同樣退回委託價,不短計
+    const behind = order({ seq_no: "L1", price: 98.5, order_qty: 2, filled_qty: 2 });
+    const r2 = aggregateLots([behind], "2330", STRICT, "股", [fill({ seq_no: "L1", price: 98.3 })]);
+    expect(buyAt(r2, 98_500)).toEqual({ qty: 0, filled: 2, seqs: ["L1"] });
+    expect(r2.buy.has(98_300)).toBe(false);
+  });
+
+  /** 異常 fill 列不得長出幽靈格:unit 股(store 除不盡退回股數)、price 0(不是價格)、側別空字串
+   *  (store `a.buy_sell or ""`)—— 濾掉後總量對不上 → 退回委託價(review spec F-01/F-04/F-05)。 */
+  it("異常 fill(unit 股 / price 0 / 側別空)不計入 → 總量不等 → 退回委託價", () => {
+    const limit = filledOrder({ seq_no: "L1", price: 98.5, order_qty: 1, filled_qty: 1 });
+    for (const bad of [
+      fill({ seq_no: "L1", price: 98.3, unit: "股", qty: 1000 }),
+      fill({ seq_no: "L1", price: 0 }),
+      fill({ seq_no: "L1", price: 98.3, buy_sell: "" }),
+    ]) {
+      const r = aggregateLots([limit], "2330", STRICT, "股", [bad]);
+      expect([...r.buy.keys()]).toEqual([98_500]);
+      expect(r.buy.size + r.sell.size).toBe(1);
+    }
   });
 
   it("終態限價單 date 昨日 → 即使 fills 有同 seq 成交也零 entry(日期界在單上判)", () => {
