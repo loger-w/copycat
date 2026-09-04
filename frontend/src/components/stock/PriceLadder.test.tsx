@@ -53,6 +53,7 @@ function mockCapitalFetch(extra: Record<string, Route> = {}) {
   return mockFetch({
     "/api/capital/orders": () => json({ orders: [] }),
     "/api/capital/positions": () => json({ positions: [] }),
+    "/api/capital/fills": () => json({ fills: [] }),
     ...extra,
   });
 }
@@ -566,6 +567,45 @@ describe("PriceLadder 已成交徽章(SC-2)", () => {
     expect(cancelBodies.length).toBe(0);
     // 徽章佔位不吃掉同列點價鈕(R8:鈕變窄是承認的偏差,不可點才是 bug)
     expect(screen.getByLabelText("買 100").hasAttribute("disabled")).toBe(false);
+  });
+
+  /** 市價單沒有委託價(回報 price 0)→ 梯列鍵改用 fills 表的逐筆成交價:2 張成交在
+   *  100 / 100.5 各 1 → 兩列各一顆 `(1)` 徽章(mod/ladder-market-fill-marker SC-4)。
+   *  過去這張單在梯上完全不出現(price 0 對不到任何列)。 */
+  it("市價買全成交(fills 兩價)→ 成交價兩列各 `(1)` 徽章,不可點、無刪單入口", async () => {
+    mockCapitalFetch({
+      "/api/capital/orders": () =>
+        json({
+          orders: [
+            capitalOrder({
+              seq_no: "M01",
+              price: 0,
+              price_type: "market",
+              order_qty: 2,
+              filled_qty: 2,
+              actionable: false,
+              status_label: "全部成交",
+              date: ymd(),
+            }),
+          ],
+        }),
+      "/api/capital/fills": () =>
+        json({
+          fills: [
+            { seq_no: "M01", stock_no: "2330", buy_sell: "B", flag_label: "現股", price: 100, qty: 1, unit: "張", date: ymd(), time: "09:10:00", code: "2330" },
+            { seq_no: "M01", stock_no: "2330", buy_sell: "B", flag_label: "現股", price: 100.5, qty: 1, unit: "張", date: ymd(), time: "09:10:00", code: "2330" },
+          ],
+        }),
+    });
+    render(ladder());
+    const badges = await screen.findAllByTestId("ladder-filled-lot");
+    expect(badges.map((b) => b.textContent)).toEqual(["(1)", "(1)"]);
+    // 列容器帶 data-price(毫元);梯由高到低排,100.5 那列在 100 之前
+    const rowOf = (priceMilli: number) =>
+      screen.getByLabelText(`買 ${priceMilli / 1000}`).closest("[data-price]");
+    expect(rowOf(100_500)?.contains(badges[0] ?? null)).toBe(true);
+    expect(rowOf(100_000)?.contains(badges[1] ?? null)).toBe(true);
+    expect(screen.queryByLabelText(/刪 .* 買單/)).toBeNull();
   });
 
   /** T4:徽章分支買賣側各一份(LadderView 的兩塊三元),只測買側時賣側那塊
