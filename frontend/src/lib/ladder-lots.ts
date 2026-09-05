@@ -11,7 +11,8 @@
  *  2. 本函式對 `buy_sell` 非 `"B"`/`"S"` 的單**整筆跳過**(連 seq 都不收,因為無側
  *     可歸);`splitMyLots` 根本不看 `buy_sell`。該態僅在「刪單失敗回報先到、原單
  *     欄位尚未補齊」的極罕留 null 情形出現,現股梯少一個刪單入口(委託列表仍在)
- *     優於歸錯側。
+ *     優於歸錯側。fills 路徑的側別由 `groupUsableFillsBySeq` 同口徑過濾(側別空的列
+ *     不計 → 總量對不上 → 該單退回委託價,見 `aggregateLots` doc)。
  *  3. **filled 的落格**(2026-09-05 起):本函式接 `fills` 時已成交量落**成交價**列
  *     (見 `aggregateLots` doc);`splitMyLots` 仍落委託價(期貨梯本輪不接 fills)。
  *     不傳 fills 時兩邊 filled 算式仍逐字一致。
@@ -121,8 +122,7 @@ export function aggregateLots(
       seqFills !== undefined && seqFills.reduce((s, f) => s + f.qty, 0) === o.filled_qty;
     if (fillsExplainAll) {
       for (const f of seqFills) {
-        // 側別已在 groupUsableFillsBySeq 過濾為 B/S,sideOf 不會回 null
-        addToLot(sideOf(f.buy_sell) ?? buy, Math.round(f.price * 1000), { qty: 0, filled: f.qty });
+        addToLot(f.side === "B" ? buy : sell, f.priceMilli, { qty: 0, filled: f.qty });
       }
     }
     const limitPrice = limitPriceOf(o);
@@ -143,21 +143,30 @@ export function aggregateLots(
   return { buy, sell };
 }
 
+/** 過閘後的成交列:側別已窄化為 B/S、價格已是毫元 —— 消費端不必再守 null 側。 */
+interface UsableFill {
+  side: "B" | "S";
+  priceMilli: number;
+  qty: number;
+}
+
 /** seq → 該單**可用**的成交列:`qty > 0`、`price > 0`(0 不是價格,同 `fill-marks` 的 `!(f.price > 0)`
- *  守門與本檔 `limitPriceOf`)、側別 B/S(store 寫 `a.buy_sell or ""`,空字串無側可歸)、非 `excludeUnit`。
- *  空 / 未傳 → 空 map(每張單都「成交價不明」)。 */
+ *  守門與本檔 `limitPriceOf`)、側別 B/S(store 寫 `a.buy_sell or ""`,空字串無側可歸;過濾當下窄化型別,
+ *  消費端不需要 fallback 側)、非 `excludeUnit`。**不看 `stock_no`**:群益 seq 是帳戶全域唯一
+ *  (store 以 seq_no 為聚合鍵),同 seq 就是同一張單。空 / 未傳 → 空 map(每張單都「成交價不明」)。 */
 function groupUsableFillsBySeq(
   fills: readonly CapitalFill[] | undefined,
   excludeUnit: string | undefined,
-): Map<string, CapitalFill[]> {
-  const out = new Map<string, CapitalFill[]>();
+): Map<string, UsableFill[]> {
+  const out = new Map<string, UsableFill[]>();
   for (const f of fills ?? []) {
     if (f.qty <= 0 || !(f.price > 0)) continue;
     if (f.buy_sell !== "B" && f.buy_sell !== "S") continue;
     if (excludeUnit !== undefined && f.unit === excludeUnit) continue;
+    const usable: UsableFill = { side: f.buy_sell, priceMilli: Math.round(f.price * 1000), qty: f.qty };
     const cur = out.get(f.seq_no);
-    if (cur === undefined) out.set(f.seq_no, [f]);
-    else cur.push(f);
+    if (cur === undefined) out.set(f.seq_no, [usable]);
+    else cur.push(usable);
   }
   return out;
 }
