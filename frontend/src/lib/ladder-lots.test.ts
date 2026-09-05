@@ -196,8 +196,8 @@ describe("aggregateLots 價位聚合(未成交 / 已成交)", () => {
   });
 });
 
-/** 市價單沒有委託價可當梯列鍵 → 已成交量改由 fills 表(逐筆真實成交價)落格;
- *  限價單路徑不看 fills(白名單 W1)。 */
+/** 市價單沒有委託價可當梯列鍵,只能靠 fills 表(逐筆真實成交價)落格;限價單同尺(見下一節),
+ *  差別只在市價單沒有委託價列可退、成交價不明時零 entry。 */
 describe("aggregateLots 市價單:成交量以 fills 表逐筆成交價落格", () => {
   it("市價買 2 張成交 100 / 100.5 各 1 → 兩格各 filled 1、qty 0、seqs 空(不取均價)", () => {
     const fills = [
@@ -249,10 +249,23 @@ describe("aggregateLots 市價單:成交量以 fills 表逐筆成交價落格", 
     expect([...r.buy.keys()]).toEqual([98_350]);
   });
 
-  it("fills 無同 seq 成交 / 他檔的 fills → 零 entry(未成交殘量沒有價位可掛)", () => {
+  it("fills 無同 seq 成交 → 零 entry(未成交殘量沒有價位可掛)", () => {
     const active = marketOrder({ actionable: true, status_label: "已委託", filled_qty: 0 });
     const r = aggregateLots([active], "2330", STRICT, "股", [fill({ seq_no: "OTHER" })]);
     expect(r.buy.size).toBe(0);
+  });
+
+  /** 知情立場:fills 只以 seq 配對、**不設股號閘**(群益 seq 帳戶全域唯一,store 以 seq_no 為聚合鍵);
+   *  這條釘的是「同 seq 就算數」—— 日後若後端 seq 語意改成 per-market 遞增,這條會先紅。 */
+  it("同 seq 的 fill 即使 stock_no 不同也採計(不看股號,依賴後端 seq 全域唯一)", () => {
+    const r = aggregateLots(
+      [marketOrder({ order_qty: 1, filled_qty: 1 })],
+      "2330",
+      STRICT,
+      "股",
+      [fill({ stock_no: "2317", code: "2317", price: 100, qty: 1 })],
+    );
+    expect(buyAt(r)).toEqual({ qty: 0, filled: 1, seqs: [] });
   });
 
   it("日期界與零股閘沿用單的判準:終態 date 昨日 → 零 entry;unit 股 → 零 entry", () => {
