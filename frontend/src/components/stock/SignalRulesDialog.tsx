@@ -361,7 +361,7 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                         )}
                         {/* spec #192:開關語意 = 通知(Discord + 瀏覽器提示),文案跟著改 */}
                         {rule.notify_discord ? (
-                          <span className="shrink-0 text-[0.625rem] text-ink-dim">Discord</span>
+                          <span className="shrink-0 text-[0.625rem] text-ink-dim">通知</span>
                         ) : null}
                       </span>
                       <span className="truncate font-mono text-[0.625rem] text-ink-muted">
@@ -534,12 +534,12 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                   <label className="flex items-center gap-1">
                     <input
                       type="checkbox"
-                      aria-label="Discord 通知"
+                      aria-label="通知"
                       checked={form.notify_discord}
                       onChange={(e) => patch({ notify_discord: e.target.checked })}
                     />
                     {/* 「通知」= Discord + 瀏覽器 toast / 嗶 / 桌面通知(spec #192);關掉仍照記 jsonl、rail 淡色列出 */}
-                    <span>Discord 通知</span>
+                    <span>通知</span>
                   </label>
                 </div>
               </div>
