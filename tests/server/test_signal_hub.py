@@ -149,16 +149,17 @@ def _tick(
 def _state(
     *,
     name: str | None = "台積電",
-    upper: int = 200_000,
+    upper: int | None = 200_000,
     lower: int = 50_000,
     locked_up: bool = False,
+    ref: int | None = 100_000,
 ) -> StockDayState:
     st = StockDayState()
     if name is not None:
         st.update_meta(
             StockMeta(
                 name=name,
-                ref_milli=100_000,
+                ref_milli=ref,
                 upper_milli=upper,
                 lower_milli=lower,
                 y_close_milli=None,
@@ -253,9 +254,14 @@ class _Watch:
         self,
         groups: list[Group] | None = None,
         quotes: dict[str, tuple[str, float | None]] | None = None,
+        peers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.groups: list[Group] = list(groups or [])
         self.quotes: dict[str, tuple[str, float | None]] = dict(quotes or {})
+        #: 政策層行情快照(spec #192;engine `policy_quotes()` 的替身),`peers_calls` 計次
+        #: —— 政策評估零 IO 的判準是「只在掃單簇事件時被叫」
+        self.peers: dict[str, dict[str, Any]] = dict(peers or {})
+        self.peers_calls = 0
         self.groups_error = False
         self.quotes_error = False
 
@@ -268,6 +274,10 @@ class _Watch:
         if self.quotes_error:
             raise RuntimeError("engine quotes 壞了")
         return dict(self.quotes)
+
+    def peers_fn(self) -> dict[str, dict[str, Any]]:
+        self.peers_calls += 1
+        return {code: dict(q) for code, q in self.peers.items()}
 
 
 #: `_Harness(daily_bars=...)` 的「未傳」哨兵(None 是合法且有意義的值)
@@ -319,6 +329,7 @@ class _Harness:
             # 預設 None = 未注入(既有測試的摘要恆為空字串,行為零改動)
             groups_fn=wl.groups_fn if wl is not None else None,
             quotes_fn=wl.quotes_fn if wl is not None else None,
+            peers_fn=wl.peers_fn if wl is not None else None,
         )
 
     def _notify(self, text: str) -> bool:

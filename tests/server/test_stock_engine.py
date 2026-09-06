@@ -28,6 +28,8 @@ def _quote(
     symbol: str | None = None,
     precise: str = "25751000000",
     status: str = "0",
+    bid: str = "2375",
+    ask: str = "2380",
 ) -> dict:
     """`precise` = TC4 的 UTC PreciseTime(預設 02:57:51 = 台北 10:57:51,日盤正中)。
 
@@ -44,8 +46,8 @@ def _quote(
         "TradeDate": date,
         "FilledTime": precise.zfill(12)[:6],  # 同一時刻的 HHMMSS 形(UTC)
         "PreciseTime": precise,
-        "Bid": "2375",
-        "Ask": "2380",
+        "Bid": bid,
+        "Ask": ask,
         "BidVolume": "10",
         "AskVolume": "10",
         "ReferencePrice": "2320",
@@ -1320,6 +1322,73 @@ class TestQuotes:
         monkeypatch.setattr(engine, "_quote_payload", mutating)
         got = engine.quotes()
         assert set(got) == {"2330", "5483"}  # 一致快照:不炸、不漏鍵、不摻新名單
+        await engine.close()
+
+
+class TestPolicyQuotes:
+    """spec #192:政策層行情快照 `policy_quotes()`(hub 以 `peers_fn` 注入)。
+
+    每檔自選一份 {name, price, ref, upper, chg_pct, high, touched_upper, locked_up};
+    no_data / 缺 meta / 未成交 → 值欄位 None **但鍵仍在**(整檔缺席會讓「族群有幾檔」跟著波動)。
+    """
+
+    async def test_quoted_stock_full_snapshot(self) -> None:
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=7, price="2400"))
+        await _drain(engine)
+        snap = engine.policy_quotes()
+        assert set(snap) == {"2330"}
+        q = snap["2330"]
+        assert q["name"] == "台積電"
+        assert q["price"] == 2_400_000 and q["high"] == 2_400_000
+        assert q["ref"] is not None and q["upper"] is not None
+        assert q["chg_pct"] == 3.45  # 與 `quotes()` / `_quote_payload` 同一把尺
+        assert q["touched_upper"] is False and q["locked_up"] is False
+
+    async def test_missing_meta_keeps_keys_with_none(self) -> None:
+        engine, _src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert engine.policy_quotes() == {
+            "2330": {
+                "name": "",
+                "price": None,
+                "ref": None,
+                "upper": None,
+                "chg_pct": None,
+                "high": None,
+                "touched_upper": None,
+                "locked_up": None,
+            }
+        }
+        await engine.close()
+
+    async def test_touched_and_locked_flags(self) -> None:
+        """鎖過 = 當日高 ≥ 漲停;當下鎖死 = 現價 = 漲停且限價賣側空(市價佇列 0 不算限價)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        # _quote 的 ReferencePrice 2320 → 漲停 2550(2320 × 1.1 = 2552 → 貼 5 元檔 2550)
+        src.on_message(_quote(cum=1, price="2550", bid="0", ask=""))
+        await _drain(engine)
+        q = engine.policy_quotes()["2330"]
+        assert q["price"] == 2_550_000 and q["upper"] == 2_550_000
+        assert q["touched_upper"] is True and q["locked_up"] is True
+        # 打開:賣側回到有限價檔 → 鎖死 False、鎖過仍 True
+        src.on_message(_quote(cum=2, price="2545", bid="2545", ask="2550"))
+        await _drain(engine)
+        q = engine.policy_quotes()["2330"]
+        assert q["touched_upper"] is True and q["locked_up"] is False
+        await engine.close()
+
+    async def test_excludes_futures_pseudo_keys(self) -> None:
+        engine, _src = await _make_mapped()
+        await engine.set_watchlist(["2330"])
+        await engine.set_main("2330")
+        await _drain(engine)
+        assert "F:CDF" in engine._states
+        assert set(engine.policy_quotes()) == {"2330"}
         await engine.close()
 
 
