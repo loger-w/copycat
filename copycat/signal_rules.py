@@ -45,14 +45,16 @@ RULE_KINDS: tuple[str, ...] = (
     "surge_pullback",
     "vol_burst",
     "limit_lock",
+    "sweep_cluster",
 )
 CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
 COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
 #: REST 可寫入的無界量要有上限(R11)—— 熱路徑是 per-tick N × evaluate。
 MAX_RULES = 30
 #: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`;v3 = append 兩張
-#: surge_pullback 種子卡(spec #174;見 `load_rules` 的遷移鏈)。
-_CACHE_VERSION = 3
+#: surge_pullback 種子卡(spec #174);v4 = append 掃單簇種子卡 + cdp_cross / vol_burst
+#: 通知一次性翻 false(spec #192;見 `load_rules` 的遷移鏈)。
+_CACHE_VERSION = 4
 #: 可載入版本 = 1.._CACHE_VERSION 推導(review F-10):bump 時白名單自動跟上,
 #: 忘了寫轉換會在 `load_rules` 的遷移鏈斷點炸出來,而不是所有舊檔靜默變壞檔 503。
 _SUPPORTED_VERSIONS: tuple[int, ...] = tuple(range(1, _CACHE_VERSION + 1))
@@ -75,18 +77,37 @@ PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
         "min_day_lots": (0, 1e7),
     },
     "limit_lock": {},
+    # spec #192:cooldown 下限 60 恰等於研究的 60 s 去重,不另設 dedup 參數
+    "sweep_cluster": {
+        "cluster_window_secs": (1, 600),
+        "min_sweeps": (1, 20),
+        "min_levels": (1, 10),
+        "up_pct": (0, 10),
+        "up_window_secs": (1, 600),
+    },
 }
 
-#: 這些鍵在 `SignalsConfig` 是 int 欄位 —— 2.5 個 tick / 半張都不存在,非整數值拒收(R25)。
-#: 不擋的話 `int()` 會靜默截尾,使用者填 2.9 拿到 2。
-INT_PARAM_KEYS: frozenset[str] = frozenset({"rearm_ticks", "min_window_lots", "min_day_lots"})
+#: 這些鍵在 `SignalsConfig` 是 int 欄位 —— 2.5 個 tick / 半張 / 半個掃單都不存在,非整數值
+#: 拒收(R25)。不擋的話 `int()` 會靜默截尾,使用者填 2.9 拿到 2。
+INT_PARAM_KEYS: frozenset[str] = frozenset(
+    {"rearm_ticks", "min_window_lots", "min_day_lots", "min_sweeps", "min_levels"}
+)
 
 _DEFAULT_NAMES: dict[str, str] = {
     "cdp_cross": "CDP 穿越",
     "surge_crash": "爆拉爆跌",
     "vol_burst": "爆量",
     "limit_lock": "鎖漲跌停",
+    "sweep_cluster": "掃單簇",
 }
+#: 掃單簇種子卡名(v3→v4 遷移撞名判準與 `_DEFAULT_NAMES` 同源)。
+_SWEEP_SEED_NAME = _DEFAULT_NAMES["sweep_cluster"]
+
+#: 種子 / 遷移把通知關掉的 kind(spec #192 拍板):CDP 穿越、爆量在 09-05~07 組合回測每筆
+#: 為負,停推播但事件照記;掃單簇是政策層的原料,自己不推、由政策列推。
+#: 「通知」語意自 spec #192 起 = Discord + 瀏覽器 toast / 嗶 / 桌面通知(wire 名 `notify_discord`
+#: 不改),jsonl 與 WS 永遠不受它影響(W3)。
+_QUIET_KINDS: frozenset[str] = frozenset({"cdp_cross", "vol_burst", "sweep_cluster"})
 
 #: surge_pullback 種子兩張卡(spec #174 拍板:5 分鐘 +2% 武裝,回檔 1% / 2%)。
 #: `pct` 是卡的**身分**(綁名稱)—— 不吃 config,否則覆寫 `pullback_pct` 會讓
@@ -265,6 +286,14 @@ def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
             "min_window_lots": float(cfg.vol_min_window_lots),
             "min_day_lots": float(cfg.vol_min_day_lots),
         }
+    elif kind == "sweep_cluster":
+        raw = {
+            "cluster_window_secs": float(cfg.sweep_cluster_window_secs),
+            "min_sweeps": float(cfg.sweep_min_sweeps),
+            "min_levels": float(cfg.sweep_min_levels),
+            "up_pct": float(cfg.sweep_up_pct),
+            "up_window_secs": float(cfg.sweep_up_window_secs),
+        }
     spec = PARAM_SPECS[kind]
     return {key: _clamp(f"{kind}.{key}", value, *spec[key]) for key, value in raw.items()}
 
@@ -276,6 +305,7 @@ def _seed_cooldown(kind: str, cfg: SignalsConfig) -> int:
         "surge_pullback": cfg.pullback_cooldown_secs,
         "vol_burst": cfg.vol_cooldown_secs,
         "limit_lock": cfg.limit_cooldown_secs,
+        "sweep_cluster": cfg.sweep_cooldown_secs,
     }[kind]
     return int(_clamp(f"{kind}.cooldown_secs", float(int(source)), COOLDOWN_MIN, COOLDOWN_MAX))
 
@@ -297,15 +327,31 @@ def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig)
     }
 
 
+def _sweep_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
+    """掃單簇種子卡(spec #192):enabled、**通知關**、冷卻與參數走 `cfg` 的六個 `sweep_*` 欄。
+    `default_rules` 與 v3→v4 遷移共用 —— 兩條種子路徑分家會漂。
+    """
+    return {
+        "id": rule_id,
+        "name": _SWEEP_SEED_NAME,
+        "kind": "sweep_cluster",
+        "enabled": True,
+        "notify_discord": False,
+        "cooldown_secs": _seed_cooldown("sweep_cluster", cfg),
+        "params": _seed_params("sweep_cluster", cfg),
+        "cdp_levels": [],
+    }
+
+
 def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rule]:
     """遷移種子:每 kind 一條(surge_pullback 例外 = 兩張卡),參數 / 冷卻取自現行
-    全域 `SignalsConfig`。
+    全域 `SignalsConfig`;通知旗 = `kind not in _QUIET_KINDS`(spec #192 全新安裝同口徑)。
 
     `legacy_flags` = 舊 `signals_enabled.json` 的鍵值;**缺鍵 = True**(fail-open,
     與舊 `_load_enabled` 的「缺檔全開」同語意 —— 遷移不該悄悄把訊號關掉)。
-    注意 hub 的 `_legacy_flags` 以 `SWITCH_KEYS`(現五鍵)起手 → surge_pullback 鍵
-    **恆在**:真舊檔沒這鍵 → True;手改過的檔寫 false 則兩張種子卡照關(review F-07,
-    刻意如實 —— 開關檔語意就是逐鍵覆蓋)。
+    注意 hub 的 `_legacy_flags` 以 `SWITCH_KEYS`(現六鍵)起手 → surge_pullback /
+    sweep_cluster 鍵**恆在**:真舊檔沒這鍵 → True;手改過的檔寫 false 則種子卡照關
+    (review F-07,刻意如實 —— 開關檔語意就是逐鍵覆蓋)。
     """
     epoch = int(time.time())
     rules: list[Rule] = []
@@ -315,6 +361,11 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
                 rule = _pullback_seed_rule(name, pct, new_rule_id(epoch, len(rules)), cfg)
                 rule["enabled"] = legacy_flags.get(kind, True)
                 rules.append(rule)
+            continue
+        if kind == "sweep_cluster":
+            rule = _sweep_seed_rule(new_rule_id(epoch, len(rules)), cfg)
+            rule["enabled"] = legacy_flags.get(kind, True)
+            rules.append(rule)
             continue
         rules.append(
             {
@@ -396,22 +447,61 @@ def _migrate_v2(items: list[Any]) -> list[Any]:
     return out
 
 
+def _migrate_v3(items: list[Any]) -> list[Any]:
+    """v3 → v4(spec #192 一次性):(a) append 掃單簇種子卡;(b) `kind` 為 cdp_cross /
+    vol_burst 的每條規則通知改 false,**逐條 log**(遷移 log 是盤後對帳「哪幾條被關了」
+    的唯一來源)。已是 false 的不動不 log(log 只講改了什麼)。
+
+    種子路徑同 `_migrate_v2`:`SignalsConfig()` 預設值、撞名跳過、滿 30 條跳過並 WARNING、
+    id 去重、輸入不就地修改、v3 空陣列也照塞(升級注入)。
+    翻旗只認 v3 之前的檔:使用者在 v4 世界於規則視窗開回通知後落的是 v4 檔,載入不再
+    經過這裡(`load_rules` 只對 `version != _CACHE_VERSION` 跑遷移鏈)。
+    """
+    out: list[Any] = list(items)
+    existing = [cast("dict[str, Any]", item) for item in out if isinstance(item, dict)]
+    names = {str(obj.get("name", "")).strip() for obj in existing}
+    ids = {obj.get("id") for obj in existing}
+    if _SWEEP_SEED_NAME in names:
+        logger.info("訊號規則檔 v3→v4:已有同名規則,跳過種子卡 %r", _SWEEP_SEED_NAME)
+        return out
+    if len(out) >= MAX_RULES:
+        logger.warning(
+            "訊號規則檔 v3→v4:規則數已達上限 %s,跳過種子卡 %r", MAX_RULES, _SWEEP_SEED_NAME
+        )
+        return out
+    epoch = int(time.time())
+    seq = len(out)
+    rule_id = new_rule_id(epoch, seq)
+    while rule_id in ids:
+        seq += 1
+        rule_id = new_rule_id(epoch, seq)
+    rule = _sweep_seed_rule(rule_id, SignalsConfig())
+    logger.info(
+        "訊號規則檔 v3→v4:append 種子卡 %r params=%s(通知關)", _SWEEP_SEED_NAME, rule["params"]
+    )
+    out.append(rule)
+    return out
+
+
 def load_rules(path: Path) -> list[Rule] | None:
     """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
 
-    「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活四條預設
-    (在當前版本 v3 上原樣成立;v2 空檔照樣拿到 v3 的種子卡 —— 那是升級注入,見下)。
+    「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活預設
+    (在當前版本 v4 上原樣成立;v2 / v3 空檔照樣拿到後續版本的種子卡 —— 那是升級注入,見下)。
     壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
     無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
 
-    **遷移鏈(D6 + spec #174)**:v1 → `_migrate_v1` 補 cdp 的 `rearm_dwell_secs` →
-    v2;v2(含補完的 v1)→ `_migrate_v2` append 兩張 surge_pullback 種子卡 → v3,
-    之後照常驗證;**載入時不回寫檔案**,磁碟要到第一次 upsert 才以 v3 落檔 ——
-    這段就是回退窗:期間舊碼可直接讀原檔。
-    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`,刪掉兩張
-    surge_pullback 種子卡、(要退到 v1 再)刪 cdp 的 `rearm_dwell_secs` 鍵、
-    `_cache_version` 改回 2(或 1)→ 起舊碼。
-    v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1 / 2 / 3 以外的版本一律 raise。
+    **遷移鏈(D6 + spec #174 + spec #192)**:v1 → `_migrate_v1` 補 cdp 的
+    `rearm_dwell_secs` → v2;v2(含補完的 v1)→ `_migrate_v2` append 兩張 surge_pullback
+    種子卡 → v3;v3(含鏈上來的)→ `_migrate_v3` append 掃單簇種子卡 + cdp_cross / vol_burst
+    通知翻 false → v4,之後照常驗證;**載入時不回寫檔案**,磁碟要到第一次 upsert 才以 v4
+    落檔 —— 這段就是回退窗:期間舊碼可直接讀原檔。
+    回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`:
+    - 退到 v3:刪掉「掃單簇」種子卡、把 cdp_cross / vol_burst 規則的 `notify_discord` 改回
+      true、`_cache_version` 改回 3 → 起舊碼(v3 碼不認 `sweep_cluster` kind,卡沒刪乾淨會 raise)。
+    - 再退到 v2 / v1:刪兩張 surge_pullback 種子卡、(v1)刪 cdp 的 `rearm_dwell_secs` 鍵、
+      `_cache_version` 改回 2(或 1)。
+    v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1..4 以外的版本一律 raise。
     """
     if not path.exists():
         return None
@@ -440,7 +530,9 @@ def load_rules(path: Path) -> list[Rule] | None:
     if version != _CACHE_VERSION:
         if version == 1:
             items = _migrate_v1(items)
-        items = _migrate_v2(items)
+        if version <= 2:
+            items = _migrate_v2(items)
+        items = _migrate_v3(items)
     rules: dict[str, Rule] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -517,4 +609,14 @@ def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
         )
     if kind == "limit_lock":
         return replace(base, limit_cooldown_secs=cooldown)
+    if kind == "sweep_cluster":
+        return replace(
+            base,
+            sweep_cluster_window_secs=params["cluster_window_secs"],
+            sweep_min_sweeps=int(params["min_sweeps"]),
+            sweep_min_levels=int(params["min_levels"]),
+            sweep_up_pct=params["up_pct"],
+            sweep_up_window_secs=params["up_window_secs"],
+            sweep_cooldown_secs=cooldown,
+        )
     raise _bad()  # normalize_rule 把關後不可達;新增 kind 忘了映射時在此炸出來

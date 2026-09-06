@@ -43,6 +43,22 @@ class SignalsConfig:
     vol_cooldown_secs: float = 1800.0  # per code 冷卻
     # --- 鎖漲跌停 / 打開(SC-4)---
     limit_cooldown_secs: float = 600.0
+    # --- 掃單簇(spec #192;定義與研究 `combo_events.py::find_sweeps` + sweepc 段同源)---
+    sweep_cluster_window_secs: float = 30.0  # [s − 窗, s] 內合格掃單數的窗
+    sweep_min_sweeps: int = 2  # 窗內合格掃單數門檻(含自己)
+    sweep_min_levels: int = 2  # 單一掃單的層數門檻(round((群高 − 首價) ÷ 首價檔距))
+    sweep_up_pct: float = 0.3  # 群高 ÷ 回看窗前最後一筆價 − 1 的門檻(%)
+    sweep_up_window_secs: float = 60.0  # 回看窗
+    sweep_cooldown_secs: float = 60.0  # per code 冷卻(= 研究的 60 s 去重)
+    # --- 政策層(spec #192;接線層 `signal_hub` 讀,只在掃單簇事件時評估)---
+    policy_peer_up_pct: float = 3.0  # 同伴「已動」門檻(較前收 %)
+    policy_max_chg_pct: float = 6.0  # 自己較前收上限(P / B-a / S 用;B-b 不看)
+    policy_push_end: str = "12:30:00"  # 推播窗右界(台北 HH:MM:SS;之後只記 late)
+    # 不算族群的自選群組名;盤前篩選群組名恆排除,不在此列(`screen_engine.SCREEN_GROUP`)。
+    # tuple 欄(frozen dataclass 要 hashable):`load_signals_config` 的 tuple_keys 轉型。
+    policy_exclude_groups: tuple[str, ...] = ("ALL IN",)
+    policy_outcome_time: str = "13:40:00"  # T+1 / T+2 開盤價回填 worker 每日跑的時點
+    policy_outcome_days: int = 5  # 回填掃描最近幾個日檔
     # --- 接線層(SignalHub)---
     discord_per_min: int = 30  # Discord 每分鐘送出上限(只擋 Discord,不擋 jsonl/WS)
     basis_gap_secs: float = 0.2  # CDP 基準 worker 逐檔間隔(測試注入 0)
@@ -56,6 +72,6 @@ def load_signals_config(path: Path = CONFIG_PATH) -> SignalsConfig:
     return load_dataclass_json(
         path,
         SignalsConfig,
-        tuple_keys=(),
+        tuple_keys=("policy_exclude_groups",),
         unknown_label="未知訊號參數",
     )

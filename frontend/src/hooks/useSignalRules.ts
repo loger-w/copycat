@@ -17,6 +17,7 @@ export const RULE_KINDS = [
   "surge_pullback",
   "vol_burst",
   "limit_lock",
+  "sweep_cluster",
 ] as const;
 export type RuleKind = (typeof RULE_KINDS)[number];
 
@@ -32,6 +33,8 @@ export interface SignalRule {
   name: string;
   kind: RuleKind;
   enabled: boolean;
+  /** 「通知」開關(spec #192 起語意 = Discord + 瀏覽器 toast / 嗶 / 桌面通知;wire 名不改)。
+   *  後端據此在每則訊號列帶 `notify`,前端提示 hook 只讀那一欄、不讀規則。 */
   notify_discord: boolean;
   cooldown_secs: number;
   /** 鍵集依 kind(後端 `PARAM_SPECS`):多鍵 / 缺鍵一律 INVALID_RULE。 */

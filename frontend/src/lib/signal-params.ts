@@ -64,6 +64,15 @@ export const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
     { key: "min_day_lots", label: "當日最少張數", step: "1", min: 0, max: 1e7, integer: true, default: "500" },
   ],
   limit_lock: [],
+  // spec #192 掃單簇:預設 = 拍板值(30 s 內 ≥2 個 ≥2 層掃單、60 s 漲 ≥0.3%),與後端種子同口徑;
+  // 「N 秒內 ≥K 個 ≥L 層掃單,且 M 秒內漲 ≥X%」是一句話,欄序照它排
+  sweep_cluster: [
+    { key: "cluster_window_secs", label: "簇窗(秒)", step: "1", min: 1, max: 600, integer: false, default: "30" },
+    { key: "min_sweeps", label: "最少掃單數", step: "1", min: 1, max: 20, integer: true, default: "2" },
+    { key: "min_levels", label: "最少層數", step: "1", min: 1, max: 10, integer: true, default: "2" },
+    { key: "up_pct", label: "漲幅 %", step: "0.1", min: 0, max: 10, integer: false, default: "0.3" },
+    { key: "up_window_secs", label: "回看窗(秒)", step: "1", min: 1, max: 600, integer: false, default: "60" },
+  ],
 };
 
 /** 「新規則」表單的 params 初值(逐欄 `default`)。 */
