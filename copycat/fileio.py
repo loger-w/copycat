@@ -22,6 +22,13 @@ def atomic_write_text(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def atomic_write_bytes(path: Path, content: bytes) -> None:
+    """位元組版(零換行翻譯):原地改寫既有檔、其餘位元組要逐字保留時用(signal_hub 回填)。"""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(content)
+    os.replace(tmp, path)
+
+
 @contextmanager
 def atomic_open_text(path: Path) -> Generator[TextIO]:
     tmp = path.with_suffix(".tmp")
