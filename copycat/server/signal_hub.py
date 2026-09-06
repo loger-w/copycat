@@ -70,8 +70,10 @@ from copycat.server.signal_policy import (
     POLICIES,
     PeerQuote,
     evaluate_policies,
+    locked_up_flag,
     resolve_groups,
     tod_bucket,
+    touched_upper_flag,
 )
 from copycat.signal_rules import (
     MAX_RULES,
@@ -212,7 +214,11 @@ def format_policy_group_text(rows: list[dict[str, Any]], *, peer_up_pct: float) 
     head = policies[0]
     tags = _dedup([str(row.get("policy", "")) for row in policies])
     others = _dedup(
-        [_kind_text(row) for row in rows if not _is_policy(row) and row.get("kind") != "sweep_cluster"]
+        [
+            _kind_text(row)
+            for row in rows
+            if not _is_policy(row) and row.get("kind") != "sweep_cluster"
+        ]
     )
     price = head.get("price")
     price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
@@ -355,6 +361,15 @@ class SignalHub:
         self._policy_touch: dict[tuple[str, str], int] = {}
         #: 多組聯集 WARNING 的每日去重(一檔一天只叫一次)
         self._multi_group_warned: set[str] = set()
+        #: `peers_fn` 例外的每日去重(review F-09):熱路徑不可逐 tick 印 traceback
+        self._peers_fn_failed = False
+        # 兩個 HH:MM:SS 設定在建構時就驗(review F-06):壞值要在啟動時大聲(hub None → routes 503),
+        # 不是每 30 s 一行 WARNING 印一整天
+        for label in ("policy_push_end", "policy_outcome_time"):
+            try:
+                _dt.datetime.strptime(getattr(cfg, label), "%H:%M:%S")
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"訊號設定 {label} 不是 HH:MM:SS:{getattr(cfg, label)!r}") from e
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -512,6 +527,12 @@ class SignalHub:
         if self._outcome_bars is None:
             logger.info("T+1/T+2 回填:無日 K 來源,worker 不啟動(政策列 t1/t2 留 null)")
         else:
+            # 起動一行 = 盤後可驗判準(spec #192「server 啟動 log 有回填 task 起動一行」)
+            logger.info(
+                "T+1/T+2 回填 worker 起動:start 後跑一次,之後每日 %s(最近 %d 個日檔)",
+                self._cfg.policy_outcome_time,
+                self._cfg.policy_outcome_days,
+            )
             self._tasks.append(asyncio.create_task(self._policy_outcome_worker()))
 
     async def close(self) -> None:
@@ -637,6 +658,7 @@ class SignalHub:
             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
         self._policy_touch.clear()  # 政策每日計數(first_of_day)在此歸零
         self._multi_group_warned.clear()
+        self._peers_fn_failed = False
         if self._staged_cache and self._staged_date == expected:
             self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
             for code in self._basis_cache:
@@ -1020,10 +1042,15 @@ class SignalHub:
             try:
                 quotes = self._peers_fn()
             except Exception:
-                # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失
-                logger.exception("政策行情快照讀取失敗,視為同伴無報價:%s", code)
+                # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失。
+                # traceback 每日一次(review F-09):同步熱路徑,持續壞掉時逐 tick 印會自己變瓶頸
+                if not self._peers_fn_failed:
+                    self._peers_fn_failed = True
+                    logger.exception("政策行情快照讀取失敗,視為同伴無報價(當日只印一次):%s", code)
                 quotes = {}
-        chg = (price - ref) / ref * 100
+        # 自己的較前收與同伴同一把尺(review F-01):`_quote_payload` 口徑 = 分母 ref、round 2;
+        # 不 round 的話 `leader = chg >= peer_max` 是兩把尺(同伴那邊已 round)
+        chg = round((price - ref) / ref * 100, 2)
         ctx = evaluate_policies(
             chg=chg,
             group_names=names,
@@ -1046,15 +1073,16 @@ class SignalHub:
         me = {
             "chg_pct": chg,
             "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
-            "touched_upper": upper is not None and high is not None and high >= upper,
-            "locked_up": upper is not None and price == upper and _best_limit_price(asks) is None,
+            # 與 engine `policy_quotes`(同伴)同一份定義(review F-03);自己這一檔 price 必有、
+            # 漲停缺 → 兩旗標 None 收成 False(列上是 bool 欄)
+            "touched_upper": touched_upper_flag(high, upper) is True,
+            "locked_up": locked_up_flag(price, upper, asks) is True,
         }
         for policy in POLICIES:
             if policy not in ctx.hits:
                 continue
             key = (code, policy)
             count = self._policy_touch.get(key, 0) + 1
-            self._policy_touch[key] = count
             first = count == 1
             notify = first and not late
             row: dict[str, Any] = {
@@ -1092,6 +1120,9 @@ class SignalHub:
             }
             self._publish(row)
             self._enqueue({**row, "trade_date": trade_date}, notify=notify)
+            # 送出後才記帳(spec review F-04):publish 若拋,`_fanout` 的 per-event 傘會吞掉這一則,
+            # 計數先寫的話這檔這條政策當日就再也推不出首筆
+            self._policy_touch[key] = count
 
     def _enqueue(self, row: dict, *, notify: bool) -> None:
         """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
@@ -1229,6 +1260,7 @@ class SignalHub:
         dated.sort(reverse=True)
         picked = sorted(dated[: self._cfg.policy_outcome_days])
         if not picked:
+            logger.info("T+1/T+2 回填:沒有日期 < %s 的已封閉日檔,本趟零列", cutoff)
             return
         start = picked[0][0]
         end = self.today
@@ -1243,11 +1275,11 @@ class SignalHub:
             # 保留每行自己的行尾(Windows 上 `_append_jsonl` 寫的是 CRLF):被補的列只換
             # JSON 本體、行尾原樣接回;整檔以位元組寫回,零換行翻譯
             lines = text.splitlines(keepends=True)
-            targets: dict[str, list[int]] = {}
+            targets: dict[str, list[tuple[int, dict[str, Any]]]] = {}
             for i, line in enumerate(lines):
                 row = _policy_row_needing_outcome(line)
                 if row is not None:
-                    targets.setdefault(str(row.get("code", "")), []).append(i)
+                    targets.setdefault(str(row.get("code", "")), []).append((i, row))
             if not targets:
                 continue
             changed = 0
@@ -1257,11 +1289,13 @@ class SignalHub:
                 bars = cache[code]
                 if not bars:
                     continue
-                after = [b for b in bars if b["t"] > date and b["o"] > 0]
-                t1 = after[0] if after else None
-                t2 = after[1] if len(after) > 1 else None
-                for i in idxs:
-                    row = cast(dict[str, Any], json.loads(lines[i]))
+                # 日期大於該日的前兩根 **就是** T+1 / T+2(spec 字面);open ≤ 0(TC4 壞列 / 今日
+                # 尚未開盤的 partial bar)視為「還沒有」→ 留 null 下輪再補,**不得**跳到下一根
+                # 冒充(欄名會說謊;spec review F-03)
+                after = [b for b in bars if b["t"] > date]
+                t1 = after[0] if after and after[0]["o"] > 0 else None
+                t2 = after[1] if len(after) > 1 and after[1]["o"] > 0 else None
+                for i, row in idxs:
                     dirty = False
                     if row.get("t1_open") is None and t1 is not None:
                         row["t1_open"], row["t1_date"] = t1["o"], t1["t"]
@@ -1396,6 +1430,11 @@ class SignalHub:
         if any(_is_policy(row) for row in rows):
             # 政策批次(spec #192):四行卡、不掛同群摘要、不分批(卡長度有界)
             text = format_policy_group_text(rows, peer_up_pct=self._cfg.policy_peer_up_pct)
+            if len(text) > _DISCORD_MAX_CHARS:
+                # 卡是四行固定版面,現實上幾百字;超標只可能是族群名 / 其他 kind 文案異常長 ——
+                # 截斷留痕,不讓整張卡被 Discord 退回而只剩一句「兩層皆未送出」(spec review F-01)
+                logger.warning("Discord 政策卡 %d 字超過上限,截斷送出:%s", len(text), head.get("id"))
+                text = text[: _DISCORD_MAX_CHARS - 1] + "…"
             if not self._allow_discord():
                 logger.warning("Discord 節流擋下政策卡 %d 則:%s", len(rows), head.get("id"))
                 return
@@ -1462,7 +1501,7 @@ class SignalHub:
 
         規則化之後這份**只在「規則檔不存在」時被讀一次**,用來決定種子規則(現六條,
         含 surge_pullback 兩卡)的 `enabled`;之後永遠不再回頭讀它。flags 以
-        `SWITCH_KEYS`(現五鍵)起手 → 每鍵恆在,檔案值逐鍵覆蓋(手寫
+        `SWITCH_KEYS`(現六鍵)起手 → 每鍵恆在,檔案值逐鍵覆蓋(手寫
         `"surge_pullback": false` 會關掉兩張種子卡 —— 逐鍵覆蓋語意,刻意如實)。
         setter 與 route 已隨開關家族退役,這個檔從此唯讀 —— 留著只為了讓既有部署的
         關閉態能跟著遷移過來。
@@ -1503,13 +1542,8 @@ def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
 
 
 def _past_time(now: _dt.datetime, hhmmss: str) -> bool:
-    """`now` 的時刻是否 ≥ `hhmmss`(台北 HH:MM:SS);設定值壞掉 → False 並 WARNING(不跑)。"""
-    try:
-        target = _dt.time.fromisoformat(hhmmss)
-    except ValueError:
-        logger.warning("policy_outcome_time 格式不符(%r),回填 worker 本輪不跑", hhmmss)
-        return False
-    return now.time() >= target
+    """`now` 的時刻是否 ≥ `hhmmss`(台北 HH:MM:SS;格式已在 `SignalHub.__init__` 驗過)。"""
+    return now.time() >= _dt.datetime.strptime(hhmmss, "%H:%M:%S").time()
 
 
 def _policy_row_needing_outcome(line: str) -> dict[str, Any] | None:

@@ -238,13 +238,18 @@ class TestFileBackfill:
         row = _read(path)[0]
         assert (row["t1_open"], row["t2_open"], row["t2_date"]) == (51_000, 52_000, "2026-08-05")
 
-    async def test_zero_open_bar_not_used(self, tmp_path: Path, clock: _Clock) -> None:
-        """今日 partial bar 開盤前 open 可能為 0 → 不算,留 null 下輪再補。"""
-        bars = _FakeDayBars({"2330": [_bar("2026-08-04", 0)]})
+    async def test_zero_open_bar_not_used_and_not_shifted(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """今日 partial bar 開盤前 open 可能為 0 → 不算,留 null 下輪再補;**T+2 那根不得
+        往前冒充 T+1**(日期大於該日的前兩根就是 T+1 / T+2,spec 字面;spec review F-03)。"""
+        bars = _FakeDayBars({"2330": [_bar("2026-08-04", 0), _bar("2026-08-05", 52_000)]})
         path = _write_day(tmp_path, _PREV, [_dump(_policy_row("2330"))])
         h = _harness(tmp_path, clock, bars)
         await h.hub.backfill_policy_outcomes()
-        assert _read(path)[0]["t1_open"] is None
+        row = _read(path)[0]
+        assert row["t1_open"] is None and row["t1_date"] is None
+        assert (row["t2_open"], row["t2_date"]) == (52_000, "2026-08-05")  # T+2 照補,不位移
 
     @pytest.mark.parametrize(
         "failure",
@@ -286,14 +291,16 @@ class TestFileBackfill:
 
 class TestSchedule:
     async def test_runs_at_start_then_daily_at_outcome_time(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(hub_mod, "POLICY_OUTCOME_POLL_SECS", 0.01)
         clock = _Clock(_dt.datetime(2026, 8, 4, 10, 0, 0))
         bars = _FakeDayBars({"2330": [_bar("2026-08-04", 51_000)]})
         _write_day(tmp_path, _PREV, [_dump(_policy_row("2330"))])
         h = _harness(tmp_path, clock, bars)
-        await h.hub.start()
+        with caplog.at_level(logging.INFO, logger="copycat.server.signal_hub"):
+            await h.hub.start()
+        assert "回填 worker 起動" in caplog.text  # 盤後可驗判準:啟動 log 一行
         try:
             await _wait_calls(bars, 1)  # start 後立即一次
             await asyncio.sleep(0.05)
@@ -342,6 +349,15 @@ class TestSchedule:
             await _wait_calls(bars, 2)
         finally:
             await asyncio.wait_for(h.hub.close(), 5)
+
+    @pytest.mark.parametrize("label", ["policy_outcome_time", "policy_push_end"])
+    async def test_bad_hhmmss_config_raises_at_construction(
+        self, tmp_path: Path, clock: _Clock, label: str
+    ) -> None:
+        """壞的 HH:MM:SS 設定在建構時就炸(review F-06):hub None → routes 503 大聲,
+        不是每 30 s 一行 WARNING 印一整天。"""
+        with pytest.raises(ValueError, match=label):
+            _harness(tmp_path, clock, None, **{label: "13:40"})  # 缺秒 → 不是 HH:MM:SS
 
     async def test_no_source_not_started_with_info(
         self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
