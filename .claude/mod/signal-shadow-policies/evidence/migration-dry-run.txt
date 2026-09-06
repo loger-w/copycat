@@ -1,0 +1,16 @@
+prod 規則檔 _cache_version = 1 ; rules = [('CDP 穿越', 'cdp_cross', True), ('爆拉爆跌', 'surge_crash', True), ('爆量', 'vol_burst', True), ('鎖漲跌停', 'limit_lock', True)]
+INFO copycat.signal_rules: 訊號規則檔 v1→v2:規則 'r-1785975520-000' 補 rearm_dwell_secs=300.0
+INFO copycat.signal_rules: 訊號規則檔 v2→v3:append 種子卡 '爆拉回檔 1%' params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 1.0}
+INFO copycat.signal_rules: 訊號規則檔 v2→v3:append 種子卡 '爆拉回檔 2%' params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 2.0}
+INFO copycat.signal_rules: 訊號規則檔 v3→v4:規則 'r-1785975520-000'(cdp_cross)通知改為 false(spec #192 停推播,事件照記)
+INFO copycat.signal_rules: 訊號規則檔 v3→v4:規則 'r-1785975520-002'(vol_burst)通知改為 false(spec #192 停推播,事件照記)
+INFO copycat.signal_rules: 訊號規則檔 v3→v4:append 種子卡 '掃單簇' params={'cluster_window_secs': 30.0, 'min_sweeps': 2.0, 'min_levels': 2.0, 'up_pct': 0.3, 'up_window_secs': 60.0}(通知關)
+載入後(記憶體,未回寫):
+  CDP 穿越   kind=cdp_cross       enabled=True notify=False cooldown=600 params={'rearm_ticks': 5.0, 'rearm_dwell_secs': 300.0}
+  爆拉爆跌     kind=surge_crash     enabled=True notify=True cooldown=1800 params={'pct': 2.0, 'window_secs': 300.0}
+  爆量       kind=vol_burst       enabled=True notify=False cooldown=1800 params={'ratio': 3.0, 'window_secs': 300.0, 'min_elapsed_min': 15.0, 'min_window_lots': 100.0, 'min_day_lots': 500.0}
+  鎖漲跌停     kind=limit_lock      enabled=True notify=True cooldown=600 params={}
+  爆拉回檔 1%  kind=surge_pullback  enabled=True notify=True cooldown=60 params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 1.0}
+  爆拉回檔 2%  kind=surge_pullback  enabled=True notify=True cooldown=60 params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 2.0}
+  掃單簇      kind=sweep_cluster   enabled=True notify=False cooldown=60 params={'cluster_window_secs': 30.0, 'min_sweeps': 2.0, 'min_levels': 2.0, 'up_pct': 0.3, 'up_window_secs': 60.0}
+檔案未回寫: True

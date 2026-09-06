@@ -1,0 +1,17 @@
+data dir: C:\Users\USER\AppData\Local\Temp\signal-shadow-evidence-2t9zfdqr
+2026-09-07 02:58:43,790 INFO copycat.server.app: copycat server build aa1818d9 +dirty started_at=2026-09-07T02:58:43
+2026-09-07 02:58:43,791 INFO copycat.live.handover: handover done: backfill=0 symbols=0 buffered=0
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v1→v2:規則 'r-1785975520-000' 補 rearm_dwell_secs=300.0
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v2→v3:append 種子卡 '爆拉回檔 1%' params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 1.0}
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v2→v3:append 種子卡 '爆拉回檔 2%' params={'surge_pct': 2.0, 'window_secs': 300.0, 'pct': 2.0}
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v3→v4:規則 'r-1785975520-000'(cdp_cross)通知改為 false(spec #192 停推播,事件照記)
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v3→v4:規則 'r-1785975520-002'(vol_burst)通知改為 false(spec #192 停推播,事件照記)
+2026-09-07 02:58:43,794 INFO copycat.signal_rules: 訊號規則檔 v3→v4:append 種子卡 '掃單簇' params={'cluster_window_secs': 30.0, 'min_sweeps': 2.0, 'min_levels': 2.0, 'up_pct': 0.3, 'up_window_secs': 60.0}(通知關)
+2026-09-07 02:58:43,795 INFO copycat.server.signal_hub: T+1/T+2 回填 worker 起動:start 後跑一次,之後每日 13:40:00(最近 5 個日檔)
+2026-09-07 02:58:43,795 INFO copycat.server.discord_bot: DISCORD_BOT_TOKEN 未設,Discord bot 不啟用
+2026-09-07 02:58:43,795 WARNING copycat.server.signal_hub: 2330 無 2026-09-07 之前的已完成日 K,CDP 停用
+2026-09-07 02:58:43,796 INFO copycat.server.stkfut_catalog: stkfut catalog 更新:0 檔(2026-09-07)
+2026-09-07 02:58:43,796 INFO copycat.server.app: boot 序列結束(0.0s)
+2026-09-07 02:58:44,002 WARNING copycat.server.signal_hub: 2344 無 2026-09-07 之前的已完成日 K,CDP 停用
+2026-09-07 02:58:44,205 WARNING copycat.server.signal_hub: 2408 無 2026-09-07 之前的已完成日 K,CDP 停用
+2026-09-07 02:58:44,409 WARNING copycat.server.signal_hub: 6715 無 2026-09-07 之前的已完成日 K,CDP 停用
