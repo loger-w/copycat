@@ -10,6 +10,7 @@ import { onSignal } from "@/lib/signal-bus";
 import {
   formatGroupToastText,
   isPolicy,
+  shouldNotify,
   type SignalGroup,
   type SignalMsg,
 } from "@/lib/signal-model";
@@ -199,6 +200,9 @@ export function useSignalAlerts() {
     };
 
     const off = onSignal((sig) => {
+      // spec #192 通知閘:`notify === false`(規則通知關 / 政策非首筆或 late)→ 不 toast、
+      // 不嗶、不桌面通知;rail 照列(feed 走另一條路)。缺欄 = 舊後端 → 照舊提示。
+      if (!shouldNotify(sig)) return;
       const now = Date.now();
       const index = groupIndexRef.current;
       const groupKey = `${sig.code}|${sig.time}`;

@@ -17,6 +17,7 @@ import {
   kindLabel,
   policyContextText,
   policyTitle,
+  shouldNotify,
   type KindSegment,
   type PolicyTag,
   type SignalGroup,
@@ -181,8 +182,9 @@ export function SignalRail({
             // spec #192:政策列(chip + 第三行脈絡);全組皆 quiet(notify=false)→ 淡色仍列
             const tags = groupPolicyTags(group);
             const anchor = groupPolicyAnchor(group);
+            const quiet = group.items.every((s) => !shouldNotify(s));
             return (
-              <li key={group.key}>
+              <li key={group.key} className={cn(quiet && "opacity-50")}>
                 <button
                   type="button"
                   onClick={() => onSelect(group.code)}
