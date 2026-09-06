@@ -54,6 +54,7 @@ from copycat.live.signal_state import (
     SignalDetector,
     SignalEvent,
     TickContext,
+    tick_secs,
 )
 
 # 私有名刻意共用:鎖停時 TC4 在第一檔推「市價單佇列」價格欄為 0,而過濾規則寫成兩份
@@ -63,6 +64,14 @@ from copycat.live.stock_source import DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.overlay import compute_cdp
+from copycat.server.screen_engine import SCREEN_GROUP
+from copycat.server.signal_policy import (
+    POLICIES,
+    PeerQuote,
+    evaluate_policies,
+    resolve_groups,
+    tod_bucket,
+)
 from copycat.signal_rules import (
     MAX_RULES,
     Rule,
@@ -83,6 +92,7 @@ __all__ = [
     "DISCORD_QUEUE_MAXSIZE",
     "JSONL_QUEUE_MAXSIZE",
     "SignalHub",
+    "format_policy_group_text",
     "format_signal_group_text",
     "format_signal_text",
 ]
@@ -140,6 +150,10 @@ def _kind_text(row: dict[str, Any]) -> str:
     if kind == "sweep_cluster":
         # pct = 60 s 漲幅(%);與前端 `signal-model.kindLabel` 逐字對齊(spec #192)
         return f"掃單簇 {value:+.2f}%"
+    if kind == "policy":
+        # 政策列平常走 `format_policy_group_text` 的四行卡;這裡是一般文案表的對齊項
+        # (前端 `kindLabel` 同字面),讓政策列落到任何單則文案路徑都印得出來
+        return f"政策 {row.get('policy', '')}"
     if kind == "limit_lock":
         return "鎖漲停" if direction == "up" else "鎖跌停"
     if kind == "limit_open":
@@ -164,6 +178,74 @@ def format_signal_text(row: dict[str, Any]) -> str:
 def _dedup(items: list[str]) -> list[str]:
     """保序去重(dict 保插入序):同 kind 兩規則同一 tick 只該印一段文案。"""
     return list(dict.fromkeys(items))
+
+
+def _is_policy(row: dict[str, Any]) -> bool:
+    return row.get("kind") == "policy"
+
+
+def _pct_text(value: object, *, signed: bool = True, digits: int = 2) -> str:
+    if not isinstance(value, (int, float)):
+        return "-"
+    return f"{value:+.{digits}f}%" if signed else f"{value:.{digits}f}%"
+
+
+def format_policy_group_text(rows: list[dict[str, Any]], *, peer_up_pct: float) -> str:
+    """政策批次的 Discord 四行卡(spec #192;同 tick 多政策標記並列、其他 kind 接首行尾)。
+
+    1. `🔔 **【P・B-a】** 名稱 代號｜價｜時刻`(+ `｜<其他 kind 文案>` 去重;掃單簇自己的
+       文案不接 —— 第二行就是它)
+    2. `掃單簇 n 掃・levels 層・qty 張・+x.xx%`
+    3. 族群脈絡 `族群 A、B:同伴≥3% n・最強 代號名稱 +x.x%・鎖過 有/無`;S 且無族群 →
+       `盤前篩選名單・無族群濾網`
+    4. `較前收 +x.xx%(族群最強)・距漲停 y.yy%`(漲停價缺 → `-`)
+    脈絡 / 量的來源是 rows 中**第一則政策列**(同 tick 各政策列的脈絡相同,只有 `policy` 不同);
+    `peer_up_pct` 是門檻文案(列上不帶門檻,由 hub 以 cfg 注入)。
+    **不掛**同群摘要:政策卡第三行已是族群脈絡,再掛既有尾巴是兩份不同口徑的「同群」。
+    """
+    policies = [row for row in rows if _is_policy(row)]
+    head = policies[0]
+    tags = _dedup([str(row.get("policy", "")) for row in policies])
+    others = _dedup(
+        [_kind_text(row) for row in rows if not _is_policy(row) and row.get("kind") != "sweep_cluster"]
+    )
+    price = head.get("price")
+    price_text = f"{price / 1000:.2f}" if isinstance(price, int) else "-"
+    who = f"{head.get('name') or ''} {head.get('code', '')}".strip()
+    line1 = f"🔔 **【{'・'.join(tags)}】** {who}｜{price_text}｜{head.get('time', '')}"
+    if others:
+        line1 += "｜" + "・".join(others)
+    sweep = cast("dict[str, Any]", head.get("sweep") if isinstance(head.get("sweep"), dict) else {})
+    qty = sweep.get("qty")
+    qty_text = f"{int(qty)}" if isinstance(qty, (int, float)) else "-"
+    line2 = (
+        f"掃單簇 {sweep.get('n30', '-')} 掃・{sweep.get('levels', '-')} 層・{qty_text} 張"
+        f"・{_pct_text(sweep.get('up_pct'))}"
+    )
+    groups = head.get("groups") if isinstance(head.get("groups"), list) else []
+    if groups:
+        peer_max = cast(
+            "dict[str, Any] | None",
+            head.get("peer_max") if isinstance(head.get("peer_max"), dict) else None,
+        )
+        best = (
+            f"{peer_max.get('code', '')}{peer_max.get('name') or ''} "
+            f"{_pct_text(peer_max.get('chg_pct'), digits=1)}"
+            if peer_max is not None
+            else "-"
+        )
+        line3 = (
+            f"族群 {'、'.join(str(g) for g in groups)}:同伴≥{peer_up_pct:g}% {head.get('peers_up', 0)}"
+            f"・最強 {best}・鎖過 {'有' if head.get('peer_touched') else '無'}"
+        )
+    else:
+        line3 = "盤前篩選名單・無族群濾網"
+    me = cast("dict[str, Any]", head.get("self") if isinstance(head.get("self"), dict) else {})
+    chg_text = _pct_text(me.get("chg_pct"))
+    if head.get("leader"):
+        chg_text += "(族群最強)"
+    line4 = f"較前收 {chg_text}・距漲停 {_pct_text(me.get('to_limit_pct'), signed=False)}"
+    return "\n".join((line1, line2, line3, line4))
 
 
 def format_signal_group_text(rows: list[dict[str, Any]]) -> str:
@@ -235,6 +317,8 @@ class SignalHub:
         now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
         groups_fn: Callable[[], list[Group]] | None = None,
         quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None,
+        peers_fn: Callable[[], dict[str, PeerQuote]] | None = None,
+        screen_group: str = SCREEN_GROUP,
     ) -> None:
         self._cfg = cfg
         self._publish = publish
@@ -252,6 +336,15 @@ class SignalHub:
         self._groups_fn = groups_fn
         self._quotes_fn = quotes_fn
         self._groups: list[Group] = []
+        # 政策層(spec #192):行情快照另注入 `peers_fn`(engine `policy_quotes()`),**不動**
+        # `quotes_fn`(同群摘要的資料面,兩者形狀不同)。None = 政策層停用(同伴無報價 →
+        # P / B 不評;S 仍評 —— 它不需要同伴)。`screen_group` = 盤前篩選群組名(恆不算族群)。
+        self._peers_fn = peers_fn
+        self._screen_group = screen_group
+        #: 每日計數 per (code, policy):值 = 第幾次命中;換日歸零、移出自選即清
+        self._policy_touch: dict[tuple[str, str], int] = {}
+        #: 多組聯集 WARNING 的每日去重(一檔一天只叫一次)
+        self._multi_group_warned: set[str] = set()
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -528,6 +621,8 @@ class SignalHub:
             self._retry_handles.pop(k).cancel()
         for slot in self._slots.values():
             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
+        self._policy_touch.clear()  # 政策每日計數(first_of_day)在此歸零
+        self._multi_group_warned.clear()
         if self._staged_cache and self._staged_date == expected:
             self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
             for code in self._basis_cache:
@@ -619,6 +714,9 @@ class SignalHub:
             slot.detector.drop_code(code)
         self._basis_cache.pop(code, None)
         self._staged_cache.pop(code, None)
+        # 政策計數一併清:重新加入是使用者驅動的新機會(同 `_basis_retries` 的理由)
+        self._policy_touch = {k: v for k, v in self._policy_touch.items() if k[0] != code}
+        self._multi_group_warned.discard(code)
         # 在途重試會在移出後才醒來:重打 TC4 事小,`_basis_failed` 還會把上面剛清掉
         # 的 cache 條目寫回去(復活成 (date, None))。計數一併清 —— 重新加入是使用者
         # 驅動的新機會,不背舊帳。已在佇列裡的 job 攔不到(秒級窗,`_stale` 之外無
@@ -864,6 +962,122 @@ class SignalHub:
             payload["detail"] = dict(event.detail)  # 只有掃單簇列帶;既有 kind 列形狀不變(W1)
         self._publish(payload)  # WS 同步先送(前端要即時)
         self._enqueue({**payload, "trade_date": trade_date}, notify=notify)
+        if event.kind == "sweep_cluster" and event.detail is not None:
+            # 政策層只掛掃單簇事件(任一條該 kind 規則;列上記 rule_id)。與 raw 列同在
+            # `_emit` 的同步區塊內 —— 零 await、零 IO(快照是 engine 記憶體讀)。
+            self._emit_policies(event, rule, state, payload, trade_date)
+
+    def _emit_policies(
+        self,
+        event: SignalEvent,
+        rule: Rule,
+        state: StockDayState,
+        raw: dict[str, Any],
+        trade_date: str,
+    ) -> None:
+        """一顆掃單簇事件 → 評四條政策,每命中一條各發一列 `kind="policy"`(WS + jsonl)。
+
+        不評(raw 列照記、零政策列)的情況:參考價缺 / 價 ≤ 0(spec「沒有猜出來的政策」);
+        零組且非盤前篩選成員(沒有東西可評)。快照 `peers_fn` 只在有同伴時才取 —— 熱路徑
+        判準是「只在掃單簇事件時被叫」。
+        `notify` = 同檔同政策當日首筆且時刻 ≤ `policy_push_end`;其餘只記(`first_of_day` /
+        `late` 兩欄讓對帳分得出「沒推是因為哪一條」)。
+        """
+        meta = state.meta
+        price = event.price_milli
+        ref = meta.ref_milli if meta is not None else None
+        if ref is None or ref <= 0 or price <= 0:
+            return
+        code = event.code
+        cfg = self._cfg
+        names, peer_codes, screen_member = resolve_groups(
+            code,
+            self._groups,
+            screen_group=self._screen_group,
+            exclude=tuple(cfg.policy_exclude_groups),
+        )
+        if not names and not screen_member:
+            return
+        if len(names) > 1 and code not in self._multi_group_warned:
+            self._multi_group_warned.add(code)
+            logger.warning("政策族群:%s 落在多個族群組 %s,取成員聯集(當日只警告一次)", code, names)
+        quotes: dict[str, PeerQuote] = {}
+        if peer_codes and self._peers_fn is not None:
+            try:
+                quotes = self._peers_fn()
+            except Exception:
+                # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失
+                logger.exception("政策行情快照讀取失敗,視為同伴無報價:%s", code)
+                quotes = {}
+        chg = (price - ref) / ref * 100
+        ctx = evaluate_policies(
+            chg=chg,
+            group_names=names,
+            peer_codes=peer_codes,
+            screen_member=screen_member,
+            quotes=quotes,
+            peer_up_pct=cfg.policy_peer_up_pct,
+            max_chg_pct=cfg.policy_max_chg_pct,
+        )
+        if not ctx.hits:
+            return
+        upper = meta.upper_milli if meta is not None else None
+        high = state.high_milli
+        book = state.book
+        asks = book.asks if book is not None else []
+        secs = tick_secs(event.time_key)
+        end_secs = tick_secs(cfg.policy_push_end)
+        late = secs is not None and end_secs is not None and secs > end_secs
+        tod = tod_bucket(secs) if secs is not None else "1200"
+        me = {
+            "chg_pct": chg,
+            "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
+            "touched_upper": upper is not None and high is not None and high >= upper,
+            "locked_up": upper is not None and price == upper and _best_limit_price(asks) is None,
+        }
+        for policy in POLICIES:
+            if policy not in ctx.hits:
+                continue
+            key = (code, policy)
+            count = self._policy_touch.get(key, 0) + 1
+            self._policy_touch[key] = count
+            first = count == 1
+            notify = first and not late
+            row: dict[str, Any] = {
+                "type": "signal",
+                "id": f"{trade_date}-{rule['id']}-{code}-policy-{policy}-{event.time_key}",
+                "rule_id": rule["id"],
+                "rule_name": rule["name"],
+                "kind": "policy",
+                "policy": policy,
+                "code": code,
+                "name": raw["name"],
+                "price": price,
+                "time": event.time,
+                "levels": [],
+                "direction": None,
+                "pct": event.pct,
+                "touch_count": count,
+                "notify": notify,
+                "first_of_day": first,
+                "late": late,
+                "tod": tod,
+                "sweep": dict(event.detail or {}),
+                "self": dict(me),
+                "groups": list(ctx.groups),
+                "screen_member": ctx.screen_member,
+                "peers": [dict(p) for p in ctx.peers],
+                "peers_up": ctx.peers_up,
+                "peer_max": dict(ctx.peer_max) if ctx.peer_max is not None else None,
+                "leader": ctx.leader,
+                "peer_touched": ctx.peer_touched,
+                "t1_open": None,
+                "t1_date": None,
+                "t2_open": None,
+                "t2_date": None,
+            }
+            self._publish(row)
+            self._enqueue({**row, "trade_date": trade_date}, notify=notify)
 
     def _enqueue(self, row: dict, *, notify: bool) -> None:
         """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
@@ -1045,6 +1259,14 @@ class SignalHub:
         缺角要在 log 看得見 —— 截斷是更差的選項:被砍掉的那幾則在任何地方都不留痕。
         """
         head = rows[0]
+        if any(_is_policy(row) for row in rows):
+            # 政策批次(spec #192):四行卡、不掛同群摘要、不分批(卡長度有界)
+            text = format_policy_group_text(rows, peer_up_pct=self._cfg.policy_peer_up_pct)
+            if not self._allow_discord():
+                logger.warning("Discord 節流擋下政策卡 %d 則:%s", len(rows), head.get("id"))
+                return
+            await self._send_text(text, head)
+            return
         # 摘要**只接在 Discord 這一段**:WS/jsonl 是歷史真相源,格式不隨通知裝飾漂移
         suffix = self._group_suffix(head)
         text = format_signal_group_text(rows) + suffix

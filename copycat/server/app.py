@@ -807,11 +807,14 @@ def create_app(
                     trade_date_fn: Callable[[], str] = _resolve_trade_date
                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
+                    # 政策層行情快照同理 None(spec #192:同伴無報價 → P / B 不評,S 照評)
+                    peers_fn: Callable[[], dict[str, dict]] | None = None
                 else:
                     daily_bars = engine.daily_bars
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
                     trade_date_fn = lambda: engine.trade_date  # noqa: E731
                     quotes_fn = engine.quotes
+                    peers_fn = engine.policy_quotes
                 return SignalHub(
                     cfg,
                     # app 層的匯流排(engine 在場時它就是 engine 自己那顆)
@@ -828,6 +831,8 @@ def create_app(
                     # 所以由 booted app 的接線測試把關。
                     groups_fn=lambda: load_watchlist(wl_path)["groups"],
                     quotes_fn=quotes_fn,
+                    # 政策層(spec #192):只在掃單簇事件時讀 engine 記憶體快照,零 IO
+                    peers_fn=peers_fn,
                 )
 
             async def _start_signals(hub: SignalHub) -> None:

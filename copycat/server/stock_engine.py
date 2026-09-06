@@ -21,6 +21,7 @@ from typing import AsyncGenerator, Callable, Iterable, Protocol
 from copycat.live.stock_models import (
     TRIAL_WINDOWS,
     StockTick,
+    _best_limit_price,
     is_trial_window,
     parse_stock_realtime,
     to_milli,
@@ -757,6 +758,43 @@ class StockEngine:
             meta = state.meta if state is not None else None
             name = meta.name if meta is not None else ""
             out[code] = (name, self._quote_payload(code)["chg_pct"])
+        return out
+
+    def policy_quotes(self) -> dict[str, dict]:
+        """自選各檔的政策層行情快照(spec #192;hub 以 `peers_fn` 注入,只在掃單簇事件時讀)。
+
+        每檔 {name, price, ref, upper, chg_pct, high, touched_upper, locked_up}:
+        - `touched_upper` = 鎖過 = 當日成交價曾觸及漲停價(`high >= upper`);
+        - `locked_up` = 當下鎖死 = 現價 = 漲停且限價賣側空(`_best_limit_price(asks) is None`,
+          鎖停時 TC4 第一檔是市價佇列 0,不算限價 —— 與訊號層 `_context` 同一把尺)。
+        no_data / 缺 meta / 未成交 → 值欄位 None **但鍵仍在**(同 `quotes()`:整檔缺席會讓
+        「族群有幾檔」跟著行情波動)。`chg_pct` 走 `_quote_payload` 的唯一定義(分母 ref)。
+        名單取 local 參照、不迭代 `_states`(R16,理由見 `quotes()`)。
+        """
+        codes = self._watchlist
+        out: dict[str, dict] = {}
+        for code in codes:
+            state = self._states.get(code)
+            no_data = code in self._no_data
+            meta = state.meta if state is not None and not no_data else None
+            last = state.last if state is not None and not no_data else None
+            price = last.price_milli if last is not None else None
+            upper = meta.upper_milli if meta is not None else None
+            high = state.high_milli if state is not None and not no_data else None
+            book = state.book if state is not None and not no_data else None
+            asks = book.asks if book is not None else []
+            out[code] = {
+                "name": meta.name if meta is not None else "",
+                "price": price,
+                "ref": meta.ref_milli if meta is not None else None,
+                "upper": upper,
+                "chg_pct": self._quote_payload(code)["chg_pct"],
+                "high": high,
+                "touched_upper": (high >= upper) if high is not None and upper is not None else None,
+                "locked_up": (price == upper and _best_limit_price(asks) is None)
+                if price is not None and upper is not None
+                else None,
+            }
         return out
 
     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:

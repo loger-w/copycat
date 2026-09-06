@@ -57,6 +57,7 @@ __all__ = [
     "SignalDetector",
     "SignalEvent",
     "TickContext",
+    "tick_secs",
 ]
 
 _SESSION_START = _dt.time(9, 0)
@@ -161,7 +162,7 @@ def _window_change_pct(window: deque[tuple[float, int, int]], price: int) -> flo
     return _change_pct(window[0][1], price) if window else None
 
 
-def _tick_secs(time_key: str) -> float | None:
+def tick_secs(time_key: str) -> float | None:
     """台北 `HH:MM:SS.fff` → 自午夜秒數(float);格式不符 → None(呼叫端退回牆鐘)。
 
     研究 tick 檔的「毫秒(自午夜)」÷ 1000 就是這個數 —— 掃單簇的窗判定要與研究同一把尺。
@@ -704,7 +705,7 @@ class SignalDetector:
         price = tick.price_milli
         if price <= 0 or tick.qty <= 0:
             return []
-        secs = _tick_secs(key)
+        secs = tick_secs(key)
         if secs is None:
             secs = mono
         cfg = self._cfg
