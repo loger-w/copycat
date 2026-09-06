@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -108,6 +109,10 @@ _SWEEP_SEED_NAME = _DEFAULT_NAMES["sweep_cluster"]
 #: 「通知」語意自 spec #192 起 = Discord + 瀏覽器 toast / 嗶 / 桌面通知(wire 名 `notify_discord`
 #: 不改),jsonl 與 WS 永遠不受它影響(W3)。
 _QUIET_KINDS: frozenset[str] = frozenset({"cdp_cross", "vol_burst", "sweep_cluster"})
+#: v3→v4 遷移**翻旗**的 kind(spec #193 字面:cdp_cross、vol_burst);與種子集合分開寫(spec review
+#: F-02)—— 掃單簇在 v3 檔不存在,把它放進翻旗集合是「順手」,哪天這段被拿去對 v4+ 檔用就會把
+#: 使用者開回的通知靜默再關掉。
+_MIGRATE_QUIET_KINDS: frozenset[str] = frozenset({"cdp_cross", "vol_burst"})
 
 #: surge_pullback 種子兩張卡(spec #174 拍板:5 分鐘 +2% 武裝,回檔 1% / 2%)。
 #: `pct` 是卡的**身分**(綁名稱)—— 不吃 config,否則覆寫 `pullback_pct` 會讓
@@ -421,36 +426,41 @@ def _migrate_v2(items: list[Any]) -> list[Any]:
     會超過 `MAX_RULES` → 跳過並 WARNING(遷移不得讓載入 raise → routes 503)。
     輸入不就地修改;v2 **空陣列也照塞**(一次性升級注入,不是復活 v3 世界的刪除)。
     """
-    existing = [cast("dict[str, Any]", item) for item in items if isinstance(item, dict)]
-    names = {str(obj.get("name", "")).strip() for obj in existing}
-    ids = {obj.get("id") for obj in existing}
     cfg = SignalsConfig()
-    epoch = int(time.time())
-    seq = len(items)
     out: list[Any] = list(items)
     for name, pct in _PULLBACK_SEEDS:
-        if name in names:
-            logger.info("訊號規則檔 v2→v3:已有同名規則,跳過種子卡 %r", name)
-            continue
-        if len(out) >= MAX_RULES:
-            logger.warning("訊號規則檔 v2→v3:規則數已達上限 %s,跳過種子卡 %r", MAX_RULES, name)
-            continue
-        rule_id = new_rule_id(epoch, seq)
-        while rule_id in ids:
-            seq += 1
-            rule_id = new_rule_id(epoch, seq)
-        seq += 1
-        ids.add(rule_id)
-        rule = _pullback_seed_rule(name, pct, rule_id, cfg)
-        logger.info("訊號規則檔 v2→v3:append 種子卡 %r params=%s", name, rule["params"])
-        out.append(rule)
+        _append_seed(out, "v2→v3", name, lambda rid: _pullback_seed_rule(name, pct, rid, cfg))
     return out
 
 
+def _append_seed(out: list[Any], tag: str, name: str, make: Callable[[str], Rule]) -> None:
+    """遷移種子卡的共同 append 路徑(v2→v3 / v3→v4 同形,review F-04):撞名跳過 + log、
+    滿 `MAX_RULES` 跳過 + WARNING、id 撞既有則單調往前找;**就地** append 到 `out`。
+    """
+    existing = [cast("dict[str, Any]", item) for item in out if isinstance(item, dict)]
+    names = {str(obj.get("name", "")).strip() for obj in existing}
+    ids = {obj.get("id") for obj in existing}
+    if name in names:
+        logger.info("訊號規則檔 %s:已有同名規則,跳過種子卡 %r", tag, name)
+        return
+    if len(out) >= MAX_RULES:
+        logger.warning("訊號規則檔 %s:規則數已達上限 %s,跳過種子卡 %r", tag, MAX_RULES, name)
+        return
+    epoch = int(time.time())
+    seq = len(out)
+    rule_id = new_rule_id(epoch, seq)
+    while rule_id in ids:
+        seq += 1
+        rule_id = new_rule_id(epoch, seq)
+    rule = make(rule_id)
+    logger.info("訊號規則檔 %s:append 種子卡 %r params=%s", tag, name, rule["params"])
+    out.append(rule)
+
+
 def _migrate_v3(items: list[Any]) -> list[Any]:
-    """v3 → v4(spec #192 一次性):(a) append 掃單簇種子卡;(b) `kind` 為 cdp_cross /
-    vol_burst 的每條規則通知改 false,**逐條 log**(遷移 log 是盤後對帳「哪幾條被關了」
-    的唯一來源)。已是 false 的不動不 log(log 只講改了什麼)。
+    """v3 → v4(spec #192 一次性):(a) append 掃單簇種子卡;(b) `kind` 在
+    `_MIGRATE_QUIET_KINDS`(cdp_cross / vol_burst)的每條規則通知改 false,**逐條 log**
+    (遷移 log 是盤後對帳「哪幾條被關了」的唯一來源)。已是 false 的不動不 log(log 只講改了什麼)。
 
     種子路徑同 `_migrate_v2`:`SignalsConfig()` 預設值、撞名跳過、滿 30 條跳過並 WARNING、
     id 去重、輸入不就地修改、v3 空陣列也照塞(升級注入)。
@@ -463,7 +473,7 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
             out.append(item)
             continue
         obj = cast(dict[str, Any], item)
-        if obj.get("kind") in _QUIET_KINDS and obj.get("notify_discord") is True:
+        if obj.get("kind") in _MIGRATE_QUIET_KINDS and obj.get("notify_discord") is True:
             logger.info(
                 "訊號規則檔 v3→v4:規則 %r(%s)通知改為 false(spec #192 停推播,事件照記)",
                 obj.get("id"),
@@ -472,28 +482,7 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
             out.append({**obj, "notify_discord": False})
             continue
         out.append(obj)
-    existing = [cast("dict[str, Any]", item) for item in out if isinstance(item, dict)]
-    names = {str(obj.get("name", "")).strip() for obj in existing}
-    ids = {obj.get("id") for obj in existing}
-    if _SWEEP_SEED_NAME in names:
-        logger.info("訊號規則檔 v3→v4:已有同名規則,跳過種子卡 %r", _SWEEP_SEED_NAME)
-        return out
-    if len(out) >= MAX_RULES:
-        logger.warning(
-            "訊號規則檔 v3→v4:規則數已達上限 %s,跳過種子卡 %r", MAX_RULES, _SWEEP_SEED_NAME
-        )
-        return out
-    epoch = int(time.time())
-    seq = len(out)
-    rule_id = new_rule_id(epoch, seq)
-    while rule_id in ids:
-        seq += 1
-        rule_id = new_rule_id(epoch, seq)
-    rule = _sweep_seed_rule(rule_id, SignalsConfig())
-    logger.info(
-        "訊號規則檔 v3→v4:append 種子卡 %r params=%s(通知關)", _SWEEP_SEED_NAME, rule["params"]
-    )
-    out.append(rule)
+    _append_seed(out, "v3→v4", _SWEEP_SEED_NAME, lambda rid: _sweep_seed_rule(rid, SignalsConfig()))
     return out
 
 
