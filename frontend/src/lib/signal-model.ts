@@ -14,7 +14,21 @@ export type SignalKind =
   | "surge_pullback"
   | "vol_burst"
   | "limit_lock"
-  | "limit_open";
+  | "limit_open"
+  | "sweep_cluster"
+  | "policy";
+
+/** 四條影子政策的標記(spec #192;後端 `signal_policy.POLICIES` 同字面)。 */
+export type PolicyTag = "P" | "B-a" | "B-b" | "S";
+
+/** 政策列的族群同伴快照一筆(後端 `_emit_policies` 的 `peers[]`)。 */
+export interface PeerSnap {
+  code: string;
+  name: string;
+  chg_pct: number | null;
+  touched_upper: boolean | null;
+  locked_up: boolean | null;
+}
 
 export interface SignalMsg {
   type: "signal";
@@ -44,6 +58,49 @@ export interface SignalMsg {
    *  沒有這兩欄,消費端要能退回 kind 文案而不是顯示空白。 */
   rule_id?: string;
   rule_name?: string;
+  /** spec #192:「通知」閘(Discord + 瀏覽器 toast / 嗶 / 桌面通知)。一般列 = 規則通知開關;
+   *  政策列 = 當日首筆且 ≤ 12:30。**缺欄視為 true**(舊後端 / 舊 jsonl 列)—— 判定走
+   *  `shouldNotify`,不要直接比 `=== false` 以外的形。jsonl / WS / rail 不受它影響。 */
+  notify?: boolean;
+  /** 掃單簇列的參數 {n30, levels, qty, up_pct}(其他 kind 沒有這欄)。 */
+  detail?: Record<string, number>;
+  // ---- 以下只有 kind === "policy" 的列才有(後端 `signal_hub._emit_policies`)----
+  policy?: PolicyTag;
+  first_of_day?: boolean;
+  late?: boolean;
+  tod?: string;
+  sweep?: { n30: number; levels: number; qty: number; up_pct: number };
+  self?: {
+    chg_pct: number | null;
+    to_limit_pct: number | null;
+    touched_upper: boolean;
+    locked_up: boolean;
+  };
+  groups?: string[];
+  screen_member?: boolean;
+  peers?: PeerSnap[];
+  peers_up?: number;
+  peer_max?: { code: string; name: string; chg_pct: number } | null;
+  leader?: boolean;
+  peer_touched?: boolean;
+  t1_open?: number | null;
+  t1_date?: string | null;
+  t2_open?: number | null;
+  t2_date?: string | null;
+}
+
+/** 通知閘:`notify === false` 才靜音;true / 缺欄一律提示(CLAUDE.md §4 契約:缺欄 = true)。 */
+export function shouldNotify(sig: SignalMsg): boolean {
+  return sig.notify !== false;
+}
+
+export function isPolicy(sig: SignalMsg): boolean {
+  return sig.kind === "policy";
+}
+
+/** 掃單簇文案(raw 掃單簇列與政策列共用:政策列的 `pct` 就是 60 s 漲幅);pct 缺值只印名。 */
+function sweepLabel(pct: number | null): string {
+  return pct === null ? "掃單簇" : `掃單簇 ${fmtPct(pct)}`;
 }
 
 /** CDP 五線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 否則標籤變「突破 CDP CDP」。 */
@@ -77,6 +134,9 @@ export function kindLabel(sig: SignalMsg): string {
   if (kind === "vol_burst") {
     return sig.pct === null ? "爆量" : `爆量 ${sig.pct.toFixed(1)} 倍`;
   }
+  // spec #192:與後端 `_kind_text` 逐字對齊(「掃單簇 +0.80%」/「政策 P」)
+  if (kind === "sweep_cluster") return sweepLabel(sig.pct);
+  if (kind === "policy") return sig.policy === undefined ? "政策" : `政策 ${sig.policy}`;
   // 與後端 `signal_hub._kind_text` 逐字對齊(design §7):同一則事件在 WS 列、jsonl
   // 與 Discord 上的文案漂掉時,對帳會變成人工比對。
   if (kind === "limit_lock") return sig.direction === "up" ? "鎖漲停" : "鎖跌停";
@@ -162,6 +222,13 @@ export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
   return groups;
 }
 
+/** 列 / toast 上的 kind 段文案:政策列顯示為**掃單簇文案**(標記另走 chip / 【】前綴),
+ *  所以同 tick 的 raw 掃單簇列與政策列會去重成一段;其餘 kind = `kindLabel`。
+ *  `kindLabel(policy)` 本身仍是「政策 P」(後端文案表的對齊項,單則路徑用)。 */
+function displayLabel(sig: SignalMsg): string {
+  return isPolicy(sig) ? sweepLabel(sig.pct) : kindLabel(sig);
+}
+
 /** 組內 kind 文案分段(**到達序**的首見順序),**同文案只留一段**:同 kind 兩條規則
  *  在同一 tick 各發一則時文案一模一樣,印兩段只是雜訊(規則名另外列)。
  *
@@ -171,12 +238,71 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
   const seen = new Set<string>();
   const out: KindSegment[] = [];
   for (const sig of [...group.items].reverse()) {
-    const label = kindLabel(sig);
+    const label = displayLabel(sig);
     if (seen.has(label)) continue;
     seen.add(label);
     out.push({ label, sig });
   }
   return out;
+}
+
+/** 組內政策標記(到達序去重;非政策列不算)。Discord 卡「【P・B-a】」與 toast / rail chip 同源。 */
+export function groupPolicyTags(group: SignalGroup): PolicyTag[] {
+  const seen = new Set<PolicyTag>();
+  const out: PolicyTag[] = [];
+  for (const sig of [...group.items].reverse()) {
+    const tag = sig.policy;
+    if (!isPolicy(sig) || tag === undefined || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+  }
+  return out;
+}
+
+/** 組內**最早到**的政策列(脈絡欄位的來源;同 tick 各政策列脈絡相同,只有標記不同)。 */
+export function groupPolicyAnchor(group: SignalGroup): SignalMsg | undefined {
+  return [...group.items].reverse().find(isPolicy);
+}
+
+function pct1(v: number | null | undefined, signed: boolean): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "-";
+  return signed ? `${v > 0 ? "+" : ""}${v.toFixed(1)}%` : `${v.toFixed(1)}%`;
+}
+
+/** rail 政策列第三行:「同伴≥3% n・鎖過 有/無・+x.x%/停 y.y%」(spec #192 字面;3% 是拍板
+ *  門檻的字面,列上不帶門檻)。缺欄(舊後端)印 `-`,不印 NaN / undefined。 */
+export function policyContextText(sig: SignalMsg): string {
+  const up = sig.peers_up === undefined ? "-" : String(sig.peers_up);
+  const touched = sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無";
+  const chg = pct1(sig.self?.chg_pct, true);
+  const limit = pct1(sig.self?.to_limit_pct, false);
+  return `同伴≥3% ${up}・鎖過 ${touched}・${chg}/停 ${limit}`;
+}
+
+/** rail 政策列 hover 全文(Discord 四行卡的同一組資訊攤平成一行)。 */
+export function policyTitle(sig: SignalMsg, tags: readonly PolicyTag[]): string {
+  const groups = sig.groups ?? [];
+  const peers = (sig.peers ?? []).map(
+    (p) => `${p.code}${p.name} ${p.chg_pct === null ? "-" : pct1(p.chg_pct, true)}`,
+  );
+  const chg = sig.self?.chg_pct;
+  const chgText =
+    chg === null || chg === undefined ? "-" : `${fmtPct(chg)}${sig.leader ? "(族群最強)" : ""}`;
+  const limit = sig.self?.to_limit_pct;
+  const limitText = limit === null || limit === undefined ? "-" : `${limit.toFixed(2)}%`;
+  const when = [sig.tod, sig.first_of_day ? "首筆" : sig.first_of_day === false ? "非首筆" : "", sig.late ? "late" : ""]
+    .filter((x) => x !== undefined && x !== "")
+    .join("・");
+  return [
+    `政策 ${tags.join("・")}`,
+    groups.length > 0 ? `族群 ${groups.join("、")}` : "盤前篩選名單・無族群濾網",
+    peers.length > 0 ? `同伴 ${peers.join("、")}` : "",
+    `同伴≥3% ${sig.peers_up ?? "-"}・鎖過 ${sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無"}`,
+    `較前收 ${chgText}・距漲停 ${limitText}`,
+    when,
+  ]
+    .filter((x) => x !== "")
+    .join("｜");
 }
 
 /** 合併 toast 一行文字:`代號 名稱 <kind 段以「・」串接> 價格`。
@@ -190,7 +316,10 @@ export function formatGroupToastText(group: SignalGroup): string {
   const kinds = groupKindLabels(group)
     .map((s) => s.label)
     .join("・");
-  return [group.code, group.name, kinds, fmt(group.price)].filter((x) => x !== "").join(" ");
+  const tags = groupPolicyTags(group);
+  const body = [group.code, group.name, kinds, fmt(group.price)].filter((x) => x !== "").join(" ");
+  // 政策組帶標記前綴(spec #192):「【P】代號 名稱 掃單簇 +0.5% 價」;在別的 tab 也分得出政策
+  return tags.length === 0 ? body : `【${tags.join("・")}】${body}`;
 }
 
 /** 組內規則名去重(**到達序**的首見順序)。缺值 / 空字串 = 升級當日的舊 jsonl 行,

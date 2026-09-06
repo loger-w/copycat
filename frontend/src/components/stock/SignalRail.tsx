@@ -10,10 +10,15 @@ import { errText, type SignalRule } from "@/hooks/useSignalRules";
 import { fmt, monthDay } from "@/lib/format";
 import {
   groupKindLabels,
+  groupPolicyAnchor,
+  groupPolicyTags,
   groupRuleNames,
   groupSignals,
   kindLabel,
+  policyContextText,
+  policyTitle,
   type KindSegment,
+  type PolicyTag,
   type SignalGroup,
   type SignalMsg,
 } from "@/lib/signal-model";
@@ -78,7 +83,16 @@ function toneOf(sig: SignalMsg): string {
   if (sig.kind === "cdp_cross") {
     return sig.direction === "from_above" ? "text-bear" : "text-bull";
   }
+  // 掃單簇 / 政策列 = 向上掃單的進場候選(spec #192:著色紅)
+  if (sig.kind === "sweep_cluster" || sig.kind === "policy") return "text-bull";
   return "text-ink-muted";
+}
+
+/** 政策 chip 色(spec #192):P = accent、B-a / B-b = bull、S = 灰。 */
+function chipClass(tag: PolicyTag): string {
+  if (tag === "P") return "border-accent text-accent";
+  if (tag === "S") return "border-line text-ink-dim";
+  return "border-bull text-bull";
 }
 
 /** kind 段的 hover 提示:「label(rule)」;rule_name 缺值(舊 jsonl)只留 label。 */
@@ -164,6 +178,9 @@ export function SignalRail({
             // 「合併」看兩邊:同 kind 兩條規則時 kind 段去重只剩一段,但規則名有兩段,
             // 與 kind 並排照樣搶同一行寬(review round-1)。
             const merged = segments.length > 1 || ruleNames.length > 1;
+            // spec #192:政策列(chip + 第三行脈絡);全組皆 quiet(notify=false)→ 淡色仍列
+            const tags = groupPolicyTags(group);
+            const anchor = groupPolicyAnchor(group);
             return (
               <li key={group.key}>
                 <button
@@ -194,6 +211,23 @@ export function SignalRail({
                         merged ? "flex flex-col items-start" : "flex items-baseline",
                       )}
                     >
+                      {/* 政策標記 chip(spec #192):同 tick 多政策並列;色依標記 */}
+                      {tags.length === 0 ? null : (
+                        <span className="flex shrink-0 gap-0.5">
+                          {tags.map((tag) => (
+                            <span
+                              key={tag}
+                              data-testid="policy-chip"
+                              className={cn(
+                                "rounded border px-1 font-mono text-[0.625rem] leading-4",
+                                chipClass(tag),
+                              )}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </span>
+                      )}
                       {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
                           整段套第一則的 tone 會把其中一半畫成相反的方向。
                           **逐段 title**(T-12):整列單一 title 看不出 kind 段與規則名段
@@ -234,6 +268,15 @@ export function SignalRail({
                     </span>
                     <span className="shrink-0 font-mono text-xs text-ink">{fmt(group.price)}</span>
                   </span>
+                  {/* 第三行(政策列限定):族群脈絡一行,hover 看全文(Discord 四行卡同一組資訊) */}
+                  {anchor === undefined ? null : (
+                    <span
+                      className="min-w-0 truncate text-[0.625rem] text-ink-muted"
+                      title={policyTitle(anchor, tags)}
+                    >
+                      {policyContextText(anchor)}
+                    </span>
+                  )}
                 </button>
               </li>
             );
