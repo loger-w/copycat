@@ -809,12 +809,21 @@ def create_app(
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
                     # 政策層行情快照同理 None(spec #192:同伴無報價 → P / B 不評,S 照評)
                     peers_fn: Callable[[], dict[str, dict]] | None = None
+                    # T+1 / T+2 回填 worker 同理不啟動(hub 印一行 INFO)
+                    outcome_bars: Callable[[str, str, str], Awaitable[list[Bar]]] | None = None
                 else:
                     daily_bars = engine.daily_bars
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
                     trade_date_fn = lambda: engine.trade_date  # noqa: E731
                     quotes_fn = engine.quotes
                     peers_fn = engine.policy_quotes
+                    live_engine = engine
+
+                    async def _outcome_bars(code: str, start: str, end: str) -> list[Bar]:
+                        # 日 K 走 `bars_range(tf="D")`:`daily_bars` 的 `DailyBar` 沒有 open
+                        return (await live_engine.bars_range(code, "D", start, end)).bars
+
+                    outcome_bars = _outcome_bars
                 return SignalHub(
                     cfg,
                     # app 層的匯流排(engine 在場時它就是 engine 自己那顆)
@@ -833,6 +842,7 @@ def create_app(
                     quotes_fn=quotes_fn,
                     # 政策層(spec #192):只在掃單簇事件時讀 engine 記憶體快照,零 IO
                     peers_fn=peers_fn,
+                    outcome_bars=outcome_bars,
                 )
 
             async def _start_signals(hub: SignalHub) -> None:

@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from copycat.fileio import atomic_write_bytes
 from copycat.live.signal_state import (
     SWITCH_KEYS,
     SignalDetector,
@@ -60,7 +61,7 @@ from copycat.live.signal_state import (
 # 私有名刻意共用:鎖停時 TC4 在第一檔推「市價單佇列」價格欄為 0,而過濾規則寫成兩份
 # 就會漂移(CLAUDE.md §8 已記四處被同一個 0 打穿的事故)。這裡要的正是消費端那把尺。
 from copycat.live.stock_models import StockTick, _best_limit_price
-from copycat.live.stock_source import DailyBar
+from copycat.live.stock_source import Bar, DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.overlay import compute_cdp
@@ -91,6 +92,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DISCORD_QUEUE_MAXSIZE",
     "JSONL_QUEUE_MAXSIZE",
+    "POLICY_OUTCOME_POLL_SECS",
     "SignalHub",
     "format_policy_group_text",
     "format_signal_group_text",
@@ -103,6 +105,9 @@ JSONL_QUEUE_MAXSIZE = 1000
 DISCORD_QUEUE_MAXSIZE = 100
 #: 關機時等 jsonl worker 把手上與佇列中的訊號寫完的上限
 _CLOSE_FLUSH_TIMEOUT = 5.0
+#: T+1 / T+2 回填 worker 的輪詢間隔(每日 `policy_outcome_time` 判定用;測試 monkeypatch 縮小)。
+#: 用輪詢而不是 `call_later(到時點的秒數)`:時鐘是注入的(`now_fn`),loop 時間與它不是同一把尺。
+POLICY_OUTCOME_POLL_SECS = 30.0
 _ENABLED_FILE = "signals_enabled.json"
 _RULES_FILE = "signal_rules.json"
 _SIGNAL_DIR = "signals"
@@ -319,6 +324,7 @@ class SignalHub:
         quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None,
         peers_fn: Callable[[], dict[str, PeerQuote]] | None = None,
         screen_group: str = SCREEN_GROUP,
+        outcome_bars: Callable[[str, str, str], Awaitable[list[Bar]]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._publish = publish
@@ -341,6 +347,10 @@ class SignalHub:
         # P / B 不評;S 仍評 —— 它不需要同伴)。`screen_group` = 盤前篩選群組名(恆不算族群)。
         self._peers_fn = peers_fn
         self._screen_group = screen_group
+        #: T+1 / T+2 開盤價回填的日 K 來源((code, start, end) → `Bar` 列表,含 `o`);
+        #: `None` = 無日 K 來源(app 層無 stock engine)→ worker 不啟動、一行 INFO。
+        #: 刻意不重用 `daily_bars`:那條回的 `DailyBar` 沒有 open(overlay 只要 H/L/C)。
+        self._outcome_bars = outcome_bars
         #: 每日計數 per (code, policy):值 = 第幾次命中;換日歸零、移出自選即清
         self._policy_touch: dict[tuple[str, str], int] = {}
         #: 多組聯集 WARNING 的每日去重(一檔一天只叫一次)
@@ -499,6 +509,10 @@ class SignalHub:
         self._tasks.append(asyncio.create_task(self._basis_worker()))
         self._tasks.append(self._jsonl_task)
         self._tasks.append(asyncio.create_task(self._discord_worker()))
+        if self._outcome_bars is None:
+            logger.info("T+1/T+2 回填:無日 K 來源,worker 不啟動(政策列 t1/t2 留 null)")
+        else:
+            self._tasks.append(asyncio.create_task(self._policy_outcome_worker()))
 
     async def close(self) -> None:
         """先停收件 → 等 jsonl 佇列排空 → 才取消 worker;Discord 佇列直接放棄。
@@ -1160,6 +1174,126 @@ class SignalHub:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._append_jsonl, row)
 
+    # ---- T+1 / T+2 回填(spec #192 T4)----
+
+    async def _policy_outcome_worker(self) -> None:
+        """start 後跑一次;之後每日 `policy_outcome_time`(牆鐘 `now_fn`)跑一次。
+
+        起動那一趟若已過當日時點,就算當日那一次(13:50 起動不會 13:50 又跑一次)。
+        每趟套 try/except:worker 死掉 = 之後所有政策列 t1/t2 永遠 null,而畫面零訊號。
+        """
+        ran_for: str | None = None
+        now = self._now_fn()
+        if _past_time(now, self._cfg.policy_outcome_time):
+            ran_for = now.date().isoformat()
+        await self._run_policy_outcomes()
+        while True:
+            await asyncio.sleep(POLICY_OUTCOME_POLL_SECS)
+            now = self._now_fn()
+            today = now.date().isoformat()
+            if today != ran_for and _past_time(now, self._cfg.policy_outcome_time):
+                ran_for = today
+                await self._run_policy_outcomes()
+
+    async def _run_policy_outcomes(self) -> None:
+        try:
+            await self.backfill_policy_outcomes()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("T+1/T+2 回填未預期失敗(worker 續行)")
+
+    async def backfill_policy_outcomes(self) -> None:
+        """把 T+1 / T+2 開盤價(連日期)原地補進過去日檔的政策列。
+
+        範圍 = 最近 `policy_outcome_days` 個日檔中,日期**同時小於** hub 日別與牆鐘日者
+        (已封閉;T+1 是今天的檔開盤價還沒定,不碰)。對象 = `kind="policy"` 且 `t1_open`
+        或 `t2_open` 為 null 的列。日 K 每檔**每趟一次**(範圍 = 最早日檔日 .. 牆鐘日),取
+        日期大於該日檔日、open > 0 的前兩根;拿不到留 null 下輪再補;逾時 / 斷線 / 例外只
+        log 該檔續行。寫法:只重寫被補的列,其餘列(含空行 / 壞行)原文逐字保留,整檔 atomic
+        覆寫;零補則不碰檔案。離線讀者契約:不新增列型、每列 `kind` 恆在(只加欄)。
+        """
+        assert self._outcome_bars is not None, "無日 K 來源時 worker 不啟動,不會走到這裡"
+        cutoff = min(self._trade_date_fn(), self.today)
+        signal_dir = self._data_dir / _SIGNAL_DIR
+        if not signal_dir.exists():
+            return
+        dated: list[tuple[str, Path]] = []
+        for path in signal_dir.glob("*.jsonl"):
+            stem = path.stem
+            if len(stem) != 8 or not stem.isdigit():
+                continue
+            date = f"{stem[:4]}-{stem[4:6]}-{stem[6:]}"
+            if date < cutoff:
+                dated.append((date, path))
+        dated.sort(reverse=True)
+        picked = sorted(dated[: self._cfg.policy_outcome_days])
+        if not picked:
+            return
+        start = picked[0][0]
+        end = self.today
+        cache: dict[str, list[Bar] | None] = {}
+        total = 0
+        for date, path in picked:
+            try:
+                text = (await asyncio.to_thread(path.read_bytes)).decode("utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                logger.warning("T+1/T+2 回填讀檔失敗,跳過 %s:%s", path.name, e)
+                continue
+            # 保留每行自己的行尾(Windows 上 `_append_jsonl` 寫的是 CRLF):被補的列只換
+            # JSON 本體、行尾原樣接回;整檔以位元組寫回,零換行翻譯
+            lines = text.splitlines(keepends=True)
+            targets: dict[str, list[int]] = {}
+            for i, line in enumerate(lines):
+                row = _policy_row_needing_outcome(line)
+                if row is not None:
+                    targets.setdefault(str(row.get("code", "")), []).append(i)
+            if not targets:
+                continue
+            changed = 0
+            for code, idxs in targets.items():
+                if code not in cache:
+                    cache[code] = await self._fetch_outcome_bars(code, start, end)
+                bars = cache[code]
+                if not bars:
+                    continue
+                after = [b for b in bars if b["t"] > date and b["o"] > 0]
+                t1 = after[0] if after else None
+                t2 = after[1] if len(after) > 1 else None
+                for i in idxs:
+                    row = cast(dict[str, Any], json.loads(lines[i]))
+                    dirty = False
+                    if row.get("t1_open") is None and t1 is not None:
+                        row["t1_open"], row["t1_date"] = t1["o"], t1["t"]
+                        dirty = True
+                    if row.get("t2_open") is None and t2 is not None:
+                        row["t2_open"], row["t2_date"] = t2["o"], t2["t"]
+                        dirty = True
+                    if dirty:
+                        body = lines[i].rstrip("\r\n")
+                        lines[i] = json.dumps(row, ensure_ascii=False) + lines[i][len(body) :]
+                        changed += 1
+            if changed:
+                await asyncio.to_thread(atomic_write_bytes, path, "".join(lines).encode("utf-8"))
+                logger.info("T+1/T+2 回填 %s:回填 %d 列(%d 檔)", date, changed, len(targets))
+                total += changed
+        logger.info("T+1/T+2 回填完成:共回填 %d 列(掃 %d 個日檔,%s..%s)", total, len(picked), start, end)
+
+    async def _fetch_outcome_bars(self, code: str, start: str, end: str) -> list[Bar] | None:
+        """一檔的日 K;失敗 → None(該檔本趟留 null);逐檔間隔沿 CDP 基準 worker 的 gap。"""
+        assert self._outcome_bars is not None
+        try:
+            bars = await self._outcome_bars(code, start, end)
+        except HistoryTimeoutError as exc:
+            logger.warning("T+1/T+2 回填日 K 逾時(留 null 下輪再補):%s(%s)", code, exc)
+            bars = None
+        except Exception:
+            logger.exception("T+1/T+2 回填日 K 取得失敗(留 null 下輪再補):%s", code)
+            bars = None
+        if self._cfg.basis_gap_secs > 0:
+            await asyncio.sleep(self._cfg.basis_gap_secs)
+        return bars
+
     # ---- jsonl ----
 
     def _signal_path(self, trade_date: str) -> Path:
@@ -1366,6 +1500,34 @@ def _peer_text(code: str, quote: tuple[str, float | None] | None) -> str:
     """`{代碼}{名稱} {+x.x%}`;名稱缺(盤前 / 未訂閱)→ 只印代碼,不留尾隨空白。"""
     name, chg = quote if quote is not None else ("", None)
     return f"{code}{name} {'-' if chg is None else f'{chg:+.1f}%'}"
+
+
+def _past_time(now: _dt.datetime, hhmmss: str) -> bool:
+    """`now` 的時刻是否 ≥ `hhmmss`(台北 HH:MM:SS);設定值壞掉 → False 並 WARNING(不跑)。"""
+    try:
+        target = _dt.time.fromisoformat(hhmmss)
+    except ValueError:
+        logger.warning("policy_outcome_time 格式不符(%r),回填 worker 本輪不跑", hhmmss)
+        return False
+    return now.time() >= target
+
+
+def _policy_row_needing_outcome(line: str) -> dict[str, Any] | None:
+    """一行 jsonl → 需要回填的政策列;空行 / 壞行 / 非政策 / 已補齊 → None(原文保留)。"""
+    if not line.strip():
+        return None
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(row, dict):
+        return None
+    obj = cast(dict[str, Any], row)
+    if obj.get("kind") != "policy":
+        return None
+    if obj.get("t1_open") is not None and obj.get("t2_open") is not None:
+        return None
+    return obj
 
 
 def _same_tick(row: dict, head: dict) -> bool:
