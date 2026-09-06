@@ -25,6 +25,45 @@ def test_default_values() -> None:
     assert cfg.limit_cooldown_secs == 600
     assert cfg.discord_per_min == 30
     assert cfg.basis_gap_secs == 0.2
+    # spec #192:掃單簇六欄 + 政策層六欄(拍板值,影子四週凍結)
+    assert cfg.sweep_cluster_window_secs == 30.0
+    assert cfg.sweep_min_sweeps == 2
+    assert cfg.sweep_min_levels == 2
+    assert cfg.sweep_up_pct == 0.3
+    assert cfg.sweep_up_window_secs == 60.0
+    assert cfg.sweep_cooldown_secs == 60.0
+    assert cfg.policy_peer_up_pct == 3.0
+    assert cfg.policy_max_chg_pct == 6.0
+    assert cfg.policy_push_end == "12:30:00"
+    assert cfg.policy_exclude_groups == ("ALL IN",)
+    assert cfg.policy_outcome_time == "13:40:00"
+    assert cfg.policy_outcome_days == 5
+
+
+def test_load_policy_keys_and_exclude_groups_as_tuple(tmp_path: Path) -> None:
+    """`policy_exclude_groups` 是 tuple 欄(JSON 陣列 → tuple,frozen dataclass 才 hashable);
+    其餘新鍵逐鍵覆寫。"""
+    p = tmp_path / "signals.json"
+    p.write_text(
+        json.dumps(
+            {
+                "policy_exclude_groups": ["ALL IN", "觀察"],
+                "policy_peer_up_pct": 2.5,
+                "policy_push_end": "12:00:00",
+                "sweep_min_levels": 3,
+                "policy_outcome_days": 7,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_signals_config(p)
+    assert cfg.policy_exclude_groups == ("ALL IN", "觀察")
+    assert cfg.policy_peer_up_pct == 2.5
+    assert cfg.policy_push_end == "12:00:00"
+    assert cfg.sweep_min_levels == 3
+    assert cfg.policy_outcome_days == 7
+    assert cfg.policy_max_chg_pct == 6.0  # 未覆寫者保留預設
 
 
 def test_frozen() -> None:

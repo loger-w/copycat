@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from copycat.live.signal_state import SignalDetector, TickContext
+from copycat.live.signal_state import KIND_SWITCH, SWITCH_KEYS, SignalDetector, TickContext
 from copycat.live.stock_models import StockTick
 from copycat.signals_config import SignalsConfig
 
@@ -720,6 +720,25 @@ class TestSessionGates:
         det = _det(clock)
         det.set_basis("2330", _BASIS)
         assert det.evaluate("2330", _tick(85_000), _ctx(), _ALL) == []
+
+
+class TestSwitchKeys:
+    def test_six_switch_keys_and_kind_map(self) -> None:
+        """spec #192:開關鍵集五鍵 → 六鍵(掃單簇是規則 kind,事件 kind 同名)。
+
+        hub 的 `_legacy_flags` 以這組鍵起手,少一鍵 = 該 kind 的種子 enabled 永遠拿不到
+        舊開關檔的值(缺鍵 fail-open)—— 對掃單簇是刻意的,但鍵集本身要釘住。
+        """
+        assert SWITCH_KEYS == (
+            "cdp_cross",
+            "surge_crash",
+            "surge_pullback",
+            "vol_burst",
+            "limit_lock",
+            "sweep_cluster",
+        )
+        assert KIND_SWITCH["sweep_cluster"] == "sweep_cluster"
+        assert set(KIND_SWITCH.values()) == set(SWITCH_KEYS)
 
 
 class TestLifecycle:

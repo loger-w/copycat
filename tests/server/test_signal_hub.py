@@ -24,7 +24,7 @@ from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
-from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RuleError, load_rules
+from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RuleError, default_rules, load_rules
 from copycat.signals_config import SignalsConfig
 from copycat.stock_watchlist import Group
 
@@ -83,11 +83,11 @@ def _rule(kind: str, rid: str, **over: Any) -> dict[str, Any]:
 def _write_rules(tmp_path: Path, rules: list[dict[str, Any]]) -> None:
     """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。
 
-    寫**當前版本 v3**:寫舊版會觸發遷移鏈 append surge_pullback 種子卡,
+    寫**當前版本 v4**:寫舊版會觸發遷移鏈 append surge_pullback / 掃單簇種子卡並翻通知旗,
     「注入的集合 = 受測的集合」這個前提就破了(遷移行為由 test_signal_rules 專測)。
     """
     (tmp_path / _RULES_FILE).write_text(
-        json.dumps({"_cache_version": 3, "rules": rules}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_cache_version": 4, "rules": rules}, ensure_ascii=False), encoding="utf-8"
     )
 
 
@@ -271,6 +271,7 @@ class _Harness:
         bars: _FakeBars | None = None,
         wl: _Watch | None = None,
         daily_bars: object = _UNSET,
+        loud_seeds: bool = False,
         **over: float | int,
     ) -> None:
         self.published: list[dict] = []
@@ -286,6 +287,14 @@ class _Harness:
         self.data_dir = tmp_path
         self.bars = bars if bars is not None else _FakeBars([_BAR_A])
         cfg = replace(SignalsConfig(), basis_gap_secs=0.0, **over)  # type: ignore[arg-type]
+        if loud_seeds and not (tmp_path / _RULES_FILE).exists():
+            # spec #192 起種子的 cdp_cross / vol_burst / sweep_cluster 通知關 —— 走「缺檔遷移」
+            # 拿到的 CDP 種子不會進 Discord。要用種子集合驗 Discord 出口的測試顯式要求
+            # 「全開的種子」(預寫 v4 檔,不經 hub 遷移;遷移行為由 test_migration_* 專測)。
+            _write_rules(
+                tmp_path,
+                [{**r, "notify_discord": True} for r in default_rules(cfg, {})],
+            )
         self.hub = SignalHub(
             cfg,
             publish=self.published.append,
@@ -462,7 +471,7 @@ def clock() -> _Clock:
 
 class TestPayloadContract:
     async def test_ws_and_jsonl_key_contract(self, tmp_path: Path, clock: _Clock) -> None:
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         h.attach_bot()
         await h.hub.start()
         try:
@@ -813,7 +822,7 @@ class TestDiscordFanout:
             await h.hub.close()
 
     async def test_bot_failure_falls_back_to_webhook(self, tmp_path: Path, clock: _Clock) -> None:
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         h.attach_bot()
         h.bot_fails = True
         await h.hub.start()
@@ -836,7 +845,7 @@ class TestDiscordFanout:
 
         頻道未設 / on_ready 還沒跑完 = 生產預設態,這條降級路徑必須有覆蓋。
         """
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         h.attach_bot()
         h.bot_ready = False
         await h.hub.start()
@@ -861,7 +870,7 @@ class TestDiscordFanout:
 
         「沒送出去」是可接受的降級,不是例外 —— worker 不得記 ERROR、jsonl 與 WS 照常。
         """
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         h.notify_ok = False
         await h.hub.start()
         try:
@@ -879,7 +888,7 @@ class TestDiscordFanout:
             await h.hub.close()
 
     async def test_no_bot_attached_uses_webhook(self, tmp_path: Path, clock: _Clock) -> None:
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330"])
@@ -1980,10 +1989,13 @@ class TestRuleEngine:
             await h.hub.close()
 
     async def test_migration_defaults(self, tmp_path: Path, clock: _Clock) -> None:
-        """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。"""
+        """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。
+
+        spec #192 起種子通知旗分兩批:cdp_cross / vol_burst / sweep_cluster 關,其餘開。
+        """
         h = _Harness(tmp_path, clock)
         rules = h.hub.rules()
-        # surge_pullback 種子是兩張卡(1% / 2%,spec #174)
+        # surge_pullback 種子是兩張卡(1% / 2%,spec #174);掃單簇一張(spec #192)
         assert [r["kind"] for r in rules] == [
             "cdp_cross",
             "surge_crash",
@@ -1991,9 +2003,17 @@ class TestRuleEngine:
             "surge_pullback",
             "vol_burst",
             "limit_lock",
+            "sweep_cluster",
         ]
         assert all(r["enabled"] for r in rules)
-        assert all(r["notify_discord"] for r in rules)
+        assert {r["kind"]: r["notify_discord"] for r in rules} == {
+            "cdp_cross": False,
+            "surge_crash": True,
+            "surge_pullback": True,
+            "vol_burst": False,
+            "limit_lock": True,
+            "sweep_cluster": False,
+        }
         assert load_rules(tmp_path / _RULES_FILE) == rules
 
     async def test_migration_reads_legacy_flags(self, tmp_path: Path, clock: _Clock) -> None:
@@ -2008,6 +2028,7 @@ class TestRuleEngine:
             "surge_pullback": True,  # 晚於開關檔時代 → 恆走缺鍵 fail-open
             "vol_burst": False,
             "limit_lock": True,
+            "sweep_cluster": True,  # 同上
         }
 
     async def test_bad_rules_file_raises_on_construct(self, tmp_path: Path, clock: _Clock) -> None:
@@ -2153,7 +2174,7 @@ class TestGroupSuffix:
             groups=[{"name": "半導體", "codes": ["2330", "2454", "2317"]}],
             quotes={"2330": ("台積電", 1.5), "2454": ("聯發科", -3.2), "2317": ("鴻海", 0.8)},
         )
-        h = _Harness(tmp_path, clock, wl=wl)
+        h = _Harness(tmp_path, clock, wl=wl, loud_seeds=True)
         h.attach_bot()
         await h.hub.start()
         try:
@@ -2177,7 +2198,7 @@ class TestGroupSuffix:
             groups=[{"name": "半導體", "codes": ["2330", "2317"]}],
             quotes={"2330": ("台積電", 1.5), "2317": ("鴻海", 0.8)},
         )
-        h = _Harness(tmp_path, clock, wl=wl)
+        h = _Harness(tmp_path, clock, wl=wl, loud_seeds=True)
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330", "2317"])
@@ -2193,7 +2214,7 @@ class TestGroupSuffix:
 
     async def test_not_injected_means_no_summary(self, tmp_path: Path, clock: _Clock) -> None:
         """兩 fn 未注入(預設 None)→ 摘要停用,文字與規則化之前逐字相同。"""
-        h = _Harness(tmp_path, clock)
+        h = _Harness(tmp_path, clock, loud_seeds=True)
         h.attach_bot()
         await h.hub.start()
         try:
@@ -2337,7 +2358,7 @@ class TestGroupSuffix:
             quotes={"2330": ("台積電", 1.0), "2317": ("鴻海", 2.0)},
         )
         wl.quotes_error = True
-        h = _Harness(tmp_path, clock, wl=wl)
+        h = _Harness(tmp_path, clock, wl=wl, loud_seeds=True)
         h.attach_bot()
         await h.hub.start()
         try:

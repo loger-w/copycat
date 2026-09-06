@@ -21,8 +21,15 @@
       "min_window_lots": [0, 1000000],
       "min_day_lots": [0, 10000000]
     },
-    "limit_lock": {}
+    "limit_lock": {},
+    "sweep_cluster": {
+      "cluster_window_secs": [1, 600],
+      "min_sweeps": [1, 20],
+      "min_levels": [1, 10],
+      "up_pct": [0, 10],
+      "up_window_secs": [1, 600]
+    }
   },
-  "int_keys": ["rearm_ticks", "min_window_lots", "min_day_lots"],
+  "int_keys": ["rearm_ticks", "min_window_lots", "min_day_lots", "min_sweeps", "min_levels"],
   "cooldown": [60, 86400]
 }
