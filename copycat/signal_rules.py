@@ -373,7 +373,7 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
                 "name": _DEFAULT_NAMES[kind],
                 "kind": kind,
                 "enabled": legacy_flags.get(kind, True),
-                "notify_discord": True,
+                "notify_discord": kind not in _QUIET_KINDS,
                 "cooldown_secs": _seed_cooldown(kind, cfg),
                 "params": _seed_params(kind, cfg),
                 "cdp_levels": list(CDP_LEVELS) if kind == "cdp_cross" else [],
@@ -457,7 +457,21 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
     翻旗只認 v3 之前的檔:使用者在 v4 世界於規則視窗開回通知後落的是 v4 檔,載入不再
     經過這裡(`load_rules` 只對 `version != _CACHE_VERSION` 跑遷移鏈)。
     """
-    out: list[Any] = list(items)
+    out: list[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        obj = cast(dict[str, Any], item)
+        if obj.get("kind") in _QUIET_KINDS and obj.get("notify_discord") is True:
+            logger.info(
+                "訊號規則檔 v3→v4:規則 %r(%s)通知改為 false(spec #192 停推播,事件照記)",
+                obj.get("id"),
+                obj.get("kind"),
+            )
+            out.append({**obj, "notify_discord": False})
+            continue
+        out.append(obj)
     existing = [cast("dict[str, Any]", item) for item in out if isinstance(item, dict)]
     names = {str(obj.get("name", "")).strip() for obj in existing}
     ids = {obj.get("id") for obj in existing}
