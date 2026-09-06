@@ -45,13 +45,14 @@ const FIXTURE_PATH = path.resolve(HERE, "../../../tests/fixtures/signal_param_sp
 describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一份)", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as Fixture;
 
-  it("fixture 自身健檢:五種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
+  it("fixture 自身健檢:六種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
     // 沒有這條的話 fixture 被改瘦(只剩一個 kind)時 parity 仍然全綠 = 空談
     expect(Object.keys(fixture.specs).sort()).toEqual([
       "cdp_cross",
       "limit_lock",
       "surge_crash",
       "surge_pullback",
+      "sweep_cluster",
       "vol_burst",
     ]);
     expect(fixture.specs.limit_lock).toEqual({});
@@ -94,6 +95,14 @@ describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一�
       min_day_lots: "500",
     });
     expect(paramDefaults("limit_lock")).toEqual({});
+    // spec #192 掃單簇:預設 = 拍板值(30 / 2 / 2 / 0.3 / 60),與後端種子同口徑
+    expect(paramDefaults("sweep_cluster")).toEqual({
+      cluster_window_secs: "30",
+      min_sweeps: "2",
+      min_levels: "2",
+      up_pct: "0.3",
+      up_window_secs: "60",
+    });
     expect(COOLDOWN_DEFAULT).toBe("300");
   });
 

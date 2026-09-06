@@ -164,7 +164,7 @@ describe("SignalRulesDialog 刪除", () => {
 });
 
 describe("SignalRulesDialog 編輯表單", () => {
-  it("新增規則 → 表單出現,種類 select 五類中文", () => {
+  it("新增規則 → 表單出現,種類 select 六類中文;通知開關文案「通知」", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
     const select = screen.getByLabelText("種類") as HTMLSelectElement;
@@ -174,10 +174,59 @@ describe("SignalRulesDialog 編輯表單", () => {
       "爆拉回檔",
       "爆量",
       "鎖漲跌停",
+      "掃單簇",
     ]);
     expect(screen.getByLabelText("名稱")).toBeTruthy();
     expect(screen.getByLabelText("冷卻秒數")).toBeTruthy();
-    expect(screen.getByLabelText("Discord 通知")).toBeTruthy();
+    // spec #192:開關語意擴為「通知」(Discord + 瀏覽器 toast / 嗶 / 桌面通知),文案跟著改
+    expect(screen.getByLabelText("通知")).toBeTruthy();
+    expect(screen.queryByLabelText("Discord 通知")).toBeNull();
+  });
+
+  it("列表徽章:通知開的規則印「通知」而不是「Discord」;掃單簇規則摘要印五參數", () => {
+    const SWEEP: SignalRule = {
+      id: "r3",
+      name: "掃單簇",
+      kind: "sweep_cluster",
+      enabled: true,
+      notify_discord: false,
+      cooldown_secs: 60,
+      params: {
+        cluster_window_secs: 30,
+        min_sweeps: 2,
+        min_levels: 2,
+        up_pct: 0.3,
+        up_window_secs: 60,
+      },
+      cdp_levels: [],
+    };
+    open([CDP, SWEEP]);
+    const cdpRow = screen.getByTestId("rule-row-r1");
+    expect(within(cdpRow).getByText("通知")).toBeTruthy();
+    expect(within(cdpRow).queryByText("Discord")).toBeNull();
+    const sweepRow = screen.getByTestId("rule-row-r3");
+    expect(within(sweepRow).queryByText("通知")).toBeNull();
+    expect(within(sweepRow).getByText("掃單簇", { selector: "span.rounded" })).toBeTruthy();
+    expect(sweepRow.textContent).toContain("30 秒內 2 掃 · 2 層 · 60 秒漲 0.3% · 冷卻 60 秒");
+  });
+
+  it("選「掃單簇」→ 五欄帶預設值且落在值域", () => {
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
+    fireEvent.change(screen.getByLabelText("種類"), { target: { value: "sweep_cluster" } });
+    const fields: [string, string, string, string][] = [
+      ["簇窗(秒)", "30", "1", "600"],
+      ["最少掃單數", "2", "1", "20"],
+      ["最少層數", "2", "1", "10"],
+      ["漲幅 %", "0.3", "0", "10"],
+      ["回看窗(秒)", "60", "1", "600"],
+    ];
+    for (const [label, value, min, max] of fields) {
+      const input = screen.getByLabelText(label) as HTMLInputElement;
+      expect(input.value).toBe(value);
+      expect([input.getAttribute("min"), input.getAttribute("max")]).toEqual([min, max]);
+    }
+    expect(screen.queryByText("監看線")).toBeNull();
   });
 
   it("冷卻秒數輸入框帶後端值域(min 60 / max 86400)", () => {
