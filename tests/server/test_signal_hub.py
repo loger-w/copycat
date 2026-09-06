@@ -47,6 +47,8 @@ _SIGNAL_KEYS = {
     "touch_count",
     "rule_id",
     "rule_name",
+    # spec #192:每列帶 `notify`(一般列 = 規則通知開關;政策列另算);前端缺欄視為 true
+    "notify",
 }
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
@@ -61,6 +63,13 @@ _RULE_PARAMS: dict[str, dict[str, float]] = {
         "min_day_lots": 500,
     },
     "limit_lock": {},
+    "sweep_cluster": {
+        "cluster_window_secs": 30,
+        "min_sweeps": 2,
+        "min_levels": 2,
+        "up_pct": 0.3,
+        "up_window_secs": 60,
+    },
 }
 
 
@@ -122,6 +131,7 @@ def _tick(
     cum: int = 1,
     time: str = "10:00:00.123",
     trade_date: str = _DATE,
+    ask: int | None = None,
 ) -> StockTick:
     return StockTick(
         code=code,
@@ -132,6 +142,7 @@ def _tick(
         trade_date=trade_date,
         side="neutral",
         is_trial=False,
+        ask_milli=ask,
     )
 
 
@@ -504,6 +515,8 @@ class TestPayloadContract:
             assert set(rows[0]) == _SIGNAL_KEYS | {"trade_date"}
             assert rows[0]["trade_date"] == _DATE
             assert rows[0]["id"] == msg["id"]
+            assert msg["notify"] is True and rows[0]["notify"] is True  # 規則通知開 → 列帶 true
+            assert "detail" not in msg  # 既有 kind 不帶 detail(只有掃單簇列有)
             assert len(h.bot) == 1
             assert h.fallback == []
         finally:
@@ -2113,6 +2126,253 @@ class TestRuleEngine:
             assert len(h.published) == 2
             assert len(h.rows()) == 2
             assert h.bot == [h.bot[0]] and h.bot[0].endswith("｜要通知")
+        finally:
+            await h.hub.close()
+
+
+def _sweep_group(
+    h: _Harness,
+    state: StockDayState,
+    time: str,
+    prices: list[int],
+    *,
+    ask: int | None,
+    code: str = "2330",
+    qty: int = 1,
+) -> None:
+    """一個同毫秒群:`prices[0]` 為首筆(對照 `ask` 判外盤),其餘同時刻接續。"""
+    for i, price in enumerate(prices):
+        h.hub.on_tick(code, _tick(price, code=code, qty=qty, cum=i + 1, time=time, ask=ask), state)
+
+
+class TestSweepCluster:
+    """spec #192 T2 主 seam:合成 tick(含同毫秒群)→ raw 掃單簇列。
+
+    價位 50.0 元帶(檔距 0.1 = 100 毫元):群 `[50_000, 50_100, 50_200]` 首筆成交 ≥ 賣一 50_000
+    (外盤)、群內出現高於首價的成交、層數 round(200 / 100) = 2 ≥ 2 → 合格掃單。
+    60 s 漲幅的回看基準 = 時刻 ≤ s − 60 的最後一筆(10:00:00.000 的 50_000)。
+    """
+
+    def _rules(self, tmp_path: Path, **over: Any) -> None:
+        over.setdefault("notify_discord", False)  # 種子口徑:通知關;個別測試可覆寫
+        _write_rules(tmp_path, [_rule("sweep_cluster", "r-1-000", name="掃單簇", **over)])
+
+    async def test_two_sweeps_within_window_emit_one_quiet_row(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            # 掃單 1(10:01:10.100):n30 = 1 < 2 → 不發
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            assert h.published == []
+            # 掃單 2(20 s 後,窗內):n30 = 2;群高 50_400 ÷ 50_000 − 1 = +0.8% ≥ 0.3 → 發
+            _sweep_group(h, st, "10:01:30.500", [50_200, 50_300, 50_400], ask=50_200, qty=2)
+            await h.settle()
+
+            assert len(h.published) == 1
+            msg = h.published[0]
+            assert set(msg) == _SIGNAL_KEYS | {"detail"}
+            assert msg["kind"] == "sweep_cluster"
+            assert msg["price"] == 50_400  # 發訊那一筆(群內第三筆)的成交價
+            assert msg["time"] == "10:01:30"
+            assert msg["levels"] == [] and msg["direction"] is None
+            assert msg["pct"] == pytest.approx(0.8)
+            assert msg["detail"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": pytest.approx(0.8)}
+            assert msg["touch_count"] == 1
+            assert msg["notify"] is False  # 種子口徑:掃單簇規則通知關
+            assert msg["id"] == "2026-08-04-r-1-000-2330-sweep_cluster---10:01:30.500"
+            rows = h.rows()
+            assert len(rows) == 1 and rows[0]["detail"] == msg["detail"]
+            assert rows[0]["notify"] is False
+            assert h.bot == [] and h.fallback == []  # 通知關 → 不進 Discord
+        finally:
+            await h.hub.close()
+
+    async def test_rule_notify_on_sends_discord_text(self, tmp_path: Path, clock: _Clock) -> None:
+        """規則通知開 → 掃單簇列照規則開關進 Discord,文案「掃單簇 +0.80%」與前端逐字對齊。"""
+        self._rules(tmp_path, cooldown_secs=60, notify_discord=True)
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:30.500", [50_200, 50_300, 50_400], ask=50_200)
+            await h.settle()
+            assert h.published[0]["notify"] is True
+            assert h.bot == ["🔔 掃單簇 +0.80%｜台積電 2330｜50.40｜10:01:30｜掃單簇"]
+        finally:
+            await h.hub.close()
+
+    @pytest.mark.parametrize(
+        ("label", "first", "second"),
+        [
+            # 只有一個掃單:第二群只有一筆(不成群)
+            ("single", ([50_000, 50_100, 50_200], 50_000), ([50_300], 50_300)),
+            # 漲幅不足:兩群都合格但群高 50_100 ÷ 50_000 = +0.2% < 0.3
+            ("small_rise", ([49_900, 50_000, 50_100], 49_900), ([49_900, 50_000, 50_100], 49_900)),
+            # 第二群首筆非外盤(成交 50_200 < 賣一 50_300)
+            ("not_outer", ([50_000, 50_100, 50_200], 50_000), ([50_200, 50_300, 50_400], 50_300)),
+            # 第二群賣一為 0(鎖停市價佇列)→ 不算外盤
+            ("ask_zero", ([50_000, 50_100, 50_200], 50_000), ([50_200, 50_300, 50_400], 0)),
+            # 第二群層數不足(只高一檔)
+            ("one_level", ([50_000, 50_100, 50_200], 50_000), ([50_200, 50_300], 50_200)),
+        ],
+    )
+    async def test_no_event_when_definition_not_met(
+        self,
+        tmp_path: Path,
+        clock: _Clock,
+        label: str,
+        first: tuple[list[int], int],
+        second: tuple[list[int], int],
+    ) -> None:
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:10.100", first[0], ask=first[1])
+            _sweep_group(h, st, "10:01:30.500", second[0], ask=second[1])
+            await h.settle()
+            assert h.published == [], label
+            assert h.rows() == []
+        finally:
+            await h.hub.close()
+
+    async def test_sweeps_outside_cluster_window_do_not_count(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """第一個掃單落在 [s − 30, s] 之外(31 s 前)→ n30 = 1 → 不發。"""
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:00.000", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:31.000", [50_200, 50_300, 50_400], ask=50_200)
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_no_trade_before_lookback_window_means_zero_rise(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """窗前無成交 → 60 s 漲幅視為 0 → 不發(研究 `j60 < 0 → 0.0` 同語意)。"""
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:30.500", [50_200, 50_300, 50_400], ask=50_200)
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_first_qualifying_tick_fires_and_group_counts_once(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """群內首次達標即發(第三筆),同群後續 tick 不再發、也不算第二個掃單。
+
+        第二群五筆:第三筆達標(層數 2)當下就發,detail 記達標當下的層數 / 量;
+        第四、五筆再高(層數 3、4)不補發、不重計 —— 與研究「群結束才判」的已知差異
+        (levels 可能低於群結束值)。
+        """
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(
+                h, st, "10:01:30.500", [50_200, 50_300, 50_400, 50_500, 50_600], ask=50_200
+            )
+            await h.settle()
+            assert len(h.published) == 1
+            assert h.published[0]["price"] == 50_400
+            assert h.published[0]["detail"]["levels"] == 2
+            assert h.published[0]["detail"]["qty"] == 3
+        finally:
+            await h.hub.close()
+
+    async def test_second_cluster_within_cooldown_blocked_then_allowed(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """冷卻(牆鐘,沿規則模型):60 s 內第二簇不發;過了才發,touch_count 累計。"""
+        self._rules(tmp_path, cooldown_secs=60)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:30.500", [50_200, 50_300, 50_400], ask=50_200)
+            assert len(h.published) == 1
+            clock.advance(30)
+            # 冷卻中:不發、但掃單照登記(下一簇的 n30 要算得到它)
+            _sweep_group(h, st, "10:02:00.500", [50_400, 50_500, 50_600], ask=50_400)
+            assert len(h.published) == 1
+            clock.advance(31)  # 發訊後 61 s → 冷卻過;簇窗內仍有 10:02:00.5 那一掃 → n30 = 2
+            _sweep_group(h, st, "10:02:20.500", [50_600, 50_700, 50_800], ask=50_600)
+            await h.settle()
+            assert len(h.published) == 2
+            assert h.published[1]["touch_count"] == 2
+            assert h.published[1]["detail"]["n30"] == 2
+        finally:
+            await h.hub.close()
+
+    async def test_quiet_and_loud_rules_stamp_notify_per_rule(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """每列 `notify` = 該規則的通知開關(同 tick 兩條 CDP 規則:一開一關)。"""
+        _write_rules(
+            tmp_path,
+            [
+                _rule("cdp_cross", "r-1-000", name="要通知"),
+                _rule("cdp_cross", "r-1-001", name="不通知", notify_discord=False),
+            ],
+        )
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            h.cross_nh(_state())
+            await h.settle()
+            assert {m["rule_id"]: m["notify"] for m in h.published} == {
+                "r-1-000": True,
+                "r-1-001": False,
+            }
+            assert {r["rule_id"]: r["notify"] for r in h.rows()} == {
+                "r-1-000": True,
+                "r-1-001": False,
+            }
         finally:
             await h.hub.close()
 

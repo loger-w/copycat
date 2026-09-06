@@ -44,7 +44,7 @@ from tests.server.test_stock_routes import FakeStockSource
 
 _RULES_FILE = "signal_rules.json"
 
-#: 缺檔遷移的種子 kind 序:surge_pullback 兩張卡(1% / 2%,spec #174)
+#: 缺檔遷移的種子 kind 序:surge_pullback 兩張卡(1% / 2%,spec #174)+ 掃單簇(spec #192)
 _SEEDED_KINDS = [
     "cdp_cross",
     "surge_crash",
@@ -52,6 +52,7 @@ _SEEDED_KINDS = [
     "surge_pullback",
     "vol_burst",
     "limit_lock",
+    "sweep_cluster",
 ]
 
 _RULE_PARAMS: dict[str, dict[str, float]] = {
