@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +50,7 @@ def _tick(
     cum: int = 0,
     time: str = "10:00:00.123",
     trade_date: str = _DATE,
+    ask: int | None = None,
 ) -> StockTick:
     return StockTick(
         code="2330",
@@ -58,6 +61,7 @@ def _tick(
         trade_date=trade_date,
         side="neutral",
         is_trial=False,
+        ask_milli=ask,
     )
 
 
@@ -720,6 +724,162 @@ class TestSessionGates:
         det = _det(clock)
         det.set_basis("2330", _BASIS)
         assert det.evaluate("2330", _tick(85_000), _ctx(), _ALL) == []
+
+
+_SWEEP = frozenset({"sweep_cluster"})
+
+
+def _ms_time(ms: int) -> str:
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, frac = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{frac:03d}"
+
+
+def _ms_clock(base: _dt.datetime, ms: int) -> _dt.datetime:
+    return base + _dt.timedelta(milliseconds=ms)
+
+
+class TestSweepClusterGolden:
+    """spec #192 對照 seam(seam 2):研究 `data/ticks` 三個股票日的 golden fixture
+    (`tests/fixtures/sweep_cluster_golden.json`,產生腳本 `record_sweep_cluster_golden.py`)。
+
+    以 **tick 時刻當注入時鐘**跑偵測器(冷卻用牆鐘、研究用 tick 時刻 —— 兩把尺在此對齊),
+    斷言事件集合 == `expected_prefix`(即時判);另斷言研究定義的事件時刻 ⊆ 即時判的事件時刻
+    (零漏發)。鎖住掃單簇定義不漂:研究 tick 的毫秒與線上 `StockTick.time` 同源 TC4 PreciseTime。
+    """
+
+    @staticmethod
+    def _fixture() -> dict:
+        path = Path(__file__).parent.parent / "fixtures" / "sweep_cluster_golden.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _run(self, case: dict, params: dict) -> list[tuple[str, int, int, int, int, float]]:
+        base = _dt.datetime.fromisoformat(case["date"])
+        clock = _Clock(base)
+        det = _det(
+            clock,
+            sweep_cluster_window_secs=float(params["cluster_window_secs"]),
+            sweep_min_sweeps=int(params["min_sweeps"]),
+            sweep_min_levels=int(params["min_levels"]),
+            sweep_up_pct=float(params["up_pct"]),
+            sweep_up_window_secs=float(params["up_window_secs"]),
+            sweep_cooldown_secs=float(params["cooldown_secs"]),
+        )
+        out: list[tuple[str, int, int, int, int, float]] = []
+        ctx = _ctx(trade_date=case["date"])
+        for i, (ms, price, qty, bid, ask) in enumerate(case["ticks"]):
+            clock.now = _ms_clock(base, ms)
+            tick = StockTick(
+                code=case["code"],
+                price_milli=round(price * 1000),
+                qty=int(qty),
+                cum_vol=i + 1,
+                time=_ms_time(ms),
+                trade_date=case["date"],
+                side="neutral",
+                is_trial=False,
+                bid_milli=round(bid * 1000) or None,
+                ask_milli=round(ask * 1000) or None,
+            )
+            for ev in det.evaluate(case["code"], tick, ctx, _SWEEP):
+                assert ev.kind == "sweep_cluster"
+                assert ev.detail is not None
+                out.append(
+                    (
+                        ev.time_key,
+                        ev.price_milli,
+                        int(ev.detail["n30"]),
+                        int(ev.detail["levels"]),
+                        int(ev.detail["qty"]),
+                        float(ev.detail["up_pct"]),
+                    )
+                )
+        return out
+
+    def test_fixture_self_check(self) -> None:
+        fx = self._fixture()
+        assert len(fx["cases"]) == 3
+        assert fx["params"] == {
+            "cluster_window_secs": 30,
+            "min_sweeps": 2,
+            "min_levels": 2,
+            "up_pct": 0.3,
+            "up_window_secs": 60,
+            "cooldown_secs": 60,
+        }
+        for case in fx["cases"]:
+            assert len(case["ticks"]) >= 300
+            assert len(case["expected_prefix"]) >= 2
+            # 已知差異列表:每案至少一則「發訊早於群末」(levels 低於群結束值)
+            earlier = [
+                (a, b)
+                for a, b in zip(case["expected_research"], case["expected_prefix"], strict=True)
+                if a["i"] != b["i"]
+            ]
+            assert earlier, case["code"]
+            for a, b in earlier:
+                assert b["i"] < a["i"] and b["levels"] <= a["levels"] and b["ms"] == a["ms"]
+
+    @pytest.mark.parametrize("idx", [0, 1, 2])
+    def test_detector_matches_prefix_reference(self, idx: int) -> None:
+        fx = self._fixture()
+        case = fx["cases"][idx]
+        got = self._run(case, fx["params"])
+        expected = [
+            (
+                _ms_time(e["ms"]),
+                round(e["price"] * 1000),
+                e["n30"],
+                e["levels"],
+                int(e["qty"]),
+                e["up_pct"],
+            )
+            for e in case["expected_prefix"]
+        ]
+        assert [g[:5] for g in got] == [e[:5] for e in expected], case["code"]
+        for g, e in zip(got, expected, strict=True):
+            assert g[5] == pytest.approx(e[5], abs=1e-9)
+        # 零漏發:研究定義的每一則都有同時刻的即時判事件
+        research_ms = {_ms_time(e["ms"]) for e in case["expected_research"]}
+        assert research_ms <= {g[0] for g in got}
+
+
+class TestSweepClusterState:
+    """換日 / 移出自選後掃單簇狀態清空(既有 lifecycle 契約延伸)。"""
+
+    def _one_sweep(self, det: SignalDetector, time: str, prices: list[int], ask: int) -> None:
+        for i, p in enumerate(prices):
+            det.evaluate("2330", _tick(p, cum=i + 1, time=time, ask=ask), _ctx(), _SWEEP)
+
+    def test_reset_day_clears_sweeps_and_lookback(self) -> None:
+        clock = _Clock()
+        det = _det(clock)
+        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
+        self._one_sweep(det, "10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+        det.reset_day()
+        # 重置後:掃單清單空(n30 = 1)、回看窗空(漲幅 0)→ 不發
+        self._one_sweep(det, "10:01:30.500", [50_200, 50_300, 50_400], 50_200)
+        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
+        ev = []
+        for i, p in enumerate([50_400, 50_500, 50_600]):
+            ev += det.evaluate(
+                "2330", _tick(p, cum=i + 1, time="10:01:40.500", ask=50_400), _ctx(), _SWEEP
+            )
+        assert ev == []
+
+    def test_drop_code_clears_only_that_code(self) -> None:
+        clock = _Clock()
+        det = _det(clock)
+        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
+        self._one_sweep(det, "10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+        det.drop_code("2330")
+        ev = []
+        for i, p in enumerate([50_200, 50_300, 50_400]):
+            ev += det.evaluate(
+                "2330", _tick(p, cum=i + 1, time="10:01:30.500", ask=50_200), _ctx(), _SWEEP
+            )
+        assert ev == []  # 掃單 1 已被丟掉 → n30 = 1
 
 
 class TestSwitchKeys:
