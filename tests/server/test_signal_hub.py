@@ -293,7 +293,8 @@ class _Harness:
         wl: _Watch | None = None,
         daily_bars: object = _UNSET,
         loud_seeds: bool = False,
-        **over: float | int,
+        outcome_bars: object = None,
+        **over: float | int | str,
     ) -> None:
         self.published: list[dict] = []
         self.fallback: list[str] = []
@@ -330,6 +331,8 @@ class _Harness:
             groups_fn=wl.groups_fn if wl is not None else None,
             quotes_fn=wl.quotes_fn if wl is not None else None,
             peers_fn=wl.peers_fn if wl is not None else None,
+            # T+1 / T+2 回填的日 K 來源(spec #192 T4);None = 不啟動 worker
+            outcome_bars=outcome_bars,  # type: ignore[arg-type]
         )
 
     def _notify(self, text: str) -> bool:
