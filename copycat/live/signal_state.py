@@ -1,6 +1,6 @@
-"""個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6)。
+"""個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6;spec #192 掃單簇)。
 
-五類訊號:CDP 五線穿越 / 爆拉跌 / 爆拉回檔 / 爆量 / 鎖漲跌停與打開。設計要點:
+六類訊號:CDP 五線穿越 / 爆拉跌 / 爆拉回檔 / 爆量 / 鎖漲跌停與打開 / 掃單簇。設計要點:
 
 - **零 IO、時鐘可注入**:窗判定、elapsed、cooldown、rearm 全部讀 `now_fn()`
   (台北牆鐘,恆單調);`SignalEvent.time` 只放 tick 時刻,純顯示用。兩條時間軸
@@ -18,6 +18,12 @@
   非線上側別與本 tick 側別相反。側別存了線價,基準換線即自動失效;`set_basis` 另外
   一律清該檔側別(盲窗 None 之後同線價回來,線價比對擋不住 —— review C-1)。
   側別推進與駐留計時同屬狀態推進,在 `enabled` gate **之前**跑。
+- **掃單簇的窗用 tick 時刻,冷卻用牆鐘**(spec #192):掃單 = 同一檔**相鄰**且 `tick.time`
+  (台北 HH:MM:SS.fff,毫秒來自 TC4 PreciseTime,與研究 tick 檔同源)相同的群;簇窗
+  [s − cluster_window, s] 與 60 s 回看窗都以 tick 時刻算(研究定義同源,golden fixture
+  `tests/fixtures/sweep_cluster_golden.json` 釘住);冷卻沿規則模型走 `now_fn`。
+  **即時判**:群內首次達標即登記掃單並評估,之後群內每筆重算(群高 / 量隨前綴長大)直到
+  發訊,不等群結束 —— 研究 1,883 股票日量測多發 0.7%、零漏發(user 2026-09-07 拍板)。
 - **接線層(SignalHub)持有所有 IO 與 membership gate**,本模組不認得自選清單。
 
 呼叫順序契約(換日,design §4.1 stage2):**先 `reset_day()` 再 promote 暫存基準**
@@ -80,15 +86,33 @@ SWITCH_KEYS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class SignalEvent:
-    kind: str  # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open
+    kind: str  # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open | sweep_cluster
     code: str
     price_milli: int
     time: str  # 台北 HH:MM:SS(= time_key[:8];顯示用)
     time_key: str  # 台北 HH:MM:SS.fff;tick 路 = tick.time、簿路 = now_fn 毫秒時刻
     levels: tuple[str, ...]  # cdp_cross:同 tick 穿越的全部線(固定序);其他 kind 空
     direction: str | None  # cdp_cross:from_below|from_above;limit_*:up|down
-    pct: float | None  # surge/crash 實際漲跌幅(%);vol_burst 實際倍率;surge_pullback 回落幅度(正)
+    # surge/crash 實際漲跌幅(%);vol_burst 實際倍率;surge_pullback 回落幅度(正);
+    # sweep_cluster 60 s 漲幅(%)
+    pct: float | None
     touch_count: int  # 當日計數;合併事件取 levels[0] 的計數
+    # sweep_cluster 專用 {n30, levels, qty, up_pct}(spec #192);既有 kind 恆 None —— 選配欄放最後、
+    # 預設 None,既有建構點零改動
+    detail: dict[str, float] | None = None
+
+
+@dataclass
+class _SweepGroup:
+    """當前同毫秒群的前綴狀態(一檔一群;時刻換了就整個換掉)。"""
+
+    time_key: str
+    first_milli: int
+    outer: bool  # 首筆成交 ≥ 賣一且賣一 > 0(市價佇列 0 不算)
+    high_milli: int
+    qty: int
+    qualified: bool = False  # 已登記為合格掃單(一群只登記一次)
+    fired: bool = False  # 本群已發過掃單簇事件
 
 
 @dataclass(frozen=True)
@@ -137,6 +161,18 @@ def _window_change_pct(window: deque[tuple[float, int, int]], price: int) -> flo
     return _change_pct(window[0][1], price) if window else None
 
 
+def _tick_secs(time_key: str) -> float | None:
+    """台北 `HH:MM:SS.fff` → 自午夜秒數(float);格式不符 → None(呼叫端退回牆鐘)。
+
+    研究 tick 檔的「毫秒(自午夜)」÷ 1000 就是這個數 —— 掃單簇的窗判定要與研究同一把尺。
+    """
+    try:
+        hh, mm, rest = time_key.split(":")
+        return int(hh) * 3600 + int(mm) * 60 + float(rest)
+    except ValueError:
+        return None
+
+
 class SignalDetector:
     def __init__(
         self,
@@ -163,6 +199,12 @@ class SignalDetector:
         # 消耗),等重武裝;後兩欄只在已發態有意義(發訊當下掃描存下的舊式基線,
         # 讓之後每 tick O(1)),武裝態恆 (0.0, 0)。
         self._pullback: dict[str, tuple[bool, int, float, int]] = {}
+        # 掃單簇(spec #192)三份狀態,全以 **tick 時刻**(自午夜秒數)為軸:
+        # 當前同毫秒群 / 近期合格掃單時刻(升冪,剪到簇窗)/ 回看價序列 (secs, price),
+        # 保留「時刻 ≤ s − up_window 的最後一筆」當 60 s 漲幅基準。
+        self._sweep_group: dict[str, _SweepGroup] = {}
+        self._sweeps: dict[str, deque[float]] = {}
+        self._lookback: dict[str, deque[tuple[float, int]]] = {}
 
     # ---- 基準(CDP)----
 
@@ -223,6 +265,9 @@ class SignalDetector:
         self._touch.clear()
         self._latch.clear()
         self._pullback.clear()
+        self._sweep_group.clear()
+        self._sweeps.clear()
+        self._lookback.clear()
 
     def drop_code(self, code: str) -> None:
         self._basis.pop(code, None)
@@ -235,6 +280,9 @@ class SignalDetector:
         self._touch = {k: v for k, v in self._touch.items() if k[0] != code}
         self._latch = {k: v for k, v in self._latch.items() if k[0] != code}
         self._pullback.pop(code, None)
+        self._sweep_group.pop(code, None)
+        self._sweeps.pop(code, None)
+        self._lookback.pop(code, None)
 
     # ---- 主入口 ----
 
@@ -253,10 +301,14 @@ class SignalDetector:
             return []
         mono = _mono(now)
         price = tick.price_milli
+        key = tick.time or _clock_key(now)
+        # 掃單簇走自己的時間軸(tick 時刻),且首 tick 也要進回看窗 / 可能是同毫秒群的首筆
+        # —— 所以在「首 tick 只初始化」gate 之前推進(其餘 kind 的首 tick 語意不變)
+        sweep_events = self._eval_sweep(code, tick, key, mono, enabled)
         if code not in self._prev:  # 首 tick 只初始化(無前值可比,任何判定都是猜)
             self._prev[code] = price
             self._window[code] = deque([(mono, price, tick.qty)])
-            return []
+            return sweep_events
 
         prev = self._prev[code]
         window = self._window.setdefault(code, deque())
@@ -267,12 +319,12 @@ class SignalDetector:
         self._prev[code] = price
 
         events: list[SignalEvent] = []
-        key = tick.time or _clock_key(now)
         events.extend(self._eval_cdp(code, prev, price, key, mono, enabled))
         events.extend(self._eval_surge(code, price, key, window, mono, enabled))
         events.extend(self._eval_pullback(code, price, key, window, mono, enabled))
         events.extend(self._eval_volume(code, ctx, key, window, now, mono, enabled))
         events.extend(self._eval_limit_tick(code, price, ctx, key, mono, enabled))
+        events.extend(sweep_events)
         return events
 
     def evaluate_book(
@@ -622,6 +674,100 @@ class SignalDetector:
                 direction=None,
                 pct=ratio,
                 touch_count=self._bump((code, "vol_burst", "")),
+            )
+        ]
+
+    # ---- 掃單簇(spec #192)----
+
+    def _eval_sweep(
+        self,
+        code: str,
+        tick: StockTick,
+        key: str,
+        mono: float,
+        enabled: frozenset[str],
+    ) -> list[SignalEvent]:
+        """同毫秒群掃單 + 簇窗 + 60 s 漲幅;狀態推進無條件,`enabled` / 冷卻只 gate 事件產出。
+
+        定義(研究 `combo_events.find_sweeps` + sweepc 段同源,即時判變體):
+        - 掃單:相鄰同 `tick.time` 的群,首筆成交 ≥ 賣一(賣一可得且 > 0),群內某筆 > 首價,
+          層數 = round((群高 − 首價) ÷ 首價檔距)≥ `sweep_min_levels`。**首次達標的那一筆**即登記
+          掃單時刻 s(群首筆時刻),一群只登記一次。
+        - 簇:n = 落在 [s − cluster_window, s] 的掃單數(含自己);漲幅 = 群高 ÷「時刻 ≤ s − up_window
+          的最後一筆成交價」− 1(窗前無成交 → 0)。n ≥ min_sweeps 且漲幅 ≥ up_pct → 候選;
+          群內每筆重算直到發訊(群高 / 量隨前綴長大),發過的群不再發。
+        - 冷卻:牆鐘 `mono`,沿規則模型;冷卻中不發也不武裝(下一群照常評)。
+        0 價 / 0 量 tick(壞資料)整段跳過:研究 loader 在分群前就濾掉,線上同語意,
+        不讓它打斷群的相鄰性。
+        `tick.time` 解析失敗(空字串)→ 退回牆鐘秒數當時刻軸(只在測試造得出來)。
+        """
+        price = tick.price_milli
+        if price <= 0 or tick.qty <= 0:
+            return []
+        secs = _tick_secs(key)
+        if secs is None:
+            secs = mono
+        cfg = self._cfg
+        # 回看價序列:保留最後一筆「時刻 ≤ s − up_window」的 tick 當基準(其餘更早的剪掉)
+        lookback = self._lookback.setdefault(code, deque())
+        lookback.append((secs, price))
+        cutoff = secs - cfg.sweep_up_window_secs
+        while len(lookback) >= 2 and lookback[1][0] <= cutoff:
+            lookback.popleft()
+        # 同毫秒群:時刻換了就開新群
+        group = self._sweep_group.get(code)
+        if group is None or group.time_key != key:
+            ask = tick.ask_milli
+            outer = ask is not None and ask > 0 and price >= ask
+            group = _SweepGroup(
+                time_key=key, first_milli=price, outer=outer, high_milli=price, qty=tick.qty
+            )
+            self._sweep_group[code] = group
+            return []  # 群首筆:層數 0,不可能達標
+        group.high_milli = max(group.high_milli, price)
+        group.qty += tick.qty
+        if not group.outer or group.fired:
+            return []
+        levels = round((group.high_milli - group.first_milli) / tick_size_milli(group.first_milli))
+        if not group.qualified:
+            if price <= group.first_milli or levels < cfg.sweep_min_levels:
+                return []
+            group.qualified = True
+            sweeps = self._sweeps.setdefault(code, deque())
+            sweeps.append(secs)
+        sweeps = self._sweeps[code]
+        window_start = secs - cfg.sweep_cluster_window_secs
+        while sweeps and sweeps[0] < window_start:
+            sweeps.popleft()
+        n_sweeps = len(sweeps)
+        base = lookback[0]
+        up_pct = (group.high_milli / base[1] - 1) * 100 if base[0] <= cutoff else 0.0
+        if n_sweeps < cfg.sweep_min_sweeps or up_pct < cfg.sweep_up_pct:
+            return []
+        if "sweep_cluster" not in enabled:
+            return []
+        bucket = (code, "sweep_cluster", "")
+        if self._cooling(bucket, mono):
+            return []
+        self._arm(bucket, mono, cfg.sweep_cooldown_secs)
+        group.fired = True
+        return [
+            SignalEvent(
+                kind="sweep_cluster",
+                code=code,
+                price_milli=price,
+                time=key[:8],
+                time_key=key,
+                levels=(),
+                direction=None,
+                pct=up_pct,
+                touch_count=self._bump(bucket),
+                detail={
+                    "n30": n_sweeps,
+                    "levels": levels,
+                    "qty": group.qty,
+                    "up_pct": up_pct,
+                },
             )
         ]
 
