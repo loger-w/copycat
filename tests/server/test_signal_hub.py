@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -24,6 +24,7 @@ from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
+from copycat.server.signal_policy import PeerQuote
 from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RuleError, default_rules, load_rules
 from copycat.signals_config import SignalsConfig
 from copycat.stock_watchlist import Group
@@ -275,9 +276,9 @@ class _Watch:
             raise RuntimeError("engine quotes 壞了")
         return dict(self.quotes)
 
-    def peers_fn(self) -> dict[str, dict[str, Any]]:
+    def peers_fn(self) -> dict[str, PeerQuote]:
         self.peers_calls += 1
-        return {code: dict(q) for code, q in self.peers.items()}
+        return {code: cast("PeerQuote", dict(q)) for code, q in self.peers.items()}
 
 
 #: `_Harness(daily_bars=...)` 的「未傳」哨兵(None 是合法且有意義的值)

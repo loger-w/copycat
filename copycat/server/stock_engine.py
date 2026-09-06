@@ -21,7 +21,6 @@ from typing import AsyncGenerator, Callable, Iterable, Protocol
 from copycat.live.stock_models import (
     TRIAL_WINDOWS,
     StockTick,
-    _best_limit_price,
     is_trial_window,
     parse_stock_realtime,
     to_milli,
@@ -36,6 +35,7 @@ from copycat.live.stock_source import (
 from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.bars import BarsResult
+from copycat.server.signal_policy import PeerQuote, locked_up_flag, touched_upper_flag
 from copycat.server.ws import WsBroadcaster
 from copycat.stkfut_map import load_map
 
@@ -760,19 +760,18 @@ class StockEngine:
             out[code] = (name, self._quote_payload(code)["chg_pct"])
         return out
 
-    def policy_quotes(self) -> dict[str, dict]:
+    def policy_quotes(self) -> dict[str, PeerQuote]:
         """自選各檔的政策層行情快照(spec #192;hub 以 `peers_fn` 注入,只在掃單簇事件時讀)。
 
-        每檔 {name, price, ref, upper, chg_pct, high, touched_upper, locked_up}:
-        - `touched_upper` = 鎖過 = 當日成交價曾觸及漲停價(`high >= upper`);
-        - `locked_up` = 當下鎖死 = 現價 = 漲停且限價賣側空(`_best_limit_price(asks) is None`,
-          鎖停時 TC4 第一檔是市價佇列 0,不算限價 —— 與訊號層 `_context` 同一把尺)。
-        no_data / 缺 meta / 未成交 → 值欄位 None **但鍵仍在**(同 `quotes()`:整檔缺席會讓
-        「族群有幾檔」跟著行情波動)。`chg_pct` 走 `_quote_payload` 的唯一定義(分母 ref)。
-        名單取 local 參照、不迭代 `_states`(R16,理由見 `quotes()`)。
+        每檔 `PeerQuote` {name, price, ref, upper, chg_pct, high, touched_upper, locked_up}:
+        鎖過 / 當下鎖死兩個旗標走 `signal_policy.touched_upper_flag / locked_up_flag`(hub 對
+        自己那一檔用同一份定義)。no_data / 缺 meta / 未成交 → 值欄位 None **但鍵仍在**
+        (同 `quotes()`:整檔缺席會讓「族群有幾檔」跟著行情波動)。`chg_pct` 走
+        `_quote_payload` 的唯一定義(分母 ref、round 2)。名單取 local 參照、不迭代 `_states`
+        (R16,理由見 `quotes()`)。
         """
         codes = self._watchlist
-        out: dict[str, dict] = {}
+        out: dict[str, PeerQuote] = {}
         for code in codes:
             state = self._states.get(code)
             no_data = code in self._no_data
@@ -783,18 +782,16 @@ class StockEngine:
             high = state.high_milli if state is not None and not no_data else None
             book = state.book if state is not None and not no_data else None
             asks = book.asks if book is not None else []
-            out[code] = {
-                "name": meta.name if meta is not None else "",
-                "price": price,
-                "ref": meta.ref_milli if meta is not None else None,
-                "upper": upper,
-                "chg_pct": self._quote_payload(code)["chg_pct"],
-                "high": high,
-                "touched_upper": (high >= upper) if high is not None and upper is not None else None,
-                "locked_up": (price == upper and _best_limit_price(asks) is None)
-                if price is not None and upper is not None
-                else None,
-            }
+            out[code] = PeerQuote(
+                name=meta.name if meta is not None else "",
+                price=price,
+                ref=meta.ref_milli if meta is not None else None,
+                upper=upper,
+                chg_pct=self._quote_payload(code)["chg_pct"],
+                high=high,
+                touched_upper=touched_upper_flag(high, upper),
+                locked_up=locked_up_flag(price, upper, asks),
+            )
         return out
 
     def group_snapshot(self, codes: list[str]) -> dict[str, dict]:
