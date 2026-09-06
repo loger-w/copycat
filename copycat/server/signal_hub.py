@@ -137,6 +137,9 @@ def _kind_text(row: dict[str, Any]) -> str:
         return f"爆拉回檔 {value:.2f}%"
     if kind == "vol_burst":
         return f"爆量 {value:.1f} 倍"
+    if kind == "sweep_cluster":
+        # pct = 60 s 漲幅(%);與前端 `signal-model.kindLabel` 逐字對齊(spec #192)
+        return f"掃單簇 {value:+.2f}%"
     if kind == "limit_lock":
         return "鎖漲停" if direction == "up" else "鎖跌停"
     if kind == "limit_open":
@@ -838,7 +841,8 @@ class SignalHub:
 
     def _emit(self, event: SignalEvent, rule: Rule, state: StockDayState) -> None:
         trade_date = self._trade_date_fn()
-        payload = {
+        notify = rule["notify_discord"]
+        payload: dict[str, Any] = {
             "type": "signal",
             "id": _event_id(trade_date, rule["id"], event),
             "rule_id": rule["id"],
@@ -852,9 +856,14 @@ class SignalHub:
             "direction": event.direction,
             "pct": event.pct,
             "touch_count": event.touch_count,
+            # spec #192:每列帶 `notify`(= 規則「通知」開關;前端據此閘 toast / 嗶 / 桌面通知,
+            # 缺欄視為 true)。jsonl / WS 永遠不受它影響(W3)。
+            "notify": notify,
         }
+        if event.detail is not None:
+            payload["detail"] = dict(event.detail)  # 只有掃單簇列帶;既有 kind 列形狀不變(W1)
         self._publish(payload)  # WS 同步先送(前端要即時)
-        self._enqueue({**payload, "trade_date": trade_date}, notify=rule["notify_discord"])
+        self._enqueue({**payload, "trade_date": trade_date}, notify=notify)
 
     def _enqueue(self, row: dict, *, notify: bool) -> None:
         """`notify` 只擋 Discord:jsonl 是歷史真相源,關通知不等於不留紀錄。"""
