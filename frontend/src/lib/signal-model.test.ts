@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   formatGroupToastText,
   groupKindLabels,
+  groupPolicyTags,
   groupRuleNames,
   groupSignals,
   kindLabel,
   mergeSignals,
+  policyContextText,
+  shouldNotify,
   type SignalMsg,
 } from "@/lib/signal-model";
 
@@ -301,5 +304,114 @@ describe("formatGroupToastText", () => {
     const twin = sig({ id: "b", kind: "surge", pct: 5.234, rule_name: "另一條" });
     const [group] = groupSignals([twin, a]);
     expect(formatGroupToastText(group!)).toBe("2330 台積電 爆拉 +5.23% 1234.5");
+  });
+});
+
+/** spec #192:政策列(kind=policy)+ raw 掃單簇列。欄位形狀 = 後端 `signal_hub._emit_policies`。 */
+function policySig(overrides: Partial<SignalMsg> = {}): SignalMsg {
+  return sig({
+    id: "2026-08-04-r-1-000-2330-policy-P-10:01:30.500",
+    kind: "policy",
+    policy: "P",
+    time: "10:01:30",
+    price: 50_400,
+    pct: 0.8,
+    notify: true,
+    first_of_day: true,
+    late: false,
+    tod: "0930",
+    sweep: { n30: 2, levels: 2, qty: 6, up_pct: 0.8 },
+    self: { chg_pct: 0.8, to_limit_pct: 9.127, touched_upper: false, locked_up: false },
+    groups: ["記憶體"],
+    screen_member: false,
+    peers: [
+      { code: "2344", name: "華邦電", chg_pct: 1.0, touched_upper: false, locked_up: false },
+      { code: "2408", name: "南亞科", chg_pct: -0.5, touched_upper: false, locked_up: false },
+    ],
+    peers_up: 0,
+    peer_max: { code: "2344", name: "華邦電", chg_pct: 1.0 },
+    leader: false,
+    peer_touched: false,
+    t1_open: null,
+    t1_date: null,
+    t2_open: null,
+    t2_date: null,
+    rule_name: "掃單簇",
+    ...overrides,
+  });
+}
+
+describe("kindLabel — spec #192 新 kind(與後端 `_kind_text` 逐字對齊)", () => {
+  it("掃單簇附 60 s 漲幅(帶正號、兩位小數);pct 缺值只印名", () => {
+    expect(kindLabel(sig({ kind: "sweep_cluster", pct: 0.8 }))).toBe("掃單簇 +0.80%");
+    expect(kindLabel(sig({ kind: "sweep_cluster", pct: null }))).toBe("掃單簇");
+  });
+
+  it("政策列 = 「政策 <標記>」;policy 缺值只印「政策」", () => {
+    expect(kindLabel(policySig())).toBe("政策 P");
+    expect(kindLabel(policySig({ policy: "B-a" }))).toBe("政策 B-a");
+    expect(kindLabel(policySig({ policy: undefined }))).toBe("政策");
+  });
+
+  it("未知 kind 仍原樣回傳", () => {
+    expect(kindLabel(sig({ kind: "whatever" as SignalMsg["kind"] }))).toBe("whatever");
+  });
+});
+
+describe("shouldNotify(notify 欄閘)", () => {
+  it("notify=false → 不提示;true / 缺欄(舊後端 / 舊 jsonl)→ 提示", () => {
+    expect(shouldNotify(sig({ notify: false }))).toBe(false);
+    expect(shouldNotify(sig({ notify: true }))).toBe(true);
+    expect(shouldNotify(sig())).toBe(true);
+  });
+});
+
+describe("政策組:標記 / 文案 / toast", () => {
+  it("groupPolicyTags:到達序去重(items 新在前 → 反序),非政策列不算", () => {
+    const [group] = groupSignals([
+      policySig({ id: "bb", policy: "B-b" }),
+      policySig({ id: "ba", policy: "B-a" }),
+      sig({ id: "raw", kind: "sweep_cluster", time: "10:01:30", price: 50_400, pct: 0.8 }),
+    ]);
+    expect(groupPolicyTags(group!)).toEqual(["B-a", "B-b"]);
+  });
+
+  it("政策列在 kind 段顯示為掃單簇文案(標記另走 chip),與同 tick 的 raw 掃單簇列去重成一段", () => {
+    const [group] = groupSignals([
+      policySig(),
+      sig({ id: "raw", kind: "sweep_cluster", time: "10:01:30", price: 50_400, pct: 0.8 }),
+    ]);
+    expect(groupKindLabels(group!).map((s) => s.label)).toEqual(["掃單簇 +0.80%"]);
+  });
+
+  it("toast 文案:政策組帶標記前綴,價取組錨(字面量)", () => {
+    const [single] = groupSignals([policySig()]);
+    expect(formatGroupToastText(single!)).toBe("【P】2330 台積電 掃單簇 +0.80% 50.4");
+    const [two] = groupSignals([
+      policySig({ id: "bb", policy: "B-b", price: 50_500 }),
+      policySig({ id: "ba", policy: "B-a" }),
+    ]);
+    expect(formatGroupToastText(two!)).toBe("【B-a・B-b】2330 台積電 掃單簇 +0.80% 50.4");
+  });
+
+  it("policyContextText:同伴≥3% n・鎖過 有/無・較前收/停距(一位小數;漲停缺 → -)", () => {
+    expect(policyContextText(policySig())).toBe("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%");
+    expect(
+      policyContextText(
+        policySig({
+          peers_up: 2,
+          peer_touched: true,
+          self: { chg_pct: 3.917, to_limit_pct: null, touched_upper: false, locked_up: false },
+        }),
+      ),
+    ).toBe("同伴≥3% 2・鎖過 有・+3.9%/停 -");
+  });
+
+  it("舊後端 / 缺欄的政策列不印 NaN 或 undefined", () => {
+    const bare = sig({ kind: "policy", policy: "S", pct: null });
+    expect(kindLabel(bare)).toBe("政策 S");
+    expect(policyContextText(bare)).toBe("同伴≥3% -・鎖過 -・-/停 -");
+    const [group] = groupSignals([bare]);
+    expect(formatGroupToastText(group!)).toBe("【S】2330 台積電 掃單簇 1234.5");
   });
 });

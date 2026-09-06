@@ -674,3 +674,61 @@ describe("useSignalAlerts — 音效與靜音", () => {
     expect(notified).toEqual([]);
   });
 });
+
+describe("useSignalAlerts — notify 閘與政策列(spec #192)", () => {
+  function policy(id: string): SignalMsg {
+    return {
+      ...sig(id),
+      id: `2026-08-04-r-1-000-${id}-policy-P-10:01:30.500`,
+      kind: "policy",
+      policy: "P",
+      time: "10:01:30",
+      price: 50_400,
+      pct: 0.8,
+      notify: true,
+      sweep: { n30: 2, levels: 2, qty: 6, up_pct: 0.8 },
+    };
+  }
+
+  it("notify=false → 不 toast、不嗶、背景也不發桌面通知", () => {
+    hidden = true;
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal({ ...sig("quiet"), notify: false }));
+    expect(hook.result.current.toasts.length).toBe(0);
+    expect(oscillators).toBe(0);
+    act(() => vi.advanceTimersByTime(6_000));
+    expect(notified).toEqual([]);
+  });
+
+  it("notify 缺欄(舊後端)→ 照舊 toast + 一聲", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(sig("legacy")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(oscillators).toBe(1);
+  });
+
+  it("政策列 → toast 帶標記、嗶兩聲", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(policy("2330")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.text).toBe("【P】2330 台積電 掃單簇 +0.80% 50.4");
+    expect(oscillators).toBe(2);
+  });
+
+  it("同 tick 兩條政策 → 一張 toast、標記並列;第二則併入不再嗶", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => emitSignal(policy("2330")));
+    act(() => emitSignal({ ...policy("2330"), id: "x-B-a", policy: "B-a" }));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(hook.result.current.toasts[0]?.text).toBe("【P・B-a】2330 台積電 掃單簇 +0.80% 50.4");
+    expect(oscillators).toBe(2);
+  });
+
+  it("靜音時政策列也不嗶(toast 照出)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    act(() => hook.result.current.setSoundOn(false));
+    act(() => emitSignal(policy("2330")));
+    expect(oscillators).toBe(0);
+    expect(hook.result.current.toasts.length).toBe(1);
+  });
+});
