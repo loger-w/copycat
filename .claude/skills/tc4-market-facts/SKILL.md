@@ -68,6 +68,14 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   時刻是假的(極安靜)。任何跨段用 tick 時刻的功能一律走 `FilledTime`(UTC HHMMSS,zfill(6);`index_engine` 對
   IX0001 **不能**用它 —— 指數 quote 的 FilledTime 恆 `'0'`,走牆鐘,見下方 08-26 bullet;實例:MES 的 PreciseTime 與 FilledTime 同值 `"41256"` = 04:12:56 UTC),
   缺值才退回本機時鐘。(Trigger:跨段 tick 時刻 / 分鐘聚合 / 時序去重)
+- **同毫秒群 = 掃單:個股同一檔相鄰且 `PreciseTime` 毫秒相同的多筆成交,是一筆主動單一次吃掉多檔的痕跡**
+  (2026-09-05~07 研究 1,883 股票日實證;spec #192 線上化):REALTIME 與歷史 TICKS 的毫秒同源(`PreciseTime` 12 位取前 9 位 =
+  `StockTick.time` 的 `.fff`,研究 `pull_ticks.py` 用 `us // 1000` 同一刀),線上 `SignalDetector._eval_sweep` 與研究
+  `combo_events.find_sweeps` 才能對到同一群。首筆外盤判準用 `tick.ask_milli > 0 and price >= ask`,**不用 `tick.side`**
+  (鎖停日 `ask` 是市價佇列 0,`derive_side` 會判 outer,研究要求 ask > 0)。**即時判(群內首次達標即發)vs 群結束才判**:
+  427,737 群 / 8,757 合格掃單,即時判多發 60(0.7%)、零漏發;2,925 個發訊筆早於群末、2,747 個層數低於群結束值
+  (量測腳本研究目錄 `scripts/sweep_prefix_scan.py`;golden fixture `tests/fixtures/sweep_cluster_golden.json`)。
+  (Trigger:任何以 tick 時刻分群 / 掃單定義 / 想改用 side 判外盤)
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
   成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**TradeStatus=1 亦 = 盤中延緩撮合中**(2026-08-28 prod 蒐證:開盤段 11 檔
