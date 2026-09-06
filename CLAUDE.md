@@ -121,6 +121,7 @@ docs/superpowers/         # spec 與 implementation plan
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
 | 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定資料日;`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內 21:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
+| **訊號影子期判準(spec #192,2026-09-08 起四週)** | 盤後:`curl -s 127.0.0.1:8721/api/stock/signals/rules` 含「掃單簇」且 CDP 穿越 / 爆量 `notify_discord=false`;啟動 log 有「T+1/T+2 回填」一行(無 stock engine 時是「無日 K 來源,worker 不啟動」)。盤中:`grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記);Discord 收到四行卡且同 tick 合併;rail 政策列三行 + toast 帶【標記】+ 雙嗶;CDP 穿越 / 爆量 jsonl 有列但無 Discord / 無 toast;`grep 佇列滿 logs/server-*.log` 為 0;13:40 log「回填 n 列」;次日 `t1_open` 已補、再次日 `t2_open` | repo root |
 
 完成前 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過
 four/five 兩份 replay)。venv = Python 3.13(`py -3.13 -m venv .venv`;`py` 預設 3.14 別直接用)。
@@ -350,6 +351,42 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   ~60 張卡、訊號切組可能切進去,零錯誤訊號;`tests/server/test_screen_engine.py::test_screen_group_name_parity_with_frontend`
   直讀前端字面釘住。虛擬「未分組」的 `selectedGroup` 值是 sentinel `UNGROUPED_PICK`(`__ungrouped__`,不落檔),
   與後端無契約。
+- **訊號列 `notify` 欄 = 「通知」閘,缺欄視為 true**(2026-09-07 起,spec #192):產生點 `copycat/server/signal_hub.py::_emit`
+  (一般列 = 規則 `notify_discord` 開關;語意自此擴為 Discord + 瀏覽器 toast / 嗶 / 桌面通知,wire 名不改)與
+  `_emit_policies`(政策列 = 同檔同政策當日首筆且時刻 ≤ `policy_push_end`)。讀者 = 後端 `_enqueue(notify=)`(Discord 佇列)、
+  前端 `lib/signal-model.ts::shouldNotify`(`notify !== false`;`hooks/useSignalAlerts.ts` 的 toast / 嗶 / 桌面通知全走它)、
+  `components/stock/SignalRail.tsx`(全組 quiet 淡色仍列)。jsonl / WS / rail **永遠不受它影響**(真相源)。漂掉的症狀:
+  後端漏帶 → 前端當 true 全響(CDP 穿越 / 爆量停推播靜默失效);前端改比 `=== true` → 舊 jsonl 列 / 舊後端整天無聲。
+  `tests/server/test_signal_hub.py::TestSweepCluster::test_quiet_and_loud_rules_stamp_notify_per_rule` +
+  `useSignalAlerts.test.tsx`「notify 閘」節釘住。
+- **政策列形狀:`kind="policy"` + `policy ∈ {P, B-a, B-b, S}` + id `<日>-<規則id>-<代號>-policy-<標記>-<時刻鍵>`**
+  (2026-09-07 起,spec #192):產生點 `signal_hub.py::_emit_policies`(欄位全集見該函式;既有 signal 欄逐字保留,
+  `pct` = 60 s 漲幅、`levels=[]`、`direction=null`;raw 掃單簇列 `kind="sweep_cluster"` 另一列帶 `detail`)。讀者 =
+  前端 `lib/signal-model.ts`(`SignalKind` 多兩值;`groupPolicyTags` / `groupPolicyAnchor` / `policyContextText` /
+  `policyTitle`;政策列在 kind 段顯示掃單簇文案、標記走 chip / 【】前綴)、`SignalRail.tsx`(三行 + chip 色)、
+  `useSignalAlerts.ts`(雙嗶)、Discord `format_policy_group_text`(四行卡;批次含政策列即改版、不掛同群摘要)。
+  文案「掃單簇 +x.xx%」「政策 P」前後端逐字對齊(`_kind_text` ↔ `kindLabel`)。後端改 kind 字面 / 標記集合 →
+  前端退回英文代號、chip 消失、toast 無前綴,零錯誤訊號;`tests/server/test_signal_policy.py` +
+  `signal-model.test.ts`「政策組」節釘住。
+- **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
+  `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
+  `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值
+  30 / 2 / 2 / 0.3 / 60 由 `signal-param-parity.test.ts` 字面 golden 釘。掃單簇**定義**另由研究 golden fixture
+  `tests/fixtures/sweep_cluster_golden.json`(產生腳本 `record_sweep_cluster_golden.py`,參考碼逐字沿研究
+  `combo_events.py`)釘住:線上 `SignalDetector._eval_sweep` 必須與 `expected_prefix` 集合相等、研究事件時刻 ⊆ 線上。
+- **T+1 / T+2 回填原地補欄 + 離線讀者契約**(2026-09-07 起):產生點 `signal_hub.py::backfill_policy_outcomes`
+  (start 後一次 + 每日 `policy_outcome_time`;只碰日期**同時小於** hub 日別與牆鐘日的最近 `policy_outcome_days` 個日檔;
+  只補 `t1_open`/`t1_date`/`t2_open`/`t2_date` 為 null 的政策列;只重寫被補的列、其餘列(含空行 / 壞行)**原文逐字保留**、
+  行尾原樣、整檔 `atomic_write_bytes` 覆寫;日 K 來源 `outcome_bars` = `engine.bars_range(tf="D")`,`daily_bars` 的
+  `DailyBar` 沒有 open 不可用)。研究目錄離線讀者(`scripts/signal_join.py` 等)逐列讀 `s["kind"]` 無防禦 →
+  **不新增列型、每列 `kind` 恆在、既有列只加欄不改欄**(W1)。漂掉的症狀:回填改成整檔 dumps → 舊列鍵序 / 浮點字面
+  變動,對帳 diff 整檔紅;`tests/server/test_signal_outcome.py` byte 比對釘住。
+- **族群 = 自選群組扣「盤前篩選」(恆)與 `policy_exclude_groups`(設定,預設 `["ALL IN"]`)**(2026-09-07 起):
+  產生點 `copycat/server/signal_policy.py::resolve_groups`(盤前篩選群組名讀 `screen_engine.SCREEN_GROUP`,與上條
+  「盤前篩選群組名前後端同字面」同一顆常數;排除組名讀 `SignalsConfig.policy_exclude_groups`,tuple 欄由
+  `configs/signals.json` 覆寫);多組取成員聯集(保序去重)並 WARNING 一檔一天一次;`screen_member` = 在盤前篩選群組
+  (S 政策母體)。改群組名 = 改族群(user 自己維護);改 `SCREEN_GROUP` 字面 → 盤前篩選那 ~60 檔會被當族群、S 母體變空,
+  零錯誤訊號;`tests/server/test_signal_policy.py::TestGroupResolution` 釘住。
 
 ## 5. 資料源
 
