@@ -21,8 +21,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
+from copycat.live.stock_models import _best_limit_price
 from copycat.stock_watchlist import Group
 
 __all__ = [
@@ -30,15 +31,44 @@ __all__ = [
     "PeerQuote",
     "PolicyContext",
     "evaluate_policies",
+    "locked_up_flag",
     "resolve_groups",
     "tod_bucket",
+    "touched_upper_flag",
 ]
 
 #: 四條政策的固定序(同一事件命中多條時列的順序 / Discord 標記並列的順序)。
 POLICIES: tuple[str, ...] = ("P", "B-a", "B-b", "S")
 
-#: 引擎 `policy_quotes()` 一檔的形狀(hub 只讀 name / chg_pct / touched_upper / locked_up)。
-PeerQuote = dict[str, Any]
+
+class PeerQuote(TypedDict):
+    """引擎 `policy_quotes()` 一檔的形狀(engine 產生、hub 讀 name / chg_pct / touched_upper /
+    locked_up;三邊共用同一個型別,review F-05)。值欄位 None = no_data / 缺 meta / 未成交。"""
+
+    name: str
+    price: int | None
+    ref: int | None
+    upper: int | None
+    chg_pct: float | None
+    high: int | None
+    touched_upper: bool | None
+    locked_up: bool | None
+
+
+def touched_upper_flag(high: int | None, upper: int | None) -> bool | None:
+    """鎖過 = 當日成交價曾觸及漲停價(`high >= upper`);任一缺 → None(不是 False:不知道)。"""
+    return (high >= upper) if high is not None and upper is not None else None
+
+
+def locked_up_flag(
+    price: int | None, upper: int | None, asks: list[tuple[int, int]]
+) -> bool | None:
+    """當下鎖死 = 現價 = 漲停且限價賣側空(鎖停時 TC4 第一檔是市價佇列 0,不算限價 ——
+    `_best_limit_price` 與訊號層 `_context` 同一把尺);價 / 漲停任一缺 → None。
+    engine `policy_quotes`(同伴)與 hub `_emit_policies`(自己)共用這一份定義(review F-03)。"""
+    if price is None or upper is None:
+        return None
+    return price == upper and _best_limit_price(asks) is None
 
 
 @dataclass(frozen=True)
@@ -97,7 +127,7 @@ def evaluate_policies(
     quoted: list[tuple[str, str, float]] = []
     peer_touched = False
     for peer in peer_codes:
-        q = quotes.get(peer) or {}
+        q: dict[str, Any] = dict(quotes.get(peer) or {})
         raw_chg = q.get("chg_pct")
         peer_chg = float(raw_chg) if isinstance(raw_chg, (int, float)) else None
         touched = q.get("touched_upper")

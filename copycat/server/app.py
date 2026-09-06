@@ -61,6 +61,7 @@ from copycat.server.discord_bot import Bot, create_bot
 from copycat.server.overlay import OverlayCache, build_overlay
 from copycat.server.shutdown_budget import SLOW_CLOSE_WARN_SECS
 from copycat.server.signal_hub import SignalHub
+from copycat.server.signal_policy import PeerQuote
 from copycat.server.stkfut_catalog import StkfutCatalog
 from copycat.server.stock_engine import (
     _CLIENT_QUEUE_MAX,
@@ -808,7 +809,7 @@ def create_app(
                     # 同群摘要的價格面沒有來源 → None(hub 既有容忍:摘要空字串)
                     quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None
                     # 政策層行情快照同理 None(spec #192:同伴無報價 → P / B 不評,S 照評)
-                    peers_fn: Callable[[], dict[str, dict]] | None = None
+                    peers_fn: Callable[[], dict[str, PeerQuote]] | None = None
                     # T+1 / T+2 回填 worker 同理不啟動(hub 印一行 INFO)
                     outcome_bars: Callable[[str, str, str], Awaitable[list[Bar]]] | None = None
                 else:

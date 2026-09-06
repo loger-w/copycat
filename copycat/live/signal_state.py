@@ -87,7 +87,8 @@ SWITCH_KEYS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class SignalEvent:
-    kind: str  # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open | sweep_cluster
+    # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open | sweep_cluster
+    kind: str
     code: str
     price_milli: int
     time: str  # 台北 HH:MM:SS(= time_key[:8];顯示用)

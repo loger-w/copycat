@@ -222,6 +222,12 @@ export function groupSignals(signals: SignalMsg[]): SignalGroup[] {
   return groups;
 }
 
+/** 組內訊號的**到達序**(`items` 是「新在前」→ 反序)。四個 group* 函式共用同一把尺:
+ *  段序 / 標記序 / 規則名序都是到達序,與 Discord 合併訊息 `rows[0]` = 最早到同口徑。 */
+function arrivalOrder(group: SignalGroup): SignalMsg[] {
+  return [...group.items].reverse();
+}
+
 /** 列 / toast 上的 kind 段文案:政策列顯示為**掃單簇文案**(標記另走 chip / 【】前綴),
  *  所以同 tick 的 raw 掃單簇列與政策列會去重成一段;其餘 kind = `kindLabel`。
  *  `kindLabel(policy)` 本身仍是「政策 P」(後端文案表的對齊項,單則路徑用)。 */
@@ -237,7 +243,7 @@ function displayLabel(sig: SignalMsg): string {
 export function groupKindLabels(group: SignalGroup): KindSegment[] {
   const seen = new Set<string>();
   const out: KindSegment[] = [];
-  for (const sig of [...group.items].reverse()) {
+  for (const sig of arrivalOrder(group)) {
     const label = displayLabel(sig);
     if (seen.has(label)) continue;
     seen.add(label);
@@ -250,7 +256,7 @@ export function groupKindLabels(group: SignalGroup): KindSegment[] {
 export function groupPolicyTags(group: SignalGroup): PolicyTag[] {
   const seen = new Set<PolicyTag>();
   const out: PolicyTag[] = [];
-  for (const sig of [...group.items].reverse()) {
+  for (const sig of arrivalOrder(group)) {
     const tag = sig.policy;
     if (!isPolicy(sig) || tag === undefined || seen.has(tag)) continue;
     seen.add(tag);
@@ -261,7 +267,7 @@ export function groupPolicyTags(group: SignalGroup): PolicyTag[] {
 
 /** 組內**最早到**的政策列(脈絡欄位的來源;同 tick 各政策列脈絡相同,只有標記不同)。 */
 export function groupPolicyAnchor(group: SignalGroup): SignalMsg | undefined {
-  return [...group.items].reverse().find(isPolicy);
+  return arrivalOrder(group).find(isPolicy);
 }
 
 function pct1(v: number | null | undefined, signed: boolean): string {
@@ -331,7 +337,7 @@ export function formatGroupToastText(group: SignalGroup): string {
 export function groupRuleNames(group: SignalGroup): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const sig of [...group.items].reverse()) {
+  for (const sig of arrivalOrder(group)) {
     const name = sig.rule_name;
     if (name === undefined || name === "" || seen.has(name)) continue;
     seen.add(name);
