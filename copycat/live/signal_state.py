@@ -57,7 +57,7 @@ _SESSION_START = _dt.time(9, 0)
 _SESSION_END = _dt.time(13, 30)  # end-exclusive:13:30 起是收盤撮合
 _EPOCH = _dt.datetime(1970, 1, 1)
 
-#: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵)。
+#: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵,spec #192 起六鍵)。
 KIND_SWITCH: dict[str, str] = {
     "cdp_cross": "cdp_cross",
     "surge": "surge_crash",
@@ -66,6 +66,7 @@ KIND_SWITCH: dict[str, str] = {
     "vol_burst": "vol_burst",
     "limit_lock": "limit_lock",
     "limit_open": "limit_lock",
+    "sweep_cluster": "sweep_cluster",
 }
 SWITCH_KEYS: tuple[str, ...] = (
     "cdp_cross",
@@ -73,6 +74,7 @@ SWITCH_KEYS: tuple[str, ...] = (
     "surge_pullback",
     "vol_burst",
     "limit_lock",
+    "sweep_cluster",
 )
 
 

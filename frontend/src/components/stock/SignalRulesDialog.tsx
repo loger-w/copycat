@@ -31,6 +31,7 @@ const KIND_LABEL: Record<RuleKind, string> = {
   surge_pullback: "爆拉回檔",
   vol_burst: "爆量",
   limit_lock: "鎖漲跌停",
+  sweep_cluster: "掃單簇",
 };
 
 /** CDP 線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 與 `signal-model.LEVEL_LABEL` 同款。 */
@@ -107,6 +108,9 @@ function ruleSummary(rule: SignalRule): string {
   }
   if (rule.kind === "vol_burst") {
     return `${num(p.ratio)} 倍 / ${num(p.window_secs)} 秒 · 開盤後 ${num(p.min_elapsed_min)} 分 · ${cooldown}`;
+  }
+  if (rule.kind === "sweep_cluster") {
+    return `${num(p.cluster_window_secs)} 秒內 ${num(p.min_sweeps)} 掃 · ${num(p.min_levels)} 層 · ${num(p.up_window_secs)} 秒漲 ${num(p.up_pct)}% · ${cooldown}`;
   }
   return cooldown;
 }
@@ -355,6 +359,7 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                         {rule.enabled ? null : (
                           <span className="shrink-0 text-[0.625rem] text-ink-dim">已停用</span>
                         )}
+                        {/* spec #192:開關語意 = 通知(Discord + 瀏覽器提示),文案跟著改 */}
                         {rule.notify_discord ? (
                           <span className="shrink-0 text-[0.625rem] text-ink-dim">Discord</span>
                         ) : null}
@@ -533,6 +538,7 @@ export function SignalRulesDialog({ open, rules, rulesError, onClose }: Props) {
                       checked={form.notify_discord}
                       onChange={(e) => patch({ notify_discord: e.target.checked })}
                     />
+                    {/* 「通知」= Discord + 瀏覽器 toast / 嗶 / 桌面通知(spec #192);關掉仍照記 jsonl、rail 淡色列出 */}
                     <span>Discord 通知</span>
                   </label>
                 </div>
