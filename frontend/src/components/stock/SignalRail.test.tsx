@@ -472,3 +472,105 @@ describe("SignalRail 標題資料日(SC-2)", () => {
     expect(titleText()).toBe("今日訊號");
   });
 });
+
+describe("SignalRail 政策列(spec #192)", () => {
+  const POLICY = sig({
+    id: "2026-08-04-r-1-000-2330-policy-P-10:01:30.500",
+    kind: "policy",
+    policy: "P",
+    time: "10:01:30",
+    price: 50_400,
+    direction: null,
+    pct: 0.8,
+    notify: true,
+    first_of_day: true,
+    late: false,
+    tod: "0930",
+    sweep: { n30: 2, levels: 2, qty: 6, up_pct: 0.8 },
+    self: { chg_pct: 0.8, to_limit_pct: 9.127, touched_upper: false, locked_up: false },
+    groups: ["記憶體"],
+    screen_member: false,
+    peers: [{ code: "2344", name: "華邦電", chg_pct: 1.0, touched_upper: false, locked_up: false }],
+    peers_up: 0,
+    peer_max: { code: "2344", name: "華邦電", chg_pct: 1.0 },
+    leader: false,
+    peer_touched: false,
+    rule_name: "掃單簇",
+  });
+  const RAW = sig({
+    id: "2026-08-04-r-1-000-2330-sweep_cluster---10:01:30.500",
+    kind: "sweep_cluster",
+    time: "10:01:30",
+    price: 50_400,
+    direction: null,
+    pct: 0.8,
+    notify: false,
+    rule_name: "掃單簇",
+  });
+
+  it("政策列三行:第一行沿用、第二行 chip + 掃單簇文案 + 價、第三行族群脈絡;hover 全文", () => {
+    renderRail({ signals: [POLICY] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const [text = ""] = rowTexts();
+    expect(text).toContain("10:01");
+    expect(text).toContain("2330");
+    const chip = list.getByText("P");
+    expect(chip.getAttribute("data-testid")).toBe("policy-chip");
+    expect(chip.className).toContain("text-accent");
+    expect(list.getByText("掃單簇 +0.80%").className).toContain("text-bull");
+    expect(text).toContain("50.4");
+    const context = list.getByText("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%");
+    expect(context.getAttribute("title")).toContain("記憶體");
+    expect(context.getAttribute("title")).toContain("2344華邦電 +1.0%");
+    expect(context.getAttribute("title")).toContain("較前收 +0.80%");
+    expect(context.getAttribute("title")).toContain("距漲停 9.13%");
+  });
+
+  it("chip 色:P = accent、B-a / B-b = bull、S = 灰", () => {
+    renderRail({
+      signals: [
+        sig({ ...POLICY, id: "s", policy: "S", time: "10:03:00" }),
+        sig({ ...POLICY, id: "bb", policy: "B-b", time: "10:02:00" }),
+        sig({ ...POLICY, id: "ba", policy: "B-a", time: "10:02:00" }),
+        POLICY,
+      ],
+    });
+    const chips = screen.getAllByTestId("policy-chip");
+    const byText = Object.fromEntries(chips.map((c) => [c.textContent, c.className]));
+    expect(byText["P"]).toContain("text-accent");
+    expect(byText["B-a"]).toContain("text-bull");
+    expect(byText["B-b"]).toContain("text-bull");
+    expect(byText["S"]).toContain("text-ink-dim");
+  });
+
+  it("同 tick 政策 + raw 掃單簇 → 一列,掃單簇文案只一段,chip 一枚", () => {
+    renderRail({ signals: [POLICY, RAW] });
+    expect(rowTexts().length).toBe(1);
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getAllByText("掃單簇 +0.80%").length).toBe(1);
+    expect(screen.getAllByTestId("policy-chip").length).toBe(1);
+  });
+
+  it("全組 quiet(notify=false)→ 列淡色;含 notify=true 或缺欄的列 → 不淡", () => {
+    renderRail({
+      signals: [
+        sig({ id: "q", kind: "cdp_cross", levels: ["nh"], direction: "from_below", pct: null, notify: false, time: "10:05:00" }),
+        sig({ id: "legacy", time: "10:04:00" }),
+        POLICY,
+      ],
+    });
+    const items = within(screen.getByTestId("signal-rail-list")).getAllByRole("listitem");
+    expect(items[0]?.className).toContain("opacity-50");
+    expect(items[1]?.className).not.toContain("opacity-50");
+    expect(items[2]?.className).not.toContain("opacity-50");
+  });
+
+  it("舊後端訊息(無 notify、無 policy 欄)照舊顯示,不 NaN 不空白", () => {
+    renderRail({ signals: [sig({ kind: "surge", direction: null, pct: 2.5 })] });
+    const [text = ""] = rowTexts();
+    expect(text).toContain("爆拉 +2.50%");
+    expect(text).not.toContain("NaN");
+    expect(text).not.toContain("undefined");
+    expect(screen.queryAllByTestId("policy-chip").length).toBe(0);
+  });
+});
