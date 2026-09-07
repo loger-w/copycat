@@ -11,8 +11,10 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 
+import copycat.server.bars as bars_mod
 from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server.app import create_app
 from copycat.server.mis import OtcSnap
@@ -395,10 +397,21 @@ class TestPartialLast:
 
         return Fixed()
 
-    def test_today_daily_bar_is_partial(self) -> None:
+    def test_today_daily_bar_is_partial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(13, 0))  # 定稿界前
         with make_client(index_source=self._src(_TODAY)) as c:
             r = c.get("/api/market/bars/TWSE?tf=D")
         assert r.json()["meta"]["partial_last"] is True
+
+    def test_today_daily_bar_after_final_time_is_not_partial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-165-review #5(09-07 盤點 C17):14:00 定稿界後今日那根已定稿,大盤頁不再印
+        「最後一根未收盤」。route 級釘一條:`is_partial_last` 的鐘是 `bars._now_time`。"""
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(14, 0))
+        with make_client(index_source=self._src(_TODAY)) as c:
+            r = c.get("/api/market/bars/TWSE?tf=D")
+        assert r.json()["meta"]["partial_last"] is False
 
     def test_old_daily_bar_is_not_partial(self) -> None:
         with make_client(index_source=self._src("2020-01-02")) as c:
