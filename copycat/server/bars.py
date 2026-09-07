@@ -112,6 +112,21 @@ class TaggedBars(NamedTuple):
     tag: str
 
 
+class PeriodBars(NamedTuple):
+    """`build_period` 的回值:bars + 資料源標籤 + **這一趟回的是不是界前寫入的快照**。
+
+    `pre_final` 與 bars 在同一個同步區塊內取值(pr-202-review F-05):定稿界後 `daily_put`
+    成功會 pop 界前標記、空手則不碰,所以界後標記還在 = 這一趟走的是 `_period_stale_or_empty`
+    墊背(TC4 下午掛掉,回的是 10:00 那份今日 bar)—— payload 與新鮮取數不可分,
+    `is_partial_last` 單看時刻會把它標成「已定稿」。route 端把本值餵進 `pre_final=`,
+    不再自己二讀快取(`|L` 鍵不外洩、也沒有「忘了傳就靜默退回舊 bug」的預設值)。
+    界前恆 True(標記一定在),與時刻判準同向。"""
+
+    bars: list[Bar]
+    tag: str
+    pre_final: bool
+
+
 #: 嚴重度:壞消息不可被好消息蓋掉,所以合併一律取 max。
 _STATUS_SEVERITY: dict[BarsStatus, int] = {"ok": 0, "timeout": 1, "disconnected": 2}
 
@@ -345,7 +360,8 @@ class BarsCache:
         return entry
 
     def pre_final_written_at(self, code: str, today: str) -> _dt.time | None:
-        """界前快照的寫入時刻(無界前標記 → None)。`_warn_if_not_advanced` 專用。"""
+        """界前快照的寫入時刻(無界前標記 → None)。讀者:`_warn_if_not_advanced`(比對用)與
+        `_period_pre_final`(只看在不在,`PeriodBars.pre_final`)。"""
         return self._daily_pre_final.get((code, today))
 
     def daily_stale(self, code: str, today: str) -> list[Bar] | None:
@@ -502,17 +518,6 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
 TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[TaggedBars]]
 
 
-def period_bars_pre_final(cache: BarsCache, code: str, today: _dt.date) -> bool:
-    """`build_period` 這一趟回給呼叫端的長窗日 K 是不是**界前寫入**的快照。
-
-    定稿界後 `daily_put` 成功會 pop 界前標記、空手則不碰 —— 所以界後標記還在 = 這一趟走的
-    是 `_period_stale_or_empty` 墊背(TC4 下午掛掉,回的是 10:00 那份今日 bar)。這條路的
-    payload 與新鮮取數不可分,`is_partial_last` 單看時刻會把它標成「已定稿」(two-axis review
-    spec S-01);呼叫端把本值餵進 `pre_final=`。界前恆 True(標記一定在),與時刻判準同向。
-    鍵格式 `|L` 只住在本模組(`build_period` 的同一條理由)。"""
-    return cache.pre_final_written_at(f"{code}|L", today.isoformat()) is not None
-
-
 def is_partial_last(bars: list[Bar], tf: str, today: _dt.date, *, pre_final: bool = False) -> bool:
     """最後一根是否仍在進行中(尚未收盤)。
 
@@ -526,7 +531,7 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date, *, pre_final: boo
     桶是否收盤與 14:00 無關。期指鍵的 tf=D 走同一支(payload 值同樣 14:00 後變 False),但
     期貨**前端**不讀這一格(`FuturesChart` 用錨定日,夜盤語意另一回事),不受影響。
 
-    `pre_final=True` = 呼叫端明知這批 bars 是界前快照(`period_bars_pre_final`,墊背路徑):
+    `pre_final=True` = 呼叫端明知這批 bars 是界前快照(`PeriodBars.pre_final`,墊背路徑):
     界後仍標「未收盤」—— 「meta 不說謊」(review P1-1)在墊背那條路也要成立。
     """
     if not bars:
@@ -546,10 +551,11 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date, *, pre_final: boo
 
 async def build_period(
     fetch: TaggedBarsFetcher, cache: BarsCache, code: str, today: _dt.date, period: str
-) -> TaggedBars:
+) -> PeriodBars:
     """大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。
 
-    `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。回 `(bars, source_tag)`。
+    `period`:`"D"` 原樣回、`"W"` / `"M"` 走 `aggregate_period`。回 `(bars, source_tag, pre_final)`
+    (`PeriodBars`;第三格的語意見該型別 docstring)。
 
     **獨立實作而不借 `build_daily`**(review P2-1):快取鍵一律 `f"{code}|L"`,
     `_daily` / `_daily_tag` / `_empty` 三處都用它 —— 只隔開 `_daily` 而讓 `_empty`
@@ -565,7 +571,7 @@ async def build_period(
         # tag 缺失回 unavailable 而非猜一個漂亮值 —— 猜值就是在最需要誠實的
         # 那條路上說謊(review P1-4 的同一條理由)
         tag = cache.daily_tag_get(key, day) or "unavailable"
-        return TaggedBars(_shaped(cached, period), tag)
+        return PeriodBars(_shaped(cached, period), tag, _period_pre_final(cache, key, day))
     if cache.empty_status(key, "D", 0) is not None:
         return _period_stale_or_empty(cache, key, day, period)
     start = today - _dt.timedelta(days=DAILY_LONG_WINDOW_DAYS)
@@ -576,11 +582,19 @@ async def build_period(
     if daily:
         cache.daily_tag_put(key, day, tag)
         cache.empty_clear(key, "D", 0)
-        return TaggedBars(_shaped(daily, period), tag)
+        return PeriodBars(_shaped(daily, period), tag, _period_pre_final(cache, key, day))
     # 大盤路徑的空態表述走自己的 source tag(`unavailable`),不吃三態 status ——
     # 存 "ok" = 現況等價,只是讓 `_empty` 的值型別一致(本輪 out of scope)
     cache.empty_mark(key, "D", 0, "ok")
     return _period_stale_or_empty(cache, key, day, period)
+
+
+def _period_pre_final(cache: BarsCache, key: str, day: str) -> bool:
+    """這一趟 `build_period` 回的 bars 是不是界前寫入的快照(`PeriodBars.pre_final` 的唯一算式)。
+
+    與 bars 在同一個同步區塊內取值:標記的 pop 與 `_daily` 的覆寫是 `daily_put` 內同一段
+    同步碼,所以「標記還在」⇔「`_daily` 仍是界前那份」對本趟恆成立。"""
+    return cache.pre_final_written_at(key, day) is not None
 
 
 def _shaped(bars: list[Bar], period: str) -> list[Bar]:
@@ -588,17 +602,19 @@ def _shaped(bars: list[Bar], period: str) -> list[Bar]:
     return bars if period == "D" else aggregate_period(bars, period)
 
 
-def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) -> TaggedBars:
+def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) -> PeriodBars:
     """定稿界作廢後 refetch 拿空手(或 15s 負向窗內)的墊背:有舊快照回舊快照 + 舊 tag,
     否則維持原本的空態表述。INFO 的理由見 `_daily_stale_or_empty`(pr-165-review #2)。"""
     stale = cache.daily_stale(key, day)
     if stale is None:
-        return TaggedBars([], "unavailable")
+        # 同走唯一算式(round-1 S-03):無快照時標記必也不在(`daily_put` 空手不寫、`prune`
+        # 同鍵同刪),值恆 False;空 bars 在 `is_partial_last` 早退,本格不可觀測
+        return PeriodBars([], "unavailable", _period_pre_final(cache, key, day))
     tag = cache.daily_tag_get(key, day) or "unavailable"
     # 與 _daily_stale_or_empty 同形(前綴/欄序:鍵、括號、根數)—— 括號欄這邊放來源 tag
     # (period 路徑無 status 欄);grep 錨點統一「墊背舊快照」(review S-1)
     logger.info("bars %s: 日 K refetch 空手(%s),墊背舊快照 %s 根", key, tag, len(stale))
-    return TaggedBars(_shaped(stale, period), tag)
+    return PeriodBars(_shaped(stale, period), tag, _period_pre_final(cache, key, day))
 
 
 async def build_minute(
