@@ -383,9 +383,6 @@ class SignalHub:
         # 整體 review F-28:0 / 負數會讓每趟只印「本趟零列」看似正常、T+1/T+2 永遠不補
         if not isinstance(cfg.policy_outcome_days, int) or cfg.policy_outcome_days < 1:
             raise ValueError(f"訊號設定 policy_outcome_days 必須 ≥ 1:{cfg.policy_outcome_days!r}")
-        # 整體 review F-28:0 / 負數會讓每趟只印「本趟零列」看似正常、T+1/T+2 永遠不補
-        if not isinstance(cfg.policy_outcome_days, int) or cfg.policy_outcome_days < 1:
-            raise ValueError(f"訊號設定 policy_outcome_days 必須 ≥ 1:{cfg.policy_outcome_days!r}")
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -1363,7 +1360,9 @@ class SignalHub:
                 same = next((b for b in bars if b["t"] == date), None)
                 for i, line, row in idxs:
                     dirty = False
-                    if (row.get("d_close") is None or row.get("d_high") is None) and same is not None:
+                    if (
+                        row.get("d_close") is None or row.get("d_high") is None
+                    ) and same is not None:
                         # 舊列(09-07 前)沒有這兩個鍵 → 一併加上(只加欄,W1)
                         row["d_close"], row["d_high"] = same["c"], same["h"]
                         dirty = True
