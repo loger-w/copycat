@@ -110,8 +110,12 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分(與基底無關)
       return;
     }
-    setGroupInput("");
-    commit((base) => rejectIfUnchanged(addGroup(base, name), base));
+    // 輸入框**只在成功後**清(與 submitRename 同一條規則;next-time 08-26 A4 留尾、09-07 盤點 B2):
+    // 撞名 / PUT 失敗是非同步從佇列冒出來的,先清等於把使用者打的字連同錯誤脈絡一起丟掉。
+    commit(
+      (base) => rejectIfUnchanged(addGroup(base, name), base),
+      () => setGroupInput(""),
+    );
   }
 
   function submitRename(from: string): void {
@@ -345,18 +349,9 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
               aria-label="群組"
               className="flex min-h-0 w-44 shrink-0 flex-col border-r border-line"
             >
-              <ul className="flex-1 overflow-y-auto">
-                {/* 「未分組」固定置頂。**必須有** —— 舊版的 checkbox 矩陣列的是 codes 全體,
-                    是「從自選整個移除」的唯一入口;改成分組視圖後若左欄沒有未分組,
-                    未分組的股票在 Dialog 裡完全不可見也刪不掉 = 功能退化。
-                    順序也與側欄一致(未分組在上、群組在後),不必重新學。 */}
-                {groupRow(UNGROUPED_LABEL, ungrouped.length, null)}
-                {wl.groups.map((g) => groupRow(g.name, g.codes.length, g.name))}
-                {wl.groups.length === 0 ? (
-                  <li className="px-2 py-2 text-xs text-ink-dim">尚無群組,可在下方新增</li>
-                ) : null}
-              </ul>
-              <div className="shrink-0 border-t border-line p-2">
+              {/* 新增列固定在左欄**頂端**、不隨清單捲(09-07 盤點 B2,user:群組多時每次要
+                  捲到最下面才按得到)。原本在清單底部的 border-t 版本已退役。 */}
+              <div className="shrink-0 border-b border-line p-2">
                 <div className="flex gap-1">
                   <input
                     aria-label="群組名稱"
@@ -378,6 +373,17 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                   </button>
                 </div>
               </div>
+              <ul className="flex-1 overflow-y-auto">
+                {/* 「未分組」固定置頂。**必須有** —— 舊版的 checkbox 矩陣列的是 codes 全體,
+                    是「從自選整個移除」的唯一入口;改成分組視圖後若左欄沒有未分組,
+                    未分組的股票在 Dialog 裡完全不可見也刪不掉 = 功能退化。
+                    順序也與側欄一致(未分組在上、群組在後),不必重新學。 */}
+                {groupRow(UNGROUPED_LABEL, ungrouped.length, null)}
+                {wl.groups.map((g) => groupRow(g.name, g.codes.length, g.name))}
+                {wl.groups.length === 0 ? (
+                  <li className="px-2 py-2 text-xs text-ink-dim">尚無群組,可在上方新增</li>
+                ) : null}
+              </ul>
             </section>
 
             {/* 右欄:目前選中群組的股票 */}

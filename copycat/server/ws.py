@@ -183,6 +183,25 @@ def _is_disconnect(exc: BaseException) -> bool:
     return isinstance(exc, WebSocketDisconnect) or _is_close_sent_error(exc)
 
 
+async def send_seed(websocket: WsConnection, payload: Any) -> bool:
+    """route 層在 `relay` **之前**自己送的首則 seed(txo-pnl / corr / river)。
+
+    對端在 accept 後、seed 前已斷:starlette 可能拋 `WebSocketDisconnect`,也可能是
+    uvicorn / starlette close_sent 後的 `RuntimeError`(`_is_close_sent_error` 那兩句原文)
+    —— 後者 route 只 catch `WebSocketDisconnect` 時會變成 uvicorn 的整段 ASGI traceback
+    (R4 N039 殘餘,next-time 2026-08-26)。兩種都回 False 讓呼叫端直接收尾;其餘例外照拋
+    (不懂的錯不寬鬆 catch,與 relay 同一條規則)。
+    """
+    try:
+        await websocket.send_json(payload)
+    except (WebSocketDisconnect, RuntimeError) as exc:
+        if not _is_disconnect(exc):
+            raise
+        logger.debug("seed 未送出:對端已斷(%r)", exc)
+        return False
+    return True
+
+
 def _consume_ws_task(task: asyncio.Task[None]) -> None:
     """被取消的 send/recv 任務收尾:消費例外避免 unretrieved warning;
     task 取消同時會關閉 stream() generator → 該 client queue 除名。"""

@@ -38,7 +38,7 @@ from copycat.server.breadth_engine import (
 )
 from copycat.server.capital_api import register_capital
 from copycat.server.oi_levels import register_oi
-from copycat.server.ws import WsBroadcaster, relay
+from copycat.server.ws import WsBroadcaster, relay, send_seed
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
 from copycat.server.engine import EngineRuntime, HandoverBusyError, QuoteSource
 from copycat.server.futures_engine import FuturesEngine, FuturesSource
@@ -1397,7 +1397,8 @@ def create_app(
             # seed 必須是「已送出的那一個 dict 物件」:再叫一次 latest_snapshot 的話,
             # 兩次之間發生的變動會被 generator 當成「跟首則一樣」吃掉
             snap = runtime.latest_snapshot()
-            await websocket.send_json(snap)
+            if not await send_seed(websocket, snap):
+                return  # accept 後、seed 前對端已斷(含 close_sent RuntimeError;B3)
             await relay(websocket, runtime.snapshots(seed=snap))
         except WebSocketDisconnect:
             return
@@ -1987,7 +1988,8 @@ def create_app(
         await websocket.accept()
         try:
             # 先送當前快照:client 不必等到下一個 tick 才有畫面
-            await websocket.send_json(corr.state())
+            if not await send_seed(websocket, corr.state()):
+                return
             await relay(websocket, corr_ws.stream())
         except WebSocketDisconnect:
             return
@@ -2010,7 +2012,8 @@ def create_app(
         await websocket.accept()
         try:
             # 首則送全量 snapshot;之後每秒只送當前分鐘的 delta(全量每秒推 = 每分鐘數 MB)
-            await websocket.send_json(corr.river_snapshot())
+            if not await send_seed(websocket, corr.river_snapshot()):
+                return
             await relay(websocket, river_ws.stream())
         except WebSocketDisconnect:
             return
