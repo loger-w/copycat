@@ -53,6 +53,8 @@ const TICK_TEXT = "2330 台積電 突破 CDP AH・爆拉 +1.50%・爆量 3.0 倍
 /** 這兩個計數器由 fake 類別在呼叫當下累加;`beforeEach` 歸零(不重新綁定,
  *  hook 內若快取了 AudioContext 單例,舊實例的方法照樣寫到現在這份計數)。 */
 let oscillators = 0;
+/** 每個 oscillator 的 `start(at)` 時刻(review F-16):雙嗶的可觀察內容是「錯開」,不只是「兩個」。 */
+let starts: number[] = [];
 let notified: string[] = [];
 let notifiedTags: (string | undefined)[] = [];
 let hidden = false;
@@ -82,7 +84,9 @@ class FakeAudioContext {
       type: "",
       frequency: { value: 0, setValueAtTime: () => {} },
       connect: () => {},
-      start: () => {},
+      start: (at?: number) => {
+        starts.push(at ?? 0);
+      },
       stop: () => {},
       onended: null as (() => void) | null,
     };
@@ -106,6 +110,7 @@ class FakeNotification {
 beforeEach(() => {
   vi.useFakeTimers();
   oscillators = 0;
+  starts = [];
   notified = [];
   notifiedTags = [];
   hidden = false;
@@ -713,6 +718,40 @@ describe("useSignalAlerts — notify 閘與政策列(spec #192)", () => {
     expect(hook.result.current.toasts.length).toBe(1);
     expect(hook.result.current.toasts[0]?.text).toBe("【P】2330 台積電 掃單簇 +0.80% 50.4");
     expect(oscillators).toBe(2);
+  });
+
+  it("雙嗶的兩聲起點錯開(review F-16):兩聲同時 start 聽起來是一聲", () => {
+    renderHook(() => useSignalAlerts());
+    act(() => emitSignal(policy("2330")));
+    expect(starts.length).toBe(2);
+    expect(starts[1]! - starts[0]!).toBeGreaterThan(0);
+  });
+
+  it("政策列併入既有 toast(raw 掃單簇通知開、先開了一張)仍雙嗶(review F-15:合併分支那一行)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    const raw: SignalMsg = { ...sig("2330"), id: "raw", kind: "sweep_cluster", time: "10:01:30", price: 50_400, pct: 0.8, notify: true };
+    act(() => emitSignal(raw));
+    expect(oscillators).toBe(1);
+    act(() => emitSignal(policy("2330")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(oscillators).toBe(3);  // 併入時政策首次到 → 再兩聲
+  });
+
+  it("雙嗶的兩聲起點錯開(review F-16):兩聲同時 start 聽起來是一聲", () => {
+    renderHook(() => useSignalAlerts());
+    act(() => emitSignal(policy("2330")));
+    expect(starts.length).toBe(2);
+    expect(starts[1]! - starts[0]!).toBeGreaterThan(0);
+  });
+
+  it("政策列併入既有 toast(raw 掃單簇通知開、先開了一張)仍雙嗶(review F-15:合併分支那一行)", () => {
+    const hook = renderHook(() => useSignalAlerts());
+    const raw: SignalMsg = { ...sig("2330"), id: "raw", kind: "sweep_cluster", time: "10:01:30", price: 50_400, pct: 0.8, notify: true };
+    act(() => emitSignal(raw));
+    expect(oscillators).toBe(1);
+    act(() => emitSignal(policy("2330")));
+    expect(hook.result.current.toasts.length).toBe(1);
+    expect(oscillators).toBe(3);  // 併入時政策首次到 → 再兩聲
   });
 
   it("同 tick 兩條政策 → 一張 toast、標記並列;第二則併入不再嗶", () => {

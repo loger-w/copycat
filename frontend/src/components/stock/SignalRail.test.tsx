@@ -571,6 +571,34 @@ describe("SignalRail 政策列(spec #192)", () => {
     expect(row?.className).not.toContain("flex-col");
   });
 
+  it("混合組(政策 notify=true + raw 掃單簇 notify=false)不淡:淡色是「全列皆 quiet」不是「有 quiet」(review F-13)", () => {
+    // prod 常態:種子掃單簇規則通知關,每一則政策列在 rail 上都是這種混合組
+    renderRail({ signals: [POLICY, RAW] });
+    const [li] = within(screen.getByTestId("signal-rail-list")).getAllByRole("listitem");
+    expect(li?.className).not.toContain("opacity-50");
+  });
+
+  it("無族群的 S 列第三行印「無族群・…」,hover 仍是「盤前篩選名單・無族群濾網」(review F-14)", () => {
+    renderRail({ signals: [sig({ ...POLICY, id: "s", policy: "S", groups: [], peers: [] })] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const context = list.getByText("無族群・+0.8%/停 9.1%");
+    expect(context.getAttribute("title")).toContain("盤前篩選名單・無族群濾網");
+  });
+
+  it("混合組(政策 notify=true + raw 掃單簇 notify=false)不淡:淡色是「全列皆 quiet」不是「有 quiet」(review F-13)", () => {
+    // prod 常態:種子掃單簇規則通知關,每一則政策列在 rail 上都是這種混合組
+    renderRail({ signals: [POLICY, RAW] });
+    const [li] = within(screen.getByTestId("signal-rail-list")).getAllByRole("listitem");
+    expect(li?.className).not.toContain("opacity-50");
+  });
+
+  it("無族群的 S 列第三行印「無族群・…」,hover 仍是「盤前篩選名單・無族群濾網」(review F-14)", () => {
+    renderRail({ signals: [sig({ ...POLICY, id: "s", policy: "S", groups: [], peers: [] })] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const context = list.getByText("無族群・+0.8%/停 9.1%");
+    expect(context.getAttribute("title")).toContain("盤前篩選名單・無族群濾網");
+  });
+
   it("全組 quiet(notify=false)→ 列淡色;含 notify=true 或缺欄的列 → 不淡", () => {
     renderRail({
       signals: [
