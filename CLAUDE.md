@@ -57,7 +57,7 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   search/stats/pipeline(outcome cache 三重失效)/report
 ├── live/                 #   TXO 看盤:models/payoff/aggregate/handover/tc4(唯一碰 ZMQ)
 │                         #   個股:stock_models(五檔位移歸一/試撮窗)、stock_state、stock_source
-│                         #   個股訊號:signal_state(CDP 穿越/爆拉跌/爆量/鎖板,零 IO)
+│                         #   個股訊號:signal_state(CDP 穿越/爆拉跌/爆量/鎖板/掃單簇,零 IO)
 │                         #   期貨:futures_models(HOT YYYYMM 解析)、futures_source
 │                         #   相關係數:corr_models/corr_state/corr_source(海外腿全天窗)
 │                         #   六腿江波圖:river_models/river_state/river_backfill
@@ -73,7 +73,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   可能無預警壞,失敗 None 降級)、capital_api、futures_engine(五檔+
 │                         #   resolved_contract)、
 │                         #   corr_engine(三窗 Pearson;兼六腿江波圖,同一報價流餵 RiverState)、
-│                         #   signal_hub(雙佇列 fanout:jsonl 真相源+Discord 節流)、discord_bot
+│                         #   signal_hub(雙佇列 fanout:jsonl 真相源+Discord 節流;政策層接線 +
+│                         #   T+1/T+2 回填 worker)、signal_policy(族群判定 + 四條政策 P/B-a/B-b/S
+│                         #   純函式,零 IO)、discord_bot
 │                         #   (/watch slash,token 缺降級)、watchlist_service(PUT/bot 同鎖 +
 │                         #   canonical 零寫早退)、oi_levels(TXO 月契約 OI 撐壓)、breadth_engine
 │                         #   (FinMind 家數 poller + 連板 EOD task;類股輪動 / 全市場鎖板事件
@@ -365,9 +367,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   前端 `lib/signal-model.ts`(`SignalKind` 多兩值;`groupPolicyTags` / `groupPolicyAnchor` / `policyContextText` /
   `policyTitle`;政策列在 kind 段顯示掃單簇文案、標記走 chip / 【】前綴)、`SignalRail.tsx`(三行 + chip 色)、
   `useSignalAlerts.ts`(雙嗶)、Discord `format_policy_group_text`(四行卡;批次含政策列即改版、不掛同群摘要)。
-  文案「掃單簇 +x.xx%」「政策 P」前後端逐字對齊(`_kind_text` ↔ `kindLabel`)。後端改 kind 字面 / 標記集合 →
-  前端退回英文代號、chip 消失、toast 無前綴,零錯誤訊號;`tests/server/test_signal_policy.py` +
-  `signal-model.test.ts`「政策組」節釘住。
+  文案「掃單簇 +x.xx%」「政策 P」前後端逐字對齊(`_kind_text` ↔ `kindLabel`;**零也帶正號** `+0.00%`,
+  前端 `signedPct2` 不走 `fmtPct`)。政策列另有 `d_close` / `d_high`(事件日收盤 / 最高;初值 null,回填
+  worker 補,2026-09-07 整體 review F-31 拍板)。後端改 kind 字面 / 標記集合 → 前端退回英文代號、chip 消失、
+  toast 無前綴,零錯誤訊號;`tests/server/test_signal_policy.py` + `signal-model.test.ts`「政策組」節釘住。
+  **訊號列**對舊 dist 不炸(未知 kind 印英文代號);**規則視窗不在此保證**:舊 dist 的 `PARAM_FIELDS` 沒有
+  新 kind,那張卡的「編輯」按了沒反應(onClick 內 TypeError、零 ErrorBoundary)—— 改規則種類的部署一律
+  前後端同版,畫面「版本落差」膠囊亮起先 `npm run build`(整體 review F-20)。
 - **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
   `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
   `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值
@@ -375,18 +381,28 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `tests/fixtures/sweep_cluster_golden.json`(產生腳本 `record_sweep_cluster_golden.py`,參考碼逐字沿研究
   `combo_events.py`)釘住:線上 `SignalDetector._eval_sweep` 必須與 `expected_prefix` 集合相等、研究事件時刻 ⊆ 線上。
 - **T+1 / T+2 回填原地補欄 + 離線讀者契約**(2026-09-07 起):產生點 `signal_hub.py::backfill_policy_outcomes`
-  (start 後一次 + 每日 `policy_outcome_time`;只碰日期**同時小於** hub 日別與牆鐘日的最近 `policy_outcome_days` 個日檔;
-  只補 `t1_open`/`t1_date`/`t2_open`/`t2_date` 為 null 的政策列;只重寫被補的列、其餘列(含空行 / 壞行)**原文逐字保留**、
-  行尾原樣、整檔 `atomic_write_bytes` 覆寫;日 K 來源 `outcome_bars` = `engine.bars_range(tf="D")`,`daily_bars` 的
-  `DailyBar` 沒有 open 不可用)。研究目錄離線讀者(`scripts/signal_join.py` 等)逐列讀 `s["kind"]` 無防禦 →
-  **不新增列型、每列 `kind` 恆在、既有列只加欄不改欄**(W1)。漂掉的症狀:回填改成整檔 dumps → 舊列鍵序 / 浮點字面
-  變動,對帳 diff 整檔紅;`tests/server/test_signal_outcome.py` byte 比對釘住。
+  (每日 `policy_outcome_time`;起動時**只在已過當日時點才立即跑**,開盤前起動不跑 —— 回填 DK 與 CDP 基準暖機共用
+  同一把 TC4 `api.lock`,整體 review F-10 拍板;只碰日期**同時小於** hub 日別與牆鐘日的最近 `policy_outcome_days`
+  個日檔 —— hub 日別落後牆鐘(空自選 / 零推播停在昨日)是常態,昨日檔正是 `_append_jsonl` 還在寫的檔,兩半守門
+  各擋一種;只補 `t1_open`/`t1_date`/`t2_open`/`t2_date`/`d_close`/`d_high` 缺或 null 的政策列(`d_*` = 事件日
+  收盤 / 最高,取日期**等於**日檔日那根;09-07 前的舊列沒這兩個鍵 → 一併加上);只重寫被補的列、其餘列(含空行 /
+  壞行)**原文逐字保留**、行尾原樣、整檔 `atomic_write_bytes` 覆寫、零補不碰檔;日 K 來源 `outcome_bars` =
+  `engine.bars_range(tf="D")`,`daily_bars` 的 `DailyBar` 沒有 open 不可用;`policy_outcome_days` < 1 建構即
+  raise)。**對帳仍需另抓的量**:研究「放到尾盤」的 13:20 出場價與盤中鎖死判定不在列上(日 K 收盤 / 最高是可接受
+  代理;要 13:20 那一格得抓 1K)。研究目錄離線讀者逐列讀 `s["kind"]` 無防禦 → **不新增列型、每列 `kind` 恆在、
+  既有列只加欄不改欄**(W1);**以 kind 為輸入的讀者必須帶白名單**(新增 kind 值本身允許 —— `nosig.py` 的三桶
+  分群 09-07 起以 `SIGNAL_KINDS` 參數指定,影子期對帳用政策列、舊分析用舊六種;整體 review F-11)。漂掉的症狀:
+  回填改成整檔 dumps → 舊列鍵序 / 浮點字面變動,對帳 diff 整檔紅;`tests/server/test_signal_outcome.py` byte 比對釘住。
 - **族群 = 自選群組扣「盤前篩選」(恆)與 `policy_exclude_groups`(設定,預設 `["ALL IN"]`)**(2026-09-07 起):
   產生點 `copycat/server/signal_policy.py::resolve_groups`(盤前篩選群組名讀 `screen_engine.SCREEN_GROUP`,與上條
   「盤前篩選群組名前後端同字面」同一顆常數;排除組名讀 `SignalsConfig.policy_exclude_groups`,tuple 欄由
   `configs/signals.json` 覆寫);多組取成員聯集(保序去重)並 WARNING 一檔一天一次;`screen_member` = 在盤前篩選群組
   (S 政策母體)。改群組名 = 改族群(user 自己維護);改 `SCREEN_GROUP` 字面 → 盤前篩選那 ~60 檔會被當族群、S 母體變空,
-  零錯誤訊號;`tests/server/test_signal_policy.py::TestGroupResolution` 釘住。
+  零錯誤訊號;`tests/server/test_signal_policy.py::TestGroupResolution` 釘住。排除組名**逐字比對**:自選把「ALL IN」
+  改名而設定檔沒跟 → 該組靜默變族群(研究 §8.2:−1,471/筆);hub 載入群組時比一次,缺名集合變了 WARNING「排除組名 …
+  對不上任何自選群組」一次(整體 review F-03;`prod` 無 `configs/signals.json` 時全走預設 `("ALL IN",)`)。排除組名**逐字比對**:自選把「ALL IN」
+  改名而設定檔沒跟 → 該組靜默變族群(研究 §8.2:−1,471/筆);hub 載入群組時比一次,缺名集合變了 WARNING「排除組名 …
+  對不上任何自選群組」一次(整體 review F-03;`prod` 無 `configs/signals.json` 時全走預設 `("ALL IN",)`)。
 
 ## 5. 資料源
 

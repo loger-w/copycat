@@ -5,23 +5,26 @@
 
 ## 1. commits(每票 test 紅先行 → feat / fix 實作;🔴 / 🟢 / 🔵 三類分開)
 
-| sha | 票 | 類 | 內容 |
-|---|---|---|---|
-| `c331b33d` | T1 #193 | test | 規則模型 / 遷移 v4 / 種子通知關 / 開關六鍵 / parity fixture / 「通知」文案的既有斷言改紅(hub 測試 `loud_seeds`) |
-| `095b8b65` | T1 | 🟢 feat | `sweep_cluster` 第六 kind:PARAM_SPECS / INT_PARAM_KEYS / rule_config / 十二個設定鍵 / 種子卡 / 遷移 v4 append / SWITCH_KEYS 六鍵 / 規則視窗欄位表 |
-| `bb51d4dd` | T1 | 🔴 fix | 種子與 v3→v4 把 cdp_cross / vol_burst 通知翻 false(逐條 log);「Discord」→「通知」 |
-| `31908d26` | T2 #194 | test | 掃單簇主 seam + 研究 golden fixture(`record_sweep_cluster_golden.py` 參考碼)+ 全列 notify + 換日 / 移出自選 |
-| `bb4dfd60` | T2 | 🟢 feat | `SignalDetector._eval_sweep`(同毫秒群 / 簇窗 / 回看窗 / 冷卻 / 即時判)、`SignalEvent.detail`、hub 每列 `notify`、文案「掃單簇 +x.xx%」 |
-| `9e24d8d4` | T3 #195 | test | 政策層主 seam(`test_signal_policy.py`)+ engine `policy_quotes` + app 接線 |
-| `6e1619be` | T3 | 🟢 feat | `signal_policy.py` 純函式、hub `_emit_policies`、Discord 四行卡、`engine.policy_quotes`、`peers_fn` 注入 |
-| `7c22f7cb` | T4 #196 | test | 回填檔案 seam(`test_signal_outcome.py`) |
-| `e0c3c233` | T4 | 🟢 feat | `backfill_policy_outcomes` + `_policy_outcome_worker`(`outcome_bars` = `bars_range(tf=D)`)、`fileio.atomic_write_bytes` |
-| `d79e5d79` | T5 #197 | test | 前端文案 / shouldNotify / 政策組 / 提示 hook / rail 三行 |
-| `00272432` | T5 | 🟢 feat | `SignalMsg` 新 kind 與欄位、toast 【標記】前綴、雙嗶、rail 政策列三行 + chip |
-| `c7445b66` | T5 | 🔴 fix | 提示 hook 改讀 `notify` 欄(false 不 toast / 嗶 / 桌面通知);rail quiet 淡色 |
-| `aa1818d9` | T6 #198 | docs | CLAUDE.md §4 五條契約 + §1 判準列;CONTEXT.md 十術語;tc4-market-facts 一條 |
-| `8c9802b5` | review r1 | 🔵 | PeerQuote TypedDict / 旗標 helper 共用 / arrivalOrder / 折行 |
-| `525c6b6a` | review r1 | 🔴 fix | chg round 2 / 壞 HH:MM:SS 建構即 raise / peers_fn 例外每日一次 / 政策卡截斷 / 翻旗集合縮回 / 回填 open ≤ 0 不位移 / 計數在 publish 後 / 起動 INFO |
+> 「sha(分支)」是 PR #199 rebase merge **前**的分支 commit(dangling,gc 後消失);「merged sha」是落地 master 的同一筆
+> (`git log 53d8f15c..1e58a083`,subject 一對一;2026-09-07 整體 review F-36)。日後查紅先行證據用 merged sha。
+
+| sha(分支) | merged sha | 票 | 類 | 內容 |
+|---|---|---|---|---|
+| `c331b33d` | `1c707137` | T1 #193 | test | 規則模型 / 遷移 v4 / 種子通知關 / 開關六鍵 / parity fixture / 「通知」文案的既有斷言改紅(hub 測試 `loud_seeds`) |
+| `095b8b65` | `30a59cd2` | T1 | 🟢 feat | `sweep_cluster` 第六 kind:PARAM_SPECS / INT_PARAM_KEYS / rule_config / 十二個設定鍵 / 種子卡 / 遷移 v4 append / SWITCH_KEYS 六鍵 / 規則視窗欄位表 |
+| `bb51d4dd` | `4a494775` | T1 | 🔴 fix | 種子與 v3→v4 把 cdp_cross / vol_burst 通知翻 false(逐條 log);「Discord」→「通知」 |
+| `31908d26` | `ae87673f` | T2 #194 | test | 掃單簇主 seam + 研究 golden fixture(`record_sweep_cluster_golden.py` 參考碼)+ 全列 notify + 換日 / 移出自選 |
+| `bb4dfd60` | `95980383` | T2 | 🟢 feat | `SignalDetector._eval_sweep`(同毫秒群 / 簇窗 / 回看窗 / 冷卻 / 即時判)、`SignalEvent.detail`、hub 每列 `notify`、文案「掃單簇 +x.xx%」 |
+| `9e24d8d4` | `21d73ad6` | T3 #195 | test | 政策層主 seam(`test_signal_policy.py`)+ engine `policy_quotes` + app 接線 |
+| `6e1619be` | `10f62489` | T3 | 🟢 feat | `signal_policy.py` 純函式、hub `_emit_policies`、Discord 四行卡、`engine.policy_quotes`、`peers_fn` 注入 |
+| `7c22f7cb` | `5695766b` | T4 #196 | test | 回填檔案 seam(`test_signal_outcome.py`) |
+| `e0c3c233` | `36884bad` | T4 | 🟢 feat | `backfill_policy_outcomes` + `_policy_outcome_worker`(`outcome_bars` = `bars_range(tf=D)`)、`fileio.atomic_write_bytes` |
+| `d79e5d79` | `d910a695` | T5 #197 | test | 前端文案 / shouldNotify / 政策組 / 提示 hook / rail 三行 |
+| `00272432` | `3bc4de54` | T5 | 🟢 feat | `SignalMsg` 新 kind 與欄位、toast 【標記】前綴、雙嗶、rail 政策列三行 + chip |
+| `c7445b66` | `9ee95d44` | T5 | 🔴 fix | 提示 hook 改讀 `notify` 欄(false 不 toast / 嗶 / 桌面通知);rail quiet 淡色 |
+| `aa1818d9` | `6f26f02a` | T6 #198 | docs | CLAUDE.md §4 五條契約 + §1 判準列;CONTEXT.md 十術語;tc4-market-facts 一條 |
+| `8c9802b5` | `b8981ca3` | review r1 | 🔵 | PeerQuote TypedDict / 旗標 helper 共用 / arrivalOrder / 折行 |
+| `525c6b6a` | `64b2dea2` | review r1 | 🔴 fix | chg round 2 / 壞 HH:MM:SS 建構即 raise / peers_fn 例外每日一次 / 政策卡截斷 / 翻旗集合縮回 / 回填 open ≤ 0 不位移 / 計數在 publish 後 / 起動 INFO |
 
 **明文偏離(handoff 要求 call `implement` skill)**:該 skill `disable-model-invocation`,無法由 agent 呼叫;實作沿 `tdd`(紅先行、垂直切片、只在 spec 四條 seams 寫測試)直做,順序 T1 → T2 → T3 → T4 → T5 → T6 與 handoff 相同。
 
@@ -56,9 +59,12 @@ ruff format:新檔(`signal_policy.py` / `record_sweep_cluster_golden.py` / `test
 
 | 項目 | 證據 | 結果 |
 |---|---|---|
-| 規則清單含「掃單簇」且 CDP 穿越 / 爆量通知關(遷移 log 逐條) | `evidence/migration-dry-run.txt`(對 prod `data/signal_rules.json` v1 唯讀 dry-run:七條、`CDP 穿越 notify=False`、`爆量 notify=False`、`掃單簇 enabled=True notify=False cooldown=60`,**檔案未回寫 True**)+ `evidence/sidecar-rules-curl.txt`(側車 `GET /api/stock/signals/rules` 同七條)+ `evidence/sidecar-startup-log.txt`(v1→v2 / v2→v3 ×2 / v3→v4 翻旗 ×2 / v3→v4 append 種子卡,逐條) | PASS |
-| server 啟動 log 有回填 task 起動一行 | `evidence/sidecar-startup-log.txt`:`T+1/T+2 回填 worker 起動:start 後跑一次,之後每日 13:40:00(最近 5 個日檔)` | PASS |
-| 前端規則視窗顯示新 kind 與「通知」文案 | `evidence/rules-dialog-list.png`(七條;通知開的印「通知」徽章、CDP 穿越 / 爆量 / 掃單簇無徽章;掃單簇摘要「30 秒內 2 掃 · 2 層 · 60 秒漲 0.3% · 冷卻 60 秒」)+ `evidence/rules-dialog-sweep-edit.png`(種類 select 六類、五欄預設 30 / 2 / 2 / 0.3 / 60 且 min/max 帶值域、「通知」checkbox 未勾) | PASS |
+| 規則清單含「掃單簇」且 CDP 穿越 / 爆量通知關(遷移 log 逐條) | `evidence/migration-dry-run.txt`(對 prod `data/signal_rules.json` v1 唯讀 dry-run:七條、`CDP 穿越 notify=False`、`爆量 notify=False`、`掃單簇 enabled=True notify=False cooldown=60`,**檔案未回寫 True**)+ `evidence/sidecar-rules-curl.txt`(側車 `GET /api/stock/signals/rules` 的 **Python 摘要**(欄名 `notify=` 是摘要
+  自己取的,wire 欄是 `notify_discord`),七條與旗標同 dry-run;不是 curl 原文 —— 整體 review F-37)+ `evidence/sidecar-startup-log.txt`(v1→v2 / v2→v3 ×2 / v3→v4 翻旗 ×2 / v3→v4 append 種子卡,逐條) | PASS |
+| server 啟動 log 有回填 task 起動一行 | `evidence/sidecar-startup-log.txt`:`T+1/T+2 回填 worker 起動:start 後跑一次,之後每日 13:40:00(最近 5 個日檔)`(取證當時的文案;2026-09-07 整體 review F-10 後改為「每日 13:40:00 跑一次(已過時點起動則立即跑;…)」,start 不再無條件跑) | PASS |
+| 前端規則視窗顯示新 kind 與「通知」文案 | `evidence/rules-dialog-list.png`(七條;通知開的印「通知」徽章、CDP 穿越 / 爆量 / 掃單簇無徽章;掃單簇摘要「30 秒內 2 掃 · 2 層 · 60 秒漲 0.3% · 冷卻 60 秒」)+ `evidence/rules-dialog-sweep-edit.png`(既有掃單簇種子卡的編輯窗:五欄存值 30 / 2 / 2 / 0.3 / 60、冷卻 60、
+  「通知」checkbox 未勾、「啟用」已勾;select 收合態只見「掃單簇」、min/max 是 HTML 屬性截圖看不到 —— 「六類」與
+  「值域」由 `SignalRulesDialog.test.tsx` / `signal-param-parity.test.ts` 釘,不由截圖證;整體 review F-37) | PASS |
 | 前端 build 成功 | `npm run build` ✓(上表) | PASS |
 
 側車:`evidence/fake_server.py`(neutralize + FakeStockSource + prod 規則檔副本落 tmp,port 8899,零 TC4 / ZMQ)+ `evidence/vite.sidecar.config.ts`

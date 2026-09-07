@@ -72,7 +72,9 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   (2026-09-05~07 研究 1,883 股票日實證;spec #192 線上化):REALTIME 與歷史 TICKS 的毫秒同源(`PreciseTime` 12 位取前 9 位 =
   `StockTick.time` 的 `.fff`,研究 `pull_ticks.py` 用 `us // 1000` 同一刀),線上 `SignalDetector._eval_sweep` 與研究
   `combo_events.find_sweeps` 才能對到同一群。首筆外盤判準用 `tick.ask_milli > 0 and price >= ask`,**不用 `tick.side`**
-  (鎖停日 `ask` 是市價佇列 0,`derive_side` 會判 outer,研究要求 ask > 0)。**即時判(群內首次達標即發)vs 群結束才判**:
+  —— 兩者在 prod **等價**(`ask_milli` 已由 `_best_limit_price` 把市價佇列 0 濾成 None,`derive_side` 的 outer 分支逐字
+  就是 `ask is not None and price >= ask`;鎖漲停時 `derive_side` 判的是 neutral,見下方 §鎖漲跌停),寫成價格比較只是
+  為了與研究 `find_sweeps` 的 `ask[i] > 0 and p0 >= ask[i]` 逐字對齊:研究 tick 檔 `pull_ticks.py` 保留原始 `Ask=0`。**即時判(群內首次達標即發)vs 群結束才判**:
   427,737 群 / 8,757 合格掃單,即時判多發 60(0.7%)、零漏發;2,925 個發訊筆早於群末、2,747 個層數低於群結束值
   (量測腳本研究目錄 `scripts/sweep_prefix_scan.py`;golden fixture `tests/fixtures/sweep_cluster_golden.json`)。
   (Trigger:任何以 tick 時刻分群 / 掃單定義 / 想改用 side 判外盤)
