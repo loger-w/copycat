@@ -234,7 +234,13 @@ class TestFileBackfill:
         )
         has_t1 = _policy_row("2330", t1_open=50_000, t1_date="2026-08-04")
         complete = _policy_row(
-            "2344", t1_open=1, t1_date="2026-08-04", t2_open=2, t2_date="2026-08-05", d_close=3, d_high=4
+            "2344",
+            t1_open=1,
+            t1_date="2026-08-04",
+            t2_open=2,
+            t2_date="2026-08-05",
+            d_close=3,
+            d_high=4,
         )
         path = _write_day(tmp_path, _PREV, [_dump(has_t1), _dump(complete)])
         h = _harness(tmp_path, clock, bars)
