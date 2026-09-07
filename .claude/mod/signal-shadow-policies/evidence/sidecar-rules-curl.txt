@@ -1,3 +1,5 @@
+# 側車 GET /api/stock/signals/rules 的 Python 摘要(print 格式;`notify=` 對應 wire 欄 `notify_discord`),
+# 非 curl 原文 —— 2026-09-07 整體 review F-37 註記;wire 形狀由 tests/server/test_signal_routes.py 釘
 CDP 穿越 cdp_cross enabled= True notify= False cooldown= 600
 爆拉爆跌 surge_crash enabled= True notify= True cooldown= 1800
 爆量 vol_burst enabled= True notify= False cooldown= 1800

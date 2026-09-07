@@ -7,14 +7,17 @@ Must 0 / Should 0 / Nice 47 / 參考用 3。user 2026-09-07 拍板:45 條 auto-f
 
 ## 1. commits(🔵 refactor → 🔴 fix(+ 對應測試)→ 🟢 test → chore docs,三類不混)
 
-| sha | 類 | 內容 |
-|---|---|---|
-| `706e4b16` | 🔵 refactor | F-02 fileio 三 helper 判準表 / F-03 evaluate docstring / F-04 detail 不可雜湊註記 / F-01 signal_policy docstring / F-13 hits 固定序契約 / F-17 前端 `peerPhrase` / F-19 wire 存證欄註記 / F-21 `beepFor`;零行為 |
-| `ae750d3b` | 🔴 fix | F-08 `outcome_bars` 整顆 `BarsResult`、status ≠ ok WARNING、刪 prod 走不到的 `except HistoryTimeoutError` / F-09 逐行 bytes / F-10 guard / F-11 `policy_quotes(codes)` + `peers_fn(peer_codes)` / F-12 no_data 保名 / F-13 迭代 `ctx.hits` / F-15 刪 sweep 專屬分支 / F-16 撞名 WARNING + 後果 / F-20 chip 移到 merged 容器外 / F-07 刪 `live_engine` 別名;同 commit 含對應測試(F-27 / F-28 / F-29 / F-30 / F-31 / F-32 / F-33 / F-34 / F-35 / F-36 / F-37 / F-38 / F-40 / F-41 / F-42 / F-43 / F-44 / F-45 / F-46 / F-47 + F-16 撞名 WARNING 案 + F-09 壞行案 + F-11 codes 子集案) |
-| `f068cadf` | 🟢 test | F-23 掃單簇清狀態五案重寫 / F-24 golden self-check ms 配對 / F-25 參考碼 loader session gate + fixture 重錄 / F-26 參考碼 docstring 分兩半 / F-39 `_RULE_PARAMS` import / F-18 `policyTitle` 三條字面 / F-22 規則視窗選擇器 |
-| `32fd0e52` | chore docs | F-01 CONTEXT.md / F-05 fake_server.py + vite.sidecar 自我定位 / F-06 verification.md 如實記跑法;pr-199-review.md + .audit.md 入 `docs/superpowers/specs/` |
-| `01de3a12` | 🔵 refactor | two-axis round-1:std F-01 app.py `peers_fn` 註解 / std F-02 `_sweep_seed_rule` docstring / spec S-01 `_fetch_outcome_bars` docstring / spec S-02 `peerPhrase` `??`;零行為 |
-| `9f13b8c9` | 🟢 test | two-axis round-1:std F-03 / S-05 guard 一案(突變體 m9 殺)/ std F-04 合併列 chip 位置一案 / spec S-03 `_EMPTY_PEER` 替身同形 / std F-06 `_PollClock` 前提 docstring |
+> 「sha(分支)」是 PR #200 rebase merge **前**的分支 commit(dangling);「merged sha」是落地 master 的同一筆
+> (`git log 1e58a083..60137dae`;2026-09-07 整體 review F-36)。
+
+| sha(分支) | merged sha | 類 | 內容 |
+|---|---|---|---|
+| `706e4b16` | `b66c072e` | 🔵 refactor | F-02 fileio 三 helper 判準表 / F-03 evaluate docstring / F-04 detail 不可雜湊註記 / F-01 signal_policy docstring / F-13 hits 固定序契約 / F-17 前端 `peerPhrase` / F-19 wire 存證欄註記 / F-21 `beepFor`;零行為 |
+| `ae750d3b` | `380cbdaf` | 🔴 fix | F-08 `outcome_bars` 整顆 `BarsResult`、status ≠ ok WARNING、刪 prod 走不到的 `except HistoryTimeoutError` / F-09 逐行 bytes / F-10 guard / F-11 `policy_quotes(codes)` + `peers_fn(peer_codes)` / F-12 no_data 保名 / F-13 迭代 `ctx.hits` / F-15 刪 sweep 專屬分支 / F-16 撞名 WARNING + 後果 / F-20 chip 移到 merged 容器外 / F-07 刪 `live_engine` 別名;同 commit 含對應測試(F-27 / F-28 / F-29 / F-30 / F-31 / F-32 / F-33 / F-34 / F-35 / F-36 / F-37 / F-38 / F-40 / F-41 / F-42 / F-43 / F-44 / F-45 / F-46 / F-47 + F-16 撞名 WARNING 案 + F-09 壞行案 + F-11 codes 子集案) |
+| `f068cadf` | `2b75c1fa` | 🟢 test | F-23 掃單簇清狀態五案重寫 / F-24 golden self-check ms 配對 / F-25 參考碼 loader session gate + fixture 重錄 / F-26 參考碼 docstring 分兩半 / F-39 `_RULE_PARAMS` import / F-18 `policyTitle` 三條字面 / F-22 規則視窗選擇器 |
+| `32fd0e52` | `1a8bfb66` | chore docs | F-01 CONTEXT.md / F-05 fake_server.py + vite.sidecar 自我定位 / F-06 verification.md 如實記跑法;pr-199-review.md + .audit.md 入 `docs/superpowers/specs/` |
+| `01de3a12` | `f498508b` | 🔵 refactor | two-axis round-1:std F-01 app.py `peers_fn` 註解 / std F-02 `_sweep_seed_rule` docstring / spec S-01 `_fetch_outcome_bars` docstring / spec S-02 `peerPhrase` `??`;零行為 |
+| `9f13b8c9` | `44665bd6` | 🟢 test | two-axis round-1:std F-03 / S-05 guard 一案(突變體 m9 殺)/ std F-04 合併列 chip 位置一案 / spec S-03 `_EMPTY_PEER` 替身同形 / std F-06 `_PollClock` 前提 docstring |
 
 ## 2. 紅 → 綠(突變體;`scratchpad/mutate.py` 套用 → 跑 → 還原,每個突變體恰一條紅、其餘綠)
 

@@ -1,29 +1,182 @@
 {
-  "fixed_point": "53d8f15c (merge-base master..HEAD)",
-  "reviewed_head": "aa1818d9 (T1–T6 十三筆;收修另提交)",
-  "reviewers": "two-axis,兩個 sub-agent 皆 model=opus,prompt 附白名單 W1–W12",
-  "standards": [
-    {"id": "F-01", "severity": "HIGH", "finding": "signal_hub._emit_policies 自己的 chg = (price-ref)/ref*100 不 round;同伴 chg_pct 來自 _quote_payload(round 2)→ leader / peers_up 兩把尺,違反 stock_engine.quotes docstring「chg_pct 一律走 _quote_payload 唯一定義」。"},
-    {"id": "F-02", "severity": "MED", "finding": "frontend signal-model.policyContextText 硬寫「同伴≥3%」,後端 Discord 用 cfg.policy_peer_up_pct;改設定後兩邊漂、零訊號。"},
-    {"id": "F-03", "severity": "MED", "finding": "Duplicated Code:touched_upper / locked_up 定義在 hub `me` 與 engine policy_quotes 各一份。"},
-    {"id": "F-04", "severity": "MED", "finding": "Duplicated Code:_migrate_v3 的 existing/names/ids/撞名/滿載/id 去重整塊與 _migrate_v2 同形。"},
-    {"id": "F-05", "severity": "MED", "finding": "policy_quotes -> dict[str, dict] / app peers_fn dict[str, dict] vs hub dict[str, PeerQuote];八鍵形狀散三檔 docstring(Primitive Obsession)。"},
-    {"id": "F-06", "severity": "MED", "finding": "_past_time 對壞 policy_outcome_time 每 30 s WARNING 一次 = 2880 行/日(PR #146 log 洪水同型)。"},
-    {"id": "F-07", "severity": "LOW", "finding": "三行超過 ruff line-length 100(signal_state.py:90 / signal_hub.py:215 / stock_engine.py:793)。"},
-    {"id": "F-08", "severity": "LOW", "finding": "stock_engine 引私有 _best_limit_price 未附理由註(signal_hub 姊妹 import 有)。"},
-    {"id": "F-09", "severity": "LOW", "finding": "_emit_policies 的 except Exception + logger.exception 在 on_tick 同步熱路徑;peers_fn 持續壞掉時逐 tick 印 traceback。"},
-    {"id": "F-10", "severity": "LOW", "finding": "[...group.items].reverse() 四處重複;peers_up ?? '-' / peer_touched 有無 兩處重複。"},
-    {"id": "F-11", "severity": "LOW", "finding": "signal-model.ts 三種百分比格式器(fmtPct / pct1 / inline toFixed);後端另有 _pct_text;pct1(0) 印 0.0%、後端 +0.00%。"},
-    {"id": "F-12", "severity": "LOW", "finding": "Shotgun Surgery:加第六個 kind 動到 ~13 個 switch 點(既有形狀)。"},
-    {"id": "F-13", "severity": "LOW", "finding": "_migrate_v3 docstring 寫 cdp_cross / vol_burst,code 走 _QUIET_KINDS(含 sweep_cluster)。"},
-    {"id": "F-14", "severity": "LOW", "finding": "backfill 同一行 JSON 解兩次(_policy_row_needing_outcome 已解、迴圈內再 json.loads)。"}
-  ],
-  "spec": [
-    {"id": "F-01", "severity": "LOW", "finding": "partial(W4):政策批次 return 早於 _DISCORD_MAX_CHARS / _split_batches;卡超 2000 字時 Discord 整張退回,只剩「兩層皆未送出」WARNING。"},
-    {"id": "F-02", "severity": "LOW", "finding": "creep:_QUIET_KINDS 含 sweep_cluster 也拿去當 v3→v4 翻旗集合,比 #193「cdp_cross、vol_burst」寬(今日 dead,v4+ 重用會靜默再關使用者開回的卡)。"},
-    {"id": "F-03", "severity": "LOW", "finding": "creep:回填 `and b['o'] > 0` 過濾會讓 open 0 的 T+1 bar 被跳過、T+2 冒充 t1_open(欄名說謊)。"},
-    {"id": "F-04", "severity": "LOW", "finding": "wrong(failure mode):_policy_touch 在 publish / enqueue 之前寫;publish 拋時計數已消耗,該 (code, policy) 當日再也推不出首筆。"},
-    {"id": "F-05", "severity": "LOW", "finding": "doc drift:_legacy_flags docstring 仍寫「SWITCH_KEYS(現五鍵)」。"}
-  ],
-  "disposition": "標準軸 14 條:F-01 修(自己的 chg round 2,與 _quote_payload 同尺,註明);F-02 **否決**(spec 字面即「同伴≥3% n」,且 spec §門檻「影子四週參數凍結」—— 列上不帶門檻是拍板形狀;記 next-time:若影子期後要調 policy_peer_up_pct,把門檻放進政策列);F-03 修(signal_policy.touched_upper_flag / locked_up_flag 兩邊共用);F-04 修(_append_seed 共用,v2→v3 / v3→v4 log 字串保留 tag);F-05 修(PeerQuote TypedDict 三邊共用);F-06 修(建構時 strptime 驗兩個 HH:MM:SS 設定,壞值 raise → hub None → routes 503 大聲;_past_time 不再 WARNING;測試 test_bad_hhmmss_config_raises_at_construction);F-07 修(三行折行);F-08 收斂(engine 改走 signal_policy 的旗標 helper,不再 import 私有名);F-09 修(traceback 當日一次,_peers_fn_failed 換日歸零);F-10 修(arrivalOrder helper;peers_up / peer_touched 文案的兩處重複因 policyTitle 與 policyContextText 版面不同、保留);F-11 **否決**(rail 第三行 spec 字面一位小數、hover / toast 兩位;後端 _pct_text 是 Discord 版面,三處各自的口徑是版面需求不是漂移;不合併);F-12 記錄(既有形狀,不動);F-13 修(docstring 對齊、並與 spec F-02 一起把翻旗集合獨立);F-14 修(helper 回 row,迴圈不重解)。spec 軸 5 條:F-01 修(政策卡 > 1900 字截斷送出 + WARNING);F-02 修(_MIGRATE_QUIET_KINDS = {cdp_cross, vol_burst} 與種子集合分開);F-03 修(前兩根就是 T+1 / T+2,open ≤ 0 留 null 不位移;測試 test_zero_open_bar_not_used_and_not_shifted 加斷言 T+2 照補);F-04 修(計數在 publish / enqueue 之後才寫);F-05 修(docstring)。白名單 W1–W12 兩軸皆未見破壞。"
+ "fixed_point": "53d8f15c (merge-base master..HEAD)",
+ "reviewed_head": "aa1818d9 (T1–T6 十三筆;收修另提交)",
+ "reviewers": "two-axis,兩個 sub-agent 皆 model=opus,prompt 附白名單 W1–W12",
+ "schema_note": "2026-09-07 整體 review F-38:原本處置擠在一顆 `disposition` 字串、每條無 file 錨;拆成與 followups 版同形的 per-finding {file, fix, disposition, commit}。`file` 依 finding 文字事後補填(原 review 無行號錨);`commit` = merged sha(🔴 64b2dea2 / 🔵 b8981ca3)。",
+ "standards": [
+  {
+   "id": "F-01",
+   "severity": "HIGH",
+   "file": "copycat/server/signal_hub.py::_emit_policies",
+   "finding": "signal_hub._emit_policies 自己的 chg = (price-ref)/ref*100 不 round;同伴 chg_pct 來自 _quote_payload(round 2)→ leader / peers_up 兩把尺,違反 stock_engine.quotes docstring「chg_pct 一律走 _quote_payload 唯一定義」。",
+   "fix": "自己的 chg round 2,與 _quote_payload 同尺,註明",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-02",
+   "severity": "MED",
+   "file": "frontend/src/lib/signal-model.ts::policyContextText",
+   "finding": "frontend signal-model.policyContextText 硬寫「同伴≥3%」,後端 Discord 用 cfg.policy_peer_up_pct;改設定後兩邊漂、零訊號。",
+   "fix": "—",
+   "disposition": "rejected:spec 字面即「同伴≥3% n」,且 spec §門檻「影子四週參數凍結」—— 列上不帶門檻是拍板形狀;記 next-time:若影子期後要調 policy_peer_up_pct,把門檻放進政策列",
+   "commit": null
+  },
+  {
+   "id": "F-03",
+   "severity": "MED",
+   "file": "copycat/server/signal_policy.py::touched_upper_flag / locked_up_flag",
+   "finding": "Duplicated Code:touched_upper / locked_up 定義在 hub `me` 與 engine policy_quotes 各一份。",
+   "fix": "兩邊共用同一份定義",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-04",
+   "severity": "MED",
+   "file": "copycat/signal_rules.py::_append_seed",
+   "finding": "Duplicated Code:_migrate_v3 的 existing/names/ids/撞名/滿載/id 去重整塊與 _migrate_v2 同形。",
+   "fix": "v2→v3 / v3→v4 共用 append 路徑,log 字串保留 tag",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-05",
+   "severity": "MED",
+   "file": "copycat/server/signal_policy.py::PeerQuote",
+   "finding": "policy_quotes -> dict[str, dict] / app peers_fn dict[str, dict] vs hub dict[str, PeerQuote];八鍵形狀散三檔 docstring(Primitive Obsession)。",
+   "fix": "PeerQuote TypedDict 三邊共用",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-06",
+   "severity": "MED",
+   "file": "copycat/server/signal_hub.py::__init__",
+   "finding": "_past_time 對壞 policy_outcome_time 每 30 s WARNING 一次 = 2880 行/日(PR #146 log 洪水同型)。",
+   "fix": "建構時 strptime 驗兩個 HH:MM:SS 設定,壞值 raise → hub None → routes 503;_past_time 不再 WARNING;測試 test_bad_hhmmss_config_raises_at_construction",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-07",
+   "severity": "LOW",
+   "file": "copycat/live/signal_state.py:90 / signal_hub.py:215 / stock_engine.py:793",
+   "finding": "三行超過 ruff line-length 100(signal_state.py:90 / signal_hub.py:215 / stock_engine.py:793)。",
+   "fix": "三行折行",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-08",
+   "severity": "LOW",
+   "file": "copycat/server/stock_engine.py",
+   "finding": "stock_engine 引私有 _best_limit_price 未附理由註(signal_hub 姊妹 import 有)。",
+   "fix": "engine 改走 signal_policy 的旗標 helper,不再 import 私有名",
+   "disposition": "fixed(收斂)",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-09",
+   "severity": "LOW",
+   "file": "copycat/server/signal_hub.py::_emit_policies",
+   "finding": "_emit_policies 的 except Exception + logger.exception 在 on_tick 同步熱路徑;peers_fn 持續壞掉時逐 tick 印 traceback。",
+   "fix": "traceback 當日一次,_peers_fn_failed 換日歸零",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-10",
+   "severity": "LOW",
+   "file": "frontend/src/lib/signal-model.ts",
+   "finding": "[...group.items].reverse() 四處重複;peers_up ?? '-' / peer_touched 有無 兩處重複。",
+   "fix": "arrivalOrder helper;peers_up / peer_touched 文案的兩處重複因 policyTitle 與 policyContextText 版面不同、保留",
+   "disposition": "fixed(部分)",
+   "commit": "b8981ca3"
+  },
+  {
+   "id": "F-11",
+   "severity": "LOW",
+   "file": "frontend/src/lib/signal-model.ts / copycat/server/signal_hub.py::_pct_text",
+   "finding": "signal-model.ts 三種百分比格式器(fmtPct / pct1 / inline toFixed);後端另有 _pct_text;pct1(0) 印 0.0%、後端 +0.00%。",
+   "fix": "—",
+   "disposition": "rejected:rail 第三行 spec 字面一位小數、hover / toast 兩位;後端 _pct_text 是 Discord 版面,三處各自的口徑是版面需求不是漂移;不合併(2026-09-07 整體 review F-17 補:零值正負號那一半仍不逐字,已收)",
+   "commit": null
+  },
+  {
+   "id": "F-12",
+   "severity": "LOW",
+   "file": "(13 個 switch 點)",
+   "finding": "Shotgun Surgery:加第六個 kind 動到 ~13 個 switch 點(既有形狀)。",
+   "fix": "—",
+   "disposition": "acknowledged:既有形狀,不動",
+   "commit": null
+  },
+  {
+   "id": "F-13",
+   "severity": "LOW",
+   "file": "copycat/signal_rules.py::_migrate_v3",
+   "finding": "_migrate_v3 docstring 寫 cdp_cross / vol_burst,code 走 _QUIET_KINDS(含 sweep_cluster)。",
+   "fix": "docstring 對齊,並與 spec F-02 一起把翻旗集合獨立(_MIGRATE_QUIET_KINDS)",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-14",
+   "severity": "LOW",
+   "file": "copycat/server/signal_hub.py::backfill_policy_outcomes",
+   "finding": "backfill 同一行 JSON 解兩次(_policy_row_needing_outcome 已解、迴圈內再 json.loads)。",
+   "fix": "helper 回 row,迴圈不重解",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  }
+ ],
+ "spec": [
+  {
+   "id": "F-01",
+   "severity": "LOW",
+   "file": "copycat/server/signal_hub.py::_send_discord",
+   "finding": "partial(W4):政策批次 return 早於 _DISCORD_MAX_CHARS / _split_batches;卡超 2000 字時 Discord 整張退回,只剩「兩層皆未送出」WARNING。",
+   "fix": "政策卡 > 1900 字截斷送出 + WARNING",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-02",
+   "severity": "LOW",
+   "file": "copycat/signal_rules.py::_MIGRATE_QUIET_KINDS",
+   "finding": "creep:_QUIET_KINDS 含 sweep_cluster 也拿去當 v3→v4 翻旗集合,比 #193「cdp_cross、vol_burst」寬(今日 dead,v4+ 重用會靜默再關使用者開回的卡)。",
+   "fix": "_MIGRATE_QUIET_KINDS = {cdp_cross, vol_burst} 與種子集合分開",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-03",
+   "severity": "LOW",
+   "file": "copycat/server/signal_hub.py::backfill_policy_outcomes",
+   "finding": "creep:回填 `and b['o'] > 0` 過濾會讓 open 0 的 T+1 bar 被跳過、T+2 冒充 t1_open(欄名說謊)。",
+   "fix": "前兩根就是 T+1 / T+2,open ≤ 0 留 null 不位移;測試 test_zero_open_bar_not_used_and_not_shifted 加斷言 T+2 照補",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-04",
+   "severity": "LOW",
+   "file": "copycat/server/signal_hub.py::_emit_policies",
+   "finding": "wrong(failure mode):_policy_touch 在 publish / enqueue 之前寫;publish 拋時計數已消耗,該 (code, policy) 當日再也推不出首筆。",
+   "fix": "計數在 publish / enqueue 之後才寫",
+   "disposition": "fixed",
+   "commit": "64b2dea2"
+  },
+  {
+   "id": "F-05",
+   "severity": "LOW",
+   "file": "copycat/signal_rules.py::_legacy_flags docstring",
+   "finding": "doc drift:_legacy_flags docstring 仍寫「SWITCH_KEYS(現五鍵)」。",
+   "fix": "docstring",
+   "disposition": "fixed",
+   "commit": "b8981ca3"
+  }
+ ],
+ "spec_summary": "白名單 W1–W12 兩軸皆未見破壞。標準軸 14 條:修 11 / 否決 2(F-02、F-11)/ 記錄 1(F-12);spec 軸 5 條全修。"
 }
