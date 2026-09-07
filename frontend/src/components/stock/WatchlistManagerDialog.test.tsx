@@ -57,6 +57,24 @@ function open(wl: Watchlist = WL) {
   return { onClose, onGroupDeleted };
 }
 
+/** 可關再開的 render:`wrap()` 每次給全新 client、不回可重包的 client,測「關窗再開」得自己持
+ *  一顆 client 重包同一棵樹(三處曾各抄一份 inline provider;round-1 std F-07 收成一支)。
+ *  回 `setOpen(false/true)` 就是 rerender 同一 client + 同一組 props、只換 `open`。 */
+function renderReopenable(wl: Watchlist = WL): {
+  setOpen: (isOpen: boolean) => void;
+  onClose: ReturnType<typeof vi.fn>;
+} {
+  const props = { wl, onClose: vi.fn(), onGroupDeleted: vi.fn() };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (isOpen: boolean) => (
+    <QueryClientProvider client={client}>
+      <WatchlistManagerDialog open={isOpen} {...props} />
+    </QueryClientProvider>
+  );
+  const { rerender } = render(view(true));
+  return { setOpen: (isOpen) => rerender(view(isOpen)), onClose: props.onClose };
+}
+
 /** PUT 卡 gate 逐發放行(成功 echo / 400 失敗可選):製造「第一發在途時做第二個動作」
  *  的視窗。gate 的 resolver 在 push body 的同一個同步區塊註冊 —— putBodies 長度到位時
  *  對應 resolver 必已存在,release 不會撲空。隔離靠 `gatePuts()` 每條測試開頭重設 `gated`
@@ -468,6 +486,30 @@ describe("WatchlistManagerDialog 新增群組被拒時保留輸入框 + 新增�
     releaseOk();
   });
 
+  // pr-202-review F-03:守門改 keyed 解除。關窗再開會重置守門(與 renameInFlight 同形、刻意保留),
+  // 之後另送一發 B;A 的 onSettled 若無條件歸零,B 的守門會被提早放掉 → 第三發又能排隊。
+  it("A 在途 → 關窗再開送 B → A 結束不得放掉 B 的守門;B 結束才解除", async () => {
+    gatePuts();
+    const { setOpen } = renderReopenable();
+    const input = () => screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input(), { target: { value: "當沖" } });
+    fireEvent.keyDown(input(), { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1)); // A 在途
+    setOpen(false);
+    setOpen(true); // 重開:守門重置(與 rename 同形)
+    fireEvent.change(input(), { target: { value: "隔日沖" } });
+    fireEvent.keyDown(input(), { key: "Enter" }); // B 排隊(A 未 release,PUT 還沒發)
+    expect(addButton().disabled).toBe(true);
+    releaseOk(); // A 成功 → A 的 onSettled:keyed,不得放掉 B
+    await waitFor(() => expect(putBodies).toHaveLength(2)); // B 的 PUT 出手
+    expect(addButton().disabled).toBe(true);
+    fireEvent.change(input(), { target: { value: "第三" } });
+    fireEvent.keyDown(input(), { key: "Enter" }); // B 在途 → 擋下
+    releaseOk(); // B 成功 → 守門解除
+    await waitFor(() => expect(addButton().disabled).toBe(false));
+    expect(putBodies).toHaveLength(2); // 「第三」沒排進去
+  });
+
   it("新增列是左欄的第一個區塊(在群組清單之前)", () => {
     open();
     const groups = screen.getByLabelText("群組");
@@ -728,22 +770,11 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
   });
 
   it("關閉再開 → selected 回到未分組(不殘留上次選的組)", async () => {
-    const onClose = vi.fn();
-    const { rerender } = wrap(
-      <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />,
-    );
+    const { setOpen } = renderReopenable();
     fireEvent.click(screen.getByRole("button", { name: "主力" }));
     expect(within(screen.getByLabelText("股票")).getByText("5483")).toBeTruthy();
-    rerender(
-      <QueryClientProvider client={new QueryClient()}>
-        <WatchlistManagerDialog open={false} wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
-      </QueryClientProvider>,
-    );
-    rerender(
-      <QueryClientProvider client={new QueryClient()}>
-        <WatchlistManagerDialog open wl={WL} onClose={onClose} onGroupDeleted={vi.fn()} />
-      </QueryClientProvider>,
-    );
+    setOpen(false);
+    setOpen(true);
     await waitFor(() =>
       expect(within(screen.getByLabelText("股票")).getByText("2317")).toBeTruthy(),
     );
@@ -752,13 +783,7 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
 
   // review F8:重置一次做四件事,原本只有 selected 被間接驗到 —— 刪掉另外三行測試仍全綠
   it("關閉再開 → 改名輸入框 / 搜尋文字 / 錯誤文案都不殘留", async () => {
-    const props = { wl: WL, onClose: vi.fn(), onGroupDeleted: vi.fn() };
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { rerender } = render(
-      <QueryClientProvider client={client}>
-        <WatchlistManagerDialog open {...props} />
-      </QueryClientProvider>,
-    );
+    const { setOpen } = renderReopenable();
     await waitFor(() => expect(screen.getByText("鴻海")).toBeTruthy());
     // 製造三種殘留:改名編輯態 / 搜尋框文字 / BAD_GROUP 錯誤文案
     fireEvent.click(screen.getByLabelText("改名 主力"));
@@ -768,13 +793,8 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
     fireEvent.keyDown(screen.getByPlaceholderText("群組名稱"), { key: "Enter" });
     await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
 
-    const view = (open: boolean) => (
-      <QueryClientProvider client={client}>
-        <WatchlistManagerDialog open={open} {...props} />
-      </QueryClientProvider>
-    );
-    rerender(view(false));
-    rerender(view(true));
+    setOpen(false);
+    setOpen(true);
     expect(screen.queryByDisplayValue("主力")).toBeNull(); // 改名態已離開
     expect((screen.getByPlaceholderText(/加入自選/) as HTMLInputElement).value).toBe("");
     expect(screen.queryByText("群組名稱不合法")).toBeNull();
