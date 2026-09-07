@@ -35,15 +35,17 @@
 
 ## 2026-08-31(pr-165-review 留尾)
 
-- [ ] **大盤頁 tf=D 的 `is_partial_last` 要不要吃定稿界**(pr-165-review #5):日曆日判準讓 14:00–24:00 印「最後一根未收盤」
+- [x] **大盤頁 tf=D 的 `is_partial_last` 要不要吃定稿界**(pr-165-review #5):日曆日判準讓 14:00–24:00 印「最後一根未收盤」
   但 bar 已定稿 —— **非** #165 引入(冷啟動 13:45 後首問同樣誤標),定稿界只讓它變常態。docstring 兩口徑註記已補
   (fix/pr-165-review-followups);要不要讓 D 分支改吃 `DAILY_FINAL_TIME` 是 /mod(`is_partial_last` 同時服務 1/W/M,
   夜盤語意另一回事,期貨側不吃本欄)。
-  **→ 2026-09-07 next-time 盤點:C17 user 拍板修 → W1 批。**
-- [ ] **`BarsCache.prune` 的 `_daily_tag`(306-307)與 `_daily_pre_final`(308)清理零測試**(pr-165-review #8,內部複查
+  **→ 2026-09-07 next-time 盤點:C17 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:tf=D 分支同吃
+  `DAILY_FINAL_TIME`(14:00 後今日那根視為定稿),分 K / 週 / 月不動;`TestIsPartialLast` + route 級 after_final_time 釘住。**
+- [x] **`BarsCache.prune` 的 `_daily_tag`(306-307)與 `_daily_pre_final`(308)清理零測試**(pr-165-review #8,內部複查
   REFUTED 單獨立案但缺口是真的):兩行同構、刪掉全綠、失效 = 純記憶體無界成長。要補就兩段一起 —— 比照
   `today_entry_count()` 開 `*_count()` 觀測點 + prune 測試各一行斷言,併 test-hygiene 批。
-  **→ 2026-09-07 next-time 盤點:B11 user 拍板修 → W1 批。**
+  **→ 2026-09-07 next-time 盤點:B11 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`test_prune_drops_stale_daily_tag` /
+  `test_prune_drops_stale_pre_final_marker` 用既有 getter 當觀測點(不另開 `*_count()`),兩段各自刪掉即紅(突變體實證)。**
 
 ## 2026-08-31(fix/futures-daily-cache-night 留尾)
 
@@ -443,8 +445,10 @@ verification;這裡回填成 backlog。
   leg.symbol),第三個引擎接同款時再抽;注意兩處**順序已漂**(futures 先 update pending 再 bump epoch,corr 相反),今天等價。
 - [ ] **rollover stage1 → worker `set_trade_date` 之間的次毫秒窗**(§7.8 SP1):source 日窗仍舊,靠 `_generation` guard 丟掉
   回補結果 —— 「靠別人擋」不是「結構上不可能」,真要收得把日窗語意納入 generation。
-- [ ] **N039 route 層首則 seed send 仍只 catch `WebSocketDisconnect`**(`app.py` 四處),close_sent traceback 噪音仍在。
-  **→ 2026-09-07 next-time 盤點:B3 user 拍板修 → W1 批。**
+- [x] **N039 route 層首則 seed send 仍只 catch `WebSocketDisconnect`**(`app.py` 四處),close_sent traceback 噪音仍在。
+  **→ 2026-09-07 next-time 盤點:B3 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`ws.send_seed`(斷線 / close_sent
+  RuntimeError 回 False 收尾、其餘照拋)接上 txo-pnl / corr / river 三處 relay 前的 seed send(實際只有三處,不是四處;
+  stock 的 seed 早已走 `stream(seed=)` 在 relay 內);`TestSendSeed` 四案釘住。**
 - [ ] **N038 jitter 對背景分頁無效**(Chrome timer 1 s 對齊),#99 E5 判 PASS 偏寬。
 - [ ] **#106 私密視窗偏好靜默不落檔畫面零訊號**(`storage.ts` 四旗標唯一讀者是自己去重)。
 - [ ] **/bug H3 昨日段中段缺格 gate 5 不涵蓋**(只比尾根;core 單條 polyline 對任何缺格架橋)+ **切回 tab 最多 60 s 印
@@ -457,10 +461,12 @@ verification;這裡回填成 backlog。
 
 ## 2026-08-26(mod/watchlist-rename-collision A4 改名保留編輯框 留尾)
 
-- [ ] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時
+- [x] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時
   文案出來、字已清(#101 verification §5.3 舊留尾;A4 只收改名)。改成留著要另設守門(清空同時是它的重送防護),
   可照 `renameInFlight` + `onSettled` 的形狀做。
-  **→ 2026-09-07 next-time 盤點:B2 user 拍板修,順帶新增列搬到左欄最上方 → W1 批。**
+  **→ 2026-09-07 next-time 盤點:B2 user 拍板修,順帶新增列搬到左欄最上方 → W1 批。→ mod/next-time-batch-w1 出貨:
+  `submitAddGroup` 的清空搬進 commit `onDone`(與 `submitRename` 同規則),新增列改 `border-b` 固定在左欄頂端、`<ul>` 在其下;
+  引導文案改「可在上方新增」;四案釘住(撞名 / 4xx 保留、成功才清、第一區塊是新增列)。**
 - [x] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
   抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:檔頂 `makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`,三個 describe 各叫一次;N118 測試裡第四份行內 400 resolve 一併改 `releaseFail()`。**
 - [x] ~~**`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
@@ -850,10 +856,12 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。
 - [ ] **盤前篩選放棄後 ~24h 不重武裝**(review F-10,MED→LOW PARTIAL):21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
   **→ 2026-09-07 next-time 盤點:C21 user 拍板做(放棄後每小時再試到資料出現或翌日 08:00)→ W2 批。**
-- [ ] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
-  **→ 2026-09-07 next-time 盤點:B15 user 拍板修 → W1 批。**
-- [ ] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
-  **→ 2026-09-07 next-time 盤點:B14 user 拍板修 → W1 批。**
+- [x] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
+  **→ 2026-09-07 next-time 盤點:B15 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`test_daily_pad_rows_parity_with_breadth`
+  釘等值(既有 `len(day1) >= _DAILY_MIN_ROWS` 只在門檻抬過「填充 + 真列」才紅);verify.py 仍不 import breadth_engine。**
+- [x] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
+  **→ 2026-09-07 next-time 盤點:B14 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`[tool.ruff.lint] select`
+  顯式列預設四組 + PLE1205 / PLE1206;加規則前全庫掃存量 0。**
 - [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
 - [ ] **盤前篩選當沖名單「部分落檔」不可偵測**(收修 review SP5):單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。
   **→ 2026-09-07 next-time 盤點:C22 user 拍板做(相對閘:少於前一晚八成視同未發布;首晚絕對下限 1,000)→ W2 批。**
