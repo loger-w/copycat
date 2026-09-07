@@ -50,10 +50,16 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
    *  佇列有零回呼的早退(深比對 / 世代作廢 / 基底未載入),掛在 onError / onDone 上的旗標會
    *  永久卡死;綁 key 也讓「A 在途、Escape 後改 B」照送(review round-1 SP1 / ST-P3)。 */
   const [renameInFlight, setRenameInFlight] = useState<string | null>(null);
-  /** 新增群組在佇列裡(排隊 / 在途)。輸入框改成成功後才清(B2)之後,「清空」不再兼任重送防護
-   *  —— 字留在框裡連按兩次 Enter = 第二發在第一發成功後以 BAD_GROUP 收場。與 `renameInFlight`
-   *  同形:由該發的 `onSettled` 解除,不掛 onDone / onError(佇列有零回呼早退)。 */
-  const [addInFlight, setAddInFlight] = useState(false);
+  /** 哪一發新增在佇列裡(排隊 / 在途;值 = 該發的送出序號)。輸入框改成成功後才清(B2)之後,
+   *  「清空」不再兼任重送防護 —— 字留在框裡連按兩次 Enter = 第二發在第一發成功後以 BAD_GROUP 收場。
+   *  與 `renameInFlight` 同形:由該發的 `onSettled` **keyed** 解除(`cur === token` 才放),不掛
+   *  onDone / onError(佇列有零回呼早退)。keyed 而非布林(pr-202-review F-03):關窗再開會重置本
+   *  旗標(與 rename 同形、刻意保留),之後另送一發 B 時,A 的 onSettled 若無條件歸零會提早放掉
+   *  B 的守門 —— 第三發又能排隊。key 用序號不用組名(round-1 S-01):同名重送時名字分不出 A / B。
+   *  已知殘留(與 rename 同形、接受):在途中關窗再開並**重打同名**再送,那一發會在前一發成功後以
+   *  BAD_GROUP 收場 —— 群組其實已建好,只是橫幅誤導、無資料遺失。 */
+  const [addInFlight, setAddInFlight] = useState<number | null>(null);
+  const addSeqRef = useRef(0);
   // 寫入一律走跨元件共用佇列(N117):側欄拖曳與本窗的動作序列化在**同一條** chain 上,
   // 基底也是同一份 —— 兩個寫者各持一顆 observer 時可以互相覆寫(見 hook 檔頭)。
   const { commit, isPending } = useWatchlistCommit({ seed: wl, onError: setLocalError });
@@ -96,7 +102,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setSelected(null);
       setRenaming(null);
       setRenameInFlight(null);
-      setAddInFlight(false);
+      setAddInFlight(null);
       setGroupInput(""); // 失敗保留後,關窗再開不該看到上次被拒的組名卻沒有它的錯誤橫幅(review S-03)
       setStockInput("");
       setLocalError(null);
@@ -116,16 +122,17 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
       setLocalError("BAD_GROUP"); // 保留名:與左欄的偽群組同名會無法區分(與基底無關)
       return;
     }
+    if (addInFlight !== null) return; // 重送防護(review S-02):見 addInFlight 宣告處
+    const token = ++addSeqRef.current;
+    setAddInFlight(token);
     // 群組名輸入框**只在成功後**清(與 submitRename 同一條規則;next-time 08-26 A4 留尾、09-07 盤點 B2;
     // 右欄的加股輸入框仍是 eager 清,不在本條):撞名 / PUT 失敗是非同步從佇列冒出來的,先清等於把
     // 使用者打的字連同錯誤脈絡一起丟掉。**只清「這一發送出的那個名字」**:PUT 在途時使用者已接著打
     // 下一組名,成功回呼無條件清空會把新字吃掉 —— 正是本修要解的失效形狀(two-axis review std F-03)。
-    if (addInFlight) return; // 重送防護(review S-02):見 addInFlight 宣告處
-    setAddInFlight(true);
     commit(
       (base) => rejectIfUnchanged(addGroup(base, name), base),
       () => setGroupInput((cur) => (cur.trim() === name ? "" : cur)),
-      () => setAddInFlight(false),
+      () => setAddInFlight((cur) => (cur === token ? null : cur)),
     );
   }
 
@@ -378,7 +385,7 @@ export function WatchlistManagerDialog({ open, wl, onClose, onGroupDeleted }: Pr
                     type="button"
                     aria-label="新增群組"
                     onClick={submitAddGroup}
-                    disabled={addInFlight}
+                    disabled={addInFlight !== null}
                     className="shrink-0 rounded border border-line px-2 py-1 text-xs text-ink hover:border-accent disabled:opacity-50"
                   >
                     新增
