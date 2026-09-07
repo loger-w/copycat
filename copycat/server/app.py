@@ -836,10 +836,10 @@ def create_app(
                     # jsonl 與開關檔天然跟著它走,測試注入自選路徑即整組落在 tmp_path
                     data_dir=wl_path.parent,
                     trade_date_fn=trade_date_fn,
-                    # 同群摘要(group-grid SC-1/2)。groups 只在 `on_watchlist` 讀檔
-                    # (自選變更時),quotes 在 Discord worker 讀 engine 現值 —— 兩者
-                    # 都輕同步,不進熱路徑。漏接的失效樣態是「通知少一段尾巴」而已,
-                    # 所以由 booted app 的接線測試把關。
+                    # groups 只在 `on_watchlist` 讀檔(自選變更時),quotes 在 Discord worker
+                    # 讀 engine 現值 —— 兩者都輕同步,不進熱路徑。兩個消費者的失效樣態不同:
+                    # quotes 漏接 = 同群摘要少一段尾巴;groups 漏接 = **政策層族群判定空表、
+                    # P / B-a / B-b / S 整天零列**(spec #192)。由 booted app 的接線測試把關。
                     groups_fn=lambda: load_watchlist(wl_path)["groups"],
                     quotes_fn=quotes_fn,
                     # 政策層(spec #192):只在掃單簇事件時讀 engine 記憶體快照,零 IO

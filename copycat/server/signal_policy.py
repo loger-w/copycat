@@ -19,6 +19,14 @@
 - B-a:自己最強(chg ≥ 同伴最大 chg)且同伴 ≥ peer_up_pct ≥ 1 且 chg < max_chg_pct 且同伴沒人鎖過。
 - B-b:B-a 拿掉 chg < max_chg_pct。
 - S:盤前篩選成員且 chg < max_chg_pct(無族群條件)。
+
+**與研究定義的已知差異**(整體 review 2026-09-07 F-32;對帳時會被問到,全部刻意):
+1. 掃單簇即時判(群內首次達標即發)vs 研究群結束才判 —— 量測多發 0.7%、零漏發(golden fixture 釘住)。
+2. 自己的 `chg` 用**當筆成交價**(spec「取當筆 state」);研究 `frompc` 用「觸發後下一筆 +1 檔」的
+   進場價 —— 865 個研究事件中 12 筆(1.4%)在 6% 界翻面,|Δ| p90 0.375 pt。
+3. 同伴 `chg_pct` 取**即時快照**;研究取 10 s 格點價(最壞落後 10 s)。
+4. 一檔落在多個族群組:線上取**聯集**並 WARNING;研究 `code2grp` 只留最後一組、ALL IN 整筆丟。
+「鎖過閘只看同伴」**不是**差異:研究 `_locked_before` 本來就只掃 peers。
 """
 
 from __future__ import annotations
