@@ -1,0 +1,22 @@
+{
+  "fixed_point": "1e58a083 (master merge-base)",
+  "reviewed_head": "32fd0e52",
+  "reviewers": {"standards": "opus (general-purpose sub-agent)", "spec": "opus (general-purpose sub-agent)"},
+  "spec_source": "docs/superpowers/specs/pr-199-review.md F-01..F-50 + user 2026-09-07 拍板(F-01 A / F-09 A / 45 auto-fix 全修 / F-14 F-48 F-49 F-50 no-op)",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "file": "copycat/server/app.py:812", "finding": "`peers_fn: Callable[[], …]` 型別註解未跟著 F-11 改成 `Callable[[list[str]], …]`;該分支被窄化成 None 所以 pyright 不報,靜默漂移。", "fix": "註解改 `Callable[[list[str]], dict[str, PeerQuote]] | None`。", "disposition": "fixed", "commit": "round-1 🔵"},
+    {"id": "F-02", "severity": "MED", "file": "copycat/signal_rules.py:336-338", "finding": "`_sweep_seed_rule` docstring 仍寫「`default_rules` 與 v3→v4 遷移共用」,F-15 已刪 `default_rules` 的呼叫,唯一 caller 剩 `_migrate_v3`。", "fix": "改述「只供 v3→v4 遷移;全新安裝走通用分支,兩邊欄位必須一致、各有測試釘」。", "disposition": "fixed", "commit": "round-1 🔵"},
+    {"id": "F-03", "severity": "MED", "file": "copycat/server/signal_hub.py:214-217", "finding": "F-10 新增的零政策列 guard 零測試(tests/ 無 `format_policy_group_text` 直呼)。", "fix": "加一條 rows 全非政策列 → 等同 `format_signal_group_text(rows)`。", "disposition": "fixed(突變體 m9 刪 guard → 新案紅)", "commit": "round-1 🟢"},
+    {"id": "F-04", "severity": "LOW", "file": "frontend/src/components/stock/SignalRail.tsx:209-230", "finding": "chip 外移(F-20)無測試釘住;移回 flex-col 容器內全綠。", "fix": "斷 chip 祖父容器 className 含 items-baseline、不含 flex-col(合併列情境)。", "disposition": "fixed", "commit": "round-1 🟢"},
+    {"id": "F-05", "severity": "LOW", "file": "frontend/src/components/stock/SignalRail.tsx:209-232", "finding": "judgement:非合併列外層與內層 span 同為 flex items-baseline gap-1,內層在非合併列是純轉手(Middle Man)。", "fix": "內層僅在 merged 時渲染。", "disposition": "rejected:內層只在 merged 時渲染會讓兩分支 DOM 形狀不同,選擇器 / 測試 / 未來樣式跟著分岔;多一層 span 零成本。記錄不改。", "commit": null},
+    {"id": "F-06", "severity": "LOW", "file": "tests/server/test_signal_outcome.py:459-468", "finding": "`_wait_polls` 以 now_fn 讀次數代理 worker 輪詢次數,hub 另有 4 個 `_now_fn()` 呼叫點;本情境不跑故只是脆弱。", "fix": "worker 自記 poll 計數,或 docstring 寫明前提。", "disposition": "fixed(docstring 寫明 TestSchedule 情境下 worker 是唯一週期讀時鐘者;情境變了要改 worker 自記計數。不為測試往 hub 加計數欄)", "commit": "round-1 🟢"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "LOW", "file": "copycat/server/signal_hub.py:1338", "finding": "`_fetch_outcome_bars` docstring 仍寫「失敗 → None」,F-08 改法讓 status≠ok 回空 list 不是 None。", "fix": "補「逾時 / 斷線 → 空 list + WARNING」。", "disposition": "fixed", "commit": "round-1 🔵"},
+    {"id": "S-02", "severity": "LOW", "file": "frontend/src/lib/signal-model.ts:283", "finding": "F-17 收斂 `peerPhrase` 採 `=== undefined`,`peers_up: null` 時 hover 由 `-` 變印 `null`(型別上 null 進不來,但 `??` 版本更穩)。", "fix": "`sig.peers_up ?? \"-\"`。", "disposition": "fixed(`peer_touched` 保持 `=== undefined`:型別 boolean | undefined,與 null 比 TS2367)", "commit": "round-1 🔵"},
+    {"id": "S-03", "severity": "LOW", "file": "tests/server/test_signal_hub.py:286", "finding": "F-11 後的替身 `peers_fn` 丟掉未知 code,與 engine 新立的「每檔鍵仍在」契約相反,hub 側測不到 F-12 的名字保留。", "fix": "替身對未知 code 回 name=\"\" 的全 None 列。", "disposition": "fixed(`_EMPTY_PEER` 常數)", "commit": "round-1 🟢"},
+    {"id": "S-04", "severity": "LOW", "file": "frontend/src/components/stock/SignalRail.tsx:209", "finding": "chip 外移後 verification.md 無新截圖,版面無視覺證據。", "fix": "補截圖。", "disposition": "acknowledged:結構由 std F-04 新案釘住;視覺以 user 下一交易日盤中 rail 合併列(政策 + 爆拉同 tick)目視為判準,記入 verification.md §4。不為此起側車。", "commit": null},
+    {"id": "S-05", "severity": "LOW", "file": "copycat/server/signal_hub.py:214", "finding": "= std F-03(guard 零測試)。", "fix": "同 std F-03。", "disposition": "fixed(同 std F-03)", "commit": "round-1 🟢"}
+  ],
+  "spec_summary": "缺漏 0 / scope creep 0;no-op 四條區域逐字未動;硬限制(政策門檻 / 規則檔 / jsonl / WS 形狀)未破;reviewer 自跑 711 pytest + 160 vitest 全綠、F-25 fixture 重錄逐字比對一致。"
+}
