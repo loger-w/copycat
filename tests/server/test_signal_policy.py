@@ -18,7 +18,11 @@ from typing import Any
 import pytest
 
 from copycat.live.stock_state import StockDayState
-from copycat.server.signal_hub import format_signal_text
+from copycat.server.signal_hub import (
+    format_policy_group_text,
+    format_signal_group_text,
+    format_signal_text,
+)
 from copycat.stock_watchlist import Group
 from tests.server.test_signal_hub import (
     _DATE,
@@ -725,6 +729,20 @@ class TestPolicyText:
             "time": "10:01:30",
         }
         assert format_signal_text(row) == "🔔 政策 B-a｜台積電 2330｜50.40｜10:01:30"
+
+    def test_policy_group_text_without_policy_rows_falls_back_to_plain_format(self) -> None:
+        """對外函式自守「至少一列政策列」(review F-10):零政策列不炸 IndexError,退回一般批次文案。"""
+        rows = [
+            {
+                "kind": "surge",
+                "code": "2330",
+                "name": "台積電",
+                "price": 50_400,
+                "time": "10:01:30",
+                "pct": 0.6,
+            }
+        ]
+        assert format_policy_group_text(rows, peer_up_pct=3.0) == format_signal_group_text(rows)
 
 
 class TestPeersFnFailure:

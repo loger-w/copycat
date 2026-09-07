@@ -53,7 +53,11 @@ class _FakeDayBars:
 
 class _PollClock(_Clock):
     """`now_fn` 讀取計數:worker 每輪輪詢讀一次時鐘,「沒再跑」要等它真的輪詢過 N 次才斷
-    (review F-32:`sleep(0.05)` 在機器忙時可能零輪詢、斷言空轉)。"""
+    (review F-32:`sleep(0.05)` 在機器忙時可能零輪詢、斷言空轉)。
+
+    前提:`TestSchedule` 的情境(無 tick、無 Discord 佇列、無 rollover)下 worker 是**唯一**週期讀時鐘者
+    (hub 另四個 `_now_fn()` 呼叫點都在 on_tick / Discord 節流 / today_signals 路徑,本情境不跑);
+    情境變了要改成 worker 自記 poll 計數,不能沿用這個代理。"""
 
     def __init__(self, start: _dt.datetime | None = None) -> None:
         super().__init__(start)

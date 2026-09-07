@@ -283,10 +283,23 @@ class _Watch:
         self.peers_calls += 1
         if self.peers_error:
             raise RuntimeError("engine policy_quotes 壞了")
+        # 與 engine 契約同形:每一檔要求的 code 鍵都在,不認識的回全 None 列(名字空字串)
         return {
-            code: cast("PeerQuote", dict(self.peers[code])) for code in codes if code in self.peers
+            code: cast("PeerQuote", dict(self.peers.get(code) or _EMPTY_PEER)) for code in codes
         }
 
+
+#: `policy_quotes()` 對不認識 / 無資料的檔回的形狀(值欄位 None、鍵仍在)
+_EMPTY_PEER: dict[str, Any] = {
+    "name": "",
+    "price": None,
+    "ref": None,
+    "upper": None,
+    "chg_pct": None,
+    "high": None,
+    "touched_upper": None,
+    "locked_up": None,
+}
 
 #: `_Harness(daily_bars=...)` 的「未傳」哨兵(None 是合法且有意義的值)
 _UNSET: object = object()
