@@ -62,7 +62,9 @@ ruff format:新檔(`signal_policy.py` / `record_sweep_cluster_golden.py` / `test
 | 前端 build 成功 | `npm run build` ✓(上表) | PASS |
 
 側車:`evidence/fake_server.py`(neutralize + FakeStockSource + prod 規則檔副本落 tmp,port 8899,零 TC4 / ZMQ)+ `evidence/vite.sidecar.config.ts`
-(preview proxy → 8899;跑時複製到 `frontend/` 再刪)。截圖以 chrome-devtools MCP 拍,拍完關 tab、殺 8899 / 4174 兩個 process。
+(preview proxy → 8899)。取證當時是把設定檔複製到 `frontend/`、順手把 import 改成 `./vite.config` + `root: __dirname` 跑的
+(與檔頭寫的 `--config ../.claude/...` 跑法互斥,review F-06);兩檔已改為自我定位(review F-05),下次直接在
+`frontend/` 以 `--config` 指定、不複製。截圖以 chrome-devtools MCP 拍,拍完關 tab、殺 8899 / 4174 兩個 process。
 
 **盤中判準(影子期第一個交易日起,留給 user;CLAUDE.md §1 已列)**:
 - [ ] `grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列,且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記)
