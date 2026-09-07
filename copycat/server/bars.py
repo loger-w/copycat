@@ -509,17 +509,19 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
     週末查的週 K 最後一桶其實已收盤 —— 用 `tf != "D"` 這種常數兩個方向都會誤導,
     而「meta 不說謊」正是本輪的設計主軸(review P1-1)。
 
-    **與 `DAILY_FINAL_TIME` 是兩個口徑**(pr-165-review #5):過界後 tf=D 的末根雖已
-    定稿,本函式仍回 True(日曆日判準)—— 大盤頁 14:00–24:00 的「最後一根未收盤」字樣
-    因此失真。非定稿界引入(冷啟動 13:45 後首問同樣誤標),D 分支要不要吃界見
-    docs/next-time.md 08-31 pr-165-review 留尾節(期貨側不吃本欄,不受影響)。
+    **tf=D 同時吃 `DAILY_FINAL_TIME`**(pr-165-review #5;09-07 盤點 C17 修):今日那根在
+    定稿界之後已是完整日 K,只憑日曆日判準會讓大盤頁 14:00–24:00 一直印「最後一根未收盤」
+    (非定稿界引入,冷啟動 13:45 後首問同樣誤標)。分 K 不吃界:當日段本來就在進行;週 / 月
+    桶是否收盤與 14:00 無關。期貨側不吃本欄(夜盤語意另一回事),不受影響。
     """
     if not bars:
         return False
     last = bars[-1]["t"][:10]
     today_iso = today.isoformat()
-    if tf in ("1", "D"):
+    if tf == "1":
         return last == today_iso
+    if tf == "D":
+        return last == today_iso and _now_time() < DAILY_FINAL_TIME
     if tf == "M":
         return last[:7] == today_iso[:7]
     if tf == "W":
