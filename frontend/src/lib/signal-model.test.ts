@@ -9,6 +9,7 @@ import {
   kindLabel,
   mergeSignals,
   policyContextText,
+  policyTitle,
   shouldNotify,
   type SignalMsg,
 } from "@/lib/signal-model";
@@ -413,5 +414,32 @@ describe("政策組:標記 / 文案 / toast", () => {
     expect(policyContextText(bare)).toBe("同伴≥3% -・鎖過 -・-/停 -");
     const [group] = groupSignals([bare]);
     expect(formatGroupToastText(group!)).toBe("【S】2330 台積電 掃單簇 1234.5");
+  });
+});
+
+describe("policyTitle(hover 全文,整句字面;review F-18)", () => {
+  it("有族群、非最強、首筆:六段以「｜」串接", () => {
+    expect(policyTitle(policySig(), ["P"])).toBe(
+      "政策 P｜族群 記憶體｜同伴 2344華邦電 +1.0%、2408南亞科 -0.5%｜同伴≥3% 0・鎖過 無｜較前收 +0.80%・距漲停 9.13%｜0930・首筆",
+    );
+  });
+
+  it("S 無族群、族群最強、非首筆且 late:無「同伴」段、加註(族群最強)、尾段三項", () => {
+    const s = policySig({
+      policy: "S",
+      groups: [],
+      peers: [],
+      leader: true,
+      first_of_day: false,
+      late: true,
+    });
+    expect(policyTitle(s, ["S"])).toBe(
+      "政策 S｜盤前篩選名單・無族群濾網｜同伴≥3% 0・鎖過 無｜較前收 +0.80%(族群最強)・距漲停 9.13%｜0930・非首筆・late",
+    );
+  });
+
+  it("舊後端 / 缺欄:同伴段與時段段整段略過、缺值印 -,不印 undefined", () => {
+    const bare = sig({ kind: "policy", policy: "S", pct: null });
+    expect(policyTitle(bare, ["S"])).toBe("政策 S｜盤前篩選名單・無族群濾網｜同伴≥3% -・鎖過 -｜較前收 -・距漲停 -");
   });
 });

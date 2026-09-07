@@ -206,7 +206,8 @@ describe("SignalRulesDialog 編輯表單", () => {
     expect(within(cdpRow).queryByText("Discord")).toBeNull();
     const sweepRow = screen.getByTestId("rule-row-r3");
     expect(within(sweepRow).queryByText("通知")).toBeNull();
-    expect(within(sweepRow).getByText("掃單簇", { selector: "span.rounded" })).toBeTruthy();
+    // 規則名與種類徽章都叫「掃單簇」→ 兩個節點;不拿 Tailwind class 當選擇器(review F-22:圓角一改就紅)
+    expect(within(sweepRow).getAllByText("掃單簇")).toHaveLength(2);
     expect(sweepRow.textContent).toContain("30 秒內 2 掃 · 2 層 · 60 秒漲 0.3% · 冷卻 60 秒");
   });
 
