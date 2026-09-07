@@ -942,7 +942,9 @@ class TestMigrationV3ToV4:
             loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 30
         # tag 與原因綁同一行斷(review F-47):失敗時看得出是哪一半
-        assert caplog.text.count("v3→v4:規則數已達上限 30,跳過種子卡") == 1
+        hits = [r for r in caplog.records if "規則數已達上限 30,跳過種子卡" in r.getMessage()]
+        assert len(hits) == 1 and hits[0].levelname == "WARNING"
+        assert "零政策列" in hits[0].getMessage()  # 與撞名分支同一句後果(review F-29)
 
     def test_v3_empty_file_still_gets_seed(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"

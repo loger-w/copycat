@@ -55,6 +55,10 @@ _POLICY_KEYS = _SIGNAL_KEYS | {
     "t1_date",
     "t2_open",
     "t2_date",
+    # 事件日收盤 / 最高(2026-09-07 整體 review F-31 拍板:回填 worker 順手補,對帳算「放到尾盤」
+    # 與鎖死不必另抓日 K);初值 null,與 t1/t2 同一趟補
+    "d_close",
+    "d_high",
 }
 _SWEEP_RULE_ID = "r-1-000"
 # 治具宣告成 `Group`(review F-37):`Group` 加必填鍵時治具跟著紅,呼叫點也不必壓 type: ignore
@@ -781,5 +785,153 @@ class TestPeersFnFailure:
                 assert caplog.text.count("政策行情快照讀取失敗") == 2  # 換日復位
             first = next(r for r in caplog.records if "政策行情快照" in r.getMessage())
             assert first.exc_info is not None  # 帶 traceback
+        finally:
+            await h.hub.close()
+
+
+class TestReviewFollowups:
+    """2026-09-07 整體 review(PR #199 + #200)收修:政策謂詞的三個界 + 守門 + 兩則 WARNING。
+
+    三個界的補案數字(V2 實算):ref=47_547 → chg 6.000379 → round 6.0(恰等界);
+    ref=48_932 → 3.000082 → 3.0(與同伴 3.0 平手);ref=48_933 → 2.997977 → round 後 3.0、
+    不 round 是 2.998(round 兩把尺)。
+    """
+
+    async def test_chg_exactly_at_max_does_not_hit(self, tmp_path: Path, clock: _Clock) -> None:
+        """`chg < max_chg_pct` 是嚴格小於:恰等於 6.00 → P / B-a / S 都不命中(review F-07)。"""
+        h, _ = await _boot(
+            tmp_path, clock, groups=[_MEM, _SCREEN], peers={"2344": _peer("華邦電", 1.0)}
+        )
+        try:
+            _fire(h, _state(ref=47_547, upper=55_000))  # 50_400 / 47_547 → 6.0
+            await h.settle()
+            assert _policies(h) == []
+        finally:
+            await h.hub.close()
+
+    async def test_leader_tie_counts_as_leader(self, tmp_path: Path, clock: _Clock) -> None:
+        """自己 chg 與同伴最大 chg **平手**仍是族群最強(研究 `_leader = self_chg >= mx`;review F-08)。"""
+        h, _ = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 3.0)})
+        try:
+            _fire(h, _state(ref=48_932, upper=55_000))  # chg 恰 3.0
+            await h.settle()
+            assert _policies(h) == ["B-a", "B-b"]
+        finally:
+            await h.hub.close()
+
+    async def test_self_chg_rounded_to_two_places_same_ruler_as_peers(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """自己的 chg 先 round 2 再比(round-1 std F-01 的修正;review F-06 零回歸保護):
+        2.997977 → 3.0 ≥ 同伴 3.0 → 最強;不 round 是 2.998 < 3.0 → 靜默少兩列。"""
+        h, _ = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 3.0)})
+        try:
+            _fire(h, _state(ref=48_933, upper=55_000))
+            await h.settle()
+            assert _policies(h) == ["B-a", "B-b"]
+            assert [m["self"]["chg_pct"] for m in h.published if m["kind"] == "policy"] == [3.0, 3.0]
+        finally:
+            await h.hub.close()
+
+    async def test_zero_ref_evaluates_nothing_without_error_log(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """參考價 0(`to_milli_units("0")` 回 0 不是 None)→ 不評、raw 列照記、**零 ERROR**(review F-44:
+        守門拿掉的失效樣態是 ZeroDivisionError 被 `_fanout` 傘吞,只斷零政策列殺不掉)。"""
+        h, wl = await _boot(
+            tmp_path, clock, groups=[_MEM, _SCREEN], peers={"2344": _peer("華邦電", 1.0)}
+        )
+        try:
+            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+                _fire(h, _state(ref=0, upper=55_000))
+                await h.settle()
+            assert _policies(h) == []
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            assert wl.peers_calls == 0
+            assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        finally:
+            await h.hub.close()
+
+    async def test_multi_group_warning_repeats_after_rollover(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """「一檔一天一次」的一天 = 換日復位(review F-45;與 `TestPeersFnFailure` 同形)。"""
+        groups: list[Group] = [
+            {"name": "記憶體", "codes": ["2330", "2344"]},
+            {"name": "半導體", "codes": ["2330", "2408"]},
+        ]
+        peers = {"2344": _peer("華邦電", 1.0), "2408": _peer("南亞科", 0.5)}
+        h, _ = await _boot(tmp_path, clock, groups=groups, peers=peers)
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+                _fire(h, _state(ref=50_000, upper=55_000))
+                await h.settle()
+                assert caplog.text.count("多個族群組") == 1
+                h.hub.on_rollover()
+                await h.settle()
+                clock.advance(61)
+                _fire(h, _state(ref=50_000, upper=55_000))
+                await h.settle()
+                assert caplog.text.count("多個族群組") == 2
+        finally:
+            await h.hub.close()
+
+    async def test_exclude_group_name_without_match_warns_once(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """排除組名對不上任何自選群組 → 載入群組時 WARNING 一次(review F-03):user 把「ALL IN」
+        改名而沒同步設定檔時,那組會靜默變族群(研究 §8.2:ALL IN 當族群 −1,471/筆)。同一組
+        缺名重複載入不重複警告;組名補回來後再缺才再警告。"""
+        _write_rules(tmp_path, [])
+        wl = _Watch(groups=[_MEM])  # 沒有「ALL IN」這一組
+        h = _Harness(tmp_path, clock, wl=wl)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+                h.hub.on_watchlist(["2330", "2344", "2408"])
+                await h.settle()
+                hits = [r for r in caplog.records if "排除組名" in r.getMessage()]
+                assert len(hits) == 1 and "ALL IN" in hits[0].getMessage()
+                h.hub.on_watchlist(["2330", "2344", "2408", "2317"])  # 再載入一次,同一組缺名
+                await h.settle()
+                assert caplog.text.count("排除組名") == 1
+                wl.groups = [_MEM, _ALL_IN]  # 組名補回來 → 不再缺
+                h.hub.on_watchlist(["2330", "2344", "2408", "2317"])
+                await h.settle()
+                wl.groups = [_MEM]  # 又不見了 → 再警告一次
+                h.hub.on_watchlist(["2330", "2344", "2408", "2317"])
+                await h.settle()
+                assert caplog.text.count("排除組名") == 2
+        finally:
+            await h.hub.close()
+
+    async def test_peers_fn_failure_count_summarised_on_rollover(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """快照失敗第二次起不再印 traceback(F-09),但**換日時彙總當日失敗顆數**(review F-25):
+        對帳時「P 沒發」是條件不成立還是快照壞掉,要看得出那天壞了幾顆。"""
+        h, wl = await _boot(
+            tmp_path, clock, groups=[_MEM, _SCREEN], peers={"2344": _peer("華邦電", 1.0)}
+        )
+        wl.peers_error = True
+        try:
+            with caplog.at_level(logging.WARNING, logger="copycat.server.signal_hub"):
+                _fire(h, _state(ref=50_000, upper=55_000))
+                await h.settle()
+                clock.advance(61)
+                _fire(
+                    h,
+                    _state(ref=50_000, upper=55_000),
+                    base="10:03:00.000",
+                    t1="10:04:10.100",
+                    t2="10:04:30.500",
+                )
+                await h.settle()
+                assert wl.peers_calls == 2
+                h.hub.on_rollover()
+                await h.settle()
+            summary = [r for r in caplog.records if "快照失敗共" in r.getMessage()]
+            assert len(summary) == 1 and summary[0].levelname == "WARNING"
+            assert "2 顆" in summary[0].getMessage()
         finally:
             await h.hub.close()

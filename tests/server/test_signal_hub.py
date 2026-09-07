@@ -329,7 +329,8 @@ class _Harness:
         self.date = _DATE
         self.data_dir = tmp_path
         self.bars = bars if bars is not None else _FakeBars([_BAR_A])
-        cfg = replace(SignalsConfig(), basis_gap_secs=0.0, **over)  # type: ignore[arg-type]
+        # gap 預設 0(測試不等待),`**over` 可覆寫(回填逐檔 gap 案要它 > 0)
+        cfg = replace(SignalsConfig(), **{"basis_gap_secs": 0.0, **over})  # type: ignore[arg-type]
         if loud_seeds and not (tmp_path / _RULES_FILE).exists():
             # spec #192 起種子的 cdp_cross / vol_burst / sweep_cluster 通知關 —— 走「缺檔遷移」
             # 拿到的 CDP 種子不會進 Discord。要用種子集合驗 Discord 出口的測試顯式要求
@@ -2881,3 +2882,76 @@ class TestTodaySignalsUnion:
         rows = h.hub.today_signals()
         assert reads == [_DATE]
         assert rows == [{"id": "same", "code": "2330"}, {"id": "same", "code": "2330"}]
+
+
+class TestSweepClusterBoundaries:
+    """2026-09-07 整體 review 收修(review F-04 / F-39):簇窗與回看窗的**閉區間界**,以及
+    「同群多筆達標只算一個掃單」在主 seam 上的正面案。prod 個股 tick 時刻落在整秒(09-07 實錄
+    75 列 sweep / policy 時刻鍵 100% `.000`),恰差 30 s / 60 s 是常態不是邊角。"""
+
+    @staticmethod
+    def _rules(tmp_path: Path) -> None:
+        _write_rules(
+            tmp_path,
+            [_rule("sweep_cluster", "r-1-000", name="掃單簇", notify_discord=False, cooldown_secs=60)],
+        )
+
+    async def test_sweep_exactly_at_cluster_window_edge_counts(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """掃單 1 在 10:01:00.000、掃單 2 在 10:01:30.000(恰差 30 s)→ 在 [s − 30, s] 內 → 發。"""
+        self._rules(tmp_path)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:00.000", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:30.000", [50_200, 50_300, 50_400], ask=50_200)
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            assert h.published[0]["detail"]["n30"] == 2
+        finally:
+            await h.hub.close()
+
+    async def test_lookback_base_exactly_at_window_edge_counts(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """回看基準 = 「時刻 ≤ s − 60 的最後一筆」,恰等於 s − 60.000 那筆算 → 漲幅算得出來 → 發。"""
+        self._rules(tmp_path)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:30.500", ask=50_000), st)  # = s − 60
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200], ask=50_000)
+            _sweep_group(h, st, "10:01:30.500", [50_200, 50_300, 50_400], ask=50_200)
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            assert h.published[0]["detail"]["up_pct"] == pytest.approx(0.8)
+        finally:
+            await h.hub.close()
+
+    async def test_repeated_qualifying_ticks_in_one_group_count_one_sweep(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """一群內第 3、4 筆都達標(層數 2、3)只登記**一個**掃單:n30 仍 1 → 不發(重複登記會讓 n30 = 2、
+        60 s 漲 +0.6% 而在群內就發)。"""
+        self._rules(tmp_path)
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            st = _state()
+            h.hub.on_tick("2330", _tick(50_000, time="10:00:00.000", ask=50_000), st)
+            _sweep_group(h, st, "10:01:10.100", [50_000, 50_100, 50_200, 50_300], ask=50_000)
+            _sweep_group(h, st, "10:01:30.500", [50_300], ask=50_300)  # 單筆不成群
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
