@@ -230,3 +230,12 @@ def test_notify_webhook_unresolvable(_restore_point: None) -> None:
     靠 cache 釘成「已解析且為 None」壓制(review R-6)。"""
     neutralize_external_env()
     assert notify.resolve_webhook_url() is None
+
+
+def test_daily_pad_rows_parity_with_breadth() -> None:
+    """pr-175-review F-16(next-time 2026-09-02 / 09-07 盤點 B15):verify 的 EOD 填充列數是
+    `_DAILY_MIN_ROWS` 的第三份(breadth / screen 兩份已有 parity)。verify.py 刻意不 import
+    breadth_engine(免拖 fastapi 進 conftest),耦合只能在測試側釘:門檻抬高而填充沒跟 →
+    verify server 連板欄整天 null,與「管線壞掉」同形。上面 `len(day1) >= _DAILY_MIN_ROWS`
+    只在門檻抬過「填充 + 真列」才紅,這裡釘等值。"""
+    assert verify._DAILY_PAD_ROWS == be._DAILY_MIN_ROWS

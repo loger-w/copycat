@@ -384,10 +384,61 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
     expect(screen.getByText(/還沒有股票/)).toBeTruthy();
   });
 
-  it("零自訂群組 → 左欄仍有未分組,並提示可在下方新增", () => {
+  it("零自訂群組 → 左欄仍有未分組,並提示可在上方新增", () => {
     open({ codes: ["2330"], groups: [] });
     expect(screen.getByRole("button", { name: "未分組" })).toBeTruthy();
-    expect(screen.getByText("尚無群組,可在下方新增")).toBeTruthy();
+    // 09-07 盤點 B2:新增列搬到左欄頂端,引導文案的方位跟著改(事前標為「該變」的斷言)
+    expect(screen.getByText("尚無群組,可在上方新增")).toBeTruthy();
+  });
+});
+
+// 🔴 next-time 2026-08-26 A4 留尾 + 09-07 盤點 B2:`submitAddGroup` 在 commit **之前**清空輸入框,
+// 撞名 / PUT 失敗是非同步從佇列冒出來的 —— 使用者打的字先消失、錯誤文案才到。與改名(review A4)
+// 同一條規則:輸入框只在**成功後**清。順帶 user 拍板:新增列固定在左欄**最上方**(群組多時免捲到底)。
+describe("WatchlistManagerDialog 新增群組被拒時保留輸入框 + 新增列置頂(09-07 盤點 B2)", () => {
+  it("新增撞既有名 → 錯誤文案,輸入框仍留著使用者打的字", async () => {
+    open();
+    const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "觀察" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    expect(putBodies).toEqual([]);
+    expect(input.value).toBe("觀察");
+  });
+
+  it("新增 PUT 失敗(4xx)→ 錯誤文案,輸入框仍留著", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
+        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
+      }
+      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
+      return new Response(JSON.stringify(WL));
+    });
+    open();
+    const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "當沖" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
+    expect(putBodies).toHaveLength(1);
+    expect(input.value).toBe("當沖");
+  });
+
+  it("新增成功 → 輸入框才清空", async () => {
+    open();
+    const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "當沖" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+
+  it("新增列是左欄的第一個區塊(在群組清單之前)", () => {
+    open();
+    const groups = screen.getByLabelText("群組");
+    const first = groups.firstElementChild as HTMLElement;
+    expect(within(first).getByPlaceholderText("群組名稱")).toBeTruthy();
+    expect(within(first).queryByRole("button", { name: "未分組" })).toBeNull();
   });
 });
 

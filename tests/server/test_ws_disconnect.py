@@ -42,7 +42,7 @@ import copycat.server.app as app_mod
 import copycat.server.ws as ws_mod
 from copycat.live.models import SeriesInfo, Tick
 from copycat.server.app import create_app
-from copycat.server.ws import PING, WsBroadcaster, relay
+from copycat.server.ws import PING, WsBroadcaster, relay, send_seed
 from tests.helpers.boot import wait_boot
 from tests.helpers.fake_sources import (
     FakeCorrSource,
@@ -1063,3 +1063,36 @@ class TestRelay:
             if r.levelno >= logging.WARNING and r.name == "copycat.server.ws"
         ]
         assert not leaked, caplog.text
+
+
+class TestSendSeed:
+    """R4 N039 殘餘(next-time 2026-08-26 / 09-07 盤點 B3):route 層在 `relay` **之前**
+    自己送的首則 seed(txo-pnl / corr / river)只 catch `WebSocketDisconnect` —— 對端在
+    accept 後、seed 前已斷時,ASGI send 拋的是 close_sent `RuntimeError`,舊行為 = uvicorn
+    印整段 traceback。`send_seed` 把 relay 那套辨識搬到 seed 上:斷線回 False(呼叫端收尾)、
+    其餘例外照拋。
+    """
+
+    async def test_ok_returns_true_and_sends(self) -> None:
+        websocket = _FakeWebSocket()
+        assert await send_seed(websocket, {"n": 0}) is True
+        assert websocket.sent == [{"n": 0}]
+
+    async def test_websocket_disconnect_returns_false(self) -> None:
+        websocket = _RaisingWebSocket(WebSocketDisconnect(code=1006))
+        assert await send_seed(websocket, {"n": 0}) is False
+
+    async def test_close_sent_runtime_error_returns_false_without_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        websocket = _RaisingWebSocket(
+            RuntimeError('Cannot call "send" once a close message has been sent.')
+        )
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            assert await send_seed(websocket, {"n": 0}) is False
+        assert not [r for r in caplog.records if r.name == "copycat.server.ws"], caplog.text
+
+    async def test_other_runtime_error_propagates(self) -> None:
+        websocket = _RaisingWebSocket(RuntimeError("seed 送出炸了"))
+        with pytest.raises(RuntimeError, match="seed 送出炸了"):
+            await send_seed(websocket, {"n": 0})

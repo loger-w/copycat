@@ -18,6 +18,7 @@ from copycat.server.bars import (
     build_minute,
     build_period,
     clamp_days,
+    is_partial_last,
     worst_status,
 )
 
@@ -254,6 +255,27 @@ class TestPhase5Hardening:
         assert cache.hist_range("2330", old, old) == []
         assert cache.daily_get("2330", "2026-01-01") is None
         assert cache.today_get("2330", "2026-01-01") is None
+
+    # pr-165-review #8(next-time 2026-08-31 / 09-07 盤點 B11):`prune` 對 `_daily_tag` 與
+    # `_daily_pre_final` 的兩段清理刪掉全綠 —— 失效 = 純記憶體無界成長,零症狀。兩條各釘一段:
+    # 觀測點用既有 getter(`daily_tag_get` / `pre_final_written_at`),不另開 `*_count()`。
+    async def test_prune_drops_stale_daily_tag(self) -> None:
+        cache = BarsCache()
+        cache.daily_tag_put("2330", "2026-01-01", "tc4_dk")
+        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
+        cache.prune(_dt.date(2026, 7, 28))
+        assert cache.daily_tag_get("2330", "2026-01-01") is None
+        assert cache.daily_tag_get("2330", "2026-07-28") == "tc4_dk"  # 今日的留著
+
+    async def test_prune_drops_stale_pre_final_marker(self) -> None:
+        """autouse 鐘凍在 09:00(< 定稿界)→ `daily_put` 必留界前標記;prune 只清別天的。"""
+        cache = BarsCache()
+        cache.daily_put("2330", "2026-01-01", [bar("2026-01-01")])
+        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28")])
+        assert cache.pre_final_written_at("2330", "2026-01-01") == _DAYTIME
+        cache.prune(_dt.date(2026, 7, 28))
+        assert cache.pre_final_written_at("2330", "2026-01-01") is None
+        assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
 
 
 class TestEmptyNegativeCache:
@@ -887,6 +909,36 @@ class TestDailySnapshotFinality:
         third = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 界上寫入 = 定稿
         assert third.bars[-1]["c"] == 200
         assert len(fetch.calls) == 2
+
+
+class TestIsPartialLast:
+    """pr-165-review #5(next-time 2026-08-31 / 09-07 盤點 C17):tf=D 的末根「未收盤」判準。
+
+    修前是純日曆日判準(末根日期 == 今天),14:00 定稿界之後仍回 True → 大盤頁
+    14:00–24:00 印「最後一根未收盤」而 bar 早已定稿。D 分支改吃 `DAILY_FINAL_TIME`;
+    分 K / 週 K / 月 K 不動(分 K 當日段本來就在進行;週月桶是否收盤與 14:00 無關)。
+    """
+
+    def test_today_daily_bar_before_final_time_is_partial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(13, 59))
+        assert is_partial_last([bar("2026-07-28")], "D", _dt.date(2026, 7, 28)) is True
+
+    def test_today_daily_bar_at_final_time_is_not_partial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: bars_mod.DAILY_FINAL_TIME)
+        assert is_partial_last([bar("2026-07-28")], "D", _dt.date(2026, 7, 28)) is False
+
+    def test_final_time_does_not_touch_minute_week_month(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(23, 0))
+        today = _dt.date(2026, 7, 28)
+        assert is_partial_last([bar("2026-07-28 13:30")], "1", today) is True
+        assert is_partial_last([bar("2026-07-27")], "W", today) is True  # 同 ISO 週
+        assert is_partial_last([bar("2026-07-01")], "M", today) is True
 
 
 class TestFrozenRefetchSignal:
