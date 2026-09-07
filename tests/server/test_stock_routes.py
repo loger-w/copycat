@@ -884,7 +884,7 @@ class TestSignalHubGroupWiring:
             # spec #192:政策層行情快照 `peers_fn` 也接上了(漏接的失效樣態 = 政策整場零列,
             # raw 掃單簇列照記、零錯誤訊號)
             assert hub._peers_fn is not None
-            assert set(hub._peers_fn()) == {"2330", "2317"}
+            assert set(hub._peers_fn(["2330", "2317"])) == {"2330", "2317"}
 
     def test_group_rename_without_code_change_reaches_the_hub(self, tmp_path: Path) -> None:
         """B3-a 端到端:只改群組名(codes 一模一樣)也要傳到 hub。

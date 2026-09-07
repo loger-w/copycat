@@ -19,6 +19,7 @@ import pytest
 
 from copycat.live.stock_state import StockDayState
 from copycat.server.signal_hub import format_signal_text
+from copycat.stock_watchlist import Group
 from tests.server.test_signal_hub import (
     _DATE,
     _SIGNAL_KEYS,
@@ -52,9 +53,10 @@ _POLICY_KEYS = _SIGNAL_KEYS | {
     "t2_date",
 }
 _SWEEP_RULE_ID = "r-1-000"
-_MEM = {"name": "記憶體", "codes": ["2330", "2344", "2408"]}
-_SCREEN = {"name": "盤前篩選", "codes": ["2330", "6715"]}
-_ALL_IN = {"name": "ALL IN", "codes": ["2330", "2317"]}
+# 治具宣告成 `Group`(review F-37):`Group` 加必填鍵時治具跟著紅,呼叫點也不必壓 type: ignore
+_MEM: Group = {"name": "記憶體", "codes": ["2330", "2344", "2408"]}
+_SCREEN: Group = {"name": "盤前篩選", "codes": ["2330", "6715"]}
+_ALL_IN: Group = {"name": "ALL IN", "codes": ["2330", "2317"]}
 
 
 def _peer(
@@ -86,7 +88,7 @@ async def _boot(
     tmp_path: Path,
     clock: _Clock,
     *,
-    groups: list[dict[str, Any]] | None = None,
+    groups: list[Group] | None = None,
     peers: dict[str, dict[str, Any]] | None = None,
     codes: list[str] | None = None,
     sweep_notify: bool = False,
@@ -104,7 +106,7 @@ async def _boot(
             )
         ],
     )
-    wl = _Watch(groups=groups or [], peers=peers or {})  # type: ignore[arg-type]
+    wl = _Watch(groups=groups or [], peers=peers or {})
     h = _Harness(tmp_path, clock, wl=wl, **cfg)
     h.attach_bot()
     await h.hub.start()
@@ -126,6 +128,15 @@ def _fire(
     h.hub.on_tick(code, _tick(50_000, code=code, time=base, ask=50_000), st)
     _sweep_group(h, st, t1, [50_000, 50_100, 50_200], ask=50_000, code=code)
     _sweep_group(h, st, t2, [50_200, 50_300, 50_400], ask=50_200, code=code, qty=2)
+
+
+def _fmt(secs: float) -> str:
+    """秒數 → `HH:MM:SS.fff`(毫秒整數 divmod,review F-36:`ss:06.3f` 在 59.9995 進位會印 `60.000`)。"""
+    ms = round(secs * 1000)
+    hh, rem = divmod(ms, 3_600_000)
+    mm, rem = divmod(rem, 60_000)
+    ss, ms = divmod(rem, 1000)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}.{ms:03d}"
 
 
 def _policies(h: _Harness) -> list[str]:
@@ -203,7 +214,7 @@ class TestPolicyHits:
 
     async def test_peers_fn_not_called_for_other_kinds(self, tmp_path: Path, clock: _Clock) -> None:
         _write_rules(tmp_path, [_rule("cdp_cross", "r-1-000")])
-        wl = _Watch(groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})  # type: ignore[arg-type]
+        wl = _Watch(groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})
         h = _Harness(tmp_path, clock, wl=wl)
         await h.hub.start()
         try:
@@ -392,7 +403,7 @@ class TestGroupResolution:
     async def test_multi_group_union_dedup_and_one_warning(
         self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        groups = [
+        groups: list[Group] = [
             {"name": "記憶體", "codes": ["2330", "2344", "2408"]},
             {"name": "半導體", "codes": ["2317", "2330", "2344"]},
         ]
@@ -426,7 +437,7 @@ class TestGroupResolution:
 
     async def test_exclude_groups_from_config(self, tmp_path: Path, clock: _Clock) -> None:
         """`policy_exclude_groups` 走設定:ALL IN(預設)與「觀察」都不算族群。"""
-        groups = [
+        groups: list[Group] = [
             {"name": "ALL IN", "codes": ["2330", "2317"]},
             {"name": "觀察", "codes": ["2330", "2408"]},
             {"name": "記憶體", "codes": ["2330", "2344"]},
@@ -450,7 +461,7 @@ class TestGroupResolution:
             await h.hub.close()
 
     async def test_default_exclude_is_all_in_only(self, tmp_path: Path, clock: _Clock) -> None:
-        groups = [
+        groups: list[Group] = [
             {"name": "ALL IN", "codes": ["2330", "2317"]},
             {"name": "觀察", "codes": ["2330", "2408"]},
         ]
@@ -540,6 +551,7 @@ class TestDailyCounting:
             _fire(h, _state(ref=50_000, upper=55_000), base=base, t1=t1, t2=t2)
             await h.settle()
             p = h.published[-1]
+            assert p["kind"] == "policy"  # 壞掉時是可讀的失敗,不是 KeyError(review F-36)
             assert (p["tod"], p["late"]) == (tod, late)
         finally:
             await h.hub.close()
@@ -558,6 +570,7 @@ class TestDailyCounting:
             await h.settle()
             ps = [m for m in h.published if m["kind"] == "policy"]
             assert [(p["touch_count"], p["first_of_day"]) for p in ps] == [(1, True), (1, True)]
+            assert len(h.bot) == 2  # 換日後首筆**再度推播**(review F-38)
         finally:
             await h.hub.close()
 
@@ -580,15 +593,9 @@ class TestDailyCounting:
             await h.settle()
             ps = [m for m in h.published if m["kind"] == "policy"]
             assert [(p["touch_count"], p["first_of_day"]) for p in ps] == [(1, True), (1, True)]
+            assert len(h.bot) == 2  # 移出再加回後首筆**再度推播**(review F-38)
         finally:
             await h.hub.close()
-
-
-def _fmt(secs: float) -> str:
-    hh = int(secs // 3600)
-    mm = int(secs % 3600 // 60)
-    ss = secs % 60
-    return f"{hh:02d}:{mm:02d}:{ss:06.3f}"
 
 
 class TestPolicyDiscord:
@@ -623,7 +630,9 @@ class TestPolicyDiscord:
             await h.settle()
             assert len(h.bot) == 1
             lines = h.bot[0].split("\n")
+            assert len(lines) == 4
             assert lines[0] == "🔔 **【B-a・B-b】** 台積電 2330｜50.40｜10:01:30"
+            assert lines[1] == "掃單簇 2 掃・2 層・6 張・+0.80%"
             assert lines[2] == "族群 記憶體:同伴≥3% 1・最強 2344華邦電 +3.0%・鎖過 無"
             assert lines[3] == "較前收 +3.92%(族群最強)・距漲停 9.13%"
         finally:
@@ -659,7 +668,7 @@ class TestPolicyDiscord:
             ],
         )
         wl = _Watch(
-            groups=[_MEM],  # type: ignore[list-item]
+            groups=[_MEM],
             quotes={"2344": ("華邦電", 1.0), "2408": ("南亞科", -0.5)},
             peers={"2344": _peer("華邦電", 1.0), "2408": _peer("南亞科", -0.5)},
         )
@@ -716,3 +725,43 @@ class TestPolicyText:
             "time": "10:01:30",
         }
         assert format_signal_text(row) == "🔔 政策 B-a｜台積電 2330｜50.40｜10:01:30"
+
+
+class TestPeersFnFailure:
+    async def test_peers_fn_error_degrades_to_s_only_logs_once_and_resets_on_rollover(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """快照失敗(review F-33 補洞):同伴視為無報價 → P / B 不評、S 照評、raw 列照記;
+        traceback 當日只印一次(同步熱路徑,逐 tick 印會自己變瓶頸),換日後再印一次。"""
+        h, wl = await _boot(
+            tmp_path, clock, groups=[_MEM, _SCREEN], peers={"2344": _peer("華邦電", 1.0)}
+        )
+        wl.peers_error = True
+        try:
+            with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+                _fire(h, _state(ref=50_000, upper=55_000))
+                await h.settle()
+                assert _policies(h) == ["S"]  # 同伴健康時是 ["P", "S"]
+                assert [r["kind"] for r in h.rows()] == ["sweep_cluster", "policy"]
+                assert wl.peers_calls == 1
+                clock.advance(61)
+                _fire(
+                    h,
+                    _state(ref=50_000, upper=55_000),
+                    base="10:03:00.000",
+                    t1="10:04:10.100",
+                    t2="10:04:30.500",
+                )
+                await h.settle()
+                assert wl.peers_calls == 2  # 每顆事件照樣試讀(失敗不熔斷),只是不再印
+                assert caplog.text.count("政策行情快照讀取失敗") == 1  # 當日一次
+                h.hub.on_rollover()
+                await h.settle()
+                clock.advance(61)
+                _fire(h, _state(ref=50_000, upper=55_000))
+                await h.settle()
+                assert caplog.text.count("政策行情快照讀取失敗") == 2  # 換日復位
+            first = next(r for r in caplog.records if "政策行情快照" in r.getMessage())
+            assert first.exc_info is not None  # 帶 traceback
+        finally:
+            await h.hub.close()

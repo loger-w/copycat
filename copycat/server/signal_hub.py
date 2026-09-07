@@ -64,10 +64,10 @@ from copycat.live.stock_models import StockTick, _best_limit_price
 from copycat.live.stock_source import Bar, DailyBar
 from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
+from copycat.server.bars import BarsResult
 from copycat.server.overlay import compute_cdp
 from copycat.server.screen_engine import SCREEN_GROUP
 from copycat.server.signal_policy import (
-    POLICIES,
     PeerQuote,
     evaluate_policies,
     locked_up_flag,
@@ -211,6 +211,10 @@ def format_policy_group_text(rows: list[dict[str, Any]], *, peer_up_pct: float) 
     **不掛**同群摘要:政策卡第三行已是族群脈絡,再掛既有尾巴是兩份不同口徑的「同群」。
     """
     policies = [row for row in rows if _is_policy(row)]
+    if not policies:
+        # 對外函式自己守「至少一列政策列」(review F-10):唯一 caller 前面有 `any(_is_policy)` gate,
+        # 別人直呼不該拿裸 IndexError
+        return format_signal_group_text(rows)
     head = policies[0]
     tags = _dedup([str(row.get("policy", "")) for row in policies])
     others = _dedup(
@@ -328,9 +332,9 @@ class SignalHub:
         now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
         groups_fn: Callable[[], list[Group]] | None = None,
         quotes_fn: Callable[[], dict[str, tuple[str, float | None]]] | None = None,
-        peers_fn: Callable[[], dict[str, PeerQuote]] | None = None,
+        peers_fn: Callable[[list[str]], dict[str, PeerQuote]] | None = None,
         screen_group: str = SCREEN_GROUP,
-        outcome_bars: Callable[[str, str, str], Awaitable[list[Bar]]] | None = None,
+        outcome_bars: Callable[[str, str, str], Awaitable[BarsResult]] | None = None,
     ) -> None:
         self._cfg = cfg
         self._publish = publish
@@ -348,12 +352,14 @@ class SignalHub:
         self._groups_fn = groups_fn
         self._quotes_fn = quotes_fn
         self._groups: list[Group] = []
-        # 政策層(spec #192):行情快照另注入 `peers_fn`(engine `policy_quotes()`),**不動**
-        # `quotes_fn`(同群摘要的資料面,兩者形狀不同)。None = 政策層停用(同伴無報價 →
-        # P / B 不評;S 仍評 —— 它不需要同伴)。`screen_group` = 盤前篩選群組名(恆不算族群)。
+        # 政策層(spec #192):行情快照另注入 `peers_fn`(engine `policy_quotes(codes)`,只取同伴
+        # 那幾檔;review F-11),**不動** `quotes_fn`(同群摘要的資料面,兩者形狀不同)。None =
+        # 政策層停用(同伴無報價 → P / B 不評;S 仍評 —— 它不需要同伴)。`screen_group` = 盤前
+        # 篩選群組名(恆不算族群)。
         self._peers_fn = peers_fn
         self._screen_group = screen_group
-        #: T+1 / T+2 開盤價回填的日 K 來源((code, start, end) → `Bar` 列表,含 `o`);
+        #: T+1 / T+2 開盤價回填的日 K 來源((code, start, end) → `BarsResult`:bars 含 `o` + 空結果
+        #: 的 status,逾時 / 斷線由 `bars_range` 吃成空 + status、這裡只印 WARNING;review F-08);
         #: `None` = 無日 K 來源(app 層無 stock engine)→ worker 不啟動、一行 INFO。
         #: 刻意不重用 `daily_bars`:那條回的 `DailyBar` 沒有 open(overlay 只要 H/L/C)。
         self._outcome_bars = outcome_bars
@@ -1030,7 +1036,7 @@ class SignalHub:
             code,
             self._groups,
             screen_group=self._screen_group,
-            exclude=tuple(cfg.policy_exclude_groups),
+            exclude=cfg.policy_exclude_groups,
         )
         if not names and not screen_member:
             return
@@ -1040,7 +1046,7 @@ class SignalHub:
         quotes: dict[str, PeerQuote] = {}
         if peer_codes and self._peers_fn is not None:
             try:
-                quotes = self._peers_fn()
+                quotes = self._peers_fn(peer_codes)
             except Exception:
                 # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失。
                 # traceback 每日一次(review F-09):同步熱路徑,持續壞掉時逐 tick 印會自己變瓶頸
@@ -1078,9 +1084,7 @@ class SignalHub:
             "touched_upper": touched_upper_flag(high, upper) is True,
             "locked_up": locked_up_flag(price, upper, asks) is True,
         }
-        for policy in POLICIES:
-            if policy not in ctx.hits:
-                continue
+        for policy in ctx.hits:  # 已依 POLICIES 固定序(evaluate_policies 保證)
             key = (code, policy)
             count = self._policy_touch.get(key, 0) + 1
             first = count == 1
@@ -1268,18 +1272,34 @@ class SignalHub:
         total = 0
         for date, path in picked:
             try:
-                text = (await asyncio.to_thread(path.read_bytes)).decode("utf-8")
-            except (OSError, UnicodeDecodeError) as e:
+                raw = await asyncio.to_thread(path.read_bytes)
+            except OSError as e:
                 logger.warning("T+1/T+2 回填讀檔失敗,跳過 %s:%s", path.name, e)
                 continue
-            # 保留每行自己的行尾(Windows 上 `_append_jsonl` 寫的是 CRLF):被補的列只換
-            # JSON 本體、行尾原樣接回;整檔以位元組寫回,零換行翻譯
-            lines = text.splitlines(keepends=True)
-            targets: dict[str, list[tuple[int, dict[str, Any]]]] = {}
-            for i, line in enumerate(lines):
+            # **逐行位元組**處理(review F-09,2026-09-07 拍板):半寫入切在中文中間那種壞行只讓
+            # 那一行原樣保留,其餘列照補 —— 整檔嚴格解碼會讓那一天連續 `policy_outcome_days`
+            # 天整檔跳過、政策列 t1/t2 永遠 null。不能學 `read_signals` 用 errors="replace":這裡要
+            # 回寫,U+FFFD 會被寫回檔案。`bytes.splitlines` 只切 \\n / \\r / \\r\\n(str 版還切 U+2028
+            # 等,JSON 字串內出現會把一列切成兩行)。保留每行自己的行尾(Windows 上 `_append_jsonl`
+            # 寫的是 CRLF):被補的列只換 JSON 本體、行尾原樣接回;整檔以位元組寫回,零換行翻譯
+            lines = raw.splitlines(keepends=True)
+            targets: dict[str, list[tuple[int, str, dict[str, Any]]]] = {}
+            undecodable = 0
+            for i, line_bytes in enumerate(lines):
+                try:
+                    line = line_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    undecodable += 1
+                    continue
                 row = _policy_row_needing_outcome(line)
                 if row is not None:
-                    targets.setdefault(str(row.get("code", "")), []).append((i, row))
+                    targets.setdefault(str(row.get("code", "")), []).append((i, line, row))
+            if undecodable:
+                logger.warning(
+                    "T+1/T+2 回填 %s:%d 行不是合法 UTF-8,原樣保留、其餘列照補",
+                    path.name,
+                    undecodable,
+                )
             if not targets:
                 continue
             changed = 0
@@ -1295,7 +1315,7 @@ class SignalHub:
                 after = [b for b in bars if b["t"] > date]
                 t1 = after[0] if after and after[0]["o"] > 0 else None
                 t2 = after[1] if len(after) > 1 and after[1]["o"] > 0 else None
-                for i, row in idxs:
+                for i, line, row in idxs:
                     dirty = False
                     if row.get("t1_open") is None and t1 is not None:
                         row["t1_open"], row["t1_date"] = t1["o"], t1["t"]
@@ -1304,11 +1324,12 @@ class SignalHub:
                         row["t2_open"], row["t2_date"] = t2["o"], t2["t"]
                         dirty = True
                     if dirty:
-                        body = lines[i].rstrip("\r\n")
-                        lines[i] = json.dumps(row, ensure_ascii=False) + lines[i][len(body) :]
+                        body = line.rstrip("\r\n")
+                        eol = line[len(body) :]
+                        lines[i] = (json.dumps(row, ensure_ascii=False) + eol).encode("utf-8")
                         changed += 1
             if changed:
-                await asyncio.to_thread(atomic_write_bytes, path, "".join(lines).encode("utf-8"))
+                await asyncio.to_thread(atomic_write_bytes, path, b"".join(lines))
                 logger.info("T+1/T+2 回填 %s:回填 %d 列(%d 檔)", date, changed, len(targets))
                 total += changed
         logger.info("T+1/T+2 回填完成:共回填 %d 列(掃 %d 個日檔,%s..%s)", total, len(picked), start, end)
@@ -1316,14 +1337,19 @@ class SignalHub:
     async def _fetch_outcome_bars(self, code: str, start: str, end: str) -> list[Bar] | None:
         """一檔的日 K;失敗 → None(該檔本趟留 null);逐檔間隔沿 CDP 基準 worker 的 gap。"""
         assert self._outcome_bars is not None
+        bars: list[Bar] | None
         try:
-            bars = await self._outcome_bars(code, start, end)
-        except HistoryTimeoutError as exc:
-            logger.warning("T+1/T+2 回填日 K 逾時(留 null 下輪再補):%s(%s)", code, exc)
-            bars = None
+            result = await self._outcome_bars(code, start, end)
         except Exception:
             logger.exception("T+1/T+2 回填日 K 取得失敗(留 null 下輪再補):%s", code)
             bars = None
+        else:
+            bars = result.bars
+            if result.status != "ok":
+                # 逾時 / 斷線在 `bars_range` 就被吃成空 + status,不會以例外到這裡(review F-08:
+                # 原本的 `except HistoryTimeoutError` 在 prod 走不到,逾時因此零記錄)。處置與例外
+                # 相同(留 null 下輪再補),差別只有 log 等級與有沒有 traceback —— 這是預期中的暫時態
+                logger.warning("T+1/T+2 回填日 K %s(留 null 下輪再補):%s", result.status, code)
         if self._cfg.basis_gap_secs > 0:
             await asyncio.sleep(self._cfg.basis_gap_secs)
         return bars

@@ -760,22 +760,25 @@ class StockEngine:
             out[code] = (name, self._quote_payload(code)["chg_pct"])
         return out
 
-    def policy_quotes(self) -> dict[str, PeerQuote]:
-        """自選各檔的政策層行情快照(spec #192;hub 以 `peers_fn` 注入,只在掃單簇事件時讀)。
+    def policy_quotes(self, codes: Iterable[str] | None = None) -> dict[str, PeerQuote]:
+        """政策層行情快照(spec #192;hub 以 `peers_fn` 注入,只在掃單簇事件時讀)。
 
+        `codes` = 要取的檔(hub 傳同伴清單;review F-11:每顆事件對整份自選 ≤150 檔組快照、
+        hub 只讀幾個同伴是白做);None = 整份自選(取 local 參照、不迭代 `_states`,R16 理由見
+        `quotes()`)。**每一檔要求的 code 都在回傳字典裡**:no_data / 缺 meta / 未成交 / 不在
+        `_states` → 值欄位 None **但鍵仍在**(同 `quotes()`:整檔缺席會讓「族群有幾檔」跟著
+        行情波動);名字走 `state.meta`(no_data 不清名字,review F-12:對帳要看得出是哪家)。
         每檔 `PeerQuote` {name, price, ref, upper, chg_pct, high, touched_upper, locked_up}:
         鎖過 / 當下鎖死兩個旗標走 `signal_policy.touched_upper_flag / locked_up_flag`(hub 對
-        自己那一檔用同一份定義)。no_data / 缺 meta / 未成交 → 值欄位 None **但鍵仍在**
-        (同 `quotes()`:整檔缺席會讓「族群有幾檔」跟著行情波動)。`chg_pct` 走
-        `_quote_payload` 的唯一定義(分母 ref、round 2)。名單取 local 參照、不迭代 `_states`
-        (R16,理由見 `quotes()`)。
+        自己那一檔用同一份定義);`chg_pct` 走 `_quote_payload` 的唯一定義(分母 ref、round 2)。
         """
-        codes = self._watchlist
+        picked = self._watchlist if codes is None else list(codes)
         out: dict[str, PeerQuote] = {}
-        for code in codes:
+        for code in picked:
             state = self._states.get(code)
             no_data = code in self._no_data
-            meta = state.meta if state is not None and not no_data else None
+            name_meta = state.meta if state is not None else None
+            meta = name_meta if not no_data else None
             last = state.last if state is not None and not no_data else None
             price = last.price_milli if last is not None else None
             upper = meta.upper_milli if meta is not None else None
@@ -783,7 +786,7 @@ class StockEngine:
             book = state.book if state is not None and not no_data else None
             asks = book.asks if book is not None else []
             out[code] = PeerQuote(
-                name=meta.name if meta is not None else "",
+                name=name_meta.name if name_meta is not None else "",
                 price=price,
                 ref=meta.ref_milli if meta is not None else None,
                 upper=upper,

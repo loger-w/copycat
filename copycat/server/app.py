@@ -811,18 +811,19 @@ def create_app(
                     # 政策層行情快照同理 None(spec #192:同伴無報價 → P / B 不評,S 照評)
                     peers_fn: Callable[[], dict[str, PeerQuote]] | None = None
                     # T+1 / T+2 回填 worker 同理不啟動(hub 印一行 INFO)
-                    outcome_bars: Callable[[str, str, str], Awaitable[list[Bar]]] | None = None
+                    outcome_bars: Callable[[str, str, str], Awaitable[BarsResult]] | None = None
                 else:
                     daily_bars = engine.daily_bars
                     # 日別語意由 engine 單一持有(兩段式 rollover 期間 stage2 才前進)
                     trade_date_fn = lambda: engine.trade_date  # noqa: E731
                     quotes_fn = engine.quotes
                     peers_fn = engine.policy_quotes
-                    live_engine = engine
 
-                    async def _outcome_bars(code: str, start: str, end: str) -> list[Bar]:
-                        # 日 K 走 `bars_range(tf="D")`:`daily_bars` 的 `DailyBar` 沒有 open
-                        return (await live_engine.bars_range(code, "D", start, end)).bars
+                    async def _outcome_bars(code: str, start: str, end: str) -> BarsResult:
+                        # 日 K 走 `bars_range(tf="D")`:`daily_bars` 的 `DailyBar` 沒有 open。
+                        # 整顆 `BarsResult` 回去(review F-08):`bars_range` 已把逾時 / 斷線吃成
+                        # 空 + status,只回 `.bars` 會讓 13:40 撞 TC4 忙時 log 只剩「共回填 0 列」
+                        return await engine.bars_range(code, "D", start, end)
 
                     outcome_bars = _outcome_bars
                 return SignalHub(

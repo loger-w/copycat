@@ -1346,6 +1346,66 @@ class TestPolicyQuotes:
         assert q["ref"] is not None and q["upper"] is not None
         assert q["chg_pct"] == 3.45  # 與 `quotes()` / `_quote_payload` 同一把尺
         assert q["touched_upper"] is False and q["locked_up"] is False
+        await engine.close()
+
+    async def test_no_data_blanks_values_but_keeps_name(self) -> None:
+        """TC4 說查無此檔(review F-34 / F-12):值欄位 None —— 舊 `high` 不得讓 `touched_upper`
+        留 True、靜默擋掉整個族群的 P / B;名字保留(對帳要看得出是哪家)。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None and src.on_no_data is not None
+        src.on_message(_quote(cum=1, price="2550", bid="0", ask=""))  # 先摸到漲停
+        await _drain(engine)
+        assert engine.policy_quotes()["2330"]["touched_upper"] is True
+        src.on_no_data("2330")
+        await _drain(engine)
+        assert engine.policy_quotes()["2330"] == {
+            "name": "台積電",
+            "price": None,
+            "ref": None,
+            "upper": None,
+            "chg_pct": None,
+            "high": None,
+            "touched_upper": None,
+            "locked_up": None,
+        }
+        await engine.close()
+
+    async def test_book_only_before_first_trade_has_meta_but_no_price(self) -> None:
+        """有簿更新、還沒成交:meta(名字 / 參考價 / 漲停)已落地,價 / 高 / 兩旗標仍 None。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=0, qty="0"))  # 純簿更新,無成交
+        await wait_until(lambda: engine._states["2330"].meta is not None)
+        q = engine.policy_quotes()["2330"]
+        assert q["name"] == "台積電" and q["ref"] is not None and q["upper"] is not None
+        assert q["price"] is None and q["high"] is None and q["chg_pct"] is None
+        assert q["touched_upper"] is None and q["locked_up"] is None
+        await engine.close()
+
+    async def test_codes_argument_limits_snapshot_and_unknown_code_keeps_key(self) -> None:
+        """hub 只傳同伴那幾檔(review F-11):回傳恰為要求的鍵集(順序照傳入);不在 `_states`
+        的檔鍵仍在、值 None、名字空字串。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330", "2317"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, price="2400"))
+        await _drain(engine)
+        snap = engine.policy_quotes(["2330", "9999"])
+        assert list(snap) == ["2330", "9999"]
+        assert snap["2330"]["price"] == 2_400_000 and snap["2330"]["name"] == "台積電"
+        assert snap["9999"] == {
+            "name": "",
+            "price": None,
+            "ref": None,
+            "upper": None,
+            "chg_pct": None,
+            "high": None,
+            "touched_upper": None,
+            "locked_up": None,
+        }
+        await engine.close()
 
     async def test_missing_meta_keeps_keys_with_none(self) -> None:
         engine, _src = await _make()
