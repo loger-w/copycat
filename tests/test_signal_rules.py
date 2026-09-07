@@ -250,6 +250,8 @@ class TestNormalizeParams:
             ("cdp_cross", "rearm_ticks"),
             ("vol_burst", "min_window_lots"),
             ("vol_burst", "min_day_lots"),
+            ("sweep_cluster", "min_sweeps"),
+            ("sweep_cluster", "min_levels"),
         ],
     )
     def test_integer_keys_accept_integral_float(self, kind: str, key: str) -> None:
@@ -404,13 +406,15 @@ class TestDefaultRules:
         通知關仍保證 jsonl 與 WS 照走(W3)—— 這裡只釘種子旗標,不釘 fanout。
         """
         rules = default_rules(SignalsConfig(), {})
-        assert {r["kind"]: r["notify_discord"] for r in rules} == {
-            "cdp_cross": False,
-            "surge_crash": True,
-            "surge_pullback": True,
-            "vol_burst": False,
-            "limit_lock": True,
-            "sweep_cluster": False,
+        # by name 不 by kind(review F-41):kind 當 key 會把兩張回檔卡塌成一張,七條只比到六個
+        assert {r["name"]: r["notify_discord"] for r in rules} == {
+            "CDP 穿越": False,
+            "爆拉爆跌": True,
+            "爆拉回檔 1%": True,
+            "爆拉回檔 2%": True,
+            "爆量": False,
+            "鎖漲跌停": True,
+            "掃單簇": False,
         }
         assert all(r["enabled"] for r in rules)  # 通知關 ≠ 停用:事件照記
 
@@ -742,9 +746,10 @@ class TestMigrationV2ToV3:
     def test_seed_id_collision_with_existing_dedups(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`_migrate_v2` 的 while 去重迴圈(review F-04):既有規則恰佔走種子要配的 id
-        (`r-<epoch>-001`)時要往前找,不得產出重複 id —— 沒有迴圈的症狀是
-        `load_rules` 對重複 id raise → 開機 hub None → signals routes 整組 503。"""
+        """`_append_seed` 的 while 去重迴圈(review F-04;v2→v3 兩張回檔卡與 v3→v4 掃單簇同一趟走
+        同一迴圈,佔走 `-001` 時三張卡各拿 `-002 / -003 / -004`):既有規則恰佔走種子要配的 id
+        時要往前找,不得產出重複 id —— 沒有迴圈的症狀是 `load_rules` 對重複 id raise → 開機
+        hub None → signals routes 整組 503。"""
         import copycat.signal_rules as signal_rules_mod
 
         epoch = 1_700_000_000
@@ -838,8 +843,9 @@ class TestMigrationV3ToV4:
     """
 
     def _v3_set(self) -> list[Any]:
+        # 兩條翻旗對象都顯式寫前置條件 notify_discord=True(review F-46),不靠 `make` 預設
         return [
-            make("cdp_cross", id="r-1-000", name="CDP 穿越"),
+            make("cdp_cross", id="r-1-000", name="CDP 穿越", notify_discord=True),
             make("surge_crash", id="r-1-001", name="爆拉爆跌"),
             make("vol_burst", id="r-1-002", name="爆量", notify_discord=True),
             make("limit_lock", id="r-1-003", name="鎖漲跌停"),
@@ -848,6 +854,9 @@ class TestMigrationV3ToV4:
     def test_v3_file_gets_sweep_seed_and_quiet_flags(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """種子參數斷言的字面 30 / 2 / 2 / 0.3 / 60 = `SignalsConfig()` **預設值**:`_migrate_v3` 刻意
+        不吃 `configs/signals.json` 覆寫(與 `_migrate_v2` 同理由,實作 docstring 兩處明載;review F-45),
+        別把這裡改成讀 cfg。"""
         path = tmp_path / "rules.json"
         _write_versioned(path, 3, self._v3_set())
         with caplog.at_level("INFO"):
@@ -896,7 +905,7 @@ class TestMigrationV3ToV4:
         assert loaded is not None
         assert [r["notify_discord"] for r in loaded[:3]] == [True, True, True]
 
-    def test_v3_already_quiet_rule_not_logged_twice(
+    def test_v3_already_quiet_rule_not_flipped_and_not_logged(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """使用者早就把 CDP 通知關掉 → 不翻、不 log(log 只講「改了什麼」)。"""
@@ -907,12 +916,20 @@ class TestMigrationV3ToV4:
         assert loaded is not None and loaded[0]["notify_discord"] is False
         assert caplog.text.count("v3→v4:規則") == 0
 
-    def test_v3_seed_skipped_on_name_collision(self, tmp_path: Path) -> None:
+    def test_v3_seed_skipped_on_name_collision_warns_with_consequence(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """撞名跳過是 WARNING 不是 INFO(review F-16):掃單簇種子是政策層唯一的觸發源,沒進去 =
+        影子期零政策列,盤後 grep WARNING 要看得到。"""
         path = tmp_path / "rules.json"
         _write_versioned(path, 3, [make("surge_crash", id="r-1-000", name="掃單簇")])
-        loaded = load_rules(path)
+        with caplog.at_level("WARNING"):
+            loaded = load_rules(path)
         assert loaded is not None
         assert [r["kind"] for r in loaded] == ["surge_crash"]  # 既有那條原樣保留、不重複名
+        hits = [r for r in caplog.records if "跳過種子卡" in r.getMessage()]
+        assert len(hits) == 1 and hits[0].levelname == "WARNING"
+        assert "零政策列" in hits[0].getMessage()
 
     def test_v3_seed_skipped_when_full_logs_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -924,7 +941,8 @@ class TestMigrationV3ToV4:
         with caplog.at_level("WARNING"):
             loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 30
-        assert caplog.text.count("v3→v4") == 1 and "跳過種子卡" in caplog.text
+        # tag 與原因綁同一行斷(review F-47):失敗時看得出是哪一半
+        assert caplog.text.count("v3→v4:規則數已達上限 30,跳過種子卡") == 1
 
     def test_v3_empty_file_still_gets_seed(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"

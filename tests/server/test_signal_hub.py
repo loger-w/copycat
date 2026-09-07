@@ -265,6 +265,7 @@ class _Watch:
         self.peers_calls = 0
         self.groups_error = False
         self.quotes_error = False
+        self.peers_error = False
 
     def groups_fn(self) -> list[Group]:
         if self.groups_error:
@@ -276,9 +277,15 @@ class _Watch:
             raise RuntimeError("engine quotes 壞了")
         return dict(self.quotes)
 
-    def peers_fn(self) -> dict[str, PeerQuote]:
+    def peers_fn(self, codes: list[str]) -> dict[str, PeerQuote]:
+        """engine `policy_quotes(codes)` 的替身:只回要求的那幾檔(review F-11);`peers_error`
+        模擬盤中快照失敗(review F-33:hub 要降級成同伴無報價、traceback 當日一次)。"""
         self.peers_calls += 1
-        return {code: cast("PeerQuote", dict(q)) for code, q in self.peers.items()}
+        if self.peers_error:
+            raise RuntimeError("engine policy_quotes 壞了")
+        return {
+            code: cast("PeerQuote", dict(self.peers[code])) for code in codes if code in self.peers
+        }
 
 
 #: `_Harness(daily_bars=...)` 的「未傳」哨兵(None 是合法且有意義的值)

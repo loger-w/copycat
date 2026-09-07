@@ -206,13 +206,9 @@ export function SignalRail({
                         升級當日的舊 jsonl 行,整段不渲染(不留下單獨的分隔符)。
                         合併列改堆疊(kind 上 / 規則名下):並排時兩段搶同一行寬,
                         kind 154 + 規則名 92 > 可用 150,任一段都還是被切。 */}
-                    <span
-                      className={cn(
-                        "min-w-0 gap-1",
-                        // column 方向 items-baseline 無意義(退 flex-start),兩分支各自顯式
-                        merged ? "flex flex-col items-start" : "flex items-baseline",
-                      )}
-                    >
+                    {/* chip 放在 merged 容器**外**(review F-20):合併列的 kind / 規則名堆疊成 column,
+                        chip 留在裡面會自己占一行;外層 row 讓 chip 恆與 kind 段同一行。 */}
+                    <span className="flex min-w-0 items-baseline gap-1">
                       {/* 政策標記 chip(spec #192):同 tick 多政策並列;色依標記 */}
                       {tags.length === 0 ? null : (
                         <span className="flex shrink-0 gap-0.5">
@@ -230,43 +226,52 @@ export function SignalRail({
                           ))}
                         </span>
                       )}
-                      {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
-                          整段套第一則的 tone 會把其中一半畫成相反的方向。
-                          **逐段 title**(T-12):整列單一 title 看不出 kind 段與規則名段
-                          的一對一對應,改成各段自帶「label(rule)」。 */}
                       <span
                         className={cn(
-                          "min-w-0 text-xs",
-                          merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
+                          "min-w-0 gap-1",
+                          // column 方向 items-baseline 無意義(退 flex-start),兩分支各自顯式
+                          merged ? "flex flex-col items-start" : "flex items-baseline",
                         )}
                       >
-                        {segments.map((seg, i) => (
-                          <Fragment key={seg.label}>
-                            {/* 分隔符是視覺用的:讀螢幕器唸出來只會把兩段文案黏成一句 */}
-                            {i === 0 ? null : (
-                              <span aria-hidden="true" className="text-ink-muted">
-                                ・
+                        {/* **逐段各自著色**:一列裡可能同時有突破(紅)與爆跌(綠),
+                            整段套第一則的 tone 會把其中一半畫成相反的方向。
+                            **逐段 title**(T-12):整列單一 title 看不出 kind 段與規則名段
+                            的一對一對應,改成各段自帶「label(rule)」。 */}
+                        <span
+                          className={cn(
+                            "min-w-0 text-xs",
+                            merged ? "line-clamp-2 break-words whitespace-normal" : "truncate",
+                          )}
+                        >
+                          {segments.map((seg, i) => (
+                            <Fragment key={seg.label}>
+                              {/* 分隔符是視覺用的:讀螢幕器唸出來只會把兩段文案黏成一句 */}
+                              {i === 0 ? null : (
+                                <span aria-hidden="true" className="text-ink-muted">
+                                  ・
+                                </span>
+                              )}
+                              <span className={toneOf(seg.sig)} title={segmentTitle(seg)}>
+                                {seg.label}
                               </span>
-                            )}
-                            <span className={toneOf(seg.sig)} title={segmentTitle(seg)}>
-                              {seg.label}
-                            </span>
-                          </Fragment>
-                        ))}
-                      </span>
-                      {/* 規則名段固定單行 truncate:堆疊後已有整行寬(實測 92px < 150),
-                          且它只是「誰發的」,截掉時 hover title 有全文;列高上限因此
-                          封在 1 + 2 + 1 行,不是 1 + 2 + 2。 */}
-                      {ruleNames.length === 0 ? null : (
-                        <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
-                          {ruleNames.map((name, i) => (
-                            <Fragment key={name}>
-                              {i === 0 ? null : <span aria-hidden="true">・</span>}
-                              <span title={ruleTitle(group, name)}>{name}</span>
                             </Fragment>
                           ))}
                         </span>
-                      )}
+                        {/* 規則名段固定單行 truncate:堆疊後已有整行寬(實測 92px < 150),
+                            且它只是「誰發的」,截掉時 hover title 有全文;列高上限因此
+                            封在 1 + 2 + 1 行,不是 1 + 2 + 2(政策列再加第三行脈絡 =
+                            1 + 2 + 1 + 1;chip 與 kind 段同行,不另占行)。 */}
+                        {ruleNames.length === 0 ? null : (
+                          <span className="min-w-0 truncate text-[0.625rem] text-ink-dim">
+                            {ruleNames.map((name, i) => (
+                              <Fragment key={name}>
+                                {i === 0 ? null : <span aria-hidden="true">・</span>}
+                                <span title={ruleTitle(group, name)}>{name}</span>
+                              </Fragment>
+                            ))}
+                          </span>
+                        )}
+                      </span>
                     </span>
                     <span className="shrink-0 font-mono text-xs text-ink">{fmt(group.price)}</span>
                   </span>

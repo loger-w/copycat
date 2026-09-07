@@ -367,11 +367,8 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
                 rule["enabled"] = legacy_flags.get(kind, True)
                 rules.append(rule)
             continue
-        if kind == "sweep_cluster":
-            rule = _sweep_seed_rule(new_rule_id(epoch, len(rules)), cfg)
-            rule["enabled"] = legacy_flags.get(kind, True)
-            rules.append(rule)
-            continue
+        # 掃單簇**不另開分支**(review F-15):通用分支產出的欄位與 `_sweep_seed_rule` 一模一樣,
+        # 專屬分支會讓 `_QUIET_KINDS` 裡的 sweep_cluster 變成沒人讀的死資料(靜音真值只剩種子卡字面)
         rules.append(
             {
                 "id": new_rule_id(epoch, len(rules)),
@@ -433,15 +430,20 @@ def _migrate_v2(items: list[Any]) -> list[Any]:
     return out
 
 
-def _append_seed(out: list[Any], tag: str, name: str, make: Callable[[str], Rule]) -> None:
-    """遷移種子卡的共同 append 路徑(v2→v3 / v3→v4 同形,review F-04):撞名跳過 + log、
-    滿 `MAX_RULES` 跳過 + WARNING、id 撞既有則單調往前找;**就地** append 到 `out`。
+def _append_seed(
+    out: list[Any], tag: str, name: str, make: Callable[[str], Rule], *, skip_note: str = ""
+) -> None:
+    """遷移種子卡的共同 append 路徑(v2→v3 / v3→v4 同形,review F-04):撞名跳過 + WARNING
+    (`skip_note` 接在後面講後果)、滿 `MAX_RULES` 跳過 + WARNING、id 撞既有則單調往前找;
+    **就地** append 到 `out`。
     """
     existing = [cast("dict[str, Any]", item) for item in out if isinstance(item, dict)]
     names = {str(obj.get("name", "")).strip() for obj in existing}
     ids = {obj.get("id") for obj in existing}
     if name in names:
-        logger.info("訊號規則檔 %s:已有同名規則,跳過種子卡 %r", tag, name)
+        # WARNING 不是 INFO(review F-16):種子沒進去對掃單簇是「整個政策層零事件」,盤後 grep
+        # WARNING 要看得到
+        logger.warning("訊號規則檔 %s:已有同名規則,跳過種子卡 %r%s", tag, name, skip_note)
         return
     if len(out) >= MAX_RULES:
         logger.warning("訊號規則檔 %s:規則數已達上限 %s,跳過種子卡 %r", tag, MAX_RULES, name)
@@ -482,7 +484,13 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
             out.append({**obj, "notify_discord": False})
             continue
         out.append(obj)
-    _append_seed(out, "v3→v4", _SWEEP_SEED_NAME, lambda rid: _sweep_seed_rule(rid, SignalsConfig()))
+    _append_seed(
+        out,
+        "v3→v4",
+        _SWEEP_SEED_NAME,
+        lambda rid: _sweep_seed_rule(rid, SignalsConfig()),
+        skip_note="(掃單簇是政策層唯一的觸發源:種子沒進去 = 影子期零政策列)",
+    )
     return out
 
 
