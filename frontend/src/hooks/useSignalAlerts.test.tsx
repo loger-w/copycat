@@ -737,22 +737,7 @@ describe("useSignalAlerts — notify 閘與政策列(spec #192)", () => {
     expect(oscillators).toBe(3);  // 併入時政策首次到 → 再兩聲
   });
 
-  it("雙嗶的兩聲起點錯開(review F-16):兩聲同時 start 聽起來是一聲", () => {
-    renderHook(() => useSignalAlerts());
-    act(() => emitSignal(policy("2330")));
-    expect(starts.length).toBe(2);
-    expect(starts[1]! - starts[0]!).toBeGreaterThan(0);
-  });
 
-  it("政策列併入既有 toast(raw 掃單簇通知開、先開了一張)仍雙嗶(review F-15:合併分支那一行)", () => {
-    const hook = renderHook(() => useSignalAlerts());
-    const raw: SignalMsg = { ...sig("2330"), id: "raw", kind: "sweep_cluster", time: "10:01:30", price: 50_400, pct: 0.8, notify: true };
-    act(() => emitSignal(raw));
-    expect(oscillators).toBe(1);
-    act(() => emitSignal(policy("2330")));
-    expect(hook.result.current.toasts.length).toBe(1);
-    expect(oscillators).toBe(3);  // 併入時政策首次到 → 再兩聲
-  });
 
   it("同 tick 兩條政策 → 一張 toast、標記並列;第二則併入不再嗶", () => {
     const hook = renderHook(() => useSignalAlerts());

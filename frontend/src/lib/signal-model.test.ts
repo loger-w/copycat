@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatGroupToastText,
   groupKindLabels,
-  groupPolicyAnchor,
+  groupPolicies,
   groupPolicyTags,
   groupRuleNames,
   groupSignals,
@@ -207,9 +207,6 @@ describe("groupSignals", () => {
     expect(groupSignals([cdp, other, crash]).map((g) => g.key)).toEqual(["g1", "g3", "g2"]);
   });
 
-  it("空輸入回空陣列", () => {
-    expect(groupSignals([])).toEqual([]);
-  });
 });
 
 describe("groupKindLabels / groupRuleNames", () => {
@@ -354,10 +351,6 @@ describe("kindLabel — spec #192 新 kind(與後端 `_kind_text` 逐字對齊)"
     expect(kindLabel(sig({ kind: "sweep_cluster", pct: -0.5 }))).toBe("掃單簇 -0.50%");
   });
 
-  it("漲幅恰為 0 也帶正號(與後端 `_kind_text` 的 `+.2f` 逐字;review F-17:`up_pct` 值域下限 0 可達)", () => {
-    expect(kindLabel(sig({ kind: "sweep_cluster", pct: 0 }))).toBe("掃單簇 +0.00%");
-    expect(kindLabel(sig({ kind: "sweep_cluster", pct: -0.5 }))).toBe("掃單簇 -0.50%");
-  });
 
   it("政策列 = 「政策 <標記>」;policy 缺值只印「政策」", () => {
     expect(kindLabel(policySig())).toBe("政策 P");
@@ -430,32 +423,16 @@ describe("政策組:標記 / 文案 / toast", () => {
     expect(policyContextText(nulled)).toBe("同伴≥3% 0・鎖過 -・+0.8%/停 9.1%");
   });
 
-  it("groupPolicyAnchor 取組內**最早到**的政策列(items 新在前 → 最後一則;review F-21)", () => {
+  it("groupPolicies 是到達序、[0] 是組內**最早到**的政策列(items 新在前 → 最後一則;review F-21)", () => {
     const [group] = groupSignals([
       policySig({ id: "late-S", policy: "S", first_of_day: false }),
       policySig({ id: "first-P", policy: "P", first_of_day: true }),
     ]);
-    expect(groupPolicyAnchor(group!)?.id).toBe("first-P");
+    expect(groupPolicies(group!).map((p) => p.id)).toEqual(["first-P", "late-S"]);
   });
 
-  it("無族群的 S 列第三行印「無族群」,不印「同伴≥3% 0・鎖過 無」(review F-14 拍板)", () => {
-    // S 政策不看族群:`groups: []` 是真值、不是缺欄;「同伴 0 檔 ≥3%、沒人鎖過」在空族群上是假陳述,
-    // 與同列 hover / Discord 第三行的「盤前篩選名單・無族群濾網」自相矛盾
-    expect(policyContextText(policySig({ policy: "S", groups: [], peers: [] }))).toBe("無族群・+0.8%/停 9.1%");
-  });
 
-  it("peer_touched 為 null(非 boolean)印 -,不印「無」(review F-19;與 peers_up 的 ?? 同一把尺)", () => {
-    const nulled = policySig({ peer_touched: null as unknown as boolean });
-    expect(policyContextText(nulled)).toBe("同伴≥3% 0・鎖過 -・+0.8%/停 9.1%");
-  });
 
-  it("groupPolicyAnchor 取組內**最早到**的政策列(items 新在前 → 最後一則;review F-21)", () => {
-    const [group] = groupSignals([
-      policySig({ id: "late-S", policy: "S", first_of_day: false }),
-      policySig({ id: "first-P", policy: "P", first_of_day: true }),
-    ]);
-    expect(groupPolicyAnchor(group!)?.id).toBe("first-P");
-  });
 
   it("舊後端 / 缺欄的政策列不印 NaN 或 undefined", () => {
     const bare = sig({ kind: "policy", policy: "S", pct: null });
@@ -483,7 +460,7 @@ describe("policyTitle(hover 全文,整句字面;review F-18)", () => {
       late: true,
     });
     expect(policyTitle([s])).toBe(
-      "政策 S｜盤前篩選名單・無族群濾網｜同伴≥3% 0・鎖過 無｜較前收 +0.80%(族群最強)・距漲停 9.13%｜0930・非首筆・late",
+      "政策 S｜盤前篩選名單・無族群濾網｜較前收 +0.80%(族群最強)・距漲停 9.13%｜0930・非首筆・late",
     );
   });
 

@@ -274,16 +274,13 @@ export function groupPolicyTags(group: SignalGroup): PolicyTag[] {
   return out;
 }
 
-/** 組內政策列(**到達序**)。脈絡欄位同 tick 各列相同,`first_of_day` 是 per (檔, 政策)計數、
- *  各列可以不同 —— hover 的 when 段要逐列看(review F-18),所以整組給出去,不只給錨。 */
+/** 組內政策列(**到達序**;`[0]` = 最早到那則 = 第三行脈絡欄位的來源,與 Discord 合併訊息 `rows[0]`
+ *  同口徑)。脈絡欄位同 tick 各列相同,`first_of_day` 是 per (檔, 政策)計數、各列可以不同 —— hover 的
+ *  when 段要逐列看(review F-18),所以整組給出去,不只給錨。 */
 export function groupPolicies(group: SignalGroup): SignalMsg[] {
   return arrivalOrder(group).filter(isPolicy);
 }
 
-/** 組內**最早到**的政策列(第三行脈絡欄位的來源;與 Discord 合併訊息 `rows[0]` 同口徑)。 */
-export function groupPolicyAnchor(group: SignalGroup): SignalMsg | undefined {
-  return groupPolicies(group)[0];
-}
 
 function pct1(v: number | null | undefined, signed: boolean): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "-";
@@ -352,7 +349,8 @@ export function policyTitle(policies: readonly SignalMsg[]): string {
     `政策 ${tags.join("・")}`,
     groups.length > 0 ? `族群 ${groups.join("、")}` : "盤前篩選名單・無族群濾網",
     peers.length > 0 ? `同伴 ${peers.join("、")}` : "",
-    peerPhrase(sig),
+    // 無族群(`groups` 在且為空)略去「同伴≥3% n・鎖過」段:與第三行 / Discord 同口徑,同一字串內不自相矛盾
+    noGroups(sig) ? "" : peerPhrase(sig),
     `較前收 ${chgText}・距漲停 ${limitText}`,
     when,
   ]
