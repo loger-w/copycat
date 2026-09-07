@@ -280,7 +280,7 @@ function pct1(v: number | null | undefined, signed: boolean): string {
 /** 「同伴≥3% n・鎖過 有/無」—— rail 第三行與 hover 全文共用同一份(review F-17);缺欄(舊後端)
  *  印 `-`。3% 是拍板門檻的字面,列上不帶門檻,門檻解凍時只改這一處。 */
 function peerPhrase(sig: SignalMsg): string {
-  const up = sig.peers_up === undefined ? "-" : String(sig.peers_up);
+  const up = sig.peers_up ?? "-";
   const touched = sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無";
   return `同伴≥3% ${up}・鎖過 ${touched}`;
 }

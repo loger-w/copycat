@@ -334,7 +334,9 @@ def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig)
 
 def _sweep_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
     """掃單簇種子卡(spec #192):enabled、**通知關**、冷卻與參數走 `cfg` 的六個 `sweep_*` 欄。
-    `default_rules` 與 v3→v4 遷移共用 —— 兩條種子路徑分家會漂。
+    只供 v3→v4 遷移;全新安裝走 `default_rules` 的通用分支(review F-15 刪了專屬分支),兩邊欄位
+    必須一致 —— 改一邊要改兩邊(`test_v3_file_gets_sweep_seed_and_quiet_flags` 與
+    `test_seed_notify_flags_quiet_for_negative_kinds` 各釘一邊)。
     """
     return {
         "id": rule_id,
