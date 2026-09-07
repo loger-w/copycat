@@ -413,6 +413,33 @@ class TestPartialLast:
             r = c.get("/api/market/bars/TWSE?tf=D")
         assert r.json()["meta"]["partial_last"] is False
 
+    def test_stale_fallback_after_final_time_stays_partial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """two-axis review spec S-01:14:00 後 refetch 空手 → `_period_stale_or_empty` 回**界前**
+        快照(10:00 那份今日 bar),payload 與新鮮取數不可分;只看時刻會把它標成「已定稿」。
+        墊背那條路要照標未收盤(meta 不說謊)。"""
+        empty = {"on": False}
+
+        class Switchable(FakeIndexSource):
+            def fetch_bars_range_tagged(
+                self, code: str, tf: str, start: str, end: str
+            ) -> tuple[list[dict], str, str]:
+                if empty["on"]:
+                    return [], "unavailable", "ok"
+                return [_dbar(_TODAY, 1_000)], "tc4_dk", "ok"
+
+        clock = {"t": _dt.time(10, 0)}
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: clock["t"])
+        with make_client(index_source=Switchable()) as c:
+            first = c.get("/api/market/bars/TWSE?tf=D").json()
+            assert first["meta"]["partial_last"] is True
+            clock["t"] = _dt.time(14, 0)  # 過界:界前快照作廢 → refetch
+            empty["on"] = True  # TC4 掛掉:空手 → 墊背回 10:00 快照
+            second = c.get("/api/market/bars/TWSE?tf=D").json()
+        assert second["bars"] == first["bars"], "墊背路徑要回界前快照"
+        assert second["meta"]["partial_last"] is True
+
     def test_old_daily_bar_is_not_partial(self) -> None:
         with make_client(index_source=self._src("2020-01-02")) as c:
             r = c.get("/api/market/bars/TWSE?tf=D")
