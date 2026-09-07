@@ -15,6 +15,12 @@ dev = ["pytest>=8", "ruff>=0.5", "pyright>=1.1", "httpx>=0.27", "pytest-asyncio>
 line-length = 100
 target-version = "py313"
 
+[tool.ruff.lint]
+# 預設集(E4/E7/E9/F)+ logging 格式引數數量(PLE1205 多給 / PLE1206 少給):
+# `logger.info("%s %s", a)` 只有機器攔得住,人眼在四個 %s 對三個值時看不出來
+# (pr-175-review F-03;09-07 盤點 B14)。加規則前全庫掃過:存量 0。
+select = ["E4", "E7", "E9", "F", "PLE1205", "PLE1206"]
+
 [tool.pyright]
 typeCheckingMode = "basic"
 include = ["copycat", "tests"]
