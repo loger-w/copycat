@@ -364,7 +364,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **政策列形狀:`kind="policy"` + `policy ∈ {P, B-a, B-b, S}` + id `<日>-<規則id>-<代號>-policy-<標記>-<時刻鍵>`**
   (2026-09-07 起,spec #192):產生點 `signal_hub.py::_emit_policies`(欄位全集見該函式;既有 signal 欄逐字保留,
   `pct` = 60 s 漲幅、`levels=[]`、`direction=null`;raw 掃單簇列 `kind="sweep_cluster"` 另一列帶 `detail`)。讀者 =
-  前端 `lib/signal-model.ts`(`SignalKind` 多兩值;`groupPolicyTags` / `groupPolicyAnchor` / `policyContextText` /
+  前端 `lib/signal-model.ts`(`SignalKind` 多兩值;`groupPolicyTags` / `groupPolicies` / `policyContextText` /
   `policyTitle`;政策列在 kind 段顯示掃單簇文案、標記走 chip / 【】前綴)、`SignalRail.tsx`(三行 + chip 色)、
   `useSignalAlerts.ts`(雙嗶)、Discord `format_policy_group_text`(四行卡;批次含政策列即改版、不掛同群摘要)。
   文案「掃單簇 +x.xx%」「政策 P」前後端逐字對齊(`_kind_text` ↔ `kindLabel`;**零也帶正號** `+0.00%`,
@@ -399,8 +399,6 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `configs/signals.json` 覆寫);多組取成員聯集(保序去重)並 WARNING 一檔一天一次;`screen_member` = 在盤前篩選群組
   (S 政策母體)。改群組名 = 改族群(user 自己維護);改 `SCREEN_GROUP` 字面 → 盤前篩選那 ~60 檔會被當族群、S 母體變空,
   零錯誤訊號;`tests/server/test_signal_policy.py::TestGroupResolution` 釘住。排除組名**逐字比對**:自選把「ALL IN」
-  改名而設定檔沒跟 → 該組靜默變族群(研究 §8.2:−1,471/筆);hub 載入群組時比一次,缺名集合變了 WARNING「排除組名 …
-  對不上任何自選群組」一次(整體 review F-03;`prod` 無 `configs/signals.json` 時全走預設 `("ALL IN",)`)。排除組名**逐字比對**:自選把「ALL IN」
   改名而設定檔沒跟 → 該組靜默變族群(研究 §8.2:−1,471/筆);hub 載入群組時比一次,缺名集合變了 WARNING「排除組名 …
   對不上任何自選群組」一次(整體 review F-03;`prod` 無 `configs/signals.json` 時全走預設 `("ALL IN",)`)。
 
