@@ -40,6 +40,7 @@ from copycat.signal_rules import Rule
 from tests.helpers.boot import BootedClient, wait_boot
 from tests.helpers.fake_sources import FakeIndexSource
 from tests.helpers.fake_txo import FakeTxoSource
+from tests.server.test_signal_hub import _RULE_PARAMS
 from tests.server.test_stock_routes import FakeStockSource
 
 _RULES_FILE = "signal_rules.json"
@@ -55,19 +56,8 @@ _SEEDED_KINDS = [
     "sweep_cluster",
 ]
 
-_RULE_PARAMS: dict[str, dict[str, float]] = {
-    "cdp_cross": {"rearm_ticks": 5, "rearm_dwell_secs": 300},
-    "surge_crash": {"pct": 2.0, "window_secs": 300},
-    "surge_pullback": {"surge_pct": 2.0, "window_secs": 300, "pct": 1.0},
-    "vol_burst": {
-        "ratio": 3,
-        "window_secs": 300,
-        "min_elapsed_min": 15,
-        "min_window_lots": 100,
-        "min_day_lots": 500,
-    },
-    "limit_lock": {},
-}
+# 各 kind 的合法參數表直接沿 `test_signal_hub._RULE_PARAMS`(review F-39):複製件少補 sweep_cluster 時
+# `_rule_body("sweep_cluster", …)` 一寫就 KeyError
 
 
 def make_app(tmp_path: Path, *, with_stock: bool = True) -> tuple[FastAPI, FakeStockSource]:

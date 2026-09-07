@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from copycat.live.signal_state import KIND_SWITCH, SWITCH_KEYS, SignalDetector, TickContext
+from copycat.live.signal_state import (
+    KIND_SWITCH,
+    SWITCH_KEYS,
+    SignalDetector,
+    SignalEvent,
+    TickContext,
+)
 from copycat.live.stock_models import StockTick
 from copycat.signals_config import SignalsConfig
 
@@ -51,9 +57,10 @@ def _tick(
     time: str = "10:00:00.123",
     trade_date: str = _DATE,
     ask: int | None = None,
+    code: str = "2330",
 ) -> StockTick:
     return StockTick(
-        code="2330",
+        code=code,
         price_milli=price,
         qty=qty,
         cum_vol=cum,
@@ -811,15 +818,20 @@ class TestSweepClusterGolden:
         for case in fx["cases"]:
             assert len(case["ticks"]) >= 300
             assert len(case["expected_prefix"]) >= 2
+            # 以 `ms` 當 key 配對(review F-24):位置配對 + strict zip 把「兩組恰好等數量」變成硬閘,
+            # 重錄挑到有多發的股票日會直接 ValueError 而不是有意義的斷言
+            by_ms = {b["ms"]: b for b in case["expected_prefix"]}
+            research_ms = {a["ms"] for a in case["expected_research"]}
+            assert research_ms <= set(by_ms), case["code"]  # 零漏發
             # 已知差異列表:每案至少一則「發訊早於群末」(levels 低於群結束值)
             earlier = [
-                (a, b)
-                for a, b in zip(case["expected_research"], case["expected_prefix"], strict=True)
-                if a["i"] != b["i"]
+                (a, by_ms[a["ms"]])
+                for a in case["expected_research"]
+                if a["i"] != by_ms[a["ms"]]["i"]
             ]
             assert earlier, case["code"]
             for a, b in earlier:
-                assert b["i"] < a["i"] and b["levels"] <= a["levels"] and b["ms"] == a["ms"]
+                assert b["i"] < a["i"] and b["levels"] <= a["levels"]
 
     @pytest.mark.parametrize("idx", [0, 1, 2])
     def test_detector_matches_prefix_reference(self, idx: int) -> None:
@@ -846,40 +858,72 @@ class TestSweepClusterGolden:
 
 
 class TestSweepClusterState:
-    """換日 / 移出自選後掃單簇狀態清空(既有 lifecycle 契約延伸)。"""
+    """換日 / 移出自選後掃單簇狀態清空(既有 lifecycle 契約延伸)。
 
-    def _one_sweep(self, det: SignalDetector, time: str, prices: list[int], ask: int) -> None:
+    先證「同一序列不清就會發」(對照),再證清了之後不發;掃單清單與回看窗**各用一案隔離**
+    (review F-23:原本兩案的 [] 其實來自「基準價在群之後才餵、永遠當不成 base」,單欄突變全存活)。
+    回看基準要**先餵**:`_lookback` 以到達序取 [0] 當基準,晚到的早時刻筆永遠排不到首位。
+    """
+
+    _G1 = ("10:01:10.100", [50_000, 50_100, 50_200], 50_000)  # 掃單 1(2 層)
+    _G2 = ("10:01:30.500", [50_200, 50_300, 50_400], 50_200)  # 掃單 2:與 1 同 30 s 窗、60 s 漲 0.8%
+    _G3 = ("10:01:40.500", [50_400, 50_500, 50_600], 50_400)  # 掃單 3:與 2 同窗
+
+    @staticmethod
+    def _base(det: SignalDetector, code: str = "2330") -> None:
+        tick = _tick(50_000, code=code, time="10:00:00.000", ask=50_000)
+        det.evaluate(code, tick, _ctx(), _SWEEP)
+
+    @staticmethod
+    def _group(
+        det: SignalDetector, time: str, prices: list[int], ask: int, code: str = "2330"
+    ) -> list[SignalEvent]:
+        out: list[SignalEvent] = []
         for i, p in enumerate(prices):
-            det.evaluate("2330", _tick(p, cum=i + 1, time=time, ask=ask), _ctx(), _SWEEP)
+            tick = _tick(p, code=code, cum=i + 1, time=time, ask=ask)
+            out += det.evaluate(code, tick, _ctx(), _SWEEP)
+        return out
 
-    def test_reset_day_clears_sweeps_and_lookback(self) -> None:
-        clock = _Clock()
-        det = _det(clock)
-        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
-        self._one_sweep(det, "10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+    def test_control_same_sequence_without_reset_fires(self) -> None:
+        det = _det(_Clock())
+        self._base(det)
+        assert self._group(det, *self._G1) == []
+        assert len(self._group(det, *self._G2)) == 1  # n30 = 2、+0.8%
+
+    def test_reset_day_clears_sweeps(self) -> None:
+        det = _det(_Clock())
+        self._base(det)
+        self._group(det, *self._G1)
         det.reset_day()
-        # 重置後:掃單清單空(n30 = 1)、回看窗空(漲幅 0)→ 不發
-        self._one_sweep(det, "10:01:30.500", [50_200, 50_300, 50_400], 50_200)
-        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
-        ev = []
-        for i, p in enumerate([50_400, 50_500, 50_600]):
-            ev += det.evaluate(
-                "2330", _tick(p, cum=i + 1, time="10:01:40.500", ask=50_400), _ctx(), _SWEEP
-            )
-        assert ev == []
+        self._base(det)  # 回看基準重建(先餵)→ 唯一約束剩 n30
+        assert self._group(det, *self._G2) == []  # 掃單 1 已清 → n30 = 1
+
+    def test_reset_day_clears_lookback(self) -> None:
+        det = _det(_Clock())
+        self._base(det)
+        self._group(det, *self._G1)
+        det.reset_day()
+        # 不重餵基準:掃單 2 + 3 同窗(n30 = 2),只有回看窗沒清時 60 s 漲幅才算得出來
+        assert self._group(det, *self._G2) == []
+        assert self._group(det, *self._G3) == []
 
     def test_drop_code_clears_only_that_code(self) -> None:
-        clock = _Clock()
-        det = _det(clock)
-        det.evaluate("2330", _tick(50_000, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP)
-        self._one_sweep(det, "10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+        det = _det(_Clock())
+        for code in ("2330", "2317"):
+            self._base(det, code)
+            self._group(det, *self._G1, code=code)
         det.drop_code("2330")
-        ev = []
-        for i, p in enumerate([50_200, 50_300, 50_400]):
-            ev += det.evaluate(
-                "2330", _tick(p, cum=i + 1, time="10:01:30.500", ask=50_200), _ctx(), _SWEEP
-            )
-        assert ev == []  # 掃單 1 已被丟掉 → n30 = 1
+        self._base(det)  # 基準重建;掃單 1 仍應已清
+        assert self._group(det, *self._G2) == []
+        assert len(self._group(det, *self._G2, code="2317")) == 1  # 另一檔不受影響
+
+    def test_drop_code_clears_lookback(self) -> None:
+        det = _det(_Clock())
+        self._base(det)
+        self._group(det, *self._G1)
+        det.drop_code("2330")
+        assert self._group(det, *self._G2) == []
+        assert self._group(det, *self._G3) == []
 
 
 class TestSwitchKeys:

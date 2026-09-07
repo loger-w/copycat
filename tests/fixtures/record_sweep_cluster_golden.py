@@ -1,8 +1,13 @@
 """掃單簇 golden fixture 產生腳本(spec #192 seam 2;一次性手跑,產物 `sweep_cluster_golden.json` 進版控)。
 
-**參考碼逐字沿研究腳本**(`C:\\Users\\USER\\Documents\\copycat-trading-review\\scripts\\combo_events.py`
-的 `find_sweeps` + 主迴圈 sweepc 段、`sweep_prefix_scan.py` 的 prefix 規則),不是 copycat 的
-偵測器 —— 這樣 expected 才有 oracle 意義(線上定義漂掉時只有偵測器那邊紅)。
+oracle 強度分兩半(review F-26),別把整支當研究真值:
+
+- **研究真值**(逐字沿 `C:\\Users\\USER\\Documents\\copycat-trading-review\\scripts\\combo_events.py`
+  的 `find_sweeps` + 主迴圈 sweepc 段):`groups` / `find_sweeps_final` / `clusters_final` →
+  `expected_research`。線上定義漂掉時只有偵測器那邊紅。
+- **本腳本自寫的第二份即時判實作**:`clusters_prefix` 的前半(群內達標即登記掃單)沿
+  `sweep_prefix_scan.py`,後半(簇窗 / 60 s 漲幅 / 去重 / qty 前綴)研究裡**沒有對應物**,是這次
+  依 spec 字面另寫的(bisect 與偵測器的 deque 不同機制,仍有對照價值)→ `expected_prefix`。
 
 兩組期望:
 
@@ -57,13 +62,20 @@ def tick_size(p: float) -> float:
     return 5.0
 
 
+#: 線上偵測器的 session gate(`signal_state._SESSION_START/_END`,[09:00, 13:30) end-exclusive)
+SESSION_START_MS = 9 * 3_600_000
+SESSION_END_MS = (13 * 3600 + 30 * 60) * 1000
+
+
 def load_rows(path: Path) -> list[Row]:
-    """研究 loader 同款:濾 價 / 量 ≤ 0,買一 / 賣一 None → 0。"""
+    """研究 loader 同款:濾 價 / 量 ≤ 0,買一 / 賣一 None → 0;另加線上偵測器的 [09:00, 13:30)
+    session gate(review F-25:研究 loader 沒有,08:xx 試撮列 / 13:30:00 收盤撮合列參考碼收、
+    偵測器丟 —— 現行三案該毫秒各只一筆不成群所以等式沒差,重錄挑到別的日子才會出事)。"""
     raw: list[list[float | None]] = json.loads(path.read_text(encoding="utf-8"))
     out: list[Row] = []
     for r in raw:
         ms, p, q, b, a = r
-        if p and p > 0 and q and q > 0:
+        if p and p > 0 and q and q > 0 and SESSION_START_MS <= (ms or 0) < SESSION_END_MS:
             out.append([float(ms or 0), float(p), float(q), float(b or 0.0), float(a or 0.0)])
     return out
 
@@ -145,7 +157,10 @@ def clusters_prefix(
     dedup: float = 60,
 ) -> list[dict[str, Any]]:
     """即時判(線上偵測器語意):掃單達標當筆即登記 s;之後群內每筆重算(hi / qty 隨前綴長大)
-    直到發訊;冷卻 = 發訊後 dedup 秒內不發(以 tick 時刻當時鐘)。事件掛在發訊那一筆。"""
+    直到發訊;冷卻 = 發訊後 dedup 秒內不發(以 tick 時刻當時鐘)。事件掛在發訊那一筆。
+
+    前半(達標即登記)沿研究 `sweep_prefix_scan.py`;後半(簇窗 / 漲幅 / 去重 / qty 前綴)研究
+    沒有對應物,是本腳本依 spec 字面自寫的第二份實作 —— 對照偵測器有價值,但不是研究 oracle。"""
     sec = [r[0] / 1000.0 for r in rows]
     out: list[dict[str, Any]] = []
     sw_secs: list[float] = []  # 已登記的掃單時刻(升冪)
