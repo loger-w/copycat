@@ -1,0 +1,22 @@
+{
+ "fixed_point": "60137dae (master merge-base)",
+ "reviewed_head": "1ee97f92 (整體 review 收修四筆:d18f4b67 / ddb1a537 / 80ea7eed / 1ee97f92)",
+ "reviewers": {"standards": "opus (general-purpose sub-agent)", "spec": "opus (general-purpose sub-agent)"},
+ "spec_source": "pr-199-200-review.md F-01..F-47 + user 2026-09-07 拍板(F-01 b / F-10 / F-11 / F-14 a / F-20 a / F-31 b;40 auto-fix 全修;F-47 no-op;推播窗維持 12:30)",
+ "standards": [
+  {"id": "F-01", "severity": "HIGH", "file": "copycat/server/signal_hub.py:382-388", "finding": "policy_outcome_days 驗證區塊(含註解)逐字貼兩次(補丁腳本重跑,新字串包含舊字串的冪等判斷失效)。", "fix": "刪第二段。", "disposition": "fixed", "commit": "round-1 🔴 fix(signals)"},
+  {"id": "F-02", "severity": "HIGH", "file": "frontend/src/lib/signal-model.test.ts / SignalRail.test.tsx / useSignalAlerts.test.tsx / copycat/signal_rules.py:517-521", "finding": "同型「patch 套兩次」散在四處:三個前端測試檔各有 it 兩份(F-14 / F-19 / F-21 / F-13 / F-15 / F-16 / F-17)、signal_rules 回退 docstring 段 ×2。", "fix": "各刪重複份;以同名 it 去重腳本收尾。", "disposition": "fixed(vitest 3024 → 3015 = 重複 9 條;docstring ×2 → 1)", "commit": "round-1 🔴 fix(signals) + 🔴 fix(frontend)"},
+  {"id": "F-03", "severity": "MED", "file": "frontend/src/lib/signal-model.ts::policyTitle", "finding": "F-14 只修了 rail 第三行;hover 仍輸出「盤前篩選名單・無族群濾網｜同伴≥3% 0・鎖過 無」,同一字串內自相矛盾。", "fix": "noGroups(sig) 時略去 peerPhrase 段。", "disposition": "fixed(測試字面同步)", "commit": "round-1 🔴 fix(frontend)"},
+  {"id": "F-04", "severity": "MED", "file": "frontend/src/lib/signal-model.ts::groupPolicyAnchor", "finding": "生產端已無呼叫者(SignalRail 改吃 groupPolicies(group)[0]),只剩自家測試(Middle Man / 與 F-27 同型)。", "fix": "刪掉、測試改測 groupPolicies。", "disposition": "fixed(CLAUDE.md 讀者名同步改)", "commit": "round-1 🔴 fix(frontend) + chore docs"},
+  {"id": "F-05", "severity": "LOW", "file": "frontend/src/lib/signal-model.ts:105", "finding": "signedPct2 與 format.ts fmtPct 只差 >= / >;同檔另有 pct1,三個百分比格式器。", "fix": "fmtPct(v, {zeroSign})。", "disposition": "rejected:fmtPct 對 0 不帶號是各處顯示的既有口徑(surge / crash / 損益等),契約點名逐字對齊的只有 _kind_text ↔ kindLabel 這一對;加參數等於讓所有 fmtPct 呼叫者多一個決策點,docstring 已載明理由。", "commit": null},
+  {"id": "F-06", "severity": "LOW", "file": "commits d18f4b67 / ddb1a537", "finding": "🔴 行為修正 commit 內含新增測試(🟢);前一 PR 是拆 test(...) 一筆。", "fix": "紅先行測試獨立成 test(signals)。", "disposition": "acknowledged:與 #200 的 ae750d3b 同形(🔴 fix 同 commit 含對應紅先行測試,verification.md §1 明寫);守門型測試(釘現行行為)與新行為的紅先行案在同一批補丁裡,分開只能用 add -p(互動,不可用)或重寫檔案;下次批次收修先拆兩個腳本。", "commit": null},
+  {"id": "F-07", "severity": "LOW", "file": "copycat/server/signal_hub.py:1363 / tests/server/test_signal_outcome.py:236", "finding": "新增兩行被 ruff format --diff 挑出(既有檔未全 format,只對齊新增行)。", "fix": "手動照 ruff 建議斷行。", "disposition": "fixed", "commit": "round-1 🔴 fix(signals) + 🟢 test(signals)"},
+  {"id": "F-08", "severity": "LOW", "file": "tests/server/test_signal_outcome.py::test_basis_gap_sleep_between_codes", "finding": "monkeypatch hub_mod.asyncio.sleep 改到全域 asyncio 模組,範圍大於待測 seam。", "fix": "注入 sleep seam 或 patch hub_mod 自己的別名。", "disposition": "acknowledged:fake 委派給真 sleep(0),其他消費者(worker 輪詢)不受影響,monkeypatch teardown 還原;hub 沒有自己的 sleep 別名,加別名只為測試是 Speculative Generality。", "commit": null}
+ ],
+ "spec": [
+  {"id": "S-01", "severity": "HIGH", "file": "六處(signal_hub.py / signal_rules.py / CLAUDE.md:400-404 / 三個前端測試檔)", "finding": "修錯:補丁重貼兩次;報告 #28 要的是一份、測試也只要求補一案;全綠零訊號。", "fix": "每處刪重複份。", "disposition": "fixed(CLAUDE.md 族群段那一份標準軸沒抓到,由此條補齊)", "commit": "round-1 四筆"},
+  {"id": "S-02", "severity": "MED", "file": "tests/server/test_signal_routes.py", "finding": "缺漏:F-46(auto-fix)未做 —— 全檔無 _rule_body(\"sweep_cluster\") 往返案。", "fix": "照 test_post_surge_pullback_round_trips 複製。", "disposition": "fixed(test_post_sweep_cluster_round_trips:五鍵精確集合 + cdp_levels == [] + GET 回讀)", "commit": "round-1 🟢 test(signals)"},
+  {"id": "S-03", "severity": "LOW", "file": "frontend/src/lib/signal-model.ts:284", "finding": "creep:groupPolicyAnchor 在 F-18 改用 groupPolicies 後只剩測試 caller —— 同批 F-27 剛拿掉的 Speculative Generality。", "fix": "內聯或標明僅測試用。", "disposition": "fixed(= std F-04,刪除)", "commit": "round-1 🔴 fix(frontend)"}
+ ],
+ "spec_summary": "F-10 / F-31 / F-14 / F-17 / F-18 與拍板逐字;F-02/04/05/06/07/08/09/39/40/41/42/43/44/45 補案皆在;F-01 repo 內零誤動;F-47 no-op;policy_push_end 未動;白名單 W1–W12 破壞:無。標準軸 8 條:修 5 / 否決 1 / 知情 2;spec 軸 3 條全修。"
+}
