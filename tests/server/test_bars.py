@@ -19,6 +19,7 @@ from copycat.server.bars import (
     build_period,
     clamp_days,
     is_partial_last,
+    period_bars_pre_final,
     worst_status,
 )
 
@@ -930,6 +931,30 @@ class TestIsPartialLast:
     ) -> None:
         monkeypatch.setattr(bars_mod, "_now_time", lambda: bars_mod.DAILY_FINAL_TIME)
         assert is_partial_last([bar("2026-07-28")], "D", _dt.date(2026, 7, 28)) is False
+
+    def test_pre_final_snapshot_stays_partial_after_final_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """墊背路徑(spec S-01):呼叫端明知 bars 是界前快照 → 界後仍未收盤。"""
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(14, 0))
+        today = _dt.date(2026, 7, 28)
+        assert is_partial_last([bar("2026-07-28")], "D", today, pre_final=True) is True
+        assert is_partial_last([bar("2026-07-27")], "D", today, pre_final=True) is False  # 非今日
+
+    def test_period_bars_pre_final_tracks_the_long_window_marker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`period_bars_pre_final` 讀的是 `build_period` 的 `|L` 鍵:界前寫入 → True;界後成功
+        refetch(`daily_put` pop 標記)→ False;界後空手(標記不動)→ 仍 True。"""
+        cache = BarsCache()
+        today = _dt.date(2026, 7, 28)
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(10, 0))
+        cache.daily_put("IX0001|L", "2026-07-28", [bar("2026-07-28")])
+        assert period_bars_pre_final(cache, "IX0001", today) is True
+        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(14, 0))
+        assert period_bars_pre_final(cache, "IX0001", today) is True  # 空手不碰標記
+        cache.daily_put("IX0001|L", "2026-07-28", [bar("2026-07-28", 101)])  # 界後成功
+        assert period_bars_pre_final(cache, "IX0001", today) is False
 
     def test_final_time_does_not_touch_minute_week_month(
         self, monkeypatch: pytest.MonkeyPatch

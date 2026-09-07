@@ -396,6 +396,9 @@ describe("WatchlistManagerDialog 左右兩欄(round4 項 4)", () => {
 // 撞名 / PUT 失敗是非同步從佇列冒出來的 —— 使用者打的字先消失、錯誤文案才到。與改名(review A4)
 // 同一條規則:輸入框只在**成功後**清。順帶 user 拍板:新增列固定在左欄**最上方**(群組多時免捲到底)。
 describe("WatchlistManagerDialog 新增群組被拒時保留輸入框 + 新增列置頂(09-07 盤點 B2)", () => {
+  const { gatePuts, releaseOk, releaseFail } = makeGate();
+  const addButton = () => screen.getByLabelText("新增群組") as HTMLButtonElement;
+
   it("新增撞既有名 → 錯誤文案,輸入框仍留著使用者打的字", async () => {
     open();
     const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
@@ -407,20 +410,14 @@ describe("WatchlistManagerDialog 新增群組被拒時保留輸入框 + 新增�
   });
 
   it("新增 PUT 失敗(4xx)→ 錯誤文案,輸入框仍留著", async () => {
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        putBodies.push(JSON.parse(String(init.body)) as Watchlist);
-        return new Response(JSON.stringify({ detail: { error: "BAD_GROUP" } }), { status: 400 });
-      }
-      if (url.includes("/api/stock/names")) return new Response(JSON.stringify(NAMES));
-      return new Response(JSON.stringify(WL));
-    });
+    gatePuts(); // 檔頂共用 gate(review std F-05:不再第四份 inline 400 mock)
     open();
     const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "當沖" } });
     fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    releaseFail();
     await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
-    expect(putBodies).toHaveLength(1);
     expect(input.value).toBe("當沖");
   });
 
@@ -431,6 +428,44 @@ describe("WatchlistManagerDialog 新增群組被拒時保留輸入框 + 新增�
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(putBodies).toHaveLength(1));
     await waitFor(() => expect(input.value).toBe(""));
+  });
+
+  // review std F-03:成功回呼若無條件清空,PUT 在途時使用者已接著打的下一個組名會被吃掉 ——
+  // 與本修要解的「字被丟掉」同形。只清「這一發送出的那個名字」。
+  it("PUT 在途時已打下一個組名 → 前一發成功回來不得吃掉新打的字", async () => {
+    gatePuts();
+    open();
+    const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "當沖" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    fireEvent.change(input, { target: { value: "隔日沖" } }); // 在途期間接著打
+    releaseOk();
+    // 該發結束 = 「新增」鈕由 in-flight 停用回到可按(onSettled),此時 onDone 必已跑過
+    await waitFor(() => expect(addButton().disabled).toBe(false));
+    expect(input.value).toBe("隔日沖");
+  });
+
+  // review spec S-02:留著字就失去「清空 = 重送防護」,要另設守門(照 renameInFlight 形狀;
+  // next-time 08-26 A4 留尾原文)。守門的可觀測面 = 「新增」鈕在途停用;第二發不排隊、不產生
+  // 「在第一發成功後撞名 → BAD_GROUP」的假錯誤(舊 N115 #1 釘的那條路自此不可達,見該處)。
+  it("PUT 在途時再按 Enter / 按鈕 → 第二發不排隊、無錯誤文案;該發結束守門解除", async () => {
+    gatePuts();
+    open();
+    const input = screen.getByPlaceholderText("群組名稱") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "當沖" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(1));
+    expect(addButton().disabled).toBe(true);
+    fireEvent.keyDown(input, { key: "Enter" }); // 在途重按
+    releaseOk();
+    await waitFor(() => expect(addButton().disabled).toBe(false));
+    expect(putBodies).toHaveLength(1);
+    expect(screen.queryByText("群組名稱不合法")).toBeNull();
+    fireEvent.change(input, { target: { value: "隔日沖" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(putBodies).toHaveLength(2)); // 守門已解除,新的一發照送
+    releaseOk();
   });
 
   it("新增列是左欄的第一個區塊(在群組清單之前)", () => {
@@ -530,16 +565,23 @@ describe("WatchlistManagerDialog 佇列視窗內的撞名與交錯(N115 / N118)"
 
   /** N115 的核心:eager 檢查在 render 閉包的 `wl` 上,佇列前段剛建好的同名組它看不到 →
    *  **驗證放行**。舊實作套用時 `addGroup` 回原物件 → 深度比對 dedup → 零 PUT、**零文案**,
-   *  而輸入框已經清空了 = 看起來完全成功。修法:撞名判定搬進 transform(回 null)。 */
-  it("N115:佇列視窗內建同名組 → 第二發零 PUT **且有 BAD_GROUP 文案**", async () => {
+   *  而輸入框已經清空了 = 看起來完全成功。修法:撞名判定搬進 transform(回 null)。
+   *
+   *  2026-09-07 B2 起「新增」有在途守門(`addInFlight`,next-time 08-26 A4 留尾預告的「另設守門」):
+   *  同一個輸入框在途重送**不再進佇列**,舊斷言「第二發零 PUT 且有 BAD_GROUP 文案」那條路自此
+   *  不可達 —— 事前標為該變。transform 側撞名判定仍由下一案(改名撞在途新組)與
+   *  「新增撞既有名」案釘住;本案改釘守門本身。 */
+  it("N115:佇列視窗內再送同名 → 守門擋下,零 PUT、零文案(不再是假 BAD_GROUP)", async () => {
     gatePuts();
     open();
     addGroupNamed("當沖");
     await waitFor(() => expect(putBodies).toHaveLength(1));
-    addGroupNamed("當沖"); // 第一發仍在途,render 閉包的 wl 還沒有「當沖」→ eager 放行
+    addGroupNamed("當沖"); // 第一發仍在途 → addInFlight 擋下,不進佇列
     releaseOk();
-    await waitFor(() => expect(screen.getByText("群組名稱不合法")).toBeTruthy());
-    await new Promise((r) => setTimeout(r, 30));
+    await waitFor(() =>
+      expect((screen.getByLabelText("新增群組") as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.queryByText("群組名稱不合法")).toBeNull();
     expect(putBodies).toHaveLength(1);
   });
 
@@ -736,6 +778,8 @@ describe("WatchlistManagerDialog selected 收斂(round4 項 4)", () => {
     expect(screen.queryByDisplayValue("主力")).toBeNull(); // 改名態已離開
     expect((screen.getByPlaceholderText(/加入自選/) as HTMLInputElement).value).toBe("");
     expect(screen.queryByText("群組名稱不合法")).toBeNull();
+    // review S-03:被拒後保留的組名「觀察」不得殘留到下次開啟(錯誤橫幅已清,字留著沒有解釋)
+    expect((screen.getByPlaceholderText("群組名稱") as HTMLInputElement).value).toBe("");
   });
 });
 
