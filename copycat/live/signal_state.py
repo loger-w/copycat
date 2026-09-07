@@ -100,7 +100,8 @@ class SignalEvent:
     pct: float | None
     touch_count: int  # 當日計數;合併事件取 levels[0] 的計數
     # sweep_cluster 專用 {n30, levels, qty, up_pct}(spec #192);既有 kind 恆 None —— 選配欄放最後、
-    # 預設 None,既有建構點零改動
+    # 預設 None,既有建構點零改動。**不可雜湊**:frozen dataclass 裝 dict,帶 detail 的事件 `hash()`
+    # 是 TypeError(消費端只 list 傳遞、零 hash 呼叫點;要進 set / dict key 先改 tuple-of-pairs)
     detail: dict[str, float] | None = None
 
 
@@ -295,7 +296,8 @@ class SignalDetector:
         ctx: TickContext,
         enabled: frozenset[str],
     ) -> list[SignalEvent]:
-        """一筆成交 tick → 事件清單。三道 gate 任一不過:回 [] 且**不推進任何狀態**。"""
+        """一筆成交 tick → 事件清單。前兩道 gate(盤外 / 舊日 snapshot)不過:回 [] 且**不推進
+        任何狀態**;第三道(首 tick 只初始化)之前掃單簇軸已推進回看窗與同毫秒群(回值仍 [])。"""
         now = self._now_fn()
         if not self._in_session(now):
             return []
