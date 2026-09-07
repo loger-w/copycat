@@ -1,9 +1,20 @@
+## 2026-09-08(pr-202 review 收修 留尾)
+
+- [ ] **C17 的修法只蓋到「重新載入」的大盤頁;整天掛著的 preview 頁 14:00 後仍印「· 最後一根未收盤」到午夜**
+  (pr-202-review F-01;`frontend/src/hooks/useMarketBars.ts` D/W/M 的 staleTime / refetchInterval 走
+  `lib/day-bars-rollover.ts` 的午夜界;成功且非空的 200 不重抓(`retryEmpty` 只救空 bars);`MarketChart.tsx:162` 是唯一讀者)。後端 `partial_last`
+  已對(含墊背路徑),錯的只是常開頁那份 body 的文案、bar 值正確。候選 = 大盤日 K 的重抓時點加 14:00 界(與 08-31
+  「前端期貨日 K 的界仍是午夜」是同一張三支同源政策表的分岔題,**併 W2 的 C16 一起議**),或前端比照 `FuturesChart`
+  不信 `partial_last` 自算。
+- [x] ~~pr-202-review F-02 ruff `select` → `extend-select`;F-03 `addInFlight` keyed 解除;F-04 守門與註解順序;F-05 `build_period`
+  回 `PeriodBars(bars, tag, pre_final)`(route 不二讀快取)~~ → fix/pr-202-review-followups 一次收修。
+
 ## 2026-09-07(next-time 盤點,user 逐條拍板;編號 A/B/C 是當次盤點的臨時編號)
 
 - 盤點口徑:A = 有期限的看盤判準、B = 可直接動工、C = 觀察 / 拍板題;user 決定看盤觀察類先略過,逐條以使用心得回答 C 桶。
 - **W1 批(本分支 mod/next-time-batch-w1)**:B2 新增群組(輸入框失敗不清空 + 新增列搬到左欄頂端)/ B3 WS 首則 seed send 關閉錯誤不印 traceback /
   B11 `BarsCache.prune` 清理補測試 / B14 ruff 加 `PLE1205/PLE1206`(先掃存量)/ B15 verify.py `_DAILY_PAD_ROWS` parity / C17 日 K 末根 14:00 後不再標未收盤。
-- **W2 批(`/mod`,W1 後)**:C16 期貨日 K 15:00 錨定翻頁換新 / C21 盤前篩選放棄後每小時重試 / C22 當沖名單太短視同未發布 / C18 輪詢頁跨 09:00 自醒。
+- **W2 批(`/mod`,W1 後)**:C16 期貨日 K 15:00 錨定翻頁換新(+ pr-202-review F-01 大盤日 K 14:00 界同議,見 09-08 節)/ C21 盤前篩選放棄後每小時重試 / C22 當沖名單太短視同未發布 / C18 輪詢頁跨 09:00 自醒。
 - **W3 重構(各自 🔵 分支,依序)**:B12 `DailyEntry`(B11 測試釘住後)→ B10 + B18 兩邊測試鷹架抽 fixture → B8 指數疊線 registry 表 + B9 時間編解碼收兩支
   → B7 四處小重複各自抽 → B6 重連同形(先 characterization 再決定抽不抽)→ B17 序號跳號純狀態機(先議 seam)。
 - **保留不動**:回測 B1(fade / tday 效能候選)/ B13(`backfill_daytrade` BuyAfterSale `Y` 誤剔);期貨未測批 C3 真市價鈕 / C7 期貨成交契約碼 /
