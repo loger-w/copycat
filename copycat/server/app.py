@@ -55,7 +55,6 @@ from copycat.server.bars import (
     build_period,
     clamp_days,
     is_partial_last,
-    period_bars_pre_final,
 )
 from copycat.notify import notify_discord
 from copycat.server.discord_bot import Bot, create_bot
@@ -1772,7 +1771,7 @@ def create_app(
         # bars 抓取仍走**牆鐘**(W3:K 線的日期邏輯本輪不動 —— 多抓一天不會少資料);
         # 疊線基準日則走顯示中的交易日(SC-13),與個股 overlay 同源。
         today = _today()
-        bars, _tag = await build_period(tagged, bars_cache, "IX0001", today, "D")
+        bars = (await build_period(tagged, bars_cache, "IX0001", today, "D")).bars
         daily: list[DailyBar] = [
             {"date": b["t"][:10], "high": b["h"], "low": b["l"], "close": b["c"]} for b in bars
         ]
@@ -1889,18 +1888,17 @@ def create_app(
                 # 給一個恆 "ok" 等於在 proxy miss 時說「問到了、就是沒有」
                 status=status if key in FUTURES_MARKET_KEYS else None,
             )
-        # 日 / 週 / 月 K 走 `build_period`,它回的是 `TaggedBars` 沒有 status 欄 →
+        # 日 / 週 / 月 K 走 `build_period`,它回的是 `PeriodBars` 沒有 status 欄 →
         # 不給這一格(未三態化)。要一起做得動 `bars.py` 的 cache 型別(白名單 §0.2-1)。
-        bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
+        bars, tag, pre_final = await build_period(tagged_source, bars_cache, code, today, tf)
         return _market_payload(
             key,
             tf,
             bars,
             source=tag,
-            # 墊背路徑(界後 refetch 空手回界前快照)的今日 D bar 仍未定稿 → 照標未收盤
-            partial_last=is_partial_last(
-                bars, tf, today, pre_final=period_bars_pre_final(bars_cache, code, today)
-            ),
+            # 墊背路徑(界後 refetch 空手回界前快照)的今日 D bar 仍未定稿 → 照標未收盤;
+            # `pre_final` 與 bars 同一趟同一同步區塊取值(pr-202-review F-05),route 不二讀快取
+            partial_last=is_partial_last(bars, tf, today, pre_final=pre_final),
         )
 
     # ---- market breadth(家數帶 / 騰落線;market-overview R2 §6)----
