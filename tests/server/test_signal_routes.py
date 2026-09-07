@@ -609,6 +609,26 @@ class TestSignalRulesRoutes:
             assert created["cdp_levels"] == []
             assert [x for x in _rules(client) if x["id"] == created["id"]] == [created]
 
+    def test_post_sweep_cluster_round_trips(self, tmp_path: Path) -> None:
+        """掃單簇的 wire 鏈(body → normalize 五參數精確集合 → save → GET);與 surge_pullback 同形的先例
+        (整體 review F-46:`_RULE_PARAMS` 改共用後整檔沒有一個 sweep_cluster 呼叫)。"""
+        app, _ = make_app(tmp_path)
+        with BootedClient(app, raise_server_exceptions=False) as client:
+            r = client.post("/api/stock/signals/rules", json=_rule_body("sweep_cluster", "掃單簇 2"))
+            assert r.status_code == 201
+            created = r.json()
+            assert created["kind"] == "sweep_cluster"
+            assert set(created["params"]) == {
+                "cluster_window_secs",
+                "min_sweeps",
+                "min_levels",
+                "up_pct",
+                "up_window_secs",
+            }
+            assert created["params"] == dict(_RULE_PARAMS["sweep_cluster"])
+            assert created["cdp_levels"] == []
+            assert [x for x in _rules(client) if x["id"] == created["id"]] == [created]
+
     def test_put_edits_in_place_and_hot_reloads(self, tmp_path: Path) -> None:
         app, _ = make_app(tmp_path)
         with BootedClient(app, raise_server_exceptions=False) as client:
