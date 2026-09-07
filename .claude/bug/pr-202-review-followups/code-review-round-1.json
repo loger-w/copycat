@@ -1,0 +1,21 @@
+{
+  "fixed_point": "e75837da",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "finding": "app.py:1891 註解「它回的是 TaggedBars 沒有 status 欄」,下一行已改 PeriodBars。", "disposition": "修:字面改 PeriodBars(refactor commit)"},
+    {"id": "F-02", "severity": "MED", "finding": "測試以 cache.empty_clear(\"IX0001|L\", …) 跳負向窗:prod 無此路、|L 鍵抄進測試;同檔慣例是注入時鐘推過 TTL。", "disposition": "修:BarsCache(clock=) + EMPTY_TTL_SECS + 1.0(test(server) commit)"},
+    {"id": "F-03", "severity": "LOW", "finding": "新測試自寫兩次 monkeypatch _now_time、無視 _make_mutable_clock;測 build_period 卻住在 TestIsPartialLast。", "disposition": "修:改用 _make_mutable_clock 並搬進 TestDailySnapshotFinality"},
+    {"id": "F-04", "severity": "LOW", "finding": "bars.py 空態硬寫 pre_final=False,與 _period_pre_final「唯一算式」相衝。", "disposition": "修:空態改呼叫同一支 + 註明不變式(與 spec S-03 同條)"},
+    {"id": "F-05", "severity": "LOW", "finding": "next-time 留尾前提「200 降級不進 60 s 重試」寫反:retryEmpty 對空 bars 正是回 DAY_ERROR_RETRY_MS。", "disposition": "修:改寫「成功且非空的 200 不重抓(retryEmpty 只救空 bars)」(與 spec S-02 同條)"},
+    {"id": "F-06", "severity": "LOW", "finding": "addInFlight 以組名為 key,關窗再開後重送同名時 A 的 onSettled 仍放掉 B 的守門。", "disposition": "修:key 改 useRef 遞增序號(與 spec S-01 同條);同名重送在重開重置下的殘留(BAD_GROUP 橫幅、群組已建)與 rename 同形、註解記帳接受"},
+    {"id": "F-07", "severity": "LOW", "finding": "新測試自建第三份 inline QueryClientProvider + view(open),wrap() 不回可重包的 client。", "disposition": "修:抽 renderReopenable(),三處(含既有兩處同檔同形)一併改用 —— 同檔測試鷹架、零斷言改動"},
+    {"id": "F-08", "severity": "LOW", "finding": "refactor commit 把測試重寫加強(第四態)包進 🔵,違 CLAUDE.md §6。", "disposition": "修:soft reset 重切六筆 —— test(frontend) / test(server) / fix(frontend) / refactor(server) / chore / chore(docs)"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "LOW", "finding": "F-03 keyed 以組名為 key,對報告自述的「重打同一組名」情境無效;測試用兩個不同名恰好避開。", "disposition": "修:key 改送出序號;同名 + 重開重置的殘留寫進宣告註解(與 rename 同形、接受)"},
+    {"id": "S-02", "severity": "LOW", "finding": "next-time 09-08 節「200 降級不進 60 s 重試」事實錯(useMarketBars 傳 retryEmpty: true)。", "disposition": "修:改「成功且非空的 200 不重抓(retryEmpty 只救空 bars)」"},
+    {"id": "S-03", "severity": "note", "finding": "bars.py 空態硬寫 False 與「唯一算式」自述相牴(值屬實但無測試釘)。", "disposition": "修:改呼叫 _period_pre_final + 註明不變式"},
+    {"id": "S-04", "severity": "note", "finding": "pre_final_written_at docstring 仍寫「_warn_if_not_advanced 專用」,F-05 後多一個讀者。", "disposition": "修:補讀者"},
+    {"id": "S-05", "severity": "note", "finding": "app.py:1774 三格棄兩格,(await build_period(...)).bars 更貼 NamedTuple 意圖。", "disposition": "修"}
+  ],
+  "disposition": "標準軸 8 條全修(F-04 / F-05 / F-06 與 spec 軸 S-03 / S-02 / S-01 同條);spec 軸 5 條全修。spec 軸正面確認:F-04 守門放在保留名檢查之後(非報告字面的空字串早退之後)是對的,照字面會讓在途時保留名不再跳 BAD_GROUP。零否決。"
+}
