@@ -100,9 +100,16 @@ export function isPolicy(sig: SignalMsg): boolean {
   return sig.kind === "policy";
 }
 
-/** 掃單簇文案(raw 掃單簇列與政策列共用:政策列的 `pct` 就是 60 s 漲幅);pct 缺值只印名。 */
+/** 與後端 `_kind_text` 的 `+.2f` 同式:**零也帶正號**(review F-17;`up_pct` 值域下限 0 可達)。
+ *  `fmtPct` 對 0 不帶號是各處顯示的既有口徑,不動它 —— 契約點名逐字對齊的只有這一對。 */
+function signedPct2(v: number): string {
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+/** 掃單簇文案(raw 掃單簇列與政策列共用:政策列的 `pct` 就是 60 s 漲幅);pct 缺值只印名
+ *  (後端對 None 印「+0.00%」,但兩種列的 `pct` 恆為 float,缺值只在舊後端 / 壞行出現)。 */
 function sweepLabel(pct: number | null): string {
-  return pct === null ? "掃單簇" : `掃單簇 ${fmtPct(pct)}`;
+  return pct === null ? "掃單簇" : `掃單簇 ${signedPct2(pct)}`;
 }
 
 /** CDP 五線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 否則標籤變「突破 CDP CDP」。 */
@@ -267,9 +274,15 @@ export function groupPolicyTags(group: SignalGroup): PolicyTag[] {
   return out;
 }
 
-/** 組內**最早到**的政策列(脈絡欄位的來源;同 tick 各政策列脈絡相同,只有標記不同)。 */
+/** 組內政策列(**到達序**)。脈絡欄位同 tick 各列相同,`first_of_day` 是 per (檔, 政策)計數、
+ *  各列可以不同 —— hover 的 when 段要逐列看(review F-18),所以整組給出去,不只給錨。 */
+export function groupPolicies(group: SignalGroup): SignalMsg[] {
+  return arrivalOrder(group).filter(isPolicy);
+}
+
+/** 組內**最早到**的政策列(第三行脈絡欄位的來源;與 Discord 合併訊息 `rows[0]` 同口徑)。 */
 export function groupPolicyAnchor(group: SignalGroup): SignalMsg | undefined {
-  return arrivalOrder(group).find(isPolicy);
+  return groupPolicies(group)[0];
 }
 
 function pct1(v: number | null | undefined, signed: boolean): string {
@@ -281,30 +294,58 @@ function pct1(v: number | null | undefined, signed: boolean): string {
  *  印 `-`。3% 是拍板門檻的字面,列上不帶門檻,門檻解凍時只改這一處。 */
 function peerPhrase(sig: SignalMsg): string {
   const up = sig.peers_up ?? "-";
-  const touched = sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無";
-  return `同伴≥3% ${up}・鎖過 ${touched}`;
+  // 與 `peers_up` 同一把尺(review F-19):null / undefined 都退 `-`,不把 null 讀成「無」
+  const touched = sig.peer_touched ?? null;
+  return `同伴≥3% ${up}・鎖過 ${touched === null ? "-" : touched ? "有" : "無"}`;
 }
 
-/** rail 政策列第三行:「同伴≥3% n・鎖過 有/無・+x.x%/停 y.y%」(spec #192 字面)。缺欄(舊後端)
- *  印 `-`,不印 NaN / undefined。 */
+/** 無族群 = `groups` **在且為空**(S 政策不看族群);缺欄(舊後端)不算 —— 那是「不知道」,照印 `-`。 */
+function noGroups(sig: SignalMsg): boolean {
+  return sig.groups !== undefined && sig.groups.length === 0;
+}
+
+/** rail 政策列第三行:「同伴≥3% n・鎖過 有/無・+x.x%/停 y.y%」(spec #192 字面);無族群的 S 列改印
+ *  「無族群・+x.x%/停 y.y%」(review F-14 拍板:空族群上「同伴 0・鎖過 無」是假陳述,與 hover /
+ *  Discord 的「盤前篩選名單・無族群濾網」矛盾)。缺欄(舊後端)印 `-`,不印 NaN / undefined。 */
 export function policyContextText(sig: SignalMsg): string {
   const chg = pct1(sig.self?.chg_pct, true);
   const limit = pct1(sig.self?.to_limit_pct, false);
-  return `${peerPhrase(sig)}・${chg}/停 ${limit}`;
+  const head = noGroups(sig) ? "無族群" : peerPhrase(sig);
+  return `${head}・${chg}/停 ${limit}`;
 }
 
-/** rail 政策列 hover 全文(Discord 四行卡的同一組資訊攤平成一行)。 */
-export function policyTitle(sig: SignalMsg, tags: readonly PolicyTag[]): string {
+function firstness(sig: SignalMsg): string {
+  return sig.first_of_day ? "首筆" : sig.first_of_day === false ? "非首筆" : "";
+}
+
+/** rail 政策列 hover 全文(Discord 四行卡的同一組資訊攤平成一行)。
+ *  `policies` = 組內政策列(到達序,`groupPolicies`);脈絡欄位取最早到那則,標記全組並列。
+ *  when 段的「首筆 / 非首筆」是 per (檔, 政策)計數,同 tick 的 P 與 S 可以一真一假 →
+ *  不一致時逐標記印「P 首筆・S 非首筆」(review F-18)。空陣列 → 空字串(呼叫端不會傳空)。 */
+export function policyTitle(policies: readonly SignalMsg[]): string {
+  const sig = policies[0];
+  if (sig === undefined) return "";
+  const tags: PolicyTag[] = [];
+  for (const p of policies) {
+    if (p.policy !== undefined && !tags.includes(p.policy)) tags.push(p.policy);
+  }
   const groups = sig.groups ?? [];
-  const peers = (sig.peers ?? []).map(
-    (p) => `${p.code}${p.name} ${p.chg_pct === null ? "-" : pct1(p.chg_pct, true)}`,
-  );
+  const peers = (sig.peers ?? []).map((p) => `${p.code}${p.name} ${pct1(p.chg_pct, true)}`);
   const chg = sig.self?.chg_pct;
   const chgText =
     chg === null || chg === undefined ? "-" : `${fmtPct(chg)}${sig.leader ? "(族群最強)" : ""}`;
   const limit = sig.self?.to_limit_pct;
   const limitText = limit === null || limit === undefined ? "-" : `${limit.toFixed(2)}%`;
-  const when = [sig.tod, sig.first_of_day ? "首筆" : sig.first_of_day === false ? "非首筆" : "", sig.late ? "late" : ""]
+  const uniform = policies.every((p) => p.first_of_day === sig.first_of_day);
+  let first = firstness(sig);
+  if (!uniform) {
+    const parts: string[] = [];
+    for (const p of policies) {
+      if (p.policy !== undefined && firstness(p) !== "") parts.push(`${p.policy} ${firstness(p)}`);
+    }
+    first = parts.join("・");
+  }
+  const when = [sig.tod, first, sig.late ? "late" : ""]
     .filter((x) => x !== undefined && x !== "")
     .join("・");
   return [

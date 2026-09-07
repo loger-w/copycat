@@ -10,7 +10,7 @@ import { errText, type SignalRule } from "@/hooks/useSignalRules";
 import { fmt, monthDay } from "@/lib/format";
 import {
   groupKindLabels,
-  groupPolicyAnchor,
+  groupPolicies,
   groupPolicyTags,
   groupRuleNames,
   groupSignals,
@@ -181,7 +181,8 @@ export function SignalRail({
             const merged = segments.length > 1 || ruleNames.length > 1;
             // spec #192:政策列(chip + 第三行脈絡);全組皆 quiet(notify=false)→ 淡色仍列
             const tags = groupPolicyTags(group);
-            const anchor = groupPolicyAnchor(group);
+            const policies = groupPolicies(group);
+            const anchor = policies[0];
             const quiet = group.items.every((s) => !shouldNotify(s));
             return (
               <li key={group.key} className={cn(quiet && "opacity-50")}>
@@ -279,7 +280,7 @@ export function SignalRail({
                   {anchor === undefined ? null : (
                     <span
                       className="min-w-0 truncate text-[0.625rem] text-ink-muted"
-                      title={policyTitle(anchor, tags)}
+                      title={policyTitle(policies)}
                     >
                       {policyContextText(anchor)}
                     </span>
