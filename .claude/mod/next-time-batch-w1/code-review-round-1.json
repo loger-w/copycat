@@ -1,0 +1,63 @@
+{
+  "fixed_point": "556f4972",
+  "reviewed_head": "4778e48f + 1f21a603(docs)",
+  "standards": [
+    {
+      "id": "F-01",
+      "severity": "LOW",
+      "finding": "bars.py:515 新 docstring 寫「期貨側不吃本欄…不受影響」;事實是 app.py 對期指鍵 tf=D 走同一支 is_partial_last,payload 值 14:00 後同樣變 False;不讀它的是前端 FuturesChart.tsx:250。",
+      "disposition": "修(docs):docstring 改「期指鍵 tf=D 走同一支、期貨前端不讀這一格」— 0aeabb0a"
+    },
+    {
+      "id": "F-02",
+      "severity": "LOW",
+      "finding": "FuturesChart.tsx:250 的「不吃 meta.partial_last(日曆日口徑…)」在 C17 後對 tf=D 措辭不成立。",
+      "disposition": "修(docs):補「2026-09-07 起 D 分支另吃 14:00 定稿界,仍非夜盤口徑」— 0aeabb0a"
+    },
+    {
+      "id": "F-03",
+      "severity": "MED",
+      "finding": "WatchlistManagerDialog.tsx:113 清空搬進 onDone 後,PUT 在途時使用者接著打下一個組名,成功回呼的 setGroupInput(\"\") 會吃掉新打的字。",
+      "disposition": "修:setGroupInput((cur) => (cur.trim() === name ? \"\" : cur));紅先行案「PUT 在途時已打下一個組名 → 前一發成功回來不得吃掉新打的字」— e084e6cc / a5cbf559"
+    },
+    {
+      "id": "F-04",
+      "severity": "LOW",
+      "finding": "註解稱「與 submitRename 同一條規則」,但 addStock(:168)仍在 commit 前 eager 清 setStockInput;規則實為 2/3。",
+      "disposition": "修(docs):註解限定「群組名輸入框」並註明加股輸入框仍 eager 清;加股輸入框收斂不在本批(user 只點群組名),入 next-time 另案 — 0aeabb0a"
+    },
+    {
+      "id": "F-05",
+      "severity": "LOW",
+      "finding": "測試檔第 4 份逐字 inline 400 BAD_GROUP mock,而檔頂 makeGate() 正是為消除這類複本而抽的。",
+      "disposition": "修:4xx 案改 gatePuts() + releaseFail() — e084e6cc"
+    }
+  ],
+  "spec": [
+    {
+      "id": "S-01",
+      "severity": "MED",
+      "finding": "C17 只問時刻:14:00 後 refetch 空手時 _period_stale_or_empty 回界前(盤中)快照,payload 與新鮮取數不可分,partial_last 卻標 False —— 牴觸「meta 不說謊」與 bullet 前提「末根雖已定稿」。",
+      "disposition": "修:bars.period_bars_pre_final(cache, code, today)(界後標記仍在 = 這趟是墊背)+ is_partial_last(pre_final=);route 端餵入。紅先行:route 級 test_stale_fallback_after_final_time_stays_partial + 單元兩案 — e084e6cc / a5cbf559"
+    },
+    {
+      "id": "S-02",
+      "severity": "MED",
+      "finding": "留尾原文「改成留著要另設守門(清空同時是它的重送防護),可照 renameInFlight + onSettled 的形狀做」未做:連按兩次 Enter = 第二發在第一發成功後以 BAD_GROUP 收場。",
+      "disposition": "修:addInFlight + onSettled 解除、「新增」鈕在途 disabled(可觀測面);既有 N115 #1 釘的「第二發假 BAD_GROUP」路自此不可達,依留尾預告改釘守門(事前標為該變);transform 側撞名仍由 N115 #2 與「新增撞既有名」案釘 — e084e6cc / a5cbf559"
+    },
+    {
+      "id": "S-03",
+      "severity": "LOW",
+      "finding": "prevOpen 歸零區塊不清 groupInput:失敗保留後關窗再開會看到上次被拒的組名卻沒有它的錯誤橫幅。",
+      "disposition": "修:歸零區塊加 setGroupInput(\"\") + setAddInFlight(false);既有「關閉再開不殘留」案加一行斷言 — e084e6cc / a5cbf559"
+    },
+    {
+      "id": "S-04",
+      "severity": "參考",
+      "finding": "useMarketBars 的 D 分支 staleTime 撐到午夜,常駐頁 14:00 前載入的那份 body 整下午不換;修正只對 14:00 後的取數生效。",
+      "disposition": "知情:真環境判準改寫為「14:00 後重新載入大盤頁 tf=D → 無『最後一根未收盤』」,不用常開的 preview 頁驗(verification.md §5)"
+    }
+  ],
+  "disposition": "標準軸 5 條:修 5(F-01 / F-02 / F-04 docs、F-03 code + 紅先行、F-05 test)。spec 軸 4 條:修 3(S-01 / S-02 / S-03 各紅先行)、知情 1(S-04 判準措辭)。零否決。"
+}
