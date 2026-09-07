@@ -1335,7 +1335,8 @@ class SignalHub:
         logger.info("T+1/T+2 回填完成:共回填 %d 列(掃 %d 個日檔,%s..%s)", total, len(picked), start, end)
 
     async def _fetch_outcome_bars(self, code: str, start: str, end: str) -> list[Bar] | None:
-        """一檔的日 K;失敗 → None(該檔本趟留 null);逐檔間隔沿 CDP 基準 worker 的 gap。"""
+        """一檔的日 K;例外 → None、逾時 / 斷線 → 空 list + WARNING(兩者該檔本趟都留 null);
+        逐檔間隔沿 CDP 基準 worker 的 gap。"""
         assert self._outcome_bars is not None
         bars: list[Bar] | None
         try:
