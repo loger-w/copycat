@@ -12,8 +12,11 @@
   者;多組取成員**聯集**(保序去重);同伴 = 族群成員扣自己。
 - `chg` = (價 − 參考價) ÷ 參考價 × 100;`to_limit` = (漲停價 − 價) ÷ 價 × 100(漲停價缺 → None)。
 - 同伴無報價(`chg_pct` None)不計;P / B 至少一檔同伴有報價。
-- P:同伴 ≥ `peer_up_pct` 為 0 且 chg < `max_chg_pct` 且族群沒人鎖過。
-- B-a:自己最強(chg ≥ 同伴最大 chg)且同伴 ≥ peer_up_pct ≥ 1 且 chg < max_chg_pct 且沒人鎖過。
+- 「鎖過」閘只看**同伴**(`peer_touched`),自己鎖過不擋(2026-09-07 review F-01 拍板:spec 字面
+  「非 peer_touched」;P / B-a 另有 < max_chg_pct 閘擋掉大多數,B-b 是唯一例外,列上 `self.touched_upper`
+  有記、對帳可事後過濾)。
+- P:同伴 ≥ `peer_up_pct` 為 0 且 chg < `max_chg_pct` 且同伴沒人鎖過。
+- B-a:自己最強(chg ≥ 同伴最大 chg)且同伴 ≥ peer_up_pct ≥ 1 且 chg < max_chg_pct 且同伴沒人鎖過。
 - B-b:B-a 拿掉 chg < max_chg_pct。
 - S:盤前篩選成員且 chg < max_chg_pct(無族群條件)。
 """
@@ -122,7 +125,10 @@ def evaluate_policies(
     peer_up_pct: float,
     max_chg_pct: float,
 ) -> PolicyContext:
-    """四條政策的命中判斷(呼叫端已保證參考價可得、價 > 0)。"""
+    """四條政策的命中判斷(呼叫端已保證參考價可得、價 > 0)。
+
+    `hits` 依 `POLICIES` 固定序(P / B-a / B-b / S)—— hub 直接迭代它,不另外照 `POLICIES` 過濾。
+    """
     peers: list[dict[str, Any]] = []
     quoted: list[tuple[str, str, float]] = []
     peer_touched = False

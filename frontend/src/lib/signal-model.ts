@@ -62,9 +62,11 @@ export interface SignalMsg {
    *  政策列 = 當日首筆且 ≤ 12:30。**缺欄視為 true**(舊後端 / 舊 jsonl 列)—— 判定走
    *  `shouldNotify`,不要直接比 `=== false` 以外的形。jsonl / WS / rail 不受它影響。 */
   notify?: boolean;
-  /** 掃單簇列的參數 {n30, levels, qty, up_pct}(其他 kind 沒有這欄)。 */
+  /** 掃單簇列的參數 {n30, levels, qty, up_pct}(其他 kind 沒有這欄)。**wire 存證、前端不讀**。 */
   detail?: Record<string, number>;
   // ---- 以下只有 kind === "policy" 的列才有(後端 `signal_hub._emit_policies`)----
+  // `sweep` / `screen_member` / `peer_max` / `t1_*` / `t2_*` 與上面的 `detail` 一樣是 **wire 存證欄、
+  // 前端不讀**(review F-19):只是把後端形狀抄過來對齊型別,讀者是 jsonl 對帳;缺了不是漏功能。
   policy?: PolicyTag;
   first_of_day?: boolean;
   late?: boolean;
@@ -275,14 +277,20 @@ function pct1(v: number | null | undefined, signed: boolean): string {
   return signed ? `${v > 0 ? "+" : ""}${v.toFixed(1)}%` : `${v.toFixed(1)}%`;
 }
 
-/** rail 政策列第三行:「同伴≥3% n・鎖過 有/無・+x.x%/停 y.y%」(spec #192 字面;3% 是拍板
- *  門檻的字面,列上不帶門檻)。缺欄(舊後端)印 `-`,不印 NaN / undefined。 */
-export function policyContextText(sig: SignalMsg): string {
+/** 「同伴≥3% n・鎖過 有/無」—— rail 第三行與 hover 全文共用同一份(review F-17);缺欄(舊後端)
+ *  印 `-`。3% 是拍板門檻的字面,列上不帶門檻,門檻解凍時只改這一處。 */
+function peerPhrase(sig: SignalMsg): string {
   const up = sig.peers_up === undefined ? "-" : String(sig.peers_up);
   const touched = sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無";
+  return `同伴≥3% ${up}・鎖過 ${touched}`;
+}
+
+/** rail 政策列第三行:「同伴≥3% n・鎖過 有/無・+x.x%/停 y.y%」(spec #192 字面)。缺欄(舊後端)
+ *  印 `-`,不印 NaN / undefined。 */
+export function policyContextText(sig: SignalMsg): string {
   const chg = pct1(sig.self?.chg_pct, true);
   const limit = pct1(sig.self?.to_limit_pct, false);
-  return `同伴≥3% ${up}・鎖過 ${touched}・${chg}/停 ${limit}`;
+  return `${peerPhrase(sig)}・${chg}/停 ${limit}`;
 }
 
 /** rail 政策列 hover 全文(Discord 四行卡的同一組資訊攤平成一行)。 */
@@ -303,7 +311,7 @@ export function policyTitle(sig: SignalMsg, tags: readonly PolicyTag[]): string 
     `政策 ${tags.join("・")}`,
     groups.length > 0 ? `族群 ${groups.join("、")}` : "盤前篩選名單・無族群濾網",
     peers.length > 0 ? `同伴 ${peers.join("、")}` : "",
-    `同伴≥3% ${sig.peers_up ?? "-"}・鎖過 ${sig.peer_touched === undefined ? "-" : sig.peer_touched ? "有" : "無"}`,
+    peerPhrase(sig),
     `較前收 ${chgText}・距漲停 ${limitText}`,
     when,
   ]

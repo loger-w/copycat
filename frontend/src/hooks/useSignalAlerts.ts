@@ -57,6 +57,15 @@ let resuming = false;
 /** 政策列的雙嗶:第二聲的起點偏移(秒)。兩聲同時 start 聽起來是一聲,要錯開才分得出來。 */
 const SECOND_BEEP_OFFSET_S = 0.18;
 
+/** 一組一次的提示音:一般訊號一聲、政策列兩聲(spec #192:在別的 tab 靠聲音就分得出政策)。
+ *  靜音只關音效,讀**當下**值而不是閉包捕捉的 soundOn(bus 訂閱只做一次,deps 恆定)。
+ *  併入既有 toast / 開新張兩個呼叫點共用同一份嗶法(review F-21)。 */
+function beepFor(policy: boolean): void {
+  if (!getSoundOn()) return;
+  playBeep();
+  if (policy) playBeep(SECOND_BEEP_OFFSET_S);
+}
+
 /** 短嗶。**任何失敗都吞掉**:提示音是附加價值,自動播放政策 / 無 Web Audio /
  *  context 被系統回收都不該影響 toast 出現。
  *  `offsetS` = 自現在起延後幾秒發聲(政策列雙嗶用;預設立即)。 */
@@ -222,10 +231,7 @@ export function useSignalAlerts() {
         const firstPolicy = isPolicy(sig) && !entry.items.some(isPolicy);
         entry.items = items;
         text = formatGroupToastText(toGroup(anchor, items));
-        if (firstPolicy && getSoundOn()) {
-          playBeep();
-          playBeep(SECOND_BEEP_OFFSET_S);
-        }
+        if (firstPolicy) beepFor(true);
         // 純 reorder:key / TTL 不變(D3),但被擠進 overflow 的那張要浮回可見區,
         // 否則新到的那則等於沒顯示。
         setQueue((prev) => {
@@ -244,13 +250,8 @@ export function useSignalAlerts() {
           key,
           window.setTimeout(() => drop(key), TTL_MS),
         );
-        // 靜音只關音效。bus 訂閱只做一次(deps 恆定),故讀當下值而不是閉包捕捉的
-        // soundOn。**每新組一聲**(D4):併入既有那張不再嗶,同 tick 三則只響一次。
-        // 政策列雙嗶(spec #192):在別的 tab 靠聲音就分得出政策與一般訊號。
-        if (getSoundOn()) {
-          playBeep();
-          if (isPolicy(sig)) playBeep(SECOND_BEEP_OFFSET_S);
-        }
+        // **每新組一聲**(D4):併入既有那張不再嗶,同 tick 三則只響一次;政策列雙嗶。
+        beepFor(isPolicy(sig));
       }
 
       // 分頁在背景就發桌面通知,**不受靜音影響**(review MFS-1):靜音的語意是
