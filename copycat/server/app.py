@@ -55,6 +55,7 @@ from copycat.server.bars import (
     build_period,
     clamp_days,
     is_partial_last,
+    period_bars_pre_final,
 )
 from copycat.notify import notify_discord
 from copycat.server.discord_bot import Bot, create_bot
@@ -1892,7 +1893,14 @@ def create_app(
         # 不給這一格(未三態化)。要一起做得動 `bars.py` 的 cache 型別(白名單 §0.2-1)。
         bars, tag = await build_period(tagged_source, bars_cache, code, today, tf)
         return _market_payload(
-            key, tf, bars, source=tag, partial_last=is_partial_last(bars, tf, today)
+            key,
+            tf,
+            bars,
+            source=tag,
+            # 墊背路徑(界後 refetch 空手回界前快照)的今日 D bar 仍未定稿 → 照標未收盤
+            partial_last=is_partial_last(
+                bars, tf, today, pre_final=period_bars_pre_final(bars_cache, code, today)
+            ),
         )
 
     # ---- market breadth(家數帶 / 騰落線;market-overview R2 §6)----
