@@ -517,8 +517,6 @@ def load_rules(path: Path) -> list[Rule] | None:
       true、`_cache_version` 改回 3 → 起舊碼(v3 碼不認 `sweep_cluster` kind,卡沒刪乾淨會 raise)。
       **再升回 v4 碼時翻旗會重跑**(遷移只看 `version != 4`):若刻意要保留 cdp_cross / vol_burst
       的通知,升級後要在規則視窗再開一次(整體 review F-30)。
-      **再升回 v4 碼時翻旗會重跑**(遷移只看 `version != 4`):若刻意要保留 cdp_cross / vol_burst
-      的通知,升級後要在規則視窗再開一次(整體 review F-30)。
     - 再退到 v2 / v1:刪兩張 surge_pullback 種子卡、(v1)刪 cdp 的 `rearm_dwell_secs` 鍵、
       `_cache_version` 改回 2(或 1)。
     v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1..4 以外的版本一律 raise。
