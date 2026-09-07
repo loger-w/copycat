@@ -247,8 +247,8 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
    *  不預先反灰);回了但無已完成 bar → 全 null 的 overlay → 兩鈕反灰。兩者不可混為一談。
    *
    *  基準日的界吃**這張圖的錨定日**,與 slice / live gate / 成交點同一支 `anchorDateOf`
-   *  —— 不吃 `meta.partial_last`(日曆日口徑,夜盤兩頭破窗且缺欄時失效在不安全側;
-   *  理由全文見 `lib/futures-overlay.ts` 檔頭)。 */
+   *  —— 不吃 `meta.partial_last`(日曆日口徑;2026-09-07 起 D 分支另吃 14:00 定稿界,仍非夜盤
+   *  口徑:夜盤兩頭破窗且缺欄時失效在不安全側;理由全文見 `lib/futures-overlay.ts` 檔頭)。 */
   const overlay = useMemo(
     () =>
       dayQ.data === undefined || anchorDate === null
