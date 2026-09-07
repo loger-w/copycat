@@ -502,7 +502,18 @@ def aggregate_period(bars: list[Bar], period: str) -> list[Bar]:
 TaggedBarsFetcher = Callable[[str, str, str, str], Awaitable[TaggedBars]]
 
 
-def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
+def period_bars_pre_final(cache: BarsCache, code: str, today: _dt.date) -> bool:
+    """`build_period` 這一趟回給呼叫端的長窗日 K 是不是**界前寫入**的快照。
+
+    定稿界後 `daily_put` 成功會 pop 界前標記、空手則不碰 —— 所以界後標記還在 = 這一趟走的
+    是 `_period_stale_or_empty` 墊背(TC4 下午掛掉,回的是 10:00 那份今日 bar)。這條路的
+    payload 與新鮮取數不可分,`is_partial_last` 單看時刻會把它標成「已定稿」(two-axis review
+    spec S-01);呼叫端把本值餵進 `pre_final=`。界前恆 True(標記一定在),與時刻判準同向。
+    鍵格式 `|L` 只住在本模組(`build_period` 的同一條理由)。"""
+    return cache.pre_final_written_at(f"{code}|L", today.isoformat()) is not None
+
+
+def is_partial_last(bars: list[Bar], tf: str, today: _dt.date, *, pre_final: bool = False) -> bool:
     """最後一根是否仍在進行中(尚未收盤)。
 
     **由資料判定,不是 tf 的常數**:盤中的日 K / 分 K 最後一根就是今天 / 當下那分鐘,
@@ -512,7 +523,11 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
     **tf=D 同時吃 `DAILY_FINAL_TIME`**(pr-165-review #5;09-07 盤點 C17 修):今日那根在
     定稿界之後已是完整日 K,只憑日曆日判準會讓大盤頁 14:00–24:00 一直印「最後一根未收盤」
     (非定稿界引入,冷啟動 13:45 後首問同樣誤標)。分 K 不吃界:當日段本來就在進行;週 / 月
-    桶是否收盤與 14:00 無關。期貨側不吃本欄(夜盤語意另一回事),不受影響。
+    桶是否收盤與 14:00 無關。期指鍵的 tf=D 走同一支(payload 值同樣 14:00 後變 False),但
+    期貨**前端**不讀這一格(`FuturesChart` 用錨定日,夜盤語意另一回事),不受影響。
+
+    `pre_final=True` = 呼叫端明知這批 bars 是界前快照(`period_bars_pre_final`,墊背路徑):
+    界後仍標「未收盤」—— 「meta 不說謊」(review P1-1)在墊背那條路也要成立。
     """
     if not bars:
         return False
@@ -521,7 +536,7 @@ def is_partial_last(bars: list[Bar], tf: str, today: _dt.date) -> bool:
     if tf == "1":
         return last == today_iso
     if tf == "D":
-        return last == today_iso and _now_time() < DAILY_FINAL_TIME
+        return last == today_iso and (pre_final or _now_time() < DAILY_FINAL_TIME)
     if tf == "M":
         return last[:7] == today_iso[:7]
     if tf == "W":
