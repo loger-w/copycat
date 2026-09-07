@@ -101,6 +101,8 @@ def _policy_row(code: str, policy: str = "P", **over: Any) -> dict[str, Any]:
         "t1_date": None,
         "t2_open": None,
         "t2_date": None,
+        "d_close": None,
+        "d_high": None,
         "trade_date": _PREV,
     }
     row.update(over)
@@ -185,6 +187,8 @@ class TestFileBackfill:
             "t1_date": "2026-08-04",
             "t2_open": 52_000,
             "t2_date": "2026-08-05",
+            "d_close": 49_100,  # 事件日那根(08-03)的 c / h(review F-31 拍板順手補)
+            "d_high": 49_500,
         }
         expected = [
             plain,  # 一般列逐字不變
@@ -230,7 +234,7 @@ class TestFileBackfill:
         )
         has_t1 = _policy_row("2330", t1_open=50_000, t1_date="2026-08-04")
         complete = _policy_row(
-            "2344", t1_open=1, t1_date="2026-08-04", t2_open=2, t2_date="2026-08-05"
+            "2344", t1_open=1, t1_date="2026-08-04", t2_open=2, t2_date="2026-08-05", d_close=3, d_high=4
         )
         path = _write_day(tmp_path, _PREV, [_dump(has_t1), _dump(complete)])
         h = _harness(tmp_path, clock, bars)
@@ -366,7 +370,7 @@ class TestFileBackfill:
 
 
 class TestSchedule:
-    async def test_runs_at_start_then_daily_at_outcome_time(
+    async def test_waits_for_outcome_time_then_daily(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(hub_mod, "POLICY_OUTCOME_POLL_SECS", 0.01)
@@ -378,16 +382,15 @@ class TestSchedule:
             await h.hub.start()
         assert "回填 worker 起動" in caplog.text  # 盤後可驗判準:啟動 log 一行
         try:
-            await _wait_calls(bars, 1)  # start 後立即一次
             await _wait_polls(clock, 10)
-            assert len(bars.calls) == 1  # 10:00 未到 13:40 → 不再跑
+            assert len(bars.calls) == 0  # 10:00 起動:未到 13:40 → 不跑(開盤前不搶 TC4 鎖;review F-10)
             clock.now = _dt.datetime(2026, 8, 4, 13, 40, 0)
-            await _wait_calls(bars, 2)  # 推到 13:40 → 當日那一次
+            await _wait_calls(bars, 1)  # 推到 13:40 → 當日那一次
             clock.now = _dt.datetime(2026, 8, 4, 13, 41, 0)
             await _wait_polls(clock, 10)
-            assert len(bars.calls) == 2  # 同日不重跑
+            assert len(bars.calls) == 1  # 同日不重跑
             clock.now = _dt.datetime(2026, 8, 5, 13, 40, 0)
-            await _wait_calls(bars, 3)  # 隔天再跑
+            await _wait_calls(bars, 2)  # 隔天再跑
         finally:
             await asyncio.wait_for(h.hub.close(), 5)  # close 取消 worker 不吊死
 
@@ -417,12 +420,11 @@ class TestSchedule:
         h = _harness(tmp_path, clock, bars, policy_outcome_time="14:30:00")
         await h.hub.start()
         try:
-            await _wait_calls(bars, 1)
             clock.now = _dt.datetime(2026, 8, 4, 13, 40, 0)
             await _wait_polls(clock, 10)
-            assert len(bars.calls) == 1  # 設定改 14:30 → 13:40 不跑
+            assert len(bars.calls) == 0  # 設定改 14:30 → 13:40 不跑
             clock.now = _dt.datetime(2026, 8, 4, 14, 30, 0)
-            await _wait_calls(bars, 2)
+            await _wait_calls(bars, 1)
         finally:
             await asyncio.wait_for(h.hub.close(), 5)
 
@@ -470,3 +472,120 @@ async def _wait_polls(clock: _PollClock, n: int) -> None:
             return
         await asyncio.sleep(0.005)
     raise AssertionError(f"時鐘只被讀了 {clock.reads} 次,等不到 {target} 次")
+
+
+class TestReviewFollowups:
+    """2026-09-07 整體 review(PR #199 + #200)收修:回填的另一半守門、零補不重寫、逐檔 gap、
+    例外傘、目錄不存在 log、設定驗證、事件日收盤 / 最高補欄。"""
+
+    async def test_hub_date_behind_wall_clock_keeps_hub_day_untouched(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """hub 日別**落後**牆鐘(空自選 / 零推播時 `trade_date` 停在昨日)是常態:昨日檔正是 `_append_jsonl`
+        還在寫的檔,只碰日期 < hub 日別者(review F-02;既有案只釘了 hub 超前那一半)。"""
+        bars = _FakeDayBars({"2330": [_bar("2026-08-03", 51_000)]})
+        _write_day(tmp_path, _PREV, [_dump(_policy_row("2330"))])  # 08-03 = hub 日別
+        _write_day(tmp_path, "2026-08-02", [_dump(_policy_row("2330", trade_date="2026-08-02"))])
+        h = _harness(tmp_path, clock, bars)
+        h.date = _PREV  # hub 停在 08-03、牆鐘 08-04
+        await h.hub.backfill_policy_outcomes()
+        assert _read(tmp_path / "signals" / "20260803.jsonl")[0]["t1_open"] is None
+        assert _read(tmp_path / "signals" / "20260802.jsonl")[0]["t1_open"] == 51_000
+
+    async def test_zero_fill_does_not_rewrite_file(
+        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """零補則**不呼叫** `atomic_write_bytes`(review F-40:內容比對在「重寫同樣位元組」下也綠)。"""
+        writes: list[Path] = []
+        real = hub_mod.atomic_write_bytes
+        monkeypatch.setattr(hub_mod, "atomic_write_bytes", lambda p, b: (writes.append(p), real(p, b)))
+        bars = _FakeDayBars({"2330": []})
+        _write_day(tmp_path, _PREV, [_dump(_policy_row("2330"))])
+        h = _harness(tmp_path, clock, bars)
+        await h.hub.backfill_policy_outcomes()
+        assert writes == []
+
+    async def test_basis_gap_sleep_between_codes(
+        self, tmp_path: Path, clock: _Clock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """逐檔間隔沿 CDP 基準 worker 的 gap(#196 AC;review F-42:harness 一律 gap 0,刪段全綠)。"""
+        slept: list[float] = []
+        real_sleep = asyncio.sleep
+
+        async def fake_sleep(secs: float) -> None:
+            slept.append(secs)
+            await real_sleep(0)
+
+        monkeypatch.setattr(hub_mod.asyncio, "sleep", fake_sleep)
+        bars = _FakeDayBars({"2330": [_bar("2026-08-04", 51_000)], "2317": [_bar("2026-08-04", 81_000)]})
+        _write_day(tmp_path, _PREV, [_dump(_policy_row("2330")), _dump(_policy_row("2317"))])
+        h = _harness(tmp_path, clock, bars, basis_gap_secs=0.05)
+        await h.hub.backfill_policy_outcomes()
+        assert slept.count(0.05) == 2  # 每檔各睡一次
+
+    async def test_unexpected_error_keeps_worker_alive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """單趟本體拋(寫檔炸)→ log 一行、worker 續行,隔日照跑(review F-43)。"""
+        monkeypatch.setattr(hub_mod, "POLICY_OUTCOME_POLL_SECS", 0.01)
+        calls = {"n": 0}
+        real = hub_mod.atomic_write_bytes
+
+        def boom_once(p: Path, b: bytes) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("disk full")
+            real(p, b)
+
+        monkeypatch.setattr(hub_mod, "atomic_write_bytes", boom_once)
+        clock = _PollClock(_dt.datetime(2026, 8, 4, 13, 50, 0))
+        bars = _FakeDayBars({"2330": [_bar("2026-08-04", 51_000)]})
+        _write_day(tmp_path, _PREV, [_dump(_policy_row("2330"))])
+        h = _harness(tmp_path, clock, bars)
+        with caplog.at_level(logging.ERROR, logger="copycat.server.signal_hub"):
+            await h.hub.start()
+            try:
+                await _wait_calls(bars, 1)
+                await _wait_polls(clock, 5)
+                assert "未預期失敗" in caplog.text
+                clock.now = _dt.datetime(2026, 8, 5, 13, 40, 0)
+                await _wait_calls(bars, 2)  # worker 沒死
+            finally:
+                await asyncio.wait_for(h.hub.close(), 5)
+
+    async def test_missing_signal_dir_logs_info(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`data/signals/` 不存在 → 一行 INFO(review F-24:靜默 return 讓 13:40 判準分不出「worker 沒跑」)。"""
+        h = _harness(tmp_path, clock, _FakeDayBars())
+        with caplog.at_level(logging.INFO, logger="copycat.server.signal_hub"):
+            await h.hub.backfill_policy_outcomes()
+        assert "不存在" in caplog.text and "回填" in caplog.text
+
+    def test_outcome_days_below_one_raises_at_construction(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """`policy_outcome_days` ≤ 0 → 建構時炸(review F-28:0 會讓每趟印「本趟零列」看似正常、永不補)。"""
+        with pytest.raises(ValueError, match="policy_outcome_days"):
+            _harness(tmp_path, clock, _FakeDayBars(), policy_outcome_days=0)
+
+    async def test_event_day_close_and_high_backfilled_even_on_old_rows(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """事件日收盤 / 最高補進 `d_close` / `d_high`(review F-31 拍板):同一趟日 K 已含事件日那根;
+        09-07 之前的舊列**沒有這兩個鍵**(只加欄)→ 視為 null 一併補;t1/t2 已齊但 d_* 缺的列仍要補。"""
+        bars = _FakeDayBars(
+            {"2330": [_bar(_PREV, 50_000), _bar("2026-08-04", 51_000), _bar("2026-08-05", 52_000)]}
+        )
+        old = _policy_row("2330")
+        del old["d_close"], old["d_high"]  # 舊列形狀
+        done = _policy_row("2330", "S", t1_open=51_000, t1_date="2026-08-04", t2_open=52_000, t2_date="2026-08-05")
+        del done["d_close"], done["d_high"]
+        path = _write_day(tmp_path, _PREV, [_dump(old), _dump(done)])
+        h = _harness(tmp_path, clock, bars)
+        await h.hub.backfill_policy_outcomes()
+        rows = _read(path)
+        assert (rows[0]["d_close"], rows[0]["d_high"]) == (50_100, 50_500)  # `_bar`:c = o+100、h = o+500
+        assert (rows[0]["t1_open"], rows[0]["t2_open"]) == (51_000, 52_000)
+        assert (rows[1]["d_close"], rows[1]["d_high"]) == (50_100, 50_500)
+        assert set(rows[0]) == _POLICY_KEYS | {"trade_date"}

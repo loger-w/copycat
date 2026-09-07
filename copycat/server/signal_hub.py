@@ -367,8 +367,12 @@ class SignalHub:
         self._policy_touch: dict[tuple[str, str], int] = {}
         #: 多組聯集 WARNING 的每日去重(一檔一天只叫一次)
         self._multi_group_warned: set[str] = set()
-        #: `peers_fn` 例外的每日去重(review F-09):熱路徑不可逐 tick 印 traceback
-        self._peers_fn_failed = False
+        #: `peers_fn` 例外的每日計數(review F-09 / 整體 review F-25):首次印 traceback,之後只計數,
+        #: 換日彙總一行 WARNING —— 對帳要看得出那天有幾顆事件被降級成「同伴無報價」
+        self._peers_fn_failures = 0
+        #: `policy_exclude_groups` 對不上任何自選群組名的那幾個(整體 review F-03):每次載入群組
+        #: 比一次,缺名集合**變了**才 WARNING(同一組缺名重複載入不重複吵)
+        self._exclude_missing: tuple[str, ...] = ()
         # 兩個 HH:MM:SS 設定在建構時就驗(review F-06):壞值要在啟動時大聲(hub None → routes 503),
         # 不是每 30 s 一行 WARNING 印一整天
         for label in ("policy_push_end", "policy_outcome_time"):
@@ -376,6 +380,12 @@ class SignalHub:
                 _dt.datetime.strptime(getattr(cfg, label), "%H:%M:%S")
             except (TypeError, ValueError) as e:
                 raise ValueError(f"訊號設定 {label} 不是 HH:MM:SS:{getattr(cfg, label)!r}") from e
+        # 整體 review F-28:0 / 負數會讓每趟只印「本趟零列」看似正常、T+1/T+2 永遠不補
+        if not isinstance(cfg.policy_outcome_days, int) or cfg.policy_outcome_days < 1:
+            raise ValueError(f"訊號設定 policy_outcome_days 必須 ≥ 1:{cfg.policy_outcome_days!r}")
+        # 整體 review F-28:0 / 負數會讓每趟只印「本趟零列」看似正常、T+1/T+2 永遠不補
+        if not isinstance(cfg.policy_outcome_days, int) or cfg.policy_outcome_days < 1:
+            raise ValueError(f"訊號設定 policy_outcome_days 必須 ≥ 1:{cfg.policy_outcome_days!r}")
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -535,7 +545,7 @@ class SignalHub:
         else:
             # 起動一行 = 盤後可驗判準(spec #192「server 啟動 log 有回填 task 起動一行」)
             logger.info(
-                "T+1/T+2 回填 worker 起動:start 後跑一次,之後每日 %s(最近 %d 個日檔)",
+                "T+1/T+2 回填 worker 起動:每日 %s 跑一次(已過時點起動則立即跑;最近 %d 個日檔)",
                 self._cfg.policy_outcome_time,
                 self._cfg.policy_outcome_days,
             )
@@ -664,7 +674,12 @@ class SignalHub:
             slot.detector.reset_day()  # 順序契約:reset 會清 _basis,必須先於 promote
         self._policy_touch.clear()  # 政策每日計數(first_of_day)在此歸零
         self._multi_group_warned.clear()
-        self._peers_fn_failed = False
+        if self._peers_fn_failures:
+            logger.warning(
+                "政策行情快照失敗共 %d 顆事件(昨日;那些事件的 P / B 未評、只剩 S)",
+                self._peers_fn_failures,
+            )
+        self._peers_fn_failures = 0
         if self._staged_cache and self._staged_date == expected:
             self._basis_cache = {code: (expected, cdp) for code, cdp in self._staged_cache.items()}
             for code in self._basis_cache:
@@ -704,15 +719,33 @@ class SignalHub:
         """群組結構跟著自選一起更新(SC-2)。
 
         `groups_fn` 生產端是讀自選檔 —— 失敗時**保舊值**而不是清空:membership 這一邊
-        照樣更新完,清空只會讓摘要從此永久消失,而畫面上完全看不出來(Discord 只是
-        少了一段尾巴)。舊群組頂多是「上一次的分組」,比沒有好。
+        照樣更新完。同一份 `_groups` 有兩個消費者:同群摘要(Discord 尾巴的裝飾)與**政策層的
+        族群判定**(spec #192;空表 = P / B-a / B-b / S 一整天零列,畫面零訊號)—— 清空的代價
+        是後者。舊群組頂多是「上一次的分組」,比沒有好。
+        載入後另比一次 `policy_exclude_groups`(整體 review F-03):排除組名對不上任何自選群組
+        (user 改了組名沒同步設定檔)時該組會**靜默變成族群**(研究 §8.2:ALL IN 當族群
+        −1,471/筆),缺名集合變了就 WARNING 一次。
         """
         if self._groups_fn is None:
             return
         try:
             self._groups = self._groups_fn()
         except Exception:
-            logger.exception("群組結構讀取失敗,同群摘要沿用上一份(%d 組)", len(self._groups))
+            logger.exception(
+                "群組結構讀取失敗,同群摘要與政策族群沿用上一份(%d 組;0 組 = 本日 P/B/S 全不評)",
+                len(self._groups),
+            )
+            return
+        names = {g["name"] for g in self._groups}
+        missing = tuple(x for x in self._cfg.policy_exclude_groups if x not in names)
+        if missing != self._exclude_missing:
+            self._exclude_missing = missing
+            if missing:
+                logger.warning(
+                    "政策族群:排除組名 %s 對不上任何自選群組(組名改了?設定檔 policy_exclude_groups 未同步)"
+                    " —— 該組若存在會被當族群評 P / B",
+                    list(missing),
+                )
 
     def _group_suffix(self, row: dict[str, Any]) -> str:
         """同群摘要(SC-1)。在 **Discord worker** 呼叫 —— 離熱路徑,quotes 取的是
@@ -1050,9 +1083,11 @@ class SignalHub:
             except Exception:
                 # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失。
                 # traceback 每日一次(review F-09):同步熱路徑,持續壞掉時逐 tick 印會自己變瓶頸
-                if not self._peers_fn_failed:
-                    self._peers_fn_failed = True
-                    logger.exception("政策行情快照讀取失敗,視為同伴無報價(當日只印一次):%s", code)
+                self._peers_fn_failures += 1
+                if self._peers_fn_failures == 1:
+                    logger.exception(
+                        "政策行情快照讀取失敗,視為同伴無報價(當日只印一次,換日彙總顆數):%s", code
+                    )
                 quotes = {}
         # 自己的較前收與同伴同一把尺(review F-01):`_quote_payload` 口徑 = 分母 ref、round 2;
         # 不 round 的話 `leader = chg >= peer_max` 是兩把尺(同伴那邊已 round)
@@ -1121,6 +1156,10 @@ class SignalHub:
                 "t1_date": None,
                 "t2_open": None,
                 "t2_date": None,
+                # 事件日收盤 / 最高(整體 review F-31 拍板):回填 worker 順手補(同一趟日 K 已含事件日
+                # 那根),對帳算「放到尾盤」與鎖死不必另抓日 K;初值 null、與 t1/t2 同一趟補
+                "d_close": None,
+                "d_high": None,
             }
             self._publish(row)
             self._enqueue({**row, "trade_date": trade_date}, notify=notify)
@@ -1212,16 +1251,19 @@ class SignalHub:
     # ---- T+1 / T+2 回填(spec #192 T4)----
 
     async def _policy_outcome_worker(self) -> None:
-        """start 後跑一次;之後每日 `policy_outcome_time`(牆鐘 `now_fn`)跑一次。
+        """每日 `policy_outcome_time`(牆鐘 `now_fn`)跑一次;起動時**只在已過當日時點才立即跑**
+        (就算當日那一次;13:50 起動不會 13:50 又跑一次)。
 
-        起動那一趟若已過當日時點,就算當日那一次(13:50 起動不會 13:50 又跑一次)。
+        未到時點起動(user 常態:開盤前才開 server)**不跑**(整體 review F-10,2026-09-07 拍板):
+        回填的 DK 與 CDP 基準暖機共用同一把 TC4 `api.lock`,開機那趟只會把基準 sweep 拉長,而它補的
+        是昨天以前的開盤價、晚到 13:40 一樣。
         每趟套 try/except:worker 死掉 = 之後所有政策列 t1/t2 永遠 null,而畫面零訊號。
         """
         ran_for: str | None = None
         now = self._now_fn()
         if _past_time(now, self._cfg.policy_outcome_time):
             ran_for = now.date().isoformat()
-        await self._run_policy_outcomes()
+            await self._run_policy_outcomes()
         while True:
             await asyncio.sleep(POLICY_OUTCOME_POLL_SECS)
             now = self._now_fn()
@@ -1243,15 +1285,18 @@ class SignalHub:
 
         範圍 = 最近 `policy_outcome_days` 個日檔中,日期**同時小於** hub 日別與牆鐘日者
         (已封閉;T+1 是今天的檔開盤價還沒定,不碰)。對象 = `kind="policy"` 且 `t1_open`
-        或 `t2_open` 為 null 的列。日 K 每檔**每趟一次**(範圍 = 最早日檔日 .. 牆鐘日),取
-        日期大於該日檔日、open > 0 的前兩根;拿不到留 null 下輪再補;逾時 / 斷線 / 例外只
-        log 該檔續行。寫法:只重寫被補的列,其餘列(含空行 / 壞行)原文逐字保留,整檔 atomic
+        或 `t2_open` 為 null、或 `d_close` / `d_high`(事件日收盤 / 最高;整體 review F-31)缺 / null
+        的列。日 K 每檔**每趟一次**(範圍 = 最早日檔日 .. 牆鐘日),取日期大於該日檔日、open > 0 的
+        前兩根,另取日期**等於**該日檔日那根的 close / high;拿不到留 null 下輪再補;逾時 / 斷線 /
+        例外只 log 該檔續行。寫法:只重寫被補的列,其餘列(含空行 / 壞行)原文逐字保留,整檔 atomic
         覆寫;零補則不碰檔案。離線讀者契約:不新增列型、每列 `kind` 恆在(只加欄)。
         """
         assert self._outcome_bars is not None, "無日 K 來源時 worker 不啟動,不會走到這裡"
         cutoff = min(self._trade_date_fn(), self.today)
         signal_dir = self._data_dir / _SIGNAL_DIR
         if not signal_dir.exists():
+            # 整體 review F-24:靜默 return 讓 13:40 判準分不出「worker 沒跑」與「沒東西可補」
+            logger.info("T+1/T+2 回填:%s 不存在,本趟零列", signal_dir)
             return
         dated: list[tuple[str, Path]] = []
         for path in signal_dir.glob("*.jsonl"):
@@ -1315,8 +1360,13 @@ class SignalHub:
                 after = [b for b in bars if b["t"] > date]
                 t1 = after[0] if after and after[0]["o"] > 0 else None
                 t2 = after[1] if len(after) > 1 and after[1]["o"] > 0 else None
+                same = next((b for b in bars if b["t"] == date), None)
                 for i, line, row in idxs:
                     dirty = False
+                    if (row.get("d_close") is None or row.get("d_high") is None) and same is not None:
+                        # 舊列(09-07 前)沒有這兩個鍵 → 一併加上(只加欄,W1)
+                        row["d_close"], row["d_high"] = same["c"], same["h"]
+                        dirty = True
                     if row.get("t1_open") is None and t1 is not None:
                         row["t1_open"], row["t1_date"] = t1["o"], t1["t"]
                         dirty = True
@@ -1586,7 +1636,12 @@ def _policy_row_needing_outcome(line: str) -> dict[str, Any] | None:
     obj = cast(dict[str, Any], row)
     if obj.get("kind") != "policy":
         return None
-    if obj.get("t1_open") is not None and obj.get("t2_open") is not None:
+    if (
+        obj.get("t1_open") is not None
+        and obj.get("t2_open") is not None
+        and obj.get("d_close") is not None
+        and obj.get("d_high") is not None
+    ):
         return None
     return obj
 

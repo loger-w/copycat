@@ -448,7 +448,10 @@ def _append_seed(
         logger.warning("訊號規則檔 %s:已有同名規則,跳過種子卡 %r%s", tag, name, skip_note)
         return
     if len(out) >= MAX_RULES:
-        logger.warning("訊號規則檔 %s:規則數已達上限 %s,跳過種子卡 %r", tag, MAX_RULES, name)
+        # 與撞名分支同一句後果(整體 review F-29):滿載其實比撞名更可能
+        logger.warning(
+            "訊號規則檔 %s:規則數已達上限 %s,跳過種子卡 %r%s", tag, MAX_RULES, name, skip_note
+        )
         return
     epoch = int(time.time())
     seq = len(out)
@@ -512,6 +515,10 @@ def load_rules(path: Path) -> list[Rule] | None:
     回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`:
     - 退到 v3:刪掉「掃單簇」種子卡、把 cdp_cross / vol_burst 規則的 `notify_discord` 改回
       true、`_cache_version` 改回 3 → 起舊碼(v3 碼不認 `sweep_cluster` kind,卡沒刪乾淨會 raise)。
+      **再升回 v4 碼時翻旗會重跑**(遷移只看 `version != 4`):若刻意要保留 cdp_cross / vol_burst
+      的通知,升級後要在規則視窗再開一次(整體 review F-30)。
+      **再升回 v4 碼時翻旗會重跑**(遷移只看 `version != 4`):若刻意要保留 cdp_cross / vol_burst
+      的通知,升級後要在規則視窗再開一次(整體 review F-30)。
     - 再退到 v2 / v1:刪兩張 surge_pullback 種子卡、(v1)刪 cdp 的 `rearm_dwell_secs` 鍵、
       `_cache_version` 改回 2(或 1)。
     v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1..4 以外的版本一律 raise。

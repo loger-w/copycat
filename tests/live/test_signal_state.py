@@ -1310,3 +1310,70 @@ class TestSurgePullback:
         assert [e.kind for e in ev2] == ["surge_pullback"]
         assert ev2[0].pct is not None
         assert abs(ev2[0].pct - (104_500 - 102_400) * 100 / 104_500) < 1e-9
+
+
+class TestSweepClusterGates:
+    """2026-09-07 整體 review 收修(review F-05 / F-26):掃單簇軸同樣吃 09:00–13:30 閘與舊日 snapshot
+    閘(既有 `TestSessionGates` 的 `_ALL` 不含 sweep_cluster);解析不了時刻的 tick 不推進掃單軸。"""
+
+    _G1 = ("10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+    _G2 = ("10:01:30.500", [50_200, 50_300, 50_400], 50_200)
+
+    @staticmethod
+    def _seq(det: SignalDetector, ctx: TickContext, base_time: str, g1: tuple, g2: tuple) -> list:
+        out: list[SignalEvent] = []
+        out += det.evaluate("2330", _tick(50_000, time=base_time, ask=50_000, trade_date=ctx.trade_date), ctx, _SWEEP)
+        for time, prices, ask in (g1, g2):
+            for i, p in enumerate(prices):
+                out += det.evaluate(
+                    "2330", _tick(p, cum=i + 1, time=time, ask=ask, trade_date=ctx.trade_date), ctx, _SWEEP
+                )
+        return out
+
+    def test_outside_session_no_event_and_no_sweep_state(self) -> None:
+        clock = _Clock(_dt.datetime(2026, 8, 4, 8, 59, 0))
+        det = _det(clock)
+        assert self._seq(det, _ctx(), "08:58:00.000", self._G1, self._G2) == []
+        clock.now = _dt.datetime(2026, 8, 4, 9, 30, 0)
+        # 進窗後同一序列照發:盤外那兩群沒有留下掃單 / 回看狀態(留下的話 n30 會是 3、且冷卻已武裝)
+        got = self._seq(det, _ctx(), "10:00:00.000", self._G1, self._G2)
+        assert [e.kind for e in got] == ["sweep_cluster"]
+        assert got[0].detail is not None and got[0].detail["n30"] == 2
+
+    def test_stale_trade_date_no_sweep_state(self) -> None:
+        """舊日 tick(`tick.trade_date` ≠ ctx 日別)整段丟:不推進掃單 / 回看狀態。"""
+        det = _det(_Clock())
+        stale_tick = "2026-08-01"
+        for time, prices, ask in (("10:00:00.000", [50_000], 50_000), self._G1, self._G2):
+            for i, p in enumerate(prices):
+                tick = _tick(p, cum=i + 1, time=time, ask=ask, trade_date=stale_tick)
+                assert det.evaluate("2330", tick, _ctx(), _SWEEP) == []
+        got = self._seq(det, _ctx(), "10:00:00.000", self._G1, self._G2)
+        assert [e.kind for e in got] == ["sweep_cluster"]
+        assert got[0].detail is not None and got[0].detail["n30"] == 2
+
+    def test_unparseable_tick_time_does_not_poison_sweep_window(self) -> None:
+        """`tick.time` 解析失敗的 tick 整段跳過(review F-26):退回牆鐘秒數(1.78e9)會混進自午夜秒數
+        (3e4)的 deque,`sweeps[0] < window_start` 從此恆假 → 整條 deque 永不修剪、簇窗形同取消。"""
+        det = _det(_Clock())
+        # 回看基準先餵(否則毒值也會卡在 lookback[0],漲幅恆 0 而遮住這條路)
+        det.evaluate("2330", _tick(50_000, time="10:10:00.000", ask=50_000), _ctx(), _SWEEP)
+        bogus = "bogus"  # `tick_secs` 回 None
+        for i, p in enumerate([50_000, 50_100, 50_200]):  # 同 key 三筆、2 層、外盤 → 若登記就是一個掃單
+            assert det.evaluate("2330", _tick(p, cum=i + 1, time=bogus, ask=50_000), _ctx(), _SWEEP) == []
+        # 之後只有**一個**合格掃單 → n30 = 1 → 不發;毒值留在 deque 時 n30 = 2、60 s 漲 +0.4% 而多發
+        out: list[SignalEvent] = []
+        for i, p in enumerate([50_000, 50_100, 50_200]):
+            out += det.evaluate("2330", _tick(p, cum=i + 1, time="10:11:10.100", ask=50_000), _ctx(), _SWEEP)
+        assert out == []
+
+
+class TestSweepClusterGoldenBounds:
+    """review F-41:即時判「多發」的上界也進 self-check —— 重錄 fixture 時定義改壞成大量多發,
+    `research ⊆ prefix` 與 `earlier 非空` 兩條都封不住。"""
+
+    def test_prefix_over_research_is_bounded(self) -> None:
+        fx = TestSweepClusterGolden._fixture()
+        for case in fx["cases"]:
+            extra = len(case["expected_prefix"]) - len(case["expected_research"])
+            assert 0 <= extra <= 2, (case["code"], extra)  # 研究量測 0.7% 多發;三案現為 0

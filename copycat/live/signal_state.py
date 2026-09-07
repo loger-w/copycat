@@ -703,14 +703,17 @@ class SignalDetector:
         - 冷卻:牆鐘 `mono`,沿規則模型;冷卻中不發也不武裝(下一群照常評)。
         0 價 / 0 量 tick(壞資料)整段跳過:研究 loader 在分群前就濾掉,線上同語意,
         不讓它打斷群的相鄰性。
-        `tick.time` 解析失敗(空字串)→ 退回牆鐘秒數當時刻軸(只在測試造得出來)。
+        `tick.time` 非空但解析不了(空字串在 `evaluate` 已改走時鐘 key)→ **整段跳過**,不推進
+        掃單 / 回看狀態(整體 review F-26):退回牆鐘秒數會把 1.78e9 混進自午夜秒數(3e4)的
+        deque,`sweeps[0] < window_start` 從此恆假、整條 deque 永不修剪、簇窗形同取消。
+        prod 不可達(`_taipei_time` 恆產 HH:MM:SS.fff),只在測試造得出來。
         """
         price = tick.price_milli
         if price <= 0 or tick.qty <= 0:
             return []
         secs = tick_secs(key)
         if secs is None:
-            secs = mono
+            return []
         cfg = self._cfg
         # 回看價序列:保留最後一筆「時刻 ≤ s − up_window」的 tick 當基準(其餘更早的剪掉)
         lookback = self._lookback.setdefault(code, deque())

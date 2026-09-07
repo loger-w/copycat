@@ -1338,7 +1338,7 @@ class TestPolicyQuotes:
         assert src.on_message is not None
         src.on_message(_quote(cum=7, price="2400"))
         await _drain(engine)
-        snap = engine.policy_quotes()
+        snap = engine.policy_quotes(["2330"])
         assert set(snap) == {"2330"}
         q = snap["2330"]
         assert q["name"] == "台積電"
@@ -1356,10 +1356,10 @@ class TestPolicyQuotes:
         assert src.on_message is not None and src.on_no_data is not None
         src.on_message(_quote(cum=1, price="2550", bid="0", ask=""))  # 先摸到漲停
         await _drain(engine)
-        assert engine.policy_quotes()["2330"]["touched_upper"] is True
+        assert engine.policy_quotes(["2330"])["2330"]["touched_upper"] is True
         src.on_no_data("2330")
         await _drain(engine)
-        assert engine.policy_quotes()["2330"] == {
+        assert engine.policy_quotes(["2330"])["2330"] == {
             "name": "台積電",
             "price": None,
             "ref": None,
@@ -1378,7 +1378,7 @@ class TestPolicyQuotes:
         assert src.on_message is not None
         src.on_message(_quote(cum=0, qty="0"))  # 純簿更新,無成交
         await wait_until(lambda: engine._states["2330"].meta is not None)
-        q = engine.policy_quotes()["2330"]
+        q = engine.policy_quotes(["2330"])["2330"]
         assert q["name"] == "台積電" and q["ref"] is not None and q["upper"] is not None
         assert q["price"] is None and q["high"] is None and q["chg_pct"] is None
         assert q["touched_upper"] is None and q["locked_up"] is None
@@ -1410,7 +1410,7 @@ class TestPolicyQuotes:
     async def test_missing_meta_keeps_keys_with_none(self) -> None:
         engine, _src = await _make()
         await engine.set_watchlist(["2330"])
-        assert engine.policy_quotes() == {
+        assert engine.policy_quotes(["2330"]) == {
             "2330": {
                 "name": "",
                 "price": None,
@@ -1432,13 +1432,13 @@ class TestPolicyQuotes:
         # _quote 的 ReferencePrice 2320 → 漲停 2550(2320 × 1.1 = 2552 → 貼 5 元檔 2550)
         src.on_message(_quote(cum=1, price="2550", bid="0", ask=""))
         await _drain(engine)
-        q = engine.policy_quotes()["2330"]
+        q = engine.policy_quotes(["2330"])["2330"]
         assert q["price"] == 2_550_000 and q["upper"] == 2_550_000
         assert q["touched_upper"] is True and q["locked_up"] is True
         # 打開:賣側回到有限價檔 → 鎖死 False、鎖過仍 True
         src.on_message(_quote(cum=2, price="2545", bid="2545", ask="2550"))
         await _drain(engine)
-        q = engine.policy_quotes()["2330"]
+        q = engine.policy_quotes(["2330"])["2330"]
         assert q["touched_upper"] is True and q["locked_up"] is False
         await engine.close()
 
@@ -1448,7 +1448,7 @@ class TestPolicyQuotes:
         await engine.set_main("2330")
         await _drain(engine)
         assert "F:CDF" in engine._states
-        assert set(engine.policy_quotes()) == {"2330"}
+        assert set(engine.policy_quotes(["2330"])) == {"2330"}
         await engine.close()
 
 
@@ -4326,3 +4326,23 @@ class TestTickBundle:
         assert engine._pending_ticks == []
         await asyncio.sleep(0.1)  # 讓原本 0.05 s 的 timer 有機會醒來
         assert _tick_items(await _collect(stream)) == []
+
+
+class TestPolicyQuotesFollowups:
+    """2026-09-07 整體 review 收修(review F-09):`locked_up` 的「限價賣側空」那一半。"""
+
+    async def test_locked_up_requires_empty_limit_ask_side(self) -> None:
+        """現價 = 漲停但賣側仍有限價檔 → **不算**當下鎖死(只是摸到);既有案第二筆同時改價又改
+        賣側,False 只被「價 ≠ 漲停」一項解釋 —— 這裡第三筆只改賣側。"""
+        engine, src = await _make()
+        await engine.set_watchlist(["2330"])
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1, price="2550", bid="0", ask=""))
+        await _drain(engine)
+        assert engine.policy_quotes(["2330"])["2330"]["locked_up"] is True
+        src.on_message(_quote(cum=2, price="2550", bid="2545", ask="2550"))  # 價仍 = 漲停,賣側有限價
+        await _drain(engine)
+        q = engine.policy_quotes(["2330"])["2330"]
+        assert q["price"] == 2_550_000 and q["upper"] == 2_550_000
+        assert q["touched_upper"] is True and q["locked_up"] is False
+        await engine.close()
