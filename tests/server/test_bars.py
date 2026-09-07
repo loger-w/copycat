@@ -19,7 +19,6 @@ from copycat.server.bars import (
     build_period,
     clamp_days,
     is_partial_last,
-    period_bars_pre_final,
     worst_status,
 )
 
@@ -791,6 +790,28 @@ class TestDailySnapshotFinality:
         assert second.bars[-1]["c"] == 200
         assert len(fetch.calls) == 1
 
+    async def test_period_pre_final_tracks_the_long_window_marker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`PeriodBars.pre_final` 與 bars 同一趟取值(pr-202-review F-05,取代 route 二讀快取):
+        界前寫入 → True;界後空手墊背(標記不動)→ 仍 True;負向窗過期後成功 refetch(`daily_put`
+        pop 標記)→ False;界後 memo 命中(定稿值)→ False。負向窗用注入時鐘推過 TTL
+        (同檔慣例),不戳快取內部鍵。"""
+        now = self._mutable_clock(monkeypatch)
+        clock = {"t": 0.0}
+        fetch = _TaggedFetcher([[bar("2026-08-31")], [], [bar("2026-08-31", c=101)]])
+        cache = BarsCache(clock=lambda: clock["t"])
+        first = await build_period(fetch, cache, "TXF", self.TODAY, "D")
+        assert first.pre_final is True
+        now["t"] = _dt.time(14, 0)
+        stale = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 空手 → 墊背
+        assert stale.bars == first.bars and stale.pre_final is True
+        clock["t"] = EMPTY_TTL_SECS + 1.0  # 負向窗過期 → 再問一次
+        final = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 界後成功
+        assert final.bars[-1]["c"] == 101 and final.pre_final is False
+        memo = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 界後 memo 命中
+        assert memo.pre_final is False and len(fetch.calls) == 3
+
     async def test_period_expired_refetch_empty_falls_back_to_stale(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -940,21 +961,6 @@ class TestIsPartialLast:
         today = _dt.date(2026, 7, 28)
         assert is_partial_last([bar("2026-07-28")], "D", today, pre_final=True) is True
         assert is_partial_last([bar("2026-07-27")], "D", today, pre_final=True) is False  # 非今日
-
-    def test_period_bars_pre_final_tracks_the_long_window_marker(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """`period_bars_pre_final` 讀的是 `build_period` 的 `|L` 鍵:界前寫入 → True;界後成功
-        refetch(`daily_put` pop 標記)→ False;界後空手(標記不動)→ 仍 True。"""
-        cache = BarsCache()
-        today = _dt.date(2026, 7, 28)
-        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(10, 0))
-        cache.daily_put("IX0001|L", "2026-07-28", [bar("2026-07-28")])
-        assert period_bars_pre_final(cache, "IX0001", today) is True
-        monkeypatch.setattr(bars_mod, "_now_time", lambda: _dt.time(14, 0))
-        assert period_bars_pre_final(cache, "IX0001", today) is True  # 空手不碰標記
-        cache.daily_put("IX0001|L", "2026-07-28", [bar("2026-07-28", 101)])  # 界後成功
-        assert period_bars_pre_final(cache, "IX0001", today) is False
 
     def test_final_time_does_not_touch_minute_week_month(
         self, monkeypatch: pytest.MonkeyPatch
