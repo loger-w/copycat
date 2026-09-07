@@ -1,27 +1,30 @@
 """spec #192 盤後可驗取證用 fake-source 側車 server(零 TC4 / 零 ZMQ — ops-discipline)。port 8899。
 
 改自 `.claude/mod/trial-pause-badge/evidence/fake_server.py`,差別:
-  1. sys.path 錨點釘回 **worktree**(`mod/signal-shadow-policies`),import 檢查斷言 create_app 來自 worktree。
+  1. sys.path 錨點**自我定位**到本檔所在的 repo root(review F-05:worktree 收掉後寫死路徑會炸),import 檢查
+     斷言 create_app 來自同一棵樹。
   2. 用途 = (a) `GET /api/stock/signals/rules` 在**舊版 v1 規則檔**(複製自 prod `data/signal_rules.json`,
      落在 tmp 隔離目錄,不碰 prod)上多出「掃單簇」且 CDP 穿越 / 爆量通知關;(b) 啟動 log 有
      「T+1/T+2 回填」起動一行;(c) 前端規則視窗截圖(vite preview 以 evidence/vite.sidecar.config.ts proxy 到 8899)。
   3. 自選檔含「記憶體」群組 + 「盤前篩選」群組(政策族群解析的形狀)。
 
-跑法(worktree root):`PYTHONUTF8=1 .venv python .claude/mod/signal-shadow-policies/evidence/fake_server.py`
+跑法(任一棵樹的 root):`PYTHONUTF8=1 .venv python .claude/mod/signal-shadow-policies/evidence/fake_server.py`
 """
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, r"C:\side-project\copycat\.claude\worktrees\mod-signal-shadow-policies")
+# 本檔在 <repo>/.claude/mod/signal-shadow-policies/evidence/ → parents[4] = repo root(深度已實跑驗證)
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(_REPO_ROOT))
 
 import json
 import logging
 import shutil
 import tempfile
 from collections.abc import Callable
-from pathlib import Path
 
 import uvicorn
 
@@ -40,8 +43,8 @@ from tests.helpers.fake_sources import (
 )
 
 assert create_app.__module__.startswith("copycat"), "import 錨點檢查"
-assert "mod-signal-shadow-policies" in (sys.modules["copycat.server.app"].__file__ or ""), (
-    "create_app 必須來自 worktree,不是主 tree"
+assert Path(sys.modules["copycat.server.app"].__file__ or "").resolve().is_relative_to(_REPO_ROOT), (
+    "create_app 必須來自本檔所在的那棵樹(venv 是 editable 主 tree,sys.path[0] 要先蓋過它)"
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
