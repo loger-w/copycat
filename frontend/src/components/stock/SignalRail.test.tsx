@@ -551,6 +551,26 @@ describe("SignalRail 政策列(spec #192)", () => {
     expect(screen.getAllByTestId("policy-chip").length).toBe(1);
   });
 
+  it("合併列(政策 + 爆拉同 tick)chip 仍與 kind 段同一行:不在 flex-col 堆疊容器內(review F-20)", () => {
+    const SURGE = sig({
+      id: "surge",
+      kind: "surge",
+      time: "10:01:30",
+      price: 50_400,
+      pct: 0.6,
+      rule_name: "爆拉爆跌",
+    });
+    renderRail({ signals: [POLICY, SURGE] });
+    expect(rowTexts().length).toBe(1);
+    const list = within(screen.getByTestId("signal-rail-list"));
+    // 合併列:kind 段 clamp 2(堆疊容器是 flex-col)
+    expect(list.getByText("掃單簇 +0.80%").parentElement?.className).toContain("line-clamp-2");
+    const [chip] = screen.getAllByTestId("policy-chip");
+    const row = chip?.parentElement?.parentElement;
+    expect(row?.className).toContain("items-baseline");
+    expect(row?.className).not.toContain("flex-col");
+  });
+
   it("全組 quiet(notify=false)→ 列淡色;含 notify=true 或缺欄的列 → 不淡", () => {
     renderRail({
       signals: [
