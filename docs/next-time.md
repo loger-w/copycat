@@ -1,3 +1,15 @@
+## 2026-09-07(next-time 盤點,user 逐條拍板;編號 A/B/C 是當次盤點的臨時編號)
+
+- 盤點口徑:A = 有期限的看盤判準、B = 可直接動工、C = 觀察 / 拍板題;user 決定看盤觀察類先略過,逐條以使用心得回答 C 桶。
+- **W1 批(本分支 mod/next-time-batch-w1)**:B2 新增群組(輸入框失敗不清空 + 新增列搬到左欄頂端)/ B3 WS 首則 seed send 關閉錯誤不印 traceback /
+  B11 `BarsCache.prune` 清理補測試 / B14 ruff 加 `PLE1205/PLE1206`(先掃存量)/ B15 verify.py `_DAILY_PAD_ROWS` parity / C17 日 K 末根 14:00 後不再標未收盤。
+- **W2 批(`/mod`,W1 後)**:C16 期貨日 K 15:00 錨定翻頁換新 / C21 盤前篩選放棄後每小時重試 / C22 當沖名單太短視同未發布 / C18 輪詢頁跨 09:00 自醒。
+- **W3 重構(各自 🔵 分支,依序)**:B12 `DailyEntry`(B11 測試釘住後)→ B10 + B18 兩邊測試鷹架抽 fixture → B8 指數疊線 registry 表 + B9 時間編解碼收兩支
+  → B7 四處小重複各自抽 → B6 重連同形(先 characterization 再決定抽不抽)→ B17 序號跳號純狀態機(先議 seam)。
+- **保留不動**:回測 B1(fade / tday 效能候選)/ B13(`backfill_daytrade` BuyAfterSale `Y` 誤剔);期貨未測批 C3 真市價鈕 / C7 期貨成交契約碼 /
+  C13 夜盤市價單實驗 / C23 期貨梯接 fills 成交價;C5 當沖資格顯示另開 session `/feat`;觀察 C4 融券代碼 / C19 凌晨開機重播 / C20 自癒後缺格。
+- **結案(user「用下來沒問題」)**:C1 C2 C6 C8 C9 C10 C11 C12 C14 —— 各條已勾並註記;C15 維持樂觀套用(成交回報才動部位)。
+
 ## 2026-09-01(pr-review #163/#164/#166/#167 四份收修 留尾)
 
 - [ ] **重播蓋日其實可達:凌晨開機時群益 backlog 尚未換日,重播昨日成交以到達日入 `FillRecord.date`**
@@ -27,9 +39,11 @@
   但 bar 已定稿 —— **非** #165 引入(冷啟動 13:45 後首問同樣誤標),定稿界只讓它變常態。docstring 兩口徑註記已補
   (fix/pr-165-review-followups);要不要讓 D 分支改吃 `DAILY_FINAL_TIME` 是 /mod(`is_partial_last` 同時服務 1/W/M,
   夜盤語意另一回事,期貨側不吃本欄)。
+  **→ 2026-09-07 next-time 盤點:C17 user 拍板修 → W1 批。**
 - [ ] **`BarsCache.prune` 的 `_daily_tag`(306-307)與 `_daily_pre_final`(308)清理零測試**(pr-165-review #8,內部複查
   REFUTED 單獨立案但缺口是真的):兩行同構、刪掉全綠、失效 = 純記憶體無界成長。要補就兩段一起 —— 比照
   `today_entry_count()` 開 `*_count()` 觀測點 + prune 測試各一行斷言,併 test-hygiene 批。
+  **→ 2026-09-07 next-time 盤點:B11 user 拍板修 → W1 批。**
 
 ## 2026-08-31(fix/futures-daily-cache-night 留尾)
 
@@ -37,6 +51,7 @@
   但 `day-bars-rollover.ts` 的 staleTime 到午夜才過期,掛著不動的 preview 要到 00:01 才重問):候選 = `useFuturesBars` 日 K 的界改
   min(午夜, 15:00 錨定翻頁 + slack)。**只有期貨那支該吃 15:00 界**(market / stock 的日 K 沒有錨定日概念),而政策的單一住處在
   `lib/day-bars-rollover.ts` 三支同源 —— 怎麼開這個分岔是設計題,/mod + grilling 一輪再動。
+  **→ 2026-09-07 next-time 盤點:C16 user 拍板做 → W2 批(/mod)。**
 - [x] ~~**`DAILY_FINAL_TIME = 14:00` 的前提(TC4 DK 定稿寫入時點)未實測**~~ **→ 09-01 已實測、判準 FAIL、根因確診
   (「界往後調」的處方作廢)**:15:02(server 08:57 起)首刷拿到凍在 10:08 的 09-01 bar(h 46955 < 1K 日盤實收 47209、
   v 與早上逐字節同);15:16 user 重啟(新 TC4 session)首刷 171 ms 直接定稿(c 47209 / v 82698,MXF 同)——
@@ -95,9 +110,10 @@
   噴「最大 2879 分」;修前 08-31 grep 要先扣掉那批,修後 `grep "期貨 1K"` 判準才成立)、F-08 落後量對齊前端終點標記(非整秒 +1,後端不再少 1)、
   F-13 去重帳按 session 分開、F-09 健康檢查加圍籬、F-03 `_note_push` 裸索引競態;測試層 F-02 / F-04 / F-05 / F-06 / F-07 / F-14 / F-15 釘齊
   (報告 `docs/superpowers/specs/pr-145-review.md`)。
-- [ ] **VX `sparse` 全日旗標的取捨**(pr-145 F-18,知情用):sparse 整場豁免 R2、CFE 段 `segment_leg_gate` 恆 True → VX 任何時段只剩 R1,
+- [x] **VX `sparse` 全日旗標的取捨**(pr-145 F-18,知情用):sparse 整場豁免 R2、CFE 段 `segment_leg_gate` 恆 True → VX 任何時段只剩 R1,
   但證據只有台北 08:47–09:55 那 68 分鐘;`corr_config.py` 既有註解記「01:02 實測 VX 45 s 推 19 則」(美盤盤中活躍)。若在意美盤時段
   單腿死無人救,候選 = sparse 時段化(比照 `heal_symbol_active`);不在意就維持。
+  **→ 2026-09-07 next-time 盤點:C12 沒看到問題。**
 - [x] **`/bug` 無券空單校準**(L151 / L394 併):`_FILL_KIND` 補「無券」、負現股列平倉解鎖、損益列蒐證;倉位線語意等下一筆實錄。
   **→ 08-30 出貨 fix/borrowless-short-calibration**:負現股列歸 `daytrade_sell`(user 拍板)+ 兩條連帶(現股買先沖空單 / 損益列「現股」配
   daytrade_sell 負列)。**prod 重啟後下一筆無券當沖的判準**:log `庫存段 <股號> 現股負股數 … → 無券空單(daytrade_sell)`(INFO,每股號每日一次;parser 那行是 DEBUG 看不到;不得再出現「平倉暫鎖」WARNING)、
@@ -126,6 +142,7 @@
   → 快照仍舊、水位判不出 → 倒退最長 60 s(L642「少一檔 / 多一檔 60s」樣態)。修法候選 =「近 N 秒內有樂觀成交的鍵」
   落地若倒退則保留樂觀值 + 立即重查;TTL 要拍板(user 08-31:「這個問題先緩緩」)。下次盤中遇到部位消失 >5 s 時抓
   `grep "balance 鏈" + 成交樂觀套用` 時序當實錄。
+  **→ 2026-09-07 next-time 盤點:C15 user 拍板維持樂觀套用(成交回報到了才動部位,沒買到不會動),閃回等實錄再拍。**
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [x] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
@@ -142,6 +159,7 @@
 - [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。
 - [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
 
+  **→ 2026-09-07 next-time 盤點:C18 user 09:00 側欄「陸續幾秒」= 各檔開盤首筆成交本就不同時(09-07 實錄 09:00:02–09:00:17)+ 側欄 1 s 節流,非本條;本條(輪詢頁跨 09:00 不自醒)→ W2 批。**
 - [x] ~~**`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
   畫面每畫格合批重繪(50 張卡 memo 教訓)。排在 `/perf` 之後。~~
   → **09-03 mod/group-grid-ticks 出貨**(spec #179;T1–T6 = #180 / #182 / #183 / #185 / #181 / #184;grilling 09-02 拍板):後端逐筆改
@@ -195,7 +213,8 @@
   attempt 1 —— NK225M 無 per-leg 時段閘、全天活性,1 發/日 = 噪音不動);15:01 stale=True + river 歸零 = OSE 14:45–15:30
   間隙 + 江波圖 15:00 翻頁,正常態非故障。**仍開** = heal 階梯(等壞日子)、跨午夜判準(今晚 server+preview 掛過 00:01,
   翌晨 grep log 00:01 的 `bars/TXF?tf=D` 一發)、SC-13 (c)(要 08:45 前起 server 的交易日看 08:46 水平橋)。
-- [ ] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
+- [x] **08-28 盤後**:L240 run.ps1 第二次 Ctrl+C `--verify` 驗;達錢並行回補實驗(`/perf` 步驟 ①)。
+  **→ 2026-09-07 next-time 盤點:C14 沒看到問題;並行回補實驗早於 08-30 /perf 完成。**
 
 ## 2026-08-28(A7 / N037 WS 韌性真環境驗 —— PASS,留尾)
 
@@ -303,9 +322,10 @@
   `FuturesChart` 經 `sliceCurrentAllday` / `anchorDateOf` / `alldayFillPoints` / `nextTradingDayIso` 四層可選穿透,缺省讀
   `trading-calendar.ts` 模組集合 —— 同一份資料兩個來源(query data vs 模組級)。現在只有 FuturesChart 一個消費者,
   再多一個(例如群組圖牆的期指卡)就該收成一個 `TradingCalendar` 型別或 context,不再各自 `new Set(holidays)`。
-- [ ] **期指「每個交易日都有夜盤」假設沒有事實鎖**(mod/futures-day-1500 §6):春節前最後交易日期交所不開夜盤,
+- [x] **期指「每個交易日都有夜盤」假設沒有事實鎖**(mod/futures-day-1500 §6):春節前最後交易日期交所不開夜盤,
   那天的圖左半會空白(錨定日 = 假日後首交易日,夜盤側零 bar → 不補橋,只畫日盤);`inFuturesAllDayHours` 同一假設。
   候選 = 交易日曆 JSON 加「無夜盤日」欄,兩處同吃。要先查期交所公告落成事實(tc4-market-facts)。 **→ 08-28:不急,2027-01 前做(先查期交所公告)。**
+  **→ 2026-09-07 next-time 盤點:C10 沒看到問題。**
 - [ ] **SC-13 (b)–(e) 真環境窗口**(mod/futures-day-1500):15:01 翻頁那一刻(左緣換成今 15:00)、次一交易日 08:46 的
   05:00→08:45 水平橋 + 跳價、CDP 五線在 15:00 換組後 user 對 APP、個股頁「台指期」線夜盤時段仍在(解耦後應與改前相同)。 **→ 08-28:08-31 驗,user 看畫面、agent 抓 `/api/market/bars` 對照。**
 - [ ] **加一條指數疊線要改 11 處(review round 1 S4 Shotgun Surgery)**:`ChartToggles` 鍵 + `DEFAULTS` + `IndexOverlayKey`
@@ -339,7 +359,7 @@
   後 `_TRADING_END` 回 13:35,13:25–13:30 那半段名實相符了,但 **13:30–13:35 已收盤函式仍回 True** —— 它實質是「個股自癒 /
   健檢閘窗(上界 13:35 是啟發式)」;`corr_source.py:61` / `app.py:416` 讀者只看得到名字,正是 #126 誤共用的同一條失效路。
   index 那把已具名 `in_index_heal_window_now`。獨立 🔵 更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END`,六個讀者一起改。 **→ 08-28:併 D 測試衛生 chore 分支。** **→ 08-31 chore/test-hygiene-batch-2 出貨:更名 `in_stock_heal_window_now` / `_STOCK_HEAL_END` / `_HEAL_START`(六讀者 + CLAUDE.md §4),docstring 補「不是盤中判定」。**
-- [ ] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
+- [x] **index 閘 13:25 的代價**(review Spec P2-2/3/4;pr-126 F-01 per-consumer 後**只剩指數側**,user 知情):訂閱在
   13:25–13:30 死掉時 (a) 加權分時由 index_engine 尾段回補得回(有日曆且為交易日 → 13:25 起到午夜;無日曆退回 `_HEAL_TAIL_END` 13:40,
   pr-126 F-05);現價欄不靠回補(`_merge_backfill` 只寫 minutes),但同一發自癒會連帶重掛 IX0001
   (`_subscribe_and_backfill`),重掛的 SUBQUOTE snapshot 即一則推播 → 現價欄**應會**跟著回來(pr-128 F-01,未實測;
@@ -349,10 +369,12 @@
   (`stock_engine.py` 收件人含 `_backfilled`,只在 upper / lower 真的變動時)與逾時重排該情境下不觸發,群組成員
   60 s 輪詢被 `_backfilled` 擋住;08-27 前那句「個股沒有當日重補」錯。
   兩條都是「13:30 回來一小段」第二段閘的價值,綁下一條的量測 —— 現價欄若真的回來,第二段閘的價值只剩 (b)。 **→ 08-28:併上條 08-31 同一次量。**
-- [ ] **IX0001 收盤最後一筆推播幾點到**:index 閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
+  **→ 2026-09-07 next-time 盤點:C9 沒看到問題。**
+- [x] **IX0001 收盤最後一筆推播幾點到**:index 閘已改 13:25,這個事實現在只決定「要不要加 13:30 回來一小段的第二段閘」
   (user 08-27 提的設計):13:30:0x 即到 → 值得加(多保護試撮 5 分鐘內訂閱死掉的窗);13:33 才到(個股 1K 有 13:33 的
   row,`tests/live/test_stock_source.py:469`)→ 加了也是誤判,維持現狀。量法 = 交易日 13:36 `curl /api/index/state`
   看 twse 最後更新時戳 / minutes 最大鍵,或 13:20 起只聽不訂 probe(`ix_listen_probe.py` 樣板)。 **→ 08-28:併 L101 08-31 同一次量。**
+  **→ 2026-09-07 next-time 盤點:C9 沒看到問題。**
 - [x] **`heal_*` 六個參數 Data Clump**(review Standards):`TC4QuoteSource` 六個 heal 參數被 `CorrQuoteSource` 逐字轉發,
   本輪加一個旗標動了 tc4 簽名 + body、corr_source 簽名 + 轉發、app 兩處、四支測試。候選 = `HealPolicy` frozen dataclass
   收攏,四個 source 子類一起改,獨立 🔵。 **→ 08-28:併 D 測試衛生 chore 分支。** **→ 08-31 chore/test-hygiene-batch-2 出貨:`tc4.HealPolicy` frozen dataclass;STOCK_HEAL / FUTURES_HEAL / CORR_HEAL 模組常數 + `dataclasses.replace` 疊閘;test_tc4 28 呼叫點、wiring 10 斷言改 `.heal` 欄位。**
@@ -363,11 +385,12 @@
   `avg_source` 字面,沒 grep `avg_price =` 就地寫入 → 真鏈 `client._on_profit_complete` 漏掉,測試綠在一條零 caller 的
   死路徑上。判準:新增欄位時 `grep "<鄰欄>\s*="` 把每個就地寫入點列出來逐一對。待併入 `ops-discipline`(該檔另一 session
   持有未提交修改,先記這裡)。
-- [ ] **期貨列 `avg_source` 恆 null(語意缺口,非本輪 bug)**(two-axis Spec (c)):`balance.py::parse_open_interest_line` 給期貨列
+- [x] **期貨列 `avg_source` 恆 null(語意缺口,非本輪 bug)**(two-axis Spec (c)):`balance.py::parse_open_interest_line` 給期貨列
   `avg_price=` 群益 OI [6] 平均成本、從不寫 `avg_source`;`merge_fut_positions` / `_stale_fut_positions` 沿用同物件。
   **不會**多加一次買費 —— 期貨列不進 `positionEcon`(`position-summary.ts:116/177` 分開走、`PriceLadder` 是現股梯),
   reviewer 說的後果不成立;真正的缺口是「群益 OI 平均成本含不含手續費」無實證,期貨梯的打平線若日後要吃它得先量。
   與 08-26 節「空方均價語意無真樣本」同一類,等首筆期貨真成交順看。 **→ 08-28:併上條,等首筆期貨真成交。**
+  **→ 2026-09-07 next-time 盤點:C11 沒看到問題。**
 - [x] ~~**F-05 `fill_date` 跨日重播復發**(pr-118-review Should):`today_qty` 看成交到達日,群益 ConnectByID 重播含前一日時
   (跨日未重啟)昨天的成交會被算進當沖段 —— 與 08-26 節「`today_qty` 依賴聚合只有當日 backlog」同一條,那條已列。~~
   → 08-28 triage:與 08-26 節「today_qty 依賴聚合只有當日 backlog」同條,留那條。
@@ -377,15 +400,18 @@
 
 ## 2026-08-26(fix/breakeven-avg-source-daytrade-tax 打平線均價語意 + 當沖稅 留尾)
 
-- [ ] **空方(融券 / 無券 daytrade_sell)均價語意無真樣本**:群益損益試算的空方「均價」是純賣價、還是扣掉賣費稅後的淨收?
+- [x] **空方(融券 / 無券 daytrade_sell)均價語意無真樣本**:群益損益試算的空方「均價」是純賣價、還是扣掉賣費稅後的淨收?
   `positionEcon` 空方分支沿舊式當純價;無券當沖(先賣後買)照法規也是現股當沖 0.15%,但 `today_qty` 減半目前**只套 kind === "cash"**,
   `daytrade_sell` 未套 —— 等 08-27 user 無券當沖實錄(balance.py 負股數整列)一併校準兩件事。 **→ 08-28 併 `/bug 無券空單校準`:① `_FILL_KIND` 補「無券」→ today_qty 對空單生效 ② 負現股列平倉解鎖 ③ 損益列 avg/cost/kind 印 INFO;**倉位線語意(user 確認今日 8358 倉位標記 ≠ 賣出價 512,差約兩檔)等下一筆實錄再定**。**
   **→ 08-30:①② 已出貨(fix/borrowless-short-calibration;前端 `positionEcon` 減半條件加 `daytrade_sell`);③ 已隨 #145 出貨。剩倉位線語意:下一筆無券當沖
   看 `損益列回填 <股號> kind=cash avg=…` 那行的 avg 是否 = 賣出價(純賣價)還是 < 賣出價(扣費稅淨收),再決定 `positionEcon` 空方分支要不要改口徑。**
-- [ ] **樂觀加碼時 broker 均價(含費)與純成交價加權**:`_apply_fill_locked` 同向加碼沿用舊來源,新增那幾張少算一次買費
+  **→ 2026-09-07 next-time 盤點:C6 成本沒大問題。**
+- [x] **樂觀加碼時 broker 均價(含費)與純成交價加權**:`_apply_fill_locked` 同向加碼沿用舊來源,新增那幾張少算一次買費
   (0.026%),鏈落地 1–2 s 即消;要精確得讓後端知道折數(= 被否決的修法 B)或前端拆兩段。撞到再說。 **→ 08-28:已知風險,只記著。**
-- [ ] **`today_qty` 依賴「聚合只有當日 backlog」**:群益 ConnectByID 只重播當日;若哪天重播含前一日(跨日未重啟、
+  **→ 2026-09-07 next-time 盤點:C6 成本沒大問題。**
+- [x] **`today_qty` 依賴「聚合只有當日 backlog」**:群益 ConnectByID 只重播當日;若哪天重播含前一日(跨日未重啟、
   或 API 行為變),today_qty 會把昨天的張數算進當沖段。判準 = `_Agg.date` 非今日仍被計入;可加 WARNING 蒐證。 **→ 08-28:已知風險,只記著(可加 WARNING 蒐證併可觀測性小批,視工時)。**
+  **→ 2026-09-07 next-time 盤點:C6 成本沒大問題。**
 - [x] ~~**群益 APP 損益試算不做當沖減半**(08-26 反推 4991 pnl_base 用 0.3%):今天的部位我們會比 APP 多顯示減半的稅,刻意;
   若 user 日後要「與 APP 一模一樣」模式,加 toggle 把 `SELL_TAX_DAYTRADE` 關成 0.3% 即可。~~
   → 08-28 拍板不做:維持減半(更準),不加「與 APP 一致」toggle。
@@ -418,6 +444,7 @@ verification;這裡回填成 backlog。
 - [ ] **rollover stage1 → worker `set_trade_date` 之間的次毫秒窗**(§7.8 SP1):source 日窗仍舊,靠 `_generation` guard 丟掉
   回補結果 —— 「靠別人擋」不是「結構上不可能」,真要收得把日窗語意納入 generation。
 - [ ] **N039 route 層首則 seed send 仍只 catch `WebSocketDisconnect`**(`app.py` 四處),close_sent traceback 噪音仍在。
+  **→ 2026-09-07 next-time 盤點:B3 user 拍板修 → W1 批。**
 - [ ] **N038 jitter 對背景分頁無效**(Chrome timer 1 s 對齊),#99 E5 判 PASS 偏寬。
 - [ ] **#106 私密視窗偏好靜默不落檔畫面零訊號**(`storage.ts` 四旗標唯一讀者是自己去重)。
 - [ ] **/bug H3 昨日段中段缺格 gate 5 不涵蓋**(只比尾根;core 單條 polyline 對任何缺格架橋)+ **切回 tab 最多 60 s 印
@@ -433,6 +460,7 @@ verification;這裡回填成 backlog。
 - [ ] **「新增群組」輸入框仍在 commit 前 eager 清空**(`WatchlistManagerDialog.tsx::submitAddGroup`):佇列視窗內撞名時
   文案出來、字已清(#101 verification §5.3 舊留尾;A4 只收改名)。改成留著要另設守門(清空同時是它的重送防護),
   可照 `renameInFlight` + `onSettled` 的形狀做。
+  **→ 2026-09-07 next-time 盤點:B2 user 拍板修,順帶新增列搬到左欄最上方 → W1 批。**
 - [x] **`WatchlistManagerDialog.test.tsx` 的 `gatePuts` / `releaseOk` 已是同檔第三份逐字複本**(L365 / L461 / A4 新 describe):
   抽成檔案頂層工廠(`makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`),要動既有兩個 describe,單獨一個 🔵。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:檔頂 `makeGate()` 回 `{ gatePuts, releaseOk, releaseFail }`,三個 describe 各叫一次;N118 測試裡第四份行內 400 resolve 一併改 `releaseFail()`。**
 - [x] ~~**`frontend/package-lock.json` 與 `package.json` 不同步**(`npm ci` 拒裝:`@emnapi/core` / `runtime` / `wasi-threads`
@@ -473,10 +501,11 @@ verification;這裡回填成 backlog。
 
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
-- [ ] **signals 段(`bot.close()` + hub drain)無上限**,只算進 `LIFESPAN_SLACK_SECS`(5 s);
+- [x] **signals 段(`bot.close()` + hub drain)無上限**,只算進 `LIFESPAN_SLACK_SECS`(5 s);
   Discord 端網路壞掉時 `discord.py` 自己的 timeout 才是上界,超過就擠掉 TC4 的預算。候選 =
   `asyncio.wait_for(signals_close, LIFESPAN_SLACK_SECS)`,但要先確認 hub 落檔在 timeout 內完成
   (jsonl 是真相源,不能被 cancel 半途)。
+  **→ 2026-09-07 next-time 盤點:C8 沒看到問題。**
 - [x] **run.ps1 finally 內第二次 Ctrl+C 未驗**:PowerShell 5.1 的 finally 在 `WaitForExit` 阻塞時再按
   Ctrl+C 是否中斷、中斷後 `Stop-Tree` 還跑不跑 —— 跑不到的話 backend 就留著。上限拉到 83 s 之後
   這條路比 15 s 時代更可能被人踩到。盤後用 --verify server 走一次即可驗。 **→ 08-28:今日盤後以 `--verify` server 驗。**
@@ -487,9 +516,10 @@ verification;這裡回填成 backlog。
   (3) 翻面代價:第二次 Ctrl+C **不能提前放棄等待**,TC4 半死時狂按無效、最壞等滿 83 s 才硬殺(知情即可,run.ps1
   已印上限與去哪看);(4) finally 之後的語句不會跑(run.ps1 finally 後無語句,無影響)。真 `--verify` server 免跑:
   問題本體是 PS 5.1 語意,stub 的 finally 結構與 run.ps1 逐字同形。
-- [ ] **上界 83 s 是「TC4 半死」可計段的數字,不是承諾**:半死時 LOGOUT 自己也送不出去,等待只是給
+- [x] **上界 83 s 是「TC4 半死」可計段的數字,不是承諾**:半死時 LOGOUT 自己也送不出去,等待只是給
   **健康** session 收尾的機會;真要縮短得在 `close()` 進場時把 socket 的 RCVTIMEO 調短(`api.lock`
   持有下 setsockopt 才安全,而 KeepAlive Pong 共用同一把鎖)—— 動到 wrapper 共用 socket,獨立一輪。
+  **→ 2026-09-07 next-time 盤點:C8 沒看到問題。**
 - [ ] **wrapper `KeepAliveHelper.ThreadProcess` 只 catch ZMQError**(`spikes/TCPY/tcoreapi_mq.py:292-303`,
   本地 patch 版):`Pong` 在 try 外,recv 撞 RCVTIMEO 會帶著 `api.lock` 死掉(= 既知的毒鎖,`_dispose`
   取不到鎖會跳過 Disconnect,無害);但 decode 類例外殺掉執行緒時鎖已釋放、SUB socket 永不關 →
@@ -684,8 +714,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
 ## 2026-08-17(mod/corr-nk225m-leg batch3 R5 留尾)
 
 - [x] `tests/live/test_river_state.py` 帶 UTF-8 BOM(`ruff format --check` 報;非 gate)—— 順手批去 BOM。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:連同 `tests/server/test_futures_engine.py` 一起去 BOM。**
-- [ ] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
+- [x] next-time:758(跨 UTC 06/22 邊界推播)本輪 20:1x 起跑仍未跨邊界,**未驗**;`spikes/nk225_leg_probe.py`
   可帶 `--listen-secs` 拉長在 13:5x 起跑順帶驗。 **→ 08-28:08-31 13:50 跑 probe(今日 15:00 才想到,14:00 邊界已過)。**
+  **→ 2026-09-07 next-time 盤點:C2 沒問題。**
 
 ## 2026-08-17(mod/positions-pnl-display batch3 R3 留尾)
 
@@ -762,10 +793,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
   會動 scalar-only 頻寬慣例,獨立輪評估。
 ## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
 
-- [ ] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
+- [x] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
   四張在 `.claude/feat/stkfut-contracts/evidence/`;**真送單驗證 = prod 安全首單**
   (遠價 1 口 → 群益 APP 核對 → 刪單,§7);首個交易日順看 08:45–09:00 期貨分時有資料
   (夜盤訂閱窗假設的 prod 觀察項)。 **→ user 08-28:個股期之後再測,不排期。**
+  **→ 2026-09-07 next-time 盤點:C1 個股期用下來沒意見。**
 ## 2026-08-06(group-grid 題5 收尾留尾巴)
 
 - [ ] **apply_backfill reset+replay 競態範圍隨 guard 去 main 化擴大**(review B3-f;2026-08-24 起由
@@ -817,10 +849,14 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 - [ ] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。
 - [ ] **盤前篩選放棄後 ~24h 不重武裝**(review F-10,MED→LOW PARTIAL):21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
+  **→ 2026-09-07 next-time 盤點:C21 user 拍板做(放棄後每小時再試到資料出現或翌日 08:00)→ W2 批。**
 - [ ] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
+  **→ 2026-09-07 next-time 盤點:B15 user 拍板修 → W1 批。**
 - [ ] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
+  **→ 2026-09-07 next-time 盤點:B14 user 拍板修 → W1 批。**
 - [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
 - [ ] **盤前篩選當沖名單「部分落檔」不可偵測**(收修 review SP5):單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。
+  **→ 2026-09-07 next-time 盤點:C22 user 拍板做(相對閘:少於前一晚八成視同未發布;首晚絕對下限 1,000)→ W2 批。**
 
 ## 2026-09-04(pr-188 review 收修 r1 留尾)
 
