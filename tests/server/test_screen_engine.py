@@ -694,3 +694,88 @@ async def test_day_trading_date_echo_mismatch_raises(
     )
     with pytest.raises(BreadthFetchError, match="當沖名單資料日回聲不符"):
         await eng.compute(_DAY)
+
+
+# ---------------------------------------------------------------------------
+# 跨 attempt EOD memo + 處置股 fail-fast(next-time 「screen_engine 跨 attempt memo」,09-08 另 session 帶入):
+# 同一目標交易日內重試不重抓上一輪已拿到的 EOD(抄 breadth `_streak_memo`:存縮列後 rows、目標日換日清空);
+# 處置股取數提到 EOD 之前(取數失敗 22 → 2 個請求)。
+# ---------------------------------------------------------------------------
+
+
+class TestEodAttemptMemo:
+    @staticmethod
+    def _counting_daily(
+        counts: dict[_dt.date, int], *, fail_once_on: _dt.date | None = None
+    ) -> Fetch:
+        def daily(token: str, day: _dt.date) -> list[dict]:
+            counts[day] = counts.get(day, 0) + 1
+            if day == fail_once_on and counts[day] == 1:
+                raise BreadthFetchError(f"FinMind {day} 暫時失敗")
+            return _daily_rows(day)
+
+        return daily
+
+    async def test_retry_reuses_eod_rows_fetched_by_the_previous_attempt(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """第 1 次 attempt 抓到第 5 個交易日(08-25)才失敗 → 第 2 次只補抓 08-25 起未拿到的日子:
+        前 4 日各 1 次、08-25 兩次、總呼叫 = 21 + 1;成功落檔、只睡一段 600 s。"""
+        clock = _Clock(_dt.datetime(2026, 9, 1, 8, 0, 30))
+        sleeps = _install_fake_sleep(monkeypatch, clock)
+        counts: dict[_dt.date, int] = {}
+        bad = _dt.date(2026, 8, 25)
+        eng = _engine(
+            self._counting_daily(counts, fail_once_on=bad),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()
+        assert eng._cached_target_date() == _DAY
+        assert sleeps == [600.0]
+        assert counts[bad] == 2
+        assert all(counts[d] == 1 for d in counts if d != bad)
+        assert sum(counts.values()) == screen_engine.WINDOW_DAYS + 1
+
+    async def test_memo_is_dropped_when_the_target_trading_day_changes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """週二算完 → 週三 08:00:30 再 tick:窗重疊的日子(08-31 等)要重抓,不沿用昨天那份 memo
+        (同一日期的 EOD 不會變,但 memo 只服務當次目標日;抄 breadth 武裝時清空)。"""
+        clock = _Clock(_dt.datetime(2026, 9, 1, 8, 0, 30))
+        _install_fake_sleep(monkeypatch, clock)
+        counts: dict[_dt.date, int] = {}
+        eng = _engine(
+            self._counting_daily(counts),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()
+        assert counts[_DATA] == 1
+        clock.t = _dt.datetime(2026, 9, 2, 8, 0, 30)  # 週三
+        await eng.tick()
+        assert eng._cached_target_date() == _dt.date(2026, 9, 2)
+        assert counts[_DATA] == 2  # 週三的窗也含 08-31,重抓而非沿用
+
+    async def test_disposition_fetch_failure_happens_before_any_eod_fetch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        counts: dict[_dt.date, int] = {}
+
+        def disposition(token: str, day: _dt.date) -> list[dict]:
+            raise BreadthFetchError("處置股 暫時失敗")
+
+        eng = _engine(
+            self._counting_daily(counts),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            disposition=disposition,
+        )
+        with pytest.raises(BreadthFetchError, match="處置股"):
+            await eng.compute(_DAY)
+        assert counts == {}
