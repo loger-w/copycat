@@ -136,6 +136,15 @@ describe("StockChart 即時末根 —— 分 K(T1 #215)", () => {
     expect(readout()).toContain("收 104");
   });
 
+  it("休市日(週六 09:06)不補:引擎假日不換日、accum 仍是前一交易日的,不得貼成今天(two-axis spec S-01)", async () => {
+    vi.setSystemTime(new Date(2026, 8, 12, 9, 6, 30)); // 2026-09-12 週六;週末不需日曆即判非交易日
+    mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
+    await waitFor(() => expect(screen.getByLabelText("K 線圖")).toBeTruthy());
+    await waitFor(() => expect(readout()).toContain(`${TODAY} 09:05`));
+    expect(readout()).not.toContain("2026-09-12");
+  });
+
   it("09:00 前(牆鐘 08:59)不補:凌晨 accum 仍是昨天的,不得貼成今天", async () => {
     vi.setSystemTime(new Date(2026, 8, 8, 8, 59, 0));
     mount(accumOf({ minutes: LIVE_MINUTES }));
