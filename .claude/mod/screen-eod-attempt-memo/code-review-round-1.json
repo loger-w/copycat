@@ -1,0 +1,26 @@
+{
+  "fixed_point": "77ef64a6 (merge-base master)",
+  "diff": "git diff 77ef64a6...HEAD (HEAD = 45f2f196 at review time; round-1 收修後 40d4c816 / 62952ae5 / a60d2b04 三筆追加)",
+  "spec_source": "user 2026-09-08 原話(另 session 帶入)+ docs/next-time.md 原條「screen_engine 跨 attempt memo + disposition fail-fast」;參考實作 breadth_engine._streak_memo",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "finding": "compute() docstring「不改引擎狀態」已成假話:_compute_with_daytrade_rows 經 _eod_memo_for 寫 self._eod_memo / _eod_memo_target;round-1 F-01 才把 instance 欄位拔掉,這次又長回一個。", "disposition": "修:memo 改為 _run_attempts 區域變數往下傳(_run_once(eod_memo=) / _compute_with_daytrade_rows(eod_memo=)),compute() 傳空 dict;instance 欄位與 _eod_memo_for 刪除(perf commit 40d4c816)"},
+    {"id": "F-02", "severity": "MED", "finding": "放棄路徑整天扣著 memo,與欄位註解「成功後清」自相矛盾;breadth 是武裝時一處清,這裡 lazy 換日 + 成功後清兩個寫入點漏掉放棄。", "disposition": "修:同 F-01 —— 區域變數生命週期 = 一次 _run_attempts,成功 / 放棄 / 例外回傳即消失,零清空點"},
+    {"id": "F-03", "severity": "LOW", "finding": "「取數失敗 22 → 2 個請求」左右基準不同:舊路徑處置股失敗實際 1 + 21 + 1 = 23。", "disposition": "修:改「23(名單 + 21 EOD + 處置)→ 2」(code 註解 + 測試 docstring);「~100 個大檔」改「6 × 21 = 126」"},
+    {"id": "F-04", "severity": "LOW", "finding": "Data Clump:_eod_memo + _eod_memo_target 恆成對,卻由 _eod_memo_for 與 _run_once 各維護一半。", "disposition": "修:同 F-01,兩個欄位皆刪"},
+    {"id": "F-05", "severity": "LOW", "finding": "非最新日空回應 memo 成 None → 暫時性空回應在該目標日內變永久,窗靜默往更舊多退一日、零訊號;日曆已先剔非交易日,語意比 breadth 弱。", "disposition": "修:空回應不進 memo(每 attempt 再問一次可自癒,一天多一發換自癒),註解寫明與 breadth 刻意不同"},
+    {"id": "F-06", "severity": "NICE", "finding": "days.append((d, cached)) 直接交出 memo 自己的 list,breadth 是 set(cached) 複本;下游 hard_candidates 唯讀故今日安全,但無註解。", "disposition": "修:註明「下游唯讀,不另複製」;不加複製(21 份縮列複製是白費)"},
+    {"id": "F-07", "severity": "NICE", "finding": "Duplicated Code:TestEodAttemptMemo._counting_daily 與 TestDayTradeFailFast._counting_daily 同名同職;處置股 fail-fast 案守的是與 TestDayTradeFailFast 相同不變式卻分居兩 class。", "disposition": "修:helper 合成 module 級 _counting_daily(計次 dict + fail_once_on),TestDayTradeFailFast 改用 dict 計次;處置股案併入 TestDayTradeFailFast(test commit 62952ae5)"},
+    {"id": "F-08", "severity": "NICE", "finding": "測試檔 module docstring 未列「跨 attempt memo」。", "disposition": "修:檔頭補上(同上 commit)"},
+    {"id": "F-09", "severity": "NICE", "finding": "換日清空的理由「同一日期的 EOD 不會變,但成果只服務當次目標日的窗」是同義反覆(沿用 breadth);真正理由是記憶體上界與不留跨日狀態。", "disposition": "修:換日清空這個概念隨區域變數消失;_run_attempts 註解改寫成事實(生命週期 + 記憶體紀律)"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "LOW", "finding": "compute() docstring 仍宣稱「不改引擎狀態」,但經 :275 寫 _eod_memo;同 instance 連呼兩次同 target 直接吃 memo 不重抓(prod 無此路徑)。", "disposition": "修:同 std F-01(compute 傳空 dict,零 instance 狀態)"},
+    {"id": "S-02", "severity": "LOW", "finding": "「None = 空回應」負快取那半全檔零測試,刪掉兩行 29 支照樣綠。", "disposition": "修:負快取整段刪除(見 std F-05),不再有那半邊可測"},
+    {"id": "S-03", "severity": "LOW", "finding": "_run_once 成功後清 memo 不在規格內、偏離 breadth,且與放棄路徑不對稱(放棄後抱著最多 20 日縮列到隔天 08:00);無測試釘住。", "disposition": "修:同 std F-02,成功 / 放棄對稱地隨區域變數消失"},
+    {"id": "S-04", "severity": "NICE", "finding": "「22 → 2」應為 23 → 2;「~100 個大檔」6 次 attempt 實為 ~126。", "disposition": "修:同 std F-03"},
+    {"id": "S-05", "severity": "LOW", "finding": "docs/next-time.md:10-11 仍寫「停放 22 條」與「Q9 screen_engine memo 停放(W2 已 merge)」,與 :928「本條結案」互斥。", "disposition": "修:計數改 21(註明原 22)、Q9 指標改結案(chore(docs) a60d2b04)"},
+    {"id": "S-06", "severity": "note", "finding": "memo 內 list 直接放進 days(breadth 走複本);hard_candidates / shrink_rows 唯讀,但無測試釘這個前提。", "disposition": "註記唯讀前提(同 std F-06);不加測試 —— 釘「下游不改 rows」是 screening seam 的性質,不在本批 seam"},
+    {"id": "S-07", "severity": "note", "finding": "負快取讓一次性空回應凍結整個目標日(改前每 attempt 會重問可自癒),窗靜默往更舊一天挪且零訊號;抄自 breadth、在規格內,列知情風險。", "disposition": "修:負快取刪除(見 std F-05),風險消失"}
+  ],
+  "disposition": "標準軸 9 條全修(F-01 / F-02 / F-04 / F-09 以「memo 改區域變數」一次解;F-05 刪負快取;F-03 算術;F-06 註記;F-07 / F-08 測試整理);spec 軸 7 條:修 5(S-01 / S-03 同上、S-02 / S-07 隨負快取刪除消失、S-04 算術、S-05 文件),note 1 註記(S-06)。零否決。逐條核過對帳表(1)–(6)全 done。Standards 對 brief 四個指定問題(data_date 空回應先 raise / 新增 sleep 對齊 pacing doc / stale memo 四條路徑 / 三條測試皆行為式)皆通過。"
+}
