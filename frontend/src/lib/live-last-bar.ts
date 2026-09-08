@@ -62,7 +62,8 @@ export function mergeLiveMinuteBars(
   }
   let prevClose = last?.c ?? null;
   const keys = [...minutes.keys()].filter((m) => m <= nowMinute).sort((a, b) => a - b);
-  let cur: Bar | null = null;
+  // `null as Bar | null`:字面 `= null` 會被 TS 窄成 `null`,迴圈內的 spread 就成了 never(TS2698)
+  let cur = null as Bar | null;
   for (const m of keys) {
     const endMin = barMinuteOf(m);
     if (endMin === null || endMin <= afterMinute) continue;

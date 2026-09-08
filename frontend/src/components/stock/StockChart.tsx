@@ -13,8 +13,10 @@ import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fillPoints, stkfutFillKey } from "@/lib/fill-marks";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
+import { mergeLiveMinuteBars } from "@/lib/live-last-bar";
 import type { StockAccum } from "@/lib/stock-accum";
 import { readLocal, writeLocal } from "@/lib/storage";
+import { isoLocalDate } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
 
 /** 圖表模式切換容器(SC-6):江波圖 / 1–10 分K / 日K。
@@ -128,10 +130,29 @@ export function StockChart({
     writeLocal(CHART_MODE_KEY, next);
   }
 
-  // n=1 時 aggregateBars 原樣回傳,不必特判
-  const bars = useMemo(() => aggregateBars(data?.bars ?? [], minutesOf(mode)), [data, mode]);
-
   const isMinute = mode !== "intraday" && mode !== "day";
+
+  // 即時末根(spec #214;CONTEXT.md):正式 1 分 K 之後由 accum 的分鐘累積補到現在,再進聚合
+  // (2–10 分的進行中桶由既有 aggregateBars 算)。啟動閘全在這裡判、純函式不判:
+  //   - `accum.code === code`:換股當下 accum 可能還是前一檔的(race),不得貼到新股的 K 線上;
+  //   - 牆鐘同日 **09:00 起**:stock engine 08:00 才換日,凌晨 accum 仍是昨天的成交;休市日 accum
+  //     無成交 → 純函式自然 no-op,不看日曆;
+  //   - 期貨態由 `isFut` 擋(K 線本來就不畫)。
+  // 牆鐘刻意不進 memo(deps 表達不了「現在幾點」,同 FuturesChart live 點慣例),改以 `nowMinute` /
+  // `liveToday` 兩個純量當 dep:同一分鐘同一份 accum 命中 memo;accum 每則 ticks 打包換 identity(0.1 s)
+  // 才重算,成本 = 一次 aggregateBars(30 日 1 分 K ≈ 5,900 根)+ merge O(補的根數)。
+  const now = new Date();
+  const liveToday = isoLocalDate(now);
+  const nowMinute = now.getHours() * 60 + now.getMinutes();
+  const liveOn = !isFut && accum.code === code && !accum.noData && nowMinute >= 9 * 60;
+  const liveMinutes = liveOn && isMinute ? accum.minutes : null;
+  // n=1 時 aggregateBars 原樣回傳,不必特判
+  const bars = useMemo(() => {
+    const raw = data?.bars ?? [];
+    const src =
+      liveMinutes === null ? raw : mergeLiveMinuteBars(raw, liveMinutes, liveToday, nowMinute);
+    return aggregateBars(src, minutesOf(mode));
+  }, [data, mode, liveMinutes, liveToday, nowMinute]);
   // 畫面分支直接認 isFut,不只看 mode:收斂雖已在同一個 render pass 完成(理論上
   // 走到這裡 mode 必為 intraday),但這是防禦 —— 收斂分支若被改壞,認 mode 會讓期貨態
   // 掛出一張與合約無關的現貨 K 線 / 閃一格「載入中…」(query 被 enabled:false 擋住,
