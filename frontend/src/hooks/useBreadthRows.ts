@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { parseError } from "@/lib/api-error";
-import { inTradingHours } from "@/lib/trading-hours";
+import { inTradingHours, msUntilTradingOpen, offHoursInterval } from "@/lib/trading-hours";
 import type { BreadthRowsState } from "@/types";
 
 /** 漲跌停列表資料流(market-overview R3 SC-1;design §5.2)。
@@ -13,8 +13,11 @@ import type { BreadthRowsState } from "@/types";
  * 不再有 unmount 這條退路。
  *
  * `refetchInterval` 用**函式形式**(R10,`useMarketBars` 同慣例):TQ 每次 interval
- * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。收盤後回 false
- * = 完全停輪詢(家數引擎自己也只在盤中窗取數,盤後輪詢只是白打)。
+ * 到期都重新求值,開盤 / 收盤的開關不依賴外部 re-render 才會生效。盤外**不回 false**
+ * (W2 T3 #208;next-time 08-31 L71「同病」):TQ 對 false 不排 timer、之後不再求值,08:00 開著的
+ * 台股綜合 tab 到 09:01 不會自己開始輪詢 —— 這條沒有 WS 重繪順便醒,是真的整天不醒(user 回報本尊)。
+ * 改回「距 09:01 的 ms」(`offHoursInterval` 秒級量化):開點那秒醒來打第一發,之後回 10 s;盤外整段
+ * 仍零請求(家數引擎自己也只在盤中窗取數,盤後輪詢只是白打)。
  *
  * `retry: 1` 而非預設的 3:這條路的失敗多半是後端引擎不在 / FinMind 掛了,
  * 重試三輪只是把「載入中」拖得更長。
@@ -43,6 +46,10 @@ export function useBreadthRows(active = true) {
     queryKey: ["breadth-rows"],
     queryFn: fetchBreadthRows,
     retry: 1,
-    refetchInterval: () => (active && inTradingHours() ? POLL_MS : false),
+    // `active=false` 仍回 false(退訂語意:切回 tab 那次 render 重新求值)
+    refetchInterval: () => {
+      if (!active) return false;
+      return inTradingHours() ? POLL_MS : offHoursInterval(msUntilTradingOpen());
+    },
   });
 }
