@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import re
 
 import pytest
@@ -214,6 +215,167 @@ class TestTick:
         # 07:00 → 今天 08:00:30;08:00:31 → 明天 08:00:30
         assert eng._sleep_secs(_dt.datetime(2026, 9, 1, 7, 0, 0)) == 3630.0
         assert eng._sleep_secs(_dt.datetime(2026, 9, 1, 8, 0, 31)) == 24 * 3600 - 1
+
+
+# ---------------------------------------------------------------------------
+# W2 T5(#209):08:00–09:00 每 10 分鐘重試時間盒(不是三次盒)—— 以注入時鐘 + fake sleep 觀測序列。
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self, start: _dt.datetime) -> None:
+        self.t = start
+
+    def now(self) -> _dt.datetime:
+        return self.t
+
+
+def _install_fake_sleep(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> list[float]:
+    """記錄 sleep 秒數並推進注入時鐘;`_REQ_GAP_SECS` 的 0 s 不計(compute 內的節奏 sleep)。"""
+    sleeps: list[float] = []
+
+    async def fake_sleep(secs: float) -> None:
+        if secs > 0:
+            sleeps.append(secs)
+        clock.t = clock.t + _dt.timedelta(seconds=secs)
+
+    monkeypatch.setattr(screen_engine.asyncio, "sleep", fake_sleep)
+    return sleeps
+
+
+def _failing(calls: list[_dt.datetime], clock: _Clock, *, quota: bool = False, succeed_on: int = 0):
+    """EOD fetcher:每呼叫記時刻;第 `succeed_on` 次(1 起算)起成功,0 = 永遠失敗。"""
+
+    def daily(token: str, day: _dt.date) -> list[dict]:
+        calls.append(clock.t)
+        if succeed_on and len(calls) >= succeed_on:
+            return _daily_rows(day)
+        raise BreadthFetchError("FinMind 尚未更新", quota=quota)
+
+    return daily
+
+
+class TestRetryWindow:
+    TUE_0800 = _dt.datetime(2026, 9, 1, 8, 0, 30)
+
+    async def test_fails_every_10_min_until_0900_then_gives_up_with_warnings_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """08:00:30 起每 600 s 再試,下一次會落在 09:00 之後就停:6 次嘗試(08:00:30 … 08:50:30)、
+        5 段 600 s;放棄記在目標日,同日再 tick 不跑;log 全 WARNING、零 ERROR。"""
+        clock = _Clock(self.TUE_0800)
+        calls: list[_dt.datetime] = []
+        sleeps = _install_fake_sleep(monkeypatch, clock)
+        eng = _engine(
+            _failing(calls, clock),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
+            await eng.tick()
+        assert sleeps == [600.0] * 5
+        assert [c.time() for c in calls] == [
+            _dt.time(8, 0, 30),
+            _dt.time(8, 10, 30),
+            _dt.time(8, 20, 30),
+            _dt.time(8, 30, 30),
+            _dt.time(8, 40, 30),
+            _dt.time(8, 50, 30),
+        ]
+        assert eng._gave_up_for == _DAY
+        assert eng._cached_target_date() is None
+        # 5 行「HH:MM:SS 再試」+ 1 行「第 6 次…今日放棄」(最後一次失敗與放棄合成同一行)
+        assert [r.levelno for r in caplog.records] == [logging.WARNING] * 6
+        assert sum("再試" in r.message for r in caplog.records[:-1]) == 5
+        assert "放棄" in caplog.records[-1].message
+        # 同一目標日再 tick(例如 09:30 別的事件)不再跑
+        clock.t = _dt.datetime(2026, 9, 1, 9, 30)
+        await eng.tick()
+        assert len(calls) == 6
+
+    async def test_succeeds_on_third_attempt_stops_retrying(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        clock = _Clock(self.TUE_0800)
+        calls: list[_dt.datetime] = []
+        sleeps = _install_fake_sleep(monkeypatch, clock)
+        eng = _engine(
+            _failing(calls, clock, succeed_on=3),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()
+        assert sleeps == [600.0, 600.0]
+        assert eng._cached_target_date() == _DAY
+        assert eng._gave_up_for is None
+
+    async def test_boot_after_0900_fails_gives_up_immediately(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """09:05 才啟動的補跑失敗 → 下一次會在 09:15 > 09:00 → 零 sleep、一次嘗試、記放棄。"""
+        clock = _Clock(_dt.datetime(2026, 9, 1, 9, 5))
+        calls: list[_dt.datetime] = []
+        sleeps = _install_fake_sleep(monkeypatch, clock)
+        eng = _engine(
+            _failing(calls, clock),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()
+        assert sleeps == []
+        assert len(calls) == 1
+        assert eng._gave_up_for == _DAY
+
+    async def test_quota_backoff_does_not_cross_0900(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """402 的長退避(3600 s)會把下一次推過 09:00 → 不睡、直接放棄(配額用盡今天就別燒了)。"""
+        clock = _Clock(self.TUE_0800)
+        calls: list[_dt.datetime] = []
+        sleeps = _install_fake_sleep(monkeypatch, clock)
+        eng = _engine(
+            _failing(calls, clock, quota=True),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()
+        assert sleeps == []
+        assert len(calls) == 1
+        assert eng._gave_up_for == _DAY
+
+    async def test_next_trading_day_rearms_after_give_up(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        clock = _Clock(_dt.datetime(2026, 9, 1, 9, 5))
+        calls: list[_dt.datetime] = []
+        _install_fake_sleep(monkeypatch, clock)
+        eng = _engine(
+            _failing(calls, clock, succeed_on=2),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            now_fn=clock.now,
+        )
+        await eng.tick()  # 週二 09:05 失敗 → 放棄
+        assert eng._gave_up_for == _DAY
+        clock.t = _dt.datetime(2026, 9, 2, 8, 0, 30)  # 週三 08:00:30
+        await eng.tick()
+        assert eng._cached_target_date() == _dt.date(2026, 9, 2)
+        # `calls` 記每個 EOD 日的 fetch:週二那次失敗在第一發、週三成功那趟走完整個窗
+        assert calls[0] == _dt.datetime(2026, 9, 1, 9, 5)
+        assert calls[1] == _dt.datetime(2026, 9, 2, 8, 0, 30)
+        assert all(c == calls[1] for c in calls[1:])
 
 
 async def test_daily_date_echo_mismatch_raises(
