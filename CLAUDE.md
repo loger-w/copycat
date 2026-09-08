@@ -84,8 +84,9 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   /api/trade/* 已刪(2026-08-04)→ 404,下單全走群益 capital
 ├── market.py             #   台股 tick 表 + 漲停價(毫元整數運算)
 ├── screening.py          #   盤前選股篩選純函式(#173:三硬條件/還原係數鏈自算/排程判定
-│                         #   expected_data_date/shrink_rows 縮列;引擎 = server/screen_engine
-│                         #   交易日 21:00 + 啟動補跑,覆寫自選群組「盤前篩選」)
+│                         #   expected_target_date/data_date_of/shrink_rows 縮列;引擎 = server/screen_engine
+│                         #   交易日 08:00 + 啟動補跑(目標交易日 = 今天:EOD 窗自昨天往回、當沖名單與
+│                         #   處置股用今天;09-08 起,原 21:00 制退役),覆寫自選群組「盤前篩選」)
 ├── market_breadth.py     #   全市場廣度純函式(零 IO;parity oracle fixture 對照)
 ├── limit_streaks.py      #   連板數純函式(prev_close = close − spread)
 ├── trading_calendar.py   #   台股交易日曆純判定(configs/trading_holidays.json;檔缺=只擋
@@ -121,7 +122,7 @@ docs/superpowers/         # spec 與 implementation plan
 | **看盤日常(prod build)** | `npm run build` 後 `npm run preview`(port 4173;proxy 沿用 dev 的 /api + /ws → 8721)。dev build 的 React Component Performance Track 已由 dev-perf-guard 堵住洩漏,但 props-diff 開銷仍在 —— 整天掛著一律用本列,`npm run dev` 只做開發(2026-08-20) | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
-| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定資料日;`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內 21:00 task + 啟動補跑) | repo root |
+| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定**目標交易日**(名單服務的交易日,預設今天 / 最近交易日;資料日 = 其前一交易日自動推);`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內交易日 08:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 | **訊號影子期判準(spec #192,2026-09-08 起四週)** | 盤後:`curl -s 127.0.0.1:8721/api/stock/signals/rules` 含「掃單簇」且 CDP 穿越 / 爆量 `notify_discord=false`;啟動 log 有「T+1/T+2 回填」一行(無 stock engine 時是「無日 K 來源,worker 不啟動」)。盤中:`grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記);Discord 收到四行卡且同 tick 合併;rail 政策列三行 + toast 帶【標記】+ 雙嗶;CDP 穿越 / 爆量 jsonl 有列但無 Discord / 無 toast;`grep 佇列滿 logs/server-*.log` 為 0;13:40 log「回填 n 列」;次日 `t1_open` 已補、再次日 `t2_open` | repo root |
 
