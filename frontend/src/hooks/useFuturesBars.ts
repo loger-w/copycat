@@ -122,8 +122,10 @@ export function useFuturesBars(
     refetchInterval: (q) => {
       // retryEmpty:同 useMarketBars —— tf=D 的 200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)
       if (!isMinute) return dayBarsRefetchInterval(q, { retryEmpty: true });
-      // `active` 不在這裡判(退訂的 observer 沒有計時器);盤外回距開點 ms 而非 false(W2 T3 #208)
-      return inFuturesAllDayHours() ? POLL_MS : offHoursInterval(msUntilFuturesAllDayOpen());
+      // `active` 不在這裡判(退訂的 observer 沒有計時器);盤外回距開點 ms 而非 false(W2 T3 #208)。
+      // 一把鐘(pr-211 F-11;理由見 lib/trading-hours `offHoursInterval` doc,開點 08:40 / 14:55)
+      const now = new Date();
+      return inFuturesAllDayHours(now) ? POLL_MS : offHoursInterval(msUntilFuturesAllDayOpen(now));
     },
   });
 }

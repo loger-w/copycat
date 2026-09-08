@@ -71,7 +71,10 @@ export function msUntilFuturesAllDayOpen(now: Date = new Date()): number {
  *  秒級量化(day-bars-rollover 鐵律 (c),全 repo 函式形 refetchInterval 同款):毫秒精度會讓每次
  *  render 求出不同值 → TQ 白做一組 clearInterval/setInterval(盤外仍有 orders 10 s 輪詢驅動 render)。
  *  1_000 下限 = 開點前最後一秒的重排護欄(09:00:59.x 求出 <1 s 的值,不設下限會排出 0ms 級 timer
- *  連環重排)。 */
+ *  連環重排)。
+ *  **呼叫端一把鐘**(pr-211 F-11,四支輪詢 hook 同款):`inXHours(now)` 與 `msUntilXOpen(now)` 必須吃
+ *  同一個 `now` —— 各自 `new Date()` 會在跨開點那一毫秒判成「盤外且今天開點已過」,`msUntilNextOpen`
+ *  就跳到下一個候選(跨週末最長 ~72 h);下一次 render 才重估回 POLL_MS。理由只寫這一處,hook 內註解指過來。 */
 export function offHoursInterval(msUntilOpen: number): number {
   return Math.max(Math.ceil(msUntilOpen / 1000) * 1000, 1_000);
 }
