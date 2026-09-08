@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { CandleChart } from "@/components/stock/CandleChart";
@@ -5,7 +6,13 @@ import { StockIntradayChart } from "@/components/stock/StockIntradayChart";
 import { RadioPills } from "@/components/ui/RadioPills";
 import { useCapitalFills } from "@/hooks/useCapital";
 import { useChartToggles } from "@/hooks/useChartToggles";
-import { MINUTE_DAYS, minutesOf, useStockBars, type ChartMode } from "@/hooks/useStockBars";
+import {
+  MINUTE_DAYS,
+  minutesOf,
+  useStockBars,
+  type BarsPayload,
+  type ChartMode,
+} from "@/hooks/useStockBars";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { aggregateBars } from "@/lib/candle";
 import { CHART_MODE_KEY } from "@/lib/constants";
@@ -13,7 +20,8 @@ import { MAIN_RATIO_DEN, MAIN_RATIO_NUM, svgBox } from "@/lib/chart-frame";
 import { fillPoints, stkfutFillKey } from "@/lib/fill-marks";
 import { ymdOf } from "@/lib/ladder-lots";
 import type { IndexOverlaySeries } from "@/lib/index-overlay-lines";
-import { mergeLiveMinuteBars } from "@/lib/live-last-bar";
+import { DAILY_FINAL_TIME } from "@/lib/day-bars-rollover";
+import { mergeLiveDailyBar, mergeLiveMinuteBars } from "@/lib/live-last-bar";
 import type { StockAccum } from "@/lib/stock-accum";
 import { readLocal, writeLocal } from "@/lib/storage";
 import { isoLocalDate } from "@/lib/trading-calendar";
@@ -67,7 +75,13 @@ export function StockChart({
   // 收斂雖然改成同一個 render pass 內完成,但這一行在收斂分支**之前**執行(hook 呼叫
   // 順序不可調),「殘留日K + 切進合約」的第一次求值時 mode 仍是 day ——
   // 外部否決(第四參數)仍是唯一保證,不能改成靠 mode 自己擋。
-  const { data, isPending, isError, error } = useStockBars(code, mode, MINUTE_DAYS, !isFut);
+  const { data, dataUpdatedAt, isPending, isError, error } = useStockBars(
+    code,
+    mode,
+    MINUTE_DAYS,
+    !isFut,
+  );
+  const queryClient = useQueryClient();
   // bb 的狀態持有者(R16/R21):CandleChart 不自呼叫這個 hook,否則按鈕與圖各管各的
   const { toggles, set } = useChartToggles();
 
@@ -146,13 +160,30 @@ export function StockChart({
   const nowMinute = now.getHours() * 60 + now.getMinutes();
   const liveOn = !isFut && accum.code === code && !accum.noData && nowMinute >= 9 * 60;
   const liveMinutes = liveOn && isMinute ? accum.minutes : null;
+  // 日 K 另一道**定稿閘**(T2 #216;user Q7 拍板「13:30–14:01 留前端值、14:01 換達錢定稿」):判準是
+  // 「這份日 K 是 14:00 界後才抓回來的」(`dataUpdatedAt` ≥ 當日 `DAILY_FINAL_TIME`),**不是牆鐘過 14:00**
+  // —— 14:01 那發失敗(TC4 關著)時 dataUpdatedAt 不前進,今天那根不會在 14:01 退回早上的快照;成功落地
+  // 才停止蓋。界與 `lib/day-bars-rollover.ts` 同一顆常數(後端 parity 釘住的那顆)。
+  const finalAt = new Date(now);
+  finalAt.setHours(DAILY_FINAL_TIME[0], DAILY_FINAL_TIME[1], 0, 0);
+  const liveDay = liveOn && mode === "day" && dataUpdatedAt < finalAt.getTime() ? accum : null;
+  // 今天那根的開盤價(只在 DK 尚無今日列、要 append 時用):今天正式 1 分 K 首根的 `o`。讀 TQ cache
+  // 而不另訂一份 query —— 日 K 模式不抓 1 分 K,cache 有(同 session 看過分 K)才用,沒有就退
+  // accum 最早分鐘的 c(純函式內)。cache 讀取不 reactive,知情:值只差在 09:00 那一分鐘內。
+  const minuteCache =
+    liveDay === null
+      ? undefined
+      : queryClient.getQueryData<BarsPayload>(["stock-bars", code, "1", MINUTE_DAYS]);
+  const dayOpen = minuteCache?.bars.find((b) => b.t.startsWith(liveToday))?.o ?? null;
   // n=1 時 aggregateBars 原樣回傳,不必特判
   const bars = useMemo(() => {
     const raw = data?.bars ?? [];
-    const src =
-      liveMinutes === null ? raw : mergeLiveMinuteBars(raw, liveMinutes, liveToday, nowMinute);
-    return aggregateBars(src, minutesOf(mode));
-  }, [data, mode, liveMinutes, liveToday, nowMinute]);
+    if (liveMinutes !== null) {
+      return aggregateBars(mergeLiveMinuteBars(raw, liveMinutes, liveToday, nowMinute), minutesOf(mode));
+    }
+    if (liveDay !== null) return mergeLiveDailyBar(raw, liveDay, liveToday, dayOpen);
+    return aggregateBars(raw, minutesOf(mode));
+  }, [data, mode, liveMinutes, liveDay, dayOpen, liveToday, nowMinute]);
   // 畫面分支直接認 isFut,不只看 mode:收斂雖已在同一個 render pass 完成(理論上
   // 走到這裡 mode 必為 intraday),但這是防禦 —— 收斂分支若被改壞,認 mode 會讓期貨態
   // 掛出一張與合約無關的現貨 K 線 / 閃一格「載入中…」(query 被 enabled:false 擋住,

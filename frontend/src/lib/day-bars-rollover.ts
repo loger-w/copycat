@@ -31,7 +31,8 @@ const DAY_ROLLOVER_SLACK_MS = 60_000;
  *  **跨檔契約**(CLAUDE.md §4):本值必須 ≥ 後端定稿界 —— 後端往後調而前端沒跟,14:01 那發拿到的是
  *  界前快照、再鎖到午夜,症狀回到修前(整個下午半成品)且零錯誤訊號。由後端測試
  *  `tests/server/test_bars.py::test_daily_final_time_parity_with_frontend` 直讀本檔字面**釘等值**(比 ≥ 嚴,兩邊本來就該是同一個數);
- *  這是本檔唯一 export 的常數,src/ 內零讀者(只給 parity 測試)。 */
+ *  這是本檔唯一 export 的常數;src/ 內唯一讀者 = `components/stock/StockChart.tsx` 的日 K 即時末根**定稿閘**
+ *  (spec #214:`dataUpdatedAt` ≥ 當日此界 → 今天那根不再以 accum 蓋),其餘只給 parity 測試。 */
 export const DAILY_FINAL_TIME: readonly [hh: number, mm: number] = [14, 0];
 
 /** 日 K 的有效期 = **到下一道界**(bug/futures-daily-bars-rollover;W2 T2 #206 加第二道):`from` 起算,
