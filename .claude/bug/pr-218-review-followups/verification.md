@@ -35,7 +35,7 @@ Blast radius:`dailyFinal` 只有 `StockChart.tsx` 一個讀者(新變數);`merge
 | pytest -q(借主樹 venv;本批零 .py 改動) | 3558 passed / 3 skipped(236 s),exit 0 |
 | ruff / pyright | All checks passed! / 0 errors 0 warnings |
 
-two-axis 收修後(S-03 🔵 明列欄位 / S-05 stub 參數化 / docs ×4)seam 兩檔 23 passed、tsc 0、eslint 0;全量 vitest 重跑數字見下方補記。
+two-axis 收修後(S-03 🔵 明列欄位 / S-05 stub 參數化 / docs ×4)重跑:vitest 全套 **156 files / 3069 passed**、tsc 0、eslint 0(收修 commit `5a9f16c2` / `37e4df8b` / `17370886`)。
 
 ## 4. 兩軸 review
 
