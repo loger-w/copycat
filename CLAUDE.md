@@ -416,7 +416,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `frontend/src/lib/live-last-bar.ts::mergeLiveMinuteBars`(accum `minutes` 的 key 是 tick 時刻的起點分 `HH*60+MM`,
   `stock-accum.ts::minuteKey`;TC4 1K 的 `t` 是終點標記,`candle.ts` 檔頭),與上條「台指期疊線分鐘鍵 = 1K 終點標記 −1 分」
   是**同一把尺的反向**,方向相反、且只有這邊有 13:30 上限(收盤撮合 13:30:00 那筆併進 13:30 那根),刻意不共用 helper。
-  讀者 = `StockChart.tsx`(正式 1 分 K 之後補到現在再 `aggregateBars`;閘 = 同檔 / 非期貨態 / 牆鐘同日 09:00 起)。
+  讀者 = `StockChart.tsx`(正式 1 分 K 之後補到現在再 `aggregateBars`;閘 = 同檔 / 非期貨態 / 牆鐘同日 09:00 起 / **交易日**
+  `isTradingDay` —— 休市日引擎不換日、accum 沿用前一交易日,不擋會貼成今天的假 K,two-axis spec S-01)。
   後端若把個股 1K 改成起點標記(或 accum 分鐘 key 改語意)→ 補的根整條右移一格 / 與正式末根重疊一根,兩張圖都畫得出來零訊號;
   `lib/live-last-bar.test.ts` 案 1 / 案 2 / 案 9 釘住(突變 `+1 → +0` 9 條紅、拿掉 13:30 上限 1 條紅)。日 K 半邊
   `mergeLiveDailyBar` 的 `v` 取 `last.cum_vol`(= TC4 當日累積量,DK `v` 同源),**不取** `accum.volume`(VWAP 分母,去重口徑不同)。
