@@ -166,12 +166,16 @@ export function StockChart({
     !isFut && accum.code === code && !accum.noData && nowMinute >= 9 * 60 && isTradingDay(now);
   const liveMinutes = liveOn && isMinute ? accum.minutes : null;
   // 日 K 另一道**定稿閘**(T2 #216;user Q7 拍板「13:30–14:01 留前端值、14:01 換達錢定稿」):判準是
-  // 「這份日 K 是 14:00 界後才抓回來的」(`dataUpdatedAt` ≥ 當日 `DAILY_FINAL_TIME`),**不是牆鐘過 14:00**
-  // —— 14:01 那發失敗(TC4 關著)時 dataUpdatedAt 不前進,今天那根不會在 14:01 退回早上的快照;成功落地
-  // 才停止蓋。界與 `lib/day-bars-rollover.ts` 同一顆常數(後端 parity 釘住的那顆)。
+  // 「這份日 K 是 14:00 界後才抓回來的**定稿**」= `dataUpdatedAt` ≥ 當日 `DAILY_FINAL_TIME` **且** 那一趟
+  // `status === "ok"`,**不是牆鐘過 14:00**。兩半各擋一種「14:01 那發不算數」:HTTP 失敗 → TQ 保留舊 data、
+  // dataUpdatedAt 不前進;**TC4 關著 / 忙**(pr-218 review F-01)→ 後端不失敗、回 200 + 界前墊背舊快照 +
+  // 原 status(`bars.py::_daily_stale_or_empty` 不洗白,`stock_engine.bars_range` 斷線回 `disconnected`),
+  // dataUpdatedAt 會前進 —— 只看它會把墊背當定稿,今天那根從 accum 真值退回早上半成品、鎖到午夜零訊號。
+  // 界與 `lib/day-bars-rollover.ts` 同一顆常數(後端 parity 釘住的那顆)。
   const finalAt = new Date(now);
   finalAt.setHours(DAILY_FINAL_TIME[0], DAILY_FINAL_TIME[1], 0, 0);
-  const liveDay = liveOn && mode === "day" && dataUpdatedAt < finalAt.getTime() ? accum : null;
+  const dailyFinal = dataUpdatedAt >= finalAt.getTime() && data?.status === "ok";
+  const liveDay = liveOn && mode === "day" && !dailyFinal ? accum : null;
   // 今天那根的開盤價(只在 DK 尚無今日列、要 append 時用):今天正式 1 分 K 首根的 `o`。讀 TQ cache
   // 而不另訂一份 query —— 日 K 模式不抓 1 分 K,cache 有(同 session 看過分 K)才用,沒有就退
   // accum 最早分鐘的 c(純函式內)。cache 讀取不 reactive,知情:值只差在 09:00 那一分鐘內。

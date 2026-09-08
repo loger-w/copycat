@@ -17,7 +17,11 @@ import type { MinuteAgg } from "@/lib/stock-accum";
 const FIRST_BAR_MIN = 9 * 60 + 1;
 const LAST_BAR_MIN = 13 * 60 + 30;
 
-/** accum 起點分 → 1K 終點標記分;域外回 null(09:01 以前 = 試撮殘留,後端本就丟、這裡防禦)。 */
+/** accum 起點分 → 1K 終點標記分;域外回 null(09:01 以前 = 試撮殘留,後端本就丟、這裡防禦)。
+ *  上界是**夾端點**不是丟棄:≥ 13:30 的起點分一律落到 13:30 那根(13:30 收盤撮合 → 13:31 不存在 → 併 13:30;
+ *  13:32 之後若仍有成交也會併進去 —— 已知範圍,pr-218 review F-05:正式 13:30 根一到 `mergeLiveMinuteBars`
+ *  整段跳過、分 K 輪詢到 13:35,曝險只有收盤後幾分鐘;13:32 後 TC4 是否推個股 tick 未驗)。與 VP 的
+ *  `_VP_START/END_MIN` 窗外丟棄語意不同(那是幾何 x 窗);期貨 / 加權接線批分鐘域不同,不要照抄這個夾法。 */
 function barMinuteOf(accumMinute: number): number | null {
   const end = Math.min(accumMinute + 1, LAST_BAR_MIN);
   return end < FIRST_BAR_MIN ? null : end;
@@ -88,8 +92,11 @@ export interface LiveDay {
 
 /** 日 K:今天那根以 accum 即時更新;今天那根還沒有(09:00 前開圖,DK 尚無今日列)就補一根。
  *
- *  - 末根 `t === today` → 取代:`o` 保留正式的(DK 的開盤集合競價價),h / l / c / v 換 accum
- *    (`high` / `low` 是後端 running max/min,必然 ⊇ 半成品的);
+ *  - 末根 `t === today` → 取代:`o` 保留正式的(DK 的開盤集合競價價),h / l 取**正式與 accum 的聯集**
+ *    (`Math.max` / `Math.min`;pr-218 review F-02):accum 的 `high` / `low` 是後端逐 tick running max/min
+ *    (`stock_state.py::_apply`),只在 TICKS 回補落地後才是當日全量 —— 盤中重啟 server 或回補逾時放棄
+ *    (`_backfill_gave_up`)時只涵蓋之後的成交,直接取代會把正式半成品已經對的高低**窄化**;兩邊都 ≤ 真極值,
+ *    聯集不會越界),c / v 換 accum;
  *  - 末根 `t < today`(或空)→ append `{t: today, o: dayOpen ?? accum 最早分鐘的 c, …}`;
  *    `dayOpen` 由呼叫端給(今天正式 1 分 K 首根的 `o`,有才給);
  *  - 末根 `t > today`(不該發生)/ accum 無成交(`last` / `high` / `low` 任一 null)→ 原樣(仍回新 array)。
@@ -108,7 +115,12 @@ export function mergeLiveDailyBar(
   if (lastDate !== null && lastDate > today) return out;
   const merged = { h: live.high, l: live.low, c: live.last.p, v: live.last.cum_vol };
   if (last !== undefined && lastDate === today) {
-    out[out.length - 1] = { ...last, ...merged };
+    out[out.length - 1] = {
+      ...last,
+      ...merged,
+      h: Math.max(last.h, live.high),
+      l: Math.min(last.l, live.low),
+    };
     return out;
   }
   let open = dayOpen;
