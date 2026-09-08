@@ -58,6 +58,30 @@ class TestUnknownCommand:
         with pytest.raises(SystemExit):
             cli.main([])
 
+
+class TestScreenCommand:
+    def test_screen_date_on_non_trading_day_exits_with_explicit_error(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """pr-211 F-07:`screen --date <非交易日>` 要在取數前擋下並講明原因 —— 否則 `data_date_of` 會
+        算出與週一相同的資料窗、當沖 fetch 週六回空,錯誤訊息把「你給的日子不是交易日」講成
+        「FinMind 未更新?」。prod 不受影響(`expected_target_date` 只回交易日)。"""
+        from copycat import trading_calendar
+        from copycat.server import screen_engine
+
+        monkeypatch.setattr(
+            trading_calendar, "load_trading_calendar", lambda: trading_calendar.WEEKEND_ONLY
+        )
+        monkeypatch.setattr(cli, "_resolve_finmind_token", lambda: "tok")
+
+        async def boom(self: object, target: object) -> list[object]:
+            raise AssertionError("非交易日不得走到取數")
+
+        monkeypatch.setattr(screen_engine.ScreenEngine, "compute", boom)
+        assert cli.main(["screen", "--date", "2026-09-05"]) == 2  # 週六
+        err = capsys.readouterr().err
+        assert "2026-09-05" in err and "非交易日" in err
+
     def test_notify_test_without_webhook_returns_one(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

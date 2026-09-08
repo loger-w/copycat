@@ -1,9 +1,9 @@
 """screen engine 的跨模組常數 parity(review B1)+ compute() 資料完整性閘(review S3)。
 
-排程 / 補跑 / 落檔 / 寫群組依 #173 議定 seam 不另測 —— 演算法測試在
-`tests/test_screening.py`、群組寫入在 `tests/server/test_watchlist_service.py`。
-`compute()` 的三道取數守門(日 K 回聲 / 空當沖名單 / 當沖回聲)是收修批新增的行為
-分歧點,以 fake fetcher 釘住(零 IO;不屬排程豁免範圍)。
+演算法測試在 `tests/test_screening.py`、群組寫入在 `tests/server/test_watchlist_service.py`(#173 議定 seam)。
+本檔以 fake fetcher + 注入時鐘 / fake sleep 釘住引擎的行為分歧點(零 IO):`compute()` 的取數守門
+(日 K 回聲 / 空當沖名單 / 當沖回聲 / 相對閘)、08:00 目標交易日制的排程判定(W2 T4)、重試時間盒與
+放棄(W2 T5,直接驅動 `_run_once` / `_run_attempts` / `tick`)、當沖名單三道閘先於 EOD 的 fail-fast(pr-211)。
 """
 
 from __future__ import annotations
@@ -87,6 +87,25 @@ def _engine(
 
 def _dt_rows(day: _dt.date, n: int = 5) -> list[dict]:
     return [{"stock_id": f"{1000 + i}", "date": day.isoformat()} for i in range(n)]
+
+
+def _write_prior(eng: ScreenEngine, rows: int) -> None:
+    """寫一份 v2 快取當相對閘的前值(`daytrade_rows`);目標日 = 前一交易日(今天還沒算過)。"""
+    path = eng._cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "_cache_version": screen_engine._CACHE_VERSION,
+                "target_date": _DATA.isoformat(),
+                "data_date": "2026-08-28",
+                "daytrade_rows": rows,
+                "written": [],
+                "candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -441,26 +460,12 @@ class TestRetryWindow:
 
 class TestDayTradeRelativeGate:
     @staticmethod
-    def _write_prior(eng: ScreenEngine, rows: int) -> None:
-        path = eng._cache_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {
-                    "_cache_version": screen_engine._CACHE_VERSION,
-                    "target_date": _DATA.isoformat(),
-                    "data_date": "2026-08-28",
-                    "daytrade_rows": rows,
-                    "written": [],
-                    "candidates": [],
-                }
-            ),
-            encoding="utf-8",
-        )
-
-    @staticmethod
     def _gate_engine(
-        rows: int, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+        rows: int,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        *,
+        now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
     ) -> ScreenEngine:
         return _engine(
             lambda token, day: _daily_rows(day),
@@ -468,36 +473,97 @@ class TestDayTradeRelativeGate:
             monkeypatch,
             tmp_path_factory,
             daytrade_floor=1000,
+            now_fn=now_fn,
         )
 
-    async def test_below_80_percent_of_prior_is_retryable_and_logs_both_counts(
+    async def test_below_80_percent_of_prior_is_retryable_and_message_carries_both_counts(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path_factory: pytest.TempPathFactory,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        """pr-211 F-05:閘本身**不自印** WARNING(其他五道 BreadthFetchError 閘都只 raise);兩數與
+        「刪 daytrade_rows 鍵重置基準」的提示都在 exception 訊息裡,由 `_run_attempts` 那一行帶出。"""
         eng = self._gate_engine(1500, monkeypatch, tmp_path_factory)
-        self._write_prior(eng, 2000)
+        _write_prior(eng, 2000)
         with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
             with pytest.raises(BreadthFetchError, match="1500") as ei:
-                await eng.compute(_DAY)
+                await eng._run_once(_DAY)
         assert "2000" in str(ei.value)
+        assert "daytrade_rows" in str(ei.value)  # 重置基準的提示
         assert ei.value.quota is False
-        assert any("daytrade_rows" in r.message for r in caplog.records)  # 重置基準的提示
+        assert caplog.records == []
+
+    async def test_gate_failure_is_logged_exactly_once_by_the_attempt_loop(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """pr-211 F-05 的可觀測面:相對閘擋下 → 整輪只有 `_run_attempts` 的一行 WARNING(09:00 後
+        補跑 = 直接放棄那行),兩數 + 刪鍵提示都在同一行,不再「閘一行 + 迴圈一行」雙印。"""
+        eng = self._gate_engine(
+            1500, monkeypatch, tmp_path_factory, now_fn=lambda: _dt.datetime(2026, 9, 1, 9, 5, 0)
+        )
+        _write_prior(eng, 2000)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
+            await eng._run_attempts(_DAY)
+        assert len(caplog.records) == 1
+        msg = caplog.records[0].message
+        assert "1500" in msg and "2000" in msg and "daytrade_rows" in msg and "放棄" in msg
+
+    async def test_gate_failure_on_the_retry_path_is_one_line_per_attempt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """同上、換 08:00:30 的重試路徑(two-axis S-04):每次 attempt 恰一行 WARNING、每行都帶刪鍵提示,
+        5 行「再試」+ 1 行「放棄」,沒有閘自印的第二行。"""
+        clock = _Clock(_dt.datetime(2026, 9, 1, 8, 0, 30))
+        _install_fake_sleep(monkeypatch, clock)
+        eng = self._gate_engine(1500, monkeypatch, tmp_path_factory, now_fn=clock.now)
+        _write_prior(eng, 2000)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
+            await eng.tick()
+        assert [r.levelno for r in caplog.records] == [logging.WARNING] * 6
+        assert all("daytrade_rows" in r.message and "1500" in r.message for r in caplog.records)
+        assert sum("再試" in r.message for r in caplog.records[:-1]) == 5
+        assert "放棄" in caplog.records[-1].message
 
     async def test_at_or_above_80_percent_passes(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
         eng = self._gate_engine(1600, monkeypatch, tmp_path_factory)
-        self._write_prior(eng, 2000)
-        await eng.compute(_DAY)  # 不炸
+        _write_prior(eng, 2000)
+        await eng._run_once(_DAY)  # 不炸
 
-    async def test_no_prior_uses_absolute_floor_1000(
+    async def test_compute_cli_preview_ignores_server_prior(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
-        with pytest.raises(BreadthFetchError, match="900"):
-            await self._gate_engine(900, monkeypatch, tmp_path_factory).compute(_DAY)
-        await self._gate_engine(1000, monkeypatch, tmp_path_factory).compute(_DAY)  # 恰 1,000 過
+        """pr-211 F-04:`compute()`(CLI 預覽路徑)**不吃** server 快取的前值 —— 同一顆引擎、同一份
+        1500 列名單:`compute` 只走絕對下限(1,000)放行,`_run_once` 用前值 2000 × 0.8 擋下。
+        CLI 不帶 data_dir 落的是 prod 那份快取,吃前值會讓 `screen --date <過去日>` 被 server 基準擋。"""
+        eng = self._gate_engine(1500, monkeypatch, tmp_path_factory)
+        _write_prior(eng, 2000)
+        await eng.compute(_DAY)  # 不炸:CLI 預覽不被 server 前值影響
+        with pytest.raises(BreadthFetchError, match="2000"):
+            await eng._run_once(_DAY)
+
+    async def test_no_prior_uses_absolute_floor_1000(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with pytest.raises(BreadthFetchError, match="900") as ei:
+            await self._gate_engine(900, monkeypatch, tmp_path_factory)._run_once(_DAY)
+        assert "前值 無(用絕對下限)" in str(ei.value)
+        eng = self._gate_engine(1000, monkeypatch, tmp_path_factory)  # 恰 1,000 過
+        with caplog.at_level(logging.INFO, logger="copycat.server.screen_engine"):
+            await eng._run_once(_DAY)
+        # 08:00 制第一天的驗收字串(W2 verification §6 / pr-211 F-01)—— 原始碼裡沒有連續字面,由這裡釘
+        assert any("當沖名單 1000 列(前值 無(用絕對下限))" in r.message for r in caplog.records)
 
     async def test_success_records_count_and_failure_keeps_prior(
         self,
@@ -506,7 +572,7 @@ class TestDayTradeRelativeGate:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         eng = self._gate_engine(1700, monkeypatch, tmp_path_factory)
-        self._write_prior(eng, 2000)
+        _write_prior(eng, 2000)
         with caplog.at_level(logging.INFO, logger="copycat.server.screen_engine"):
             await eng._run_once(_DAY)
         payload = json.loads(eng._cache_path().read_text(encoding="utf-8"))
@@ -525,6 +591,64 @@ class TestDayTradeRelativeGate:
         payload = json.loads(eng._cache_path().read_text(encoding="utf-8"))
         assert payload["daytrade_rows"] == 1700
         assert payload["target_date"] == _DAY.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# pr-211 F-02 (a):當沖名單三道閘(空集合 / 回聲 / 相對閘)排在 21 次 EOD **之前**(fail-fast)——
+# 「名單沒出齊」是 T6 立論的最常走失敗路徑,原本每次都先重下載 21 個不會變的過去日 EOD 才發現;
+# 提前後失敗路徑 22 → 1 個請求,10 分鐘重試節奏在失敗路徑上才成真。閘語意與 `_REQ_GAP_SECS` 節奏不變。
+# ---------------------------------------------------------------------------
+
+
+class TestDayTradeFailFast:
+    @staticmethod
+    def _counting_daily(calls: list[_dt.date]) -> Fetch:
+        def daily(token: str, day: _dt.date) -> list[dict]:
+            calls.append(day)
+            return _daily_rows(day)
+
+        return daily
+
+    async def test_empty_daytrade_list_fails_before_any_eod_fetch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        calls: list[_dt.date] = []
+        eng = _engine(
+            self._counting_daily(calls), lambda token, day: [], monkeypatch, tmp_path_factory
+        )
+        with pytest.raises(BreadthFetchError, match="當沖名單尚無資料"):
+            await eng.compute(_DAY)
+        assert calls == []  # EOD fetcher 零呼叫
+
+    async def test_relative_gate_fails_before_any_eod_fetch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        calls: list[_dt.date] = []
+        eng = _engine(
+            self._counting_daily(calls),
+            lambda token, day: _dt_rows(day, 1500),
+            monkeypatch,
+            tmp_path_factory,
+            daytrade_floor=1000,
+        )
+        _write_prior(eng, 2000)
+        with pytest.raises(BreadthFetchError, match="1500"):
+            await eng._run_once(_DAY)
+        assert calls == []
+
+    async def test_healthy_daytrade_list_still_fetches_the_full_eod_window(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """對照組:名單健康 → EOD 窗照抓(21 個交易日),閘提前不是少抓。"""
+        calls: list[_dt.date] = []
+        eng = _engine(
+            self._counting_daily(calls),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+        )
+        await eng.compute(_DAY)
+        assert len(calls) == screen_engine.WINDOW_DAYS
 
 
 async def test_daily_date_echo_mismatch_raises(
