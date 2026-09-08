@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { aggregateBars, type Bar } from "@/lib/candle";
-import { mergeLiveMinuteBars } from "@/lib/live-last-bar";
+import { mergeLiveDailyBar, mergeLiveMinuteBars } from "@/lib/live-last-bar";
 import type { MinuteAgg } from "@/lib/stock-accum";
 
 /** 規則表(spec #214 Testing Decisions;seam (b)):期望值全部手寫字面量,不從實作同源的常數算回來。
@@ -119,5 +119,75 @@ describe("mergeLiveMinuteBars(分 K 即時末根)", () => {
     expect(out.map((b) => b.t)).toEqual([`${TODAY} 09:03`, `${TODAY} 09:06`, `${TODAY} 09:09`]);
     expect(out[1]).toMatchObject({ o: 101_000, h: 107_000, l: 99_000, c: 106_000, v: 16 });
     expect(out[2]).toMatchObject({ o: 106_000, h: 108_000, l: 102_000, c: 103_000, v: 7 });
+  });
+});
+
+/** 日 K 的 accum 面(`StockAccum` 的四個欄):`last.cum_vol` = TC4 當日累積量(與 DK 的 `v` 同源)。 */
+function live(over: {
+  last?: { p: number; t: string; cum_vol: number } | null;
+  high?: number | null;
+  low?: number | null;
+  minutes?: Map<number, MinuteAgg>;
+}) {
+  return {
+    last: over.last === undefined ? { p: 103_000, t: "09:06:20.000", cum_vol: 21 } : over.last,
+    high: over.high === undefined ? 108_000 : over.high,
+    low: over.low === undefined ? 98_000 : over.low,
+    minutes:
+      over.minutes ??
+      new Map<number, MinuteAgg>([
+        [M(9, 1), agg(102_000, 4, 102_500, 101_000)],
+        [M(9, 0), agg(101_000, 12, 101_500, 100_500)], // 最早分鐘;插入順序刻意亂放
+      ]),
+  };
+}
+
+describe("mergeLiveDailyBar(日 K 即時末根)", () => {
+  it("案 6a:末根 = today → o 保留正式的,h / l / c / v 換 accum(high / low / last.p / last.cum_vol)", () => {
+    const official = [
+      bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300),
+      bar(TODAY, 100_000, 101_000, 99_000, 100_500, 5),
+    ];
+    const out = mergeLiveDailyBar(official, live({}), TODAY, 102_000);
+    expect(out).toEqual([
+      official[0],
+      { t: TODAY, o: 100_000, h: 108_000, l: 98_000, c: 103_000, v: 21 },
+    ]);
+  });
+
+  it("案 6b:末根是昨天 → append 今天一根,o = dayOpen;dayOpen null → accum 最早分鐘的 c", () => {
+    const official = [bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300)];
+    expect(mergeLiveDailyBar(official, live({}), TODAY, 102_000)).toEqual([
+      official[0],
+      { t: TODAY, o: 102_000, h: 108_000, l: 98_000, c: 103_000, v: 21 },
+    ]);
+    expect(mergeLiveDailyBar(official, live({}), TODAY, null)[1]).toEqual({
+      t: TODAY, o: 101_000, h: 108_000, l: 98_000, c: 103_000, v: 21,
+    });
+  });
+
+  it("案 7:accum 無成交(last null / high null)→ 原樣;末根日期 > today(不該發生)→ 原樣", () => {
+    const official = [bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300)];
+    expect(mergeLiveDailyBar(official, live({ last: null }), TODAY, null)).toEqual(official);
+    expect(mergeLiveDailyBar(official, live({ high: null, low: null }), TODAY, null)).toEqual(official);
+    const future = [bar("2026-09-09", 90_000, 92_000, 89_000, 91_000, 300)];
+    expect(mergeLiveDailyBar(future, live({}), TODAY, null)).toEqual(future);
+    expect(mergeLiveDailyBar([], live({}), TODAY, 102_000)).toEqual([
+      { t: TODAY, o: 102_000, h: 108_000, l: 98_000, c: 103_000, v: 21 },
+    ]);
+  });
+
+  it("案 8(日 K):正式段元素 identity 保留、傳入 array 不改;原樣路徑也回新 array", () => {
+    const official = [
+      bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300),
+      bar(TODAY, 100_000, 101_000, 99_000, 100_500, 5),
+    ];
+    const snapshot = official.map((b) => ({ ...b }));
+    const out = mergeLiveDailyBar(official, live({}), TODAY, null);
+    expect(out[0]).toBe(official[0]);
+    expect(out[1]).not.toBe(official[1]);
+    expect(official).toEqual(snapshot);
+    const none = mergeLiveDailyBar(official, live({ last: null }), TODAY, null);
+    expect(none).not.toBe(official);
   });
 });
