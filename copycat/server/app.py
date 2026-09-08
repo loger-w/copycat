@@ -1098,7 +1098,7 @@ def create_app(
             app.state.breadth = breadth
             booted.breadth = breadth
 
-            # 盤前選股篩選(#173):交易日 21:00 重算 + 啟動補跑,覆寫自選群組。
+            # 盤前選股篩選(#173;W2 #207 起交易日 08:00 目標交易日制):交易日 08:00 重算 + 啟動補跑,覆寫自選群組。
             # 只在 prod 路徑建(DEFAULT_BREADTH sentinel 慣例 —— 測試注入 fetchers 的
             # 是 breadth 專用四元組,篩選不共用那個注入面)。
             def _make_screen() -> ScreenEngine | None:

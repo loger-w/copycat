@@ -32,20 +32,30 @@ RET_MIN_PCT = 15.0
 AVG_LOTS_MIN = 5000.0
 #: 漲幅界比較前的量化位數(review J4)—— 精度是判準的一部分,與 `RET_MIN_PCT` 同級具名。
 RET_QUANT_DIGITS = 6
-#: 每晚重算時刻(台北牆鐘)—— FinMind 當日 EOD 於晚間已定稿(#173 Q5 拍板 21:00)。
-RUN_TIME = _dt.time(21, 0)
+#: 每個交易日的重算時刻(台北牆鐘)。**08:00 不是 21:00**(W2 T4 #207,user 2026-09-08 拍板 Q7 (b);
+#: 原 #173 Q5 的 21:00 制退役):早上跑,昨日 EOD 一定齊(21:00 制 09-07 拖到 22:34 才成),而且
+#: 當沖名單可以抓**今天**的正式名單(FinMind `TaiwanStockDayTrading` 名單欄盤前先出、成交量收盤後補 ——
+#: 09-08 13:15 實測今天 2,079 列成交量全 0;08:00 整是否已出待實錄,T5 的 10 分鐘重試補這一段)。
+RUN_TIME = _dt.time(8, 0)
 
 
-def expected_data_date(now: _dt.datetime, cal: TradingCalendar) -> _dt.date:
-    """此刻「應已算完」的資料日:交易日 `RUN_TIME`(含)後 = 當日,其餘 = 前一交易日。
+def expected_target_date(now: _dt.datetime, cal: TradingCalendar) -> _dt.date:
+    """此刻「應已算完」的**目標交易日**(名單服務的交易日;CONTEXT.md):交易日 `RUN_TIME`(含)後
+    = 今天,其餘(交易日 08:00 前 / 非交易日整天)= 今天之前最近的交易日 —— 那一天早上算的那份還在服務。
 
-    引擎的補跑判定 = 快取 `data_date` ≠ 本值即重算(server 21:00 沒開著,隔天早上
-    啟動時 expected 已是昨日 → 啟動即補跑)。
+    引擎的補跑判定 = 快取 `target_date` ≠ 本值即重算(server 08:00 沒開著、稍後才啟動 → 啟動即補跑;
+    週六啟動 → 目標日 = 週五,若週五那份沒算過就補跑週五的,服務到週一 08:00)。
     """
     today = now.date()
     if cal.is_trading_day(today) and now.time() >= RUN_TIME:
         return today
     return cal.last_trading_day(today - _dt.timedelta(days=1))
+
+
+def data_date_of(target: _dt.date, cal: TradingCalendar) -> _dt.date:
+    """目標交易日對應的**資料日**(EOD 窗末日)= 目標日的前一交易日:早上跑時今天的 EOD 還不存在,
+    窗自昨天往回湊 `WINDOW_DAYS` 個交易日。推導值,不落判定。"""
+    return cal.last_trading_day(target - _dt.timedelta(days=1))
 
 
 #: `shrink_rows` 保留欄 —— `hard_candidates` 讀的就是這四欄。
