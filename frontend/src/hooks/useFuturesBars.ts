@@ -5,7 +5,11 @@ import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollove
 import { fetchWithTimeout } from "@/lib/fetch-timeout";
 import type { FutChartMode } from "@/lib/fut-chart-mode";
 import type { MarketKey } from "@/lib/timeframe";
-import { inFuturesAllDayHours } from "@/lib/trading-hours";
+import {
+  inFuturesAllDayHours,
+  msUntilFuturesAllDayOpen,
+  offHoursInterval,
+} from "@/lib/trading-hours";
 import type { MarketBars } from "@/hooks/useMarketBars";
 
 /** 期貨 tab 的 K 線資料源(futures-allday SC-1/2/3;design §4.1)。
@@ -14,7 +18,9 @@ import type { MarketBars } from "@/hooks/useMarketBars";
  * - 後端 `session=allday`(近全時段分鐘域)只有期指鍵吃得下,大盤 tab 的 `TXF`(day)
  *   與這裡的 `TXF:allday` 是**兩份後端 cache**(D10 記錄的取捨:同 symbol 歷史抓兩遍,
  *   換取大盤頁零改動)。
- * - 輪詢窗是近全時段(`inFuturesAllDayHours`),日盤那把尺會讓夜盤整段不自動更新。
+ * - 輪詢窗是近全時段(`inFuturesAllDayHours`),日盤那把尺會讓夜盤整段不自動更新。兩段停輪詢窗
+ *   (05:06–08:39 / 13:51–14:54)結束時自己醒:盤外回「距開點 ms」不回 false(W2 T3 #208;開點只有
+ *   08:40 / 14:55 兩個,`msUntilFuturesAllDayOpen`),盤中本就靠 WS 重繪順便醒、差的是開點那分鐘。
  *
  * **分時與分 K 共用同一份 `tf=1` 原料**(分時圖的幾何在 `lib/allday.ts`,聚合在
  * `lib/candle.ts`)—— 一份原料餵所有分鐘級模式,切模式不重打。
@@ -116,7 +122,8 @@ export function useFuturesBars(
     refetchInterval: (q) => {
       // retryEmpty:同 useMarketBars —— tf=D 的 200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)
       if (!isMinute) return dayBarsRefetchInterval(q, { retryEmpty: true });
-      return inFuturesAllDayHours() ? POLL_MS : false;
+      // `active` 不在這裡判(退訂的 observer 沒有計時器);盤外回距開點 ms 而非 false(W2 T3 #208)
+      return inFuturesAllDayHours() ? POLL_MS : offHoursInterval(msUntilFuturesAllDayOpen());
     },
   });
 }

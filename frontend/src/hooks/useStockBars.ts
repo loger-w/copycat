@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
 import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollover";
-import { inTradingHours } from "@/lib/trading-hours";
+import { inTradingHours, msUntilTradingOpen, offHoursInterval } from "@/lib/trading-hours";
 
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
  *  - `D`:**兩道界之間**不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
@@ -12,7 +12,8 @@ import { inTradingHours } from "@/lib/trading-hours";
  *    今日那根 14:01 換定稿)。個股 overlay(CDP / MA)走後端 `/api/stock/overlay` 的
  *    `date < today` + queryKey 帶日期,不受這條影響。
  *  - `1`:交易時段每 60s 重取(D-9)。成本控制在後端 —— 歷史日走永久 memo,
- *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。
+ *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。盤外回「距 09:01 的 ms」不回 false
+ *    (W2 T3 #208):開盤前開著的個股頁到開點那秒自己打第一發(盤中靠個股 WS 重繪順便醒)。
  *
  *  2–10 分 K **共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合;後端 `tf` 值域
  *  仍只有 `D` / `1`,不需要改(app.py:399 的 BAD_TF 白名單)。 */
@@ -65,15 +66,19 @@ async function fetchBars(code: string, tf: string, days: number): Promise<BarsPa
 }
 
 /** 輪詢間隔(SC-4)。空且非 ok = 「還在等 / 斷線」,必須自己走得出來:20s > 後端
- *  15s 負向快取 TTL,所以每輪都真打 TC4 而不是撞快取空轉。其餘情形維持既有語意
- *  (分K 交易時段 60s;日K 與盤外不輪詢)。抽成純函式才量得到(SC-4 量法)。 */
+ *  15s 負向快取 TTL,所以每輪都真打 TC4 而不是撞快取空轉。其餘情形:分K 交易時段 60s、
+ *  分K 盤外回「距 09:01 的 ms」(W2 T3 #208;`offHoursInterval` 秒級量化 + 1 s 下限,不回 false —— TQ 對
+ *  false 不排 timer、開盤前開著的頁到 09:01 不自醒)、日K 回 false(由 `lib/day-bars-rollover` 的界政策接手)。
+ *  抽成純函式才量得到(SC-4 量法);`now` 讓盤外距離可量,呼叫端與 `trading` 用同一個時刻。 */
 export function barsPollInterval(
   data: BarsPayload | undefined,
   isDaily: boolean,
   trading: boolean,
+  now: Date = new Date(),
 ): number | false {
   if (data !== undefined && data.bars.length === 0 && data.status !== "ok") return 20_000;
-  return !isDaily && trading ? POLL_MS : false;
+  if (isDaily) return false;
+  return trading ? POLL_MS : offHoursInterval(msUntilTradingOpen(now));
 }
 
 /** `enabled` 是**外部否決**(D10/R5),不是「再判一次 code/mode」:個股期合約態下
@@ -109,7 +114,8 @@ export function useStockBars(
     // retryEmpty: false —— 本 hook 的空態語意由 status 三態接手:空 + 非 ok 上面 20 s 已判,
     // 空 + ok = 「真無資料」刻意不輪詢(SC-4;與 market / futures 的未三態化空回應不是同一種空)。
     refetchInterval: (query) => {
-      const poll = barsPollInterval(query.state.data, isDaily, inTradingHours());
+      const now = new Date();
+      const poll = barsPollInterval(query.state.data, isDaily, inTradingHours(now), now);
       if (!isDaily || poll !== false) return poll;
       return dayBarsRefetchInterval(query, { retryEmpty: false });
     },

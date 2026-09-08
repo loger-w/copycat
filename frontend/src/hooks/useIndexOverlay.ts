@@ -18,7 +18,11 @@ async function fetchIndexOverlay(): Promise<StockOverlay> {
  *  什麼都不做的情況下自行恢復,沒有這道輪詢就得手動重新整理才看得到疊線。
  *
  *  **error 態必須查 `status` 不能查 `data`**:失敗時 `data` 是 undefined,
- *  只寫 `data != null && 全 null` 的條件會讓 503 那條路永遠不輪詢。 */
+ *  只寫 `data != null && 全 null` 的條件會讓 503 那條路永遠不輪詢。
+ *
+ *  **這裡的 `false` 不是時段閘,W2 T3(#208)刻意不動**:四支輪詢 hook 盤外回 false 的病是「開盤前開著、
+ *  開點不自醒」;本 hook 的 false 意思是「資料健康、今天不必再抓」,跨日由 queryKey 帶日期自然換
+ *  (render 時重算),沒有「該醒卻沒醒」的時刻可言。改成距開點 ms 只會每天多打一發無意義的請求。 */
 export function useIndexOverlay(enabled: boolean) {
   return useQuery({
     // 本機日界 = 台北(部署綁本機);跨日換 queryKey 自然失效(同 useStockOverlay)

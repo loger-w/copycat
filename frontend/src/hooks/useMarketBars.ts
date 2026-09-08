@@ -4,7 +4,13 @@ import { parseError } from "@/lib/api-error";
 import type { Bar } from "@/lib/candle";
 import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollover";
 import { type MarketKey, type MarketMode, tfOf } from "@/lib/timeframe";
-import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
+import {
+  inFuturesTradingHours,
+  inTradingHours,
+  msUntilFuturesTradingOpen,
+  msUntilTradingOpen,
+  offHoursInterval,
+} from "@/lib/trading-hours";
 
 /** 大盤 K 線(index-board N-7)。
  *
@@ -14,7 +20,9 @@ import { inFuturesTradingHours, inTradingHours } from "@/lib/trading-hours";
  *   `lib/day-bars-rollover.ts::msUntilDayRollover`(bug/daily-bars-siblings-rollover;W2 T2 #206 加定稿界:
  *   14:01 那發讓 `partial_last` 翻 false、今日那根換定稿,pr-202-review F-01)。當週 / 當月那根每個交易日
  *   都會變,W / M 與 D 同一條分支。
- * - `1`:交易時段每 60s 重取;成本控制在後端(歷史段永久 memo,只有當日段真打 TC4)
+ * - `1`:交易時段每 60s 重取;成本控制在後端(歷史段永久 memo,只有當日段真打 TC4)。盤外回
+ *   「距開點的 ms」不回 false(W2 T3 #208):開盤前開著的頁到開點那秒自己打第一發(盤中靠指數 WS
+ *   重繪順便醒,差的只是開點到第一筆推播那幾秒);加權 / 櫃買 09:01、期指鍵 08:46,兩把尺各自的開點函式。
  *
  * 30/60/90 分與 2–10 分**共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合。
  */
@@ -63,7 +71,10 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
   const tf = tfOf(mode);
   const isMinute = tf === "1";
   // 期指日盤 08:45–13:45,個股那把尺會讓開盤前 15 分與 13:36–13:45 不自動更新(P2-5)
-  const inHours = key === "TWSE" || key === "OTC" ? inTradingHours : inFuturesTradingHours;
+  const isIndex = key === "TWSE" || key === "OTC";
+  const inHours = isIndex ? inTradingHours : inFuturesTradingHours;
+  // 開點函式與 inHours 同尺(lib 測試釘「前一分鐘關且距開點 60 s、開點那分鐘開」)
+  const msUntilOpen = isIndex ? msUntilTradingOpen : msUntilFuturesTradingOpen;
   return useQuery({
     // 非分 K 不含 days:忽略的參數進 key 會產生多份等價 cache(D-15)
     queryKey: isMinute
@@ -87,7 +98,8 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
         // retryEmpty:D / W / M 路徑未三態化,200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)。
         return dayBarsRefetchInterval(q, { retryEmpty: true });
       }
-      return active && inHours() ? POLL_MS : false;
+      if (!active) return false; // 退訂語意:切回 tab 那次 render 重新求值
+      return inHours() ? POLL_MS : offHoursInterval(msUntilOpen());
     },
   });
 }
