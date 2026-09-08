@@ -1,7 +1,7 @@
 {
   "fixed_point": "de192ca3 (merge-base master)",
   "diff": "git diff de192ca3...HEAD (HEAD = 1dd3db45 at review time)",
-  "spec": "GitHub issue #204 + tickets #205-#210 + 對話拍板(_RETRY_UNTIL 09:00 / T4 sleep 語意等價 / T2 事前標為該變實數 9 條)",
+  "spec_source": "GitHub issue #204 + tickets #205-#210 + 對話拍板(_RETRY_UNTIL 09:00 / T4 sleep 語意等價 / T2 事前標為該變實數 9 條)",
   "standards": [
     {"id": "F-01", "severity": "MED", "kind": "judgement", "smell": "Temporal Coupling / 隱藏通道", "finding": "`_require_daytrade_complete` 把列數寫進 `self._daytrade_rows_seen`,由 `_write_cache` 事後撈;`compute()` docstring 仍寫「純結果」,CLI 走 compute 也會污染引擎狀態。", "disposition": "修:`_compute_with_daytrade_rows` 以回值 (final, rows) 帶出,`compute` 只回 final;`_write_cache(…, daytrade_rows)` 明參;欄位刪除。測試 `assert not hasattr(eng, \"_daytrade_rows_seen\")` 釘。"},
     {"id": "F-02", "severity": "LOW", "kind": "judgement", "smell": "Duplicated Data", "finding": "`trading-hours.ts` 三對開點分鐘各留兩份(`in*Hours` 與 `msUntil*Open` 候選表),六個字面值要同動。", "disposition": "不修(知情):三對同尺已由 `trading-hours.test.ts` 「前一分鐘 in=false 且距開點 60 s、開點那分鐘 in=true」釘住,漂了立刻紅;把 in*Hours 改讀常數表屬 🔵 順手改既有 code,依鐵則 B 記 next-time 併 W3。"},

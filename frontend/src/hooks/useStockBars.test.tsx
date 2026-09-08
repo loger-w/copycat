@@ -178,8 +178,6 @@ describe("barsPollInterval(SC-4 純函式)", () => {
   });
 });
 
-// 接線測試(R3):純函式綠不足以證明 refetchInterval 真的吃它 —— TanStack v5 函式形
-// refetchInterval 若讀閉包裡的 data 會恆為初值(undefined),純函式測全綠但線沒接上。
 // W2 T3(#208):接線測試 —— 開盤前開著的個股頁分 K,09:01 那秒自己打第一發。
 describe("useStockBars 分 K 盤外自醒(W2 T3 #208)", () => {
   it("開盤前開著(週三 08:00)→ 09:01 前零請求、09:01 那秒自己打第一發、之後回 60 s", async () => {
@@ -203,6 +201,8 @@ describe("useStockBars 分 K 盤外自醒(W2 T3 #208)", () => {
   });
 });
 
+// 接線測試(R3):純函式綠不足以證明 refetchInterval 真的吃它 —— TanStack v5 函式形
+// refetchInterval 若讀閉包裡的 data 會恆為初值(undefined),純函式測全綠但線沒接上。
 describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
   function barsCalls(): number {
     return urls().filter((u) => u.includes("/api/stock/bars")).length;

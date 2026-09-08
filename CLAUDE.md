@@ -122,7 +122,7 @@ docs/superpowers/         # spec 與 implementation plan
 | **看盤日常(prod build)** | `npm run build` 後 `npm run preview`(port 4173;proxy 沿用 dev 的 /api + /ws → 8721)。dev build 的 React Component Performance Track 已由 dev-perf-guard 堵住洩漏,但 props-diff 開銷仍在 —— 整天掛著一律用本列,`npm run dev` 只做開發(2026-08-20) | frontend/ |
 | Config 實驗對照 | `.venv\Scripts\python -m copycat compare out/A out/B` | repo root |
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
-| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定**目標交易日**(名單服務的交易日,預設今天 / 最近交易日;資料日 = 其前一交易日自動推);`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內交易日 08:00 task + 啟動補跑) | repo root |
+| 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定**目標交易日**(名單服務的交易日;預設 = 排程判定值:交易日 08:00 起 = 今天,之前 / 非交易日 = 前一交易日;資料日 = 其前一交易日自動推;給非交易日直接擋、exit 2);`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內交易日 08:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
 | **訊號影子期判準(spec #192,2026-09-08 起四週)** | 盤後:`curl -s 127.0.0.1:8721/api/stock/signals/rules` 含「掃單簇」且 CDP 穿越 / 爆量 `notify_discord=false`;啟動 log 有「T+1/T+2 回填」一行(無 stock engine 時是「無日 K 來源,worker 不啟動」)。盤中:`grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記);Discord 收到四行卡且同 tick 合併;rail 政策列三行 + toast 帶【標記】+ 雙嗶;CDP 穿越 / 爆量 jsonl 有列但無 Discord / 無 toast;`grep 佇列滿 logs/server-*.log` 為 0;13:40 log「回填 n 列」;次日 `t1_open` 已補、再次日 `t2_open` | repo root |
 

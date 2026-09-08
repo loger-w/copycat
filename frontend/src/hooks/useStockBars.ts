@@ -69,7 +69,10 @@ async function fetchBars(code: string, tf: string, days: number): Promise<BarsPa
  *  15s 負向快取 TTL,所以每輪都真打 TC4 而不是撞快取空轉。其餘情形:分K 交易時段 60s、
  *  分K 盤外回「距 09:01 的 ms」(W2 T3 #208;`offHoursInterval` 秒級量化 + 1 s 下限,不回 false —— TQ 對
  *  false 不排 timer、開盤前開著的頁到 09:01 不自醒)、日K 回 false(由 `lib/day-bars-rollover` 的界政策接手)。
- *  抽成純函式才量得到(SC-4 量法);`now` 讓盤外距離可量,呼叫端與 `trading` 用同一個時刻。 */
+ *  抽成純函式才量得到(SC-4 量法);`now` 讓盤外距離可量,呼叫端與 `trading` 用同一個時刻。
+ *  **前置:`trading` 必須 = `inTradingHours(now)`**(唯一 prod caller 同源推導,矛盾態到不了 prod);
+ *  測試刻意餵 `trading=true` + 盤外 `now` 只為隔離分支。不在函式內自算 `inTradingHours(now)`:那會讓
+ *  純函式吃到日曆快取、測試得再 stub 日曆,違背抽成純函式的初衷(pr-211 F-14)。 */
 export function barsPollInterval(
   data: BarsPayload | undefined,
   isDaily: boolean,
