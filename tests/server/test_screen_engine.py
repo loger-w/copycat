@@ -742,20 +742,27 @@ class TestEodAttemptMemo:
     async def test_memo_is_dropped_when_the_target_trading_day_changes(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
-        """週二算完 → 週三 08:00:30 再 tick:窗重疊的日子(08-31 等)要重抓,不沿用昨天那份 memo
-        (同一日期的 EOD 不會變,但 memo 只服務當次目標日;抄 breadth 武裝時清空)。"""
+        """週二整早都在 08-25 那天失敗、09:00 放棄(memo 留著 08-31 … 08-26 四天)→ 週三 08:00:30 再 tick:
+        窗重疊的日子(08-31 等)要重抓,不沿用昨天那份 memo(同一日期的 EOD 不會變,但 memo 只服務當次目標日;
+        抄 breadth 武裝時清空)。同時釘週二六次 attempt 之間 08-31 只抓一次(memo 跨失敗 attempt 有效)。"""
         clock = _Clock(_dt.datetime(2026, 9, 1, 8, 0, 30))
         _install_fake_sleep(monkeypatch, clock)
         counts: dict[_dt.date, int] = {}
+        bad = _dt.date(2026, 8, 25)
+
+        def daily(token: str, day: _dt.date) -> list[dict]:
+            counts[day] = counts.get(day, 0) + 1
+            if day == bad and clock.t.date() == _DAY:
+                raise BreadthFetchError(f"FinMind {day} 週二整早失敗")
+            return _daily_rows(day)
+
         eng = _engine(
-            self._counting_daily(counts),
-            lambda token, day: _dt_rows(day),
-            monkeypatch,
-            tmp_path_factory,
-            now_fn=clock.now,
+            daily, lambda token, day: _dt_rows(day), monkeypatch, tmp_path_factory, now_fn=clock.now
         )
         await eng.tick()
-        assert counts[_DATA] == 1
+        assert eng._gave_up_for == _DAY
+        assert counts[_DATA] == 1  # 六次 attempt 只抓一次 08-31
+        assert counts[bad] == 6  # 失敗那天每次都重試
         clock.t = _dt.datetime(2026, 9, 2, 8, 0, 30)  # 週三
         await eng.tick()
         assert eng._cached_target_date() == _dt.date(2026, 9, 2)
