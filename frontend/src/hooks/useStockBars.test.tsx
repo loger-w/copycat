@@ -149,26 +149,60 @@ describe("barsPollInterval(SC-4 純函式)", () => {
     expect(barsPollInterval(empty("timeout"), false, true)).toBe(20_000);
   });
 
-  it("空 + ok → 既有邏輯(日K false;分K 依交易時段)", () => {
-    expect(barsPollInterval(empty("ok"), true, false)).toBe(false);
-    expect(barsPollInterval(empty("ok"), false, true)).toBe(60_000);
-    expect(barsPollInterval(empty("ok"), false, false)).toBe(false);
+  // W2 T3(#208)事前標為該變:分 K 盤外不再回 false,改回「距開點 ms」(量化);日 K 盤外仍回 false
+  //(由 lib 的日界政策接手)。`now` 參數讓純函式量得到開點距離。
+  const OFF = new Date(2026, 7, 5, 8, 0); // 週三 08:00:距 09:01 = 61 分
+  const OFF_MS = 61 * 60_000;
+
+  it("空 + ok → 既有邏輯(日K false;分K 盤中 60 s / 盤外距開點)", () => {
+    expect(barsPollInterval(empty("ok"), true, false, OFF)).toBe(false);
+    expect(barsPollInterval(empty("ok"), false, true, OFF)).toBe(60_000);
+    expect(barsPollInterval(empty("ok"), false, false, OFF)).toBe(OFF_MS);
   });
 
   it("非空 + 非 ok → 既有邏輯,不觸發 20s(Out of scope 3:有資料就照常畫)", () => {
-    expect(barsPollInterval(filled, true, false)).toBe(false);
-    expect(barsPollInterval(filled, false, true)).toBe(60_000);
-    expect(barsPollInterval(filled, false, false)).toBe(false);
+    expect(barsPollInterval(filled, true, false, OFF)).toBe(false);
+    expect(barsPollInterval(filled, false, true, OFF)).toBe(60_000);
+    expect(barsPollInterval(filled, false, false, OFF)).toBe(OFF_MS);
   });
 
   it("data 尚未到位(undefined)→ 既有邏輯", () => {
-    expect(barsPollInterval(undefined, true, false)).toBe(false);
-    expect(barsPollInterval(undefined, false, true)).toBe(60_000);
+    expect(barsPollInterval(undefined, true, false, OFF)).toBe(false);
+    expect(barsPollInterval(undefined, false, true, OFF)).toBe(60_000);
+    expect(barsPollInterval(undefined, false, false, OFF)).toBe(OFF_MS);
+  });
+
+  it("分 K 盤外回值秒級量化 + 1 s 下限(offHoursInterval)", () => {
+    expect(barsPollInterval(empty("ok"), false, false, new Date(2026, 7, 5, 8, 0, 0, 400))).toBe(OFF_MS);
+    expect(barsPollInterval(empty("ok"), false, false, new Date(2026, 7, 5, 9, 0, 59, 500))).toBe(1_000);
   });
 });
 
 // 接線測試(R3):純函式綠不足以證明 refetchInterval 真的吃它 —— TanStack v5 函式形
 // refetchInterval 若讀閉包裡的 data 會恆為初值(undefined),純函式測全綠但線沒接上。
+// W2 T3(#208):接線測試 —— 開盤前開著的個股頁分 K,09:01 那秒自己打第一發。
+describe("useStockBars 分 K 盤外自醒(W2 T3 #208)", () => {
+  it("開盤前開著(週三 08:00)→ 09:01 前零請求、09:01 那秒自己打第一發、之後回 60 s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0));
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ bars: [{ t: "2026-08-04 13:30", o: 1, h: 1, l: 1, c: 1, v: 1 }], status: "ok" }),
+        ),
+    );
+    renderHook(() => useStockBars("2330", "m1", MINUTE_DAYS), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls().length).toBe(1);
+    await vi.advanceTimersByTimeAsync(59 * 60_000 + 59_000); // 08:59:59
+    expect(urls().length).toBe(1);
+    await vi.advanceTimersByTimeAsync(61_000); // 09:01:00
+    expect(urls().length).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000); // 09:02:00
+    expect(urls().length).toBe(3);
+  });
+});
+
 describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
   function barsCalls(): number {
     return urls().filter((u) => u.includes("/api/stock/bars")).length;

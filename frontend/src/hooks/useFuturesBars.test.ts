@@ -125,7 +125,34 @@ describe("useFuturesBars(SC-1/2/3)", () => {
     ]);
   });
 
-  it("停輪詢窗(週三 14:00,日盤收→夜盤開)不輪詢", async () => {
+  // W2 T3(#208):兩段停輪詢窗(05:06–08:39 / 13:51–14:54)結束時自己醒 —— 盤外回「距開點 ms」不回 false。
+  it("停輪詢窗(週三 14:00,日盤收→夜盤開)不輪詢;14:55 那秒自己打第一發、之後回 60 s", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 14, 0)); // 2026-08-05 週三 14:00
+    renderHook(() => useFuturesBars("TXF", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(54 * 60_000 + 59_000); // 14:54:59
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000); // 14:55:00
+    expect(urls.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000); // 14:56:00:回 60 s 節奏
+    expect(urls.length).toBe(3);
+  });
+
+  it("清晨停輪詢窗(週三 08:30)→ 08:40 那秒自己打第一發", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 30));
+    renderHook(() => useFuturesBars("TXF", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(9 * 60_000 + 59_000); // 08:39:59
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000); // 08:40:00
+    expect(urls.length).toBe(2);
+  });
+
+  it("停輪詢窗(週三 14:00)三個輪詢週期內零請求(既有斷言,回值不再是 false 但 55 分內不打)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 14, 0)); // 2026-08-05 週三 14:00
     renderHook(() => useFuturesBars("TXF", "m1"), { wrapper: wrapper(newClient()) });

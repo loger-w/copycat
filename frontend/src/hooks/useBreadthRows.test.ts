@@ -95,7 +95,7 @@ describe("useBreadthRows(SC-1)", () => {
     expect(urls.length).toBe(3);
   });
 
-  it("非交易時段不輪詢(refetchInterval 為 false)", async () => {
+  it("非交易時段不輪詢(盤外回「距開點 ms」而非 10 s;W2 T3 #208 起不再是 false)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 6, 20, 0)); // 週四 20:00,日盤已收
     renderHook(() => useBreadthRows(), { wrapper: wrapper(newClient()) });
@@ -104,6 +104,33 @@ describe("useBreadthRows(SC-1)", () => {
     expect(before).toBe(1);
     await vi.advanceTimersByTimeAsync(60_000); // 六個輪詢週期
     expect(urls.length).toBe(before);
+  });
+
+  // W2 T3(#208;next-time 08-31 L71「同病」):盤外回 `false` → TQ 不排 timer、之後不再求值,08:00 開著的
+  // 台股綜合 tab 到 09:01 不會自己開始輪詢(要等切 tab / 別的 render 碰到)。改回「距開點 ms」(秒級量化):
+  // 開點那秒醒來打第一發,之後每次落地重新求值回 10 s。
+  it("開盤前開著(週四 08:00)→ 09:01 前零請求、09:01 那秒自己打第一發、之後回 10 s 節奏", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 6, 8, 0)); // 週四 08:00
+    renderHook(() => useBreadthRows(), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1); // 掛載那發
+    await vi.advanceTimersByTimeAsync(59 * 60_000 + 59_000); // 08:59:59
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(61_000); // 09:01:00
+    expect(urls.length).toBe(2); // 開點那秒醒來
+    await vi.advanceTimersByTimeAsync(10_000); // 09:01:10:回 10 s 節奏
+    expect(urls.length).toBe(3);
+  });
+
+  it("active=false 盤外仍回 false(退訂語意不變:切回 tab 才重新求值)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 6, 8, 0)); // 週四 08:00
+    renderHook(() => useBreadthRows(false), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(urls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000); // 10:00:盤中但人不在 tab
+    expect(urls.length).toBe(1);
   });
 
   // FE-2:台股綜合 tab 的 DOM 由 App 以 `hidden` 保留(不 unmount)→ 沒有這道 gate,

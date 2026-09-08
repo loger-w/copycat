@@ -94,7 +94,7 @@ describe("useMarketBars", () => {
     expect(urls).toEqual(["/api/market/bars/TWSE?tf=D", "/api/market/bars/MXF?tf=D"]);
   });
 
-  it("非交易時段不輪詢(refetchInterval 為 false)", async () => {
+  it("非交易時段不輪詢(盤外回「距開點 ms」而非 60 s;W2 T3 #208 起不再是 false)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 30, 20, 0)); // 週四 20:00,日盤已收
     const { result } = renderHook(() => useMarketBars("TWSE", "m1"), {
@@ -105,6 +105,36 @@ describe("useMarketBars", () => {
     const before = urls.length;
     await vi.advanceTimersByTimeAsync(180_000); // 三個輪詢週期
     expect(urls.length).toBe(before);
+  });
+
+  // W2 T3(#208):分 K 盤外回 false → 開盤前開著的加權頁到 09:01 不自醒(盤中靠指數 WS 重繪順便醒,差的是開點
+  // 到第一筆推播那幾秒;期指鍵開點是 08:46,兩把尺各自的開點函式)。
+  it("分 K:開盤前開著(週四 08:00)→ 09:01 那秒自己打第一發、之後回 60 s;期指鍵 08:46 開點", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 30, 8, 0)); // 週四 08:00
+    renderHook(() => useMarketBars("TWSE", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    const minute = () => urls.filter((u) => u.includes("tf=1")).length;
+    expect(minute()).toBe(1);
+    await vi.advanceTimersByTimeAsync(59 * 60_000 + 59_000); // 08:59:59
+    expect(minute()).toBe(1);
+    await vi.advanceTimersByTimeAsync(61_000); // 09:01:00
+    expect(minute()).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_000); // 09:02:00:回 60 s 節奏
+    expect(minute()).toBe(3);
+  });
+
+  it("分 K 期指鍵:開盤前開著(週四 08:00)→ 08:46 那秒自己打第一發", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 30, 8, 0));
+    renderHook(() => useMarketBars("TXF", "m1"), { wrapper: wrapper(newClient()) });
+    await vi.advanceTimersByTimeAsync(0);
+    const minute = () => urls.filter((u) => u.includes("tf=1")).length;
+    expect(minute()).toBe(1);
+    await vi.advanceTimersByTimeAsync(45 * 60_000 + 59_000); // 08:45:59
+    expect(minute()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000); // 08:46:00
+    expect(minute()).toBe(2);
   });
 
   // (review round-2 XR-4)分 K 這條路在**當日段每次都真走 TC4 SubHistory**,與
