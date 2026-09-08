@@ -379,6 +379,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.date
             else expected_target_date(_dt.datetime.now(), cal)
         )
+        if not cal.is_trading_day(target):
+            # pr-211 F-07:`data_date_of` 的前置是 target 為交易日(prod 唯一來源 expected_target_date
+            # 恆滿足);--date 給週末 / 假日會算出與下一交易日相同的資料窗、當沖 fetch 回空,
+            # 錯誤訊息會把「你給的日子不是交易日」講成「FinMind 未更新?」—— 在取數前明講。
+            sys.stderr.write(
+                f"盤前篩選:{target} 是非交易日,--date 須為目標交易日(名單服務的交易日)\n"
+            )
+            return 2
         engine = ScreenEngine(
             token=_resolve_finmind_token(),
             calendar=cal,
