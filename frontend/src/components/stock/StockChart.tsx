@@ -25,7 +25,7 @@ import { DAILY_FINAL_TIME } from "@/lib/day-bars-rollover";
 import { mergeLiveDailyBar, mergeLiveMinuteBars } from "@/lib/live-last-bar";
 import type { StockAccum } from "@/lib/stock-accum";
 import { readLocal, writeLocal } from "@/lib/storage";
-import { isoLocalDate } from "@/lib/trading-calendar";
+import { isoLocalDate, isTradingDay } from "@/lib/trading-calendar";
 import { cn } from "@/lib/utils";
 
 /** 圖表模式切換容器(SC-6):江波圖 / 1–10 分K / 日K。
@@ -150,8 +150,11 @@ export function StockChart({
   // 即時末根(spec #214;CONTEXT.md):正式 1 分 K 之後由 accum 的分鐘累積補到現在,再進聚合
   // (2–10 分的進行中桶由既有 aggregateBars 算)。啟動閘全在這裡判、純函式不判:
   //   - `accum.code === code`:換股當下 accum 可能還是前一檔的(race),不得貼到新股的 K 線上;
-  //   - 牆鐘同日 **09:00 起**:stock engine 08:00 才換日,凌晨 accum 仍是昨天的成交;休市日 accum
-  //     無成交 → 純函式自然 no-op,不看日曆;
+  //   - 牆鐘同日 **09:00 起**:stock engine 08:00 才換日,凌晨 accum 仍是昨天的成交;
+  //   - **交易日**(`isTradingDay`,與 `inTradingHours` 同一把日曆尺):休市日引擎**不換日**(rollover
+  //     stage2 等新日首筆 tick,假日永遠不來;`stock_engine._checkpoint_loop` 註),accum 整天沿用前一
+  //     交易日的分鐘 / 高低 / 現價 —— 不擋的話會把前一交易日 ~270 根貼成「今天」的假 K,零錯誤訊號
+  //     (two-axis spec S-01;週末靠 weekday、國定假日靠 `/api/calendar` 假日集合,未載入時退回只擋週末);
   //   - 期貨態由 `isFut` 擋(K 線本來就不畫)。
   // 牆鐘刻意不進 memo(deps 表達不了「現在幾點」,同 FuturesChart live 點慣例),改以 `nowMinute` /
   // `liveToday` 兩個純量當 dep:同一分鐘同一份 accum 命中 memo;accum 每則 ticks 打包換 identity(0.1 s)
@@ -159,7 +162,8 @@ export function StockChart({
   const now = new Date();
   const liveToday = isoLocalDate(now);
   const nowMinute = now.getHours() * 60 + now.getMinutes();
-  const liveOn = !isFut && accum.code === code && !accum.noData && nowMinute >= 9 * 60;
+  const liveOn =
+    !isFut && accum.code === code && !accum.noData && nowMinute >= 9 * 60 && isTradingDay(now);
   const liveMinutes = liveOn && isMinute ? accum.minutes : null;
   // 日 K 另一道**定稿閘**(T2 #216;user Q7 拍板「13:30–14:01 留前端值、14:01 換達錢定稿」):判準是
   // 「這份日 K 是 14:00 界後才抓回來的」(`dataUpdatedAt` ≥ 當日 `DAILY_FINAL_TIME`),**不是牆鐘過 14:00**
