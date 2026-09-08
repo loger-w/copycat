@@ -100,7 +100,7 @@ export interface LiveDay {
  *  - 末根 `t < today`(或空)→ append `{t: today, o: dayOpen ?? accum 最早分鐘的 c, …}`;
  *    `dayOpen` 由呼叫端給(今天正式 1 分 K 首根的 `o`,有才給);
  *  - 末根 `t > today`(不該發生)/ accum 無成交(`last` / `high` / `low` 任一 null)→ 原樣(仍回新 array)。
- *  正式段元素 identity 保留、傳入 array 不改。**定稿閘不在這裡**(呼叫端以「日 K 資料是 14:00 界後才抓回來的」判,
+ *  正式段元素 identity 保留、傳入 array 不改。**定稿閘不在這裡**(呼叫端以「日 K 資料是 14:00 界後才抓回來的、且那一趟 status ok」判,
  *  純函式不讀時鐘)。 */
 export function mergeLiveDailyBar(
   official: readonly Bar[],
@@ -113,13 +113,13 @@ export function mergeLiveDailyBar(
   const last = official[official.length - 1];
   const lastDate = last === undefined ? null : splitStamp(last.t).date;
   if (lastDate !== null && lastDate > today) return out;
-  const merged = { h: live.high, l: live.low, c: live.last.p, v: live.last.cum_vol };
   if (last !== undefined && lastDate === today) {
     out[out.length - 1] = {
       ...last,
-      ...merged,
       h: Math.max(last.h, live.high),
       l: Math.min(last.l, live.low),
+      c: live.last.p,
+      v: live.last.cum_vol,
     };
     return out;
   }
@@ -128,6 +128,6 @@ export function mergeLiveDailyBar(
     const first = [...live.minutes.keys()].sort((a, b) => a - b)[0];
     open = first === undefined ? live.last.p : live.minutes.get(first)!.c;
   }
-  out.push({ t: today, o: open, ...merged });
+  out.push({ t: today, o: open, h: live.high, l: live.low, c: live.last.p, v: live.last.cum_vol });
   return out;
 }
