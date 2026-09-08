@@ -77,7 +77,7 @@ async function fetchFuturesBars(
  *  不會 —— cache 裡的舊圖留著等新料。**前提是 cache 還在**:退訂後 observer 歸零,TQ 預設
  *  `gcTime` 5 分鐘就回收,而 user 配方正是「個股頁待很久」→ 這幾把 query 給 `gcTime: Infinity`
  *  (鍵集合有界:3 商品 × 2 tf;review round 1 兩軸各一條 P1)。分 K 與日 K 同一道 gate
- *  (日 K 同一日曆日內重新 subscribe 不重抓;跨了午夜才重抓,見 `msUntilDayRollover`)。
+ *  (日 K 同一界內重新 subscribe 不重抓;跨了界(午夜 / 14:00 定稿)才重抓,見 `msUntilDayRollover`)。
  *  **不用 `useEffect`**(frontend-conventions:server state 一律 TQ)。副作用(刻意):queryFn 吃了 TQ 的 signal 後,切走 tab 時在飛的那趟
  *  會被 TQ 主動中止(`cancel({revert:true})`),不再讓它跑完落 cache —— 切回時反正立即重抓。
  *
@@ -110,7 +110,7 @@ export function useFuturesBars(
     // 日 K 的新鮮度政策整組在 `lib/day-bars-rollover.ts`(三支日 K hook 同動,改政策只改那裡)
     staleTime: isMinute ? 0 : dayBarsStaleTime,
     // 函式形式:TQ 每次結果落地**與每次 render** 都重新求值 → 日盤收 / 夜盤開的開關、日 K 的
-    // 下一個午夜都不依賴外部 re-render;回值一變 TQ 就重排計時器,所以日 K 那條回整秒值
+    // 下一道界(午夜 / 14:00)都不依賴外部 re-render;回值一變 TQ 就重排計時器,所以日 K 那條回整秒值
     //(`msUntilDayRollover`)。`active` 這一維不在這裡:退訂的 observer 根本沒有計時器
     //(`subscribed` 是唯一的閘)。
     refetchInterval: (q) => {

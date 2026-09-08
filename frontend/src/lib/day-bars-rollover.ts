@@ -1,11 +1,11 @@
 import { msUntilNextLocalDate } from "@/lib/trading-calendar";
 
-/** 日 K 的新鮮度政策(bug/futures-daily-bars-rollover → bug/daily-bars-siblings-rollover):
- *  「同一個本機日曆日內不過期、跨午夜 + slack 重抓、失敗 60 s 重試」——**政策的唯一住處**,
- *  公開面只有 `dayBarsStaleTime` / `dayBarsRefetchInterval` 兩支,hook 只接線(pr-159-review F-02:
- *  先前只收常數、兩行政策運算式仍三支 hook 各一份 —— 「改一支、其他兩支測試照綠」正是
- *  bug/daily-bars-siblings-rollover 的病因,收進來後改政策只改本檔、三支同動)。
- *  常數與 `msUntilDayRollover` 不 export:整個 src/ 零外部讀者(pr-159-review F-06),
+/** 日 K 的新鮮度政策(bug/futures-daily-bars-rollover → bug/daily-bars-siblings-rollover → W2 T2 #206):
+ *  「兩道界之間不過期、過界 + slack 重抓、失敗 60 s 重試」——**政策的唯一住處**,
+ *  公開面只有 `dayBarsStaleTime` / `dayBarsRefetchInterval` 兩支(加一顆 parity 用的 `DAILY_FINAL_TIME`),
+ *  hook 只接線(pr-159-review F-02:先前只收常數、兩行政策運算式仍三支 hook 各一份 —— 「改一支、其他
+ *  兩支測試照綠」正是 bug/daily-bars-siblings-rollover 的病因,收進來後改政策只改本檔、三支同動)。
+ *  slack 常數與 `msUntilDayRollover` 不 export:整個 src/ 零外部讀者(pr-159-review F-06),
  *  測試釘界用牆鐘字面值、不 import 常數(frontend-testing 慣例)。
  *
  *  **不併進 `lib/trading-calendar.ts`**:那邊是純日曆算術(下一個午夜幾毫秒);這邊是 TanStack Query
@@ -26,8 +26,24 @@ import { msUntilNextLocalDate } from "@/lib/trading-calendar";
  *  slack 是「界」的一部分、不是加在界之後的等待 —— 推導見 `msUntilDayRollover`。 */
 const DAY_ROLLOVER_SLACK_MS = 60_000;
 
-/** 日 K 的有效期 = **同一個本機日曆日**(bug/futures-daily-bars-rollover):`from` 起算,到
- *  它之後的第一個日曆日 00:00 + `DAY_ROLLOVER_SLACK_MS` 的毫秒數。
+/** 後端日 K 快照的**定稿界**(台北牆鐘;`copycat/server/bars.py::DAILY_FINAL_TIME` 的前端鏡像,
+ *  W2 T2 #206)。tuple 形式(小時, 分)而不是 "14:00" 字串:政策直接拿來 `setHours`,不必解析;
+ *  **跨檔契約**(CLAUDE.md §4):本值必須 ≥ 後端定稿界 —— 後端往後調而前端沒跟,14:01 那發拿到的是
+ *  界前快照、再鎖到午夜,症狀回到修前(整個下午半成品)且零錯誤訊號。由後端測試
+ *  `tests/server/test_bars.py::test_daily_final_time_parity_with_frontend` 直讀本檔字面釘住;
+ *  這是本檔唯一 export 的常數,src/ 內零讀者(只給 parity 測試)。 */
+export const DAILY_FINAL_TIME: readonly [hh: number, mm: number] = [14, 0];
+
+/** 日 K 的有效期 = **到下一道界**(bug/futures-daily-bars-rollover;W2 T2 #206 加第二道):`from` 起算,
+ *  到它之後的第一個界的毫秒數。界有兩道,同形(時刻 + `DAY_ROLLOVER_SLACK_MS`):
+ *  - **日曆日 00:00**(舊有):新交易日的 D bar 要出現、錨定日翻頁後基準要換;
+ *  - **每日 `DAILY_FINAL_TIME`**(14:00;W2 T2):後端自 bug/futures-daily-cache-night 起把今日那根定稿在
+ *    這一刻之後,前端只到午夜才問的話 —— 期貨 15:00 錨定翻頁後 CDP / MA 基準仍是早上那截(next-time 08-31)、
+ *    加權頁整個下午印「· 最後一根未收盤」(pr-202-review F-01)、個股日 K 今日那根停在第一次開圖的值。
+ *    三支同吃、政策零分岔(user 2026-09-08 拍板 Q1 (a)):個股 / 加權沒有錨定日概念,但「今日那根何時定稿」
+ *    三張圖是同一個後端界。成本 = 每個掛著的日 K query 每天多一發(含非交易日,後端 cache 命中不打 TC4)。
+ *    14:01 那發拿到墊背(TC4 關著,後端回界前快照且 `partial_last` 仍 true)**不自救**,與後端 pr-165 口徑
+ *    一致(實務 = F5;user 拍板 Q3 (a),留 next-time)。
  *
  *  讀者見檔頭(同一個 bug 形狀 —— bug/daily-bars-siblings-rollover;症狀與界的由來只寫這一處)。
  *
@@ -36,11 +52,8 @@ const DAY_ROLLOVER_SLACK_MS = 60_000;
  *  一交易日)拿的是**昨天早上抓的那份**:昨天的 D bar 停在盤中部分值(或根本還沒有),而
  *  錨定日判準只保證「不畫到未來」,對「停在更早的一天」無感 —— 畫面只是幾條位置不對的線。
  *
- *  **界是日曆午夜,不是 15:00 錨定日翻頁**:一把尺服務三支 hook,而 market / stock 的日 K
- *  沒有錨定日概念。後端自 bug/futures-daily-cache-night 起有 14:00 定稿界(界前快照過界
- *  作廢一次,`server/bars.py::DAILY_FINAL_TIME`),15:00 後再問**拿得到**定稿 —— 但本檔
- *  staleTime 到午夜才過期,掛著不動的期貨分頁 15:01–24:00 仍用早上快照畫 CDP(F5 即正確);
- *  期貨那支要不要另吃 15:00 界是設計題,留 docs/next-time.md 08-31 節。
+ *  **第二道界是 14:00 定稿界,不是 15:00 錨定日翻頁**:錨定翻頁時只要 cache 裡是 14:01 之後那份就對了,
+ *  而 14:00 對三支 hook 都有意義(見上),15:00 只對期貨有 —— 一把尺服務三支 hook。
  *  三條路徑同一把尺(界的由來只寫這一處,helper 與測試指過來):
  *  - `refetchInterval`:人一直在 tab 上 → 午夜到了自己打一發(函式形式,每次結果落地後
  *    重算到下一個午夜;不是固定 24 h —— 那會把「掛載時刻」當午夜,20:00 開的分頁整個
@@ -54,24 +67,31 @@ const DAY_ROLLOVER_SLACK_MS = 60_000;
  *    (c) 回值秒級量化(pr-151-review F-02):同一秒內的重繪回同值,計時器不再每 render 重排。
  *  - `staleTime`:切走的 observer 是退訂(沒計時器)、背景分頁的 interval tick 被 focus 閘
  *    跳過(TQ 預設 `refetchIntervalInBackground: false`)—— 這兩條都靠「這份是昨天抓的」
- *    才能在切回 / 回前景時補上。以 `dataUpdatedAt` 為起點算到它之後的第一個午夜,不是以
+ *    才能在切回 / 回前景時補上。以 `dataUpdatedAt` 為起點算到它之後的第一道界,不是以
  *    現在算(否則每次判定都會把過期點往後推)。
  *  尚無資料不用守:TQ `Query.isStaleByTime` 第一條對 `state.data === undefined` 直接判過期,
  *  `dataUpdatedAt` 要到第三條 `timeUntilStale` 才用到;本 query 無 `initialData` / `setQueryData`,
  *  `data` 有值 ⇔ `dataUpdatedAt > 0`(pr-151-review F-04 改正:不是 `!updatedAt`)。
  *
- *  算法:界 B_k = 日曆日 k 的 00:00 + slack;回「第一個 B_k > from」− from。`from − slack` 到下一個
- *  午夜的距離正好等於 `from` 到下一個 B_k 的距離,且 `msUntilNextLocalDate` 恆 > 0 保證嚴格在後。
+ *  算法:兩道界各算「第一個嚴格在 from 之後的距離」取**最小**。午夜界 B_k = 日曆日 k 的 00:00 + slack,
+ *  回「第一個 B_k > from」− from:`from − slack` 到下一個午夜的距離正好等於 `from` 到下一個 B_k 的距離,
+ *  且 `msUntilNextLocalDate` 恆 > 0 保證嚴格在後;定稿界 F = `from` 當日 `DAILY_FINAL_TIME` + slack,
+ *  F > from 才是候選。**不能**「F 在後就直接回 F」:00:00–00:01 的 slack 窗內今天的 B(00:01)也還在前面、
+ *  且比 F 近 —— 只看 F 會把午夜那發推到 14:01(pr-151-review F-01 那條測試守的正是這種「界被推走」)。
  *  再 ceil 到整秒:回值 ≥ 真距離(不會早於界打)、最多晚 1 s;同一秒內重繪回同值。
  *  `staleTime` 吃同一支(以 `dataUpdatedAt` 起算)的連帶:資料若在 00:00–00:01 內落地(error 重試那條路),
  *  stale 點是**今天** 00:01 而不是明天 —— 有界(那一發落地後下一界即明天,不成迴圈)、方向安全(多打一發)。 */
 function msUntilDayRollover(from: number): number {
-  const ms = msUntilNextLocalDate(new Date(from - DAY_ROLLOVER_SLACK_MS));
+  const final = new Date(from);
+  final.setHours(DAILY_FINAL_TIME[0], DAILY_FINAL_TIME[1], 0, 0);
+  const finalBoundary = final.getTime() + DAY_ROLLOVER_SLACK_MS;
+  const toMidnight = msUntilNextLocalDate(new Date(from - DAY_ROLLOVER_SLACK_MS));
+  const ms = finalBoundary > from ? Math.min(finalBoundary - from, toMidnight) : toMidnight;
   return Math.ceil(ms / 1000) * 1000;
 }
 
 /** 日 K 那一發失敗(`retry: 1` 用完)後的重試節奏。沒有這條的話 interval 會照樣重算成
- *  「到下一個午夜」—— 00:01 那一發碰上後端不通就整個交易日停在昨天的基準,與修前同一個症狀。
+ *  「到下一道界」—— 00:01 那一發碰上後端不通就整個交易日停在昨天的基準,與修前同一個症狀。
  *  與三支 hook 各自分 K 輪詢的 60 s 數值相同但**互不同源**(各檔私有 `POLL_MS`),也不吃它們的時段閘;
  *  `retry: 1` 讓每輪其實是兩發:失效方向選「多打」不選「整天不救」。
  *  **只在 HTTP 非 2xx 才走到這條**(各 hook 的 fetch 對非 2xx throw → TQ error;pr-159-review F-07 口徑):
@@ -93,13 +113,13 @@ interface DayBarsQuery {
   };
 }
 
-/** 日 K `staleTime`:以「上次落地時刻」算到它之後的第一個午夜。以 `dataUpdatedAt` 起算而不是
+/** 日 K `staleTime`:以「上次落地時刻」算到它之後的第一道界(午夜 / 14:00)。以 `dataUpdatedAt` 起算而不是
  *  「現在」的理由、與 refetchInterval 恰好相反的理由,都在 `msUntilDayRollover` doc。 */
 export function dayBarsStaleTime(q: DayBarsQuery): number {
   return msUntilDayRollover(q.state.dataUpdatedAt);
 }
 
-/** 日 K `refetchInterval`:失敗 → 60 s 重試(`DAY_ERROR_RETRY_MS`);否則到下一個午夜——以「現在」算、
+/** 日 K `refetchInterval`:失敗 → 60 s 重試(`DAY_ERROR_RETRY_MS`);否則到下一道界(午夜 / 14:00)——以「現在」算、
  *  **不吃 `dataUpdatedAt`**(鐵律 (b),推導見 `msUntilDayRollover`)。
  *  refetch 失敗時 TQ 保留舊 data 但 status 轉 error(v5 RefetchErrorResult)。
  *
@@ -107,7 +127,7 @@ export function dayBarsStaleTime(q: DayBarsQuery): number {
  *  market / futures 的 D(/W/M)路徑後端未三態化 —— TC4 不可用時回 200 + 空 bars 不 raise,
  *  TQ 判 success、空快照蓋掉好資料,而下一發已排到明天、staleTime 整天不過期、回焦 refetch 被
  *  `isStaleByTime` 擋 → 圖空白一整天、零自救。兩支傳 `true`:空 = 「拿了等於沒拿」,吃同一個
- *  60 s 節奏(資料非空即回到「下一個午夜」,不成迴圈;成本上界 = TC4 整天不可用時每分鐘一發,
+ *  60 s 節奏(資料非空即回到「下一道界」,不成迴圈;成本上界 = TC4 整天不可用時每分鐘一發,
  *  與 error 重試同級)。`useStockBars` 傳 `false`:它的空態語意由 `status` 三態 + `barsPollInterval`
  *  接手(空 + 非 ok → 20 s 已在本函式之前先判;空 + ok = 「真無資料」的刻意不輪詢,SC-4),
  *  在這裡再開 60 s 會把「真無資料」變成整天空轉 —— 兩種空不是同一種空。 */
