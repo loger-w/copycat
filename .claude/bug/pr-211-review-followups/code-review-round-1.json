@@ -1,0 +1,26 @@
+{
+  "fixed_point": "ded1f93b (merge-base master)",
+  "diff": "git diff ded1f93b...HEAD (HEAD = 2bf11feb at review time; round-1 收修後 soft reset 重切為 35030896 / 7b69c319 / 1a863f37 / 9db0f0f4)",
+  "spec_source": "docs/superpowers/specs/pr-211-review.md(F-01–F-14 修、F-15–F-18 不動)+ user 2026-09-08 本 session 拍板 F-02 (a) / F-04 prior 由呼叫端傳入 + handoff 兩條順手文件項",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "finding": "useFuturesBars.ts:126-127 新註解「跨 08:46:00 / 15:01:00 那一毫秒」與該 hook 用的閘不符:inFuturesAllDayHours / msUntilFuturesAllDayOpen 的開點是 08:40 / 14:55(lib/trading-hours.ts:65,108-119);08:46 是日盤那把尺、15:01 不是任何界。踩 frontend-conventions「回校註解對著常數表寫」。", "disposition": "修:hook 註解改指向 lib 的單一份理由並寫「開點 08:40 / 14:55」(fix(frontend) commit;與 spec S-01 同條)"},
+    {"id": "F-02", "severity": "LOW", "finding": "三支 hook 各抄一份三行推導(含 ~72 h 推導數字)+ 同一段 `const now = new Date(); return inX(now) ? POLL_MS : offHoursInterval(msUntilXOpen(now))`;frontend-conventions「推導數字只留一份」。", "disposition": "修一半:理由收進 lib/trading-hours.ts offHoursInterval doc 一份、三支 hook 只留一行指過去;抽 pollOrUntilOpen helper(四處同形)屬 🔵、本批不動,入 next-time 09-08 節併 W3 重構批候選"},
+    {"id": "F-03", "severity": "LOW", "finding": "test_screen_engine.py:500 `eng._now_fn = lambda … # type: ignore[assignment]`,但 ScreenEngine(now_fn=) / _engine(now_fn=) 就是議定注入點。", "disposition": "修:_gate_engine 加 now_fn 直傳,type-ignore 消失(test commit)"},
+    {"id": "F-04", "severity": "LOW", "finding": "Feature Envy:test_screen_engine.py:600 `TestDayTradeRelativeGate._write_prior(eng, 2000)` 跨測試類抓私有 helper。", "disposition": "修:_write_prior 提到 module 級,與 _engine / _dt_rows 同層,七處呼叫改用(test commit)"},
+    {"id": "F-05", "severity": "LOW", "finding": "Mysterious Name:tests/test_cli.py:62 新測試放進 class TestUnknownCommand,但測的是 screen --date;本檔慣例按子命令分類。", "disposition": "修:新開 class TestScreenCommand(test commit)"},
+    {"id": "F-06", "severity": "LOW", "finding": "CLAUDE.md §6 三類不混:2bf11feb chore(docs) 夾帶 ruff format 重排(test_screen_engine.py 兩處、test_cli.py 一處),對象是 227fc599 自己寫的測試。", "disposition": "修:soft reset ded1f93b 重切四筆 —— test(server)(含格式 + round-1 測試整理)/ fix(server) / fix(frontend) / chore(docs)"},
+    {"id": "F-07", "severity": "NICE", "finding": "_compute_with_daytrade_rows(screen_engine.py:238-301)~50 行、三段抓取混在一起;可抽 _daytrade_ok(target, prior) 與 _eod_window(data_date)。", "disposition": "不修(知情):三段各有註解分段、順序是本批的行為主體,抽 helper 屬 🔵 且非本批 scope;入 next-time 09-08 節併 W3 重構批候選"},
+    {"id": "F-08", "severity": "NICE", "finding": "screen_engine.py:14 模組 docstring 仍寫 `RETRY_UNTIL`,常數已於 round-1 F-03 改名 _RETRY_UNTIL(同段這次有動)。", "disposition": "修:補底線(fix(server) commit)"},
+    {"id": "F-09", "severity": "NICE", "finding": "compute() docstring「不讀不改引擎狀態」,body 仍讀 self._token / _cal / 三個 fetch;精確講法是「不讀快取前值、不落檔、不改狀態」。", "disposition": "修:docstring 改「不讀快取前值、不改引擎狀態」(fix(server) commit)"},
+    {"id": "F-10", "severity": "NICE", "finding": "test_screen_engine.py 檔頭仍寫「排程 / 補跑 / 落檔 / 寫群組依 #173 議定 seam 不另測」,新測試直接驅動 _run_once / _run_attempts(既存漂移,本批加深)。", "disposition": "修:檔頭口徑改事實(test commit)"},
+    {"id": "F-11", "severity": "NICE", "finding": "_require_daytrade_complete 改 @classmethod 只為 cls._prior_text(staticmethod、無子類)。", "disposition": "修:降回 @staticmethod + ScreenEngine._prior_text(fix(server) commit)"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "LOW", "finding": "useFuturesBars.ts:126 註解界值 08:46 / 15:01 錯,該 hook 的界是 08:40 / 14:55(lib/trading-hours.ts:65-66, :113);spec F-11 的一把鐘修對了,但這檔唯一記錄界的那句是假的。", "disposition": "修:同 std F-01"},
+    {"id": "S-02", "severity": "LOW", "finding": "docs/next-time.md:929 該條標題是「跨 attempt memo + disposition fail-fast」,新段落寫「fail-fast 半邊已出貨、本條只剩 memo」——實際搬的是當沖名單三道閘,disp_rows 仍在 21 次 EOD 之後(screen_engine.py:289),剩餘量被低估一半。", "disposition": "修:改寫「當沖名單那半邊出貨;處置股仍在 EOD 之後;本條剩 memo + disposition 提前」(chore(docs));code 側 _compute_with_daytrade_rows docstring 同步記「處置股仍在 EOD 之後」(fix(server))"},
+    {"id": "S-03", "severity": "LOW", "finding": "artifact verification.md:43 宣稱 `grep \"前值 無\" screen_engine.py` 命中 _prior_text;實際唯一命中是本批新增的 F-06 註解,runtime 字串是格式字串 + _prior_text 兩段組出來的,grep 不是 parity。", "disposition": "修:test_no_prior_uses_absolute_floor_1000 以 caplog 釘整句「當沖名單 1000 列(前值 無(用絕對下限))」(test commit);verification.md 那句改寫"},
+    {"id": "S-04", "severity": "note", "finding": "F-05 原述症狀含「一行內『盤前篩選 <日>』出現兩次」,選 (a) 只消掉第二行,reason = f\"取數失敗:{e}\" 仍把整句包進去(spec 明列此選項,知情);另 test_gate_failure_is_logged_exactly_once… 只釘 give-up 路徑,10 分鐘重試路徑無直接斷言。", "disposition": "前綴重複知情不修(六道閘訊息同形,單改一道反而不一致);修後半:新增 test_gate_failure_on_the_retry_path_is_one_line_per_attempt(08:00:30 起 6 行 WARNING、每行帶刪鍵提示、5 再試 + 1 放棄)(test commit)"},
+    {"id": "S-05", "severity": "note", "finding": "scope:F-07 同時做 docstring 與 CLI 兩案(spec 是「或」)、breadth_fetch「每晚一次」→「每個交易日早上一次」超出 402 分家指示但為真、_require_daytrade_complete 改 classmethod;重排後 EOD 失敗路徑每 attempt 多 1 個請求,:243-247 只記 22 → 1 那一面。F-15–F-18 零改動、_failing 時戳未受重排影響。", "disposition": "F-07 兩案皆做 / 「早上一次」為事實校正,知情保留;classmethod 見 std F-11 已降;EOD 失敗路徑 +1 請求記進 _compute_with_daytrade_rows docstring(fix(server))"}
+  ],
+  "disposition": "標準軸 11 條:修 9(F-01 / F-03 / F-04 / F-05 / F-06 / F-08 / F-09 / F-10 / F-11)、修一半 1(F-02:理由收成一份,helper 抽取入 next-time)、知情不修 1(F-07 入 next-time);spec 軸 5 條:修 3(S-01 / S-02 / S-03)、note 2 各修其可修半邊(S-04 新增重試路徑測試、S-05 記帳)。零否決。收修後 soft reset 重切四筆(std F-06),全 gate 重跑見 verification.md §3。"
+}
