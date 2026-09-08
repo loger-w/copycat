@@ -145,3 +145,83 @@ describe("StockChart 即時末根 —— 分 K(T1 #215)", () => {
     expect(readout()).not.toContain("09:07");
   });
 });
+
+/** 日 K fixture:`tf=D` 回昨天 + 今天半成品(開圖在 09:00 後,DK 有今日列);`tf=1` 回 MINUTE_BARS
+ *  (今天首根 09:01 的 o = 100 → `dayOpen`,只在 append 路徑用到)。 */
+const DAILY_BARS: Bar[] = [
+  bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300),
+  bar(TODAY, 100_000, 101_000, 99_000, 100_500, 5),
+];
+
+function stubBars(daily: Bar[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/api/stock/bars")) {
+        return new Response(JSON.stringify({ bars: u.includes("tf=D") ? daily : MINUTE_BARS, status: "ok" }));
+      }
+      if (u.includes("/api/capital/fills")) return new Response(JSON.stringify({ fills: [] }));
+      return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+    }),
+  );
+}
+
+describe("StockChart 即時末根 —— 日 K(T2 #216)", () => {
+  it("今天那根:開 = 正式(100)、高 / 低 / 收 = accum(108 / 99 / 103)、量 = 當日累積量(21)", async () => {
+    stubBars(DAILY_BARS);
+    mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain("收 103"));
+    expect(readout()).toContain(TODAY);
+    expect(readout()).toContain("開 100");
+    expect(readout()).toContain("高 108");
+    expect(readout()).toContain("低 99");
+    expect(readout()).toContain("量 21");
+  });
+
+  it("DK 還沒有今日列(09:00 前開圖)→ 補一根今天,開 = 今日首根 1 分 K 的 o(100.5 那根之前的 100)", async () => {
+    stubBars(DAILY_BARS.slice(0, 1));
+    const { rerenderWith } = mount(accumOf({ minutes: LIVE_MINUTES }));
+    // 先進 1 分 K 讓今日 1 分 K 進 cache(dayOpen 的來源),再切日 K
+    fireEvent.click(screen.getByRole("radio", { name: "1分K" }));
+    await waitFor(() => expect(readout()).toContain("09:07"));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain(`${TODAY}開 100`));
+    expect(readout()).toContain("收 103");
+    rerenderWith(accumOf({ minutes: LIVE_MINUTES, last: { p: 105_000, t: "09:06:50.000", cum_vol: 30 } }));
+    await waitFor(() => expect(readout()).toContain("收 105"));
+    expect(readout()).toContain("量 30");
+  });
+
+  it("08:59 不補:末根仍是昨天(2026-09-05)", async () => {
+    vi.setSystemTime(new Date(2026, 8, 8, 8, 59, 0));
+    stubBars(DAILY_BARS.slice(0, 1));
+    mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain("2026-09-05"));
+    expect(readout()).toContain("收 91");
+  });
+
+  it("定稿閘:日 K 是 14:00 界後抓回來的 → 不蓋,今天那根 = 正式定稿值(收 100.5)", async () => {
+    vi.setSystemTime(new Date(2026, 8, 8, 14, 5, 0));
+    stubBars(DAILY_BARS);
+    mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain(TODAY));
+    expect(readout()).toContain("收 100.5");
+    expect(readout()).not.toContain("收 103");
+  });
+
+  it("13:50 抓的半成品,牆鐘過 14:00 後(14:01 重抓還沒成功)仍以 accum 蓋 —— 失敗不退回舊值", async () => {
+    vi.setSystemTime(new Date(2026, 8, 8, 13, 50, 0));
+    stubBars(DAILY_BARS);
+    const { rerenderWith } = mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain("收 103"));
+    vi.setSystemTime(new Date(2026, 8, 8, 14, 5, 0));
+    rerenderWith(accumOf({ minutes: LIVE_MINUTES, last: { p: 103_500, t: "13:30:00.000", cum_vol: 40 } }));
+    await waitFor(() => expect(readout()).toContain("收 103.5"));
+    expect(readout()).toContain("量 40");
+  });
+});
