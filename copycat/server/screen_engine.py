@@ -7,10 +7,11 @@
 EOD 窗自**資料日**(昨天 = 前一交易日,`screening.data_date_of`)往回湊 21 交易日,當沖名單與處置股
 抓 / 判**今天**的(CONTEXT.md「盤前篩選」節兩個詞)。
 篩選演算法全在 `copycat.screening`(議定 seam,測試在那邊);本模組只做 IO 接線:
-逐日 fetch(縮列後才累積,記憶體紀律見 `screening.shrink_rows`)、逐檔資格查、
-落檔快取、經 `WatchlistService.replace_group` 覆寫群組(同鎖 + 訂閱 + 廣播)。
+當沖名單先過三道閘(空集合 / 回聲 / 相對閘;fail-fast,pr-211 F-02)、逐日 fetch(縮列後才累積,
+記憶體紀律見 `screening.shrink_rows`)、單次全市場資格查、落檔快取、經
+`WatchlistService.replace_group` 覆寫群組(同鎖 + 訂閱 + 廣播)。
 
-失敗處理(W2 T5 #209,user 2026-09-08 拍板 Q8):08:00 起每 `_RETRY_SECS` 再試,**到 `RETRY_UNTIL`
+失敗處理(W2 T5 #209,user 2026-09-08 拍板 Q8):08:00 起每 `_RETRY_SECS` 再試,**到 `_RETRY_UNTIL`
 (09:00)為止**(時間盒,不是次數盒 —— 名單盤前幾點出還沒實錄,10 分鐘一發到開盤前盡量趕上);
 下一次會落在 09:00 之後就放棄(`_gave_up_for`,目標日換日自動重武裝),群組維持前一日名單。
 09:00 後才啟動的補跑失敗 = 直接放棄(當日名單過了開盤就不追,明日 08:00 再來)。每次失敗一行
@@ -56,10 +57,12 @@ _CACHE_NAME = "premarket_screen.json"
 #: 重試間隔(沿 breadth streak 量級);重試的界是**時刻**不是次數(W2 T5 #209)。
 _RETRY_SECS = 600.0
 #: 重試時間盒的上界(台北牆鐘,end-exclusive):下一次嘗試時刻 ≥ 這一刻就不再排。08:00:30 起
-#: 每 600 s → 08:00:30 … 08:50:30 共 6 次。**402 配額用盡不重試、當天直接放棄**(round-1 F-04 / S-02:
-#: 一小時的盒裡沒有「長退避」可言,借退避值越界來間接放棄是障眼法,改成明講)。
+#: 每 600 s → 理論 08:00:30 … 08:50:30 共 6 次;`_run_attempts` 的 sleep 是固定 600 s、不扣 attempt 自己的
+#: 耗時,**實際視取數耗時 4–6 次**(成功路徑一個 attempt = 序列抓 21 個 MB 級 EOD;失敗路徑自 pr-211 F-02
+#: 起 fail-fast,當沖名單先過閘,不齊就只花 1 個請求)。**402 配額用盡不重試、當天直接放棄**(round-1
+#: F-04 / S-02:一小時的盒裡沒有「長退避」可言,借退避值越界來間接放棄是障眼法,改成明講)。
 _RETRY_UNTIL = _dt.time(9, 0)
-#: 逐請求間距(breadth streak 同款 —— 21 次全市場 + ~60 次資格查,別打成 burst)。
+#: 逐請求間距(breadth streak 同款 —— 21 次全市場 EOD + 1 次當沖名單 + 1 次處置股,別打成 burst)。
 _REQ_GAP_SECS = 0.3
 #: 單日全市場列數下限(breadth `_DAILY_MIN_ROWS` 同值):部分截斷的日子入窗會讓
 #: 缺列的檔靜默斷窗(「窗內缺日不判」),整批候選無聲少一截。
@@ -220,19 +223,41 @@ class ScreenEngine:
             )
 
     async def compute(self, target: _dt.date) -> list[ScreenCandidate]:
-        """抓窗 → 三硬條件 → 全市場當沖資格 → 處置剔除。純結果,不落檔不寫群組、不改引擎狀態(CLI 共用)。
+        """當沖名單三道閘 → 抓窗 → 三硬條件 → 全市場當沖資格 → 處置剔除。純結果:不落檔不寫群組、
+        不讀快取前值、不改引擎狀態(CLI 預覽路徑;pr-211 F-04)—— 相對閘的前值由呼叫端給,這裡恆傳 None,
+        CLI 只走絕對下限 `_DAYTRADE_MIN_ROWS`,不吃 server 那份快取的基準(CLI 不帶 data_dir 落的
+        正是 prod 快取;`screen --date <過去日>` 不該被 server 前值擋、WARNING 的刪鍵提示也不該引人去砍
+        server 基準)。server 路徑(`_run_once`)另傳快取前值。
 
         `target` = 目標交易日(名單服務的交易日,通常是今天):EOD 窗自資料日(前一交易日)往回,
         當沖名單與處置股用 `target` 本人 —— 昨天剛停當沖的今天不會還在名單裡、昨天剛結束處置的
         今天能進、今天剛開始處置的今天被剔(W2 T4 #207)。"""
-        final, _ = await self._compute_with_daytrade_rows(target)
+        final, _ = await self._compute_with_daytrade_rows(target, prior=None)
         return final
 
     async def _compute_with_daytrade_rows(
-        self, target: _dt.date
+        self, target: _dt.date, *, prior: int | None
     ) -> tuple[list[ScreenCandidate], int]:
         """`compute` 的本體,多帶回過閘的當沖名單列數(`_run_once` 落檔當下一次的前值;round-1 F-01:
-        用回值傳,不留 instance 欄位)。"""
+        用回值傳,不留 instance 欄位)。`prior` = 相對閘的前值(None → 絕對下限),由呼叫端決定來源。
+
+        順序 = 當沖名單(三道閘)**先於** 21 次 EOD(pr-211 F-02 (a) fail-fast):「名單沒出齊」是
+        T6 立論的最常走失敗路徑,閘排在 EOD 之後會讓每次重試都先重下載 21 個不會變的過去日 EOD
+        才發現;提前後名單失敗路徑 22 → 1 個請求,10 分鐘重試節奏在失敗路徑上才成真。代價 = EOD 失敗
+        路徑每 attempt 多 1 個(先抓的名單)請求;處置股仍在 EOD 之後(取數失敗照樣 22 個,next-time
+        F-09 剩餘半邊)。"""
+        # 當沖名單抓**目標交易日**的(今天的正式名單,盤前先出;W2 T4 #207)。
+        # 當沖資格 = 單次全市場查詢(review F-02:「data_id 必填」是週六探測誤判,
+        # 逐檔 fan-out ~60 次收斂成 1 次;口徑同 spec「最近交易日有列」,7 日回看退役)
+        dt_rows = await asyncio.to_thread(self._day_trading_fetch, self._token, target)
+        await asyncio.sleep(_REQ_GAP_SECS)
+        if not dt_rows:
+            # 空集合拿去過濾會把**全部**候選當非當沖標的誤剔,群組被清空還零訊號 ——
+            # 當日名單未發布視同取數失敗,走重試
+            raise BreadthFetchError(f"盤前篩選 {target} 當沖名單尚無資料(FinMind 未更新?)")
+        self._require_date_echo(dt_rows, target, "當沖名單")
+        daytrade_rows = self._require_daytrade_complete(dt_rows, target, prior)
+        daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
         data_date = data_date_of(target, self._cal)
         days: list[tuple[_dt.date, list[dict]]] = []
         d = data_date
@@ -263,18 +288,6 @@ class ScreenEngine:
                 f"盤前篩選 {data_date} 往回 {_SCAN_CAL_DAYS} 日曆天僅湊到 {len(days)} 交易日"
             )
         cands = hard_candidates(days)
-        # 當沖資格 = 單次全市場查詢(review F-02:「data_id 必填」是週六探測誤判,
-        # 逐檔 fan-out ~60 次收斂成 1 次;口徑同 spec「最近交易日有列」,7 日回看退役)
-        # 當沖名單抓**目標交易日**的(今天的正式名單,盤前先出;W2 T4 #207)
-        dt_rows = await asyncio.to_thread(self._day_trading_fetch, self._token, target)
-        await asyncio.sleep(_REQ_GAP_SECS)
-        if not dt_rows:
-            # 空集合拿去過濾會把**全部**候選當非當沖標的誤剔,群組被清空還零訊號 ——
-            # 當日名單未發布視同取數失敗,走重試
-            raise BreadthFetchError(f"盤前篩選 {target} 當沖名單尚無資料(FinMind 未更新?)")
-        self._require_date_echo(dt_rows, target, "當沖名單")
-        daytrade_rows = self._require_daytrade_complete(dt_rows, target)
-        daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
         disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, target)
         disposed = parse_active_disposition(disp_rows, target)  # 處置期間涵蓋**今天**
         final = apply_eligibility(cands, daytrade_ok=daytrade_ok, disposed=disposed)
@@ -293,32 +306,28 @@ class ScreenEngine:
     def _prior_text(prior: int | None) -> str:
         return str(prior) if prior is not None else "無(用絕對下限)"
 
-    def _require_daytrade_complete(self, dt_rows: list[dict], target: _dt.date) -> int:
+    @staticmethod
+    def _require_daytrade_complete(dt_rows: list[dict], target: _dt.date, prior: int | None) -> int:
         """相對閘(理由見 `_DAYTRADE_SHRINK_RATIO`):今天列數 < 前值 × 0.8(無前值 → < 絕對下限)
-        → 可重試錯誤;過閘回列數(`_run_once` 落檔當下一次的前值)。"""
+        → 可重試錯誤;過閘回列數(`_run_once` 落檔當下一次的前值)。`prior` 由呼叫端給(server 傳
+        快取前值、CLI 傳 None;pr-211 F-04)。只 raise 不自印(pr-211 F-05:其他五道取數閘同款,
+        `_run_attempts` 那一行 WARNING 帶整句 —— 兩數與刪鍵提示都在訊息裡,不雙印)。"""
         n = len(dt_rows)
-        prior = self._cached_daytrade_rows()
         floor = int(prior * _DAYTRADE_SHRINK_RATIO) if prior is not None else _DAYTRADE_MIN_ROWS
         if n < floor:
-            logger.warning(
-                "盤前篩選 %s 當沖名單只有 %d 列(前值 %s,門檻 %d),視同尚未發布完 —— "
-                "名單若真的縮了,刪快取 %s 的 daytrade_rows 鍵可重置基準",
-                target,
-                n,
-                self._prior_text(prior),
-                floor,
-                _CACHE_NAME,
-            )
             raise BreadthFetchError(
-                f"盤前篩選 {target} 當沖名單只有 {n} 列(前值 {self._prior_text(prior)},門檻 {floor}),"
-                "視同尚未發布完"
+                f"盤前篩選 {target} 當沖名單只有 {n} 列(前值 {ScreenEngine._prior_text(prior)},"
+                f"門檻 {floor}),"
+                f"視同尚未發布完 —— 名單若真的縮了,刪快取 {_CACHE_NAME} 的 daytrade_rows 鍵可重置基準"
             )
         return n
 
     async def _run_once(self, target: _dt.date) -> None:
-        final, daytrade_rows = await self._compute_with_daytrade_rows(target)
-        written = await self._write_group(final)
+        # 前值只讀這一次(pr-211 F-06):擋人用的與落檔後 log 印的是同一個值,中間隔著 `_write_group`
+        # 的 await 也不會因有人照提示手動刪鍵而印出「前值 無」卻其實是用舊值擋的。
         prior = self._cached_daytrade_rows()
+        final, daytrade_rows = await self._compute_with_daytrade_rows(target, prior=prior)
+        written = await self._write_group(final)
         self._write_cache(target, final, written, daytrade_rows)
         # 落檔**之後**才印(round-1 S-05):印了 = 前值已更新,對帳時不會誤讀
         logger.info(
