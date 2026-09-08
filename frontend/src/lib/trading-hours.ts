@@ -26,7 +26,8 @@ type OpenAt = readonly [hh: number, mm: number];
 /** 距**下一個開點**的毫秒數:掃今天起 14 個日曆日,逐日取 `opens` 中第一個嚴格在 `now` 之後、
  *  且該日是交易日的候選。假日集合與 `in*Hours` 同源(`isTradingDay`);14 天內找不到(日曆異常)
  *  → 退回一天後再評估,失效方向是「多等」不是空轉輪詢。三把時段閘各自的開點表在下面三支公開函式,
- *  **開點分鐘必須與對應 `in*Hours` 的起點同尺**(測試以「前一分鐘 in=false 且距開點 60 s」釘住)。 */
+ *  **開點分鐘必須與對應 `in*Hours` 的起點同尺**(測試以「前一分鐘 in=false 且距開點 60 s」釘住);
+ *  **`opens` 必須遞增**(內層迴圈回第一個未過的候選,倒序會靜默回較晚的那個;round-1 std F-05)。 */
 function msUntilNextOpen(now: Date, opens: readonly OpenAt[]): number {
   for (let d = 0; d <= 14; d++) {
     const day = new Date(now);
