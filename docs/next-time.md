@@ -232,7 +232,7 @@
   `msUntilFuturesTradingOpen`(08:46)/ `msUntilFuturesAllDayOpen`(08:40 / 14:55)/ `offHoursInterval`(量化 helper,
   `groupPollInterval` 改用);`useBreadthRows` / `useMarketBars` 分 K / `useStockBars` 分 K(`barsPollInterval` 加 `now`)/
   `useFuturesBars` 分 K 盤外改回距開點 ms;`useIndexOverlay` 不動(其 false 是「資料健康」不是時段閘,註解已記)。
-  (原文:08-31 L71 掃出:`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
+  (原文:08-31 L71 掃出:`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開)。
 
   **→ 2026-09-07 next-time 盤點:C18 user 09:00 側欄「陸續幾秒」= 各檔開盤首筆成交本就不同時(09-07 實錄 09:00:02–09:00:17)+ 側欄 1 s 節流,非本條;本條(輪詢頁跨 09:00 不自醒)→ W2 批。**
 - [x] ~~**`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
@@ -926,13 +926,13 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-09-02(pr-175 review 留尾,Nice/ask-user 未做組)
 
-- [x] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。**pr-211 F-09 校正(09-08 收修)**:W2 T5 起上限 = 時間盒(理論 6 次、實際視取數耗時 4–6 次),「3 attempts ≈ 4%」量級作廢;T6 相對閘原排在 21 次 EOD 之後、失敗路徑成本成常態 —— **當沖名單那半邊已於 fix/pr-211-review-followups 出貨**(三道閘提到 EOD 迴圈前,名單失敗路徑 22 → 1 個請求;two-axis S-02 校正:**處置股仍在 EOD 之後**,取數失敗照樣 22 個)。本條剩兩件:跨 attempt memo(成功路徑的 EOD 重抓)+ disposition 提到 EOD 前。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] ~~**盤前篩選放棄後 ~24h 不重武裝**~~ → **09-08 W2 T4 + T5(#207 / #209)出貨,且改制**:盤前篩選改**每個交易日 08:00**
   跑目標交易日制(名單服務今天;EOD 窗自昨天往回、當沖名單與處置股用今天;快取 v2 `target_date` / `data_date`;
   CLI `--date` = 目標交易日;CONTEXT.md「盤前篩選」節);重試改時間盒 = 每 10 分鐘到 09:00 為止、全敗隔交易日 08:00 再來,
   失敗 / 放棄全 WARNING(user 09-08 拍板 Q7 (b) / Q8;原「每小時到翌日 08:00」作廢)。**真環境待實錄**:FinMind 當沖名單
   08:00 整是否已出(09-08 13:15 實測今天名單已在、成交量全 0),第一個交易日早上看 log。
-  (原文:review F-10,MED→LOW PARTIAL:21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
+  (原文:review F-10,MED→LOW PARTIAL:21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本)。
   **→ 2026-09-07 next-time 盤點:C21 user 拍板做(放棄後每小時再試到資料出現或翌日 08:00)→ W2 批。**
 - [x] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
   **→ 2026-09-07 next-time 盤點:B15 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`test_daily_pad_rows_parity_with_breadth`
@@ -944,8 +944,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [x] ~~**盤前篩選當沖名單「部分落檔」不可偵測**~~ → **09-08 W2 T6(#210)出貨**:相對閘(今天列數 < 前一交易日列數 × 0.8
   視同未發布完,走 T5 重試;無前值絕對下限 1,000;列數落快取 `daytrade_rows`、log 印今日 / 前值;名單真縮 >20% 不自動放寬,
   WARNING 提示刪鍵重置 —— user 09-08 拍板 Q4 (a) / Q11 (a))。
-  (原文:收修 review SP5:單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。
+  (原文:收修 review SP5:單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500))。
   **→ 2026-09-07 next-time 盤點:C22 user 拍板做(相對閘:少於前一晚八成視同未發布;首晚絕對下限 1,000)→ W2 批。**
+
+- [ ] **pr-211 收修 two-axis round-1 留尾(🔵,併 W3 重構批候選)**:std F-02 四處 `const now = new Date(); return inX(now) ? POLL_MS : offHoursInterval(msUntilXOpen(now))` 同形(useMarketBars / useBreadthRows / useFuturesBars + `barsPollInterval` 尾行)可抽 `pollOrUntilOpen(now, inHours, msUntilOpen)` 收成一份;std F-07 `screen_engine._compute_with_daytrade_rows` ~50 行三段抓取可抽 `_daytrade_ok(target, prior)` / `_eod_window(data_date)`。兩條零行為、本批不動(理由收進 `lib/trading-hours.ts offHoursInterval` doc 後重複只剩三行呼叫)。
 
 ## 2026-09-04(pr-188 review 收修 r1 留尾)
 

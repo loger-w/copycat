@@ -41,9 +41,11 @@ export const DAILY_FINAL_TIME: readonly [hh: number, mm: number] = [14, 0];
  *    這一刻之後,前端只到午夜才問的話 —— 期貨 15:00 錨定翻頁後 CDP / MA 基準仍是早上那截(next-time 08-31)、
  *    加權頁整個下午印「· 最後一根未收盤」(pr-202-review F-01)、個股日 K 今日那根停在第一次開圖的值。
  *    三支同吃、政策零分岔(user 2026-09-08 拍板 Q1 (a)):個股 / 加權沒有錨定日概念,但「今日那根何時定稿」
- *    三張圖是同一個後端界。成本 = 每個掛著的日 K query 每天多一發(含非交易日,後端 cache 命中不打 TC4)。
- *    14:01 那發拿到墊背(TC4 關著,後端回界前快照且 `partial_last` 仍 true)**不自救**,與後端 pr-165 口徑
- *    一致(實務 = F5;user 拍板 Q3 (a),留 next-time)。
+ *    三張圖是同一個後端界。成本 = 每個掛著的日 K query 每天多一發(含非交易日),而且 **14:01 那發必走上游**:
+ *    後端 `daily_get` 對「界前寫入且已過 14:00」的 entry 直接回 None(界前快照過界作廢是後端設計),
+ *    常開頁 00:01 那發正好把當日 entry 寫成界前 → 每把 key 每天真的多走一趟 180 日窗 SubHistory(pr-211 F-03)。
+ *    TC4 關著時後端回 `daily_stale` 墊背 + 一行 INFO(墊背非空,不進 retryEmpty 的 60 s 迴圈);拿到墊背
+ *    (界前快照且 `partial_last` 仍 true)**不自救**,與後端 pr-165 口徑一致(實務 = F5;user 拍板 Q3 (a),留 next-time)。
  *
  *  讀者見檔頭(同一個 bug 形狀 —— bug/daily-bars-siblings-rollover;症狀與界的由來只寫這一處)。
  *

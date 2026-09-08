@@ -54,7 +54,11 @@ def expected_target_date(now: _dt.datetime, cal: TradingCalendar) -> _dt.date:
 
 def data_date_of(target: _dt.date, cal: TradingCalendar) -> _dt.date:
     """目標交易日對應的**資料日**(EOD 窗末日)= 目標日的前一交易日:早上跑時今天的 EOD 還不存在,
-    窗自昨天往回湊 `WINDOW_DAYS` 個交易日。推導值,不落判定。"""
+    窗自昨天往回湊 `WINDOW_DAYS` 個交易日。推導值,不落判定。
+
+    前置:`target` 本身是交易日(prod 唯一來源 `expected_target_date` 恆滿足;CLI `--date` 在
+    `cli.py` 先驗)。給非交易日不會炸,只會回「該日之前最近的交易日」—— 與下一個交易日的資料窗
+    相同,再配上當沖名單抓非交易日回空,錯誤會被講成上游沒資料(pr-211 F-07)。"""
     return cal.last_trading_day(target - _dt.timedelta(days=1))
 
 

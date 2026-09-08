@@ -7,10 +7,12 @@
 - `fetch_daily_prices`:單日全市場 EOD(連板數回看用)。一天只武裝一輪,掃描窗上限
   25 個日曆日,而**已成功取得的日跨重試由引擎的 memo 重用** → 成功取數 ≤ 25 次;
   每次失敗的嘗試最多多打 1 次(嘗試上限 10)→ 一天上界 ≈ 35 次。
-- `fetch_day_trading`:單日全市場當沖成交統計(盤前篩選資格查,每晚一次)。
+- `fetch_day_trading`:單日全市場當沖成交統計(盤前篩選資格查,每個交易日早上一次;W2 #207 起
+  08:00 制,原「每晚」退役)。
 
 **402 不重試**:配額用盡時重打只會燒更多且必然同樣失敗 —— 以 `BreadthFetchError.quota`
-標記讓呼叫端改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開。
+標記,呼叫端各自處置:breadth 改走長退避(config `quota_backoff_secs`),與一般失敗的短退避分開;
+screen 的一小時時間盒沒有退避可言,當天直接放棄(`screen_engine._run_attempts`,W2 round-1 F-04)。
 `TimeoutError` 獨立列在 except:SSL read timeout 不包在 URLError(CLAUDE.md §8)。
 """
 
