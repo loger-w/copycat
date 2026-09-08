@@ -15,7 +15,6 @@
   `o.date 的夜盤跨午夜組合假設` / 期貨梯與個股期梯接 fills 成交價落格(PR #190 留尾 C23,只在 memory)。
 - 回測(user:後續再處理):`backfill_daytrade.py BuyAfterSale 錯規則`(**下次跑空方回測前必修**)/ `空日不進 marker` /
   `simulate 完整 derived-series` / fade round 1–5 八條(搜 `fade`,全部 /perf 先 profile)。 / tday-join 07-07 七條(搜 `round5` / `_simulate_core` / `check_flush_exit`)。
-- 盤前篩選:`screen_engine 跨 attempt memo`(A-3 改每小時重試後每次重抓 21 檔;重試那幾晚嫌慢再做)。
 - 分時圖內部結構五條(下次動分時圖時帶走):`J1 IntradayChartCore mode 四態` / `J2 MINUTE_SNAP_RADIUS` / `LabelSpan 型別統一` /
   `EnergySub 改單一 <path>` / `OVERLAY_LINES 以輸入序查表`。
 - `空回補免 seq bump`(行為改動,要同步 CLAUDE.md §4 契約口徑)。
@@ -926,7 +925,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-09-02(pr-175 review 留尾,Nice/ask-user 未做組)
 
-- [x] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。**pr-211 F-09 校正(09-08 收修)**:W2 T5 起上限 = 時間盒(理論 6 次、實際視取數耗時 4–6 次),「3 attempts ≈ 4%」量級作廢;T6 相對閘原排在 21 次 EOD 之後、失敗路徑成本成常態 —— **當沖名單那半邊已於 fix/pr-211-review-followups 出貨**(三道閘提到 EOD 迴圈前,名單失敗路徑 22 → 1 個請求;two-axis S-02 校正:**處置股仍在 EOD 之後**,取數失敗照樣 22 個)。本條剩兩件:跨 attempt memo(成功路徑的 EOD 重抓)+ disposition 提到 EOD 前。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。**pr-211 F-09 校正(09-08 收修)**:W2 T5 起上限 = 時間盒(理論 6 次、實際視取數耗時 4–6 次),「3 attempts ≈ 4%」量級作廢;T6 相對閘原排在 21 次 EOD 之後、失敗路徑成本成常態 —— **當沖名單那半邊已於 fix/pr-211-review-followups 出貨**(三道閘提到 EOD 迴圈前,名單失敗路徑 22 → 1 個請求;two-axis S-02 校正:**處置股仍在 EOD 之後**,取數失敗照樣 22 個)。本條剩兩件:跨 attempt memo(成功路徑的 EOD 重抓)+ disposition 提到 EOD 前。 **→ 09-08 盤點停放 → 同晚另 session 帶回、mod/screen-eod-attempt-memo 出貨**:`_eod_memo`(日期 → shrink 後列、None = 空回應;目標日換日與成功落檔後清空,抄 breadth `_streak_memo`)+ 處置股提到 EOD 前(取數失敗 22 → 2 請求);一早上 4–6 次 attempt 最壞 ~100 個大檔 → 21 + 失敗日補抓。**本條結案。**
 - [x] ~~**盤前篩選放棄後 ~24h 不重武裝**~~ → **09-08 W2 T4 + T5(#207 / #209)出貨,且改制**:盤前篩選改**每個交易日 08:00**
   跑目標交易日制(名單服務今天;EOD 窗自昨天往回、當沖名單與處置股用今天;快取 v2 `target_date` / `data_date`;
   CLI `--date` = 目標交易日;CONTEXT.md「盤前篩選」節);重試改時間盒 = 每 10 分鐘到 09:00 為止、全敗隔交易日 08:00 再來,
