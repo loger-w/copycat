@@ -62,10 +62,13 @@ def _engine(
     *,
     disposition: object = lambda token, day: [],
     now_fn: object = _dt.datetime.now,
+    daytrade_floor: int = 1,
 ) -> ScreenEngine:
     monkeypatch.setattr(screen_engine, "_REQ_GAP_SECS", 0.0)
     # 列數守門降到 fixture 量級 —— 本組測的是回聲/空集合閘,不是列數閘(它有 parity 測試)
     monkeypatch.setattr(screen_engine, "_DAILY_MIN_ROWS", 1)
+    # 當沖名單絕對下限同理(T6 #210 的閘;TestDayTradeRelativeGate 傳 daytrade_floor=1000 測真值)
+    monkeypatch.setattr(screen_engine, "_DAYTRADE_MIN_ROWS", daytrade_floor)
     return ScreenEngine(
         token="tok",
         calendar=WEEKEND_ONLY,
@@ -376,6 +379,95 @@ class TestRetryWindow:
         assert calls[0] == _dt.datetime(2026, 9, 1, 9, 5)
         assert calls[1] == _dt.datetime(2026, 9, 2, 8, 0, 30)
         assert all(c == calls[1] for c in calls[1:])
+
+
+# ---------------------------------------------------------------------------
+# W2 T6(#210):當沖名單相對閘 —— 今天列數 < 前一個交易日列數 × 0.8 視同未發布完(可重試錯誤),
+# 無前值用絕對下限 1,000;列數落進快取 `daytrade_rows`(只在成功時更新);log 印今日 / 前值。
+# 名單裡「有列 = 可當沖」的資格語意不變。
+# ---------------------------------------------------------------------------
+
+
+class TestDayTradeRelativeGate:
+    @staticmethod
+    def _write_prior(eng: ScreenEngine, rows: int) -> None:
+        path = eng._cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "_cache_version": screen_engine._CACHE_VERSION,
+                    "target_date": _DATA.isoformat(),
+                    "data_date": "2026-08-28",
+                    "daytrade_rows": rows,
+                    "written": [],
+                    "candidates": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _gate_engine(
+        rows: int, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> ScreenEngine:
+        return _engine(
+            lambda token, day: _daily_rows(day),
+            lambda token, day: _dt_rows(day, rows),
+            monkeypatch,
+            tmp_path_factory,
+            daytrade_floor=1000,
+        )
+
+    async def test_below_80_percent_of_prior_is_retryable_and_logs_both_counts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        eng = self._gate_engine(1500, monkeypatch, tmp_path_factory)
+        self._write_prior(eng, 2000)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
+            with pytest.raises(BreadthFetchError, match="1500") as ei:
+                await eng.compute(_DAY)
+        assert "2000" in str(ei.value)
+        assert ei.value.quota is False
+        assert any("daytrade_rows" in r.message for r in caplog.records)  # 重置基準的提示
+
+    async def test_at_or_above_80_percent_passes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        eng = self._gate_engine(1600, monkeypatch, tmp_path_factory)
+        self._write_prior(eng, 2000)
+        await eng.compute(_DAY)  # 不炸
+
+    async def test_no_prior_uses_absolute_floor_1000(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        with pytest.raises(BreadthFetchError, match="900"):
+            await self._gate_engine(900, monkeypatch, tmp_path_factory).compute(_DAY)
+        await self._gate_engine(1000, monkeypatch, tmp_path_factory).compute(_DAY)  # 恰 1,000 過
+
+    async def test_success_records_count_and_failure_keeps_prior(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        eng = self._gate_engine(1700, monkeypatch, tmp_path_factory)
+        self._write_prior(eng, 2000)
+        with caplog.at_level(logging.INFO, logger="copycat.server.screen_engine"):
+            await eng._run_once(_DAY)
+        payload = json.loads(eng._cache_path().read_text(encoding="utf-8"))
+        assert payload["daytrade_rows"] == 1700
+        assert any("1700" in r.message and "2000" in r.message for r in caplog.records)
+        # 下一天只給 1,300 列(< 1700 × 0.8 = 1360)→ 擋下,前值不動、目標日也不動
+        eng._day_trading_fetch = lambda token, day: _dt_rows(day, 1300)  # type: ignore[assignment]
+        with pytest.raises(BreadthFetchError):
+            await eng._run_once(_dt.date(2026, 9, 2))
+        payload = json.loads(eng._cache_path().read_text(encoding="utf-8"))
+        assert payload["daytrade_rows"] == 1700
+        assert payload["target_date"] == _DAY.isoformat()
 
 
 async def test_daily_date_echo_mismatch_raises(
