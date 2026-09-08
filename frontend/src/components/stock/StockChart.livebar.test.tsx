@@ -162,13 +162,15 @@ const DAILY_BARS: Bar[] = [
   bar(TODAY, 100_000, 101_000, 99_000, 100_500, 5),
 ];
 
-function stubBars(daily: Bar[]) {
+/** @param status 兩支 bars 回應共用的 status;`"disconnected"` = 後端 `_daily_stale_or_empty` 墊背路徑
+ *  (fetch 空手 → 回界前快照 + 原 status 不洗白,HTTP 200)。 */
+function stubBars(daily: Bar[], status = "ok") {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       const u = String(url);
       if (u.includes("/api/stock/bars")) {
-        return new Response(JSON.stringify({ bars: u.includes("tf=D") ? daily : MINUTE_BARS, status: "ok" }));
+        return new Response(JSON.stringify({ bars: u.includes("tf=D") ? daily : MINUTE_BARS, status }));
       }
       if (u.includes("/api/capital/fills")) return new Response(JSON.stringify({ fills: [] }));
       return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
@@ -224,20 +226,7 @@ describe("StockChart 即時末根 —— 日 K(T2 #216)", () => {
 
   it("達錢關著:14:05 抓回的是 200 + 墊背舊快照(status disconnected、bars 非空)→ 仍以 accum 蓋,不退回早上半成品(pr-218 F-01)", async () => {
     vi.setSystemTime(new Date(2026, 8, 8, 14, 5, 0));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        const u = String(url);
-        if (u.includes("/api/stock/bars")) {
-          // 後端 `_daily_stale_or_empty`:fetch 空手 → 回界前快照 + 原 status(不洗白),HTTP 200
-          return new Response(
-            JSON.stringify({ bars: u.includes("tf=D") ? DAILY_BARS : MINUTE_BARS, status: "disconnected" }),
-          );
-        }
-        if (u.includes("/api/capital/fills")) return new Response(JSON.stringify({ fills: [] }));
-        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
-      }),
-    );
+    stubBars(DAILY_BARS, "disconnected");
     mount(accumOf({ minutes: LIVE_MINUTES }));
     fireEvent.click(screen.getByRole("radio", { name: "日K" }));
     await waitFor(() => expect(readout()).toContain(TODAY));

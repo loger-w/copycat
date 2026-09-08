@@ -143,7 +143,7 @@ function live(over: {
 }
 
 describe("mergeLiveDailyBar(日 K 即時末根)", () => {
-  it("案 6a:末根 = today → o 保留正式的,h / l / c / v 換 accum(high / low / last.p / last.cum_vol)", () => {
+  it("案 6a:末根 = today → o 保留正式的,c / v 換 accum(last.p / last.cum_vol),h / l 取聯集(此例 accum 較寬)", () => {
     const official = [
       bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300),
       bar(TODAY, 100_000, 101_000, 99_000, 100_500, 5),
