@@ -3,7 +3,8 @@
 演算法測試在 `tests/test_screening.py`、群組寫入在 `tests/server/test_watchlist_service.py`(#173 議定 seam)。
 本檔以 fake fetcher + 注入時鐘 / fake sleep 釘住引擎的行為分歧點(零 IO):`compute()` 的取數守門
 (日 K 回聲 / 空當沖名單 / 當沖回聲 / 相對閘)、08:00 目標交易日制的排程判定(W2 T4)、重試時間盒與
-放棄(W2 T5,直接驅動 `_run_once` / `_run_attempts` / `tick`)、當沖名單三道閘先於 EOD 的 fail-fast(pr-211)。
+放棄(W2 T5,直接驅動 `_run_once` / `_run_attempts` / `tick`)、當沖名單三道閘 + 處置股先於 EOD 的 fail-fast(pr-211 /
+mod/screen-eod-attempt-memo)、跨 attempt EOD memo(同一目標日重試只補抓、換目標日重抓)。
 """
 
 from __future__ import annotations
@@ -106,6 +107,18 @@ def _write_prior(eng: ScreenEngine, rows: int) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _counting_daily(counts: dict[_dt.date, int], *, fail_once_on: _dt.date | None = None) -> Fetch:
+    """EOD fetcher:每個日期記呼叫次數;`fail_once_on` 那一天第一次被問到時炸一次(之後正常)。"""
+
+    def daily(token: str, day: _dt.date) -> list[dict]:
+        counts[day] = counts.get(day, 0) + 1
+        if day == fail_once_on and counts[day] == 1:
+            raise BreadthFetchError(f"FinMind {day} 暫時失敗")
+        return _daily_rows(day)
+
+    return daily
 
 
 # ---------------------------------------------------------------------------
@@ -601,31 +614,21 @@ class TestDayTradeRelativeGate:
 
 
 class TestDayTradeFailFast:
-    @staticmethod
-    def _counting_daily(calls: list[_dt.date]) -> Fetch:
-        def daily(token: str, day: _dt.date) -> list[dict]:
-            calls.append(day)
-            return _daily_rows(day)
-
-        return daily
-
     async def test_empty_daytrade_list_fails_before_any_eod_fetch(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
-        calls: list[_dt.date] = []
-        eng = _engine(
-            self._counting_daily(calls), lambda token, day: [], monkeypatch, tmp_path_factory
-        )
+        counts: dict[_dt.date, int] = {}
+        eng = _engine(_counting_daily(counts), lambda token, day: [], monkeypatch, tmp_path_factory)
         with pytest.raises(BreadthFetchError, match="當沖名單尚無資料"):
             await eng.compute(_DAY)
-        assert calls == []  # EOD fetcher 零呼叫
+        assert counts == {}  # EOD fetcher 零呼叫
 
     async def test_relative_gate_fails_before_any_eod_fetch(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
-        calls: list[_dt.date] = []
+        counts: dict[_dt.date, int] = {}
         eng = _engine(
-            self._counting_daily(calls),
+            _counting_daily(counts),
             lambda token, day: _dt_rows(day, 1500),
             monkeypatch,
             tmp_path_factory,
@@ -634,21 +637,38 @@ class TestDayTradeFailFast:
         _write_prior(eng, 2000)
         with pytest.raises(BreadthFetchError, match="1500"):
             await eng._run_once(_DAY)
-        assert calls == []
+        assert counts == {}
+
+    async def test_disposition_fetch_failure_happens_before_any_eod_fetch(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """處置股(1 個請求)也在 EOD 之前(mod/screen-eod-attempt-memo):取數失敗 23 → 2 個請求。"""
+        counts: dict[_dt.date, int] = {}
+
+        def disposition(token: str, day: _dt.date) -> list[dict]:
+            raise BreadthFetchError("處置股 暫時失敗")
+
+        eng = _engine(
+            _counting_daily(counts),
+            lambda token, day: _dt_rows(day),
+            monkeypatch,
+            tmp_path_factory,
+            disposition=disposition,
+        )
+        with pytest.raises(BreadthFetchError, match="處置股"):
+            await eng.compute(_DAY)
+        assert counts == {}
 
     async def test_healthy_daytrade_list_still_fetches_the_full_eod_window(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
         """對照組:名單健康 → EOD 窗照抓(21 個交易日),閘提前不是少抓。"""
-        calls: list[_dt.date] = []
+        counts: dict[_dt.date, int] = {}
         eng = _engine(
-            self._counting_daily(calls),
-            lambda token, day: _dt_rows(day),
-            monkeypatch,
-            tmp_path_factory,
+            _counting_daily(counts), lambda token, day: _dt_rows(day), monkeypatch, tmp_path_factory
         )
         await eng.compute(_DAY)
-        assert len(calls) == screen_engine.WINDOW_DAYS
+        assert sum(counts.values()) == screen_engine.WINDOW_DAYS
 
 
 async def test_daily_date_echo_mismatch_raises(
@@ -697,25 +717,13 @@ async def test_day_trading_date_echo_mismatch_raises(
 
 
 # ---------------------------------------------------------------------------
-# 跨 attempt EOD memo + 處置股 fail-fast(next-time 「screen_engine 跨 attempt memo」,09-08 另 session 帶入):
-# 同一目標交易日內重試不重抓上一輪已拿到的 EOD(抄 breadth `_streak_memo`:存縮列後 rows、目標日換日清空);
-# 處置股取數提到 EOD 之前(取數失敗 22 → 2 個請求)。
+# 跨 attempt EOD memo(next-time 「screen_engine 跨 attempt memo」,09-08 另 session 帶入):同一目標交易日內
+# 重試不重抓上一輪已拿到的 EOD(抄 breadth `_streak_memo` 存縮列後 rows;memo 是 `_run_attempts` 的區域變數,
+# 成功 / 放棄即消失,換目標日自然重抓)。處置股 fail-fast 的案在 `TestDayTradeFailFast`。
 # ---------------------------------------------------------------------------
 
 
 class TestEodAttemptMemo:
-    @staticmethod
-    def _counting_daily(
-        counts: dict[_dt.date, int], *, fail_once_on: _dt.date | None = None
-    ) -> Fetch:
-        def daily(token: str, day: _dt.date) -> list[dict]:
-            counts[day] = counts.get(day, 0) + 1
-            if day == fail_once_on and counts[day] == 1:
-                raise BreadthFetchError(f"FinMind {day} 暫時失敗")
-            return _daily_rows(day)
-
-        return daily
-
     async def test_retry_reuses_eod_rows_fetched_by_the_previous_attempt(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
     ) -> None:
@@ -726,7 +734,7 @@ class TestEodAttemptMemo:
         counts: dict[_dt.date, int] = {}
         bad = _dt.date(2026, 8, 25)
         eng = _engine(
-            self._counting_daily(counts, fail_once_on=bad),
+            _counting_daily(counts, fail_once_on=bad),
             lambda token, day: _dt_rows(day),
             monkeypatch,
             tmp_path_factory,
@@ -767,22 +775,3 @@ class TestEodAttemptMemo:
         await eng.tick()
         assert eng._cached_target_date() == _dt.date(2026, 9, 2)
         assert counts[_DATA] == 2  # 週三的窗也含 08-31,重抓而非沿用
-
-    async def test_disposition_fetch_failure_happens_before_any_eod_fetch(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
-    ) -> None:
-        counts: dict[_dt.date, int] = {}
-
-        def disposition(token: str, day: _dt.date) -> list[dict]:
-            raise BreadthFetchError("處置股 暫時失敗")
-
-        eng = _engine(
-            self._counting_daily(counts),
-            lambda token, day: _dt_rows(day),
-            monkeypatch,
-            tmp_path_factory,
-            disposition=disposition,
-        )
-        with pytest.raises(BreadthFetchError, match="處置股"):
-            await eng.compute(_DAY)
-        assert counts == {}
