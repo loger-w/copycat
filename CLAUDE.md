@@ -401,6 +401,14 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   零錯誤訊號;`tests/server/test_signal_policy.py::TestGroupResolution` 釘住。排除組名**逐字比對**:自選把「ALL IN」
   改名而設定檔沒跟 → 該組靜默變族群(研究 §8.2:−1,471/筆);hub 載入群組時比一次,缺名集合變了 WARNING「排除組名 …
   對不上任何自選群組」一次(整體 review F-03;`prod` 無 `configs/signals.json` 時全走預設 `("ALL IN",)`)。
+- **日 K 定稿界前後端同值**(2026-09-08 起,W2 T2 #206):產生點 `copycat/server/bars.py::DAILY_FINAL_TIME`(14:00;
+  界後寫入的日 K 快照視為定稿、`partial_last` 翻 false),前端鏡像 `frontend/src/lib/day-bars-rollover.ts::DAILY_FINAL_TIME`
+  (`[14, 0]`;日 K 新鮮度政策的**第二道界**:期貨 / 加權 / 個股三支日 K hook 常開時 14:01 多問一發換定稿,之後到午夜不再打)。
+  前端界 **< 後端界** → 14:01 那發拿到界前快照、再鎖到午夜,整個下午半成品(期貨 15:00 錨定翻頁後 CDP 基準錯、加權
+  「· 最後一根未收盤」印到午夜、個股今日那根停在開圖時的值),零錯誤訊號;`tests/server/test_bars.py::
+  test_daily_final_time_parity_with_frontend` 直讀前端字面釘等值。改界 = 改契約要同時改兩邊(另一個 14:00 讀者
+  `app.py::_calendar_crosscheck` 語意不同、刻意不共用,見 bars.py 常數 doc)。已知不救:14:01 那發拿到墊背(TC4 關著,
+  後端回界前快照且 `partial_last` 仍 true)前端鎖到午夜,與後端 pr-165 口徑一致(實務 = F5;user 2026-09-08 拍板)。
 
 ## 5. 資料源
 
