@@ -91,3 +91,47 @@ export function mergeLiveMinuteBars(
   }
   return out;
 }
+
+/** 日 K 即時末根吃的 accum 面(`StockAccum` 的四個欄,結構型別 —— 測試與下一批不必造整顆 accum)。
+ *  `last.cum_vol` = TC4 當日累積量,與 DK 的 `v` 同源(tc4-market-facts:DK `v` 與 REALTIME 累積總量一致);
+ *  **不用** `accum.volume`(那是 VWAP 分母,去重口徑不同)。 */
+export interface LiveDay {
+  last: { p: number; cum_vol: number } | null;
+  high: number | null;
+  low: number | null;
+  minutes: ReadonlyMap<number, MinuteAgg>;
+}
+
+/** 日 K:今天那根以 accum 即時更新;今天那根還沒有(09:00 前開圖,DK 尚無今日列)就補一根。
+ *
+ *  - 末根 `t === today` → 取代:`o` 保留正式的(DK 的開盤集合競價價),h / l / c / v 換 accum
+ *    (`high` / `low` 是後端 running max/min,必然 ⊇ 半成品的);
+ *  - 末根 `t < today`(或空)→ append `{t: today, o: dayOpen ?? accum 最早分鐘的 c, …}`;
+ *    `dayOpen` 由呼叫端給(今天正式 1 分 K 首根的 `o`,有才給);
+ *  - 末根 `t > today`(不該發生)/ accum 無成交(`last` / `high` / `low` 任一 null)→ 原樣(仍回新 array)。
+ *  正式段元素 identity 保留、傳入 array 不改。**定稿閘不在這裡**(呼叫端以「日 K 資料是 14:00 界後才抓回來的」判,
+ *  純函式不讀時鐘)。 */
+export function mergeLiveDailyBar(
+  official: readonly Bar[],
+  live: LiveDay,
+  today: string,
+  dayOpen: number | null,
+): Bar[] {
+  const out: Bar[] = [...official];
+  if (live.last === null || live.high === null || live.low === null) return out;
+  const last = official[official.length - 1];
+  const lastDate = last === undefined ? null : splitStamp(last.t).date;
+  if (lastDate !== null && lastDate > today) return out;
+  const merged = { h: live.high, l: live.low, c: live.last.p, v: live.last.cum_vol };
+  if (last !== undefined && lastDate === today) {
+    out[out.length - 1] = { ...last, ...merged };
+    return out;
+  }
+  let open = dayOpen;
+  if (open === null) {
+    const first = [...live.minutes.keys()].sort((a, b) => a - b)[0];
+    open = first === undefined ? live.last.p : live.minutes.get(first)!.c;
+  }
+  out.push({ t: today, o: open, ...merged });
+  return out;
+}
