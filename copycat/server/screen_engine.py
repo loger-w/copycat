@@ -1,13 +1,17 @@
-"""盤前選股篩選引擎(#173)—— 交易日 21:00 重算 + 啟動補跑 + 覆寫自選群組「盤前篩選」。
+"""盤前選股篩選引擎(#173 → W2 T4 #207 改 08:00 目標交易日制)—— 每個交易日 08:00 重算 +
+啟動補跑 + 覆寫自選群組「盤前篩選」。
 
-排程判定是純函式(`screening.expected_data_date`):快取 `data_date` ≠ expected 即該跑,
-所以「21:00 定時」與「server 啟動補跑」是同一條路 —— 迴圈醒來時算一次 expected,不對就補。
+排程判定是純函式(`screening.expected_target_date`):快取 `target_date` ≠ expected 即該跑,
+所以「08:00 定時」與「server 啟動補跑」是同一條路 —— 迴圈醒來時算一次 expected,不對就補;
+非交易日早上醒來 expected 仍是上一個交易日(已算過)→ 零動作。名單服務的是**目標交易日 = 今天**:
+EOD 窗自**資料日**(昨天 = 前一交易日,`screening.data_date_of`)往回湊 21 交易日,當沖名單與處置股
+抓 / 判**今天**的(CONTEXT.md「盤前篩選」節兩個詞)。
 篩選演算法全在 `copycat.screening`(議定 seam,測試在那邊);本模組只做 IO 接線:
 逐日 fetch(縮列後才累積,記憶體紀律見 `screening.shrink_rows`)、逐檔資格查、
 落檔快取、經 `WatchlistService.replace_group` 覆寫群組(同鎖 + 訂閱 + 廣播)。
 
-失敗處理:單一 expected 日最多 `_MAX_ATTEMPTS` 次(鐵則 F),用完當日放棄
-(`_gave_up_for`,expected 換日自動重武裝)—— 壞上游不整夜燒配額。
+失敗處理:單一目標日最多 `_MAX_ATTEMPTS` 次(鐵則 F),用完當日放棄
+(`_gave_up_for`,目標日換日自動重武裝)—— 壞上游不整天燒配額。
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ from copycat.screening import (
     WINDOW_DAYS,
     ScreenCandidate,
     apply_eligibility,
-    expected_data_date,
+    data_date_of,
+    expected_target_date,
     hard_candidates,
     shrink_rows,
 )
@@ -41,7 +46,9 @@ __all__ = ["SCREEN_GROUP", "ScreenEngine"]
 
 #: 覆寫目標群組名(#173 Q19 拍板)。
 SCREEN_GROUP = "盤前篩選"
-_CACHE_VERSION = 1
+#: v2(W2 T4 #207):以 `target_date` 判「做過沒」、`data_date` 降為推導值;v1(21:00 制,只有
+#: `data_date`)讀到即 None → 換制後第一次啟動補跑一次,不會把舊制的「資料日」誤判成今天已完成。
+_CACHE_VERSION = 2
 _CACHE_NAME = "premarket_screen.json"
 #: 單一 expected 日的嘗試上限(鐵則 F);間隔 / 配額退避沿 breadth streak 量級。
 _MAX_ATTEMPTS = 3
@@ -107,30 +114,35 @@ class ScreenEngine:
 
     async def _loop(self) -> None:
         while True:
-            now = self._now_fn()
-            expected = expected_data_date(now, self._cal)
-            if self._cached_data_date() != expected and self._gave_up_for != expected:
-                await self._run_attempts(expected)
+            await self.tick()
             await asyncio.sleep(self._sleep_secs(self._now_fn()))
 
+    async def tick(self) -> None:
+        """一次排程迭代(排程迴圈與測試共用的觀測點):算目標交易日,沒算過且沒放棄就跑。
+        非交易日早上 expected = 上一個交易日(已算過)→ 什麼都不做。"""
+        expected = expected_target_date(self._now_fn(), self._cal)
+        if self._cached_target_date() != expected and self._gave_up_for != expected:
+            await self._run_attempts(expected)
+
     def _sleep_secs(self, now: _dt.datetime) -> float:
-        """睡到下一個 `RUN_TIME`(+30s 緩衝,避免踩在 21:00:00.000 判定邊上)。"""
+        """睡到下一個 `RUN_TIME`(+30s 緩衝,避免踩在 08:00:00.000 判定邊上)。每個日曆日都醒:
+        非交易日醒來由 `tick` 判零動作,不必在這裡算下一個交易日。"""
         target = _dt.datetime.combine(now.date(), RUN_TIME) + _dt.timedelta(seconds=30)
         if now >= target:
             target += _dt.timedelta(days=1)
         return max(30.0, (target - now).total_seconds())
 
-    async def _run_attempts(self, data_date: _dt.date) -> None:
+    async def _run_attempts(self, target: _dt.date) -> None:
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             wait = _RETRY_SECS
             try:
-                await self._run_once(data_date)
+                await self._run_once(target)
                 return
             except BreadthFetchError as e:
                 wait = _QUOTA_RETRY_SECS if e.quota else _RETRY_SECS
                 logger.warning(
                     "盤前篩選 %s 取數失敗(第 %d/%d 次,quota=%s,%.0fs 後重試):%s",
-                    data_date,
+                    target,
                     attempt,
                     _MAX_ATTEMPTS,
                     e.quota,
@@ -144,17 +156,17 @@ class ScreenEngine:
                 # 排程迴圈 —— 死透的表現只是「群組再也不更新」,零錯誤訊號。
                 logger.exception(
                     "盤前篩選 %s 非預期失敗(第 %d/%d 次,%.0fs 後重試)",
-                    data_date,
+                    target,
                     attempt,
                     _MAX_ATTEMPTS,
                     wait,
                 )
             if attempt < _MAX_ATTEMPTS:
                 await asyncio.sleep(wait)
-        self._gave_up_for = data_date
+        self._gave_up_for = target
         logger.error(
-            "盤前篩選 %s 連續 %d 次未成,當日放棄(群組維持前一日名單,明日再武裝)",
-            data_date,
+            "盤前篩選 %s 連續 %d 次未成,當日放棄(群組維持前一日名單,下一交易日再武裝)",
+            target,
             _MAX_ATTEMPTS,
         )
 
@@ -171,8 +183,13 @@ class ScreenEngine:
                 f"盤前篩選 {day} {label}資料日回聲不符({rows[0].get('date')!r}),視同取數失敗"
             )
 
-    async def compute(self, data_date: _dt.date) -> list[ScreenCandidate]:
-        """抓窗 → 三硬條件 → 全市場當沖資格 → 處置剔除。純結果,不落檔不寫群組(CLI 共用)。"""
+    async def compute(self, target: _dt.date) -> list[ScreenCandidate]:
+        """抓窗 → 三硬條件 → 全市場當沖資格 → 處置剔除。純結果,不落檔不寫群組(CLI 共用)。
+
+        `target` = 目標交易日(名單服務的交易日,通常是今天):EOD 窗自資料日(前一交易日)往回,
+        當沖名單與處置股用 `target` 本人 —— 昨天剛停當沖的今天不會還在名單裡、昨天剛結束處置的
+        今天能進、今天剛開始處置的今天被剔(W2 T4 #207)。"""
+        data_date = data_date_of(target, self._cal)
         days: list[tuple[_dt.date, list[dict]]] = []
         d = data_date
         floor = data_date - _dt.timedelta(days=_SCAN_CAL_DAYS)
@@ -204,19 +221,21 @@ class ScreenEngine:
         cands = hard_candidates(days)
         # 當沖資格 = 單次全市場查詢(review F-02:「data_id 必填」是週六探測誤判,
         # 逐檔 fan-out ~60 次收斂成 1 次;口徑同 spec「最近交易日有列」,7 日回看退役)
-        dt_rows = await asyncio.to_thread(self._day_trading_fetch, self._token, data_date)
+        # 當沖名單抓**目標交易日**的(今天的正式名單,盤前先出;W2 T4 #207)
+        dt_rows = await asyncio.to_thread(self._day_trading_fetch, self._token, target)
         await asyncio.sleep(_REQ_GAP_SECS)
         if not dt_rows:
             # 空集合拿去過濾會把**全部**候選當非當沖標的誤剔,群組被清空還零訊號 ——
             # 當日名單未發布視同取數失敗,走重試
-            raise BreadthFetchError(f"盤前篩選 {data_date} 當沖名單尚無資料(FinMind 未更新?)")
-        self._require_date_echo(dt_rows, data_date, "當沖名單")
+            raise BreadthFetchError(f"盤前篩選 {target} 當沖名單尚無資料(FinMind 未更新?)")
+        self._require_date_echo(dt_rows, target, "當沖名單")
         daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
-        disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, data_date)
-        disposed = parse_active_disposition(disp_rows, data_date)
+        disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, target)
+        disposed = parse_active_disposition(disp_rows, target)  # 處置期間涵蓋**今天**
         final = apply_eligibility(cands, daytrade_ok=daytrade_ok, disposed=disposed)
         logger.info(
-            "盤前篩選 %s:硬條件 %d 檔 → 資格後 %d 檔(非當沖 %d / 處置 %d)",
+            "盤前篩選 %s(資料日 %s):硬條件 %d 檔 → 資格後 %d 檔(非當沖 %d / 處置 %d)",
+            target,
             data_date,
             len(cands),
             len(final),
@@ -225,10 +244,10 @@ class ScreenEngine:
         )
         return final
 
-    async def _run_once(self, data_date: _dt.date) -> None:
-        final = await self.compute(data_date)
+    async def _run_once(self, target: _dt.date) -> None:
+        final = await self.compute(target)
         written = await self._write_group(final)
-        self._write_cache(data_date, final, written)
+        self._write_cache(target, final, written)
 
     async def _write_group(self, final: list[ScreenCandidate]) -> list[str]:
         """截到上限後覆寫群組(截位語意單一份 `fit_group_codes`,CLI `--write` 同用)。"""
@@ -255,26 +274,27 @@ class ScreenEngine:
         )
         return codes_out
 
-    # ---- 快取(= 「這個 expected 日已完成」的判定依據)----
+    # ---- 快取(= 「這個目標交易日已完成」的判定依據)----
 
     def _cache_path(self) -> Path:
         return self._dir / _CACHE_NAME
 
-    def _cached_data_date(self) -> _dt.date | None:
+    def _cached_target_date(self) -> _dt.date | None:
         try:
             payload = json.loads(self._cache_path().read_text(encoding="utf-8"))
             if payload.get("_cache_version") != _CACHE_VERSION:
                 return None
-            return _dt.date.fromisoformat(payload["data_date"])
+            return _dt.date.fromisoformat(payload["target_date"])
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
     def _write_cache(
-        self, data_date: _dt.date, final: list[ScreenCandidate], written: list[str]
+        self, target: _dt.date, final: list[ScreenCandidate], written: list[str]
     ) -> None:
         payload = {
             "_cache_version": _CACHE_VERSION,
-            "data_date": data_date.isoformat(),
+            "target_date": target.isoformat(),
+            "data_date": data_date_of(target, self._cal).isoformat(),
             "computed_at": self._now_fn().isoformat(timespec="seconds"),
             "written": written,
             "candidates": [

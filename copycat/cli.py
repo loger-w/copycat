@@ -144,7 +144,11 @@ def main(argv: list[str] | None = None) -> int:
     p_nt.add_argument("--title", default=None)
 
     p_sc = sub.add_parser("screen", help="盤前選股篩選(#173):印候選名單")
-    p_sc.add_argument("--date", default=None, help="資料日 YYYY-MM-DD(預設依牆鐘推)")
+    p_sc.add_argument(
+        "--date",
+        default=None,
+        help="目標交易日 YYYY-MM-DD(名單服務的交易日;EOD 窗自其前一交易日往回、當沖名單抓該日;預設依牆鐘推)",
+    )
     p_sc.add_argument(
         "--write",
         action="store_true",
@@ -356,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         import asyncio
         import datetime as _dt
 
-        from copycat.screening import expected_data_date
+        from copycat.screening import data_date_of, expected_target_date
         from copycat.server import breadth_fetch
         from copycat.server.screen_engine import SCREEN_GROUP, ScreenEngine
         from copycat.stock_watchlist import (
@@ -370,10 +374,10 @@ def main(argv: list[str] | None = None) -> int:
         from copycat.trading_calendar import load_trading_calendar
 
         cal = load_trading_calendar()
-        data_date = (
+        target = (
             _dt.date.fromisoformat(args.date)
             if args.date
-            else expected_data_date(_dt.datetime.now(), cal)
+            else expected_target_date(_dt.datetime.now(), cal)
         )
         engine = ScreenEngine(
             token=_resolve_finmind_token(),
@@ -382,8 +386,8 @@ def main(argv: list[str] | None = None) -> int:
             day_trading_fetch=breadth_fetch.fetch_day_trading,
             disposition_fetch=breadth_fetch.fetch_disposition,
         )
-        final = asyncio.run(engine.compute(data_date))
-        sys.stdout.write(f"盤前篩選 {data_date}:{len(final)} 檔\n")
+        final = asyncio.run(engine.compute(target))
+        sys.stdout.write(f"盤前篩選 {target}(資料日 {data_date_of(target, cal)}):{len(final)} 檔\n")
         sys.stdout.write(f"{'代號':<6}{'還原20日%':>9}{'均量(張)':>10}{'鎖板次':>5}  最近鎖板\n")
         for c in final:
             sys.stdout.write(
