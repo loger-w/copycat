@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import re
 from typing import cast
 
 import pytest
@@ -21,6 +22,7 @@ from copycat.server.bars import (
     is_partial_last,
     worst_status,
 )
+from tests.helpers.frontend_source import read_frontend_source
 
 
 #: 本檔預設時刻(見 `TestModuleClock`)
@@ -931,6 +933,21 @@ class TestDailySnapshotFinality:
         third = await build_period(fetch, cache, "TXF", self.TODAY, "D")  # 界上寫入 = 定稿
         assert third.bars[-1]["c"] == 200
         assert len(fetch.calls) == 2
+
+
+def test_daily_final_time_parity_with_frontend() -> None:
+    """跨語言契約(CLAUDE.md §4「日 K 定稿界前後端同值」;W2 T2 #206):後端 `DAILY_FINAL_TIME` 是
+    產生點(界後寫入的日 K 快照視為定稿),前端 `lib/day-bars-rollover.ts::DAILY_FINAL_TIME` 是政策的
+    第二道界(14:01 重抓一發換定稿)。前端界 < 後端界 → 14:01 那發拿到界前快照、再鎖到午夜,整個下午
+    半成品且零錯誤訊號;前端界 > 後端界只是晚拿到定稿。這裡釘**等值**(比 ≥ 嚴,兩邊本來就該是同一個
+    數)。同 `test_screen_group_name_parity_with_frontend` 姿態:直讀前端原始碼字面。"""
+    text = read_frontend_source("lib/day-bars-rollover.ts")
+    m = re.search(
+        r"export const DAILY_FINAL_TIME: readonly \[hh: number, mm: number\] = \[(\d+), (\d+)\];",
+        text,
+    )
+    assert m, "day-bars-rollover.ts 找不到 `export const DAILY_FINAL_TIME: readonly [...] = [hh, mm];` 字面"
+    assert _dt.time(int(m.group(1)), int(m.group(2))) == bars_mod.DAILY_FINAL_TIME
 
 
 class TestIsPartialLast:

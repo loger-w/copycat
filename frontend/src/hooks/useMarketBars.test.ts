@@ -205,16 +205,55 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     await vi.advanceTimersByTimeAsync(0);
     expect(count("D")).toBe(1);
     expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
+    // W2 T2(#206)事前標為該變:14:01 定稿界多一發 → 23:59 起的計數各 +1
     await vi.advanceTimersByTimeAsync(14 * 60 * 60_000 + 59 * 60_000); // 23:59
-    expect(count("D")).toBe(1);
-    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
-    expect(count("D")).toBe(1);
-    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
     expect(count("D")).toBe(2);
+    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
+    expect(count("D")).toBe(2);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(count("D")).toBe(3);
     // 使用者的症狀:D+1 早上 K 線末根仍是昨天 09:00 那份(D bar 停在部分值、沒有 D+1 那根)
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同一日曆日內不再打
+    expect(count("D")).toBe(3);
+  });
+
+  // W2 T2(#206;pr-202-review F-01):後端 14:00 起 `partial_last` 翻 false、今日那根定稿,但常開的加權頁
+  // 到午夜才問 → 整個下午照印「· 最後一根未收盤」、bar 值停在早上。14:01 多問一發即修;之後到午夜不再打。
+  it("日 K:人一直在 tab 上跨過 14:00 定稿界 → 14:01 重抓一次(partial_last 翻 false、bar 是定稿),之後到午夜不再打", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        const now = new Date();
+        const d1 = isoLocalDate(now) >= D1_ISO;
+        const afterFinal = now.getHours() >= 14;
+        const bars = d1 ? D1_SNAPSHOT : afterFinal ? D_FINAL : D_SNAPSHOT;
+        const meta = { ...META, partial_last: d1 || !afterFinal };
+        return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta }));
+      }),
+    );
+    const { result } = renderHook(() => useMarketBars("TWSE", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(count("D")).toBe(1);
+    expect(result.current.data?.meta.partial_last).toBe(true);
+    await vi.advanceTimersByTimeAsync(4 * 60 * 60_000 + 59 * 60_000); // 13:59
+    expect(count("D")).toBe(1);
+    await vi.advanceTimersByTimeAsync(90_000); // 14:00:30:過界但還在 slack 內
+    expect(count("D")).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
     expect(count("D")).toBe(2);
+    expect(result.current.data?.bars).toEqual(D_FINAL);
+    expect(result.current.data?.meta.partial_last).toBe(false); // 「· 最後一根未收盤」在此消失
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
+    expect(count("D")).toBe(2);
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000); // D+1 00:01:01:午夜界照舊
+    expect(count("D")).toBe(3);
   });
 
   // 週 / 月 K 與日 K 同一把 key 形狀(`["market-bars", key, tf]`)、同一條 staleTime / interval 分支:
@@ -306,17 +345,18 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     );
     await vi.advanceTimersByTimeAsync(0);
     expect(count("D")).toBe(1);
+    // W2 T2(#206)事前標為該變:日 K 不吃 active,14:01 那發在 15:00 切走前已打 → 之後計數各 +1
     await vi.advanceTimersByTimeAsync(6 * 60 * 60_000); // 15:00 切去個股頁
     rerender({ active: false });
     await vi.advanceTimersByTimeAsync(5 * 60 * 60_000); // 20:00 切回
     rerender({ active: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(count("D")).toBe(1); // 同日曆日切回不重抓
+    expect(count("D")).toBe(2); // 同界內切回不重抓(14:01 那份未過期)
     rerender({ active: false }); // 20:00 再切去個股頁,待到 D+1 09:00
     await vi.advanceTimersByTimeAsync(13 * 60 * 60_000);
     rerender({ active: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(count("D")).toBe(2);
+    expect(count("D")).toBe(3);
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
@@ -369,14 +409,15 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(count("D")).toBe(1);
+    // W2 T2(#206)事前標為該變:途經 D 14:01 多一發 → 之後計數各 +1
     await vi.advanceTimersByTimeAsync(15 * 60 * 60_000 + 10_000); // D+1 00:00:10
     await rerenderBurst(rerender, 40_000, 100); // → 00:00:50,400 次重繪
-    expect(count("D")).toBe(1); // 還在 slack 內
+    expect(count("D")).toBe(2); // 還在 slack 內(D 14:01 那發已計)
     await vi.advanceTimersByTimeAsync(11_000); // 00:01:01
-    expect(count("D")).toBe(2);
+    expect(count("D")).toBe(3);
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同日不再打
-    expect(count("D")).toBe(2);
+    expect(count("D")).toBe(3);
   });
 
   // 鐵律 (c) 前半 + (b) 後半:跨秒必須看到 1 是生效自檢(spy 真的看得到 TQ 的 setInterval),
