@@ -1,3 +1,39 @@
+## 2026-09-08(剩餘待辦盤點,user 逐條拍板 Q1–Q20;handoff `%TEMP%\copycat-handoff-2026-09-08-remaining-todos.md`)
+
+- [ ] **`/bug` 加權指數分時線在 server 09:00 後啟動的日子不由推播前進**(Q20 (a),優先於 C5;handoff
+  `%TEMP%\copycat-handoff-2026-09-08-index-minutes-late-start.md`):現價會跳、分鐘只在「index 分時自癒」成功時補一段,
+  每 7 分鐘一發直到窗口階梯封頂(`end hour 23`)後停在那一分鐘。實錄:09-02 09:01 重啟 217 發 / 09-04 09:00 啟動 42 發 /
+  09-08 09:23 啟動 121 發、線停 11:23(`/api/index/state` twse minutes 尾鍵 1123、`last_minute` None、`p` 仍更新);
+  08:03 / 08:10 / 08:23 啟動的日子只有 13:30 那 2 發。`index_engine._handle_quote` 08-26 修過同症狀(FilledTime 缺值走牆鐘),
+  這是另一條路徑:`last_minute` 恆 None = 推播從未寫進 minutes(key None 或 pending),差異只在啟動時刻。走 `diagnosing-bugs`
+  先做能變紅的 loop(建構時 trade_date = 今日 vs 昨日 + 08:30 rollover 兩條路徑對照)。
+- 結案 40 條(Q1 / Q2 / Q6 / Q7 / Q11 / Q13–Q17 / Q19,各條原位 `[x]` 附註);停放 22 條(下表);Q3 教訓搬 ops-discipline;
+  Q4 C5 當沖資格顯示 user 另開 session `/feat`;Q5 期貨批停放;Q9 screen_engine memo 停放(W2 已 merge);Q18 `_listen_loop` 併 W3 B2。
+
+**停放索引**(不再逐次盤點;觸發條件到了再從原位搜):
+- 期貨批(等 user 有期貨單):`N075 夜盤遠價市價單實驗` / `F5 期貨成交契約碼組法` / `真市價 literal "M"` /
+  `o.date 的夜盤跨午夜組合假設` / 期貨梯與個股期梯接 fills 成交價落格(PR #190 留尾 C23,只在 memory)。
+- 回測(user:後續再處理):`backfill_daytrade.py BuyAfterSale 錯規則`(**下次跑空方回測前必修**)/ `空日不進 marker` /
+  `simulate 完整 derived-series` / fade round 1–5 八條(搜 `fade`,全部 /perf 先 profile)。 / tday-join 07-07 七條(搜 `round5` / `_simulate_core` / `check_flush_exit`)。
+- 盤前篩選:`screen_engine 跨 attempt memo`(A-3 改每小時重試後每次重抓 21 檔;重試那幾晚嫌慢再做)。
+- 分時圖內部結構五條(下次動分時圖時帶走):`J1 IntradayChartCore mode 四態` / `J2 MINUTE_SNAP_RADIUS` / `LabelSpan 型別統一` /
+  `EnergySub 改單一 <path>` / `OVERLAY_LINES 以輸入序查表`。
+- `空回補免 seq bump`(行為改動,要同步 CLAUDE.md §4 契約口徑)。
+
+**已知風險索引**(Q16 整批結案;六天 log 零再發。症狀出現時從原位搜):
+- `rollover stage1 → worker` 次毫秒窗:靠 generation guard 丟;症狀 = 換日當下分鐘缺一筆。
+- `heal 每個 variant 新發一個 history 訂閱`:壞日子累積(09-08 57 個無事);症狀 = 自癒後靜默回空。**根因由上條 /bug 帶走。**
+- `heal 帶 minutes 的廣播對飽和 client`:`grep 佇列滿` 非 0 且該分頁線空。
+- `apply_backfill reset+replay 競態`:回補落地那一秒的 live tick 被洗;症狀 = 分鐘完整性(84 檔三日 270 根對帳工具在本次盤點 scratch)。
+- `loop 預設 executor 同池`:TC4 半死時 today / daily_bars 變慢。
+- `KeepAliveHelper.ThreadProcess` 只 catch ZMQError:關機收尾 > 數秒且 run.ps1 硬殺。
+- `假日集合「兩個來源」`:第二個 holidays 消費者出現時收 TradingCalendar。
+- `R5 封關夜近似誤差`:封關前夜江波圖空 churn,方向安全。
+- `#142 bars: 慢請求`:console 再見 > 15 s 且 TC4 未斷。
+- `連假首日無夜盤` / `非交易日「當日段」白付 10s`:春節前 / 假日開站嫌 log 吵。
+- `N120 回補後 n 整段平移`:CLAUDE.md §4 知情例外。
+
+
 ## 2026-09-08(mod/w2-daily-bars-and-screen-0800 W2 批 留尾;spec #204)
 
 - [ ] **`/feat` 盤中即時最後一根**(user 09-08 拍板 Q1 (a) 後續):期貨 / 加權 / 個股三頁的日 K 與分 K 以頁面已在收的即時
@@ -42,7 +78,7 @@
 
 ## 2026-09-01(pr-review #163/#164/#166/#167 四份收修 留尾)
 
-- [ ] **重播蓋日其實可達:凌晨開機時群益 backlog 尚未換日,重播昨日成交以到達日入 `FillRecord.date`**
+- [x] **重播蓋日其實可達:凌晨開機時群益 backlog 尚未換日,重播昨日成交以到達日入 `FillRecord.date`**
   (2026-09-01 01:14 真環境實錄,非本輪回歸 —— L76 出貨起即如此):Tue 01:14 boot,ConnectByID 重播
   週一 09:17/09:25 的 D 事件,`date=20260901`(到達日)→ 前端 `rawFill` 的 `date !== todayYmd` 閘放行,
   **週一的成交三角會畫上週二的分時圖**(時刻用的是原始 09:17);`today_qty` 同族(週一買 1 張被計進
@@ -50,18 +86,18 @@
   是新的,效果相同)。早晨 ~08:10 開機未見此症狀 → 群益 backlog 疑似清晨換日,僅跨午夜到清晨那段開機
   會踩。緩解 = 開盤前照常重啟(user 既有流程);真解 = 重播列的 date 語意重審(候選:D 事件 idx23 回報日
   可信度實證後改用之,或 time 落在「今日尚未到達的時刻」時歸前一交易日)。FillRecord docstring 的
-  「目前不可達」措辭要一併改口。
-- [ ] **水位多計向(pr-163 F-02,對稱留尾,與上方「倒退保護 60 s 洞」成對)**:涵蓋判定以本機到達序為準,
+  「目前不可達」措辭要一併改口。 **→ 09-08 盤點:Q7 結案:只在 00:00–清晨開機才踩,user 開盤前重啟;再見昨日成交三角畫到今日分時即開 /bug**
+- [x] **水位多計向(pr-163 F-02,對稱留尾,與上方「倒退保護 60 s 洞」成對)**:涵蓋判定以本機到達序為準,
   成交已入券商快照、推播卻晚於 balance 查詢出手的那筆會被快照計一次、落地又重套一次(複查實測 qty 2→3),
   下一輪鏈 ~2 s 自癒。真堵 = 落地時對帳(該鍵快照張數已等於樂觀張數就不重套;有「同鍵兩筆只入帳一筆」殘餘邊界)。
-  user 09-01 拍板先做輕(口徑註解 + 本留尾),與 60 s 洞同批等實錄再拍。
-- [ ] **零推播自癒重掛不通知 engine(pr-164 F-02 殘餘)**:`_heal_tick` R2 重掛訂閱不清 `_backfilled`,
+  user 09-01 拍板先做輕(口徑註解 + 本留尾),與 60 s 洞同批等實錄再拍。 **→ 09-08 盤點:Q6 結案 known-risk(同上)**
+- [x] **零推播自癒重掛不通知 engine(pr-164 F-02 殘餘)**:`_heal_tick` R2 重掛訂閱不清 `_backfilled`,
   靜默期的分鐘缺口當日補不回(「切主圖順手補」的舊救援已隨 set_main 去重 guard 移出不變式,三處註解
   08-31 同批改口)。**不要照字面修** —— heal 以 60 s 門檻清記帳會把 churn 放大到遠超修前 75 次;
-  真解 = heal 發 per-code 事件或節流式 guard,另案。
-- [ ] **水位配對 token 化(pr-163 F-09)**:begin_snapshot ↔ set_positions 的 1:1 配對靠 client 三個守門旗標維持,
+  真解 = heal 發 per-code 事件或節流式 guard,另案。 **→ 09-08 盤點:Q17 結案:09-08 6949 重掛 30+ 次仍 270 根 / 221 根有量,無缺口證據**
+- [x] **水位配對 token 化(pr-163 F-09)**:begin_snapshot ↔ set_positions 的 1:1 配對靠 client 三個守門旗標維持,
   balance 段超時 abandon 後遲到列被誤認新輪的縫隙裡,W2 會被 round-1 快照消耗 → 該輪退回修前少計行為(非新洞)。
-  真堵 = begin_snapshot 回 token、set_positions 驗 token,消掉 store 一個跨呼叫可變欄位。user 09-01 拍板記留尾。
+  真堵 = begin_snapshot 回 token、set_positions 驗 token,消掉 store 一個跨呼叫可變欄位。user 09-01 拍板記留尾。 **→ 09-08 盤點:Q6 結案 known-risk(同上)**
 
 ## 2026-08-31(pr-165-review 留尾)
 
@@ -173,11 +209,11 @@
   修前只有零 prod caller 的 `clear()` 受保護,每次開機都走的 ConnectByID backlog 路徑會被空水位 `{}` 重套)。
   紅測試 = test_fill_latency `test_chain_landing_does_not_regress_fill_arrived_in_flight` + test_store
   `test_boot_watermark_before_backlog_does_not_reapply_replayed_fills`。
-- [ ] **倒退保護(R1 留尾,待實錄再拍)**:成交發生在 balance 查詢出手**前**、但群益報表自身落後(> 0.5 s debounce)
+- [x] **倒退保護(R1 留尾,待實錄再拍)**:成交發生在 balance 查詢出手**前**、但群益報表自身落後(> 0.5 s debounce)
   → 快照仍舊、水位判不出 → 倒退最長 60 s(L642「少一檔 / 多一檔 60s」樣態)。修法候選 =「近 N 秒內有樂觀成交的鍵」
   落地若倒退則保留樂觀值 + 立即重查;TTL 要拍板(user 08-31:「這個問題先緩緩」)。下次盤中遇到部位消失 >5 s 時抓
   `grep "balance 鏈" + 成交樂觀套用` 時序當實錄。
-  **→ 2026-09-07 next-time 盤點:C15 user 拍板維持樂觀套用(成交回報到了才動部位,沒買到不會動),閃回等實錄再拍。**
+  **→ 2026-09-07 next-time 盤點:C15 user 拍板維持樂觀套用(成交回報到了才動部位,沒買到不會動),閃回等實錄再拍。** **→ 09-08 盤點:Q6 結案 known-risk:九天實戰無閃回;再見部位數字閃回 / 錯誤即開 /bug**
 - [x] ~~**`/bug` 期貨日 K `staleTime: Infinity` 跨日不重抓**(L332)。~~ → 08-30 fix/futures-daily-bars-rollover 出貨(見 08-30 節)。
 - [x] **`/perf` 開盤回補並行**:user 目標 = **09:00 一開盤自選全部同時開始收,不是一檔一檔排隊**。今日實測:首筆回補 09:02:09 才開始
   (兩分鐘空檔原因未明),之後單工 worker 一秒一檔(09:02 38 檔 / 09:03 16 檔 … 到 09:13)。步驟:① 盤後實驗達錢並行 SubHistory
@@ -274,9 +310,9 @@
 - [x] **TC4 斷線期間 log 洪水**(已出貨 PR #146,2026-08-28;判準見 `.claude/mod/tc4-disconnected-log-flood/verification.md` §5):11.5 分鐘長出 6764 行 / 585 KB —— `零推播自癒 … → 重掛` + `自癒重掛失敗 …: TC4 quote not connected`
   每 symbol 每輪各一行(1206 條),reconnect 失敗每次印 4 行 traceback(210 個 `Traceback`)。TC4 整天沒開會長到 ~30 MB,
   且把真訊號淹掉。候選:quote 未連線時零推播自癒整批只印一行(「N 腿等連線」)、reconnect 失敗 traceback 只在第一次與換退避檔時印。
-- [ ] **#142 `bars: 慢請求` 第一筆真事件**:15:13:06 console `bars: 慢請求 /api/market/bars/TMF?tf=D 24.9 s 才回(status 200)`
+- [x] **#142 `bars: 慢請求` 第一筆真事件**:15:13:06 console `bars: 慢請求 /api/market/bars/TMF?tf=D 24.9 s 才回(status 200)`
   —— TC4 斷線中的日 K 請求要等 24.9 s 才回(200,後端 cache / 降級路徑),離 30 s timeout 只差 5 s。題 4「一趟永不回」的候選
-  在 TC4 半死時是可觸及的;要看盤中有沒有同款(TC4 沒斷卻 > 15 s)。後端 `build_minute` 慢請求 WARNING 留尾(handoff §4)仍未做。
+  在 TC4 半死時是可觸及的;要看盤中有沒有同款(TC4 沒斷卻 > 15 s)。後端 `build_minute` 慢請求 WARNING 留尾(handoff §4)仍未做。 **→ 09-08 盤點:Q16 結案 → 已知風險索引;六天 0 次**
 
 ## 2026-08-28(mod/index-heal-holiday-gate 加權自癒休市日補窗內閘 留尾)
 
@@ -290,7 +326,7 @@
 
 ## 2026-08-28(mod/n075-price-type-label-window N075 標籤文件改口 留尾)
 
-- [ ] **N075 夜盤遠價市價單實驗(user 親做)**:某個夜盤用 copycat 送一張離現價很遠的市價單(不成交),看回報 `date`
+- [x] **N075 夜盤遠價市價單實驗(user 親做)**:某個夜盤用 copycat 送一張離現價很遠的市價單(不成交),看回報 `date`
   (idx23)是本機日曆日還是所屬交易日,然後刪單;同一筆回報順帶核群益 seq 是日曆日重置還是交易日重置(隔天日盤第一張單的
   seq 有沒有從頭編)。兩者**同口徑** → `store.note_price_type` 改成只記單一候選日即關掉「同檔同方向撞同 seq」的誤標窗;
   **不同口徑**(日界走交易日、seq 走日曆日)→ 日期分不出,才需要送單時刻 ± 窗那類補丁(08-28 拍板程式先不封洞)。
@@ -303,7 +339,7 @@
   seq 看來是**全域遞增計數不重編**(三日樣本外推),撞同 seq 機率趨近零 —— 實驗的意義只剩日界定案。另一個現成線索:06-10 14:59:48 掛給 06-11 的
   預約單 idx23=`20260610`(進單日)、**idx29**=`20260611`(疑似所屬交易日欄;idx28 恆 `PI`,pr-134 報告 F-07 寫 idx28 為誤,逐欄重數為 idx29),`reply.py` 未解析 idx29;夜盤實驗那筆回報順便看 idx29
   是不是交易日 —— 若是,「記兩個候選日」整套可退成讀該欄。同一筆也順便定 **idx23 跨日事件是否變值**(pr-134 F-01:`reply.py` 同日
-  C / D 實測不變 vs tc4-market-facts「最新事件日」機制推論,repo 內零跨日樣本)。 **→ user 08-28:後續再測,不排期;等夜盤實驗才動。**
+  C / D 實測不變 vs tc4-market-facts「最新事件日」機制推論,repo 內零跨日樣本)。 **→ user 08-28:後續再測,不排期;等夜盤實驗才動。** **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 
 ## 2026-08-28(chore/test-hygiene-batch 測試衛生三條 留尾)
 
@@ -329,11 +365,11 @@
 
 ## 2026-08-27(chore/pr-review-128-130-followups 三份 review 22 條收修 留尾)
 
-- [ ] **artifact 引 rebase 前 SHA 在 #129 重演 —— user 2026-08-28 拍板 (b)**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md`
+- [x] **artifact 引 rebase 前 SHA 在 #129 重演 —— user 2026-08-28 拍板 (b)**(pr-129 F-07;`docs/superpowers/specs/2026-08-25-do-batch-review.md`
   §4.1「47/56 dangling」流程 finding 的續集):rebase merge 必改寫 SHA,artifact(verification / review JSON)寫的分支 SHA 在乾淨 clone 上
   `git show` unknown revision。**拍板 = (b) artifact 不引 SHA,改引「第 n 筆 + commit subject」**(rebase 後順序與標題不變);(a) merge 後補寫
   最終 SHA 不採。待做 = harness 改動(`branch-lifecycle` 收尾節 + `harness/refs/closeout.md` artifact 格式一行),依鐵則 B **攢批**、
-  不單獨開;在那之前新分支的 verification 直接照 (b) 寫(`chore/test-hygiene-batch` 當首例)。
+  不單獨開;在那之前新分支的 verification 直接照 (b) 寫(`chore/test-hygiene-batch` 當首例)。 **→ 09-08 盤點:Q2 接受現況:#199 起 verification 加「merged sha」欄(subject 一對一)已解原問題,harness 不另改**
 - [x] ~~**`tests/server/test_index_routes.py::TestIndexState::test_ws_streams_index_payload` 順序型 flake**(非本輪 finding,如實揭露;08-27 深夜全量 pytest
   1/3135 紅、單跑 1 紅 5 綠、整檔綠):測試 `websocket_connect` 後立刻 `fake.on_message(quote)` 再 `receive_json()` 斷
   `twse.p == 42_039_920`,但 `/ws/index` 連上時先送**初始快照**(`twse.p` None),quote 廣播若排在快照之後,首則就是快照
@@ -357,16 +393,16 @@
   (段順序 / `anchorDateOf` / `sliceCurrentAllday` / 刻度表)、`copycat/live/futures_source.py::FUTURES_ALLDAY_DOMAIN`
   與回補日窗、`useFuturesBars` 輪詢窗 `inFuturesAllDayHours`、相關係數腿的台期交自癒閘、FuturesChart live 點四道 gate。
   結算價基準不變(15:00→13:45 同一個 ref)。
-- [ ] **假日集合「兩個來源」的 Data Clump(mod/futures-day-1500 review round 1 S7)**:`holidays?: ReadonlySet<string>` 從
+- [x] **假日集合「兩個來源」的 Data Clump(mod/futures-day-1500 review round 1 S7)**:`holidays?: ReadonlySet<string>` 從
   `FuturesChart` 經 `sliceCurrentAllday` / `anchorDateOf` / `alldayFillPoints` / `nextTradingDayIso` 四層可選穿透,缺省讀
   `trading-calendar.ts` 模組集合 —— 同一份資料兩個來源(query data vs 模組級)。現在只有 FuturesChart 一個消費者,
-  再多一個(例如群組圖牆的期指卡)就該收成一個 `TradingCalendar` 型別或 context,不再各自 `new Set(holidays)`。
+  再多一個(例如群組圖牆的期指卡)就該收成一個 `TradingCalendar` 型別或 context,不再各自 `new Set(holidays)`。 **→ 09-08 盤點:Q16 結案 → 已知風險索引(第二個消費者出現時再收)**
 - [x] **期指「每個交易日都有夜盤」假設沒有事實鎖**(mod/futures-day-1500 §6):春節前最後交易日期交所不開夜盤,
   那天的圖左半會空白(錨定日 = 假日後首交易日,夜盤側零 bar → 不補橋,只畫日盤);`inFuturesAllDayHours` 同一假設。
   候選 = 交易日曆 JSON 加「無夜盤日」欄,兩處同吃。要先查期交所公告落成事實(tc4-market-facts)。 **→ 08-28:不急,2027-01 前做(先查期交所公告)。**
   **→ 2026-09-07 next-time 盤點:C10 沒看到問題。**
-- [ ] **SC-13 (b)–(e) 真環境窗口**(mod/futures-day-1500):15:01 翻頁那一刻(左緣換成今 15:00)、次一交易日 08:46 的
-  05:00→08:45 水平橋 + 跳價、CDP 五線在 15:00 換組後 user 對 APP、個股頁「台指期」線夜盤時段仍在(解耦後應與改前相同)。 **→ 08-28:08-31 驗,user 看畫面、agent 抓 `/api/market/bars` 對照。**
+- [x] **SC-13 (b)–(e) 真環境窗口**(mod/futures-day-1500):15:01 翻頁那一刻(左緣換成今 15:00)、次一交易日 08:46 的
+  05:00→08:45 水平橋 + 跳價、CDP 五線在 15:00 換組後 user 對 APP、個股頁「台指期」線夜盤時段仍在(解耦後應與改前相同)。 **→ 08-28:08-31 驗,user 看畫面、agent 抓 `/api/market/bars` 對照。** **→ 09-08 盤點:09-02 全數結案(memory futures-daily-bars-rollover-shipped)**
 - [ ] **加一條指數疊線要改 11 處(review round 1 S4 Shotgun Surgery)**:`ChartToggles` 鍵 + `DEFAULTS` + `IndexOverlayKey`
   + `INDEX_OVERLAY_LABEL` + `OVERLAY_KEYS` + `IDX_LINE_CLASS`/`IDX_TEXT_CLASS` + `toggleDefs` 字面 union + `GRID_TOGGLES` union
   + `index.css` token + `GroupGridView` 的 `||` 串;12 個測試檔只為補 `idxTxf: false`。候選 = 收成一張以 `IndexOverlayKey`
@@ -377,17 +413,17 @@
 
 ## 2026-08-27(fix/corr-sparse-leg-heal-exempt SXF 稀疏腿自癒 churn 留尾)
 
-- [ ] **`sparse` 是人工標記,不是量出來的**:判準寫在 tc4-market-facts(全 attempt 1 且間隔 ≥ 門檻);若哪天 SXF 真死
+- [x] **`sparse` 是人工標記,不是量出來的**:判準寫在 tc4-market-facts(全 attempt 1 且間隔 ≥ 門檻);若哪天 SXF 真死
   (stub),R2 不救、只剩 R1(整條 session 靜默 120 s)—— 其他腿活著時 SXF 會整場不救,零訊號。候選 = 稀疏腿改吃
-  更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。 **→ 08-28:08-31 量 SXF 日盤最長真靜默後再定門檻。**
+  更長門檻(如 1800 s)而非整條豁免,要先量 SXF 日盤最長真靜默(今天觀察到 22 分鐘)。 **→ 08-28:08-31 量 SXF 日盤最長真靜默後再定門檻。** **→ 09-08 盤點:Q19 結案:江波圖某腿整天平線再查;user 09-07 VX 沒看到問題**
 - [x] ~~**個股冷門檔同型(6949 每分鐘一發 attempt 1)**:個股 source 的 R2 60 s 對零股 / 冷門檔同樣是假警報,但個股是
   自選動態集合,沒有設定檔可標 —— 走 08-26 節「從未推播 / 冷門檔退避上限 60→300 s」那條,不套 sparse。~~
   → 08-28 triage:與 08-26 節 N051 6949 條同件事(退避上限 60→300 s),留那條。
-- [ ] **收盤段 `IX0001` 每 30 s 一發 —— 已出貨待次一交易日真環境驗**:08-27 user 拍板 13:25(mod/stock-heal-gate-end-1325),
+- [x] **收盤段 `IX0001` 每 30 s 一發 —— 已出貨待次一交易日真環境驗**:08-27 user 拍板 13:25(mod/stock-heal-gate-end-1325),
   pr-126 F-01 收修為 per-consumer(mod/heal-gate-per-consumer):**只有 index session** 吃 `in_index_heal_window_now` 13:25,
   個股 / corr 台積電腿留 `in_trading_hours_now` 13:35(試撮期個股仍有簿更新推播,一起關是零收益純代價)。看門狗 13:25 下班、
   訂閱不退、13:30 收盤推播照收。驗法:`grep 零推播自癒 logs/server-<次日>.log | grep IX0001` 13:25 後 0 筆 + 13:36
-  `curl /api/index/state` 記 twse 最後更新時戳(同時反證 F-03「誤判 vs 真死」);**驗過再勾**(pr-126 F-08)。 **→ 08-28:08-31 對帳驗(13:25 後 0 筆 + 13:36 現價欄)。**
+  `curl /api/index/state` 記 twse 最後更新時戳(同時反證 F-03「誤判 vs 真死」);**驗過再勾**(pr-126 F-08)。 **→ 08-28:08-31 對帳驗(13:25 後 0 筆 + 13:36 現價欄)。** **→ 09-08 盤點:09-01 盤中驗 PASS;09-08 再查 IX0001 零推播自癒 0 筆**
 - [x] ~~**重掛 snapshot 會清 heal attempts → 退避 / 換窗階梯可能永不升級**(08-27 盤後發現,未證):TC4 對 SUBQUOTE 回
   snapshot(tc4-market-facts fresh subscribe 事實)→ `tc4._note_push` 清 `_heal_attempts` / `_heal_next` → 下一輪又從
   attempt 1、base 門檻起算;IX0001 收盤段 19 發 30 s 等距 attempt 全 1、SXF 兩發剛好 240 s 都是這形狀。若 symbol 真死
@@ -420,10 +456,10 @@
 
 ## 2026-08-27(fix/breakeven-avg-source-prod-chain #118 broker 半邊在 prod 是死的 留尾)
 
-- [ ] **流程教訓:blast radius 要 grep「欄位寫入點」不只「建構點」**:#118 的 blast radius 只 grep `Position(` 建構點與
+- [x] **流程教訓:blast radius 要 grep「欄位寫入點」不只「建構點」**:#118 的 blast radius 只 grep `Position(` 建構點與
   `avg_source` 字面,沒 grep `avg_price =` 就地寫入 → 真鏈 `client._on_profit_complete` 漏掉,測試綠在一條零 caller 的
   死路徑上。判準:新增欄位時 `grep "<鄰欄>\s*="` 把每個就地寫入點列出來逐一對。待併入 `ops-discipline`(該檔另一 session
-  持有未提交修改,先記這裡)。
+  持有未提交修改,先記這裡)。 **→ 09-08 盤點:Q3 已搬進 ops-discipline「blast radius:grep 欄位寫入點」節**
 - [x] **期貨列 `avg_source` 恆 null(語意缺口,非本輪 bug)**(two-axis Spec (c)):`balance.py::parse_open_interest_line` 給期貨列
   `avg_price=` 群益 OI [6] 平均成本、從不寫 `avg_source`;`merge_fut_positions` / `_stale_fut_positions` 沿用同物件。
   **不會**多加一次買費 —— 期貨列不進 `positionEcon`(`position-summary.ts:116/177` 分開走、`PriceLadder` 是現股梯),
@@ -460,19 +496,19 @@
 review `docs/superpowers/specs/2026-08-25-do-batch-review.md` §4.3 點名 #105 那輪 next-time −66/+0 行,七項留尾只活在單輪
 verification;這裡回填成 backlog。
 
-- [ ] **N111 深修剩下的一半:ZMQ IO 移出 `_pool_lock`**(`stock_engine.set_watchlist`,#105 verification §5.3):要 per-code
+- [x] **N111 深修剩下的一半:ZMQ IO 移出 `_pool_lock`**(`stock_engine.set_watchlist`,#105 verification §5.3):要 per-code
   in-flight 狀態(`owners.add` 先佔位 → IO 鎖外 → 失敗回滾 + 第二個 acquirer 的等待)。**耦合**:N111 現行的退訂正確性
-  (`removed` 以 `_refs` 為準)**依賴 IO 在鎖內**,一移出 ST1 洩漏原樣復發 —— 兩件事要同一輪做。
-- [ ] **N092 `stock_source.backfill` 真三態化**(§5.4):先把 `parse_hist_tick` 的「試撮窗濾掉」與「解析不出」分流(現在
-  兩者都回 None),否則 08:30–09:00 盤前回補會被判成 stub 無限重排。改回傳契約,獨立輪。
-- [ ] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發 → 08-27 user 拍板 index
+  (`removed` 以 `_refs` 為準)**依賴 IO 在鎖內**,一移出 ST1 洩漏原樣復發 —— 兩件事要同一輪做。 **→ 09-08 盤點:Q17 結案:無實錄;改自選後畫面卡 > 1 s 再開**
+- [x] **N092 `stock_source.backfill` 真三態化**(§5.4):先把 `parse_hist_tick` 的「試撮窗濾掉」與「解析不出」分流(現在
+  兩者都回 None),否則 08:30–09:00 盤前回補會被判成 stub 無限重排。改回傳契約,獨立輪。 **→ 09-08 盤點:Q17 結案:無實錄;盤前 08:30 後個股分時一直空白再開**
+- [x] **N051 另外兩個 churn 來源**(§5.5):收盤段 `IX0001` 13:25:37–13:34 每 30 s 一發共 18 發 → 08-27 user 拍板 index
   閘 13:25(`in_index_heal_window_now`,pr-126 F-01 per-consumer 收修;`_TRADING_END` 留 13:35),**已出貨待次一交易日驗**
   (見 08-27 節「收盤段 IX0001」條,pr-126 F-08 不先勾);個股冷門檔(6921 全日 6 ticks → 153 發)—— 對「從未推播」的檔把
   退避上限 60 s 拉到 300 s。另:N051 逐腿閘的真環境待核項(SXF 休市段自癒發數)#105 §6 沒列,prod 重啟後盤中
   `grep "零推播自癒" | grep SXF` 應大幅少於 M0 的 3 小時 8 發。**08-27 核過:休市段(08:45 前 / 13:45 後)零發 = 逐腿閘
   PASS;日盤 09:45–13:01 另有 11 發是稀疏腿真沒成交的假警報(M0 那 8 發是休市段,不是同一件事),
   已由 fix/corr-sparse-leg-heal-exempt 以 `sparse` 旗標豁免 R2。** 6949 冷門檔 172 發(每分鐘 attempt 1)仍是本條。 **→ 08-28 拍板:6949 退避上限 60→300 s 併 `/mod` 可觀測性小批(達錢無「暫停交易」旗標,今日 6949 回補三次逾時放棄 = 只能反推;暫停交易標示等 B2 調研)。**
-  → 08-28 mod/observability-batch-0828:退避上限 300 s 本來就在,病根是重掛 snapshot 清 attempts(上條)→ 指紋規則一併收;**本條留 `[ ]` 到次一交易日 grep 6949 ≤ 10 發驗過再勾**。
+  → 08-28 mod/observability-batch-0828:退避上限 300 s 本來就在,病根是重掛 snapshot 清 attempts(上條)→ 指紋規則一併收;**本條留 `[ ]` 到次一交易日 grep 6949 ≤ 10 發驗過再勾**。 **→ 09-08 盤點:Q1 結案:6949 09-08 25 發但間隔 2–10 分鐘、幾乎全 attempt 1 = 冷門股真沒成交;原病(每分鐘連發 172 發)已消**
 - [x] ~~**`corr_source.taifex_leg_gate` 對 SGX / CME / CBOT / OSE 段恆 True**(§5.6):要收得先用 `QUERYINSTRUMENTINFO` 的
   `OpenCloseTime` 把各段時段落成事實(skill 只有 OSE 一組)。~~
   → 08-28 拍板不做:今日實測 SGX TWN 開盤前僅 2 發/日;VX 7 發是稀疏假警報 → 改加 `sparse` 旗標(併可觀測性小批)。
@@ -480,17 +516,17 @@ verification;這裡回填成 backlog。
   → 08-28 triage:與 08-17 節同條(L429),留那條。
 - [ ] **corr / futures `_handle_reconnect` 逐字同形**(§7.8 ST5;review 也列 Duplicated Code):對帳單位不同(product vs
   leg.symbol),第三個引擎接同款時再抽;注意兩處**順序已漂**(futures 先 update pending 再 bump epoch,corr 相反),今天等價。
-- [ ] **rollover stage1 → worker `set_trade_date` 之間的次毫秒窗**(§7.8 SP1):source 日窗仍舊,靠 `_generation` guard 丟掉
-  回補結果 —— 「靠別人擋」不是「結構上不可能」,真要收得把日窗語意納入 generation。
+- [x] **rollover stage1 → worker `set_trade_date` 之間的次毫秒窗**(§7.8 SP1):source 日窗仍舊,靠 `_generation` guard 丟掉
+  回補結果 —— 「靠別人擋」不是「結構上不可能」,真要收得把日窗語意納入 generation。 **→ 09-08 盤點:Q16 結案 → 已知風險索引(09-08 盤點節);六天 log 零「作廢」**
 - [x] **N039 route 層首則 seed send 仍只 catch `WebSocketDisconnect`**(`app.py` 四處),close_sent traceback 噪音仍在。
   **→ 2026-09-07 next-time 盤點:B3 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`ws.send_seed`(斷線 / close_sent
   RuntimeError 回 False 收尾、其餘照拋)接上 txo-pnl / corr / river 三處 relay 前的 seed send(實際只有三處,不是四處;
   stock 的 seed 早已走 `stream(seed=)` 在 relay 內);`TestSendSeed` 四案釘住。**
-- [ ] **N038 jitter 對背景分頁無效**(Chrome timer 1 s 對齊),#99 E5 判 PASS 偏寬。
-- [ ] **#106 私密視窗偏好靜默不落檔畫面零訊號**(`storage.ts` 四旗標唯一讀者是自己去重)。
-- [ ] **/bug H3 昨日段中段缺格 gate 5 不涵蓋**(只比尾根;core 單條 polyline 對任何缺格架橋)+ **切回 tab 最多 60 s 印
-  「TC4 回補中」歸因錯**(inactive 停輪詢)。
-- [ ] **`futures_engine._leaf_rearm` 不自驅**(只在 `_handle_quote` 消化,`_handle_reconnect` 不自排 → 靠別品推播觸發)。
+- [x] **N038 jitter 對背景分頁無效**(Chrome timer 1 s 對齊),#99 E5 判 PASS 偏寬。 **→ 09-08 盤點:Q15 結案**
+- [x] **#106 私密視窗偏好靜默不落檔畫面零訊號**(`storage.ts` 四旗標唯一讀者是自己去重)。 **→ 09-08 盤點:Q15 結案:無痕本不該存**
+- [x] **/bug H3 昨日段中段缺格 gate 5 不涵蓋**(只比尾根;core 單條 polyline 對任何缺格架橋)+ **切回 tab 最多 60 s 印
+  「TC4 回補中」歸因錯**(inactive 停輪詢)。 **→ 09-08 盤點:Q14 結案 known:09-08 自選 84 檔三日分時各 270 根零缺**
+- [x] **`futures_engine._leaf_rearm` 不自驅**(只在 `_handle_quote` 消化,`_handle_reconnect` 不自排 → 靠別品推播觸發)。 **→ 09-08 盤點:Q19 結案:期貨頁某商品整天不跳再查**
 - [ ] **Duplicated Code 抽取候選**(review §5 D):`capital_api.py` tick 閘尾段六行 ×2;`futExchangeContract` try/catch→null
   第 5 份(`FuturesLadder.tsx`);`flash-locked` 三個產生點(`flash-send.ts` / `FuturesLadder.tsx` / `close-order.ts`);
   `list-drag.ts` 六位置參數 Data Clump(`WatchlistSidebar.tsx` ×2)。
@@ -525,22 +561,22 @@ verification;這裡回填成 backlog。
   要做只能接非即時源(FinMind / 央行)當日線腿,不合相關係數的秒級口徑;若 user 仍要,另案。~~ → user 08-26 拍板:達錢沒有就不做。
 - [x] ~~**F4 江波圖 11 色是否分得開**待 user 過目(river-8..11 天藍 / 靛紫 / 鋼灰藍 / 棕褐,後兩色靠低飽和區分);
   `RiverOverlay.tsx` / `RiverPanel.tsx` 註解仍寫「七腿」(成本例證,論點更強不影響正確性)。~~ → user 08-26 過目「分得開」。
-- [ ] **F5 期貨成交契約碼組法只有一筆真樣本**(08-26 整天無期貨成交,仍未驗)(`QEF06` + idx33 `202606` → `QEFF6`):首筆真期貨成交後看 log
+- [x] **F5 期貨成交契約碼組法只有一筆真樣本**(08-26 整天無期貨成交,仍未驗)(`QEF06` + idx33 `202606` → `QEFF6`):首筆真期貨成交後看 log
   「期貨部位鍵差異(樂觀 vs 券商)」;不同就改 `mapping.contract_from_fill`。另 **無券當沖(flag 無券)/ 零股不套**,
-  仍走回查鏈;無券的部位狀態與 balance.py 負股數校準同一條(08-20 待實錄)。 **→ 08-28:等首筆期貨真成交,agent 看 log 即可。**
+  仍走回查鏈;無券的部位狀態與 balance.py 負股數校準同一條(08-20 待實錄)。 **→ 08-28:等首筆期貨真成交,agent 看 log 即可。** **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] ~~**F5 真成交耗時數字**:三段 log「balance 鏈: … 自成交回報到達起 N ms」已備,下一筆真成交後把數字記回
   `.claude/feat/chart-ux-batch-0826/verification.md`(現在只有 FakeCom 模擬:修前 463 ms、修後推播早於回查鏈)。~~ → 08-26 已記回 verification.md:樂觀 0.0–0.7 ms、鏈落地 624–5538 ms(13 筆)。
-- [ ] **F5 成交到達時回查鏈若在途,該輪落地會短暫覆蓋回成交前快照**(與現狀等長的空窗,不擴大);
-  若盤中觀察到「部位閃一下回舊值再回來」就是這條,候選 = 鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次。 **→ 08-28 拍板升 `/bug 部位快照不得倒退`:鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次(根治)。**
+- [x] **F5 成交到達時回查鏈若在途,該輪落地會短暫覆蓋回成交前快照**(與現狀等長的空窗,不擴大);
+  若盤中觀察到「部位閃一下回舊值再回來」就是這條,候選 = 鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次。 **→ 08-28 拍板升 `/bug 部位快照不得倒退`:鏈落地時對 `_fill_seen_at` 之後到達的成交重新套一次(根治)。** **→ 09-08 盤點:Q6 結案 known-risk(同上)**
 - [x] ~~**worktree `frontend/npm ci` 失敗:package-lock.json 與 package.json 不同步**(@emnapi/* 版本);主 tree 是
   `npm install` 裝的。開 worktree 只能 robocopy node_modules;要根治就 `npm install` 更新 lock 一次(獨立 chore)。~~ → 08-26 chore/frontend-lockfile-sync `npm install` 更新 lock(diff = @emnapi/* + wasm32-wasi optional 平台包 bundled 項 + yaml peer 旗標)。
 - [x] **`tests/server/test_ws_disconnect.py::test_close_sent_runtime_error_is_not_logged_as_warning` 全量並行下偶紅**
   (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。** → 08-31 出貨(部分結案):斷言改只看 `copycat.server.ws` logger(caplog 收整個 root,他測殘留背景執行緒的 WARNING 落進 2 秒窗即誤紅);候選根因未親眼抓到那則紀錄,再紅時失敗訊息印 caplog.text 可回溯。**洩漏源已有實證**:pr-160 review 跑 8 檔後端測試,收尾冒出 `tc4.py _listen_loop` 殘留執行緒的 PytestUnhandledThreadExceptionWarning —— 本測試已免疫,其他 caplog 負向斷言未免疫,follow-up 見下一條。
-- [ ] **TC4 `_listen_loop` 執行緒活過測試(pr-160 review 實證)**:候選修法 = conftest autouse fixture 測後斷言無殘留
-  `_listen_loop` 執行緒(或揪出漏 `close()` 的 fixture)。影響面 = 全套件所有 caplog 負向斷言與執行緒計數斷言。
-- [ ] **空回補免 seq bump(pr-160 review F-04)**:`stock_state.apply_backfill` 對 `ticks=[]` 且倖存集 = 現況時仍 `seq +1001`
+- [x] **TC4 `_listen_loop` 執行緒活過測試(pr-160 review 實證)**:候選修法 = conftest autouse fixture 測後斷言無殘留
+  `_listen_loop` 執行緒(或揪出漏 `close()` 的 fixture)。影響面 = 全套件所有 caplog 負向斷言與執行緒計數斷言。 **→ 09-08 盤點:Q18 併 W3 B2 測試鷹架批(user 09-08 轉告該 session)**
+- [x] **空回補免 seq bump(pr-160 review F-04)**:`stock_state.apply_backfill` 對 `ticks=[]` 且倖存集 = 現況時仍 `seq +1001`
   → 前端跳號規則整片重掛 tbody,純 no-op、開盤 ×N 檔各一次。候選 = 空回補且無變化時不 bump(行為改動,單獨分支;
-  contract 見 CLAUDE.md §4 個股 seq 條「例外已知且刻意」段,改時要同步改口)。
+  contract 見 CLAUDE.md §4 個股 seq 條「例外已知且刻意」段,改時要同步改口)。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 
 ## 2026-08-26(mod/shutdown-budget A1 關機預算同源 留尾)
 
@@ -563,11 +599,11 @@ verification;這裡回填成 backlog。
   **健康** session 收尾的機會;真要縮短得在 `close()` 進場時把 socket 的 RCVTIMEO 調短(`api.lock`
   持有下 setsockopt 才安全,而 KeepAlive Pong 共用同一把鎖)—— 動到 wrapper 共用 socket,獨立一輪。
   **→ 2026-09-07 next-time 盤點:C8 沒看到問題。**
-- [ ] **wrapper `KeepAliveHelper.ThreadProcess` 只 catch ZMQError**(`spikes/TCPY/tcoreapi_mq.py:292-303`,
+- [x] **wrapper `KeepAliveHelper.ThreadProcess` 只 catch ZMQError**(`spikes/TCPY/tcoreapi_mq.py:292-303`,
   本地 patch 版):`Pong` 在 try 外,recv 撞 RCVTIMEO 會帶著 `api.lock` 死掉(= 既知的毒鎖,`_dispose`
   取不到鎖會跳過 Disconnect,無害);但 decode 類例外殺掉執行緒時鎖已釋放、SUB socket 永不關 →
   `Disconnect()` 的 `_ctx.term()` **無界阻塞**,那條 lane 只能靠 run.ps1 硬殺。修法 = try 包住整個迴圈體 +
-  finally 關 socket(wrapper 是 gitignored 本地檔,改了要同步 `docs/research/2026-07-06-tc4-stock-tick-1k-api-report.md` §11)。
+  finally 關 socket(wrapper 是 gitignored 本地檔,改了要同步 `docs/research/2026-07-06-tc4-stock-tick-1k-api-report.md` §11)。 **→ 09-08 盤點:Q16 結案 → 已知風險索引;最近四次關機收尾 ≤ 0.35 s**
 
 ## 2026-08-26(08-25 盤中觀察對帳 + fix/tc4-logout-and-cancel-reply-warning 留尾)
 
@@ -592,24 +628,24 @@ verification;這裡回填成 backlog。
   engine 實例的 fixture 或背景 thread 殘留;再紅一次就開 /bug。 **→ 08-28:併 D chore/test-hygiene-batch-2。** → 08-31 chore/test-hygiene-batch-2 出貨:根因 = 主圖入列的空回補照樣 `apply_backfill`(seq +1001),worker thread 先於 tick 落地時首則 tick seq=1002;測試改用 `backfill_gate` 卡住回補讓 tick 必為首事件,斷言不動。不是狀態外漏。
 - [ ] **現股當沖 / 信用當沖資格顯示**(user 08-26 提問,未拍板):現股當沖 = FinMind `TaiwanStockDayTrading`
   (`BuyAfterSale` Y/＊ = 僅先買後賣;回測 `backfill_daytrade.py` 已用),信用當沖 = `TaiwanStockMarginPurchaseShortSale`
-  資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。 **→ 08-28:併 B2 調研(達錢商品資訊有無當日當沖資格 / 暫停交易;證交所當日名單 API;FinMind 當日更新時刻;順便列達錢還能拿到哪些欄位)。user:不能用前一日名單。**
+  資券標的;兩者皆 EOD 名單,T 日名單 FinMind 幾點更新未實測;群益 `sDayTrade` 是送單意圖不是資格,SKCOM 有無資格查詢 API 未查。 **→ 08-28:併 B2 調研(達錢商品資訊有無當日當沖資格 / 暫停交易;證交所當日名單 API;FinMind 當日更新時刻;順便列達錢還能拿到哪些欄位)。user:不能用前一日名單。** **→ 09-08 盤點 Q4:user 另開 session `/feat`(排在 Q20 /bug 之後);資料源見 `docs/research/2026-08-28-instrument-flags-survey.md`**
 
 ## 2026-08-25(fix/futures-intraday-lag-bridge 期貨分時 live 點架橋 留尾)
 
-- [ ] **歷史段永久 memo 會把「分頁靜默截斷的非空日」永久釘住**(bug H3;`bars.py::put_hist_range` 只對「截斷後面的日子」不寫負向快取,截斷**當日本身**的非空殘段照樣 `_hist[(code,day)] = got` 永久化):症狀 = 前一交易日序列中間 / 尾巴缺一段,一直到 server 重啟才消失,零 log。候選 = 對 allday 1K 以「該日應有分鐘數 / 尾根時刻」做覆蓋度判定,不足者不入 memo(同 `_possible_data_days` 的日曆判定可算出期望尾根)。本輪 gate 5 只擋「live 點架橋」,中間缺格仍會被 core 單條 polyline 直線相連。
+- [x] **歷史段永久 memo 會把「分頁靜默截斷的非空日」永久釘住**(bug H3;`bars.py::put_hist_range` 只對「截斷後面的日子」不寫負向快取,截斷**當日本身**的非空殘段照樣 `_hist[(code,day)] = got` 永久化):症狀 = 前一交易日序列中間 / 尾巴缺一段,一直到 server 重啟才消失,零 log。候選 = 對 allday 1K 以「該日應有分鐘數 / 尾根時刻」做覆蓋度判定,不足者不入 memo(同 `_possible_data_days` 的日曆判定可算出期望尾根)。本輪 gate 5 只擋「live 點架橋」,中間缺格仍會被 core 單條 polyline 直線相連。 **→ 09-08 盤點:Q17 結案:09-08 自選 84 檔三日分時各 270 根零缺**
 
 ## 2026-08-24(mod/stream-ui-misc two-axis 留尾)
 
 review 收修已出貨(NaN ref 語意反轉 / `commitRef` 單一出口 + backstop 移除 / 文案全繁中 /
 seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
 
-- [ ] **`OVERLAY_LINES` 以「輸入序」查表,輸入本身不帶識別**(`lib/index-chart-svg.ts::
+- [x] **`OVERLAY_LINES` 以「輸入序」查表,輸入本身不帶識別**(`lib/index-chart-svg.ts::
   `OverlayLinePts.index` → `MarketPane` 的 `OVERLAY_LINES[l.index]`):N262 修的是「過濾後
   位置塌陷」,但**位置仍是唯一的識別**——哪天有人在 `buildOverlayGeometry` 的輸入陣列前面
   插一腿(或把加權 / 櫃買調換),線色與標籤會整排錯位,而畫面照畫、零錯誤訊號(現有測試
   鎖的是 `[0,1]` / `[1]` 這種**位置**,同樣跟著漂)。候選 = 輸入改帶 key
   (`{ key: "TWSE" | "OTC", minutes, ref }`),幾何回傳 key、呼叫端以 key 查表(ST4);
-  順帶讓 `OVERLAY_LINES` 從陣列變 `Record<key, style>`,「腿數多於樣式表」那條 guard 可退休。
+  順帶讓 `OVERLAY_LINES` 從陣列變 `Record<key, style>`,「腿數多於樣式表」那條 guard 可退休。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] **`signal-model.ts::formatToastText` 待刪**:prod 已無讀者(只剩 `useSignalAlerts.test`
   拿它當期望值來源)。現況是**同源同義反覆** —— 實作與斷言同一顆函式,文案改動 mutant 全綠。
   順序不可顛倒:**先**把測試的期望值改成字面量(逐字寫死文案 + 註解寫拆解),lock 生效後
@@ -618,38 +654,38 @@ seq 契約落檔 / `otcSourceDead` 抽 lib);以下為刻意不做的:
   TC4 斷 / 無 engine 模式)前端沒有可分辨訊號,本輪只能出「對兩態都誠實」的單句。真解 =
   `stock_engine` 的 status seed 加一個「engine 是否存在」欄(`/api/health` 刻意不含引擎
   健康度,不要改那支),前端才分得出「等它自癒」與「去重啟伺服器」。屬後端改動,擇日排。 **→ 08-28 拍板做:小 `/mod`(後端一欄 + 前端兩句話)。**
-- [ ] **N108 判別子是啟發式,換源要重看**(`lib/index-source-health.ts::otcSourceDead`):
+- [x] **N108 判別子是啟發式,換源要重看**(`lib/index-source-health.ts::otcSourceDead`):
   「加權 ≥2 格而櫃買 0 格」只抓得到**開盤即死透**;MIS 盤中才壞(已有格)判不出來,
   而櫃買改用非 MIS 的來源時整條判準的前提(otc 不吃 `stale`、5s poll)就不成立了。
-  改櫃買資料源時**必須連這支一起重看**,否則它會靜默地永遠回 false。
-- [ ] **N120 回補後 `n` 整段平移一次 → tbody 重掛一次**:`apply_backfill` 的 seq 跳增
+  改櫃買資料源時**必須連這支一起重看**,否則它會靜默地永遠回 false。 **→ 09-08 盤點:Q14 結案:換櫃買資料源時重看(code 註解已有)**
+- [x] **N120 回補後 `n` 整段平移一次 → tbody 重掛一次**:`apply_backfill` 的 seq 跳增
   (`_BACKFILL_SEQ_MARGIN` 1000 + 回補筆數)讓由尾回推的號整段位移,同一批成交換一批 key。
   可接受(回補是一次性事件,且跳增本來就是要前端偵測到並重抓全量),characterization 已鎖在
   `stock-accum.test.ts`。真要消掉這一次重掛,key 得改吃「不隨 seq 走的成交識別」
-  (後端逐筆給 id,或以 `t + cum_vol` 組鍵)—— 屬跨檔契約改動,不順手做。
+  (後端逐筆給 id,或以 `t + cum_vol` 組鍵)—— 屬跨檔契約改動,不順手做。 **→ 09-08 盤點:Q16 結案:CLAUDE.md §4 已列知情例外**
 
 ## 2026-08-24(架構債盤點,唯讀)
 
-- [ ] **全站抽象化 /refactor Why gate 未過(user 拍板 (d) 沒有具體被卡住)→ 改為盤點文件**
+- [x] **全站抽象化 /refactor Why gate 未過(user 拍板 (d) 沒有具體被卡住)→ 改為盤點文件**
   `docs/superpowers/specs/2026-08-24-architecture-debt-inventory.md`:A 後端 engine 骨架 /
   B app.py / C 三座梯 / D 分時圖 / E localStorage(/mod)/ F WsStatus ×7 / G fade / H fake source
-  兩份,每條附觸發條件、半徑、seam、步數草案。**沒撞到觸發條件不動**;撞到時直接取用不重調研。
+  兩份,每條附觸發條件、半徑、seam、步數草案。**沒撞到觸發條件不動**;撞到時直接取用不重調研。 **→ 09-08 盤點:唯讀盤點文件,勾銷**
 
 ## 2026-08-24(mod/futures-intraday-features two-axis 留尾)
 
 review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture / `splitCapitalStamp` /
 全形括號);以下為刻意不做的:
 
-- [ ] **J1:`IntradayChartCore` 的 mode 四態(stock / index / futures / stkfut)分歧散在五處**
+- [x] **J1:`IntradayChartCore` 的 mode 四態(stock / index / futures / stkfut)分歧散在五處**
   —— x 窗 `xw`、`snapRadius`、`vpEnabled` + 副圖能量、疊線三元組
   (`overlay` / `overlayFailed` / `supported`)、五顆 toggle 的 `available` / `hint` + 空態文案。
   每加一個 mode 就要記得五處都改,漏改的樣態是「新 mode 沿用了現貨窗的預設」——
   圖照畫、只是對位或可用性靜默錯掉,零測試會紅。候選 = **per-mode capability 表**
-  (一個 `Record<Mode, Capability>`,五處各自查表),分歧收在一個地方讀得完。
-- [ ] **J2:`MINUTE_SNAP_RADIUS` 與 `XWindow` 常數不同源**:snap 半徑是「幾個 key」,
+  (一個 `Record<Mode, Capability>`,五處各自查表),分歧收在一個地方讀得完。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **J2:`MINUTE_SNAP_RADIUS` 與 `XWindow` 常數不同源**:snap 半徑是「幾個 key」,
   而 key 的語意由當前 `XWindow` 決定(現貨窗 = 分鐘、近全軸 = 軸索引)。兩者分開放的話,
   換窗時半徑的實際涵蓋範圍跟著變而沒有任何提示。候選 = 併進 `XWindow`(每個窗自帶
-  預設 snap 半徑),`buildIntradayGeometry` 的 `opts.snapRadius` 退成覆寫。
+  預設 snap 半徑),`buildIntradayGeometry` 的 `opts.snapRadius` 退成覆寫。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] **期貨日 K `staleTime: Infinity` 跨日不重抓 → 基準日停在昨天**
   (`hooks/useFuturesBars.ts:61`):疊線資料源與日 K 模式共用同一份 query,`Infinity` 讓它
   「一天只打一次」—— 但 preview 整天掛著(看盤日常,CLAUDE.md §1)跨過午夜後那份 cache
@@ -661,46 +697,46 @@ review 收修已出貨(基準日改吃圖上錨定日 / CDP·MA parity fixture /
   而 TQ v5 每 render 都 `setOptions` 重排計時器 → 00:00–00:01 內任一重繪把那一發推到隔天,「一直在期貨 tab 上」主情境其實沒修好
   (`FuturesChart` 每則 WS 訊息重繪)。改成界嚴格在 from 之後(`msUntilNextLocalDate(new Date(from − slack))`)+ 秒級量化;
   紅測試 = slack 窗內每 100 ms rerender 40 s。報告 `docs/superpowers/specs/pr-151-review.md`。
-- [ ] **`o.date` 的夜盤跨午夜組合假設未證**(`lib/fill-marks.ts::alldayFillPoints`):
+- [x] **`o.date` 的夜盤跨午夜組合假設未證**(`lib/fill-marks.ts::alldayFillPoints`):
   群益回報的 `date` 是否為最新事件日**未實證**(08-28 pr-134 F-01:同日 C/D 實測仍原單日期),而近全軸把 `date + time` 組成時戳後丟給 `anchorDateOf`
   —— 這假設了「夜盤 01:00 的成交,`date` 已是次一日曆日」。若群益實際回的是委託所屬交易日
   (即 01:00 成交仍記前一日),`anchorDateOf` 會再退一天 → 該筆成交**靜默不畫**。
-  失效在安全側(不畫 < 畫錯分鐘),故本輪不猜。待**真夜盤成交一筆**取證後決定是否改判準。 **→ 08-28:併 N075 夜盤實驗那筆回報順看,等事實。**
-- [ ] **`EnergySub` 改單一 `<path>`**(N047 量測後的真正收法,verification §N047):
+  失效在安全側(不畫 < 畫錯分鐘),故本輪不猜。待**真夜盤成交一筆**取證後決定是否改判準。 **→ 08-28:併 N075 夜盤實驗那筆回報順看,等事實。** **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **`EnergySub` 改單一 `<path>`**(N047 量測後的真正收法,verification §N047):
   1140 個 `<rect>` → 1 個 path,節點數降三個量級。**不走「資料版本 memo key」**——
-  1K 回補可以在總量不變下改寫某一分鐘的量,以總量當版本會讓副圖靜默停在舊值(用錯誤換效能)。
-- [ ] **期貨 POC 標籤印桶心 `23002.5` 而非檔位價 `23000`**:`futuresBarsToAccum` 以近全軸
+  1K 回補可以在總量不變下改寫某一分鐘的量,以總量當版本會讓副圖靜默停在舊值(用錯誤換效能)。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **期貨 POC 標籤印桶心 `23002.5` 而非檔位價 `23000`**:`futuresBarsToAccum` 以近全軸
   自折 VP(不經 `foldVp`),桶心落在兩檔之間。待 user 表態(verification 待驗項 4)後再定
-  —— 改印檔位價要先決定「桶跨多檔時算哪一檔」,不是純顯示改動。 **→ user 08-28:現在就放著(那是價位不是量;不讀它)。**
+  —— 改印檔位價要先決定「桶跨多檔時算哪一檔」,不是純顯示改動。 **→ user 08-28:現在就放著(那是價位不是量;不讀它)。** **→ 09-08 盤點:Q13 結案:user 不讀它**
 
 ## 2026-08-24(mod/chart-label-batch two-axis 留尾)
 
 review 收修已出貨(N007 讓位方向 / 界單位 / N044 補完 / 三處斷言字面量 / helper 抽取);
 以下為刻意不做的:
 
-- [ ] **LabelSpan 型別統一**:同一個「一段文字的水平佔位」在本批有三種表示法 ——
+- [x] **LabelSpan 型別統一**:同一個「一段文字的水平佔位」在本批有三種表示法 ——
   `{ x, width }`(`vwapLabelBox`)、`span: [a, b]`(`buildVwapLabel` / `spansOverlap`)、
   `x + half`(極值文字 `maObstacles`)。三者互轉散在呼叫端,轉錯不會紅(只是避讓帶偏)。
-  候選 = 一個 `LabelSpan` 型別 + 兩個建構子,轉換只留一處。
-- [ ] **`maLabelLeft` 的 MA 標籤寬仍硬編 `EDGE_LABEL_W`(34)**:那是個股 `fmtTickPrice`
+  候選 = 一個 `LabelSpan` 型別 + 兩個建構子,轉換只留一處。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] **`maLabelLeft` 的 MA 標籤寬仍硬編 `EDGE_LABEL_W`(34)**:那是個股 `fmtTickPrice`
   口徑的上界,index / 期指態的 MA 是 8 字(≈45.6px)—— 與 N006 同一種病(N006 只修了
   VWAP 標籤與極值文字的寬)。症狀:走廊左緣算窄了,MA 標籤與極值文字「判定說不撞、
-  畫出來撞」的窄帶約 11px。**下輪動 MA 標籤時帶走**。
-- [ ] **index 態極值標記文字仍走 `fmt`**(`24283.54`),與同圖 `fmtIndexPts` 兩套口徑
-  (R1 verification §5 已記)。它畫在繪圖區內、不參與右緣寬度 clamp,故 N006 沒收它。
-- [ ] **N062 修後 1536×678 以下仍會溢出**:6rem 地板讓 1536×700 的家數帶 section 需求
+  畫出來撞」的窄帶約 11px。**下輪動 MA 標籤時帶走**。 **→ 09-08 盤點:Q13 結案:不礙眼、不影響效能**
+- [x] **index 態極值標記文字仍走 `fmt`**(`24283.54`),與同圖 `fmtIndexPts` 兩套口徑
+  (R1 verification §5 已記)。它畫在繪圖區內、不參與右緣寬度 clamp,故 N006 沒收它。 **→ 09-08 盤點:Q13 結案:不礙眼**
+- [x] **N062 修後 1536×678 以下仍會溢出**:6rem 地板讓 1536×700 的家數帶 section 需求
   252 ≤ 262,餘裕只有 **10px** —— 視窗再矮 22px 就回到出捲軸。候選 = 家數帶 section 的
-  `flex` 由 `0 0 auto` 改 `5 1 auto`(讓它跟著壓縮而不是硬撐),**本輪未評估**。
+  `flex` 由 `0 0 auto` 改 `5 1 auto`(讓它跟著壓縮而不是硬撐),**本輪未評估**。 **→ 09-08 盤點:Q13 結案:user 視窗不低於 1536×700**
 - [x] **`CandleChart.test.tsx` 含歷史 NUL 位元組**,git 判整檔 binary(diff / grep 全瞎;
   N026 的 class 鎖因此只能落在新檔 `CandleChart.caption.test.tsx`)。獨立 chore 清掉。 **→ 08-28:併 D chore/test-hygiene-batch-2。** **→ 08-31 chore/test-hygiene-batch-2 出貨:3bef8634 帶進的 `"漲跌 -\0"` 清掉(not.toContain 恆真),改 `/漲跌 -(?!\d)/`;git 不再判 binary。**
 
 ## 2026-08-24(fix/futures-bars-gap 收尾留尾)
 
-- [ ] **非交易日「當日段」查詢仍白付 10s**(review C1,刻意不對稱):週日/假日開站時
+- [x] **非交易日「當日段」查詢仍白付 10s**(review C1,刻意不對稱):週日/假日開站時
   today 段照發、15s TTL 節流;日曆錯標風險考量不套過濾。若之後嫌 log 吵或假日看盤卡,
-  候選 = today 段接 resolve_trade_date(與 R3/N089 盤前冷啟動案同一塊)。
-- [ ] **連假首日無夜盤且為窗尾唯一可能日 → 仍重複探測**(review C2,2026-02 春節形狀):
-  要收得動 put_hist_range last_seen 防護(P1-2 取捨),屆時一併評估。
+  候選 = today 段接 resolve_trade_date(與 R3/N089 盤前冷啟動案同一塊)。 **→ 09-08 盤點:Q16 結案 → 已知風險索引**
+- [x] **連假首日無夜盤且為窗尾唯一可能日 → 仍重複探測**(review C2,2026-02 春節形狀):
+  要收得動 put_hist_range last_seen 防護(P1-2 取捨),屆時一併評估。 **→ 09-08 盤點:Q16 結案 → 已知風險索引(春節前再看)**
 
 ## 2026-08-22(日間鏈 R1–R10 review 留尾;結論 `docs/superpowers/specs/2026-08-22-daytime-chain-review.md`)
 
@@ -710,14 +746,14 @@ prod 8721 = 6adf20d9、dist 已重建)。
 **待 user 過目 / 盤中觀察(真環境無法刻意觸發,以測試代證的五項)**:
 以下為本次不動的 P2:
 
-- [ ] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
-  守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。
+- [x] **R5 封關夜近似誤差**(次一營業日休市的夜仍空 churn,方向安全)獨立開條;`river_state.py:72` clamp
+  守門改名次小者贏需 per-offset rank(與 TQ-8 同設計);跨午夜表補週五 23:00 / 週六 23:00 / 週日 01:00 / 週一 08:50。 **→ 09-08 盤點:Q16 結案 → 已知風險索引**
 ## 2026-08-20(盤後 server log 巡檢發現)
 
-- [ ] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
+- [x] **融券的 [25] 代碼未實證,刻意不對映**(上條留尾):首次持融券過夜時 log 會出現
   「種類標籤未知 …整列」,拿該列 [25] 值(疑 3)回填 `balance.py::_PNL_KIND_CODE` 即收工;
-  在那之前融券部位的均價/打平照舊缺值(寧缺勿錯)。 **→ 08-28:等首次持融券過夜(今日無券空單走的是現股負股數,沒碰到融券列)。**
-- [ ] **當沖空單第二層校準:kind 歸類 + 平倉映射解鎖**(2026-08-20 user 實報空單標記方向錯;
+  在那之前融券部位的均價/打平照舊缺值(寧缺勿錯)。 **→ 08-28:等首次持融券過夜(今日無券空單走的是現股負股數,沒碰到融券列)。** **→ 09-08 盤點:Q7 結案:user 無融券;首次持融券過夜看 log 再說**
+- [x] **當沖空單第二層校準:kind 歸類 + 平倉映射解鎖**(2026-08-20 user 實報空單標記方向錯;
   第一層已出貨 = 現股/融資負股數保留空方向 + 整列蒐證 warning + 平倉暫鎖):user 下一筆
   現股當沖先賣(或資券互抵)開倉期間,log 會出現「balance line 負股數…整列」與損益列的
   「種類標籤未知…整列」(若為融券態)→ 依實錄決定 (a) 負現股列歸 `daytrade_sell`(close
@@ -726,18 +762,18 @@ prod 8721 = 6adf20d9、dist 已重建)。
   blocked_until_calibrated` 為解鎖語意。注意:打平公式的 SELL_TAX 固定 0.3%(user 拍板不分
   當沖),當沖實際稅 0.15% → 空單打平線會偏保守(往不利側),要精確另議。 **→ 08-28:今日 8358 無券空(現股列 T,-1000)實錄已取得,併上條 `/bug 無券空單校準`;(b) 損益均價口徑等下一筆。**
   **→ 08-30 (a) 已定:負現股列歸 `daytrade_sell`(`_CLOSE_MAP` 既有鍵解鎖 = 現股買);`test_cash_short_direction_close_blocked_until_calibrated` 保留、
-  語意改口為「cash 負向 = 資料矛盾」。負**融資**列仍鎖(資券互抵無實錄,WARNING 文案改「融資賣超,未校準」)。(b) 見 08-26 節。**
+  語意改口為「cash 負向 = 資料矛盾」。負**融資**列仍鎖(資券互抵無實錄,WARNING 文案改「融資賣超,未校準」)。(b) 見 08-26 節。** **→ 09-08 盤點:(a) PR #152 定案、(b) 走 avg_source 契約;user 09-07「成本沒大問題」**
 
 ## 2026-08-20(refactor/memo-boundaries R6 留尾)
 
-- [ ] **GroupGridView 2.5 萬 SVG 節點縮減**(handoff R6 原文):per-card memo 已有,
-  節點數縮減屬視覺/結構設計變更(虛擬化或降採樣),另案 /mod。 **→ 08-28:user 目前不覺得卡;併 `/perf 開盤回補並行` 一起量,不卡就勾。**
+- [x] **GroupGridView 2.5 萬 SVG 節點縮減**(handoff R6 原文):per-card memo 已有,
+  節點數縮減屬視覺/結構設計變更(虛擬化或降採樣),另案 /mod。 **→ 08-28:user 目前不覺得卡;併 `/perf 開盤回補並行` 一起量,不卡就勾。** **→ 09-08 盤點:Q15 結案:user 不卡**
 ## 2026-08-20(mod/signals-today-offload 留尾)
 
-- [ ] **loop 預設 executor 同池耦合**(review C-1):to_thread 全走同一 ThreadPoolExecutor
+- [x] **loop 預設 executor 同池耦合**(review C-1):to_thread 全走同一 ThreadPoolExecutor
   (daily_bars / capital close / signals-today / hub append),TC4 半死的不可中斷殭屍執行緒
   堆積時全池排隊。若 prod 觀察到 today / daily_bars 變慢,考慮給「純本機檔案 IO」一個
-  獨立有界 executor;`_warned_years` check-then-add 跨執行緒(review C-3)屆時一併看。
+  獨立有界 executor;`_warned_years` check-then-add 跨執行緒(review C-3)屆時一併看。 **→ 09-08 盤點:Q16 結案 → 已知風險索引;六天慢請求 0**
 
 ## 2026-08-19(mod/futures-broadcast-coalesce-leaf-unsub 期貨廣播 coalesce 留尾)
 
@@ -775,9 +811,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [x] ~~**群組卡個股期委託不標**~~ → 08-31 併精確版出貨(fillsByCode 吃 code)。
 ## 2026-08-17(mod/ladder-market-buttons batch3 R1 留尾)
 
-- [ ] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
+- [x] 真市價 literal `"M"` 給個股期 / 期貨市價鈕(D3b):prod 實測 `"M"` 可送後可從 limit@邊價切回;
   屆時 OrdersList 標籤對這兩梯才會出現(現在 wire 就是限價 IOC,不標)。
-  (2026-08-24 註:user 之後找機會下單再驗;現股側 1068 修時一併盤點期貨端 `"M"` 路徑。) **→ 08-28:併個股期安全首單一起驗,不排期。**
+  (2026-08-24 註:user 之後找機會下單再驗;現股側 1068 修時一併盤點期貨端 `"M"` 路徑。) **→ 08-28:併個股期安全首單一起驗,不排期。** **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 ## 2026-08-17(mod/group-grid-full-chart R4 留尾)
 
 - [x] ~~**冷 cache 50 overlay 與瀏覽器 6 條連線交互未量**(review B10):盤中實機錄 waterfall,含同期
@@ -796,14 +832,14 @@ prod 8721 = 6adf20d9、dist 已重建)。
   breadth streak 06:00 三個時序。 **→ 08-28 拍板做:`/mod`(與上條同支)。**
 ## 2026-08-14(fix/index-line-vanish 收尾留尾巴)
 
-- [ ] **heal 每個 variant 新發一個 history 訂閱、無釋放路徑**(review L1-P2-4):壞日子
+- [x] **heal 每個 variant 新發一個 history 訂閱、無釋放路徑**(review L1-P2-4):壞日子
   單 session 最多累積 ~18 個 IX0001 1K 訂閱(`_unsub` 只管 REALTIME)。TC4 per-session
   history 訂閱上限未實測;SC-5 側車重演時順手觀察連續多窗口訂閱的行為,若有上限,
-  觸頂樣態可能又是「靜默回空」。 **→ 08-28:等壞日子(heal 階梯有爬才看得到)。**
-- [ ] **SC-5 側車順驗 stub 語意**(review L1-P2-1 / L2-P1-2 Known Risk):驗「凍結
+  觸頂樣態可能又是「靜默回空」。 **→ 08-28:等壞日子(heal 階梯有爬才看得到)。** **→ 09-08 盤點:Q16 結案 → 已知風險索引;09-08 壞日子累積 57 個無事,根因由 Q20 /bug 帶走**
+- [x] **SC-5 側車順驗 stub 語意**(review L1-P2-1 / L2-P1-2 Known Risk):驗「凍結
   stub 的 Time 是否恆為訂閱建立時刻」與「盤中建立的新窗口在該窗真無 1K 時是否產生
   in-domain 假分鐘(實際為當下真實指數價的稀疏點)」;若後者實測發生且被嫌,
-  升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。 **→ 08-28:等壞日子,與上條同窗口。**
+  升級手段 = fetch 結果單鍵且鍵=當下分鐘時標記可疑(不動階梯,只加 log)。 **→ 08-28:等壞日子,與上條同窗口。** **→ 09-08 盤點:Q11 結案:TC4 行為非本專案 bug;加權分時出現不該有的單點時再查**
 
 ## 2026-08-13(mod/trial-pause-badge 第一段收尾留尾巴)
 
@@ -827,13 +863,13 @@ prod 8721 = 6adf20d9、dist 已重建)。
   ≈ 2 min,恢復 tick 即集合撮合成交**;(b) per-code `trial` 可直接吃 TradeStatus==1。 **→ 08-28 拍板做:獨立 `/mod`,per-code 吃 TradeStatus==1、文案統一「(緩)」;處置股(分盤撮合 TradeStatus 每 N 分鐘 1→0→1)用 breadth 引擎既有 FinMind 名單改標「(處置)」;先回填 tc4-market-facts。**
 ## 2026-08-13(fix/index-chart-empty-minutes 收尾留尾巴)
 
-- [ ] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷 / 跨輪混合快照並關閉本輪**(2026-08-21 R7 review F7;2026-08-22 review P1 補:舊輪 rows 與新輪 rows 落同一 staging 時會復活已出清的幽靈部位):COM 無查詢識別不可根治;
-  機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 / 多一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。 **→ 08-28:併 `/bug 部位快照不得倒退`,時間窗緩解(查詢後 N ms 內的 `##` 才算本輪)。**
-- [ ] **heal 帶 minutes 的廣播對飽和 client 是 at-most-once**(review T-4/C-2,known-risk):
+- [x] **BalanceCollector 殘餘交錯:新輪已收 rows 時舊輪遲到 `##` 會 flush 截斷 / 跨輪混合快照並關閉本輪**(2026-08-21 R7 review F7;2026-08-22 review P1 補:舊輪 rows 與新輪 rows 落同一 staging 時會復活已出清的幽靈部位):COM 無查詢識別不可根治;
+  機率 = 兩回應交錯於 ms 級窗。若 prod 觀察到「部位少一檔 / 多一檔 60s 後自癒」即此樣態;候選 = 查詢後 N ms 內的 `##` 才視為本輪。 **→ 08-28:併 `/bug 部位快照不得倒退`,時間窗緩解(查詢後 N ms 內的 `##` 才算本輪)。** **→ 09-08 盤點:Q6 結案 known-risk(同上)**
+- [x] **heal 帶 minutes 的廣播對飽和 client 是 at-most-once**(review T-4/C-2,known-risk):
   per-client queue(`ws.py::CLIENT_QUEUE_MAX`,2026-08-24 現為 500;原記 32 已過時)飽和期間
   `QueueFull: pass` 靜默丟掉 heal 那一則 → 該分頁線仍空且無二次機會(引擎
   state 與 log 都顯示已自癒)。觸發窗極窄;系統性解法(per-client 補送 / 低頻週期全量)
-  會動 scalar-only 頻寬慣例,獨立輪評估。
+  會動 scalar-only 頻寬慣例,獨立輪評估。 **→ 09-08 盤點:Q16 結案 → 已知風險索引;六天「佇列滿」0**
 ## 2026-08-06(stkfut-contracts 題3 收尾留尾巴)
 
 - [x] **個股期功能待 user 過目**(PR #28 試用指引):合約下拉/分時五檔切換/個股期梯截圖
@@ -843,54 +879,54 @@ prod 8721 = 6adf20d9、dist 已重建)。
   **→ 2026-09-07 next-time 盤點:C1 個股期用下來沒意見。**
 ## 2026-08-06(group-grid 題5 收尾留尾巴)
 
-- [ ] **apply_backfill reset+replay 競態範圍隨 guard 去 main 化擴大**(review B3-f;2026-08-24 起由
+- [x] **apply_backfill reset+replay 競態範圍隨 guard 去 main 化擴大**(review B3-f;2026-08-24 起由
   Claude 盯:下次盤中以 group-state 連續抓取對照分鐘完整性,user 不用主動看):SubHistory 與套用之間
-  到達的 live tick 被洗掉,現及於全部自選成員(每檔每日一次 + 60s 輪詢自癒)。 **→ 08-28:08-31 對帳。**
+  到達的 live tick 被洗掉,現及於全部自選成員(每檔每日一次 + 60s 輪詢自癒)。 **→ 08-28:08-31 對帳。** **→ 09-08 盤點:Q16 結案 → 已知風險索引;08-31 / 09-02 對帳無事件、09-08 84 檔三日 270 根零缺**
 ## 2026-07-07(tday-join-ga-backtest 收尾沉澱)
 
-- [ ] simulate 完整 derived-series 預計算重構(review F2 只做了 anchor 網格限定;若 Phase B 全量變慢再做)
+- [x] simulate 完整 derived-series 預計算重構(review F2 只做了 anchor 網格限定;若 Phase B 全量變慢再做) **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 
 ## 2026-07-11(fade-round-1 收尾 review P2 彙總,18 條聚類)
 
-- [ ] fade pipeline 效能候選(6h 長跑;/perf 先 profile 再動):診斷段重讀全部 1K bars(run 時已讀過)、optimize_rule_tp 重算 optimize_rule_stops 已算過的 rule mask、guard_dist_grid 每格全量重模擬、by_source O(sources×trades) 重掃
+- [x] fade pipeline 效能候選(6h 長跑;/perf 先 profile 再動):診斷段重讀全部 1K bars(run 時已讀過)、optimize_rule_tp 重算 optimize_rule_stops 已算過的 rule mask、guard_dist_grid 每格全量重模擬、by_source O(sources×trades) 重掃 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 
 ## 2026-07-14(fade-round-2 自評 review P2 彙總)
 
-- [ ] fade 診斷效能候選(/perf 先 profile):diagnose_pool_fade 對同一 universe base+stress+lock_grid 共 5 次全量重模擬(可單迴圈多配置);evaluate_cells 每 cell×variant 各 base/stress 兩趟 + baseline ×4 = 16 趟(觸發判定可先算一次共用)
-- [ ] write_pool_fade_report / write_cells_report 兩份 markdown 表建構結構相似(第三份出現時抽共用 table builder)
-- [ ] fade_cells 新增 cell 需改多點(find fn / _simulate_cell_trades 分支 / specs 列表 / config):cell 數 >4 時抽 registry
-- [ ] fade_cells find_cell_a_entry 的 headroom 除式無 b.close>0 防禦(實際 1K 資料恆正;若接入外部資料源先補 guard)
-- [ ] backfill_brokers/label_events 對 FinMind 非數值欄位(如 'N/A')無韌性(現況未觀察到;出現時在 aggregate 層加 tolerant parse + 計數)
+- [x] fade 診斷效能候選(/perf 先 profile):diagnose_pool_fade 對同一 universe base+stress+lock_grid 共 5 次全量重模擬(可單迴圈多配置);evaluate_cells 每 cell×variant 各 base/stress 兩趟 + baseline ×4 = 16 趟(觸發判定可先算一次共用) **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] write_pool_fade_report / write_cells_report 兩份 markdown 表建構結構相似(第三份出現時抽共用 table builder) **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] fade_cells 新增 cell 需改多點(find fn / _simulate_cell_trades 分支 / specs 列表 / config):cell 數 >4 時抽 registry **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] fade_cells find_cell_a_entry 的 headroom 除式無 b.close>0 防禦(實際 1K 資料恆正;若接入外部資料源先補 guard) **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] backfill_brokers/label_events 對 FinMind 非數值欄位(如 'N/A')無韌性(現況未觀察到;出現時在 aggregate 層加 tolerant parse + 計數) **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
 
 ## 2026-07-15(fade-round-3 自評 review P2 彙總,8 條聚類)
 
-- [ ] evaluate_cells_from_universe 頂層 round gate 分岔 → **觸發條件已到**(2026-08-24 盤點:`fade_cells.py:263-286`
-  已是 round5 → round4 → round3 → round2 四段 if-elif chain),下次動 fade 回測時抽 evaluator factory
-- [ ] 底倉格 grid 對 in_w 掃 6 次(單次分桶可 O(n),n 小暫無感)
-- [ ] run_cells 三次 build_fade_universe(cellb 可由 main 超集記憶體過濾,現況重讀 1K JSON)
-- [ ] validate_disaster_fields 在 _simulate_core 每 call 驗一次(GA 熱迴圈微耗;可改 config frozen 後驗一次的快取)
+- [x] evaluate_cells_from_universe 頂層 round gate 分岔 → **觸發條件已到**(2026-08-24 盤點:`fade_cells.py:263-286`
+  已是 round5 → round4 → round3 → round2 四段 if-elif chain),下次動 fade 回測時抽 evaluator factory **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] 底倉格 grid 對 in_w 掃 6 次(單次分桶可 O(n),n 小暫無感) **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
+- [x] run_cells 三次 build_fade_universe(cellb 可由 main 超集記憶體過濾,現況重讀 1K JSON) **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] validate_disaster_fields 在 _simulate_core 每 call 驗一次(GA 熱迴圈微耗;可改 config frozen 後驗一次的快取) **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
 
 ## 2026-07-16(fade-round-4 自評 review P2 彙總,12 條聚類)
 
-- [ ] fade_anatomy 效能候選(單次跑分鐘級,量級可接受;/perf 先 profile):flush_anatomy 每個 z 全宇宙重掃(可單趟收三個 z)、hl_anatomy 每個 k × arm 重算 entry idx(可 cache)、_evaluate_round4 消融 5 組 × 5 變體 = 25 趟全量模擬
-- [ ] check_flush_exit(cfg 驅動)與 _tp1(combo 驅動)結構重複但錨不同(進場後最低 vs running_low 含 trig)——已在 docstring 註明差異;若 Phase B 網格路徑退役,_tp1 可刪併
+- [x] fade_anatomy 效能候選(單次跑分鐘級,量級可接受;/perf 先 profile):flush_anatomy 每個 z 全宇宙重掃(可單趟收三個 z)、hl_anatomy 每個 k × arm 重算 entry idx(可 cache)、_evaluate_round4 消融 5 組 × 5 變體 = 25 趟全量模擬 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
+- [x] check_flush_exit(cfg 驅動)與 _tp1(combo 驅動)結構重複但錨不同(進場後最低 vs running_low 含 trig)——已在 docstring 註明差異;若 Phase B 網格路徑退役,_tp1 可刪併 **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
 
 ## 2026-07-17(fade-round-5 收尾 review P2 彙總,8 finder → 6 條)
 
-- [ ] round5 效能候選(/perf 先 profile):stress 跑法重執行 entry_fn 全宇宙掃描(進場 idx 不依 run_cfg)、樣本預算表 4×全宇宙重掃(可單趟 _iter_votes 同時判多個 S)、消融 3 單訊號各自重跑狀態機
-- [ ] 敏感度區塊複製貼上(S/c/m 三塊近同)+ disaster_off 手刻出異形 dict shape + round 輪次 dispatch 鏈成長(round 6 時考慮 active_round 單點解析);flow_flip_anatomy 出現率分母含 len(bars)<2 跳過日(輕微低估,不影響判準)
+- [x] round5 效能候選(/perf 先 profile):stress 跑法重執行 entry_fn 全宇宙掃描(進場 idx 不依 run_cfg)、樣本預算表 4×全宇宙重掃(可單趟 _iter_votes 同時判多個 S)、消融 3 單訊號各自重跑狀態機 **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
+- [x] 敏感度區塊複製貼上(S/c/m 三塊近同)+ disaster_off 手刻出異形 dict shape + round 輪次 dispatch 鏈成長(round 6 時考慮 active_round 單點解析);flow_flip_anatomy 出現率分母含 len(bars)<2 跳過日(輕微低估,不影響判準) **→ 09-08 盤點停放(回測,user:後續再處理;見 09-08 盤點節停放索引)**
 
 ## 2026-07-20(backfill 雙修 review P2)
 
-- [ ] backfill_finmind/backfill_daytrade 空日不進 marker 後,真假日在重跑同 range 時會反覆重抓(range 約 11 個月含 100+ 週末假日);若 FinMind 配額吃緊,疊加靜態台股假日曆只重試「非假日空回應」 **→ user 08-28:回測資料管線,排除不討論。**
+- [x] backfill_finmind/backfill_daytrade 空日不進 marker 後,真假日在重跑同 range 時會反覆重抓(range 約 11 個月含 100+ 週末假日);若 FinMind 配額吃緊,疊加靜態台股假日曆只重試「非假日空回應」 **→ user 08-28:回測資料管線,排除不討論。** **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 
 ## 2026-07-28(capital-order Phase 3 順手清單)
 
-- [ ] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價 **→ user 08-28:目前不下選擇權,先放著。**
+- [x] TXO 市價單確認框金額 = **估算**,冷門履約價可能是舊價:`snapshot.contracts[].last_price` 是該合約當日**時序最後一筆成交價**、無時效標記(2026-08-05 /mod txo-contract-last-price 拍板 out of scope)。深價外履約價可能整個上午沒成交 → 確認框「預估權利金」與安全閘 `safety._check_qty_amount` 的名目金額都吃到數小時前的價。**送單本身不受影響**(市價走 literal M,`capital/mapping.py:161`,價格不是我方帶的);要收斂的話候選 = last_price 帶成交時刻 + 前端超過 N 分鐘標示為舊價 **→ user 08-28:目前不下選擇權,先放著。** **→ 09-08 盤點:Q7 結案:確認框金額與成交差距大再說**
 
 ## 2026-09-02(pr-175 review 留尾,Nice/ask-user 未做組)
 
-- [ ] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。
+- [x] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] ~~**盤前篩選放棄後 ~24h 不重武裝**~~ → **09-08 W2 T4 + T5(#207 / #209)出貨,且改制**:盤前篩選改**每個交易日 08:00**
   跑目標交易日制(名單服務今天;EOD 窗自昨天往回、當沖名單與處置股用今天;快取 v2 `target_date` / `data_date`;
   CLI `--date` = 目標交易日;CONTEXT.md「盤前篩選」節);重試改時間盒 = 每 10 分鐘到 09:00 為止、全敗隔交易日 08:00 再來,
@@ -904,7 +940,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [x] **ruff select 加 `PLE1205/PLE1206`**(review F-03 順手項):logger 格式引數 3-vs-4 只有機器攔得住;現 pyproject 未設 select(預設 E4/E7/E9/F)。加規則要先全庫掃一輪存量。
   **→ 2026-09-07 next-time 盤點:B14 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`[tool.ruff.lint] select`
   顯式列預設四組 + PLE1205 / PLE1206;加規則前全庫掃存量 0。**
-- [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
+- [x] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
 - [x] ~~**盤前篩選當沖名單「部分落檔」不可偵測**~~ → **09-08 W2 T6(#210)出貨**:相對閘(今天列數 < 前一交易日列數 × 0.8
   視同未發布完,走 T5 重試;無前值絕對下限 1,000;列數落快取 `daytrade_rows`、log 印今日 / 前值;名單真縮 >20% 不自動放寬,
   WARNING 提示刪鍵重置 —— user 09-08 拍板 Q4 (a) / Q11 (a))。

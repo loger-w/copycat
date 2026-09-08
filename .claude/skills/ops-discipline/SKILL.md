@@ -203,3 +203,13 @@ description: 盤中/本機操作紀律(專案累積教訓)。盤中要驗任何�
    本 app 每則 WS 全樹 re-render → 632 筆/s ≈ 1.1 MB/s。已由 `frontend/src/lib/dev-perf-guard.ts` dev-only 守門(PR #70);
    **看盤日常仍建議跑 production build**,dev server 只做開發。chrome-devtools MCP 是獨立 profile,看不到 user 的 Chrome。
    (Trigger:任何「瀏覽器用一段時間變慢 / 掛掉」回報、或在 dev server 上長時間跑 WS 重繪型頁面)
+
+## Blast radius:grep「欄位寫入點」不只「建構點」(2026-08-27 實證,09-08 自 next-time 遷入)
+
+- **教訓**:#118 修 `avg_source` 時 blast radius 只 grep 了 `Position(` 建構點與 `avg_source` 字面,沒 grep `avg_price =`
+  就地寫入 → 真正的 prod 鏈 `capital/client.py::_on_profit_complete`(損益試算回填)漏掉,測試綠在一條零 caller 的死路徑上,
+  prod 整欄 null(08-27 fix/breakeven-avg-source-prod-chain 才修到)。
+- **判準**:新增 / 改語意一個欄位時,`grep "<鄰欄>\s*="` 把每個**就地寫入點**列出來逐一對(鄰欄 = 同一 record 上一定會一起
+  被寫的欄位,如 `avg_price` 之於 `avg_source`),再 grep 建構點;兩份清單都要出現在 spec 的白名單裡。
+- **紅燈**:某欄位在 prod 恆 null / 恆預設值而測試全綠 → 先懷疑寫入點漏掃,不是資料源。
+  (Trigger:任何 `/mod` 加欄位、改欄位語意;two-axis review 的 spec 軸對白名單時)
