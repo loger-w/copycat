@@ -7,8 +7,8 @@
   08:03 / 08:10 / 08:23 啟動的日子只有 13:30 那 2 發。`index_engine._handle_quote` 08-26 修過同症狀(FilledTime 缺值走牆鐘),
   這是另一條路徑:`last_minute` 恆 None = 推播從未寫進 minutes(key None 或 pending),差異只在啟動時刻。走 `diagnosing-bugs`
   先做能變紅的 loop(建構時 trade_date = 今日 vs 昨日 + 08:30 rollover 兩條路徑對照)。
-- 結案 40 條(Q1 / Q2 / Q6 / Q7 / Q11 / Q13–Q17 / Q19,各條原位 `[x]` 附註);停放 22 條(下表);Q3 教訓搬 ops-discipline;
-  Q4 C5 當沖資格顯示 user 另開 session `/feat`;Q5 期貨批停放;Q9 screen_engine memo 停放(W2 已 merge);Q18 `_listen_loop` 併 W3 B2。
+- 結案 40 條(Q1 / Q2 / Q6 / Q7 / Q11 / Q13–Q17 / Q19,各條原位 `[x]` 附註);停放 21 條(下表;原 22,`screen_engine 跨 attempt memo` 同晚出貨結案);Q3 教訓搬 ops-discipline;
+  Q4 C5 當沖資格顯示 user 另開 session `/feat`;Q5 期貨批停放;Q9 screen_engine memo 停放 → 同晚另 session 帶回、mod/screen-eod-attempt-memo 出貨結案;Q18 `_listen_loop` 併 W3 B2。
 
 **停放索引**(不再逐次盤點;觸發條件到了再從原位搜):
 - 期貨批(等 user 有期貨單):`N075 夜盤遠價市價單實驗` / `F5 期貨成交契約碼組法` / `真市價 literal "M"` /
