@@ -41,6 +41,10 @@
 - [ ] **即時末根 —— 期貨頁 / 加權頁接線(另開批,user 09-08 Q10 (a))**:規則沿 `lib/live-last-bar.ts`(補在正式末根之後、正式到了讓位),
   原料不同要各問幾題:期貨 WS 無當日高低(Q5 拍板:用當日 1 分 K 高低併現價,極值最多晚 1–2 分鐘)、期貨 1K 分鐘域是近全時段
   (`allday.ts`,不是 09:01–13:30 那把尺);加權只有每分鐘收盤價 + 當日高低、無量(週 / 月 K 當週 / 當月那根同規則,Q6 拍板一起做)。
+- [x] **pr-218 review 收修(F-01 / F-02 / F-03)**:定稿閘加 `status === "ok"` 半邊(達錢關著 14:01 回 200 + 墊背不退回)/ 日 K h/l 取正式與 accum 聯集 / verification §6 判準 1 措辭;fix/pr-218-review-followups 出貨。
+- [ ] **即時末根交易日閘只擋日曆知道的休市日(pr-218 review F-04,user 09-09 拍板「遇到再說」)**:日曆漏的臨時休市(颱風假 / `trading_holidays.json` 沒更新到當年)那天 09:00 後引擎不換日、accum 仍前一交易日 → 個股頁分 K 隨牆鐘把昨天貼成今天、日 K 補一根假今天,零訊號。
+  最便宜修法 = `/api/calendar` 已回引擎 `trade_date`(`app.py`)且前端 `useTradingCalendar` 全域取數,`StockChart` 的 `liveOn` 多比一句 `trade_date === liveToday`,不動 snapshot 形狀。boot 已有日曆過期 WARNING(`years_loaded`),真遇到再做。
+- [ ] **即時末根 13:30 夾端點(pr-218 review F-05,參考用)**:`barMinuteOf` 把 ≥ 13:30 全夾進 13:30 那根(doc 已註明範圍與曝險窗);期貨 / 加權接線批分鐘域是近全時段,不要照抄,到時一起想「窗外丟棄 vs 夾端點」。
 - [ ] **即時末根已知近似(知情,user Q11 (a))**:補的分鐘 bar 開盤價 = 前一根收盤(前端 accum 不記每分鐘首筆),最多 90 s 後被正式
   1 分 K 換掉;DK 尚無今日列時今天那根的開盤價退「今日 1 分 K 首根 o(讀 TQ cache,不 reactive)→ accum 最早分鐘 c」。
   要精確就得 accum 多記每分鐘首筆(後端 `MinuteAgg` 加 open 欄 + 前端 `applyTick`),屬跨檔契約改動,等有人真的看到差再做。

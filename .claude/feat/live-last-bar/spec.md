@@ -27,7 +27,7 @@ user(09-08 grilling Q1 原話):「在盤中當下不能更新嗎?我有發現在
 2. As a 盯盤者, I want 日 K 今天那根的高低收與量盤中即時變, so that 日 K 不是早上的快照。
 3. As a 盯盤者, I want 正式 1 分 K 每分鐘到了就自然換掉前端補的那幾根, so that 畫面上停留的永遠是最接近正式的值(補的根最多存在 90 s)。
 4. As a 盯盤者, I want 13:30 收盤到 14:01 之間今天那根維持前端算的值、14:01 換達錢定稿, so that 收盤後不會退回早上的舊值。
-5. As a 盯盤者, I want 14:01 那發失敗(達錢關著)時今天那根不退回舊值, so that 失敗不比沒做更糟。
+5. As a 盯盤者, I want 14:01 那發失敗**或拿到墊背舊快照**(達錢關著 / 忙:後端回 200 + 界前快照 + status 非 ok)時今天那根不退回舊值, so that 失敗不比沒做更糟。(pr-218 review F-01 回校:原句只寫「失敗」,HTTP 非 2xx 那半)
 6. As a 盯盤者, I want 09:00 前開著的頁不會把昨天的成交貼成今天那根, so that 早上開圖不出假 K。
 7. As a 盯盤者, I want 換股當下不會把前一檔的成交貼到新股的 K 線上, so that 切股不閃錯圖。
 8. As a 盯盤者, I want 個股期合約態維持只有分時、K 線鈕反灰, so that 這批不動合約態(Q8)。
@@ -46,7 +46,7 @@ user(09-08 grilling Q1 原話):「在盤中當下不能更新嗎?我有發現在
   - 只補到 `nowMinute` 對應的 bar(進行中那分鐘 = `min(nowMinute + 1, 810)`);accum 分鐘若晚於它(時鐘倒退)忽略。
   - 純函式:不讀時鐘、不讀日曆;`today` / `nowMinute` 由呼叫端給。
 - `mergeLiveDailyBar(official: readonly Bar[], accum: StockAccum, today: string, opts: { dayOpen: number | null }): Bar[]`
-  - 末根 `t === today` → 以 merged 取代:`o` 保留正式的;`h` / `l` 直接取 `accum.high` / `accum.low`(後端 running max/min 含開盤集合競價,不與正式 `o` 再取 max/min —— 正式半成品的 h/l 是早上快照,accum 的必然 ⊇ 它),`c = accum.last.p`,`v = accum.last.cum_vol`(= TC4 當日累積量,DK 的 `v` 與之同源;不用 `accum.volume` 那是 VWAP 分母、去重口徑不同)。
+  - 末根 `t === today` → 以 merged 取代:`o` 保留正式的;`h` / `l` 取**正式與 accum 的聯集**(`Math.max` / `Math.min`;pr-218 review F-02 回校:accum 的 running max/min 只在 TICKS 回補落地後才是當日全量,盤中重啟 / 回補放棄時直接取代會窄化;原句「必然 ⊇」為假),`c = accum.last.p`,`v = accum.last.cum_vol`(= TC4 當日累積量,DK 的 `v` 與之同源;不用 `accum.volume` 那是 VWAP 分母、去重口徑不同)。
   - 末根 `t < today` → append 一根 `{t: today, o: dayOpen ?? accum 最早分鐘的 c, h, l, c, v}`。
   - 末根 `t > today`(不該發生)或 accum 無成交(`last === null` / `high === null`)→ 原樣回傳。
   - `dayOpen` 由呼叫端給:今天正式 1 分 K 首根(09:01)的 `o`(有就用),否則 null → 退 accum 最早分鐘 `c`。
@@ -59,7 +59,7 @@ user(09-08 grilling Q1 原話):「在盤中當下不能更新嗎?我有發現在
   - `accum.code === code` 且 `!accum.noData` 且非期貨態(既有 `isFut` 已擋 K 線)。
   - **牆鐘同日 09:00 起**(`now` 時分 ≥ 09:00;日期 = `isoLocalDate(now)`):stock engine 08:00 才換日,凌晨 accum 仍是昨天的,09:00 前不補(story 6)。
   - **交易日**(`isTradingDay(now)`;2026-09-08 two-axis spec S-01 修訂,原句「交易日曆不看:休市日 accum 無成交 → 純函式自然 no-op」前提為假):休市日引擎 rollover stage2 等新日首筆 tick、假日永遠不來,accum 整天沿用前一交易日的分鐘 / 高低 / 現價,不擋會把前一交易日貼成今天的假 K。週末靠 weekday、國定假日靠 `/api/calendar` 假日集合(未載入退回只擋週末)。
-  - 日 K 另加**定稿閘**:`dataUpdatedAt` **≥** 今天 14:00 界(`DAILY_FINAL_TIME`,與 `lib/day-bars-rollover.ts` 同一顆常數;界的定義 = 當日 14:00:00 本機時刻,等於即算定稿,與 CLAUDE.md §4 口徑同;two-axis spec S-02 回校)→ 不蓋(story 4 / 5:14:01 refetch 失敗時 `dataUpdatedAt` 不前進 → 繼續補;成功才停)。分 K 無此閘(正式 1 分 K 只會往後追加,補的根永遠只在正式末根之後)。
+  - 日 K 另加**定稿閘**:`dataUpdatedAt` **≥** 今天 14:00 界(`DAILY_FINAL_TIME`,與 `lib/day-bars-rollover.ts` 同一顆常數;界的定義 = 當日 14:00:00 本機時刻,等於即算定稿,與 CLAUDE.md §4 口徑同;two-axis spec S-02 回校)**且那一趟 `status === "ok"`** → 不蓋(story 4 / 5:14:01 refetch HTTP 失敗時 `dataUpdatedAt` 不前進 → 繼續補;達錢關著 / 忙時後端回 200 + 墊背 + status 非 ok,`dataUpdatedAt` 會前進但 status 擋住 → 繼續補;pr-218 review F-01 回校;真定稿才停)。分 K 無此閘(正式 1 分 K 只會往後追加,補的根永遠只在正式末根之後)。
 - 順序:1 分 K 原料 → `mergeLiveMinuteBars` → `aggregateBars(…, minutesOf(mode))`(補在聚合**之前**,2–10 分的進行中桶由既有聚合算);日 K → `mergeLiveDailyBar`。
 - `useMemo` deps = `[data, accum, mode, today, nowMinute, final]`:accum 每則 ticks 打包換 identity(0.1 s),重算成本 = 一次 `aggregateBars`(30 日 1 分 K ≈ 5,900 根,O(n))+ merge O(補的根數)。
 - 「現在幾分」由 render 時的 `new Date()` 取(與 `FuturesChart` live 點同慣例:牆鐘不進 memo deps 的問題以 `nowMinute` 純量 dep 解 —— 同分鐘同 accum 命中 memo)。
