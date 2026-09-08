@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import json
 import logging
 import re
+from collections.abc import Callable
 
 import pytest
 
@@ -54,14 +56,17 @@ def _daily_rows(day: _dt.date, n: int = 5) -> list[dict]:
     ]
 
 
+Fetch = Callable[[str, _dt.date], list[dict]]
+
+
 def _engine(
-    daily: object,
-    day_trading: object,
+    daily: Fetch,
+    day_trading: Fetch,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
     *,
-    disposition: object = lambda token, day: [],
-    now_fn: object = _dt.datetime.now,
+    disposition: Fetch = lambda token, day: [],
+    now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
     daytrade_floor: int = 1,
 ) -> ScreenEngine:
     monkeypatch.setattr(screen_engine, "_REQ_GAP_SECS", 0.0)
@@ -72,11 +77,11 @@ def _engine(
     return ScreenEngine(
         token="tok",
         calendar=WEEKEND_ONLY,
-        daily_fetch=daily,  # type: ignore[arg-type]
-        day_trading_fetch=day_trading,  # type: ignore[arg-type]
-        disposition_fetch=disposition,  # type: ignore[arg-type]
+        daily_fetch=daily,
+        day_trading_fetch=day_trading,
+        disposition_fetch=disposition,
         data_dir=tmp_path_factory.mktemp("screen"),
-        now_fn=now_fn,  # type: ignore[arg-type]
+        now_fn=now_fn,
     )
 
 
@@ -157,7 +162,7 @@ class TestTick:
     """一次排程迭代(`tick`):以注入時鐘 + fake fetcher 觀測「該不該跑、跑哪一天」。"""
 
     @staticmethod
-    def _counting(daily_days: list[_dt.date], dt_days: list[_dt.date]) -> tuple[object, object]:
+    def _counting(daily_days: list[_dt.date], dt_days: list[_dt.date]) -> tuple[Fetch, Fetch]:
         def daily(token: str, day: _dt.date) -> list[dict]:
             daily_days.append(day)
             return _daily_rows(day)
@@ -210,6 +215,45 @@ class TestTick:
         await eng.tick()
         assert dt_days == [fri]  # 零新請求
         assert daily_days.count(fri - _dt.timedelta(days=1)) == 1
+
+    async def test_loop_reruns_immediately_when_a_long_tick_crossed_today_run_time(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        """round-1 spec S-01:週二 07:00 啟動、週一那份沒算過 → 為週一補跑一路失敗到 08:50 放棄;
+        這時 expected 已是週二(≥ 08:00),`_loop` 必須**立刻再 tick** 算今天,不能睡到明天 08:00:30。
+        fetcher 以「第幾次被問到 08-28(週一那份 EOD 窗的第一天)」分辨:前 12 次(07:00 … 08:50 的 12 次
+        週一嘗試)壞,之後好 —— 週二那份的窗第二天也問 08-28,那時已放行。"""
+        clock = _Clock(_dt.datetime(2026, 9, 1, 7, 0, 0))  # 週二 07:00
+        fri = _dt.date(2026, 8, 28)
+        asked_fri = 0
+
+        def daily(token: str, day: _dt.date) -> list[dict]:
+            nonlocal asked_fri
+            if day == fri:
+                asked_fri += 1
+                if asked_fri <= 12:
+                    raise BreadthFetchError("FinMind down")
+            return _daily_rows(day)
+
+        sleeps: list[float] = []
+
+        async def fake_sleep(secs: float) -> None:
+            # 只放行 compute 節奏(0)與重試(600);第一次落到 `_sleep_secs` 的日等待就結束迴圈
+            if secs not in (0.0, 600.0):
+                raise asyncio.CancelledError
+            if secs > 0:
+                sleeps.append(secs)
+            clock.t = clock.t + _dt.timedelta(seconds=secs)
+
+        monkeypatch.setattr(screen_engine.asyncio, "sleep", fake_sleep)
+        eng = _engine(
+            daily, lambda token, day: _dt_rows(day), monkeypatch, tmp_path_factory, now_fn=clock.now
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await eng._loop()
+        assert eng._gave_up_for == _dt.date(2026, 8, 31)  # 週一那份放棄
+        assert eng._cached_target_date() == _DAY  # 週二那份緊接著算完,沒有睡到明天
+        assert sleeps == [600.0] * 11  # 07:00 → 08:50 共 12 次嘗試、11 段;之後零等待直接跑週二
 
     async def test_sleep_targets_next_run_time_plus_buffer(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
@@ -338,10 +382,14 @@ class TestRetryWindow:
         assert len(calls) == 1
         assert eng._gave_up_for == _DAY
 
-    async def test_quota_backoff_does_not_cross_0900(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+    async def test_quota_402_gives_up_today_with_explicit_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """402 的長退避(3600 s)會把下一次推過 09:00 → 不睡、直接放棄(配額用盡今天就別燒了)。"""
+        """402 = 配額用盡 → 一次嘗試、零 sleep、當日放棄,WARNING 明講「配額」(round-1 F-04 / S-02:
+        不再借 3600 s 退避越界來間接放棄)。"""
         clock = _Clock(self.TUE_0800)
         calls: list[_dt.datetime] = []
         sleeps = _install_fake_sleep(monkeypatch, clock)
@@ -352,10 +400,13 @@ class TestRetryWindow:
             tmp_path_factory,
             now_fn=clock.now,
         )
-        await eng.tick()
+        with caplog.at_level(logging.WARNING, logger="copycat.server.screen_engine"):
+            await eng.tick()
         assert sleeps == []
         assert len(calls) == 1
         assert eng._gave_up_for == _DAY
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert "配額" in caplog.records[0].message and "放棄" in caplog.records[0].message
 
     async def test_next_trading_day_rearms_after_give_up(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
@@ -461,6 +512,12 @@ class TestDayTradeRelativeGate:
         payload = json.loads(eng._cache_path().read_text(encoding="utf-8"))
         assert payload["daytrade_rows"] == 1700
         assert any("1700" in r.message and "2000" in r.message for r in caplog.records)
+        # round-1 S-05 / F-01:那行 INFO 在**落檔之後**才印(印了 = 前值已更新);compute 本身不印、不留 instance 欄位
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="copycat.server.screen_engine"):
+            await eng.compute(_DAY)
+        assert not any("前值" in r.message for r in caplog.records)
+        assert not hasattr(eng, "_daytrade_rows_seen")
         # 下一天只給 1,300 列(< 1700 × 0.8 = 1360)→ 擋下,前值不動、目標日也不動
         eng._day_trading_fetch = lambda token, day: _dt_rows(day, 1300)  # type: ignore[assignment]
         with pytest.raises(BreadthFetchError):
