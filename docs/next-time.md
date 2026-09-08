@@ -1,7 +1,22 @@
+## 2026-09-08(mod/w2-daily-bars-and-screen-0800 W2 批 留尾;spec #204)
+
+- [ ] **`/feat` 盤中即時最後一根**(user 09-08 拍板 Q1 (a) 後續):期貨 / 加權 / 個股三頁的日 K 與分 K 以頁面已在收的即時
+  報價(個股 accum / 期貨 WS / 加權 WS)合成「今天那根 / 這一分鐘那根」蓋在圖尾,每筆成交都動;零後端成本(不多打 TC4)。
+  14:01 定稿重抓仍負責換正式版(合成末根與 TC4 正式日 K 有收盤撮合 / 量去重的小差)。規模約三頁 × 兩 tf,要議 seam。
+- [ ] **14:01 那發拿到墊背不自救**(知情;user 09-08 拍板 Q3 (a)):TC4 交易日 14:00 關著時後端回界前快照且 `partial_last` 仍 true,
+  前端「成功且非空 200 不重抓」鎖到午夜(實務 = F5)。若要自救只能蓋 market / futures(個股 payload 無 meta),暫不做。
+- [ ] **盤前篩選 08:00 制第一個交易日早上實錄**:log 應有「盤前篩選 <今天>(資料日 <昨天>):硬條件 … → 資格後 …」+
+  「當沖名單 n 列(前值 m)」;08:00 FinMind 名單沒出 → 每 10 分鐘一行 WARNING「HH:MM:SS 再試」、09:00 前全敗 → 一行「今日放棄」。
+  T4 AC「睡到下一交易日 08:00:30」實作為**每個日曆日 08:00:30 醒、非交易日 tick 判零動作**(行為等價,`TestTick` 釘)。
+
 ## 2026-09-08(pr-202 review 收修 留尾)
 
-- [ ] **C17 的修法只蓋到「重新載入」的大盤頁;整天掛著的 preview 頁 14:00 後仍印「· 最後一根未收盤」到午夜**
-  (pr-202-review F-01;`frontend/src/hooks/useMarketBars.ts` D/W/M 的 staleTime / refetchInterval 走
+- [x] ~~**C17 的修法只蓋到「重新載入」的大盤頁;整天掛著的 preview 頁 14:00 後仍印「· 最後一根未收盤」到午夜**~~
+  → **09-08 mod/w2-daily-bars-and-screen-0800 T2(#206)出貨**:`lib/day-bars-rollover.ts` 加第二道界 14:00 定稿界 + slack,
+  三支日 K hook 同吃(14:01 一發換定稿、之後到午夜不再打);前後端 14:00 由 `test_daily_final_time_parity_with_frontend` 釘等值
+  (CLAUDE.md §4)。**知情不救**:14:01 那發拿到墊背(TC4 關著、後端回界前快照且 `partial_last` 仍 true)前端鎖到午夜,
+  與後端 pr-165 口徑一致(實務 = F5;user 09-08 拍板 Q3 (a))。
+  (原文:pr-202-review F-01;`frontend/src/hooks/useMarketBars.ts` D/W/M 的 staleTime / refetchInterval 走
   `lib/day-bars-rollover.ts` 的午夜界;成功且非空的 200 不重抓(`retryEmpty` 只救空 bars);`MarketChart.tsx:162` 是唯一讀者)。後端 `partial_last`
   已對(含墊背路徑),錯的只是常開頁那份 body 的文案、bar 值正確。候選 = 大盤日 K 的重抓時點加 14:00 界(與 08-31
   「前端期貨日 K 的界仍是午夜」是同一張三支同源政策表的分岔題,**併 W2 的 C16 一起議**),或前端比照 `FuturesChart`
@@ -60,7 +75,10 @@
 
 ## 2026-08-31(fix/futures-daily-cache-night 留尾)
 
-- [ ] **前端期貨日 K 的界仍是午夜 —— 一直掛著的分頁 15:01–24:00 還是用早上快照畫 CDP**(後端定稿界落地後,F5 / 新掛載即正確,
+- [x] ~~**前端期貨日 K 的界仍是午夜 —— 一直掛著的分頁 15:01–24:00 還是用早上快照畫 CDP**~~ → **09-08 W2 T2(#206)出貨**:
+  第二道界取 14:00 定稿界而非 15:00 錨定翻頁(翻頁時 cache 裡是 14:01 之後那份就對;14:00 對三支 hook 都有意義),
+  三支同吃、政策零分岔(user 09-08 拍板 Q1 (a));**盤中即時最後一根(日 K / 分 K 以即時報價合成末根)另開 `/feat`**(user 09-08 拍板)。
+  (原文:後端定稿界落地後,F5 / 新掛載即正確,
   但 `day-bars-rollover.ts` 的 staleTime 到午夜才過期,掛著不動的 preview 要到 00:01 才重問):候選 = `useFuturesBars` 日 K 的界改
   min(午夜, 15:00 錨定翻頁 + slack)。**只有期貨那支該吃 15:00 界**(market / stock 的日 K 沒有錨定日概念),而政策的單一住處在
   `lib/day-bars-rollover.ts` 三支同源 —— 怎麼開這個分岔是設計題,/mod + grilling 一輪再動。
@@ -170,7 +188,11 @@
 - [x] ~~**set_main 無條件重排回補去重**(08-30 /perf 旁支,user 拍板 next-time):~~ → 08-31 fix/backfill-enqueue-trio 出貨:set_main 只擋 `_backfilled` / 在途兩道(no_data / 冷卻刻意不下沉);斷線缺口保險由 reconnect 清 `_backfilled` 承接。08-31 實測 2455 一天 75 次重複回補是證據。原文:`GET /api/stock/state/{code}` → `set_main` → `_enqueue_backfill` 不看 `_backfilled` / 在途 —— 08-28 8358 一天 44 次、6213 41 次(612 次 state 請求),每次 = SubHistory + 全量收割數千 tick + `apply_backfill`。去重會失去「切主圖時順便修補 live 缺口」的保險(reconnect 已清 `_backfilled`,斷線缺口仍會補)。S1 之後每次重複只花 ~0.3 s,痛感大減,先觀察。
 - [x] ~~**開盤瞬間每檔回補兩次**(08-30 觀察):~~ → 08-31 log 核過**結案**:S2 後開盤窗(09:00–09:05)零 sub-second 雙發(08-28 的 1 秒 pattern 消失)。盤中 Δ0s 雙發(09:35 等)= 主圖 fresh subscribe 的「set_main 先入列、首則 REALTIME meta None→值再補一次」刻意設計(鎖停補判需要,stock_engine 註解記載),不改。原文:08-28 09:02–09:03 有 20 檔跑兩次(3042 09:02:20.944 / 09:02:21.976),第二次來自「漲跌停值變」入列點(首則帶 UpperLimitPrice 的 REALTIME 在回補完成後才到 → `prev_limits != meta`)。設計上刻意(補鎖停判定);S2 之後首筆 tick 與meta 同一則到 → 應只剩一次,08-31 log 核。
 - [x] ~~**前端 `useGroupSnapshots` 的 `refetchInterval` 回 false 時 TQ 不排 timer**(08-30 觀察):~~ → 08-31 fix/backfill-enqueue-trio 出貨:groupPollInterval 盤外改回 `msUntilTradingOpen`(新純函式),窗開瞬間醒來。原文:08:59 就開著的群組檢視要等 query 被別的事件重估才會在 09:01 後開始輪詢;S2 之後回補不再依賴這條輪詢,影響只剩卡片 60 s 刷新的起點。
-- [ ] **同病:`refetchInterval` 回 false 的其他 hook**(08-31 L71 掃出):`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
+- [x] ~~**同病:`refetchInterval` 回 false 的其他 hook**~~ → **09-08 W2 T1 + T3(#205 / #208)出貨**:`lib/trading-hours` 加
+  `msUntilFuturesTradingOpen`(08:46)/ `msUntilFuturesAllDayOpen`(08:40 / 14:55)/ `offHoursInterval`(量化 helper,
+  `groupPollInterval` 改用);`useBreadthRows` / `useMarketBars` 分 K / `useStockBars` 分 K(`barsPollInterval` 加 `now`)/
+  `useFuturesBars` 分 K 盤外改回距開點 ms;`useIndexOverlay` 不動(其 false 是「資料健康」不是時段閘,註解已記)。
+  (原文:08-31 L71 掃出:`useBreadthRows` L46(`active && inTradingHours() ? POLL_MS : false`,靠 tab 切換 re-render 半自癒)與 useMarketBars / useStockBars / useFuturesBars / useIndexOverlay 的 `(q) =>` 形各自的盤外 false 分支 —— 開著不動跨越開盤點的都有同一個洞。candidates = 各自換 `msUntilTradingOpen`(已在 lib/trading-hours);逐支確認盤外語意再動,不在 L71 一次掃。要驗再開。
 
   **→ 2026-09-07 next-time 盤點:C18 user 09:00 側欄「陸續幾秒」= 各檔開盤首筆成交本就不同時(09-07 實錄 09:00:02–09:00:17)+ 側欄 1 s 節流,非本條;本條(輪詢頁跨 09:00 不自醒)→ W2 批。**
 - [x] ~~**`/mod` 群組圖牆逐筆**(C9;08-31 C 類四輪**排除**,要先 grilling「資料逐筆不丟」前置再另開案):user 拍板每檔逐筆(現況 60 s 輪詢 group-state + 每秒 watchlist_quote 拉尾);實作條件 = 資料逐筆不丟、
@@ -865,7 +887,12 @@ prod 8721 = 6adf20d9、dist 已重建)。
 ## 2026-09-02(pr-175 review 留尾,Nice/ask-user 未做組)
 
 - [ ] **screen_engine 跨 attempt memo + disposition fail-fast**(review F-09,MED→LOW PARTIAL):compute() 每 attempt 從頭重抓 21 個 MB 級全市場 EOD;最壞 3 attempts ≈ 全配額 4%,是頻寬/時間不是配額問題。修法 = 抄 breadth `_streak_memo`(存 shrink 後列、expected 換日清空)+ disposition 提到資格查前。
-- [ ] **盤前篩選放棄後 ~24h 不重武裝**(review F-10,MED→LOW PARTIAL):21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
+- [x] ~~**盤前篩選放棄後 ~24h 不重武裝**~~ → **09-08 W2 T4 + T5(#207 / #209)出貨,且改制**:盤前篩選改**每個交易日 08:00**
+  跑目標交易日制(名單服務今天;EOD 窗自昨天往回、當沖名單與處置股用今天;快取 v2 `target_date` / `data_date`;
+  CLI `--date` = 目標交易日;CONTEXT.md「盤前篩選」節);重試改時間盒 = 每 10 分鐘到 09:00 為止、全敗隔交易日 08:00 再來,
+  失敗 / 放棄全 WARNING(user 09-08 拍板 Q7 (b) / Q8;原「每小時到翌日 08:00」作廢)。**真環境待實錄**:FinMind 當沖名單
+  08:00 整是否已出(09-08 13:15 實測今天名單已在、成交量全 0),第一個交易日早上看 log。
+  (原文:review F-10,MED→LOW PARTIAL:21:20 重試預算用完 → `_gave_up_for` 鎖到隔日 21:00,名單停前一日且無前端可觀測面(僅 boot console ERROR)。候選:cached != expected 時睡短週期(1h)/ 跨日曆日清旗標。09-01 實測 21:0x 當日 EOD 已可得,首晚失敗機率待更多樣本。
   **→ 2026-09-07 next-time 盤點:C21 user 拍板做(放棄後每小時再試到資料出現或翌日 08:00)→ W2 批。**
 - [x] **verify.py `_DAILY_PAD_ROWS = 25_000` 第三份未納 parity**(review F-16,LOW PARTIAL):breadth/screen 兩份已有 parity 測試;verify 那份註解明說刻意不 import breadth_engine(免拖 fastapi),耦合關係零機驗。
   **→ 2026-09-07 next-time 盤點:B15 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`test_daily_pad_rows_parity_with_breadth`
@@ -874,7 +901,10 @@ prod 8721 = 6adf20d9、dist 已重建)。
   **→ 2026-09-07 next-time 盤點:B14 user 拍板修 → W1 批。→ mod/next-time-batch-w1 出貨:`[tool.ruff.lint] select`
   顯式列預設四組 + PLE1205 / PLE1206;加規則前全庫掃存量 0。**
 - [ ] **`backfill_daytrade.py` BuyAfterSale 錯規則**(review F-01 下游):`_ban` 對任何非空值一律 banned,`Y`(兩向皆可)被誤剔 —— 空方回測的當沖過濾偏嚴。正確值域已寫進 finmind-conventions skill(2026-09-02 校正);修 code + 重跑受影響回測另案。
-- [ ] **盤前篩選當沖名單「部分落檔」不可偵測**(收修 review SP5):單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。
+- [x] ~~**盤前篩選當沖名單「部分落檔」不可偵測**~~ → **09-08 W2 T6(#210)出貨**:相對閘(今天列數 < 前一交易日列數 × 0.8
+  視同未發布完,走 T5 重試;無前值絕對下限 1,000;列數落快取 `daytrade_rows`、log 印今日 / 前值;名單真縮 >20% 不自動放寬,
+  WARNING 提示刪鍵重置 —— user 09-08 拍板 Q4 (a) / Q11 (a))。
+  (原文:收修 review SP5:單日全市場查只擋全空與回聲,dataset 當晚只發布一半時會靜默少剔 —— 原 7 日回看的保守面。觀察數晚發布完整性(與 F-10 樣本累積同批)再定;可選閘 = 列數下限(~1,500)。
   **→ 2026-09-07 next-time 盤點:C22 user 拍板做(相對閘:少於前一晚八成視同未發布;首晚絕對下限 1,000)→ W2 批。**
 
 ## 2026-09-04(pr-188 review 收修 r1 留尾)
