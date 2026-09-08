@@ -5,7 +5,10 @@ import {
   inFuturesAllDayHours,
   inFuturesTradingHours,
   inTradingHours,
+  msUntilFuturesAllDayOpen,
+  msUntilFuturesTradingOpen,
   msUntilTradingOpen,
+  offHoursInterval,
 } from "@/lib/trading-hours";
 
 /** 2026-08 月曆:01 六 / 02 日 / 03 一 / 04 二 / 05 三 / 06 四 / 07 五 / 08 六。
@@ -156,5 +159,94 @@ describe("msUntilTradingOpen(pr-164 F-06:防護分支 + 基本幾何)", () => {
 
   it("開點前最後一秒回原始毫秒差(1s 下限與秒級量化在 groupPollInterval 那層)", () => {
     expect(msUntilTradingOpen(new Date(2026, 7, 5, 9, 0, 59, 500))).toBe(500);
+  });
+});
+
+/** W2 T3(#208)的前置(#205):輪詢頁盤外不回 false、改回「距開點的 ms」—— 每一把時段閘都要有
+ *  自己的開點函式,且**開點分鐘與對應 `in*Hours` 的起點同尺**(前一分鐘 in=false 且距開點恰 60 s、
+ *  開點那分鐘 in=true):兩邊各留一份數字必漂移,漂了的症狀是開點前 1 分鐘醒來打一發空手、再排一天。 */
+describe("msUntilFuturesTradingOpen(期指日盤 08:46;#205)", () => {
+  it("窗前:同日開點差(週三 08:00 → 08:46 = 46 分)", () => {
+    expect(msUntilFuturesTradingOpen(at(WED, 8, 0))).toBe(46 * 60_000);
+  });
+
+  it("收盤後:次一交易日開點(週三 14:00 → 週四 08:46 = 18h46m)", () => {
+    expect(msUntilFuturesTradingOpen(at(WED, 14, 0))).toBe(18 * 3_600_000 + 46 * 60_000);
+  });
+
+  it("週五收盤後 → 週一開點(跳過週末 = 66h46m);假日再跳一天", () => {
+    expect(msUntilFuturesTradingOpen(at(7, 14, 0))).toBe(66 * 3_600_000 + 46 * 60_000);
+    setHolidays(["2026-08-06"]);
+    expect(msUntilFuturesTradingOpen(at(WED, 14, 0))).toBe(42 * 3_600_000 + 46 * 60_000);
+  });
+
+  it("開點與 inFuturesTradingHours 起點同尺:08:45 關且距開點 60 s、08:46 開", () => {
+    expect(inFuturesTradingHours(at(WED, 8, 45))).toBe(false);
+    expect(msUntilFuturesTradingOpen(at(WED, 8, 45))).toBe(60_000);
+    expect(inFuturesTradingHours(at(WED, 8, 46))).toBe(true);
+  });
+
+  it("14 天窮盡 → 24h fallback", () => {
+    setHolidays([
+      "2026-08-06", "2026-08-07", "2026-08-10", "2026-08-11", "2026-08-12",
+      "2026-08-13", "2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19",
+    ]);
+    expect(msUntilFuturesTradingOpen(at(WED, 10, 0))).toBe(24 * 3_600_000);
+  });
+});
+
+/** 近全時段的「開點」只有兩個:08:40(清晨停輪詢窗 05:06–08:39 結束)與 14:55(日盤收→夜盤開
+ *  13:51–14:54 結束)。00:00–05:05 那段是前一日 14:55 窗的延續(跨午夜不斷),不是新開點 ——
+ *  所以「非交易日」只要跳過該日兩個候選就對了(週六凌晨仍在窗內,本函式不會被呼叫)。 */
+describe("msUntilFuturesAllDayOpen(期指近全時段 08:40 / 14:55;#205)", () => {
+  it("清晨窗:週三 06:00 → 08:40 = 2h40m", () => {
+    expect(msUntilFuturesAllDayOpen(at(WED, 6, 0))).toBe(2 * 3_600_000 + 40 * 60_000);
+  });
+
+  it("日盤收→夜盤開窗:週三 14:00 → 14:55 = 55 分", () => {
+    expect(msUntilFuturesAllDayOpen(at(WED, 14, 0))).toBe(55 * 60_000);
+  });
+
+  it("週六 05:06 起全關 → 週一 08:40;週日 20:00 → 週一 08:40;週一凌晨(無週日夜盤)→ 週一 08:40", () => {
+    expect(msUntilFuturesAllDayOpen(at(SAT, 10, 0))).toBe(46 * 3_600_000 + 40 * 60_000);
+    expect(msUntilFuturesAllDayOpen(at(SUN, 20, 0))).toBe(12 * 3_600_000 + 40 * 60_000);
+    expect(msUntilFuturesAllDayOpen(at(MON, 3, 0))).toBe(5 * 3_600_000 + 40 * 60_000);
+  });
+
+  it("假日當天兩個開點都跳過:週三假日 06:00 → 週四 08:40", () => {
+    setHolidays(["2026-08-05"]);
+    expect(msUntilFuturesAllDayOpen(at(WED, 6, 0))).toBe(26 * 3_600_000 + 40 * 60_000);
+  });
+
+  it("兩個開點都與 inFuturesAllDayHours 同尺:08:39 / 14:54 關且距開點 60 s,08:40 / 14:55 開", () => {
+    expect(inFuturesAllDayHours(at(WED, 8, 39))).toBe(false);
+    expect(msUntilFuturesAllDayOpen(at(WED, 8, 39))).toBe(60_000);
+    expect(inFuturesAllDayHours(at(WED, 8, 40))).toBe(true);
+    expect(inFuturesAllDayHours(at(WED, 14, 54))).toBe(false);
+    expect(msUntilFuturesAllDayOpen(at(WED, 14, 54))).toBe(60_000);
+    expect(inFuturesAllDayHours(at(WED, 14, 55))).toBe(true);
+  });
+
+  it("14 天窮盡 → 24h fallback", () => {
+    setHolidays([
+      "2026-08-06", "2026-08-07", "2026-08-10", "2026-08-11", "2026-08-12",
+      "2026-08-13", "2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19",
+    ]);
+    // 週三 16:00:當日兩個開點皆已過,往後 14 天全假
+    expect(msUntilFuturesAllDayOpen(at(WED, 16, 0))).toBe(24 * 3_600_000);
+  });
+});
+
+/** 盤外 `refetchInterval` 回值的唯一整形:秒級量化 + 1 s 下限(day-bars-rollover 鐵律 (c);
+ *  `groupPollInterval` 08-31 起的算式搬來這裡,四支輪詢 hook 同用)。 */
+describe("offHoursInterval(#205)", () => {
+  it("ceil 到整秒:1_799_600 → 1_800_000;整秒不動", () => {
+    expect(offHoursInterval(1_799_600)).toBe(1_800_000);
+    expect(offHoursInterval(30_000)).toBe(30_000);
+  });
+
+  it("< 1 s 吃 1 s 下限(開點前最後一秒不排 0ms 級 timer 連環重排)", () => {
+    expect(offHoursInterval(500)).toBe(1_000);
+    expect(offHoursInterval(0)).toBe(1_000);
   });
 });
