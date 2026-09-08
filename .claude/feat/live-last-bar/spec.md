@@ -45,7 +45,7 @@ user(09-08 grilling Q1 原話):「在盤中當下不能更新嗎?我有發現在
   - 補的 bar:`o` = 前一根(正式或已補)的 `c`(前端沒記每分鐘首筆;最多 90 s 後被正式版換掉,user Q11 知情);`h` / `l` = 分鐘 `h` / `l`(null → 用 `c`);`c` = 分鐘 `c`;`v` = 分鐘 `v`;`uv` / `dv` = 分鐘 `o` / `i`(外 / 內盤;既有 1K 有欄,補的根也給欄才不會讓聚合桶「全缺」與「部分缺」在桶界漂)。
   - 只補到 `nowMinute` 對應的 bar(進行中那分鐘 = `min(nowMinute + 1, 810)`);accum 分鐘若晚於它(時鐘倒退)忽略。
   - 純函式:不讀時鐘、不讀日曆;`today` / `nowMinute` 由呼叫端給。
-- `mergeLiveDailyBar(official: readonly Bar[], accum: StockAccum, today: string, opts: { dayOpen: number | null }): Bar[]`
+- `mergeLiveDailyBar(official: readonly Bar[], live: LiveDay, today: string, dayOpen: number | null): Bar[]`(簽名依實作回校:結構型 `LiveDay` = last / high / low / minutes、`dayOpen` 位置參數;two-axis 收修 S-02)
   - 末根 `t === today` → 以 merged 取代:`o` 保留正式的;`h` / `l` 取**正式與 accum 的聯集**(`Math.max` / `Math.min`;pr-218 review F-02 回校:accum 的 running max/min 只在 TICKS 回補落地後才是當日全量,盤中重啟 / 回補放棄時直接取代會窄化;原句「必然 ⊇」為假),`c = accum.last.p`,`v = accum.last.cum_vol`(= TC4 當日累積量,DK 的 `v` 與之同源;不用 `accum.volume` 那是 VWAP 分母、去重口徑不同)。
   - 末根 `t < today` → append 一根 `{t: today, o: dayOpen ?? accum 最早分鐘的 c, h, l, c, v}`。
   - 末根 `t > today`(不該發生)或 accum 無成交(`last === null` / `high === null`)→ 原樣回傳。

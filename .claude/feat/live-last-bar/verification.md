@@ -86,7 +86,7 @@ tsc 一次紅:`live-last-bar.ts` TS2698(`let cur: Bar | null = null` 被窄成 `
 | 1 分 K 末根跟成交跳(含進行中) | `mergeLiveMinuteBars` + StockChart 分 K 接線 | lib 案 1/4/9;RTL「3 分 K 進行中桶」「再一筆成交」;§6-1 |
 | 2 日 K 今天那根高低收量即時 | `mergeLiveDailyBar`(h/l/c = accum、v = `last.cum_vol`) | lib 案 6a/6b;RTL「今天那根 = accum」;§6-2 |
 | 3 正式 1 分 K 到了換掉補的根 | merge 只補正式末根之後,每 render 重算 | lib 案 1(正式 09:05 已有 → 跳過);§6-1 |
-| 4 13:30–14:01 留前端值、14:01 換定稿 | 定稿閘 = `dataUpdatedAt ≥ 14:00` | RTL「定稿閘」「13:50 抓的半成品」;§6-2 |
+| 4 13:30–14:01 留前端值、14:01 換定稿 | 定稿閘 = `dataUpdatedAt ≥ 14:00` 且 status ok(pr-218 F-01 收修) | RTL「定稿閘」「13:50 抓的半成品」;§6-2 |
 | 5 14:01 失敗不退回 | 閘看 `dataUpdatedAt` 不看牆鐘 | RTL「13:50 … 牆鐘過 14:00 仍蓋」;M3 |
 | 6 09:00 前不出假 K | `nowMinute >= 540` + `isTradingDay`(review 補) | RTL「08:59」「週六」;M4 / M6;§6-3 / 1a |
 | 7 換股不誤貼 | `accum.code === code` | RTL「換股 race」;M5;§6-4 |

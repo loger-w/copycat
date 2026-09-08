@@ -1,0 +1,20 @@
+{
+  "round": 1,
+  "fixed_point": "16605b70",
+  "head_reviewed": "8505deca",
+  "spec_source": "docs/superpowers/specs/pr-218-review.md F-01..F-05 + user 09-09 拍板(F-01 修 / F-02 F-03 併 / F-04 遇到再說 / F-05 參考用)",
+  "reviewers": { "standards": "opus (general-purpose)", "spec": "opus (general-purpose)" },
+  "standards": [
+    { "id": "S-01", "severity": "P2", "file": "frontend/src/lib/day-bars-rollover.ts:34-35", "finding": "DAILY_FINAL_TIME 常數 doc 仍寫「dataUpdatedAt ≥ 當日此界 → 不再以 accum 蓋」,沒跟上 status 半邊;「拿到墊背 → 日 K 鎖到午夜、今天那根停在 accum 13:30 值」的後果四處文件皆無", "standard": "CLAUDE.md §4 跨檔契約同源;該檔自稱政策唯一住處", "kind": "judgement", "disposition": "accepted", "fix": "常數 doc 補 status 半邊 + 墊背後果一句(收修 commit)" },
+    { "id": "S-02", "severity": "P3", "file": "frontend/src/lib/live-last-bar.ts:103", "finding": "mergeLiveDailyBar doc「定稿閘不在這裡(呼叫端以…14:00 界後才抓回來的判)」少 status 半邊", "standard": "同 S-01", "kind": "judgement", "disposition": "accepted", "fix": "doc 補「且那一趟 status ok」" },
+    { "id": "S-03", "severity": "P3", "file": "frontend/src/lib/live-last-bar.ts:118-123", "finding": "`{...last, ...merged, h: max, l: min}` 中 merged 的 h/l 是死值靠 spread 後序覆寫,意圖隱性", "standard": "Fowler 隱性意圖", "kind": "judgement", "disposition": "accepted", "fix": "刪 merged 中介物,取代分支與 append 分支各自明列 h / l / c / v(🔵,案 6a/6b/6c 照綠)" },
+    { "id": "S-04", "severity": "P3", "file": "frontend/src/lib/live-last-bar.test.ts:146", "finding": "案 6a 名稱仍寫「h / l / c / v 換 accum」,語意已改聯集", "standard": "Mysterious Name(測試名 = 規格)", "kind": "judgement", "disposition": "accepted", "fix": "改名「c / v 換 accum、h / l 取聯集(此例 accum 較寬)」" },
+    { "id": "S-05", "severity": "P3", "file": "frontend/src/components/stock/StockChart.livebar.test.tsx:227-240", "finding": "新案把 stubBars 的 fetch mock 逐字複製一份只為改 status", "standard": "Duplicated Code / frontend-testing 共用 stub", "kind": "judgement", "disposition": "accepted", "fix": "`stubBars(daily, status = \"ok\")` 加參數,新案改呼叫 `stubBars(DAILY_BARS, \"disconnected\")`" },
+    { "id": "S-06", "severity": "P3", "file": ".claude/feat/live-last-bar/verification.md:89", "finding": "story 對照表「定稿閘 = dataUpdatedAt ≥ 14:00」未回校", "standard": "文件回校一致", "kind": "judgement", "disposition": "accepted", "fix": "表格加「且 status ok(pr-218 F-01 收修)」" }
+  ],
+  "spec": [
+    { "id": "Spec-01", "severity": "LOW", "file": "frontend/src/components/stock/StockChart.tsx:174", "finding": "status 被當「墊背」代理,但 DK 有「非空 + timeout」真定稿路徑(stock_source.py:873 DK / fallback 逾時仍回已收到的 bars、status timeout)→ 14:01 拿到定稿卻不封閘,今天那根整個下午留 accum 值;值差極小(c / cum_vol / h-l 聯集 ≈ 定稿),四份文件皆未記此取捨", "spec_quote": "報告 F-01「一行條件 || data?.status !== \"ok\"」", "disposition": "accepted (知情取捨,註解)", "fix": "payload 分不出「墊背」與「定稿但慢」,失效方向安全(留 accum 值 ≈ 定稿)故不改 code;StockChart 註解 + bug verification §5 記取捨" },
+    { "id": "Spec-02", "severity": "LOW", "file": ".claude/feat/live-last-bar/spec.md:48", "finding": "同 bullet 的 :49 已做 F-02 回校,:48 的簽名 `opts: { dayOpen }` 仍是舊寫法(實作是位置參數 + LiveDay);既有漂移非本批引入", "spec_quote": "報告 F-02「註解與 spec.md:49『必然 ⊇』改口」", "disposition": "accepted", "fix": "spec.md:48 簽名依實作回校" }
+  ],
+  "disposition": "Standards 6 條(P2×1、P3×5,零硬違規)全 accepted,同批收修(docs ×4 / 🔵 refactor ×1 / test ×1);Spec 2 條 LOW:Spec-01 知情取捨(註解 + verification 記錄,不改 code)、Spec-02 文字回校。核可:F-01 修法逐字照拍板、後端墊背路徑(`_daily_stale_or_empty` 不洗白、`daily_get` 過界即過期)實證 liveDay 非 null;F-02 兩向案齊、append 分支不動合理;紅先行兩案修前皆紅;零 scope creep;文件四處口徑一致。收修後 seam 23 綠 / tsc 0 / eslint 0。"
+}
