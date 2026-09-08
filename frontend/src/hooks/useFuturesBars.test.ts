@@ -42,6 +42,27 @@ function stubDayFetchByWallClock(dBars: readonly object[], d1Bars: readonly obje
 }
 const dayFetchCount = () => urls.filter((u) => u.includes("tf=D")).length;
 
+/** W2 T2(#206)三段牆鐘 stub:D 14:00 前回 `dBars`(今日那根仍在進行、`partial_last` true)、D 14:00 起回
+ *  `dFinalBars`(後端 `DAILY_FINAL_TIME` 後的定稿,`partial_last` false)、D+1 起回 `d1Bars`。 */
+function stubDayFetchThreeWay(
+  dBars: readonly object[],
+  dFinalBars: readonly object[],
+  d1Bars: readonly object[],
+) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      urls.push(String(url));
+      const now = new Date();
+      const d1 = isoLocalDate(now) >= D1_ISO;
+      const afterFinal = now.getHours() >= 14;
+      const bars = d1 ? d1Bars : afterFinal ? dFinalBars : dBars;
+      const meta = { ...META, partial_last: d1 || !afterFinal };
+      return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta }));
+    }),
+  );
+}
+
 beforeEach(() => {
   urls = [];
   vi.stubGlobal(
@@ -321,16 +342,44 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     await vi.advanceTimersByTimeAsync(0);
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
     expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
+    // W2 T2(#206)事前標為該變:14:01 定稿界多一發 → 23:59 起的計數各 +1
     await vi.advanceTimersByTimeAsync(14 * 60 * 60_000 + 59 * 60_000); // 23:59
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
-    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
-    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
     // 使用者的症狀:D+1 早上疊線基準仍是昨天 09:00 那份(D bar 停在部分值)
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同一日曆日內不再打
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(2);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+  });
+
+  // W2 T2(#206;next-time 08-31「前端期貨日 K 的界仍是午夜」):後端 14:00 起把今日那根定稿,常開的期貨
+  // 分頁若到午夜才問,15:00 錨定翻頁後 CDP / MA 基準拿的仍是早上那截。政策多一道 14:00 + slack 的界,
+  // 與午夜界同形(三點斷言:13:59 / 14:00:30 不打、14:01:01 打),之後到午夜不再多打(一天只多一發)。
+  it("人一直在期貨 tab 上跨過 14:00 定稿界 → 14:01 重抓一次拿到定稿,之後到午夜不再打", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
+    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
+    stubDayFetchThreeWay(D_SNAPSHOT, D_FINAL, D1_SNAPSHOT);
+    const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayFetchCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(4 * 60 * 60_000 + 59 * 60_000); // 13:59
+    expect(dayFetchCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(90_000); // 14:00:30:過界但還在 slack 內
+    expect(dayFetchCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
+    expect(dayFetchCount()).toBe(2);
+    expect(result.current.data?.bars).toEqual(D_FINAL); // 15:00 翻頁前 cache 裡已是定稿
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
+    expect(dayFetchCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000); // D+1 00:01:01:午夜界照舊
+    expect(dayFetchCount()).toBe(3);
+    expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
   // 午夜那一發失敗(TC4 忙 / 後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,
@@ -443,7 +492,8 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
   });
 
-  it("同一日曆日內(22:00 → 23:59)不重抓,跨兩個午夜恰重抓兩次(不是每 60 s 一發)", async () => {
+  // W2 T2(#206)事前標為該變:兩天各多一發 14:01 → 跨兩天共 4 發(午夜 ×2 + 定稿界 ×2),仍不是每 60 s 一發
+  it("同一界內(22:00 → 23:59)不重抓,跨兩天恰重抓四次(午夜 ×2 + 14:01 ×2;不是每 60 s 一發)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
     stubDayFetchByWallClock(D_SNAPSHOT, D1_SNAPSHOT);
@@ -452,7 +502,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     await vi.advanceTimersByTimeAsync(119 * 60_000); // 23:59
     expect(urls.filter((u) => u.includes("tf=D")).length).toBe(1);
     await vi.advanceTimersByTimeAsync(48 * 60 * 60_000); // D+2 23:59
-    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(3);
+    expect(urls.filter((u) => u.includes("tf=D")).length).toBe(5);
   });
 });
 
@@ -486,14 +536,15 @@ describe("useFuturesBars 日 K 跨午夜 × 重繪(pr-151-review F-01 / F-02 / F
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(dayFetchCount()).toBe(1);
+    // W2 T2(#206)事前標為該變:途經 D 14:01 多一發 → 之後計數各 +1
     await vi.advanceTimersByTimeAsync(15 * 60 * 60_000 + 10_000); // D+1 00:00:10
     await rerenderBurst(rerender, 40_000, 100); // → 00:00:50,400 次重繪
-    expect(dayFetchCount()).toBe(1); // 還在 slack 內
+    expect(dayFetchCount()).toBe(2); // 還在 slack 內(D 14:01 那發已計)
     await vi.advanceTimersByTimeAsync(11_000); // 00:01:01
-    expect(dayFetchCount()).toBe(2);
+    expect(dayFetchCount()).toBe(3);
     expect(result.current.data?.bars).toEqual(ONE_BAR_D1);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同日不再打
-    expect(dayFetchCount()).toBe(2);
+    expect(dayFetchCount()).toBe(3);
   });
 
   // 鎖住修法的另一面:以 `dataUpdatedAt` 起算的版本跨 render 穩定,但 setInterval 的週期是從「重新武裝的時刻」
@@ -508,16 +559,17 @@ describe("useFuturesBars 日 K 跨午夜 × 重繪(pr-151-review F-01 / F-02 / F
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(dayFetchCount()).toBe(1);
+    // W2 T2(#206)事前標為該變:15:00 切走前已途經 14:01 那發 → 之後計數各 +1
     await vi.advanceTimersByTimeAsync(6 * 60 * 60_000); // 15:00
     rerender({ active: false });
     await vi.advanceTimersByTimeAsync(5 * 60 * 60_000); // 20:00
     rerender({ active: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(dayFetchCount()).toBe(1); // 同日曆日切回不重抓
+    expect(dayFetchCount()).toBe(2); // 同界內切回不重抓(14:01 那份未過期)
     await vi.advanceTimersByTimeAsync(4 * 60 * 60_000 + 30_000); // 00:00:30
-    expect(dayFetchCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
     expect(dayFetchCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(dayFetchCount()).toBe(3);
   });
 
   // F-02:連續值 interval 讓每次 render 都 clear + setInterval 一組;秒級量化後同一秒內的重繪不再重排。

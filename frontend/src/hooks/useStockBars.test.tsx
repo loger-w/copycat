@@ -266,16 +266,47 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
     await vi.advanceTimersByTimeAsync(0);
     expect(dayCalls()).toBe(1);
     expect(result.current.data?.bars).toEqual(D_SNAPSHOT);
+    // W2 T2(#206)事前標為該變:14:01 定稿界多一發 → 23:59 起的計數各 +1
     await vi.advanceTimersByTimeAsync(14 * 60 * 60_000 + 59 * 60_000); // 23:59
-    expect(dayCalls()).toBe(1);
-    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
-    expect(dayCalls()).toBe(1);
-    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
     expect(dayCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(90_000); // D+1 00:00:30:午夜過了但還在 slack 內
+    expect(dayCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(31_000); // 00:01:01
+    expect(dayCalls()).toBe(3);
     // 使用者的症狀:D+1 早上 K 線末根仍是昨天 09:00 那份(D bar 停在部分值、沒有 D+1 那根)
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同一日曆日內不再打
+    expect(dayCalls()).toBe(3);
+  });
+
+  // W2 T2(#206):個股日 K 今天那根同病 —— 第一次開圖時抓一次就停到午夜。政策(三支同源)多一道 14:00 + slack 的界,
+  // 14:01 換成後端定稿;`barsPollInterval` 的 20 s 空態優先與 `retryEmpty: false` 都不動。
+  it("人一直在個股頁跨過 14:00 定稿界 → 14:01 重抓一次拿到定稿,之後到午夜不再打", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
+    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
+    fetchMock.mockImplementation(async () => {
+      const now = new Date();
+      const d1 = isoLocalDate(now) >= D1_ISO;
+      const bars = d1 ? D1_SNAPSHOT : now.getHours() >= 14 ? D_FINAL : D_SNAPSHOT;
+      return new Response(JSON.stringify({ bars, status: "ok" }));
+    });
+    const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
+      wrapper: wrapper(newClient()),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(4 * 60 * 60_000 + 59 * 60_000); // 13:59
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(90_000); // 14:00:30:過界但還在 slack 內
+    expect(dayCalls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
     expect(dayCalls()).toBe(2);
+    expect(result.current.data?.bars).toEqual(D_FINAL);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
+    expect(dayCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000); // D+1 00:01:01:午夜界照舊
+    expect(dayCalls()).toBe(3);
   });
 
   // 午夜那一發失敗(後端 503)→ `retry: 1` 用完後 interval 若照樣重算成「下一個午夜」,整個交易日就
@@ -346,14 +377,15 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(dayCalls()).toBe(1);
+    // W2 T2(#206)事前標為該變:途經 D 14:01 多一發 → 之後計數各 +1
     await vi.advanceTimersByTimeAsync(15 * 60 * 60_000 + 10_000); // D+1 00:00:10
     await rerenderBurst(rerender, 40_000, 100); // → 00:00:50,400 次重繪
-    expect(dayCalls()).toBe(1); // 還在 slack 內
+    expect(dayCalls()).toBe(2); // 還在 slack 內(D 14:01 那發已計)
     await vi.advanceTimersByTimeAsync(11_000); // 00:01:01
-    expect(dayCalls()).toBe(2);
+    expect(dayCalls()).toBe(3);
     expect(result.current.data?.bars).toEqual(D1_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000); // 09:00:xx:同日不再打
-    expect(dayCalls()).toBe(2);
+    expect(dayCalls()).toBe(3);
   });
 
   // 鐵律 (c) 前半 + (b) 後半:跨秒必須看到 1 是生效自檢,也是 `dataUpdatedAt` 版的死穴(跨 render 恆同值 → 0)。
