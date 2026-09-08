@@ -1,0 +1,31 @@
+{
+  "fixed_point": "de192ca3 (merge-base master)",
+  "diff": "git diff de192ca3...HEAD (HEAD = 1dd3db45 at review time)",
+  "spec": "GitHub issue #204 + tickets #205-#210 + 對話拍板(_RETRY_UNTIL 09:00 / T4 sleep 語意等價 / T2 事前標為該變實數 9 條)",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "kind": "judgement", "smell": "Temporal Coupling / 隱藏通道", "finding": "`_require_daytrade_complete` 把列數寫進 `self._daytrade_rows_seen`,由 `_write_cache` 事後撈;`compute()` docstring 仍寫「純結果」,CLI 走 compute 也會污染引擎狀態。", "disposition": "修:`_compute_with_daytrade_rows` 以回值 (final, rows) 帶出,`compute` 只回 final;`_write_cache(…, daytrade_rows)` 明參;欄位刪除。測試 `assert not hasattr(eng, \"_daytrade_rows_seen\")` 釘。"},
+    {"id": "F-02", "severity": "LOW", "kind": "judgement", "smell": "Duplicated Data", "finding": "`trading-hours.ts` 三對開點分鐘各留兩份(`in*Hours` 與 `msUntil*Open` 候選表),六個字面值要同動。", "disposition": "不修(知情):三對同尺已由 `trading-hours.test.ts` 「前一分鐘 in=false 且距開點 60 s、開點那分鐘 in=true」釘住,漂了立刻紅;把 in*Hours 改讀常數表屬 🔵 順手改既有 code,依鐵則 B 記 next-time 併 W3。"},
+    {"id": "F-03", "severity": "LOW", "kind": "judgement", "smell": "可見性不一致", "finding": "`RETRY_UNTIL` 是唯一無底線的調參常數,`__all__` 沒收、零外部讀者。", "disposition": "修:改名 `_RETRY_UNTIL`。"},
+    {"id": "F-04", "severity": "LOW", "kind": "judgement", "smell": "Middle Man / 死值", "finding": "`_QUOTA_RETRY_SECS = 3600` 在 08:00–09:00 盒內必定越界,永不 sleep,只當放棄的間接觸發器。", "disposition": "修(與 spec S-02 同件):402 分支直接 `_give_up(…, \"FinMind 配額用盡(402)\")`,常數退役;測試改釘「一次嘗試、零 sleep、WARNING 明講配額」。"},
+    {"id": "F-05", "severity": "LOW", "kind": "judgement", "smell": "未言明前置條件", "finding": "`msUntilNextOpen(now, opens)` 依賴 `opens` 遞增,倒序會靜默回較晚的候選。", "disposition": "修(doc):doc 補一行「候選表必須遞增」。不加 sort:三張表是字面常數,sort 是為不存在的呼叫端加的防禦。"},
+    {"id": "F-06", "severity": "LOW", "kind": "judgement", "smell": "型別鬆綁", "finding": "測試 helper `_engine` 兩個新 `object` 參數 + 四個 `# type: ignore`,pyright 免費檢查在此放棄。", "disposition": "修:`Fetch = Callable[[str, _dt.date], list[dict]]` 別名替換,四個 ignore 全刪(pyright 因此抓到 `_counting` 回型 `tuple[object, object]` 一處,順手改 `tuple[Fetch, Fetch]`)。"},
+    {"id": "F-07", "severity": "LOW", "kind": "judgement", "smell": "commit type 不一致", "finding": "同性質行為變更 T4 用 feat、T5 用 fix、T3 用 fix。", "disposition": "不修:歷史 commit 不重寫;§6 未硬性規定 feat/fix 的分界,三筆皆標 🔴 行為類且 subject 帶 ticket 號可 grep。round-1 三筆沿「行為改動 = fix、新增能力 = feat」口徑。"},
+    {"id": "F-08", "severity": "LOW", "kind": "judgement", "smell": "log 格式不齊", "finding": "WARNING 把無前值印成「無(用絕對下限)」、INFO 直接印 `None`。", "disposition": "修:`_prior_text(prior)` 共用,兩處同文。"},
+    {"id": "OBS", "severity": "INFO", "kind": "observation", "finding": "`useFuturesBars.test.ts` 「停輪詢窗不輪詢」案改名 + 改斷言,是全批唯一沒貼「事前標為該變」的一處(原斷言保留在姊妹案)。", "disposition": "修(doc):案前補註記。"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "MED", "kind": "真洞", "finding": "`_loop` = tick → sleep(_sleep_secs(now));交易日 00:00–08:00 啟動且前一交易日那份沒算過(週末關機常態)→ 為昨天補跑一路失敗到 08:50 放棄,回到 `_sleep_secs(08:50)` 直接睡到明天 08:00:30,今天整天不跑;違反 US13「稍後才啟動時立刻補跑」與 T5 AC「下一交易日 08:00 重武裝」。", "disposition": "修:`_due()` 抽出(tick 與 _loop 共用),`_loop` 在 sleep 前重算,仍該跑就 `continue` 立刻再 tick。紅先行 `test_loop_reruns_immediately_when_a_long_tick_crossed_today_run_time`(週二 07:00 啟動、週一 12 次失敗到 08:50 放棄 → 週二緊接著算完、sleeps == [600]*11)。"},
+    {"id": "S-02", "severity": "LOW", "kind": "與 spec 字面不同", "finding": "spec / T5 AC 寫「402 仍走既有長退避但不越過 09:00」,實作 402 一律當天放棄(1 次嘗試),`_QUOTA_RETRY_SECS` 永不 sleep。", "disposition": "修(= std F-04):行為就是「當天放棄」,改成明講不借退避值;ticket #209 收尾留言校正 AC 字面。"},
+    {"id": "S-03", "severity": "LOW", "kind": "語意 ≠ spec 字面", "finding": "T6「前一個交易日列數 × 0.8」;實作前值 = 上一次成功落檔的列數(server 關幾天就是更早那份)。", "disposition": "修(doc):常數 doc 校正「常態 = 前一交易日那份,server 關了幾天就是更早那份」;行為不改(user 拍板不自動放寬,前值語意即「上次成功」)。"},
+    {"id": "S-04", "severity": "NICE", "kind": "口徑不一", "finding": "CLAUDE.md §4 與 lib doc 寫「前端界必須 ≥ 後端」,parity 測試釘等值。", "disposition": "修(doc):兩處補「釘等值(比 ≥ 嚴)」。"},
+    {"id": "S-05", "severity": "NICE", "kind": "log 時點", "finding": "INFO「n 列(前值 m)」印在過閘當下而非成功落檔後;其後失敗會有該行但前值未更新。", "disposition": "修:移到 `_run_once` 落檔之後;測試釘 compute 不印。"}
+  ],
+  "verified_ok_by_spec_axis": [
+    "msUntilDayRollover 兩界取最小算術(00:00–00:01 slack 窗不被推到 14:01;from=14:00:30 / 14:02 / 23:59:30 皆對)",
+    "三支開點函式與對應 in*Hours 同尺;barsPollInterval 20 s 空態優先與 isDaily→false 次序未變;active=false 三支仍回 false",
+    "offHoursInterval 與原 groupPollInterval 內聯式逐字等價;快取 v1 → None → 補跑;相對閘邊界 1600 / 1000 恰過",
+    "Out of Scope 五項全未碰:bars.py 零 diff、useIndexOverlay 只加註解、三硬條件 / 排序 / 截位 / 群組寫入零改;無 scope creep",
+    "next-time 五條勾銷齊;CONTEXT.md 兩詞 + CLAUDE.md §0/§1/§4 同步"
+  ],
+  "disposition": "Standards 8 條 + 1 觀察:修 6(F-01 / F-03 / F-04 / F-05 / F-06 / F-08 / OBS)、知情不修 2(F-02 記 next-time 併 W3;F-07 歷史不重寫)。Spec 5 條:全修(S-01 真洞紅先行 + _due 重算;S-02 = F-04;S-03 / S-04 doc;S-05 log 移位)。收修 commits:030bd815 test / 0243b33a fix / 436f1ace docs。"
+}
