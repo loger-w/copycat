@@ -98,8 +98,12 @@ export function useMarketBars(key: MarketKey, mode: MarketMode, active = true) {
         // retryEmpty:D / W / M 路徑未三態化,200 + 空 bars = TC4 不可用的降級 payload(理由見 lib)。
         return dayBarsRefetchInterval(q, { retryEmpty: true });
       }
-      if (!active) return false; // 退訂語意:切回 tab 那次 render 重新求值
-      return inHours() ? POLL_MS : offHoursInterval(msUntilOpen());
+      // `active=false` 只停 interval(非退訂:observer 仍訂著,回前景仍會 refetchOnWindowFocus);
+      // 切回 tab 那次 render 重新求值(pr-211 F-12)
+      if (!active) return false;
+      // 一把鐘(pr-211 F-11;理由見 lib/trading-hours `offHoursInterval` doc)
+      const now = new Date();
+      return inHours(now) ? POLL_MS : offHoursInterval(msUntilOpen(now));
     },
   });
 }

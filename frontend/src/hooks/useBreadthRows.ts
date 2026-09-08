@@ -46,10 +46,13 @@ export function useBreadthRows(active = true) {
     queryKey: ["breadth-rows"],
     queryFn: fetchBreadthRows,
     retry: 1,
-    // `active=false` 仍回 false(退訂語意:切回 tab 那次 render 重新求值)
+    // `active=false` 仍回 false:只停 interval(非退訂 —— 見上方 doc,observer 仍訂著,回前景仍會
+    // refetchOnWindowFocus);切回 tab 那次 render 重新求值(pr-211 F-12)
     refetchInterval: () => {
       if (!active) return false;
-      return inTradingHours() ? POLL_MS : offHoursInterval(msUntilTradingOpen());
+      // 一把鐘(pr-211 F-11;理由見 lib/trading-hours `offHoursInterval` doc)
+      const now = new Date();
+      return inTradingHours(now) ? POLL_MS : offHoursInterval(msUntilTradingOpen(now));
     },
   });
 }
