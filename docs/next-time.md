@@ -8,6 +8,10 @@
 - [ ] **盤前篩選 08:00 制第一個交易日早上實錄**:log 應有「盤前篩選 <今天>(資料日 <昨天>):硬條件 … → 資格後 …」+
   「當沖名單 n 列(前值 m)」;08:00 FinMind 名單沒出 → 每 10 分鐘一行 WARNING「HH:MM:SS 再試」、09:00 前全敗 → 一行「今日放棄」。
   T4 AC「睡到下一交易日 08:00:30」實作為**每個日曆日 08:00:30 醒、非交易日 tick 判零動作**(行為等價,`TestTick` 釘)。
+- [ ] **`trading-hours.ts` 三對開點分鐘各留兩份**(two-axis round-1 std F-02,LOW 判斷題):`inTradingHours` 09:01 /
+  `inFuturesTradingHours` 08:46 / `inFuturesAllDayHours` 08:40·14:55 與 `msUntil*Open` 候選表是六個字面值要同動;
+  同尺已由 `trading-hours.test.ts`「前一分鐘 in=false 且距開點 60 s」釘住,漂了立刻紅。候選 = 每把尺一組 module 常數、
+  `in*Hours` 與 `opens` 表同讀 —— 動既有 `in*Hours` 屬 🔵,併 W3 B-系列。
 
 ## 2026-09-08(pr-202 review 收修 留尾)
 
