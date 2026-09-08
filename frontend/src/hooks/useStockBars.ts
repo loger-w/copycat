@@ -90,6 +90,13 @@ export function barsPollInterval(
  *  (StockChart 的 render 期間調整分支),本 hook 是在那個分支**之前**被呼叫的
  *  (hook 呼叫順序不可調)——「殘留日 K + 切進合約」的第一次求值仍是 day,
  *  外部否決(`enabled` 參數)因此仍是唯一保證,不在這裡擋就已經打出去了。 */
+/** queryKey 的**唯一產生式**(two-axis S-01):tf=D 不含 days —— 忽略該參數卻進 key 會產生多份等價 cache(D-15)。
+ *  `StockChart` 的日 K 即時末根讀 1 分 K cache 拿今日開盤價也走這支;字面抄第二份的失效樣態是 key 一改
+ *  `getQueryData` 靜默回 undefined、`dayOpen` 退回近似值,零錯誤訊號、tsc 抓不到。 */
+export function stockBarsKey(code: string | null, isDaily: boolean, days: number) {
+  return isDaily ? (["stock-bars", code, "D"] as const) : (["stock-bars", code, "1", days] as const);
+}
+
 export function useStockBars(
   code: string | null,
   mode: ChartMode,
@@ -100,8 +107,7 @@ export function useStockBars(
   const enabled = externallyEnabled && code !== null && mode !== "intraday";
   const tf = isDaily ? "D" : "1";
   return useQuery({
-    // tf=D 不含 days:忽略該參數卻進 key 會產生多份等價 cache(D-15)
-    queryKey: isDaily ? ["stock-bars", code, "D"] : ["stock-bars", code, "1", days],
+    queryKey: stockBarsKey(code, isDaily, days),
     queryFn: () => fetchBars(code as string, tf, days),
     enabled,
     retry: 1,

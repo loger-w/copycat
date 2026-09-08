@@ -9,6 +9,7 @@ import { useChartToggles } from "@/hooks/useChartToggles";
 import {
   MINUTE_DAYS,
   minutesOf,
+  stockBarsKey,
   useStockBars,
   type BarsPayload,
   type ChartMode,
@@ -170,11 +171,16 @@ export function StockChart({
   // 今天那根的開盤價(只在 DK 尚無今日列、要 append 時用):今天正式 1 分 K 首根的 `o`。讀 TQ cache
   // 而不另訂一份 query —— 日 K 模式不抓 1 分 K,cache 有(同 session 看過分 K)才用,沒有就退
   // accum 最早分鐘的 c(純函式內)。cache 讀取不 reactive,知情:值只差在 09:00 那一分鐘內。
+  // key 走 `stockBarsKey`(唯一產生式,two-axis S-01);cache 物件 identity 在 refetch 前穩定,掃描收進
+  // memo 才不會每則 ticks 打包都重掃 ~5,900 根(S-02)。
   const minuteCache =
     liveDay === null
       ? undefined
-      : queryClient.getQueryData<BarsPayload>(["stock-bars", code, "1", MINUTE_DAYS]);
-  const dayOpen = minuteCache?.bars.find((b) => b.t.startsWith(liveToday))?.o ?? null;
+      : queryClient.getQueryData<BarsPayload>(stockBarsKey(code, false, MINUTE_DAYS));
+  const dayOpen = useMemo(
+    () => minuteCache?.bars.find((b) => b.t.startsWith(liveToday))?.o ?? null,
+    [minuteCache, liveToday],
+  );
   // n=1 時 aggregateBars 原樣回傳,不必特判
   const bars = useMemo(() => {
     const raw = data?.bars ?? [];
@@ -191,7 +197,9 @@ export function StockChart({
   const showIntraday = isFut || mode === "intraday";
 
   // 空 bars 且非 ok 時的替代句(null = 照舊掛 CandleChart)。bars 非空一律不分態:
-  // 有資料就照常畫,某段降級不在本輪 scope。
+  // 有資料就照常畫,某段降級不在本輪 scope。判別子刻意看**正式** `data.bars` 不看合成後的 `bars`
+  // (two-axis S-05 知情):正式空 + ok 而 accum 有成交(新掛牌首日 / 09:00 首根 1 分 K 還沒出)時,
+  // 畫即時末根勝過印「無 K 線資料」;timeout / disconnected 仍印進行式文案,那是 TC4 連線的事實。
   const emptyNote =
     data !== undefined && data.bars.length === 0
       ? data.status === "timeout"

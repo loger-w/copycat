@@ -6,15 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StockChart } from "@/components/stock/StockChart";
 import type { Bar } from "@/lib/candle";
 import type { MinuteAgg, StockAccum } from "@/lib/stock-accum";
-import { isoLocalDate } from "@/lib/trading-calendar";
 
 /** 即時末根接線(spec #214 seam (a);T1 #215 分 K / T2 #216 日 K)。
  *
  *  只假造 `Date`(不假造 timer:RTL `waitFor` 在 vitest 下偵測不到 fake timers,見 frontend-testing skill)。
- *  盤中時刻固定 09:06:30,`today` 由它動態算 —— 寫死日期會在隔天靜默轉紅。 */
+ *  盤中時刻固定 09:06:30;`TODAY` 是**字面量**不是 `isoLocalDate(NOW)` —— 與實作同源的話 codec 的 mutant
+ *  兩邊同步漂、測試恆綠(frontend-testing「期望值寫字面量」;two-axis S-04)。Date 已凍住,不會隔天轉紅。 */
 
 const NOW = new Date(2026, 8, 8, 9, 6, 30); // 2026-09-08 09:06:30(週二,交易日)
-const TODAY = isoLocalDate(NOW);
+const TODAY = "2026-09-08";
 const M = (hh: number, mm: number) => hh * 60 + mm;
 
 function bar(t: string, o: number, h: number, l: number, c: number, v = 1): Bar {
