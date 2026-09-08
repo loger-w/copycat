@@ -110,6 +110,14 @@ class ScreenEngine:
         self._now_fn = now_fn
         self._task: asyncio.Task[None] | None = None
         self._gave_up_for: _dt.date | None = None
+        #: 同一目標交易日內跨 attempt 重用的逐日 EOD 成果(日期 → `shrink_rows` 後的列;None = 空回應)。
+        #: 每日 EOD 是 MB 級回應而重試是整輪從頭掃 —— 沒有它,第 15 日才失敗會把前 14 日各重抓一遍,
+        #: 10 分鐘時間盒 4–6 次 attempt 一早上最壞 ~100 個大檔(抄 breadth `_streak_memo`,R3-BE-2)。
+        #: 記憶體紀律同 `shrink_rows`:只留縮列後的列(~2,000 檔 × 4 欄 / 日),raw 一拿到就丟。
+        #: 目標日換日即清空(同一日期的 EOD 不會變,但成果只服務當次目標日的窗);成功落檔後也清
+        #: (該目標日不會再算,沒必要整天扣著 21 份)。
+        self._eod_memo: dict[_dt.date, list[dict] | None] = {}
+        self._eod_memo_target: _dt.date | None = None
 
     # ---- 生命週期 ----
 
@@ -243,9 +251,10 @@ class ScreenEngine:
 
         順序 = 當沖名單(三道閘)**先於** 21 次 EOD(pr-211 F-02 (a) fail-fast):「名單沒出齊」是
         T6 立論的最常走失敗路徑,閘排在 EOD 之後會讓每次重試都先重下載 21 個不會變的過去日 EOD
-        才發現;提前後名單失敗路徑 22 → 1 個請求,10 分鐘重試節奏在失敗路徑上才成真。代價 = EOD 失敗
-        路徑每 attempt 多 1 個(先抓的名單)請求;處置股仍在 EOD 之後(取數失敗照樣 22 個,next-time
-        F-09 剩餘半邊)。"""
+        才發現;提前後名單失敗路徑 22 → 1 個請求,10 分鐘重試節奏在失敗路徑上才成真。處置股(1 個請求)
+        同樣提到 EOD 之前(next-time「跨 attempt memo + disposition fail-fast」,09-08 收尾批)。代價 = EOD 失敗
+        路徑每 attempt 多 2 個(先抓的名單 + 處置股)請求 —— 而 EOD 本身跨 attempt 走 `_eod_memo`,重試只補抓
+        上一輪還沒拿到的日子。"""
         # 當沖名單抓**目標交易日**的(今天的正式名單,盤前先出;W2 T4 #207)。
         # 當沖資格 = 單次全市場查詢(review F-02:「data_id 必填」是週六探測誤判,
         # 逐檔 fan-out ~60 次收斂成 1 次;口徑同 spec「最近交易日有列」,7 日回看退役)
@@ -258,7 +267,12 @@ class ScreenEngine:
         self._require_date_echo(dt_rows, target, "當沖名單")
         daytrade_rows = self._require_daytrade_complete(dt_rows, target, prior)
         daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
+        # 處置股也在 EOD 之前(1 個請求;fail-fast 同上):取數失敗 22 → 2 個請求
+        disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, target)
+        await asyncio.sleep(_REQ_GAP_SECS)
+        disposed = parse_active_disposition(disp_rows, target)  # 處置期間涵蓋**今天**
         data_date = data_date_of(target, self._cal)
+        memo = self._eod_memo_for(target)
         days: list[tuple[_dt.date, list[dict]]] = []
         d = data_date
         floor = data_date - _dt.timedelta(days=_SCAN_CAL_DAYS)
@@ -266,6 +280,13 @@ class ScreenEngine:
             if not self._cal.is_trading_day(d):
                 # 日曆先剔(review F2):非交易日的空請求一天一發,21 個交易日的窗要多
                 # 燒 ~10 次。空回應 fallback 仍在(無日曆年份只擋週末、臨時休市)。
+                d -= _dt.timedelta(days=1)
+                continue
+            if d in memo:
+                # 上一輪 attempt 已拿到(過閘、縮列後)的日子不重抓;None = 空回應照樣跳過
+                cached = memo[d]
+                if cached is not None:
+                    days.append((d, cached))
                 d -= _dt.timedelta(days=1)
                 continue
             rows = await asyncio.to_thread(self._daily_fetch, self._token, d)
@@ -277,19 +298,20 @@ class ScreenEngine:
                         "視同取數失敗"
                     )
                 self._require_date_echo(rows, d, "")
-                days.append((d, shrink_rows(rows)))
+                memo[d] = shrunk = shrink_rows(rows)
+                days.append((d, shrunk))
             elif d == data_date:
                 # 最新一天必須有資料:FinMind 當日 EOD 未落檔時,靜默拿更舊的日子湊窗
                 # 會把過期窗記成 expected 完成 —— 名單整天停在昨日還零訊號。
                 raise BreadthFetchError(f"盤前篩選 {d} 的 EOD 尚無資料(FinMind 未更新?)")
+            else:
+                memo[d] = None
             d -= _dt.timedelta(days=1)
         if len(days) < WINDOW_DAYS:
             raise BreadthFetchError(
                 f"盤前篩選 {data_date} 往回 {_SCAN_CAL_DAYS} 日曆天僅湊到 {len(days)} 交易日"
             )
         cands = hard_candidates(days)
-        disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, target)
-        disposed = parse_active_disposition(disp_rows, target)  # 處置期間涵蓋**今天**
         final = apply_eligibility(cands, daytrade_ok=daytrade_ok, disposed=disposed)
         logger.info(
             "盤前篩選 %s(資料日 %s):硬條件 %d 檔 → 資格後 %d 檔(非當沖 %d / 處置 %d)",
@@ -301,6 +323,13 @@ class ScreenEngine:
             sum(1 for c in cands if c.code in disposed),
         )
         return final, daytrade_rows
+
+    def _eod_memo_for(self, target: _dt.date) -> dict[_dt.date, list[dict] | None]:
+        """目標交易日的 EOD memo;目標日換了就丟掉上一日那份(理由見 `__init__` 的欄位註解)。"""
+        if self._eod_memo_target != target:
+            self._eod_memo = {}
+            self._eod_memo_target = target
+        return self._eod_memo
 
     @staticmethod
     def _prior_text(prior: int | None) -> str:
@@ -329,6 +358,7 @@ class ScreenEngine:
         final, daytrade_rows = await self._compute_with_daytrade_rows(target, prior=prior)
         written = await self._write_group(final)
         self._write_cache(target, final, written, daytrade_rows)
+        self._eod_memo = {}  # 該目標日已完成,21 份縮列 EOD 不必整天扣著
         # 落檔**之後**才印(round-1 S-05):印了 = 前值已更新,對帳時不會誤讀
         logger.info(
             "盤前篩選 %s 當沖名單 %d 列(前值 %s)", target, daytrade_rows, self._prior_text(prior)
