@@ -172,6 +172,9 @@ export function StockChart({
   // 原 status(`bars.py::_daily_stale_or_empty` 不洗白,`stock_engine.bars_range` 斷線回 `disconnected`),
   // dataUpdatedAt 會前進 —— 只看它會把墊背當定稿,今天那根從 accum 真值退回早上半成品、鎖到午夜零訊號。
   // 界與 `lib/day-bars-rollover.ts` 同一顆常數(後端 parity 釘住的那顆)。
+  // 知情取捨(two-axis 收修 S-01):DK 有「非空 + timeout」的真定稿路徑(`stock_source.py` DK / fallback 逾時仍回
+  // 已收到的 bars),status 半邊會把它當墊背、今天那根整個下午留在 accum 值 —— payload 分不出「墊背」與
+  // 「定稿但慢」,而失效方向安全(收盤後 accum 的 c / cum_vol / h-l 聯集 ≈ 定稿,差一格量的去重),寧可不封閘。
   const finalAt = new Date(now);
   finalAt.setHours(DAILY_FINAL_TIME[0], DAILY_FINAL_TIME[1], 0, 0);
   const dailyFinal = dataUpdatedAt >= finalAt.getTime() && data?.status === "ok";
