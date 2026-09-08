@@ -10,8 +10,11 @@ EOD 窗自**資料日**(昨天 = 前一交易日,`screening.data_date_of`)往回
 逐日 fetch(縮列後才累積,記憶體紀律見 `screening.shrink_rows`)、逐檔資格查、
 落檔快取、經 `WatchlistService.replace_group` 覆寫群組(同鎖 + 訂閱 + 廣播)。
 
-失敗處理:單一目標日最多 `_MAX_ATTEMPTS` 次(鐵則 F),用完當日放棄
-(`_gave_up_for`,目標日換日自動重武裝)—— 壞上游不整天燒配額。
+失敗處理(W2 T5 #209,user 2026-09-08 拍板 Q8):08:00 起每 `_RETRY_SECS` 再試,**到 `RETRY_UNTIL`
+(09:00)為止**(時間盒,不是次數盒 —— 名單盤前幾點出還沒實錄,10 分鐘一發到開盤前盡量趕上);
+下一次會落在 09:00 之後就放棄(`_gave_up_for`,目標日換日自動重武裝),群組維持前一日名單。
+09:00 後才啟動的補跑失敗 = 直接放棄(當日名單過了開盤就不追,明日 08:00 再來)。每次失敗一行
+WARNING、放棄那行也是 WARNING(FinMind 晚出不是 bug,不印 ERROR);非預期例外仍 `logger.exception`。
 """
 
 from __future__ import annotations
@@ -50,10 +53,12 @@ SCREEN_GROUP = "盤前篩選"
 #: `data_date`)讀到即 None → 換制後第一次啟動補跑一次,不會把舊制的「資料日」誤判成今天已完成。
 _CACHE_VERSION = 2
 _CACHE_NAME = "premarket_screen.json"
-#: 單一 expected 日的嘗試上限(鐵則 F);間隔 / 配額退避沿 breadth streak 量級。
-_MAX_ATTEMPTS = 3
+#: 重試間隔 / 配額退避(沿 breadth streak 量級);重試的界是**時刻**不是次數(W2 T5 #209)。
 _RETRY_SECS = 600.0
 _QUOTA_RETRY_SECS = 3600.0
+#: 重試時間盒的上界(台北牆鐘,end-exclusive):下一次嘗試時刻 ≥ 這一刻就不再排。08:00:30 起
+#: 每 600 s → 08:00:30 … 08:50:30 共 6 次;配額退避 3600 s 一律越界 → 402 當天即放棄。
+RETRY_UNTIL = _dt.time(9, 0)
 #: 逐請求間距(breadth streak 同款 —— 21 次全市場 + ~60 次資格查,別打成 burst)。
 _REQ_GAP_SECS = 0.3
 #: 單日全市場列數下限(breadth `_DAILY_MIN_ROWS` 同值):部分截斷的日子入窗會讓
@@ -132,43 +137,53 @@ class ScreenEngine:
             target += _dt.timedelta(days=1)
         return max(30.0, (target - now).total_seconds())
 
+    def _next_attempt_at(self, wait: float) -> _dt.datetime | None:
+        """下一次嘗試的時刻;會落在 `RETRY_UNTIL`(含)之後 → None(時間盒到頂,放棄)。"""
+        now = self._now_fn()
+        nxt = now + _dt.timedelta(seconds=wait)
+        deadline = _dt.datetime.combine(now.date(), RETRY_UNTIL)
+        return nxt if nxt < deadline else None
+
     async def _run_attempts(self, target: _dt.date) -> None:
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             wait = _RETRY_SECS
+            reason = ""
             try:
                 await self._run_once(target)
                 return
             except BreadthFetchError as e:
                 wait = _QUOTA_RETRY_SECS if e.quota else _RETRY_SECS
-                logger.warning(
-                    "盤前篩選 %s 取數失敗(第 %d/%d 次,quota=%s,%.0fs 後重試):%s",
-                    target,
-                    attempt,
-                    _MAX_ATTEMPTS,
-                    e.quota,
-                    wait,
-                    e,
-                )
+                reason = f"取數失敗(quota={e.quota}):{e}"
             except asyncio.CancelledError:
                 raise
             except Exception:
                 # 任務存活邊界(breadth streak 同款):落檔 / 群組寫入的意外不能殺掉
                 # 排程迴圈 —— 死透的表現只是「群組再也不更新」,零錯誤訊號。
-                logger.exception(
-                    "盤前篩選 %s 非預期失敗(第 %d/%d 次,%.0fs 後重試)",
+                logger.exception("盤前篩選 %s 非預期失敗(第 %d 次)", target, attempt)
+                reason = "非預期失敗(見上方 traceback)"
+            nxt = self._next_attempt_at(wait)
+            if nxt is None:
+                self._gave_up_for = target
+                logger.warning(
+                    "盤前篩選 %s 第 %d 次%s;下一次會落在 %s 之後,今日放棄"
+                    "(群組維持前一日名單,下一交易日 %s 再武裝)",
                     target,
                     attempt,
-                    _MAX_ATTEMPTS,
-                    wait,
+                    reason,
+                    RETRY_UNTIL.strftime("%H:%M"),
+                    RUN_TIME.strftime("%H:%M"),
                 )
-            if attempt < _MAX_ATTEMPTS:
-                await asyncio.sleep(wait)
-        self._gave_up_for = target
-        logger.error(
-            "盤前篩選 %s 連續 %d 次未成,當日放棄(群組維持前一日名單,下一交易日再武裝)",
-            target,
-            _MAX_ATTEMPTS,
-        )
+                return
+            logger.warning(
+                "盤前篩選 %s 第 %d 次%s;%s 再試",
+                target,
+                attempt,
+                reason,
+                nxt.strftime("%H:%M:%S"),
+            )
+            await asyncio.sleep(wait)
 
     # ---- 單次重算 ----
 
