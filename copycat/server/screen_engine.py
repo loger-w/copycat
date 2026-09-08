@@ -66,6 +66,13 @@ _REQ_GAP_SECS = 0.3
 _DAILY_MIN_ROWS = 25_000
 #: 湊 21 交易日的日曆天保險絲(春節連假最長 ~10 日曆天,45 天綽綽有餘)。
 _SCAN_CAL_DAYS = 45
+#: 當沖名單的**相對閘**(W2 T6 #210,user 2026-09-08 拍板 Q4 / Q11):今天列數 < 前一個交易日列數 ×
+#: 這個係數 → 視同 FinMind 還在寫、只寫了一半(可重試錯誤,走 T5 的 10 分鐘重試)—— 半份名單拿去剔會把
+#: 沒寫進來的那一半候選誤當「非當沖」踢掉,群組少一截且零錯誤訊號。前值 = 快取 `daytrade_rows`(只在成功
+#: 落檔時更新);無前值(首次 / 舊版快取)退到絕對下限 `_DAYTRADE_MIN_ROWS`(09-08 實測全市場 2,079 列)。
+#: 名單真的長期縮 > 20%(例如 server 關一個月)會每天擋 —— 不自動放寬,log 印兩數並提示刪鍵重置。
+_DAYTRADE_SHRINK_RATIO = 0.8
+_DAYTRADE_MIN_ROWS = 1_000
 
 
 class ScreenEngine:
@@ -99,6 +106,8 @@ class ScreenEngine:
         self._now_fn = now_fn
         self._task: asyncio.Task[None] | None = None
         self._gave_up_for: _dt.date | None = None
+        #: 本輪 `compute` 過閘的當沖名單列數;`_write_cache` 落成 `daytrade_rows`(下一次的前值)。
+        self._daytrade_rows_seen: int | None = None
 
     # ---- 生命週期 ----
 
@@ -244,6 +253,7 @@ class ScreenEngine:
             # 當日名單未發布視同取數失敗,走重試
             raise BreadthFetchError(f"盤前篩選 {target} 當沖名單尚無資料(FinMind 未更新?)")
         self._require_date_echo(dt_rows, target, "當沖名單")
+        self._require_daytrade_complete(dt_rows, target)
         daytrade_ok = {sid for row in dt_rows if isinstance(sid := row.get("stock_id"), str)}
         disp_rows = await asyncio.to_thread(self._disposition_fetch, self._token, target)
         disposed = parse_active_disposition(disp_rows, target)  # 處置期間涵蓋**今天**
@@ -258,6 +268,28 @@ class ScreenEngine:
             sum(1 for c in cands if c.code in disposed),
         )
         return final
+
+    def _require_daytrade_complete(self, dt_rows: list[dict], target: _dt.date) -> None:
+        """相對閘(理由見 `_DAYTRADE_SHRINK_RATIO`):今天列數 < 前值 × 0.8(無前值 → < 絕對下限)
+        → 可重試錯誤。過閘時把列數暫存到 `_daytrade_rows_seen`,成功落檔時寫進快取當下一次的前值。"""
+        n = len(dt_rows)
+        prior = self._cached_daytrade_rows()
+        floor = int(prior * _DAYTRADE_SHRINK_RATIO) if prior is not None else _DAYTRADE_MIN_ROWS
+        if n < floor:
+            logger.warning(
+                "盤前篩選 %s 當沖名單只有 %d 列(前值 %s,門檻 %d),視同尚未發布完 —— "
+                "名單若真的縮了,刪快取 %s 的 daytrade_rows 鍵可重置基準",
+                target,
+                n,
+                prior if prior is not None else "無(用絕對下限)",
+                floor,
+                _CACHE_NAME,
+            )
+            raise BreadthFetchError(
+                f"盤前篩選 {target} 當沖名單只有 {n} 列(前值 {prior},門檻 {floor}),視同尚未發布完"
+            )
+        logger.info("盤前篩選 %s 當沖名單 %d 列(前值 %s)", target, n, prior)
+        self._daytrade_rows_seen = n
 
     async def _run_once(self, target: _dt.date) -> None:
         final = await self.compute(target)
@@ -294,14 +326,31 @@ class ScreenEngine:
     def _cache_path(self) -> Path:
         return self._dir / _CACHE_NAME
 
-    def _cached_target_date(self) -> _dt.date | None:
+    def _read_cache(self) -> dict | None:
         try:
             payload = json.loads(self._cache_path().read_text(encoding="utf-8"))
-            if payload.get("_cache_version") != _CACHE_VERSION:
-                return None
-            return _dt.date.fromisoformat(payload["target_date"])
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError):
             return None
+        if not isinstance(payload, dict) or payload.get("_cache_version") != _CACHE_VERSION:
+            return None
+        return payload
+
+    def _cached_target_date(self) -> _dt.date | None:
+        payload = self._read_cache()
+        if payload is None:
+            return None
+        try:
+            return _dt.date.fromisoformat(payload["target_date"])
+        except (ValueError, KeyError, TypeError):
+            return None
+
+    def _cached_daytrade_rows(self) -> int | None:
+        """前一次成功落檔的當沖名單列數(相對閘的前值);缺鍵 / 非整數 → None(走絕對下限)。"""
+        payload = self._read_cache()
+        if payload is None:
+            return None
+        n = payload.get("daytrade_rows")
+        return n if isinstance(n, int) and not isinstance(n, bool) else None
 
     def _write_cache(
         self, target: _dt.date, final: list[ScreenCandidate], written: list[str]
@@ -311,6 +360,7 @@ class ScreenEngine:
             "target_date": target.isoformat(),
             "data_date": data_date_of(target, self._cal).isoformat(),
             "computed_at": self._now_fn().isoformat(timespec="seconds"),
+            "daytrade_rows": self._daytrade_rows_seen,
             "written": written,
             "candidates": [
                 {
