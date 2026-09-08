@@ -23,7 +23,8 @@ export interface Bar {
 const X_ORIGIN_MIN = 9 * 60; // 09:00 = 桶界原點
 const DAY_MIN = 24 * 60;
 
-function splitStamp(t: string): { date: string; minute: number | null } {
+/** `YYYY-MM-DD HH:MM` → (date, 分鐘);日 K 時戳(無空白)→ minute null。export 給 `lib/live-last-bar.ts`(同一把尺,不各留一份)。 */
+export function splitStamp(t: string): { date: string; minute: number | null } {
   const sp = t.indexOf(" ");
   if (sp < 0) return { date: t, minute: null };
   const date = t.slice(0, sp);
@@ -34,7 +35,8 @@ function splitStamp(t: string): { date: string; minute: number | null } {
   return { date, minute: h * 60 + m };
 }
 
-function stampOf(date: string, minute: number): string {
+/** (date, 分鐘)→ `YYYY-MM-DD HH:MM`;`splitStamp` 的反向,同上 export 理由。 */
+export function stampOf(date: string, minute: number): string {
   const h = Math.floor(minute / 60);
   const m = minute % 60;
   return `${date} ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;

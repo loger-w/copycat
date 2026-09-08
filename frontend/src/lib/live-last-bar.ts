@@ -1,4 +1,4 @@
-import type { Bar } from "@/lib/candle";
+import { splitStamp, stampOf, type Bar } from "@/lib/candle";
 import type { MinuteAgg } from "@/lib/stock-accum";
 
 /** 即時末根(CONTEXT.md;spec #214):拿 `StockAccum` 折出的逐筆資料,蓋在**正式 K 棒**之後補到現在。
@@ -16,22 +16,6 @@ import type { MinuteAgg } from "@/lib/stock-accum";
  *  收盤撮合 13:30:00 那筆在 accum 落在起點分 13:30(→ 終點 13:31,不存在),併進 13:30 那根。 */
 const FIRST_BAR_MIN = 9 * 60 + 1;
 const LAST_BAR_MIN = 13 * 60 + 30;
-
-function stampOf(date: string, minute: number): string {
-  const h = Math.floor(minute / 60);
-  const m = minute % 60;
-  return `${date} ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-/** `YYYY-MM-DD HH:MM` → (date, 終點分);日 K 時戳(無空白)→ minute null。 */
-function splitStamp(t: string): { date: string; minute: number | null } {
-  const sp = t.indexOf(" ");
-  if (sp < 0) return { date: t, minute: null };
-  const hh = Number(t.slice(sp + 1, sp + 3));
-  const mm = Number(t.slice(sp + 4, sp + 6));
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return { date: t.slice(0, sp), minute: null };
-  return { date: t.slice(0, sp), minute: hh * 60 + mm };
-}
 
 /** accum 起點分 → 1K 終點標記分;域外回 null(09:01 以前 = 試撮殘留,後端本就丟、這裡防禦)。 */
 function barMinuteOf(accumMinute: number): number | null {
