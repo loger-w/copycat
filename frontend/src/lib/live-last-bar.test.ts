@@ -155,6 +155,18 @@ describe("mergeLiveDailyBar(日 K 即時末根)", () => {
     ]);
   });
 
+  it("案 6c:正式半成品的 h / l 比 accum 寬(回補未到 / 放棄,accum 只含之後的成交)→ 取聯集,不被 accum 窄化(pr-218 F-02)", () => {
+    const official = [
+      bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300),
+      bar(TODAY, 100_000, 110_000, 97_000, 100_500, 5),
+    ];
+    const out = mergeLiveDailyBar(official, live({}), TODAY, null);
+    expect(out[1]).toEqual({ t: TODAY, o: 100_000, h: 110_000, l: 97_000, c: 103_000, v: 21 });
+    // accum 較寬的那一側照樣贏(6a 的既有語意不變)
+    const wider = mergeLiveDailyBar(official, live({ high: 111_000, low: 96_000 }), TODAY, null);
+    expect(wider[1]).toMatchObject({ h: 111_000, l: 96_000 });
+  });
+
   it("案 6b:末根是昨天 → append 今天一根,o = dayOpen;dayOpen null → accum 最早分鐘的 c", () => {
     const official = [bar("2026-09-05", 90_000, 92_000, 89_000, 91_000, 300)];
     expect(mergeLiveDailyBar(official, live({}), TODAY, 102_000)).toEqual([

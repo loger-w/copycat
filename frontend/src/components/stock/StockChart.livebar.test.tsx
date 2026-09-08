@@ -222,6 +222,29 @@ describe("StockChart 即時末根 —— 日 K(T2 #216)", () => {
     expect(readout()).not.toContain("收 103");
   });
 
+  it("達錢關著:14:05 抓回的是 200 + 墊背舊快照(status disconnected、bars 非空)→ 仍以 accum 蓋,不退回早上半成品(pr-218 F-01)", async () => {
+    vi.setSystemTime(new Date(2026, 8, 8, 14, 5, 0));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.includes("/api/stock/bars")) {
+          // 後端 `_daily_stale_or_empty`:fetch 空手 → 回界前快照 + 原 status(不洗白),HTTP 200
+          return new Response(
+            JSON.stringify({ bars: u.includes("tf=D") ? DAILY_BARS : MINUTE_BARS, status: "disconnected" }),
+          );
+        }
+        if (u.includes("/api/capital/fills")) return new Response(JSON.stringify({ fills: [] }));
+        return new Response(JSON.stringify({ cdp: null, ma5: null, ma20: null, date: null }));
+      }),
+    );
+    mount(accumOf({ minutes: LIVE_MINUTES }));
+    fireEvent.click(screen.getByRole("radio", { name: "日K" }));
+    await waitFor(() => expect(readout()).toContain(TODAY));
+    await waitFor(() => expect(readout()).toContain("收 103"));
+    expect(readout()).not.toContain("收 100.5");
+  });
+
   it("13:50 抓的半成品,牆鐘過 14:00 後(14:01 重抓還沒成功)仍以 accum 蓋 —— 失敗不退回舊值", async () => {
     vi.setSystemTime(new Date(2026, 8, 8, 13, 50, 0));
     stubBars(DAILY_BARS);
