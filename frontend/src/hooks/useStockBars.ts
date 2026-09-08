@@ -6,9 +6,10 @@ import { dayBarsRefetchInterval, dayBarsStaleTime } from "@/lib/day-bars-rollove
 import { inTradingHours } from "@/lib/trading-hours";
 
 /** K 線資料(SC-7)。日 K 與分 K 的新鮮度策略不同:
- *  - `D`:**同一個本機日曆日內**不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
- *    界 = 日曆午夜 + slack,與期指日 K 同一把尺 —— 症狀與由來見 `lib/day-bars-rollover.ts::msUntilDayRollover`
- *    (bug/daily-bars-siblings-rollover)。個股 overlay(CDP / MA)走後端 `/api/stock/overlay` 的
+ *  - `D`:**兩道界之間**不過期(已完成日 bar 不會變);query key **不含 days**(D-15)。
+ *    界 = 日曆午夜 + slack 與 14:00 定稿界 + slack,與期指 / 加權日 K 同一把尺 —— 症狀與由來見
+ *    `lib/day-bars-rollover.ts::msUntilDayRollover`(bug/daily-bars-siblings-rollover;W2 T2 #206 加定稿界,
+ *    今日那根 14:01 換定稿)。個股 overlay(CDP / MA)走後端 `/api/stock/overlay` 的
  *    `date < today` + queryKey 帶日期,不受這條影響。
  *  - `1`:交易時段每 60s 重取(D-9)。成本控制在後端 —— 歷史日走永久 memo,
  *    只有當日段會真的打 TC4(change-spec R2-2/R2-3)。
@@ -99,12 +100,12 @@ export function useStockBars(
     // 日 K 的新鮮度政策整組在 `lib/day-bars-rollover.ts`(三支日 K hook 同動,改政策只改那裡)
     staleTime: isDaily ? dayBarsStaleTime : 0,
     // 函式形式:TQ 每次 interval 到期**與每次 render** 都會重新求值 → 開盤/收盤的開關、日 K 的
-    // 下一個午夜都不依賴外部 re-render(值形式只在 render 當下求值,冷門股沒推播就不會自動開始
+    // 下一道界(午夜 / 14:00)都不依賴外部 re-render(值形式只在 render 當下求值,冷門股沒推播就不會自動開始
     // 輪詢 — review P2-4);回值一變 TQ 就重排計時器,所以日 K 那條回整秒值。
     // data 必須讀 `query.state.data`:閉包裡的 data 恆為訂閱當下的初值(undefined),
     // 空態轉 timeout 後永遠不會開始 20s 重試(review R3)。
     // `barsPollInterval` 先判(SC-4 的 20 s 空態重試優先於日界);日 K 它回 false 才輪到
-    // lib 的「失敗 60 s 重試 / 下一個午夜」政策(個股頁本來就沒有 `active` 閘)。
+    // lib 的「失敗 60 s 重試 / 下一道界」政策(個股頁本來就沒有 `active` 閘)。
     // retryEmpty: false —— 本 hook 的空態語意由 status 三態接手:空 + 非 ok 上面 20 s 已判,
     // 空 + ok = 「真無資料」刻意不輪詢(SC-4;與 market / futures 的未三態化空回應不是同一種空)。
     refetchInterval: (query) => {
