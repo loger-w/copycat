@@ -16,7 +16,8 @@ from copycat.screening import (
     WINDOW_DAYS,
     ScreenCandidate,
     apply_eligibility,
-    expected_data_date,
+    data_date_of,
+    expected_target_date,
     hard_candidates,
     shrink_rows,
 )
@@ -287,29 +288,37 @@ def test_apply_eligibility_filters_and_preserves_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# expected_data_date —— 排程 / 補跑判定
+# expected_target_date / data_date_of —— 排程 / 補跑判定(W2 T4 #207:08:00 目標交易日制)
 # ---------------------------------------------------------------------------
+# 事前標為該變(spec #204):原 `expected_data_date`(21:00 制,回「資料日」)改為回**目標交易日**
+# (名單服務的交易日 = 今天,08:00 起);資料日成為推導值 `data_date_of`(目標日前一交易日)。
 
 
-def test_expected_data_date_flips_at_run_time_on_trading_day() -> None:
-    assert RUN_TIME == _dt.time(21, 0)
-    # 2026-08-31 = 週一(交易日):21:00 起 = 當日,之前 = 前一交易日(週五 08-28)
-    assert expected_data_date(_dt.datetime(2026, 8, 31, 21, 0), WEEKEND_ONLY) == _dt.date(
+def test_expected_target_date_flips_at_run_time_on_trading_day() -> None:
+    assert RUN_TIME == _dt.time(8, 0)
+    # 2026-08-31 = 週一(交易日):08:00 起 = 當日(今天用的名單),之前 = 前一交易日(週五 08-28 那份)
+    assert expected_target_date(_dt.datetime(2026, 8, 31, 8, 0), WEEKEND_ONLY) == _dt.date(
         2026, 8, 31
     )
-    assert expected_data_date(_dt.datetime(2026, 8, 31, 20, 59), WEEKEND_ONLY) == _dt.date(
+    assert expected_target_date(_dt.datetime(2026, 8, 31, 7, 59), WEEKEND_ONLY) == _dt.date(
         2026, 8, 28
     )
 
 
-def test_expected_data_date_non_trading_day_ignores_clock() -> None:
-    # 週六深夜也不會指到週六 —— 非交易日整天 = 前一交易日(週五)
-    assert expected_data_date(_dt.datetime(2026, 8, 29, 23, 0), WEEKEND_ONLY) == _dt.date(
+def test_expected_target_date_non_trading_day_ignores_clock() -> None:
+    # 週六 / 週日整天 = 週五那份(非交易日沒有自己的名單可服務)
+    assert expected_target_date(_dt.datetime(2026, 8, 29, 23, 0), WEEKEND_ONLY) == _dt.date(
         2026, 8, 28
     )
-    assert expected_data_date(_dt.datetime(2026, 8, 30, 8, 0), WEEKEND_ONLY) == _dt.date(
+    assert expected_target_date(_dt.datetime(2026, 8, 30, 8, 0), WEEKEND_ONLY) == _dt.date(
         2026, 8, 28
     )
+
+
+def test_data_date_of_is_previous_trading_day() -> None:
+    # 目標交易日週一 → 資料日(EOD 窗末日)= 上週五;週二 → 週一
+    assert data_date_of(_dt.date(2026, 8, 31), WEEKEND_ONLY) == _dt.date(2026, 8, 28)
+    assert data_date_of(_dt.date(2026, 9, 1), WEEKEND_ONLY) == _dt.date(2026, 8, 31)
 
 
 # ---------------------------------------------------------------------------
