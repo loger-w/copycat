@@ -5,12 +5,20 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  afterMidnightBudget,
+  D_FINAL_SNAPSHOT,
+  D_SNAPSHOT,
+  D1_SNAPSHOT,
+  rerenderBurst,
+  snapshotAt,
+  snapshotAtThreeWay,
+} from "@/hooks/__fixtures__/day-rollover";
+import {
   MINUTE_DAYS,
   barsPollInterval,
   useStockBars,
   type BarsPayload,
 } from "@/hooks/useStockBars";
-import { isoLocalDate } from "@/lib/trading-calendar";
 import { inTradingHours } from "@/lib/trading-hours";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -253,42 +261,18 @@ describe("useStockBars 非 ok 空態自動重試接線(SC-4)", () => {
 // 三條鐵律 (a)(b)(c) 都寫在 `lib/day-bars-rollover.ts::msUntilDayRollover`;本 describe 沿 `useFuturesBars.test.ts`
 // 最後兩個 describe,鐵律 ↔ 測試的對應同 `useMarketBars.test.ts` 同名 describe 前言。
 describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", () => {
-  /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起回「D 完成 + D+1 部分」。 */
-  const D1_ISO = "2026-08-06";
-  const D_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
-  ];
-  const D1_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
-    { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
-  ];
+  // 時間軸與快照(D = 2026-08-05 週三)住 `hooks/__fixtures__/day-rollover.ts`;這裡只包 `{bars, status}` 信封。
   /** D+1 起先失敗 `failTimes` 發(503),之後照牆鐘回快照。 */
   function stubFetchByWallClock(failTimes = 0) {
-    let failLeft = failTimes;
+    const shouldFail = afterMidnightBudget(failTimes);
     fetchMock.mockImplementation(async () => {
-      const d1 = isoLocalDate(new Date()) >= D1_ISO;
-      if (d1 && failLeft > 0) {
-        failLeft -= 1;
+      if (shouldFail()) {
         return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
       }
-      const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
-      return new Response(JSON.stringify({ bars, status: "ok" }));
+      return new Response(JSON.stringify({ bars: snapshotAt(), status: "ok" }));
     });
   }
   const dayCalls = () => urls().filter((u) => u.includes("tf=D")).length;
-  /** 模擬 StockChart 吃個股 WS 的重繪節奏:每 `everyMs` 一次 rerender、持續 `forMs`。 */
-  async function rerenderBurst(
-    rerender: (p: { tick: number }) => void,
-    forMs: number,
-    everyMs: number,
-  ) {
-    for (let t = 0; t < forMs; t += everyMs) {
-      rerender({ tick: t });
-      await vi.advanceTimersByTimeAsync(everyMs);
-    }
-  }
 
   it("人一直在個股頁跨過午夜 → 00:01 重抓一次,cache 不停在昨天的快照", async () => {
     vi.useFakeTimers();
@@ -318,13 +302,9 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
   it("人一直在個股頁跨過 14:00 定稿界 → 14:01 重抓一次拿到定稿,之後到午夜不再打", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
-    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
-    fetchMock.mockImplementation(async () => {
-      const now = new Date();
-      const d1 = isoLocalDate(now) >= D1_ISO;
-      const bars = d1 ? D1_SNAPSHOT : now.getHours() >= 14 ? D_FINAL : D_SNAPSHOT;
-      return new Response(JSON.stringify({ bars, status: "ok" }));
-    });
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ bars: snapshotAtThreeWay(), status: "ok" })),
+    );
     const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
       wrapper: wrapper(newClient()),
     });
@@ -336,7 +316,7 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
     expect(dayCalls()).toBe(1);
     await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
     expect(dayCalls()).toBe(2);
-    expect(result.current.data?.bars).toEqual(D_FINAL);
+    expect(result.current.data?.bars).toEqual(D_FINAL_SNAPSHOT);
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
     expect(dayCalls()).toBe(2);
     await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000); // D+1 00:01:01:午夜界照舊
