@@ -258,9 +258,10 @@ class TestPhase5Hardening:
         assert cache.daily_get("2330", "2026-01-01") is None
         assert cache.today_get("2330", "2026-01-01") is None
 
-    # pr-165-review #8(next-time 2026-08-31 / 09-07 盤點 B11):`prune` 對 `_daily_tag` 與
-    # `_daily_pre_final` 的兩段清理刪掉全綠 —— 失效 = 純記憶體無界成長,零症狀。兩條各釘一段:
-    # 觀測點用既有 getter(`daily_tag_get` / `pre_final_written_at`),不另開 `*_count()`。
+    # pr-165-review #8(next-time 2026-08-31 / 09-07 盤點 B11):`prune` 對 tag 與界前標記的
+    # 清理刪掉全綠 —— 失效 = 純記憶體無界成長,零症狀。原三份同鍵 dict 各一段清理,
+    # refactor/bars-cache-daily-entry 收成 `DailyEntry` 一格後剩一段,兩條測試照釘(tag 欄 /
+    # 標記欄各一);觀測點用既有 getter(`daily_tag_get` / `pre_final_written_at`),不另開 `*_count()`。
     async def test_prune_drops_stale_daily_tag(self) -> None:
         cache = BarsCache()
         cache.daily_tag_put("2330", "2026-01-01", "tc4_dk")
