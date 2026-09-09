@@ -84,8 +84,16 @@ class TestSubscribe:
         # 健檢把全部檔誤標 no_data
         src = StockQuoteSource(api=FakeApi(lambda o: ok()), session="s1", trade_date="2026-07-21")
         src._sub_port = "59999"  # 模擬真連線已知 SubPort
-        src.subscribe_symbol("2330")
-        assert src._listener is not None
+        try:
+            src.subscribe_symbol("2330")
+            assert src._listener is not None
+        finally:
+            # 真起了 listener + healer(連 59999 無人聽):不 stop 會活到 process 結束,30 s 後開始印
+            # 「TC4 stale」WARNING 進別條測試的 caplog(pr-160 review 實證;root conftest 守門會點名)
+            src._stop.set()
+            for t in (src._listener, src._healer):
+                if t is not None:
+                    t.join(timeout=3.0)
 
     def test_subscribe_without_sub_port_skips_listener(self) -> None:
         # 注入測試路徑(無真連線)不得因 listener 缺 SubPort 而炸

@@ -10,6 +10,8 @@ factory._getenv 讀 os.environ + repo root .env(Phase 6 real-env finding)— 開
 from __future__ import annotations
 
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -82,6 +84,39 @@ def _isolate_watchlist_default_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     if app_mod is None:
         return
     monkeypatch.setattr(app_mod, "WATCHLIST_DEFAULT_PATH", tmp_path / "stock_watchlist.json")
+
+
+#: TC4 source 的兩條背景執行緒(`tc4.py` `_start_listener` / `_start_healer` 用預設命名 ——
+#: CPython 3.10+ 是 `Thread-N (<target.__name__>)`)。名字比對而不碰 `_target`:那是 Thread 私有欄。
+_TC4_THREAD_MARKERS = ("(_listen_loop)", "(_heal_loop)")
+#: `close()` / `_stop.set()` 之後 listener 最晚在下一個 RCVTIMEO(1 s)醒來退出、healer 立即;
+#: 3 s 容許「有 stop 沒 join」的測試,只抓「根本沒 stop」的。
+_TC4_THREAD_JOIN_SECS = 3.0
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_tc4_threads() -> Iterator[None]:
+    """TC4 `_listen_loop` / `_heal_loop` 執行緒不得活過起它的那條測試(refactor/w3-b2;pr-160 review 實證)。
+
+    漏 stop 的 listener 是 daemon,會活到 process 結束:連不上的 SubPort 每秒 recv 逾時、30 s 後
+    `_check_stale` 開始印 WARNING「TC4 stale」+ 重連 traceback,落進**別條**測試的 caplog 負向斷言與
+    執行緒計數斷言(`test_ws_disconnect.py` 曾為此把斷言收窄到單一 logger)。這裡只點名不代收:fixture
+    拿不到 source 實例,代為 stop 會讓洩漏隱形;漏的測試自己補 `close()` / `_stop.set()` + join。
+
+    住 root conftest 的理由同 `_isolate_watchlist_default_path`(子目錄 autouse 在交錯的命令列參數順序下
+    會靜默丟失)。
+    """
+    before = {t.ident for t in threading.enumerate()}
+    yield
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.ident not in before and any(m in t.name for m in _TC4_THREAD_MARKERS)
+    ]
+    for t in leaked:
+        t.join(timeout=_TC4_THREAD_JOIN_SECS)
+    alive = [t.name for t in leaked if t.is_alive()]
+    assert not alive, f"TC4 背景執行緒活過測試(漏 close() / _stop.set()):{alive}"
 
 
 @pytest.fixture(autouse=True)
