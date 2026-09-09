@@ -1,0 +1,5 @@
+[M1 daily_put 整格替換(丟 tag)] exit=1 :: FAILED tests/server/test_bars.py::TestDailyEntryFields::test_daily_tag_survives_daily_put_overwrite | 1 failed, 7 passed in 0.14s
+[M2 daily_tag_put 整格替換(丟 bars / 標記)] exit=1 :: FAILED tests/server/test_bars.py::TestDailyEntryFields::test_daily_tag_put_leaves_bars_and_marker_untouched | 1 failed, 9 passed in 0.16s
+[M3 daily_put 拿掉空手早退] exit=1 :: FAILED tests/server/test_bars.py::TestDailyCache::test_daily_empty_not_cached | 1 failed, 4 passed in 0.16s
+[M4(參考)daily_get 拿掉 bars is None guard] exit=0 :: 82 passed in 0.30s
+restored OK

@@ -1,0 +1,9 @@
+SAME 200/200 /api/stock/bars/2330?tf=D bars=5 meta={}
+SAME 200/200 /api/stock/bars/2330?tf=D bars=5 meta={}
+SAME 200/200 /api/stock/bars/IX0001?tf=D bars=5 meta={}
+SAME 200/200 /api/market/bars/TWSE?tf=D bars=5 meta={"source": "tc4_dk", "coverage_from": "2026-09-05", "coverage_to": "2026-09-09", "partial_last": true, "volume": true, "refusal": null, "synth_since": null}
+SAME 200/200 /api/market/bars/TWSE?tf=D bars=5 meta={"source": "tc4_dk", "coverage_from": "2026-09-05", "coverage_to": "2026-09-09", "partial_last": true, "volume": true, "refusal": null, "synth_since": null}
+SAME 200/200 /api/market/bars/TWSE?tf=W bars=2 meta={"source": "tc4_dk", "coverage_from": "2026-09-06", "coverage_to": "2026-09-09", "partial_last": true, "volume": true, "refusal": null, "synth_since": null}
+SAME 200/200 /api/market/bars/TWSE?tf=M bars=1 meta={"source": "tc4_dk", "coverage_from": "2026-09-09", "coverage_to": "2026-09-09", "partial_last": true, "volume": true, "refusal": null, "synth_since": null}
+SAME 200/200 /api/stock/bars/9999?tf=D bars=5 meta={}
+RESULT: ALL SAME
