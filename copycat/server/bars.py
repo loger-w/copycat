@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import time
+from dataclasses import dataclass
 from typing import Awaitable, Callable, NamedTuple, cast
 
 from copycat.live.stock_source import Bar, BarsStatus
@@ -210,6 +211,26 @@ def _possible_data_days(
     return [d for d in days if calendar.is_trading_day(d)]
 
 
+@dataclass
+class DailyEntry:
+    """`BarsCache` 日 K memo 的一格:同一 (code, today) 的 bars / 資料源 tag / 界前標記。
+
+    原本是三份同鍵 dict(two-axis review J3):每次 put / prune 要三處同步,漂掉零錯誤訊號。
+    收成一格後「無快照時標記必也不在」變成結構保證(標記只由 `daily_put` 非空寫入)。
+    三欄**彼此獨立**(characterization 釘住):`bars` 缺(只有 tag)不算快照;`tag` 不被
+    bars 的寫入帶掉;空 bars 對三欄全 no-op。
+
+    `pre_final_written_at`:定稿界(`DAILY_FINAL_TIME`)**之前**寫入的牆鐘時刻,過界後
+    `daily_get` 視為過期(bars 保留給 `daily_stale` 墊背);界後寫入 → None(定稿)。
+    「值未前進」WARNING 只對盤中(< `_INTRADAY_SNAPSHOT_END`)寫入的快照鳴,13:30–14:00
+    寫入的已是定稿值,過界重查同值是預期(spec review #2)。
+    """
+
+    bars: list[Bar] | None = None
+    tag: str | None = None
+    pre_final_written_at: _dt.time | None = None
+
+
 class BarsCache:
     def __init__(self, ttl: float = TODAY_TTL_SECS, clock: Callable[[], float] = time.monotonic):
         self._hist: dict[tuple[str, str], list[Bar]] = {}
@@ -218,23 +239,15 @@ class BarsCache:
         #: days=30 的請求會 `empty_status` 未命中、`today_get` 命中那份源自 timeout 的
         #: 空 —— 若視為 ok 就把 timeout 洗白了(spec R4;違反 SC-5)。
         self._today: dict[tuple[str, str], tuple[float, list[Bar], BarsStatus]] = {}
-        self._daily: dict[tuple[str, str], list[Bar]] = {}
-        #: 與 `_daily` 同鍵的資料源標籤(大盤 meta 用)。分開存而不塞進值:
-        #: `_daily` 的值型別是 `list[Bar]`,個股路徑四個呼叫點都吃它
-        self._daily_tag: dict[tuple[str, str], str] = {}
+        #: (code, today) -> 日 K 三欄一格(bars / tag / 界前標記),見 `DailyEntry`。
+        #: 注意:本 class 從此有**兩把鐘** —— 注入的 `clock`(monotonic,TTL 用)與
+        #: module 級 `_now_time()`(牆鐘,定稿界用;測試凍結點與午夜緩衝同一支)。
+        self._daily: dict[tuple[str, str], DailyEntry] = {}
         #: (code, tf, days) -> (寫入時刻, 空的原因)。days 必須進 key —— 少了它,
         #: days=1 的空結果會把 days=30 的請求一併釘住(spec review R15)。
         #: tf="D" 一律傳 days=0。**原因要存**:15s 內的重複請求若一律回 ok,
         #: 「還在等 TC4」就被快取洗成「這檔沒資料」(SC-5)。
         self._empty: dict[tuple[str, str, int], tuple[float, BarsStatus]] = {}
-        #: 定稿界(`DAILY_FINAL_TIME`)**之前**寫入的 `_daily` 鍵:過界後 `daily_get`
-        #: 視為過期(entry 本體保留,`daily_stale` 當墊背)。獨立存不改 `_daily` 值型別
-        #: —— 與 `_daily_tag` 分開存的同一條理由(個股路徑呼叫點都吃 `list[Bar]`)。
-        #: 值 = 界前寫入的牆鐘時刻:「值未前進」WARNING 只對盤中(< `_INTRADAY_SNAPSHOT_END`)
-        #: 寫入的快照鳴,13:30–14:00 寫入的已是定稿值,過界重查同值是預期(spec review #2)。
-        #: 注意:本 class 從此有**兩把鐘** —— 注入的 `clock`(monotonic,TTL 用)與
-        #: module 級 `_now_time()`(牆鐘,定稿界用;測試凍結點與午夜緩衝同一支)。
-        self._daily_pre_final: dict[tuple[str, str], _dt.time] = {}
         self._ttl = ttl
         self._clock = clock
 
@@ -332,12 +345,7 @@ class BarsCache:
             del self._hist[key]
         today_iso = today.isoformat()
         for key in [k for k in self._daily if k[1] != today_iso]:
-            del self._daily[key]
-        for key in [k for k in self._daily_tag if k[1] != today_iso]:
-            del self._daily_tag[key]
-        self._daily_pre_final = {
-            k: t for k, t in self._daily_pre_final.items() if k[1] == today_iso
-        }
+            del self._daily[key]  # 三欄同格,一刀清
         now = self._clock()
         for key in [
             k
@@ -353,16 +361,17 @@ class BarsCache:
 
     def daily_get(self, code: str, today: str) -> list[Bar] | None:
         entry = self._daily.get((code, today))
-        if entry is None:
+        if entry is None or entry.bars is None:
             return None
-        if (code, today) in self._daily_pre_final and _now_time() >= DAILY_FINAL_TIME:
-            return None  # 界前快照過界即過期;entry 留給 `daily_stale` 墊背
-        return entry
+        if entry.pre_final_written_at is not None and _now_time() >= DAILY_FINAL_TIME:
+            return None  # 界前快照過界即過期;bars 留給 `daily_stale` 墊背
+        return entry.bars
 
     def pre_final_written_at(self, code: str, today: str) -> _dt.time | None:
         """界前快照的寫入時刻(無界前標記 → None)。讀者:`_warn_if_not_advanced`(比對用)與
         `_period_pre_final`(只看在不在,`PeriodBars.pre_final`)。"""
-        return self._daily_pre_final.get((code, today))
+        entry = self._daily.get((code, today))
+        return None if entry is None else entry.pre_final_written_at
 
     def daily_stale(self, code: str, today: str) -> list[Bar] | None:
         """過不過期都回 —— 過期後 refetch 拿空手(TC4 關/忙)時的墊背。
@@ -370,26 +379,26 @@ class BarsCache:
         沒有這條的話,定稿界會把「盤後 TC4 關著」(已知常態)從「顯示早上快照」
         惡化成「整片空白到午夜」。呼叫端只在 fetch 失敗路徑用它,status/tag 照實帶。
         """
-        return self._daily.get((code, today))
+        entry = self._daily.get((code, today))
+        return None if entry is None else entry.bars
 
     def daily_put(self, code: str, today: str, bars: list[Bar]) -> None:
         if not bars:
-            return  # don't-cache-empty
-        self._daily[(code, today)] = bars
+            return  # don't-cache-empty(三欄全不動,含不 pop 界前標記)
+        entry = self._daily.setdefault((code, today), DailyEntry())
+        entry.bars = bars
         # 界前寫入 → 記下「今日 bar 可能還在進行」+ 寫入時刻;界後寫入 → 定稿(含覆寫舊標記)
         now = _now_time()
-        if now < DAILY_FINAL_TIME:
-            self._daily_pre_final[(code, today)] = now
-        else:
-            self._daily_pre_final.pop((code, today), None)
+        entry.pre_final_written_at = now if now < DAILY_FINAL_TIME else None
 
     # ---- 資料源標籤(大盤 meta;cache hit 也要還原正確 tag)----
 
     def daily_tag_get(self, code: str, today: str) -> str | None:
-        return self._daily_tag.get((code, today))
+        entry = self._daily.get((code, today))
+        return None if entry is None else entry.tag
 
     def daily_tag_put(self, code: str, today: str, tag: str) -> None:
-        self._daily_tag[(code, today)] = tag
+        self._daily.setdefault((code, today), DailyEntry()).tag = tag
 
 
 async def build_daily(
@@ -558,7 +567,7 @@ async def build_period(
     (`PeriodBars`;第三格的語意見該型別 docstring)。
 
     **獨立實作而不借 `build_daily`**(review P2-1):快取鍵一律 `f"{code}|L"`,
-    `_daily` / `_daily_tag` / `_empty` 三處都用它 —— 只隔開 `_daily` 而讓 `_empty`
+    `_daily` / `_empty` 兩處都用它 —— 只隔開 `_daily` 而讓 `_empty`
     共用 `code`,會讓 180 日窗的一次空結果在 15 秒內把長窗請求也擋掉(反之亦然),
     診斷時看到的是「日K 有、週K 空」這種難以歸因的狀態。`build_daily` 則維持原簽名,
     個股路徑零風險。
@@ -607,8 +616,8 @@ def _period_stale_or_empty(cache: BarsCache, key: str, day: str, period: str) ->
     否則維持原本的空態表述。INFO 的理由見 `_daily_stale_or_empty`(pr-165-review #2)。"""
     stale = cache.daily_stale(key, day)
     if stale is None:
-        # 同走唯一算式(round-1 S-03):無快照時標記必也不在(`daily_put` 空手不寫、`prune`
-        # 同鍵同刪),值恆 False;空 bars 在 `is_partial_last` 早退,本格不可觀測
+        # 同走唯一算式(round-1 S-03):無快照時標記必也不在(同一格 `DailyEntry`,標記只由
+        # `daily_put` 非空寫入),值恆 False;空 bars 在 `is_partial_last` 早退,本格不可觀測
         return PeriodBars([], "unavailable", _period_pre_final(cache, key, day))
     tag = cache.daily_tag_get(key, day) or "unavailable"
     # 與 _daily_stale_or_empty 同形(前綴/欄序:鍵、括號、根數)—— 括號欄這邊放來源 tag
