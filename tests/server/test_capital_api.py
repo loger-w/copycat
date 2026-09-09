@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -1052,137 +1053,141 @@ class TestFuturesState:
             assert res.json()["detail"]["error"] == "NOT_READY"
 
 
-class TestWsBroadcasterBackpressure:
-    async def test_overflow_drops_oldest_keeps_newest(self) -> None:
-        # review C8:慢連線灌超量 → 丟最舊、保最新(行情/回報都是最新有意義)
-        b = WsBroadcaster()
-        gen = b.stream()
-        try:
-            for i in range(_CLIENT_QUEUE_MAX + 5):
-                b.publish({"i": i})
-            got = [await gen.__anext__() for _ in range(_CLIENT_QUEUE_MAX)]
-            assert got[0] == {"i": 5}  # 最舊 0..4 被丟
-            assert got[-1] == {"i": _CLIENT_QUEUE_MAX + 4}  # 收尾端 = 最新
-        finally:
-            await gen.aclose()
+_WsStream = AsyncGenerator[dict, None]
+_OpenWsStream = Callable[..., tuple[WsBroadcaster, _WsStream]]
 
-    async def test_custom_maxsize_applies_to_client_queue(self) -> None:
+
+@pytest.fixture
+async def ws_stream() -> AsyncGenerator[_OpenWsStream, None]:
+    """`WsBroadcaster(...)` + `stream()` 一組,測後對每條開過的 stream `aclose()`(原八份 `try/finally`
+    骨架;refactor/w3-b2)。`open(maxsize=...)` 回 `(broadcaster, stream)`;同一顆 broadcaster 要第二條
+    stream 直接 `b.stream()` 再交給 `open` 的登記表 —— 見 `test_slow_client_does_not_affect_fast_client`。
+    queue 在測試內首次 `__anext__` 才建,與 async fixture 同一個 function loop(pytest-asyncio 1.x)。"""
+    opened: list[_WsStream] = []
+
+    def open_stream(
+        maxsize: int | None = None, *, on: WsBroadcaster | None = None
+    ) -> tuple[WsBroadcaster, _WsStream]:
+        if on is not None:
+            b = on
+        else:
+            b = WsBroadcaster() if maxsize is None else WsBroadcaster(maxsize=maxsize)
+        gen = b.stream()
+        opened.append(gen)
+        return b, gen
+
+    yield open_stream
+    for gen in reversed(opened):
+        await gen.aclose()
+
+
+def _queue_full_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """`copycat.server.ws` 丟包 WARNING 的訊息文字(判準 = 盤後 `grep 佇列滿`)。"""
+    return [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
+
+
+class TestWsBroadcasterBackpressure:
+    async def test_overflow_drops_oldest_keeps_newest(self, ws_stream: _OpenWsStream) -> None:
+        # review C8:慢連線灌超量 → 丟最舊、保最新(行情/回報都是最新有意義)
+        b, gen = ws_stream()
+        for i in range(_CLIENT_QUEUE_MAX + 5):
+            b.publish({"i": i})
+        got = [await gen.__anext__() for _ in range(_CLIENT_QUEUE_MAX)]
+        assert got[0] == {"i": 5}  # 最舊 0..4 被丟
+        assert got[-1] == {"i": _CLIENT_QUEUE_MAX + 4}  # 收尾端 = 最新
+
+    async def test_custom_maxsize_applies_to_client_queue(self, ws_stream: _OpenWsStream) -> None:
         """`maxsize` 參數必須真的傳到 per-client queue(engine 層各自傳值,B-D5)。
 
         參數若被忽略(queue 一律吃模組常數 500),5 則全進得去 → 讀到的是**最舊** 3 則;
         真的生效才會丟舊保新。上面兩條都用預設值,測不出這個差別。
         """
-        b = WsBroadcaster(maxsize=3)
-        gen = b.stream()
-        try:
-            for i in range(5):
-                b.publish({"i": i})
-            got = [await gen.__anext__() for _ in range(3)]
-            assert got == [{"i": 2}, {"i": 3}, {"i": 4}]
-        finally:
-            await gen.aclose()
+        b, gen = ws_stream(maxsize=3)
+        for i in range(5):
+            b.publish({"i": i})
+        got = [await gen.__anext__() for _ in range(3)]
+        assert got == [{"i": 2}, {"i": 3}, {"i": 4}]
 
-    async def test_slow_client_does_not_affect_fast_client(self) -> None:
-        b = WsBroadcaster()
-        slow = b.stream()
-        fast = b.stream()
-        try:
-            for i in range(_CLIENT_QUEUE_MAX + 3):
-                b.publish({"i": i})
-            assert await fast.__anext__() == {"i": 3}  # 各自獨立 queue,各自丟舊
-            assert await slow.__anext__() == {"i": 3}
-        finally:
-            await slow.aclose()
-            await fast.aclose()
+    async def test_slow_client_does_not_affect_fast_client(self, ws_stream: _OpenWsStream) -> None:
+        b, slow = ws_stream()
+        _, fast = ws_stream(on=b)
+        for i in range(_CLIENT_QUEUE_MAX + 3):
+            b.publish({"i": i})
+        assert await fast.__anext__() == {"i": 3}  # 各自獨立 queue,各自丟舊
+        assert await slow.__anext__() == {"i": 3}
 
     async def test_drops_are_counted_and_warned_once_per_window(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, ws_stream: _OpenWsStream
     ) -> None:
         """#182(mod/group-grid-ticks):丟最舊從**靜默**改成有帳可查 —— 逐筆改打包後
         「不丟」的證據就是這個計數;盤後 `grep 佇列滿` 為 0 = 沒丟。政策本身不變。
         WARNING 節流:首次丟包記一則,之後同一窗(60 s)內只累計不洗版。"""
-        b = WsBroadcaster(maxsize=3)
-        gen = b.stream()
-        try:
-            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(10):
-                    b.publish({"i": i})
-            assert b.dropped == 7
-            warned = [r for r in caplog.records if "佇列滿" in r.getMessage()]
-            assert len(warned) == 1
-            assert "maxsize=3" in warned[0].getMessage()
-            got = [await gen.__anext__() for _ in range(3)]
-            assert got == [{"i": 7}, {"i": 8}, {"i": 9}]  # 政策不變:丟最舊保最新
-        finally:
-            await gen.aclose()
+        b, gen = ws_stream(maxsize=3)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            for i in range(10):
+                b.publish({"i": i})
+        assert b.dropped == 7
+        warned = _queue_full_warnings(caplog)
+        assert len(warned) == 1
+        assert "maxsize=3" in warned[0]
+        got = [await gen.__anext__() for _ in range(3)]
+        assert got == [{"i": 7}, {"i": 8}, {"i": 9}]  # 政策不變:丟最舊保最新
 
     async def test_no_drop_means_zero_count_and_no_warning(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, ws_stream: _OpenWsStream
     ) -> None:
-        b = WsBroadcaster(maxsize=5)
-        gen = b.stream()
-        try:
-            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(5):
-                    b.publish({"i": i})
-            assert b.dropped == 0
-            assert not [r for r in caplog.records if "佇列滿" in r.getMessage()]
-        finally:
-            await gen.aclose()
+        b, _ = ws_stream(maxsize=5)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            for i in range(5):
+                b.publish({"i": i})
+        assert b.dropped == 0
+        assert not _queue_full_warnings(caplog)
 
     async def test_drop_warning_reports_window_count_and_relogs_after_window(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
     ) -> None:
         """pr-187 review #8:節流不能讓「量」消失 —— 開盤瞬間一窗內丟 200 筆,log 只說
         `dropped=1` 等於看不到規模;窗到期要**結算**上一窗的筆數(掛在 publish 入口,不等下一次
         丟包 —— 爆一窗後轉安靜也要印得出來),之後再塞車也要再記(否則盤中第二段塞車再也不出現
         在 log,而判準正是 `grep 佇列滿`)。"""
-        b = WsBroadcaster(maxsize=3)
-        gen = b.stream()
-        try:
-            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(10):  # 一窗內丟 7 筆:窗首一則 WARNING、其餘只累計
-                    b.publish({"i": i})
-                assert b.window_dropped == 7
-                # 窗到期(把窗縮成 0 = 立即到期)→ 下一則 publish 入口結算;queue 仍滿,這則也會
-                # 被丟,於是同時開新窗 —— 兩件事各一則 WARNING、順序固定
-                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
-                b.publish({"i": 10})
-            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
-            assert len(warned) == 3
-            assert "丟最舊保最新" in warned[0] and "累計 dropped=1" in warned[0]
-            # 結算那則帶**字面值** 7,不是累計 —— 把上一窗筆數換成累計值的突變體不得全綠(review r1 F-02)
-            assert "上一窗共丟 7 則" in warned[1] and "累計 dropped=7" in warned[1]
-            assert "丟最舊保最新" in warned[2] and "累計 dropped=8" in warned[2]
-            assert b.window_dropped == 1  # 新窗從這一筆重新起算
-        finally:
-            await gen.aclose()
+        b, _ = ws_stream(maxsize=3)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            for i in range(10):  # 一窗內丟 7 筆:窗首一則 WARNING、其餘只累計
+                b.publish({"i": i})
+            assert b.window_dropped == 7
+            # 窗到期(把窗縮成 0 = 立即到期)→ 下一則 publish 入口結算;queue 仍滿,這則也會
+            # 被丟,於是同時開新窗 —— 兩件事各一則 WARNING、順序固定
+            monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+            b.publish({"i": 10})
+        warned = _queue_full_warnings(caplog)
+        assert len(warned) == 3
+        assert "丟最舊保最新" in warned[0] and "累計 dropped=1" in warned[0]
+        # 結算那則帶**字面值** 7,不是累計 —— 把上一窗筆數換成累計值的突變體不得全綠(review r1 F-02)
+        assert "上一窗共丟 7 則" in warned[1] and "累計 dropped=7" in warned[1]
+        assert "丟最舊保最新" in warned[2] and "累計 dropped=8" in warned[2]
+        assert b.window_dropped == 1  # 新窗從這一筆重新起算
 
     async def test_drop_window_settles_on_quiet_publish_without_new_drop(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
     ) -> None:
         """爆一窗後轉安靜(client 追上了、之後的 publish 不再丟):結算仍要發生 —— 這正是
         review #8 的原始症狀(單窗爆量規模永遠停在 dropped=1)。"""
-        b = WsBroadcaster(maxsize=3)
-        gen = b.stream()
-        try:
-            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                for i in range(10):
-                    b.publish({"i": i})
-                for _ in range(3):  # client 追上:清空 queue
-                    await gen.__anext__()
-                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
-                b.publish({"i": 10})  # 有位子、不丟 → 只有結算
-            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
-            assert len(warned) == 2
-            assert "上一窗共丟 7 則" in warned[1]
-            assert b.window_dropped == 0
-            assert b.dropped == 7
-        finally:
-            await gen.aclose()
+        b, gen = ws_stream(maxsize=3)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            for i in range(10):
+                b.publish({"i": i})
+            for _ in range(3):  # client 追上:清空 queue
+                await gen.__anext__()
+            monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+            b.publish({"i": 10})  # 有位子、不丟 → 只有結算
+        warned = _queue_full_warnings(caplog)
+        assert len(warned) == 2
+        assert "上一窗共丟 7 則" in warned[1]
+        assert b.window_dropped == 0
+        assert b.dropped == 7
 
     async def test_single_drop_window_settles_without_second_warning(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
     ) -> None:
         """pr-188 review F-04 / F-05:「窗內只丟一筆就不另印」是 `_settle_drop_window` docstring 明寫的
         刻意規則(窗首那則已經說過了),但兩個結算場景的 `window_dropped` 都是 7 —— `> 1` 改 `> 0` 全綠。
@@ -1190,23 +1195,19 @@ class TestWsBroadcasterBackpressure:
         (原 `test_drop_warning_first_of_window_then_window_total` 與
         `test_drops_are_counted_and_warned_once_per_window` 同劇本,其唯一增量 `window_dropped == 7`
         由 `test_drop_warning_reports_window_count_and_relogs_after_window` 承接,故改寫成本案。)"""
-        b = WsBroadcaster(maxsize=1)
-        gen = b.stream()
-        try:
-            with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
-                b.publish({"i": 0})
-                b.publish({"i": 1})  # 佇列滿:丟 {"i": 0},窗首那一則 WARNING
-                assert b.window_dropped == 1
-                await gen.__anext__()  # client 追上:清空 queue
-                monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
-                b.publish({"i": 2})  # 窗到期結算:整窗只丟一筆 → 不另印
-            warned = [r.getMessage() for r in caplog.records if "佇列滿" in r.getMessage()]
-            assert len(warned) == 1
-            assert "上一窗" not in warned[0]
-            assert b.window_dropped == 0
-            assert b.dropped == 1
-        finally:
-            await gen.aclose()
+        b, gen = ws_stream(maxsize=1)
+        with caplog.at_level(logging.WARNING, logger="copycat.server.ws"):
+            b.publish({"i": 0})
+            b.publish({"i": 1})  # 佇列滿:丟 {"i": 0},窗首那一則 WARNING
+            assert b.window_dropped == 1
+            await gen.__anext__()  # client 追上:清空 queue
+            monkeypatch.setattr("copycat.server.ws.DROP_WARN_WINDOW_SECS", 0.0)
+            b.publish({"i": 2})  # 窗到期結算:整窗只丟一筆 → 不另印
+        warned = _queue_full_warnings(caplog)
+        assert len(warned) == 1
+        assert "上一窗" not in warned[0]
+        assert b.window_dropped == 0
+        assert b.dropped == 1
 
 
 class TestWebSockets:
