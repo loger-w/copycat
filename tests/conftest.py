@@ -10,7 +10,6 @@ factory._getenv 讀 os.environ + repo root .env(Phase 6 real-env finding)— 開
 from __future__ import annotations
 
 import sys
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -20,6 +19,7 @@ import copycat.capital.factory as _capital_factory
 import copycat.server.discord_bot as _discord_bot
 import copycat.server.finmind_token as _finmind_token
 from copycat.server.verify import CAPITAL_ENV_KEYS, DISCORD_ENV_KEYS
+from tests.helpers.threads import leaked_tc4_threads, live_threads
 
 # TC4 官方 wrapper(spikes/TCPY)不在版控(.gitignore:9)→ 乾淨 checkout 與新 worktree
 # 一律缺它。真的要 import 它的測試必須 skip 而非紅:紅會讓「環境沒裝」看起來像「程式壞了」。
@@ -86,29 +86,6 @@ def _isolate_watchlist_default_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(app_mod, "WATCHLIST_DEFAULT_PATH", tmp_path / "stock_watchlist.json")
 
 
-#: TC4 source 的兩條背景執行緒(`tc4.py` `_start_listener` / `_start_healer` 用預設命名 ——
-#: CPython 3.10+ 是 `Thread-N (<target.__name__>)`)。名字比對而不碰 `_target`:那是 Thread 私有欄。
-_TC4_THREAD_MARKERS = ("(_listen_loop)", "(_heal_loop)")
-#: `close()` / `_stop.set()` 之後 listener 最晚在下一個 RCVTIMEO(1 s)醒來退出、healer 立即;
-#: 3 s 容許「有 stop 沒 join」的測試,只抓「根本沒 stop」的。
-_TC4_THREAD_JOIN_SECS = 3.0
-
-
-def leaked_tc4_threads(
-    before: set[int | None], *, join_secs: float = _TC4_THREAD_JOIN_SECS
-) -> list[str]:
-    """`before`(測前 `threading.enumerate()` 的 ident 集)之外、名字帶 TC4 標記、join `join_secs`
-    後仍活著的執行緒名。守門 fixture 與其生效自檢(`tests/test_conftest_guards.py`)共用這一支。"""
-    leaked = [
-        t
-        for t in threading.enumerate()
-        if t.ident not in before and any(m in t.name for m in _TC4_THREAD_MARKERS)
-    ]
-    for t in leaked:
-        t.join(timeout=join_secs)
-    return [t.name for t in leaked if t.is_alive()]
-
-
 @pytest.fixture(autouse=True)
 def _no_leaked_tc4_threads() -> Iterator[None]:
     """TC4 `_listen_loop` / `_heal_loop` 執行緒不得活過起它的那條測試(refactor/w3-b2;pr-160 review 實證)。
@@ -122,8 +99,9 @@ def _no_leaked_tc4_threads() -> Iterator[None]:
     會靜默丟失)。快照在 fixture 進場時拍:比本 fixture **更早**定義的 autouse fixture 若起了帶 TC4 標記
     的執行緒,會被算成「測試起的」而誤紅 —— 現有 autouse 都不起執行緒,新增會起執行緒的 autouse 時
     把它放本 fixture **之後**。前一條測試留下的活執行緒已在 `before` 內,不會重複點名(它已在自己那條紅過)。
+    偵測邏輯與常數住 `tests/helpers/threads.py`(理由見該檔檔頭:conftest 會被載成兩個 module 物件)。
     """
-    before = {t.ident for t in threading.enumerate()}
+    before = live_threads()
     yield
     alive = leaked_tc4_threads(before)
     assert not alive, f"TC4 背景執行緒活過測試(漏 close() / _stop.set()):{alive}"

@@ -13,7 +13,7 @@ import type { Bar } from "@/lib/candle";
 import { isoLocalDate } from "@/lib/trading-calendar";
 
 /** D+1 的日曆日;`pastMidnight` 以 `isoLocalDate(now) >= D1_ISO` 判,與 hook 的日界同一把尺。 */
-export const D1_ISO = "2026-08-06";
+const D1_ISO = "2026-08-06";
 
 /** D 09:00 時的快照:昨日完成 + 今日部分 bar。 */
 export const D_SNAPSHOT: readonly Bar[] = [
@@ -41,7 +41,7 @@ export function pastMidnight(now: Date = new Date()): boolean {
 
 /** 牆鐘已過當日 14:00 定稿界。14 是與後端 `DAILY_FINAL_TIME` 同值的**測試側字面值**(只看小時,同三檔原寫法);
  *  不受 CLAUDE.md §4 那條 parity 測試保護 —— 那條釘的是 `lib/day-bars-rollover.ts::DAILY_FINAL_TIME`,不是這裡。 */
-export function pastDailyFinal(now: Date = new Date()): boolean {
+function pastDailyFinal(now: Date = new Date()): boolean {
   return now.getHours() >= 14;
 }
 
