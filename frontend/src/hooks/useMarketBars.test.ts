@@ -4,8 +4,18 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  afterMidnightBudget,
+  D_FINAL_SNAPSHOT,
+  D_SNAPSHOT,
+  D1_SNAPSHOT,
+  pastDailyFinal,
+  pastMidnight,
+  rerenderBurst,
+  snapshotAt,
+  snapshotAtThreeWay,
+} from "@/hooks/__fixtures__/day-rollover";
 import { useMarketBars } from "@/hooks/useMarketBars";
-import { isoLocalDate } from "@/lib/trading-calendar";
 
 const META = {
   source: "tc4_dk",
@@ -184,46 +194,23 @@ describe("useMarketBars", () => {
 // `dataUpdatedAt` → 「同一秒重繪 … 跨秒恰 1 次」後半的生效自檢(`dataUpdatedAt` 版跨秒回同值 → 0 ≠ 1;
 // 本 hook 無 `subscribed`,沒有期指那條「20:00 切回武裝 15 h」的直接情境);(c) 秒級量化 → 同一條前半。
 describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-rollover)", () => {
-  /** D = 2026-08-05(週三)。D 當天的請求回「D 部分 bar」快照;D+1 起回「D 完成 + D+1 部分」。 */
-  const D1_ISO = "2026-08-06";
-  const D_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
-  ];
-  const D1_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
-    { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
-  ];
+  // 時間軸與快照(D = 2026-08-05 週三)住 `hooks/__fixtures__/day-rollover.ts`;這裡只包 `{key, tf, bars, meta}` 信封。
   /** D+1 起先失敗 `failTimes` 發(503),之後照牆鐘回快照。 */
   function stubFetchByWallClock(failTimes = 0) {
-    let failLeft = failTimes;
+    const shouldFail = afterMidnightBudget(failTimes);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        const d1 = isoLocalDate(new Date()) >= D1_ISO;
-        if (d1 && failLeft > 0) {
-          failLeft -= 1;
+        if (shouldFail()) {
           return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
         }
-        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
+        const bars = snapshotAt();
         return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta: META }));
       }),
     );
   }
   const count = (tf: string) => urls.filter((u) => u.includes(`tf=${tf}`)).length;
-  /** 模擬 MarketPane 吃指數 WS 的重繪節奏:每 `everyMs` 一次 rerender、持續 `forMs`。 */
-  async function rerenderBurst(
-    rerender: (p: { tick: number }) => void,
-    forMs: number,
-    everyMs: number,
-  ) {
-    for (let t = 0; t < forMs; t += everyMs) {
-      rerender({ tick: t });
-      await vi.advanceTimersByTimeAsync(everyMs);
-    }
-  }
 
   it("日 K:人一直在 tab 上跨過午夜 → 00:01 重抓一次,cache 不停在昨天的快照", async () => {
     vi.useFakeTimers();
@@ -253,16 +240,13 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   it("日 K:人一直在 tab 上跨過 14:00 定稿界 → 14:01 重抓一次(partial_last 翻 false、bar 是定稿),之後到午夜不再打", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
-    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
         const now = new Date();
-        const d1 = isoLocalDate(now) >= D1_ISO;
-        const afterFinal = now.getHours() >= 14;
-        const bars = d1 ? D1_SNAPSHOT : afterFinal ? D_FINAL : D_SNAPSHOT;
-        const meta = { ...META, partial_last: d1 || !afterFinal };
+        const bars = snapshotAtThreeWay(now);
+        const meta = { ...META, partial_last: pastMidnight(now) || !pastDailyFinal(now) };
         return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta }));
       }),
     );
@@ -278,7 +262,7 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
     expect(count("D")).toBe(1);
     await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
     expect(count("D")).toBe(2);
-    expect(result.current.data?.bars).toEqual(D_FINAL);
+    expect(result.current.data?.bars).toEqual(D_FINAL_SNAPSHOT);
     expect(result.current.data?.meta.partial_last).toBe(false); // 「· 最後一根未收盤」在此消失
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
     expect(count("D")).toBe(2);
@@ -332,19 +316,16 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    let emptyLeft = 1; // 只有午夜那一發降級;200 不觸發 TQ retry,所以一發就夠
+    const degraded = afterMidnightBudget(1); // 只有午夜那一發降級;200 不觸發 TQ retry,所以一發就夠
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        const d1 = isoLocalDate(new Date()) >= D1_ISO;
-        if (d1 && emptyLeft > 0) {
-          emptyLeft -= 1;
+        if (degraded()) {
           const meta = { ...META, source: "unavailable" };
           return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars: [], meta }));
         }
-        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
-        return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta: META }));
+        return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars: snapshotAt(), meta: META }));
       }),
     );
     const { result } = renderHook(() => useMarketBars("TWSE", "day"), {

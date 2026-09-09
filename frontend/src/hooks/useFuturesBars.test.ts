@@ -4,8 +4,17 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  afterMidnightBudget,
+  D_FINAL_SNAPSHOT,
+  D_SNAPSHOT,
+  D1_SNAPSHOT,
+  pastDailyFinal,
+  pastMidnight,
+  rerenderBurst,
+  snapshotAt,
+} from "@/hooks/__fixtures__/day-rollover";
 import { FUTURES_MINUTE_DAYS, useFuturesBars } from "@/hooks/useFuturesBars";
-import { isoLocalDate } from "@/lib/trading-calendar";
 
 const META = {
   source: "tc4_1k",
@@ -28,14 +37,14 @@ function newClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-/** 日 K 跨日測試共用:D = 2026-08-05(週三)。D 當天的請求回 `dBars`、D+1 起的請求回 `d1Bars`。 */
-const D1_ISO = "2026-08-06";
+/** 日 K 跨日測試共用(時間軸 D = 2026-08-05 週三,住 `hooks/__fixtures__/day-rollover.ts`):
+ *  D 當天的請求回 `dBars`、D+1 起的請求回 `d1Bars`。這裡只包 `{key, tf, bars, meta}` 信封。 */
 function stubDayFetchByWallClock(dBars: readonly object[], d1Bars: readonly object[]) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       urls.push(String(url));
-      const bars = isoLocalDate(new Date()) >= D1_ISO ? d1Bars : dBars;
+      const bars = pastMidnight() ? d1Bars : dBars;
       return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
     }),
   );
@@ -54,8 +63,8 @@ function stubDayFetchThreeWay(
     vi.fn(async (url: string) => {
       urls.push(String(url));
       const now = new Date();
-      const d1 = isoLocalDate(now) >= D1_ISO;
-      const afterFinal = now.getHours() >= 14;
+      const d1 = pastMidnight(now);
+      const afterFinal = pastDailyFinal(now);
       const bars = d1 ? d1Bars : afterFinal ? dFinalBars : dBars;
       const meta = { ...META, partial_last: d1 || !afterFinal };
       return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta }));
@@ -346,17 +355,7 @@ describe("useFuturesBars(SC-1/2/3)", () => {
 // 跨過午夜後日 K 那份 cache 不會失效(`staleTime: Infinity` + 不輪詢)→ 新交易日的 CDP / MA 疊線
 // 拿**前一天那份快照**當基準。為什麼界是日曆午夜:見 `lib/day-bars-rollover.ts::msUntilDayRollover`。
 describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", () => {
-  /** D 當天的請求回「D 部分 bar」快照;D+1 起的請求回「D 完成 + D+1 部分」
-   *  (第四條推到 D+2 只數 URL,快照沒有 D+2 bar 無妨)。 */
-  const D_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }, // 09:00 時的部分 bar
-  ];
-  const D1_SNAPSHOT = [
-    { t: "2026-08-04", o: 1, h: 3, l: 1, c: 2, v: 10 },
-    { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }, // D 完成
-    { t: "2026-08-06", o: 8, h: 8, l: 8, c: 8, v: 1 },
-  ];
+  // 快照 `D_SNAPSHOT` / `D1_SNAPSHOT` 來自 fixture(第四條推到 D+2 只數 URL,快照沒有 D+2 bar 無妨)。
   // 界 = 日曆午夜 + 60 s slack,不是「掛載後固定 24 h」(那會讓 20:00 開的分頁整個次日都用舊基準;
   // review Spec F-1)—— 所以掛載時刻取 09:00、斷言點取 23:59 / 00:00:30 / 00:01:01 三點,固定 24 h
   // 與 slack = 0 兩種突變體各紅一點。
@@ -389,8 +388,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("人一直在期貨 tab 上跨過 14:00 定稿界 → 14:01 重抓一次拿到定稿,之後到午夜不再打", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
-    const D_FINAL = [D_SNAPSHOT[0]!, { t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
-    stubDayFetchThreeWay(D_SNAPSHOT, D_FINAL, D1_SNAPSHOT);
+    stubDayFetchThreeWay(D_SNAPSHOT, D_FINAL_SNAPSHOT, D1_SNAPSHOT);
     const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
       wrapper: wrapper(newClient()),
     });
@@ -402,7 +400,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
     expect(dayFetchCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(31_000); // 14:01:01
     expect(dayFetchCount()).toBe(2);
-    expect(result.current.data?.bars).toEqual(D_FINAL); // 15:00 翻頁前 cache 裡已是定稿
+    expect(result.current.data?.bars).toEqual(D_FINAL_SNAPSHOT); // 15:00 翻頁前 cache 裡已是定稿
     await vi.advanceTimersByTimeAsync(9 * 60 * 60_000 + 58 * 60_000); // 23:59:同日不再打
     expect(dayFetchCount()).toBe(2);
     await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000); // D+1 00:01:01:午夜界照舊
@@ -415,17 +413,15 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("午夜那一發失敗 → 60 s 後再試,成功即回到「下一個午夜」節奏", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    let failLeft = 2; // 本體 + retry:1 各失敗一次
+    const shouldFail = afterMidnightBudget(2); // 本體 + retry:1 各失敗一次
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        if (isoLocalDate(new Date()) >= D1_ISO && failLeft > 0) {
-          failLeft -= 1;
+        if (shouldFail()) {
           return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
         }
-        const bars = isoLocalDate(new Date()) >= D1_ISO ? D1_SNAPSHOT : D_SNAPSHOT;
-        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars: snapshotAt(), meta: META }));
       }),
     );
     const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
@@ -448,19 +444,16 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    let emptyLeft = 1; // 200 不觸發 TQ retry,一發就夠
+    const degraded = afterMidnightBudget(1); // 200 不觸發 TQ retry,一發就夠
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         urls.push(String(url));
-        const d1 = isoLocalDate(new Date()) >= D1_ISO;
-        if (d1 && emptyLeft > 0) {
-          emptyLeft -= 1;
+        if (degraded()) {
           const meta = { ...META, source: "unavailable" };
           return new Response(JSON.stringify({ key: "TXF", tf: "D", bars: [], meta }));
         }
-        const bars = d1 ? D1_SNAPSHOT : D_SNAPSHOT;
-        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta: META }));
+        return new Response(JSON.stringify({ key: "TXF", tf: "D", bars: snapshotAt(), meta: META }));
       }),
     );
     const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
@@ -541,17 +534,7 @@ describe("useFuturesBars 日 K 跨午夜 × 重繪(pr-151-review F-01 / F-02 / F
   /** 只數請求,一根 bar 就夠(與上一個 describe 的兩根快照刻意不同名)。 */
   const ONE_BAR_D = [{ t: "2026-08-05", o: 2, h: 2, l: 2, c: 2, v: 1 }];
   const ONE_BAR_D1 = [{ t: "2026-08-05", o: 2, h: 9, l: 1, c: 8, v: 99 }];
-  /** 模擬 FuturesChart 吃 WS 的重繪節奏:每 `everyMs` 一次 rerender、持續 `forMs`。 */
-  async function rerenderBurst(
-    rerender: (p: { tick: number }) => void,
-    forMs: number,
-    everyMs: number,
-  ) {
-    for (let t = 0; t < forMs; t += everyMs) {
-      rerender({ tick: t });
-      await vi.advanceTimersByTimeAsync(everyMs);
-    }
-  }
+  // `rerenderBurst`(模擬 FuturesChart 吃 WS 的重繪節奏)來自 fixture。
 
   it("slack 窗內(00:00:10 → 00:00:50)每 100 ms 重繪一次 → 00:01:01 照樣重抓,不被推到隔天", async () => {
     vi.useFakeTimers();
