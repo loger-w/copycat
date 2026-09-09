@@ -5,14 +5,15 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  afterMidnightBudget,
   D_FINAL_SNAPSHOT,
   D_SNAPSHOT,
   D1_SNAPSHOT,
-  pastDailyFinal,
+  firstCallsAfterMidnight,
+  partialLastAt,
   pastMidnight,
   rerenderBurst,
   snapshotAt,
+  snapshotAtWithDailyFinal,
 } from "@/hooks/__fixtures__/day-rollover";
 import { FUTURES_MINUTE_DAYS, useFuturesBars } from "@/hooks/useFuturesBars";
 
@@ -51,22 +52,15 @@ function stubDayFetchByWallClock(dBars: readonly object[], d1Bars: readonly obje
 }
 const dayFetchCount = () => urls.filter((u) => u.includes("tf=D")).length;
 
-/** W2 T2(#206)三段牆鐘 stub:D 14:00 前回 `dBars`(今日那根仍在進行、`partial_last` true)、D 14:00 起回
- *  `dFinalBars`(後端 `DAILY_FINAL_TIME` 後的定稿,`partial_last` false)、D+1 起回 `d1Bars`。 */
-function stubDayFetchThreeWay(
-  dBars: readonly object[],
-  dFinalBars: readonly object[],
-  d1Bars: readonly object[],
-) {
+/** W2 T2(#206)三段牆鐘 stub:料與 `partial_last` 都向 fixture 要(D / D 14:00 定稿 / D+1),這裡只包信封。 */
+function stubDayFetchWithDailyFinal() {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       urls.push(String(url));
       const now = new Date();
-      const d1 = pastMidnight(now);
-      const afterFinal = pastDailyFinal(now);
-      const bars = d1 ? d1Bars : afterFinal ? dFinalBars : dBars;
-      const meta = { ...META, partial_last: d1 || !afterFinal };
+      const bars = snapshotAtWithDailyFinal(now);
+      const meta = { ...META, partial_last: partialLastAt(now) };
       return new Response(JSON.stringify({ key: "TXF", tf: "D", bars, meta }));
     }),
   );
@@ -388,7 +382,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("人一直在期貨 tab 上跨過 14:00 定稿界 → 14:01 重抓一次拿到定稿,之後到午夜不再打", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0)); // D 09:00,preview 開著
-    stubDayFetchThreeWay(D_SNAPSHOT, D_FINAL_SNAPSHOT, D1_SNAPSHOT);
+    stubDayFetchWithDailyFinal();
     const { result } = renderHook(() => useFuturesBars("TXF", "day"), {
       wrapper: wrapper(newClient()),
     });
@@ -413,7 +407,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("午夜那一發失敗 → 60 s 後再試,成功即回到「下一個午夜」節奏", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    const shouldFail = afterMidnightBudget(2); // 本體 + retry:1 各失敗一次
+    const shouldFail = firstCallsAfterMidnight(2); // 本體 + retry:1 各失敗一次
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -444,7 +438,7 @@ describe("useFuturesBars 日 K 跨日曆日(bug/futures-daily-bars-rollover)", (
   it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    const degraded = afterMidnightBudget(1); // 200 不觸發 TQ retry,一發就夠
+    const degraded = firstCallsAfterMidnight(1); // 200 不觸發 TQ retry,一發就夠
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
