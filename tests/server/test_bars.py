@@ -132,6 +132,53 @@ class TestDailyCache:
         assert (today - _dt.date.fromisoformat(start)).days == 180
 
 
+class TestDailyEntryFields:
+    """refactor/bars-cache-daily-entry characterization(next-time 09-07 盤點 J3):日 K 的
+    bars / tag / 界前標記三欄同鍵,收成單一 `_DailyEntry` 前先釘住三欄**彼此獨立**的現行語意 ——
+    收攏後最容易漂的正是「寫其中一欄把另兩欄帶掉」(整格替換型突變)。觀測點一律走公開 getter;
+    `prune` 對 tag / 標記的清理另在 `TestPhase5Hardening` 兩條(B11)。"""
+
+    async def test_daily_tag_survives_daily_put_overwrite(self) -> None:
+        """tag 先落、bars 覆寫兩次:tag 不被 bars 的寫入帶掉。"""
+        cache = BarsCache()
+        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
+        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28", c=100)])
+        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28", c=200)])
+        assert cache.daily_tag_get("2330", "2026-07-28") == "tc4_dk"
+        assert cache.daily_get("2330", "2026-07-28") == [bar("2026-07-28", c=200)]
+
+    async def test_daily_tag_alone_is_not_a_snapshot(self) -> None:
+        """只有 tag 沒有 bars:三條讀 bars / 標記的 getter 都不得把它當成有快照。"""
+        cache = BarsCache()
+        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
+        assert cache.daily_get("2330", "2026-07-28") is None
+        assert cache.daily_stale("2330", "2026-07-28") is None
+        assert cache.pre_final_written_at("2330", "2026-07-28") is None
+
+    async def test_daily_tag_put_leaves_bars_and_marker_untouched(self) -> None:
+        """bars 與界前標記先落、再寫 tag:bars 與標記原樣。"""
+        cache = BarsCache()
+        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28")])
+        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
+        assert cache.daily_get("2330", "2026-07-28") == [bar("2026-07-28")]
+        assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
+
+    async def test_daily_put_empty_is_noop_for_all_three(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """don't-cache-empty 對三欄都成立:空 bars 不覆寫 bars、不動 tag、也不 pop 界前標記
+        (即使此刻已過定稿界 —— 墊背路徑靠的就是標記還在)。"""
+        now = _make_mutable_clock(monkeypatch)
+        cache = BarsCache()
+        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28")])
+        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
+        now["t"] = _dt.time(14, 1)
+        cache.daily_put("2330", "2026-07-28", [])
+        assert cache.daily_stale("2330", "2026-07-28") == [bar("2026-07-28")]
+        assert cache.daily_tag_get("2330", "2026-07-28") == "tc4_dk"
+        assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
+
+
 class TestMinuteTwoTier:
     async def test_history_memoized_today_refetched(self) -> None:
         today = _dt.date(2026, 7, 28)
@@ -260,7 +307,7 @@ class TestPhase5Hardening:
 
     # pr-165-review #8(next-time 2026-08-31 / 09-07 盤點 B11):`prune` 對 tag 與界前標記的
     # 清理刪掉全綠 —— 失效 = 純記憶體無界成長,零症狀。原三份同鍵 dict 各一段清理,
-    # refactor/bars-cache-daily-entry 收成 `DailyEntry` 一格後剩一段,兩條測試照釘(tag 欄 /
+    # refactor/bars-cache-daily-entry 收成 `_DailyEntry` 一格後剩一段,兩條測試照釘(tag 欄 /
     # 標記欄各一);觀測點用既有 getter(`daily_tag_get` / `pre_final_written_at`),不另開 `*_count()`。
     async def test_prune_drops_stale_daily_tag(self) -> None:
         cache = BarsCache()
@@ -278,49 +325,6 @@ class TestPhase5Hardening:
         assert cache.pre_final_written_at("2330", "2026-01-01") == _DAYTIME
         cache.prune(_dt.date(2026, 7, 28))
         assert cache.pre_final_written_at("2330", "2026-01-01") is None
-        assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
-
-    # refactor/bars-cache-daily-entry characterization(next-time 09-07 盤點 J3):日 K 的
-    # bars / tag / 界前標記三欄同鍵,收成單一 entry 前先釘住三欄**彼此獨立**的現行語意 ——
-    # 收攏後最容易漂的正是「寫其中一欄把另兩欄帶掉」。觀測點一律走公開 getter。
-    async def test_daily_tag_survives_daily_put_overwrite(self) -> None:
-        """tag 先落、bars 覆寫兩次:tag 不被 bars 的寫入帶掉。"""
-        cache = BarsCache()
-        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
-        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28", c=100)])
-        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28", c=200)])
-        assert cache.daily_tag_get("2330", "2026-07-28") == "tc4_dk"
-        assert cache.daily_get("2330", "2026-07-28") == [bar("2026-07-28", c=200)]
-
-    async def test_daily_tag_alone_is_not_a_snapshot(self) -> None:
-        """只有 tag 沒有 bars:三條讀 bars / 標記的 getter 都不得把它當成有快照。"""
-        cache = BarsCache()
-        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
-        assert cache.daily_get("2330", "2026-07-28") is None
-        assert cache.daily_stale("2330", "2026-07-28") is None
-        assert cache.pre_final_written_at("2330", "2026-07-28") is None
-
-    async def test_daily_tag_put_leaves_bars_and_marker_untouched(self) -> None:
-        """bars 與界前標記先落、再寫 tag:bars 與標記原樣。"""
-        cache = BarsCache()
-        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28")])
-        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
-        assert cache.daily_get("2330", "2026-07-28") == [bar("2026-07-28")]
-        assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
-
-    async def test_daily_put_empty_is_noop_for_all_three(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """don't-cache-empty 對三欄都成立:空 bars 不覆寫 bars、不動 tag、也不 pop 界前標記
-        (即使此刻已過定稿界 —— 墊背路徑靠的就是標記還在)。"""
-        now = _make_mutable_clock(monkeypatch)
-        cache = BarsCache()
-        cache.daily_put("2330", "2026-07-28", [bar("2026-07-28")])
-        cache.daily_tag_put("2330", "2026-07-28", "tc4_dk")
-        now["t"] = _dt.time(14, 1)
-        cache.daily_put("2330", "2026-07-28", [])
-        assert cache.daily_stale("2330", "2026-07-28") == [bar("2026-07-28")]
-        assert cache.daily_tag_get("2330", "2026-07-28") == "tc4_dk"
         assert cache.pre_final_written_at("2330", "2026-07-28") == _DAYTIME
 
 
