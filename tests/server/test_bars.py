@@ -166,7 +166,7 @@ class TestDailyEntryFields:
     async def test_daily_put_empty_is_noop_for_all_three(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """don't-cache-empty 對三欄都成立:空 bars 不覆寫 bars、不動 tag、也不 pop 界前標記
+        """don't-cache-empty 對三欄都成立:空 bars 不覆寫 bars、不動 tag、也不清界前標記
         (即使此刻已過定稿界 —— 墊背路徑靠的就是標記還在)。"""
         now = _make_mutable_clock(monkeypatch)
         cache = BarsCache()
@@ -780,7 +780,7 @@ class _TaggedFetcher:
 def _make_mutable_clock(monkeypatch: pytest.MonkeyPatch) -> dict[str, _dt.time]:
     """回可變 handle(`now["t"] = ...` 即翻牆鐘);起始值 = 檔頭 `_DAYTIME`。
 
-    定稿界兩個 class 共用的唯一一份(pr-171-review F-12:曾複製成 `_clock` 逐字副本,
+    定稿界三個 class 共用的唯一一份(pr-171-review F-12:曾複製成 `_clock` 逐字副本,
     名字不同讓改凍結點語意的人 grep 不到同類);`TestMidnightMemoRace._freeze` 是
     **不可變**凍結版,語意不同、刻意不收進來。"""
     now = {"t": _DAYTIME}
