@@ -11,7 +11,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable, Protocol, cast
 
 import pytest
 from fastapi import FastAPI, WebSocketDisconnect
@@ -1054,24 +1054,27 @@ class TestFuturesState:
 
 
 _WsStream = AsyncGenerator[dict, None]
-_OpenWsStream = Callable[..., tuple[WsBroadcaster, _WsStream]]
+
+
+class _OpenWsStream(Protocol):
+    def __call__(
+        self, maxsize: int = ..., *, on: WsBroadcaster | None = ...
+    ) -> tuple[WsBroadcaster, _WsStream]: ...
 
 
 @pytest.fixture
 async def ws_stream() -> AsyncGenerator[_OpenWsStream, None]:
     """`WsBroadcaster(...)` + `stream()` 一組,測後對每條開過的 stream `aclose()`(原八份 `try/finally`
-    骨架;refactor/w3-b2)。`open(maxsize=...)` 回 `(broadcaster, stream)`;同一顆 broadcaster 要第二條
-    stream 直接 `b.stream()` 再交給 `open` 的登記表 —— 見 `test_slow_client_does_not_affect_fast_client`。
-    queue 在測試內首次 `__anext__` 才建,與 async fixture 同一個 function loop(pytest-asyncio 1.x)。"""
+    骨架;refactor/w3-b2)。`ws_stream(maxsize=...)` 回 `(broadcaster, stream)`;同一顆 broadcaster 要第二條
+    stream 傳 `on=b`(登記進同一張表)—— 見 `test_slow_client_does_not_affect_fast_client`。
+    `stream()` 呼叫當下就同步建 queue 並入 `_clients`(`ws.py`),所以 `open_stream` 由測試本體呼叫;
+    async fixture 與測試同一個 function loop(pytest-asyncio 1.x),teardown 的 `aclose()` 不跨 loop。"""
     opened: list[_WsStream] = []
 
     def open_stream(
-        maxsize: int | None = None, *, on: WsBroadcaster | None = None
+        maxsize: int = _CLIENT_QUEUE_MAX, *, on: WsBroadcaster | None = None
     ) -> tuple[WsBroadcaster, _WsStream]:
-        if on is not None:
-            b = on
-        else:
-            b = WsBroadcaster() if maxsize is None else WsBroadcaster(maxsize=maxsize)
+        b = on if on is not None else WsBroadcaster(maxsize=maxsize)
         gen = b.stream()
         opened.append(gen)
         return b, gen
@@ -1144,7 +1147,10 @@ class TestWsBroadcasterBackpressure:
         assert not _queue_full_warnings(caplog)
 
     async def test_drop_warning_reports_window_count_and_relogs_after_window(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        ws_stream: _OpenWsStream,
     ) -> None:
         """pr-187 review #8:節流不能讓「量」消失 —— 開盤瞬間一窗內丟 200 筆,log 只說
         `dropped=1` 等於看不到規模;窗到期要**結算**上一窗的筆數(掛在 publish 入口,不等下一次
@@ -1168,7 +1174,10 @@ class TestWsBroadcasterBackpressure:
         assert b.window_dropped == 1  # 新窗從這一筆重新起算
 
     async def test_drop_window_settles_on_quiet_publish_without_new_drop(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        ws_stream: _OpenWsStream,
     ) -> None:
         """爆一窗後轉安靜(client 追上了、之後的 publish 不再丟):結算仍要發生 —— 這正是
         review #8 的原始症狀(單窗爆量規模永遠停在 dropped=1)。"""
@@ -1187,7 +1196,10 @@ class TestWsBroadcasterBackpressure:
         assert b.dropped == 7
 
     async def test_single_drop_window_settles_without_second_warning(
-        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, ws_stream: _OpenWsStream
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        ws_stream: _OpenWsStream,
     ) -> None:
         """pr-188 review F-04 / F-05:「窗內只丟一筆就不另印」是 `_settle_drop_window` docstring 明寫的
         刻意規則(窗首那則已經說過了),但兩個結算場景的 `window_dropped` 都是 7 —— `> 1` 改 `> 0` 全綠。

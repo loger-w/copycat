@@ -5,7 +5,7 @@
  * 時間軸:D = 2026-08-05(週三)。D 當天回「D 部分 bar」快照(`D_SNAPSHOT`);D 14:00 起後端
  * `DAILY_FINAL_TIME` 定稿、今日那根換成完成值(`D_FINAL_SNAPSHOT`);D+1 起回「D 完成 + D+1 部分」
  * (`D1_SNAPSHOT`)。**Response 信封不在這裡**:`{key, tf, bars, meta}` 與 `{bars, status}` 是各 hook
- * 自己的 interface 事實,三檔各留 5 行 stub 包信封,只向這裡要料。
+ * 自己的 interface 事實,三檔各留信封 stub,只向這裡要料(含 `meta.partial_last` 的值,見 `partialLastAt`)。
  */
 import { vi } from "vitest";
 
@@ -39,9 +39,16 @@ export function pastMidnight(now: Date = new Date()): boolean {
   return isoLocalDate(now) >= D1_ISO;
 }
 
-/** 牆鐘已過當日 14:00 定稿界(後端 `DAILY_FINAL_TIME` 的測試側鏡像;只看小時,同三檔原寫法)。 */
+/** 牆鐘已過當日 14:00 定稿界。14 是與後端 `DAILY_FINAL_TIME` 同值的**測試側字面值**(只看小時,同三檔原寫法);
+ *  不受 CLAUDE.md §4 那條 parity 測試保護 —— 那條釘的是 `lib/day-bars-rollover.ts::DAILY_FINAL_TIME`,不是這裡。 */
 export function pastDailyFinal(now: Date = new Date()): boolean {
   return now.getHours() >= 14;
+}
+
+/** 三段牆鐘下後端 `meta.partial_last` 的值:D 14:00 前 true(今日那根仍在進行)、D 14:00 起 false(定稿)、
+ *  D+1 起 true(D+1 那根又在進行)。與 `snapshotAtWithDailyFinal` 同一把尺;二段 stub 用不到(恆 `META` 原值)。 */
+export function partialLastAt(now: Date = new Date()): boolean {
+  return pastMidnight(now) || !pastDailyFinal(now);
 }
 
 /** 二段選料:D 當天恆回 `D_SNAPSHOT`(含 14:00 後),D+1 起回 `D1_SNAPSHOT`。 */
@@ -50,7 +57,7 @@ export function snapshotAt(now: Date = new Date()): readonly Bar[] {
 }
 
 /** 三段選料(W2 T2 #206):D 14:00 前 `D_SNAPSHOT`、D 14:00 起 `D_FINAL_SNAPSHOT`、D+1 起 `D1_SNAPSHOT`。 */
-export function snapshotAtThreeWay(now: Date = new Date()): readonly Bar[] {
+export function snapshotAtWithDailyFinal(now: Date = new Date()): readonly Bar[] {
   if (pastMidnight(now)) return D1_SNAPSHOT;
   return pastDailyFinal(now) ? D_FINAL_SNAPSHOT : D_SNAPSHOT;
 }
@@ -59,7 +66,7 @@ export function snapshotAtThreeWay(now: Date = new Date()): readonly Bar[] {
  * 「D+1 起前 n 次請求走另一條路」的計數器:回 `() => boolean`,午夜前恆 false、午夜後前 `n` 次呼叫 true。
  * 「先失敗 n 發(503)」與「午夜那一發 200+空 bars」共用同一顆,差別只在 stub 對 true 回什麼。
  */
-export function afterMidnightBudget(n: number): () => boolean {
+export function firstCallsAfterMidnight(n: number): () => boolean {
   let left = n;
   return () => {
     if (!pastMidnight() || left <= 0) return false;

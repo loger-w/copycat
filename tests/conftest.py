@@ -94,6 +94,21 @@ _TC4_THREAD_MARKERS = ("(_listen_loop)", "(_heal_loop)")
 _TC4_THREAD_JOIN_SECS = 3.0
 
 
+def leaked_tc4_threads(
+    before: set[int | None], *, join_secs: float = _TC4_THREAD_JOIN_SECS
+) -> list[str]:
+    """`before`(測前 `threading.enumerate()` 的 ident 集)之外、名字帶 TC4 標記、join `join_secs`
+    後仍活著的執行緒名。守門 fixture 與其生效自檢(`tests/test_conftest_guards.py`)共用這一支。"""
+    leaked = [
+        t
+        for t in threading.enumerate()
+        if t.ident not in before and any(m in t.name for m in _TC4_THREAD_MARKERS)
+    ]
+    for t in leaked:
+        t.join(timeout=join_secs)
+    return [t.name for t in leaked if t.is_alive()]
+
+
 @pytest.fixture(autouse=True)
 def _no_leaked_tc4_threads() -> Iterator[None]:
     """TC4 `_listen_loop` / `_heal_loop` 執行緒不得活過起它的那條測試(refactor/w3-b2;pr-160 review 實證)。
@@ -104,18 +119,13 @@ def _no_leaked_tc4_threads() -> Iterator[None]:
     拿不到 source 實例,代為 stop 會讓洩漏隱形;漏的測試自己補 `close()` / `_stop.set()` + join。
 
     住 root conftest 的理由同 `_isolate_watchlist_default_path`(子目錄 autouse 在交錯的命令列參數順序下
-    會靜默丟失)。
+    會靜默丟失)。快照在 fixture 進場時拍:比本 fixture **更早**定義的 autouse fixture 若起了帶 TC4 標記
+    的執行緒,會被算成「測試起的」而誤紅 —— 現有 autouse 都不起執行緒,新增會起執行緒的 autouse 時
+    把它放本 fixture **之後**。前一條測試留下的活執行緒已在 `before` 內,不會重複點名(它已在自己那條紅過)。
     """
     before = {t.ident for t in threading.enumerate()}
     yield
-    leaked = [
-        t
-        for t in threading.enumerate()
-        if t.ident not in before and any(m in t.name for m in _TC4_THREAD_MARKERS)
-    ]
-    for t in leaked:
-        t.join(timeout=_TC4_THREAD_JOIN_SECS)
-    alive = [t.name for t in leaked if t.is_alive()]
+    alive = leaked_tc4_threads(before)
     assert not alive, f"TC4 背景執行緒活過測試(漏 close() / _stop.set()):{alive}"
 
 

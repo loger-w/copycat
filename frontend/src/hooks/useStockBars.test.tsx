@@ -5,13 +5,13 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  afterMidnightBudget,
   D_FINAL_SNAPSHOT,
   D_SNAPSHOT,
   D1_SNAPSHOT,
+  firstCallsAfterMidnight,
   rerenderBurst,
   snapshotAt,
-  snapshotAtThreeWay,
+  snapshotAtWithDailyFinal,
 } from "@/hooks/__fixtures__/day-rollover";
 import {
   MINUTE_DAYS,
@@ -264,7 +264,7 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
   // 時間軸與快照(D = 2026-08-05 週三)住 `hooks/__fixtures__/day-rollover.ts`;這裡只包 `{bars, status}` 信封。
   /** D+1 起先失敗 `failTimes` 發(503),之後照牆鐘回快照。 */
   function stubFetchByWallClock(failTimes = 0) {
-    const shouldFail = afterMidnightBudget(failTimes);
+    const shouldFail = firstCallsAfterMidnight(failTimes);
     fetchMock.mockImplementation(async () => {
       if (shouldFail()) {
         return new Response(JSON.stringify({ detail: { error: "NOT_READY" } }), { status: 503 });
@@ -303,7 +303,7 @@ describe("useStockBars 日 K 跨日曆日(bug/daily-bars-siblings-rollover)", ()
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 9, 0));
     fetchMock.mockImplementation(
-      async () => new Response(JSON.stringify({ bars: snapshotAtThreeWay(), status: "ok" })),
+      async () => new Response(JSON.stringify({ bars: snapshotAtWithDailyFinal(), status: "ok" })),
     );
     const { result } = renderHook(() => useStockBars("2330", "day", MINUTE_DAYS), {
       wrapper: wrapper(newClient()),

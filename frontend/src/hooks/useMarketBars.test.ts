@@ -5,15 +5,14 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  afterMidnightBudget,
   D_FINAL_SNAPSHOT,
   D_SNAPSHOT,
   D1_SNAPSHOT,
-  pastDailyFinal,
-  pastMidnight,
+  firstCallsAfterMidnight,
+  partialLastAt,
   rerenderBurst,
   snapshotAt,
-  snapshotAtThreeWay,
+  snapshotAtWithDailyFinal,
 } from "@/hooks/__fixtures__/day-rollover";
 import { useMarketBars } from "@/hooks/useMarketBars";
 
@@ -197,7 +196,7 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   // 時間軸與快照(D = 2026-08-05 週三)住 `hooks/__fixtures__/day-rollover.ts`;這裡只包 `{key, tf, bars, meta}` 信封。
   /** D+1 起先失敗 `failTimes` 發(503),之後照牆鐘回快照。 */
   function stubFetchByWallClock(failTimes = 0) {
-    const shouldFail = afterMidnightBudget(failTimes);
+    const shouldFail = firstCallsAfterMidnight(failTimes);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -245,8 +244,8 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
       vi.fn(async (url: string) => {
         urls.push(String(url));
         const now = new Date();
-        const bars = snapshotAtThreeWay(now);
-        const meta = { ...META, partial_last: pastMidnight(now) || !pastDailyFinal(now) };
+        const bars = snapshotAtWithDailyFinal(now);
+        const meta = { ...META, partial_last: partialLastAt(now) };
         return new Response(JSON.stringify({ key: "TWSE", tf: "D", bars, meta }));
       }),
     );
@@ -316,7 +315,7 @@ describe("useMarketBars 日 / 週 / 月 K 跨日曆日(bug/daily-bars-siblings-r
   it("日 K:午夜那一發拿到 200 + 空 bars(TC4 沒開)→ 60 s 後重試,不把空快照鎖到隔天", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 5, 22, 0));
-    const degraded = afterMidnightBudget(1); // 只有午夜那一發降級;200 不觸發 TQ retry,所以一發就夠
+    const degraded = firstCallsAfterMidnight(1); // 只有午夜那一發降級;200 不觸發 TQ retry,所以一發就夠
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
