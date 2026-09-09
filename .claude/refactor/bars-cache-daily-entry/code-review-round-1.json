@@ -1,0 +1,21 @@
+{
+  "fixed_point": "45df8dbd (merge-base master)",
+  "reviewed_head": "b778214f",
+  "reviewers": "code-review-two-axis:兩個 opus sub-agent 並行(Standards / Spec);/refactor 流程 Standards 軸為主、Spec 軸對照「行為不變」+ design.md",
+  "standards": [
+    {"id": "S-01", "severity": "judgement", "finding": "四個 `None if entry is None else entry.<field>` getter —— pre_final_written_at / daily_stale / daily_tag_get 三處同形 + daily_get 第四個變體。Duplicated Code 成立但每份 2 行,且 daily_get 多兩道分支本來就不同形;抽 helper 會把「第四個不同形」藏起來。依 backend-conventions「兩份 30 行的重複比錯的抽象便宜」→ 建議維持現狀,不抽。", "disposition": "accepted-no-change —— 同意不抽,理由同 reviewer"},
+    {"id": "S-02", "severity": "judgement", "finding": "`DailyEntry` 可見性訊號 —— 鄰居 BarsResult / TaggedBars / PeriodBars 都是被 import 出去的公開型別,而 design.md 明寫「internal seam;不匯出」。copycat/server/ 內部型別慣例一律底線前綴(_Booted / _LegState / _ProductState / _RuleSlot / _Series)。修:更名 `_DailyEntry`。", "disposition": "accepted —— grep 證實 server/ 內部型別底線前綴慣例;更名 _DailyEntry(bars.py 6 處 + 測試 docstring / 註解 + design.md / next-time.md);收修 commit 3af3c822"},
+    {"id": "S-03", "severity": "judgement", "finding": "mutable @dataclass 選型正確(setdefault 後就地改欄,NamedTuple 會逼回整格替換)。但 copycat/ 內 dataclass 壓倒性帶 slots=True,此處可加而不影響語意。修:@dataclass(slots=True)。", "disposition": "rejected —— 事實主張不成立:grep `^@dataclass` 實測 copycat 主流是 `@dataclass(frozen=True)`(capital/models 7、live/*models 9、signal_state 2 …)無 slots;slots=True 只在 backtest/fade_config 與 engine/t1_open 兩檔(且皆 frozen);可變型鄰居 live/stock_state / live/aggregate 亦裸 @dataclass。維持裸 @dataclass 與可變型鄰居一致。"},
+    {"id": "S-04", "severity": "judgement", "finding": "PeriodBars docstring(bars.py:120)「定稿界後 daily_put 成功會 pop 界前標記」—— 收攏後不再有 pop,是 pre_final_written_at = None。語意等價但 grep pop 找不到對應實作。修:改「把界前標記清成 None」。", "disposition": "accepted —— 照修;收修 commit 3af3c822"},
+    {"id": "S-05", "severity": "judgement", "finding": "新測試放 TestPhase5Hardening —— 該 class 是歷史批次集合,四條新測試釘的是日 K memo 三欄語意,與 TestDailyCache / TestDailySnapshotFinality 同族;第四條還前向引用 776 行才定義的 _make_mutable_clock。修:新開 TestDailyEntryFields 置於 TestDailyCache 之後。註解本身保留。", "disposition": "accepted —— 四條搬 TestDailyEntryFields(TestDailyCache 之後),class docstring 保留原註解並指回 TestPhase5Hardening 的兩條 prune 測試;收修 commit 3af3c822"},
+    {"id": "S-附記", "severity": "note", "finding": "docs/next-time.md 已改成「出貨」但未 commit;依 §6 收尾應另起 chore(docs) 一筆,勿混進 🔵 refactor commit。", "disposition": "accepted —— 本就規劃 chore commit(artifacts + docs)"}
+  ],
+  "spec": [
+    {"id": "Spec-00", "severity": "—", "finding": "結論:未發現行為分歧。逐狀態對照 45df8dbd 三 dict 版與新版:tag put 在 bars put 前/後、過界後空 bars put、prune 混日期、daily_get entry 在但 bars is None、只有 tag 時的 pre_final_written_at、界後寫入(pop vs 指派 None)、儲存 list aliasing —— 全部等價。四條 interface 事實各有一條 characterization,且對「整格替換」型突變會紅。全 repo 零外部直戳三 dict。", "disposition": "no-action(核過)"},
+    {"id": "Spec-01", "severity": "nice", "finding": "design.md「『無快照時標記必也不在』從…兩條約定變成結構保證」—— 只有 prune 那半真的結構化;寫入那半仍是 daily_put 的單點約定,_DailyEntry 三欄各自 Optional,型別上 bars=None + 標記完全合法。程式碼註解其實誠實,是 design.md 措辭超出實作。修:design.md 改「兩條跨 dict 約定收成一條單點約定 + prune 的結構保證」。", "disposition": "accepted —— design.md 結構收益段回校"},
+    {"id": "Spec-02", "severity": "nice", "finding": "design.md「internal seam;不匯出到別的 module」但實作用無底線公開名、模組無 __all__,from bars import DailyEntry 合法。修:更名 _DailyEntry,或記取捨。", "disposition": "accepted —— 與 S-02 同一件,更名 _DailyEntry"},
+    {"id": "Spec-03", "severity": "nice", "finding": "daily_get 新增的 `or entry.bars is None` 在現行寫入路徑等價冗餘(拿掉後仍回 entry.bars = None,test_daily_tag_alone_is_not_a_snapshot 不會紅)。非錯誤;修:保留 guard,註明意圖。", "disposition": "accepted —— 保留 guard,加註「只有 tag 的格不算快照(標記只隨非空 bars 寫入,此時必也是 None)」;收修 commit 3af3c822"},
+    {"id": "Spec-04", "severity": "nice", "finding": "design.md 步驟 2 只列「兩處 docstring」,實際另改 build_period docstring(三處 → 兩處)。必要的事實更新、未改語意,僅步驟清單失準。修:補列。", "disposition": "accepted —— design.md 步驟 2 改列三處"}
+  ],
+  "disposition": "Standards 5 judgement + 1 附記:S-01 同意不抽、S-02 / S-04 / S-05 照修、S-03 拒絕(slots=True 慣例主張經 grep 反證)、附記照規劃。Spec 4 nice 全接受(Spec-01 / Spec-04 改 design.md 措辭、Spec-02 = S-02 更名、Spec-03 保留 guard 加註)。零 hard / blocking / should。收修 commit 3af3c822;收修後 test_bars 82 passed、ruff / format / pyright 綠,全量 gate 見 verification.md。增量(收修 commit)= 更名 / 註解 / 測試搬 class,無新邏輯,main agent 機械快篩無新 finding。"
+}

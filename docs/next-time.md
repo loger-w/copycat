@@ -139,8 +139,11 @@
   TC4 回舊值架空後標成定稿釘到午夜。→ 開 /bug:handoff `%TEMP%\copycat-handoff-2026-09-01-dk-frozen-snapshot.md`
   (修法方向 = DK refetch 帶窗口 variant(index engine 窗口階梯 pattern)+「refetch 成功但值未前進」訊號;
   順帶把 DK 凍結語意入 tc4-market-facts)。詳細證據鏈:memory `futures-daily-cache-final-boundary-shipped` 09-01 節。
-- [ ] **`BarsCache` 的 `_daily` / `_daily_tag` / `_daily_pre_final` 三份同鍵平行結構**(two-axis review J3):第三份起收成
+- [x] **`BarsCache` 的 `_daily` / `_daily_tag` / `_daily_pre_final` 三份同鍵平行結構**(two-axis review J3):第三份起收成
   `DailyEntry(bars, tag, pre_final)` 的效益已高於單點改動成本 —— 🔵 refactor 候選,動時連 `daily_*` 五個方法一起收。
+  **→ 2026-09-09 refactor/bars-cache-daily-entry 出貨(W3 B1)**:`dict[(code, today), _DailyEntry(bars, tag, pre_final_written_at)]`,
+  六個 `daily_*` 方法 + `prune` 改讀寫 entry、公開簽名不變;先以四條 characterization 釘住三欄獨立語意(tag 不被 bars 覆寫帶掉 /
+  只有 tag 不算快照 / tag put 不動 bars 與標記 / 空 bars 三欄全 no-op),既有 `TestDailySnapshotFinality` 全套不改仍綠。
 
 ## 2026-08-30(fix/futures-daily-bars-rollover 留尾)
 
