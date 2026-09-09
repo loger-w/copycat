@@ -27,8 +27,9 @@
 
 ### Seam 1 — `frontend/src/hooks/__fixtures__/day-rollover.ts`(新 module)
 
-- **Interface**(小):常數 `D1_ISO` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D_FINAL_SNAPSHOT`;判定
-  `pastMidnight(now)` / `pastDailyFinal(now)`;選料 `snapshotAt(now)`(二段:D / D+1)與
+- **Interface**(小):常數 `D_SNAPSHOT` / `D1_SNAPSHOT` / `D_FINAL_SNAPSHOT`;判定 `pastMidnight(now)`
+  (`D1_ISO` 與 `pastDailyFinal` 只有檔內消費者,pr-222 review F-03 user 拍板 (a) 降 module-private,不在
+  interface);選料 `snapshotAt(now)`(二段:D / D+1)與
   `snapshotAtWithDailyFinal(now)`(三段:D / D 14:00 定稿 / D+1)+ `partialLastAt(now)`(三段下
   `meta.partial_last` 的值,review S-03 收:那是政策不是信封);計數器 `firstCallsAfterMidnight(n)`
   (回 `() => boolean`,午夜後前 n 次呼叫為 true —— 「先失敗 n 發」與「空 bars 一發」同一顆);
@@ -71,6 +72,10 @@
   負向案(測前已在的與無標記的不點名)/ 字面 parity(`tc4.py` 起兩條執行緒不帶 `name=`、target 是裸 bound
   method)。守門靠名字比對,這三條讓「名字前提」壞掉時有紅燈而不是靜默 vacuous。
   快照時點與 autouse 定義順序的前提寫進 fixture docstring(review S-05)。
+  **pr-222 review 收修**(F-01 / F-02):偵測邏輯與常數搬 `tests/helpers/threads.py`(`tests/` 無 `__init__.py`,
+  自檢 `from tests.conftest import` 會拿到第二個 module 物件 —— `test_factory.py` 檔頭早警告的雙重 import);
+  快照改存 Thread 物件(`live_threads()`)不存 `ident`(stdlib 明寫 ident 會回收重發,舊執行緒剛死 + 新 listener
+  同號會被放行),自檢加第四條結構斷言。
 - **預期一發紅**:`test_stock_source::test_subscribe_starts_listener_when_sub_port_known`;其餘由全量
   跑一次揭露。
 

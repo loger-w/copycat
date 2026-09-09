@@ -60,7 +60,7 @@
 
 | 動機 | 改前 | 改後 |
 |---|---|---|
-| 日 K 跨日鷹架逐字份數 | 3 檔各一份(常數 + 判定 + 計數器 + rerenderBurst ≈ 40 行 ×3) | fixture 一份;三檔 −118 / +62 行(`git diff --stat` 5aa1c08c) |
+| 日 K 跨日鷹架逐字份數 | 3 檔各一份(常數 + 判定 + 計數器 + rerenderBurst ≈ 40 行 ×3) | fixture 一份;三檔 +63 / −119 行(`git diff --numstat bebdcd3d..5aa1c08c` 三檔加總,5aa1c08c 當下口徑;HEAD 口徑 +65 / −128,因 review F-04 後又刪了 futures 三段 stub 參數 —— pr-222 review F-05 回校) |
 | backpressure 骨架 | 8 份 `try/finally aclose` + 5 份 caplog 過濾 | fixture 一份 + helper 一支 |
 | `_listen_loop` 活過測試 | 靠人記得 close;pr-160 review 實證洩漏、`test_ws_disconnect.py:1058` 收窄斷言 | root conftest 每條測試後守門,洩漏 = 該測試紅並點名 |
 

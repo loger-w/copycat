@@ -1,5 +1,11 @@
 ## 2026-09-09(refactor/w3-b2-test-scaffolds 留尾)
 
+- [ ] **`TestWsBroadcasterBackpressure`(測 `ws.py`)住在 `tests/server/test_capital_api.py`(1463 行)—— 開 `tests/server/test_ws.py`
+  把 class + `ws_stream` fixture + `_queue_full_warnings` 整組搬過去**(pr-222 review F-06,user 09-09 拍板「記著、下次搬家」):
+  class 在 base 就在此(:1055),本批只把鷹架收成模組私有 fixture、搬檔零額外成本;`test_ws_disconnect.py`(1098 行)測的是突斷 /
+  relay / graceful shutdown 那一半,不是 backpressure;`capital_api.py` 自持 `/ws/capital` `/ws/futures` 路由所以不算全然無關。
+  純搬家 🔵,併下一個 test-hygiene 批;搬完 `grep -n "WsBroadcaster" tests/server/test_capital_api.py` 應只剩 import 與路由測試。
+
 - [ ] **`StockChart.test.tsx` 四條「無 K 線資料」測試在交易日 09:00 後跑必紅(測試沒釘牆鐘)**:SC-7「取到空 bars 仍顯示無 K 線資料」
   + N-7 三條(缺 status / 未知 status / 空物件)都以真牆鐘 render,`ACCUM` 帶 2330 一筆成交、`code="2330"`;`StockChart.tsx`
   自 #214 起「非期貨 + accum 同檔 + 牆鐘同日 09:00 起 + 交易日」就畫即時末根而**刻意不印**「無 K 線資料」(code 註解 two-axis
