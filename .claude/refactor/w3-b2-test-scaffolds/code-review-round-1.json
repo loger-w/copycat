@@ -1,0 +1,23 @@
+{
+  "fixed_point": "bebdcd3d",
+  "reviewed_range": "bebdcd3d...4af8c0b0(5aa1c08c / 7f314f58 / 704ab357 / 4af8c0b0)",
+  "standards": [
+    {"id": "F-01", "severity": "MED", "kind": "judgement", "finding": "conftest 執行緒名比對脆弱且無生效自檢:`_TC4_THREAD_MARKERS` 靠 CPython 預設 `Thread-N (<target>)` 命名;唯一洩漏源修好後守門恆綠,哪天 tc4.py 給 Thread 加 `name=` 或改用 partial 當 target,fixture 靜默轉 vacuous。建議正向案 + 字面 parity。"},
+    {"id": "F-02", "severity": "MED", "kind": "judgement(偏 hard)", "finding": "`_OpenWsStream = Callable[..., …]` 抹掉參數型別(backend-conventions「Type hints 無例外」);改 Protocol 具名 `__call__`。附:`on=` 不是 speculative generality(`test_slow_client_does_not_affect_fast_client` 是實用者),但兩種模式擠一支函式,拆成 open/also 更誠實。"},
+    {"id": "F-03", "severity": "LOW", "kind": "hard", "finding": "ruff line-length 100 破口:test_capital_api.py 1147 / 1171 / 1190 三行 105 字元(新寫的簽名行);E501 未進 extend-select 故 ruff check 不擋,但屬新 code。"},
+    {"id": "F-04", "severity": "MED", "kind": "judgement(Duplicated Code + Speculative Generality)", "finding": "useFuturesBars.test.ts::stubDayFetchThreeWay 仍逐字保留三段選料,與 fixture snapshotAtThreeWay 平行;三個參數只有單一呼叫點,傳的正是三顆 fixture 常數。照 useMarketBars 改吃 fixture,參數拿掉。"},
+    {"id": "F-05", "severity": "LOW", "kind": "judgement(Mysterious Name)", "finding": "`afterMidnightBudget` 回消耗式謂詞,呼叫點都得改名成 shouldFail / degraded 才讀得懂;`snapshotAtThreeWay` 講實作分支數而非語意(差別是吃不吃 14:00 定稿界)。"},
+    {"id": "F-06", "severity": "LOW", "kind": "docs", "finding": "fixture 檔頭「三檔各留 5 行 stub 包信封」與實況不符(futures 留兩支約 25 行);不要寫行數。"},
+    {"id": "F-07", "severity": "LOW", "kind": "judgement", "finding": "fixture 檔位兩套慣例並存:既有 colocated `components/corr/river-test-fixtures.ts`,本批新開 `hooks/__fixtures__/`;frontend-conventions 未定 fixture 慣例,擇一寫進 skill。"},
+    {"id": "F-08", "severity": "LOW", "kind": "docs", "finding": "`pastDailyFinal` 的 14 自稱「後端 DAILY_FINAL_TIME 的測試側鏡像」,但 CLAUDE.md §4 parity 只釘 lib/day-bars-rollover.ts 那顆;改口為「與後端界同值的測試側字面值(不受 parity 保護)」。"},
+    {"id": "F-09", "severity": "LOW", "kind": "judgement", "finding": "`WsBroadcaster() if maxsize is None else WsBroadcaster(maxsize=maxsize)` 兩分支可收成一行:ws.py `__init__(maxsize: int = CLIENT_QUEUE_MAX)` 已有預設。"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "MED", "kind": "docs", "finding": "design.md Seam 2 與 fixture docstring 寫「stream() 的 queue 在 test 內首次 __anext__ 才建,不跨 loop」與程式不符:ws.py:127-128 在 stream() 呼叫當下同步建 queue 並入 _clients。結論仍對(open_stream 由測試呼叫),但理由是假的。"},
+    {"id": "S-02", "severity": "LOW", "kind": "docs", "finding": "ws_stream docstring 說「第二條 stream 直接 b.stream() 再交給 open 的登記表」,實作是 `ws_stream(on=b)`;`on=` 也不在 design.md 宣告的 interface。"},
+    {"id": "S-03", "severity": "LOW", "kind": "scope", "finding": "`partial_last: d1 || !afterFinal` 這條政策(非信封)仍在 useFuturesBars.test.ts 與 useMarketBars.test.ts 兩份;design.md 只把「信封」排除,未替 partial_last 記帳。"},
+    {"id": "S-04", "severity": "LOW", "kind": "process", "finding": "design.md / verification.md 未 commit(git status `??`),與 B1 先例 artifacts commit 不一致。"},
+    {"id": "S-05", "severity": "LOW", "kind": "guard-correctness", "finding": "守門的快照在 fixture 進場時拍,比它更早定義的 autouse fixture 若起了帶標記的執行緒會誤紅(現有四支都不起執行緒,現況安全);此前提未寫進註解。前一條測試留下的活執行緒已在 before 內、不會重複點名(設計正確)。"}
+  ],
+  "disposition": "Standards 9 / Spec 5,零 Must / Should,全數接受收修(同分支 🔵 commit):F-01 → 偵測邏輯抽 `leaked_tc4_threads(before, *, join_secs)`,新檔 tests/test_conftest_guards.py 三條(正向 / 負向 / tc4.py 字面 parity 不帶 name= 且 target 為裸 bound method);F-02 → `_OpenWsStream` 改 Protocol 具名 `__call__`(保留單一函式 + `on=`,拆兩支不做:tuple 第一格在 on= 模式冗餘可接受,`_, fast = ws_stream(on=b)` 一行讀得懂);F-03 → 三行簽名拆行;F-04 → futures 三段 stub 改吃 fixture、參數拿掉、更名 stubDayFetchWithDailyFinal;F-05 → `afterMidnightBudget` → `firstCallsAfterMidnight`、`snapshotAtThreeWay` → `snapshotAtWithDailyFinal`;F-06 / F-08 → docstring 改口;F-07 → 慣例寫進 frontend-testing skill(跨檔共用鷹架 `__fixtures__/`,單檔專用 colocated `*-test-fixtures.ts` 沿既有);F-09 → `maxsize: int = _CLIENT_QUEUE_MAX` 一行;S-01 → design.md + docstring 改成「stream() 呼叫當下同步建 queue,故 open_stream 由測試本體呼叫;同 function loop」;S-02 → docstring + design.md interface 補 `on=`;S-03 → fixture 加 `partialLastAt(now)`,兩檔 meta 改吃它;S-04 → 收尾鏈 §4.1 artifacts commit;S-05 → fixture docstring 補快照時點 / autouse 定義順序前提。收修後重跑:touched-file pytest 90 passed、ruff / pyright 0、三檔 vitest 74/74、tsc / eslint 0;全量 gate 見 verification.md §2(收修後重跑)。"
+}
