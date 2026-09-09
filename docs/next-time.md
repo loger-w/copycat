@@ -172,9 +172,11 @@
   (`dayBarsRefetchInterval` 加 `retryEmpty`,market / futures true、stock false —— stock 的空+ok = 真無資料刻意不輪詢,SC-4);
   F-02 政策運算式收 `lib/day-bars-rollover.ts`(公開面只剩兩支政策函式,常數全降私有);F-03~F-08 docs / 測試衛生六條。
   報告入 `docs/superpowers/specs/pr-159-review.md`(+ .audit.md)。
-- [ ] **三支日 K 跨日測試鷹架逐字三份**(review S-F5,08-31):`rerenderBurst` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D1_ISO` / `stubFetchByWallClock` 在
+- [x] ~~**三支日 K 跨日測試鷹架逐字三份**(review S-F5,08-31):`rerenderBurst` / `D_SNAPSHOT` / `D1_SNAPSHOT` / `D1_ISO` / `stubFetchByWallClock` 在
   `useFuturesBars.test.ts` / `useMarketBars.test.ts` / `useStockBars.test.tsx` 同形。可抽 `hooks/__fixtures__/day-rollover.ts`;動到期指那檔出本案範圍,
-  併 test-hygiene 批。(08-31 followups 又長一對:market / futures 各一條近逐字的「午夜 200+空 bars」測試 —— 抽 fixture 時一併收。)
+  併 test-hygiene 批。(08-31 followups 又長一對:market / futures 各一條近逐字的「午夜 200+空 bars」測試 —— 抽 fixture 時一併收。)~~
+  → 09-09 refactor/w3-b2-test-scaffolds 出貨:`hooks/__fixtures__/day-rollover.ts`(快照 / 牆鐘判定 / 午夜後計數器 / `rerenderBurst`),三檔只留 Response 信封;
+  `wrapper` / `newClient` 在 19 個 hook 測試檔重複**不在本批**(handoff 未列,留此記帳,要抽再開 test-hygiene)。
 - [x] ~~**`useIndexOverlay` / `useStockOverlay` 的跨日靠 queryKey 帶 `isoLocalDate(new Date())`**~~(08-31 user 拍板知情不動、結案;render 時重算,**有**日期鍵、風險較低):
   與 08-30 否決的 H3 同構 —— 只在 re-render 時翻鍵。現況無症狀(個股 / 指數頁每秒有 WS 推播 → 必 re-render),但若哪天這兩頁也加了
   「沒人看就退訂」的閘,跨日會與期貨日 K 同病。記著,不動。
@@ -583,6 +585,8 @@ verification;這裡回填成 backlog。
   (本輪 1 次;單跑 3/3 綠;不在本分支 diff)—— 與 08-26 fix/tc4-logout 留尾的 flake 候選同一條。 **→ 08-28:併 D chore/test-hygiene-batch-2。** → 08-31 出貨(部分結案):斷言改只看 `copycat.server.ws` logger(caplog 收整個 root,他測殘留背景執行緒的 WARNING 落進 2 秒窗即誤紅);候選根因未親眼抓到那則紀錄,再紅時失敗訊息印 caplog.text 可回溯。**洩漏源已有實證**:pr-160 review 跑 8 檔後端測試,收尾冒出 `tc4.py _listen_loop` 殘留執行緒的 PytestUnhandledThreadExceptionWarning —— 本測試已免疫,其他 caplog 負向斷言未免疫,follow-up 見下一條。
 - [x] **TC4 `_listen_loop` 執行緒活過測試(pr-160 review 實證)**:候選修法 = conftest autouse fixture 測後斷言無殘留
   `_listen_loop` 執行緒(或揪出漏 `close()` 的 fixture)。影響面 = 全套件所有 caplog 負向斷言與執行緒計數斷言。 **→ 09-08 盤點:Q18 併 W3 B2 測試鷹架批(user 09-08 轉告該 session)**
+  → 09-09 refactor/w3-b2-test-scaffolds 出貨:root conftest autouse `_no_leaked_tc4_threads`(測後新出現的 `(_listen_loop)` / `(_heal_loop)` 執行緒 join 3 s 仍活著即點名);
+  全量跑一次唯一洩漏源 = `test_stock_source::test_subscribe_starts_listener_when_sub_port_known`(listener + healer 兩條),已補 `_stop.set()` + join。
 - [x] **空回補免 seq bump(pr-160 review F-04)**:`stock_state.apply_backfill` 對 `ticks=[]` 且倖存集 = 現況時仍 `seq +1001`
   → 前端跳號規則整片重掛 tbody,純 no-op、開盤 ×N 檔各一次。候選 = 空回補且無變化時不 bump(行為改動,單獨分支;
   contract 見 CLAUDE.md §4 個股 seq 條「例外已知且刻意」段,改時要同步改口)。 **→ 09-08 盤點:09-08 盤點停放(見 09-08 盤點節停放索引)**
@@ -960,4 +964,5 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-09-04(pr-188 review 收修 r1 留尾)
 
-- [ ] **`TestWsBroadcasterBackpressure` 五份 `WsBroadcaster(...) + stream() + try/finally aclose()` + caplog 骨架抽 fixture**(收修 review 標準軸 F-06,LOW 判斷題):第 5 份是本批的單筆窗案,前四份(:1098 / :1119 / :1133 / :1161)為既有;動它們屬順手 refactor,依鐵則 B 另開 🔵 test-hygiene 批。
+- [x] ~~**`TestWsBroadcasterBackpressure` 五份 `WsBroadcaster(...) + stream() + try/finally aclose()` + caplog 骨架抽 fixture**(收修 review 標準軸 F-06,LOW 判斷題):第 5 份是本批的單筆窗案,前四份(:1098 / :1119 / :1133 / :1161)為既有;動它們屬順手 refactor,依鐵則 B 另開 🔵 test-hygiene 批。~~
+  → 09-09 refactor/w3-b2-test-scaffolds 出貨:該 class 住 `tests/server/test_capital_api.py`(非 test_ws_disconnect;到 09-09 已長成八份),收成模組內 async fixture `ws_stream`(測後統一 aclose)+ `_queue_full_warnings`。
