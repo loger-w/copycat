@@ -1074,6 +1074,9 @@ async def ws_stream() -> AsyncGenerator[_OpenWsStream, None]:
     def open_stream(
         maxsize: int = _CLIENT_QUEUE_MAX, *, on: WsBroadcaster | None = None
     ) -> tuple[WsBroadcaster, _WsStream]:
+        # pr-222 review F-04:`on=` 沿用既有 broadcaster,它的 maxsize 早已定 —— 兩者同給時 maxsize
+        # 會靜默失效,照簽名寫 `ws_stream(maxsize=3, on=b)` 的人會拿到一條假綠測試;機械擋在這裡
+        assert on is None or maxsize == _CLIENT_QUEUE_MAX, "on= 模式沿用既有 broadcaster,不吃 maxsize"
         b = on if on is not None else WsBroadcaster(maxsize=maxsize)
         gen = b.stream()
         opened.append(gen)

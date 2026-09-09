@@ -1,8 +1,10 @@
-"""root conftest 守門 fixture 的生效自檢(two-axis review F-01,refactor/w3-b2)。
+"""root conftest 守門 fixture 的生效自檢(two-axis review F-01,refactor/w3-b2;pr-222 review F-01 / F-02 收修)。
 
 `_no_leaked_tc4_threads` 靠執行緒**名字**認 TC4 的 listener / healer;唯一洩漏源修好後它從此恆綠,
 名字比對一旦失效(`tc4.py` 給 Thread 加了 `name=`、或改用 `functools.partial` 當 target)守門會
-**靜默**轉 vacuous,零訊號。這裡兩條各釘一端:偵測邏輯本身(正向案)與 `tc4.py` 的命名前提(字面 parity)。
+**靜默**轉 vacuous,零訊號。這裡三條各釘一端:偵測邏輯本身(正向 / 負向)與 `tc4.py` 的命名前提(字面 parity)。
+偵測邏輯從 `tests/helpers/threads.py` 拿 —— **不從 `tests.conftest`**:那會載出第二個 module 物件,
+測到的不是守門 fixture 用的那顆(pr-222 review F-01)。
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import re
 import threading
 from pathlib import Path
 
-from tests.conftest import leaked_tc4_threads
+from tests.helpers.threads import leaked_tc4_threads, live_threads
 
 _TC4_SRC = Path(__file__).resolve().parent.parent / "copycat" / "live" / "tc4.py"
 
@@ -21,7 +23,7 @@ def test_guard_names_a_live_thread_with_tc4_marker_and_clears_once_it_exits() ->
 
     join 上限縮到 50 ms(預設 3 s 是給真 listener 的 RCVTIMEO 尾巴),自檢不等 3 秒。
     """
-    before = {t.ident for t in threading.enumerate()}
+    before = live_threads()
     release = threading.Event()
     t = threading.Thread(target=release.wait, name="Thread-999 (_listen_loop)", daemon=True)
     t.start()
@@ -38,7 +40,7 @@ def test_guard_ignores_threads_alive_before_the_test_and_unmarked_names() -> Non
     release = threading.Event()
     older = threading.Thread(target=release.wait, name="Thread-998 (_listen_loop)", daemon=True)
     older.start()
-    before = {t.ident for t in threading.enumerate()}  # older 已在快照內
+    before = live_threads()  # older 已在快照內
     plain = threading.Thread(target=release.wait, name="Thread-997 (worker)", daemon=True)
     plain.start()
     try:
@@ -47,6 +49,18 @@ def test_guard_ignores_threads_alive_before_the_test_and_unmarked_names() -> Non
         release.set()
         older.join(timeout=3.0)
         plain.join(timeout=3.0)
+
+
+def test_guard_snapshot_holds_thread_objects_not_recyclable_idents() -> None:
+    """pr-222 review F-02:快照存 Thread 物件而非 `ident`。同一個 ident 被回收給新執行緒時,
+    新執行緒仍是「測後新出現」—— 以物件身分判,守門必須點名。
+
+    不能命令 OS 重發同號,所以用結構斷言釘住:快照元素是 `Thread`、比對走 `t not in before`
+    (突變回 ident 集會讓本條 isinstance 紅)。
+    """
+    before = live_threads()
+    assert before and all(isinstance(t, threading.Thread) for t in before)
+    assert threading.current_thread() in before
 
 
 def test_tc4_threads_keep_the_default_name_the_guard_matches_on() -> None:
