@@ -1,3 +1,12 @@
+## 2026-09-09(refactor/w3-b2-test-scaffolds 留尾)
+
+- [ ] **`StockChart.test.tsx` 四條「無 K 線資料」測試在交易日 09:00 後跑必紅(測試沒釘牆鐘)**:SC-7「取到空 bars 仍顯示無 K 線資料」
+  + N-7 三條(缺 status / 未知 status / 空物件)都以真牆鐘 render,`ACCUM` 帶 2330 一筆成交、`code="2330"`;`StockChart.tsx`
+  自 #214 起「非期貨 + accum 同檔 + 牆鐘同日 09:00 起 + 交易日」就畫即時末根而**刻意不印**「無 K 線資料」(code 註解 two-axis
+  S-05 知情)→ 盤中跑 5 s timeout。09-09 11:49 / 12:xx 兩次全量與主樹 master 單跑同紅 4 條(4 failed / 28 passed),盤後應綠。
+  候選 = 四條加 `vi.useFakeTimers()` + `vi.setSystemTime(休市時刻)`(或 accum 換別檔);屬測試衛生,另開 🔵 或併下一個
+  test-hygiene 批。**判準**:交易日 10:00 跑 `npx vitest run src/components/stock/StockChart.test.tsx` 全綠。
+
 ## 2026-09-08(剩餘待辦盤點,user 逐條拍板 Q1–Q20;handoff `%TEMP%\copycat-handoff-2026-09-08-remaining-todos.md`)
 
 - [ ] **`/bug` 加權指數分時線在 server 09:00 後啟動的日子不由推播前進**(Q20 (a),優先於 C5;handoff

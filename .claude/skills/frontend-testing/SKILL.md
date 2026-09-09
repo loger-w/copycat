@@ -57,3 +57,10 @@ description: 前端 vitest / RTL 測試慣例。寫 component 或 hook 測試前
   X_START_MIN/offsetAtX 這類常數,座標全 NaN)。樣板 `RiverPanel.memo.test.tsx` /
   `MarketPane.memo.test.tsx` / `App.memo.test.tsx`(葉子 mock + deps 內容斷言雙向守門)。
   Trigger:寫任何 `.memo.test.tsx` 計次測試 / mock 內部元件符號。
+- **跨檔共用的測試鷹架放 `<dir>/__fixtures__/*.ts`,單檔(或同目錄一組元件)專用的 colocated `*-test-fixtures.ts`**
+  (2026-09-09 refactor/w3-b2 two-axis F-07 拍板):前者樣板 `hooks/__fixtures__/day-rollover.ts`(三支日 K hook
+  的跨日時間軸 / 快照 / 牆鐘判定 / `rerenderBurst`),後者樣板 `components/corr/river-test-fixtures.ts`。vitest `include`
+  只認 `*.test.*`,fixture 檔在 `src/` 下 import `vitest`(`vi.advanceTimersByTimeAsync`)沒問題、tsc / eslint 同一套規則。
+  **Response 信封不進 fixture**:`{key, tf, bars, meta}` 與 `{bars, status}` 是各 hook 的 interface 事實,各檔自留 stub 包信封,
+  只向 fixture 要料與政策值(如 `partial_last`);fixture 內的界(14:00)是與後端同值的**測試側字面值**,不在 CLAUDE.md §4
+  parity 保護內。Trigger:第二個測試檔要抄同一組常數 / helper 時。
