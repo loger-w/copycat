@@ -55,10 +55,10 @@ worktree 環境:`C:/side-project/copycat/.venv/Scripts/python`(主樹 venv,pypro
 | `/api/market/bars/TWSE?tf=D` ×2 | `build_period` happy + memo hit(tag 由 cache 還原 → meta.source `tc4_dk`、`partial_last` true) | SAME |
 | `/api/market/bars/TWSE?tf=W` / `?tf=M` | edge:長窗聚合走同一格 | SAME(W bars=2 / M bars=1) |
 | `/api/stock/bars/9999?tf=D` | edge:鍵隔離 | SAME |
-| `/api/stock/bars/2330?tf=1&days=2` | 未改功能抽查 1(分 K 兩段式) | SAME(419 B) |
-| `/api/calendar` | 未改功能抽查 2 | SAME(183 B) |
+| `/api/stock/bars/2330?tf=1&days=2` | 未改功能抽查 1(分 K 兩段式;**手動 curl,不在腳本內**) | SAME(419 B) |
+| `/api/calendar` | 未改功能抽查 2(**手動 curl,不在腳本內**) | SAME(183 B) |
 
-RESULT: ALL SAME。側車跑完即關(8731 / 8732 兩 pid 已 Stop-Process),prod 8721 全程未動。
+RESULT: ALL SAME(腳本 8 列;表中最後兩列是手動 curl 逐字比對兩台回應、不在 `compare_bars.py::PATHS` 內,重跑腳本得 8 列 —— pr-220 review F-04)。側車跑完即關(8731 / 8732 兩 pid 已 Stop-Process),prod 8721 全程未動。
 定稿界後的路徑(14:00 後 `daily_get` 作廢、空手墊背)側車跑在 10:3x 走不到,由 `TestDailySnapshotFinality` 全套(單元)覆蓋,
 且與 refactor 前同一批測試不改仍綠。
 

@@ -216,7 +216,8 @@ class _DailyEntry:
     """`BarsCache` 日 K memo 的一格:同一 (code, today) 的 bars / 資料源 tag / 界前標記。
 
     原本是三份同鍵 dict(two-axis review J3):每次 put / prune 要三處同步,漂掉零錯誤訊號。
-    收成一格後「無快照時標記必也不在」變成結構保證(標記只由 `daily_put` 非空寫入)。
+    收成一格後 `prune` 的「同鍵同刪」由結構吸收;「無快照時標記必也不在」的寫入半邊仍靠
+    `daily_put` 這一個寫入點守住(空手早退、標記只隨非空 bars 寫入),不是型別級保證。
     三欄**彼此獨立**(characterization 釘住):`bars` 缺(只有 tag)不算快照;`tag` 不被
     bars 的寫入帶掉;空 bars 對三欄全 no-op。
 
@@ -384,7 +385,7 @@ class BarsCache:
 
     def daily_put(self, code: str, today: str, bars: list[Bar]) -> None:
         if not bars:
-            return  # don't-cache-empty(三欄全不動,含不 pop 界前標記)
+            return  # don't-cache-empty(三欄全不動,含不清界前標記)
         entry = self._daily.setdefault((code, today), _DailyEntry())
         entry.bars = bars
         # 界前寫入 → 記下「今日 bar 可能還在進行」+ 寫入時刻;界後寫入 → 定稿(含覆寫舊標記)
@@ -601,7 +602,7 @@ async def build_period(
 def _period_pre_final(cache: BarsCache, key: str, day: str) -> bool:
     """這一趟 `build_period` 回的 bars 是不是界前寫入的快照(`PeriodBars.pre_final` 的唯一算式)。
 
-    與 bars 在同一個同步區塊內取值:標記的 pop 與 `_daily` 的覆寫是 `daily_put` 內同一段
+    與 bars 在同一個同步區塊內取值:標記的清除與 `_daily` 的覆寫是 `daily_put` 內同一段
     同步碼,所以「標記還在」⇔「`_daily` 仍是界前那份」對本趟恆成立。"""
     return cache.pre_final_written_at(key, day) is not None
 
