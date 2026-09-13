@@ -73,7 +73,7 @@ BIG_LOTS_KEY = "big_lots_120s"
 _BIG_LOT_MIN_TICKS = 30
 _BIG_LOT_MEDIAN_TICKS = 300
 
-#: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵,spec #192 起六鍵)。
+#: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵,spec #192 起六鍵,#226 起七鍵)。
 KIND_SWITCH: dict[str, str] = {
     "cdp_cross": "cdp_cross",
     "surge": "surge_crash",
@@ -83,6 +83,7 @@ KIND_SWITCH: dict[str, str] = {
     "limit_lock": "limit_lock",
     "limit_open": "limit_lock",
     "sweep_cluster": "sweep_cluster",
+    "vol_breakout": "vol_breakout",
 }
 SWITCH_KEYS: tuple[str, ...] = (
     "cdp_cross",
@@ -91,7 +92,11 @@ SWITCH_KEYS: tuple[str, ...] = (
     "vol_burst",
     "limit_lock",
     "sweep_cluster",
+    "vol_breakout",
 )
+#: 放量離開(#226):迴盪期「有成交的分鐘數」地板 —— 研究 `len(vols) >= 4` 才算得出均量
+#: (薄股十分鐘只成交兩分鐘沒有「每分鐘均量」可言),沿研究定義留內部常數不做旋鈕。
+_BREAKOUT_MIN_MINUTES = 4
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,28 @@ class _SweepGroup:
     qty: int
     qualified: bool = False  # 已登記為合格掃單(一群只登記一次)
     fired: bool = False  # 本群已發過掃單簇事件
+
+
+@dataclass
+class _Dwell:
+    """放量離開(#226)的當前區段:錨 = 區段首筆價;帶內成交量與「有成交的分鐘」集合(均量分母)。"""
+
+    anchor: int
+    start: float  # 區段首筆 tick 秒(自午夜)
+    vol: int
+    minutes: set[int]
+
+
+@dataclass
+class _Break:
+    """離帶那一分鐘的即時判狀態:自離帶筆起累積量,達 `threshold` 即發(一次),分鐘換了就丟。"""
+
+    minute: int
+    direction: str  # up | down
+    threshold: float  # ratio × 迴盪期每分鐘均量
+    avg: float  # 迴盪期每分鐘均量(事件 pct = vol / avg)
+    vol: int
+    fired: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,6 +251,9 @@ class SignalDetector:
         self._lot_count: dict[str, int] = {}
         self._big_prev: dict[str, int] = {}
         self._big_hits: dict[str, deque[float]] = {}
+        # 放量離開(#226)兩份狀態(tick 時刻軸;冷卻用牆鐘):當前區段 / 離帶分鐘的即時判
+        self._dwell: dict[str, _Dwell] = {}
+        self._break: dict[str, _Break] = {}
 
     # ---- 基準(CDP)----
 
@@ -291,6 +321,8 @@ class SignalDetector:
         self._lot_count.clear()
         self._big_prev.clear()
         self._big_hits.clear()
+        self._dwell.clear()
+        self._break.clear()
 
     def drop_code(self, code: str) -> None:
         self._basis.pop(code, None)
@@ -310,6 +342,8 @@ class SignalDetector:
         self._lot_count.pop(code, None)
         self._big_prev.pop(code, None)
         self._big_hits.pop(code, None)
+        self._dwell.pop(code, None)
+        self._break.pop(code, None)
 
     # ---- 主入口 ----
 
@@ -333,6 +367,8 @@ class SignalDetector:
         # 掃單簇走自己的時間軸(tick 時刻),且首 tick 也要進回看窗 / 可能是同毫秒群的首筆
         # —— 所以在「首 tick 只初始化」gate 之前推進(其餘 kind 的首 tick 語意不變)
         sweep_events = self._eval_sweep(code, tick, key, mono, enabled)
+        # 放量離開(#226)同款:區段首筆就是當日首筆,所以也在首 tick gate 之前推進
+        sweep_events += self._eval_breakout(code, tick, key, mono, enabled)
         if code not in self._prev:  # 首 tick 只初始化(無前值可比,任何判定都是猜)
             self._prev[code] = price
             self._window[code] = deque([(mono, price, tick.qty)])
@@ -839,6 +875,107 @@ class SignalDetector:
         while hits and hits[0] < window_start:
             hits.popleft()
         return len(hits)
+
+    # ---- 放量離開(#226)----
+
+    def _eval_breakout(
+        self,
+        code: str,
+        tick: StockTick,
+        key: str,
+        mono: float,
+        enabled: frozenset[str],
+    ) -> list[SignalEvent]:
+        """帶內迴盪 → 離帶 → 離帶分鐘放量即發;狀態推進無條件,`enabled` / 冷卻只 gate 事件產出。
+
+        定義(研究 `cdp_oscillation.py::scan` 的無價位錨翻譯;§17 結論「與價位無關」):
+        - 區段:錨 = 區段首筆價(當日首筆 / 上一次離帶那筆),帶 = |價 − 錨| ≤ 錨 × band_pct(含端點)。
+        - 離帶:第一筆帶外成交。停留 = 離帶筆時刻 − 區段首筆時刻 ≥ `breakout_min_dwell_secs`,且區段內
+          有成交的分鐘數 ≥ `_BREAKOUT_MIN_MINUTES`,才有「迴盪均量」= 區段量 ÷ 分鐘數;離帶筆同時是
+          下一區段的首筆(錨換成它)。
+        - 離帶分鐘:自離帶筆起累積同一牆鐘分鐘(tick 時刻)的量,≥ `breakout_ratio` × 均量那一筆即發
+          (即時判,沿掃單簇先例;研究看整分鐘);該分鐘結束仍未達 → 不發、狀態丟棄。一次離帶最多一則。
+        - `direction` = 離帶側(up / down)、`pct` = 發訊當下 累積量 ÷ 均量。
+        0 價 / 0 量 / 時刻解析失敗的 tick 整段跳過(與掃單簇同一道閘)。
+        """
+        price = tick.price_milli
+        if price <= 0 or tick.qty <= 0:
+            return []
+        secs = tick_secs(key)
+        if secs is None:
+            return []
+        cfg = self._cfg
+        minute = int(secs // 60)
+        events: list[SignalEvent] = []
+        # (1) 離帶分鐘的即時判(先於區段推進:這一筆可能就是達標筆)
+        pending = self._break.get(code)
+        if pending is not None:
+            if pending.minute != minute:
+                del self._break[code]  # 分鐘結束仍未達標 → 不發
+            elif not pending.fired:
+                pending.vol += tick.qty
+                if pending.vol >= pending.threshold:
+                    pending.fired = True  # 無條件消耗(design R2:停用 / 冷卻期間達標不補發)
+                    ev = self._breakout_event(code, pending, price, key, mono, enabled)
+                    if ev is not None:
+                        events.append(ev)
+        # (2) 區段推進
+        dwell = self._dwell.get(code)
+        if dwell is None:
+            self._dwell[code] = _Dwell(anchor=price, start=secs, vol=tick.qty, minutes={minute})
+            return events
+        if abs(price - dwell.anchor) <= dwell.anchor * cfg.breakout_band_pct / 100:
+            dwell.vol += tick.qty
+            dwell.minutes.add(minute)
+            return events
+        # 離帶:先判這一區段夠不夠格當「迴盪」,再無條件開新區段(錨 = 這一筆)
+        n_min = len(dwell.minutes)
+        if secs - dwell.start >= cfg.breakout_min_dwell_secs and n_min >= _BREAKOUT_MIN_MINUTES:
+            avg = dwell.vol / n_min
+            pending = _Break(
+                minute=minute,
+                direction="up" if price > dwell.anchor else "down",
+                threshold=cfg.breakout_ratio * avg,
+                avg=avg,
+                vol=tick.qty,
+            )
+            self._break[code] = pending
+            if pending.vol >= pending.threshold:
+                pending.fired = True
+                ev = self._breakout_event(code, pending, price, key, mono, enabled)
+                if ev is not None:
+                    events.append(ev)
+        else:
+            self._break.pop(code, None)
+        self._dwell[code] = _Dwell(anchor=price, start=secs, vol=tick.qty, minutes={minute})
+        return events
+
+    def _breakout_event(
+        self,
+        code: str,
+        pending: _Break,
+        price: int,
+        key: str,
+        mono: float,
+        enabled: frozenset[str],
+    ) -> SignalEvent | None:
+        if "vol_breakout" not in enabled:
+            return None
+        bucket = (code, "vol_breakout", "")
+        if self._cooling(bucket, mono):
+            return None
+        self._arm(bucket, mono, self._cfg.breakout_cooldown_secs)
+        return SignalEvent(
+            kind="vol_breakout",
+            code=code,
+            price_milli=price,
+            time=key[:8],
+            time_key=key,
+            levels=(),
+            direction=pending.direction,
+            pct=pending.vol / pending.avg,
+            touch_count=self._bump(bucket),
+        )
 
     # ---- 鎖漲跌停 / 打開(SC-4)----
 

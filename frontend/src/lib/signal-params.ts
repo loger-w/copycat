@@ -73,6 +73,13 @@ export const PARAM_FIELDS: Record<RuleKind, readonly ParamField[]> = {
     { key: "up_pct", label: "漲幅 %", step: "0.1", min: 0, max: 10, integer: false, default: "0.3" },
     { key: "up_window_secs", label: "回看窗(秒)", step: "1", min: 1, max: 600, integer: false, default: "60" },
   ],
+  // #226 放量離開:預設 = 研究值(帶 ±0.6% 停留 ≥ 600 s、離帶分鐘量 ≥ 4× 迴盪均量),與後端種子同口徑;
+  // 「在 ±X% 帶內停留 ≥ N 秒後,離帶那一分鐘的量 ≥ K 倍」是一句話,欄序照它排
+  vol_breakout: [
+    { key: "band_pct", label: "帶寬 ±%", step: "0.1", min: 0.1, max: 5, integer: false, default: "0.6" },
+    { key: "min_dwell_secs", label: "最短停留(秒)", step: "1", min: 60, max: 3600, integer: false, default: "600" },
+    { key: "ratio", label: "離帶分鐘量倍率", step: "0.1", min: 1, max: 100, integer: false, default: "4" },
+  ],
 };
 
 /** 「新規則」表單的 params 初值(逐欄 `default`)。 */

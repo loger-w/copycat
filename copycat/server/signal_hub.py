@@ -158,6 +158,9 @@ def _kind_text(row: dict[str, Any]) -> str:
         return f"爆拉回檔 {value:.2f}%"
     if kind == "vol_burst":
         return f"爆量 {value:.1f} 倍"
+    if kind == "vol_breakout":
+        # #226:pct = 離帶分鐘量 ÷ 迴盪均量;與前端 `signal-model.kindLabel` 逐字對齊;方向缺值退向上
+        return f"放量{'向下' if direction == 'down' else '向上'}離開 {value:.1f} 倍"
     if kind == "sweep_cluster":
         # pct = 60 s 漲幅(%);與前端 `signal-model.kindLabel` 逐字對齊(spec #192)
         return f"掃單簇 {value:+.2f}%"
