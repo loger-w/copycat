@@ -270,6 +270,16 @@ describe("SignalRail 合併列可讀性(B3:換行 + 逐段 title)", () => {
     expect(list.getByText("CDP 穿越").parentElement?.className).toContain("truncate");
   });
 
+  it("#226 放量離開:向上紅、向下綠;quiet 列淡色仍列", () => {
+    const UP = sig({ id: "bo-up", kind: "vol_breakout", direction: "up", pct: 4.2, notify: false, time: "09:40:00" });
+    const DOWN = sig({ id: "bo-dn", kind: "vol_breakout", direction: "down", pct: 5, notify: false, time: "09:41:00" });
+    renderRail({ signals: [DOWN, UP] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    expect(list.getByText("放量向上離開 4.2 倍").className).toContain("text-bull");
+    expect(list.getByText("放量向下離開 5.0 倍").className).toContain("text-bear");
+    expect(list.getByText("放量向上離開 4.2 倍").closest("li")?.className).toContain("opacity-50");
+  });
+
   it("SC-1 edge:三段合併(cdp+crash+vol_burst)→ 仍 clamp 2、三段 title 各自完整、分隔符 2 個", () => {
     const VOL = sig({ id: "v", kind: "vol_burst", direction: null, pct: 3.5, rule_name: "我的爆量" });
     renderRail({ signals: [VOL, CRASH, CDP_DOWN] });

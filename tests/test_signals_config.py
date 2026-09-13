@@ -44,6 +44,11 @@ def test_default_values() -> None:
     # #227 大單敲檔筆數格:K = 10、窗 120 s(研究 bigtick_hits / confirm_bt 同口徑)
     assert cfg.big_lot_ratio == 10
     assert cfg.big_lot_window_secs == 120.0
+    # #226 放量離開:帶 ±0.6% / 停留 600 s / 離帶分鐘 4× / 冷卻 600 s(研究 §17 值,user 09-14 拍板)
+    assert cfg.breakout_band_pct == 0.6
+    assert cfg.breakout_min_dwell_secs == 600.0
+    assert cfg.breakout_ratio == 4.0
+    assert cfg.breakout_cooldown_secs == 600.0
 
 
 def test_load_policy_keys_and_exclude_groups_as_tuple(tmp_path: Path) -> None:

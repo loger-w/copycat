@@ -346,6 +346,12 @@ describe("kindLabel — spec #192 新 kind(與後端 `_kind_text` 逐字對齊)"
     expect(kindLabel(sig({ kind: "sweep_cluster", pct: null }))).toBe("掃單簇");
   });
 
+  it("#226 放量離開:方向 + 倍率一位小數(與後端 `_kind_text` 逐字);pct 缺值只印名", () => {
+    expect(kindLabel(sig({ kind: "vol_breakout", direction: "up", pct: 4.26 }))).toBe("放量向上離開 4.3 倍");
+    expect(kindLabel(sig({ kind: "vol_breakout", direction: "down", pct: 4 }))).toBe("放量向下離開 4.0 倍");
+    expect(kindLabel(sig({ kind: "vol_breakout", direction: "down", pct: null }))).toBe("放量離開");
+  });
+
   it("漲幅恰為 0 也帶正號(與後端 `_kind_text` 的 `+.2f` 逐字;review F-17:`up_pct` 值域下限 0 可達)", () => {
     expect(kindLabel(sig({ kind: "sweep_cluster", pct: 0 }))).toBe("掃單簇 +0.00%");
     expect(kindLabel(sig({ kind: "sweep_cluster", pct: -0.5 }))).toBe("掃單簇 -0.50%");

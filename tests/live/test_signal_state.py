@@ -734,6 +734,7 @@ class TestSessionGates:
 
 
 _SWEEP = frozenset({"sweep_cluster"})
+_BO = frozenset({"vol_breakout"})
 
 
 def _ms_time(ms: int) -> str:
@@ -927,11 +928,11 @@ class TestSweepClusterState:
 
 
 class TestSwitchKeys:
-    def test_six_switch_keys_and_kind_map(self) -> None:
-        """spec #192:開關鍵集五鍵 → 六鍵(掃單簇是規則 kind,事件 kind 同名)。
+    def test_seven_switch_keys_and_kind_map(self) -> None:
+        """spec #192:開關鍵集五鍵 → 六鍵(掃單簇是規則 kind,事件 kind 同名);#226 放量離開 → 七鍵。
 
         hub 的 `_legacy_flags` 以這組鍵起手,少一鍵 = 該 kind 的種子 enabled 永遠拿不到
-        舊開關檔的值(缺鍵 fail-open)—— 對掃單簇是刻意的,但鍵集本身要釘住。
+        舊開關檔的值(缺鍵 fail-open)—— 對掃單簇 / 放量離開是刻意的,但鍵集本身要釘住。
         """
         assert SWITCH_KEYS == (
             "cdp_cross",
@@ -940,8 +941,10 @@ class TestSwitchKeys:
             "vol_burst",
             "limit_lock",
             "sweep_cluster",
+            "vol_breakout",
         )
         assert KIND_SWITCH["sweep_cluster"] == "sweep_cluster"
+        assert KIND_SWITCH["vol_breakout"] == "vol_breakout"
         assert set(KIND_SWITCH.values()) == set(SWITCH_KEYS)
 
 
@@ -1322,11 +1325,19 @@ class TestSweepClusterGates:
     @staticmethod
     def _seq(det: SignalDetector, ctx: TickContext, base_time: str, g1: tuple, g2: tuple) -> list:
         out: list[SignalEvent] = []
-        out += det.evaluate("2330", _tick(50_000, time=base_time, ask=50_000, trade_date=ctx.trade_date), ctx, _SWEEP)
+        out += det.evaluate(
+            "2330",
+            _tick(50_000, time=base_time, ask=50_000, trade_date=ctx.trade_date),
+            ctx,
+            _SWEEP,
+        )
         for time, prices, ask in (g1, g2):
             for i, p in enumerate(prices):
                 out += det.evaluate(
-                    "2330", _tick(p, cum=i + 1, time=time, ask=ask, trade_date=ctx.trade_date), ctx, _SWEEP
+                    "2330",
+                    _tick(p, cum=i + 1, time=time, ask=ask, trade_date=ctx.trade_date),
+                    ctx,
+                    _SWEEP,
                 )
         return out
 
@@ -1359,12 +1370,19 @@ class TestSweepClusterGates:
         # 回看基準先餵(否則毒值也會卡在 lookback[0],漲幅恆 0 而遮住這條路)
         det.evaluate("2330", _tick(50_000, time="10:10:00.000", ask=50_000), _ctx(), _SWEEP)
         bogus = "bogus"  # `tick_secs` 回 None
-        for i, p in enumerate([50_000, 50_100, 50_200]):  # 同 key 三筆、2 層、外盤 → 若登記就是一個掃單
-            assert det.evaluate("2330", _tick(p, cum=i + 1, time=bogus, ask=50_000), _ctx(), _SWEEP) == []
+        for i, p in enumerate(
+            [50_000, 50_100, 50_200]
+        ):  # 同 key 三筆、2 層、外盤 → 若登記就是一個掃單
+            assert (
+                det.evaluate("2330", _tick(p, cum=i + 1, time=bogus, ask=50_000), _ctx(), _SWEEP)
+                == []
+            )
         # 之後只有**一個**合格掃單 → n30 = 1 → 不發;毒值留在 deque 時 n30 = 2、60 s 漲 +0.4% 而多發
         out: list[SignalEvent] = []
         for i, p in enumerate([50_000, 50_100, 50_200]):
-            out += det.evaluate("2330", _tick(p, cum=i + 1, time="10:11:10.100", ask=50_000), _ctx(), _SWEEP)
+            out += det.evaluate(
+                "2330", _tick(p, cum=i + 1, time="10:11:10.100", ask=50_000), _ctx(), _SWEEP
+            )
         assert out == []
 
 
@@ -1525,3 +1543,124 @@ class TestBigLots:
         det.drop_code("2330")
         assert self._fire(det, "2330") == 0
         assert self._fire(det, "2317") == 1
+
+
+class TestVolBreakout:
+    """#226 放量離開(`vol_breakout`):價在錨 ±band_pct 帶內停留 ≥ min_dwell_secs,離帶那一分鐘的量
+    ≥ ratio × 迴盪期每分鐘均量(分母 = 有成交的分鐘數,< 4 分鐘不算)→ 發一則,`direction` = 離帶方向、
+    `pct` = 倍率。錨 = 區段首筆價(上一次離帶那筆 / 當日首筆);離帶分鐘量自離帶筆起累積、達標即發
+    (即時判,沿掃單簇先例)、該分鐘結束仍未達不發。停留與分鐘用 tick 時刻、冷卻用牆鐘(同掃單簇)。
+    研究 §17:迴盪後打破續走 22% = 隨機,離帶分鐘 ≥ 4× 才 37–44% —— 「打破當下放量」是訊號,價位不是。
+    """
+
+    _T0 = 9 * 3600 + 30 * 60  # 09:30:00
+
+    @staticmethod
+    def _bo(
+        det: SignalDetector, price: int, qty: int, secs: float, enabled: frozenset[str] = _BO
+    ) -> list[SignalEvent]:
+        return det.evaluate(
+            "2330", _tick(price, qty=qty, cum=1, time=_ms_time(round(secs * 1000))), _ctx(), enabled
+        )
+
+    def _dwell(
+        self, det: SignalDetector, *, minutes: int = 10, price: int = 50_000, qty: int = 10
+    ) -> None:
+        """每分鐘一筆、同價、qty 張:minutes 個有成交的分鐘,均量 = qty / 分鐘。"""
+        for i in range(minutes):
+            assert self._bo(det, price, qty, self._T0 + i * 60) == []
+
+    def test_dwell_then_break_up_with_expanded_minute_volume_fires(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)  # 09:30–09:39 十個分鐘、均量 10
+        # 09:40:00 離帶(50_400 > 50_000 + 0.6%):停留 600 s、離帶筆 40 張 = 4 × 10 → 即發
+        got = self._bo(det, 50_400, 40, self._T0 + 600)
+        assert [(e.kind, e.direction, e.price_milli, e.time_key) for e in got] == [
+            ("vol_breakout", "up", 50_400, "09:40:00.000")
+        ]
+        assert got[0].pct == pytest.approx(4.0)
+        assert got[0].levels == () and got[0].touch_count == 1 and got[0].detail is None
+
+    def test_break_down_direction(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        got = self._bo(det, 49_600, 40, self._T0 + 600)
+        assert [(e.kind, e.direction) for e in got] == [("vol_breakout", "down")]
+
+    def test_dwell_shorter_than_min_secs_does_not_fire(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_400, 400, self._T0 + 599) == []  # 停留 599 s
+
+    def test_break_minute_volume_accumulates_and_fires_on_the_reaching_tick(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_400, 15, self._T0 + 600) == []  # 離帶筆 15 < 40
+        got = self._bo(det, 50_450, 25, self._T0 + 620)  # 同分鐘累積 40 → 這一筆發、價取這一筆
+        assert [(e.direction, e.price_milli, e.time_key) for e in got] == [
+            ("up", 50_450, "09:40:20.000")
+        ]
+        assert got[0].pct == pytest.approx(4.0)
+
+    def test_minute_ends_without_reaching_ratio_never_fires(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_400, 15, self._T0 + 600) == []
+        assert self._bo(det, 50_450, 400, self._T0 + 660) == []  # 09:41 已是下一分鐘:不算離帶分鐘
+
+    def test_band_is_inclusive_and_anchored_at_segment_first_tick(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_300, 400, self._T0 + 600) == []  # 恰 +0.6% 仍在帶內(不是離帶)
+        got = self._bo(
+            det, 50_301, 200, self._T0 + 660
+        )  # 下一分鐘離帶:停留 660 s、均量 (100+400)/11
+        assert len(got) == 1 and got[0].pct == pytest.approx(200 / (500 / 11))
+
+    def test_fewer_than_four_traded_minutes_does_not_fire(self) -> None:
+        """研究 `len(vols) >= 4` 才算得出均量(薄股 10 分鐘只成交兩分鐘沒有「均量」可言)。"""
+        det = _det(_Clock())
+        assert self._bo(det, 50_000, 10, self._T0) == []
+        assert self._bo(det, 50_000, 10, self._T0 + 590) == []  # 只有兩個有成交的分鐘
+        assert self._bo(det, 50_400, 1000, self._T0 + 600) == []
+
+    def test_zero_price_or_qty_ticks_are_ignored(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 0, 10, self._T0 + 300) == []  # 壞 tick 不算離帶、不進均量
+        assert self._bo(det, 50_000, 0, self._T0 + 310) == []
+        got = self._bo(det, 50_400, 40, self._T0 + 600)
+        assert len(got) == 1 and got[0].pct == pytest.approx(4.0)
+
+    def test_disabled_rule_consumes_state_without_emitting(self) -> None:
+        """狀態推進無條件(design R2):停用期間達標的那一次離帶被消耗,重開不補發。"""
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_400, 40, self._T0 + 600, enabled=frozenset()) == []
+        assert self._bo(det, 50_450, 100, self._T0 + 620) == []  # 同分鐘再多量也不補發
+
+    def test_cooldown_uses_wall_clock(self) -> None:
+        clock = _Clock()
+        det = _det(clock, breakout_cooldown_secs=600.0)
+        self._dwell(det)
+        assert len(self._bo(det, 50_400, 40, self._T0 + 600)) == 1
+        # 新區段自離帶筆起(錨 50_400):再停留 10 分後離帶 —— 牆鐘沒走、冷卻中不發
+        for i in range(1, 11):
+            assert self._bo(det, 50_400, 10, self._T0 + 600 + i * 60) == []
+        # 離帶筆也是新區段首筆:上一區段量 140 / 11 分 → 門檻 50.9,80 張達標但冷卻中
+        assert self._bo(det, 50_800, 80, self._T0 + 1260) == []
+        clock.advance(601)
+        for i in range(1, 11):
+            assert self._bo(det, 50_800, 10, self._T0 + 1260 + i * 60) == []
+        got = self._bo(det, 51_200, 80, self._T0 + 1920)
+        assert len(got) == 1 and got[0].touch_count == 2
+
+    def test_reset_day_and_drop_code_clear_dwell(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det)
+        det.reset_day()
+        assert self._bo(det, 50_400, 400, self._T0 + 600) == []  # 換日後第一筆只是新區段首筆
+        det2 = _det(_Clock())
+        self._dwell(det2)
+        det2.drop_code("2330")
+        assert self._bo(det2, 50_400, 400, self._T0 + 600) == []

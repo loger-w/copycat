@@ -45,6 +45,7 @@ VALID_PARAMS: dict[str, dict[str, float]] = {
         "up_pct": 0.3,
         "up_window_secs": 60,
     },
+    "vol_breakout": {"band_pct": 0.6, "min_dwell_secs": 600, "ratio": 4},
 }
 
 
@@ -73,6 +74,7 @@ class TestConstants:
             "vol_burst",
             "limit_lock",
             "sweep_cluster",
+            "vol_breakout",
         )
         assert CDP_LEVELS == ("ah", "nh", "cdp", "nl", "al")
         assert (COOLDOWN_MIN, COOLDOWN_MAX) == (60, 86_400)
@@ -113,6 +115,8 @@ class TestConstants:
                 "up_pct": (0, 10),
                 "up_window_secs": (1, 600),
             },
+            # #226 放量離開:帶寬 % / 最短停留秒 / 離帶分鐘量倍率(全 float 鍵)
+            "vol_breakout": {"band_pct": (0.1, 5), "min_dwell_secs": (60, 3600), "ratio": (1, 100)},
         }
 
     def test_param_specs_parity_with_frontend(self) -> None:
@@ -373,6 +377,7 @@ SEEDED_KINDS = [
     "vol_burst",
     "limit_lock",
     "sweep_cluster",
+    "vol_breakout",
 ]
 
 
@@ -399,6 +404,7 @@ class TestDefaultRules:
         assert flags["爆拉回檔 1%"] is True  # 真舊開關檔沒有這一鍵 → 兩卡各自恆開
         assert flags["爆拉回檔 2%"] is True
         assert flags["掃單簇"] is True  # 同上:晚於開關檔時代,恆走缺鍵 fail-open
+        assert flags["放量離開"] is True  # 同上(#226)
 
     def test_seed_notify_flags_quiet_for_negative_kinds(self) -> None:
         """spec #192:全新安裝的預設規則 cdp_cross / vol_burst / sweep_cluster 通知關,其餘開。
@@ -415,6 +421,7 @@ class TestDefaultRules:
             "爆量": False,
             "鎖漲跌停": True,
             "掃單簇": False,
+            "放量離開": False,  # #226 影子期只上 rail 列
         }
         assert all(r["enabled"] for r in rules)  # 通知關 ≠ 停用:事件照記
 
@@ -433,6 +440,9 @@ class TestDefaultRules:
             sweep_min_levels=4,
             sweep_up_pct=0.5,
             sweep_up_window_secs=90.0,
+            breakout_band_pct=0.8,
+            breakout_min_dwell_secs=480.0,
+            breakout_ratio=3.0,
         )
         # 回檔兩卡另由 test_pullback_seed_cards_pinned_to_names 按 name 鎖;這裡先濾掉,
         # 免得 by-kind dict 靜默塌卡讓人誤以為有斷到(review F-14)
@@ -457,6 +467,11 @@ class TestDefaultRules:
             "up_window_secs": 90.0,
         }
         assert by_kind["sweep_cluster"]["cdp_levels"] == []
+        assert by_kind["vol_breakout"]["params"] == {
+            "band_pct": 0.8,
+            "min_dwell_secs": 480.0,
+            "ratio": 3.0,
+        }
 
     def test_pullback_seed_cards_pinned_to_names(self) -> None:
         """兩張卡的 pct 是卡的身分(綁名稱,不吃 config);武裝參數沿 surge 全域設定。"""
@@ -476,6 +491,7 @@ class TestDefaultRules:
             limit_cooldown_secs=180.0,
             pullback_cooldown_secs=240.0,
             sweep_cooldown_secs=75.0,
+            breakout_cooldown_secs=420.0,
         )
         # by name(review F-14):兩張回檔卡各自斷言,不讓 dict 塌卡
         by_name = {r["name"]: r["cooldown_secs"] for r in default_rules(cfg, {})}
@@ -487,6 +503,7 @@ class TestDefaultRules:
             "爆量": 1200,
             "鎖漲跌停": 180,
             "掃單簇": 75,
+            "放量離開": 420,
         }
 
     def test_out_of_domain_config_cooldown_clamped_not_raised(self) -> None:
@@ -520,7 +537,7 @@ class TestLoadSaveRules:
         path = tmp_path / "rules.json"
         save_rules(path, [])
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 4
+        assert payload["_cache_version"] == 5  # #226 起 v5
         assert payload["rules"] == []
 
     def test_bad_json_raises(self, tmp_path: Path) -> None:
@@ -622,9 +639,9 @@ class TestMigrationFromV1:
 
         loaded = load_rules(path)
 
-        # v1 → v2 補鍵之外,遷移鏈尾端(v2 → v3 → v4)另 append 兩張 surge_pullback 種子卡
-        # 與一張掃單簇種子卡,並把舊 CDP 規則的通知翻 false
-        assert loaded is not None and len(loaded) == 5
+        # v1 → v2 補鍵之外,遷移鏈尾端(v2 → v3 → v4 → v5)另 append 兩張 surge_pullback 種子卡、
+        # 一張掃單簇種子卡、一張放量離開種子卡,並把舊 CDP 規則的通知翻 false
+        assert loaded is not None and len(loaded) == 6
         assert loaded[0]["params"] == {"rearm_ticks": 5.0, "rearm_dwell_secs": 300.0}
         assert loaded[0]["notify_discord"] is False
         assert loaded[1]["params"] == {}
@@ -633,6 +650,7 @@ class TestMigrationFromV1:
             "surge_pullback",
             "surge_pullback",
             "sweep_cluster",
+            "vol_breakout",
         ]
 
     def test_v1_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
@@ -689,22 +707,22 @@ class TestMigrationFromV1:
         with pytest.raises(RuleError, match="INVALID_RULE"):
             load_rules(path)
 
-    def test_save_after_v1_load_lands_v4(self, tmp_path: Path) -> None:
+    def test_save_after_v1_load_lands_v5(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
         _write_versioned(path, 1, [self._v1_cdp()])
         loaded = load_rules(path)
         assert loaded is not None
         save_rules(path, loaded)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 4
+        assert payload["_cache_version"] == 5
         assert payload["rules"][0]["params"]["rearm_dwell_secs"] == 300.0
-        # v1 鏈到 v4 也吃到通知翻旗(舊 CDP 規則通知關)與掃單簇種子
+        # v1 鏈到 v5 也吃到通知翻旗(舊 CDP 規則通知關)、掃單簇種子與放量離開種子
         assert payload["rules"][0]["notify_discord"] is False
-        assert payload["rules"][-1]["kind"] == "sweep_cluster"
+        assert [r["kind"] for r in payload["rules"][-2:]] == ["sweep_cluster", "vol_breakout"]
 
-    def test_version_zero_and_five_still_raise(self, tmp_path: Path) -> None:
+    def test_version_zero_and_six_still_raise(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
-        for version in (0, 5):
+        for version in (0, 6):
             _write_versioned(path, version, [])
             with pytest.raises(RuleError, match="INVALID_RULE"):
                 load_rules(path)
@@ -726,10 +744,11 @@ class TestMigrationV2ToV3:
         _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
         with caplog.at_level("INFO"):
             loaded = load_rules(path)
-        assert loaded is not None and len(loaded) == 4
+        assert loaded is not None and len(loaded) == 5
         seeds = loaded[1:3]
         assert [r["name"] for r in seeds] == ["爆拉回檔 1%", "爆拉回檔 2%"]
         assert loaded[3]["kind"] == "sweep_cluster"  # v3→v4 接續 append
+        assert loaded[4]["kind"] == "vol_breakout"  # v4→v5 接續 append(#226)
         assert seeds[0]["params"] == {"surge_pct": 2.0, "window_secs": 300.0, "pct": 1.0}
         assert seeds[1]["params"] == {"surge_pct": 2.0, "window_secs": 300.0, "pct": 2.0}
         for seed in seeds:
@@ -738,10 +757,11 @@ class TestMigrationV2ToV3:
             assert seed["notify_discord"] is True
             assert seed["cdp_levels"] == []
         # 撞既有 id 的去重見 test_seed_id_collision_with_existing_dedups(這裡 id 空間不相交)
-        assert len({r["id"] for r in loaded}) == 4
-        # append 內容要留痕(對帳判準,v1 遷移 log 前例同款;review F-05);v3→v4 再一張
+        assert len({r["id"] for r in loaded}) == 5
+        # append 內容要留痕(對帳判準,v1 遷移 log 前例同款;review F-05);v3→v4 / v4→v5 各再一張
         assert caplog.text.count("v2→v3:append 種子卡") == 2
         assert caplog.text.count("v3→v4:append 種子卡") == 1
+        assert caplog.text.count("v4→v5:append 種子卡") == 1
 
     def test_seed_id_collision_with_existing_dedups(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -759,8 +779,8 @@ class TestMigrationV2ToV3:
         occupied = make("surge_crash", id=f"r-{epoch}-001", name="爆拉爆跌")
         _write_versioned(path, 2, [occupied])
         loaded = load_rules(path)
-        assert loaded is not None and len(loaded) == 4  # 沒有去重迴圈時這裡是 raise
-        assert len({r["id"] for r in loaded}) == 4
+        assert loaded is not None and len(loaded) == 5  # 沒有去重迴圈時這裡是 raise
+        assert len({r["id"] for r in loaded}) == 5
 
     def test_seed_skip_on_max_rules_logs_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -773,7 +793,7 @@ class TestMigrationV2ToV3:
         with caplog.at_level("WARNING"):
             loaded = load_rules(path)
         assert loaded is not None and len(loaded) == 30
-        assert caplog.text.count("跳過種子卡") == 3  # 兩張回檔卡 + 掃單簇
+        assert caplog.text.count("跳過種子卡") == 4  # 兩張回檔卡 + 掃單簇 + 放量離開
 
     def test_v2_empty_file_still_gets_seeds(self, tmp_path: Path) -> None:
         """一次性升級注入:v2 空檔(v2 世界刪光的)也拿到新功能的種子。"""
@@ -781,7 +801,7 @@ class TestMigrationV2ToV3:
         _write_versioned(path, 2, [])
         loaded = load_rules(path)
         assert loaded is not None
-        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%", "掃單簇"]
+        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%", "掃單簇", "放量離開"]
 
     def test_v2_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
@@ -790,10 +810,10 @@ class TestMigrationV2ToV3:
         load_rules(path)
         assert path.read_text(encoding="utf-8") == before
 
-    def test_v4_file_never_reseeded(self, tmp_path: Path) -> None:
-        """v4 檔刪光就是刪光 —— 既有「空陣列 ≠ 缺檔」語意在當前版本上原樣成立。"""
+    def test_v5_file_never_reseeded(self, tmp_path: Path) -> None:
+        """v5 檔刪光就是刪光 —— 既有「空陣列 ≠ 缺檔」語意在當前版本上原樣成立。"""
         path = tmp_path / "rules.json"
-        _write_versioned(path, 4, [])
+        _write_versioned(path, 5, [])
         assert load_rules(path) == []
 
     def test_seed_skipped_on_name_collision(self, tmp_path: Path) -> None:
@@ -802,7 +822,7 @@ class TestMigrationV2ToV3:
         _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉回檔 1%")])
         loaded = load_rules(path)
         assert loaded is not None
-        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%", "掃單簇"]
+        assert [r["name"] for r in loaded] == ["爆拉回檔 1%", "爆拉回檔 2%", "掃單簇", "放量離開"]
         assert loaded[0]["kind"] == "surge_crash"  # 既有那條原樣保留
 
     def test_seed_skipped_when_would_exceed_max_rules(self, tmp_path: Path) -> None:
@@ -820,15 +840,15 @@ class TestMigrationV2ToV3:
         assert loaded_full is not None and len(loaded_full) == 30
         assert all(r["kind"] == "limit_lock" for r in loaded_full)
 
-    def test_save_after_v2_load_lands_v4_and_stable(self, tmp_path: Path) -> None:
-        """load → save → load 不再增生(v4 檔不重播種)。"""
+    def test_save_after_v2_load_lands_v5_and_stable(self, tmp_path: Path) -> None:
+        """load → save → load 不再增生(v5 檔不重播種)。"""
         path = tmp_path / "rules.json"
         _write_versioned(path, 2, [make("surge_crash", id="r-1-000", name="爆拉爆跌")])
         loaded = load_rules(path)
-        assert loaded is not None and len(loaded) == 4
+        assert loaded is not None and len(loaded) == 5
         save_rules(path, loaded)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 4
+        assert payload["_cache_version"] == 5
         again = load_rules(path)
         assert again == loaded
 
@@ -861,9 +881,10 @@ class TestMigrationV3ToV4:
         _write_versioned(path, 3, self._v3_set())
         with caplog.at_level("INFO"):
             loaded = load_rules(path)
-        assert loaded is not None and len(loaded) == 5
+        assert loaded is not None and len(loaded) == 6
         seed = loaded[4]
         assert seed["kind"] == "sweep_cluster"
+        assert loaded[5]["kind"] == "vol_breakout"  # v4→v5 接續 append(#226)
         assert seed["name"] == "掃單簇"
         assert seed["enabled"] is True
         assert seed["notify_discord"] is False
@@ -883,6 +904,7 @@ class TestMigrationV3ToV4:
             "爆量": False,
             "鎖漲跌停": True,
             "掃單簇": False,
+            "放量離開": False,
         }
         # 其餘欄位逐字不變(只翻通知旗)
         assert loaded[0]["params"] == {"rearm_ticks": 5.0, "rearm_dwell_secs": 300.0}
@@ -926,7 +948,8 @@ class TestMigrationV3ToV4:
         with caplog.at_level("WARNING"):
             loaded = load_rules(path)
         assert loaded is not None
-        assert [r["kind"] for r in loaded] == ["surge_crash"]  # 既有那條原樣保留、不重複名
+        # 既有那條原樣保留、不重複名;放量離開種子(#226)不撞名照 append
+        assert [r["kind"] for r in loaded] == ["surge_crash", "vol_breakout"]
         hits = [r for r in caplog.records if "跳過種子卡" in r.getMessage()]
         assert len(hits) == 1 and hits[0].levelname == "WARNING"
         assert "零政策列" in hits[0].getMessage()
@@ -943,15 +966,16 @@ class TestMigrationV3ToV4:
         assert loaded is not None and len(loaded) == 30
         # tag 與原因綁同一行斷(review F-47):失敗時看得出是哪一半
         hits = [r for r in caplog.records if "規則數已達上限 30,跳過種子卡" in r.getMessage()]
-        assert len(hits) == 1 and hits[0].levelname == "WARNING"
+        assert [h.levelname for h in hits] == ["WARNING", "WARNING"]  # 掃單簇 + 放量離開(#226)各一
         assert "零政策列" in hits[0].getMessage()  # 與撞名分支同一句後果(review F-29)
+        assert "放量離開" in hits[1].getMessage()
 
     def test_v3_empty_file_still_gets_seed(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
         _write_versioned(path, 3, [])
         loaded = load_rules(path)
         assert loaded is not None
-        assert [r["name"] for r in loaded] == ["掃單簇"]
+        assert [r["name"] for r in loaded] == ["掃單簇", "放量離開"]
 
     def test_v3_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
@@ -967,14 +991,105 @@ class TestMigrationV3ToV4:
         loaded = load_rules(path)
         assert loaded is not None and loaded[0]["notify_discord"] is True
 
-    def test_save_after_v3_load_lands_v4_and_stable(self, tmp_path: Path) -> None:
+    def test_save_after_v3_load_lands_v5_and_stable(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.json"
         _write_versioned(path, 3, self._v3_set())
         loaded = load_rules(path)
-        assert loaded is not None and len(loaded) == 5
+        assert loaded is not None and len(loaded) == 6
         save_rules(path, loaded)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["_cache_version"] == 4
+        assert payload["_cache_version"] == 5
+        assert load_rules(path) == loaded
+
+
+class TestMigrationV4ToV5:
+    """#226 一次性遷移:v4(或更舊,鏈到 v4 之後)檔在載入期 append 「放量離開」種子卡(enabled、
+    通知關、冷卻 600、參數 0.6 / 600 / 4 = `SignalsConfig()` 預設);不翻任何旗;載入不回寫,第一次
+    upsert 才落 v5。回退手順在 `load_rules` docstring:停 server → 刪放量離開卡、`_cache_version`
+    改 4 → 起舊碼(v4 碼不認 `vol_breakout`,卡沒刪乾淨會 raise)。
+    """
+
+    def _v4_set(self) -> list[Any]:
+        return [
+            make("cdp_cross", id="r-1-000", name="CDP 穿越", notify_discord=True),
+            make("vol_burst", id="r-1-001", name="爆量", notify_discord=True),
+            make("sweep_cluster", id="r-1-002", name="掃單簇", notify_discord=False),
+        ]
+
+    def test_v4_file_gets_breakout_seed_and_flags_untouched(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 4, self._v4_set())
+        with caplog.at_level("INFO"):
+            loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 4
+        seed = loaded[3]
+        assert seed["kind"] == "vol_breakout" and seed["name"] == "放量離開"
+        assert seed["enabled"] is True and seed["notify_discord"] is False
+        assert seed["cooldown_secs"] == 600
+        assert seed["params"] == {"band_pct": 0.6, "min_dwell_secs": 600.0, "ratio": 4.0}
+        assert seed["cdp_levels"] == []
+        # v4 檔 = 使用者可能已在規則視窗開回通知 → 一個旗都不翻(v3→v4 的翻旗不重跑)
+        assert [r["notify_discord"] for r in loaded[:3]] == [True, True, False]
+        assert caplog.text.count("v4→v5:append 種子卡") == 1
+        assert caplog.text.count("v3→v4:規則") == 0
+
+    def test_v4_seed_skipped_on_name_collision_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 4, [make("vol_burst", id="r-1-000", name="放量離開")])
+        with caplog.at_level("WARNING"):
+            loaded = load_rules(path)
+        assert loaded is not None and [r["kind"] for r in loaded] == ["vol_burst"]
+        hits = [r for r in caplog.records if "跳過種子卡" in r.getMessage()]
+        assert len(hits) == 1 and hits[0].levelname == "WARNING"
+
+    def test_v4_seed_skipped_when_full(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(
+            path, 4, [make("limit_lock", id=f"r-1-{i:03d}", name=f"規則{i}") for i in range(30)]
+        )
+        with caplog.at_level("WARNING"):
+            loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 30
+        assert caplog.text.count("規則數已達上限 30,跳過種子卡") == 1
+
+    def test_v4_empty_file_still_gets_seed(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 4, [])
+        loaded = load_rules(path)
+        assert loaded is not None and [r["name"] for r in loaded] == ["放量離開"]
+
+    def test_v4_file_not_rewritten_on_load(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 4, self._v4_set())
+        before = path.read_text(encoding="utf-8")
+        load_rules(path)
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_v5_file_loads_as_is(self, tmp_path: Path) -> None:
+        """v5 檔(使用者刪掉放量離開卡後落的)不重播種。"""
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 5, self._v4_set())
+        loaded = load_rules(path)
+        assert loaded is not None and [r["kind"] for r in loaded] == [
+            "cdp_cross",
+            "vol_burst",
+            "sweep_cluster",
+        ]
+
+    def test_save_after_v4_load_lands_v5_and_stable(self, tmp_path: Path) -> None:
+        path = tmp_path / "rules.json"
+        _write_versioned(path, 4, self._v4_set())
+        loaded = load_rules(path)
+        assert loaded is not None and len(loaded) == 4
+        save_rules(path, loaded)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["_cache_version"] == 5
         assert load_rules(path) == loaded
 
 
@@ -1008,6 +1123,24 @@ class TestRuleConfig:
         assert cfg.surge_pct == 3.5
         assert cfg.surge_window_secs == 120.0
         assert cfg.surge_cooldown_secs == 900
+
+    def test_vol_breakout_mapping(self) -> None:
+        """#226:三參數 + 冷卻各落 `breakout_*` 欄;爆量欄位不動(兄弟卡不共欄)。"""
+        base = SignalsConfig()
+        rule = normalize_rule(
+            make(
+                "vol_breakout",
+                cooldown_secs=900,
+                params={"band_pct": 0.8, "min_dwell_secs": 480, "ratio": 3},
+            ),
+            {},
+        )
+        cfg = rule_config(rule, base)
+        assert cfg.breakout_band_pct == 0.8
+        assert cfg.breakout_min_dwell_secs == 480.0
+        assert cfg.breakout_ratio == 3.0
+        assert cfg.breakout_cooldown_secs == 900
+        assert cfg.vol_ratio == base.vol_ratio and cfg.vol_cooldown_secs == base.vol_cooldown_secs
 
     def test_vol_burst_mapping_uses_surge_window_secs(self) -> None:
         """SignalsConfig 無 vol_window_secs;per-rule detector 讓 surge_window_secs 可共用."""

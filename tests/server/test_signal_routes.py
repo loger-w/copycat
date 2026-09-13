@@ -54,6 +54,7 @@ _SEEDED_KINDS = [
     "vol_burst",
     "limit_lock",
     "sweep_cluster",
+    "vol_breakout",  # #226 放量離開
 ]
 
 # 各 kind 的合法參數表直接沿 `test_signal_hub._RULE_PARAMS`(review F-39):複製件少補 sweep_cluster 時
