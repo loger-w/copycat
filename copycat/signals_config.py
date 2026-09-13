@@ -24,6 +24,12 @@ class SignalsConfig:
     # 觸發後需**連續**待在線外 N 秒才解除 suppressed;0 = 離線即解除(舊行為)
     cdp_rearm_dwell_secs: float = 300.0
     cdp_cooldown_secs: float = 600.0  # per (code, level) 冷卻
+    # CDP 列閘(#225,2026-09-14):基準只餵給「前 cdp_gate_days 個交易日累計報酬 ≥ cdp_gate_pct」
+    # 的檔((close[-1] − close[-(days+1)]) × 100 / close[-(days+1)],研究 own5 同口徑;守住率
+    # 85% vs 隨機 74%)。不過閘 = 該檔當日零 cdp_cross(rail / jsonl 都沒有),圖上五線照畫。
+    # 全域設定不進規則參數:研究固定口徑,不是使用者旋鈕。已完成日 K 不足 days+1 根 = 不合格。
+    cdp_gate_days: int = 5
+    cdp_gate_pct: float = 5.0
     # --- 爆拉 / 爆跌(SC-2)---
     surge_pct: float = 2.0  # 窗內漲跌幅門檻(%)
     surge_window_secs: float = 300.0  # 滾動窗長度(爆量共用)

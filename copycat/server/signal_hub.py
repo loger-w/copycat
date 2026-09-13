@@ -113,7 +113,10 @@ POLICY_OUTCOME_POLL_SECS = 30.0
 _ENABLED_FILE = "signals_enabled.json"
 _RULES_FILE = "signal_rules.json"
 _SIGNAL_DIR = "signals"
-_BASIS_BARS = 5  # CDP 只要最後一根已完成 bar,多抓幾根當緩衝
+#: 基準日 K 抓取根數 = `cdp_gate_days + _BASIS_BARS_SLACK`:閘要 days+1 根已完成 bar,
+#: 加今日 partial(`done` 會剔掉)與 1 根緩衝。DK 段窗本來就是逐字 40 日,`n` 只影響 1K
+#: fallback 段縮窗(`fetch_daily_bars` doc),多抓不多花。
+_BASIS_BARS_SLACK = 3
 #: 基準取得**例外**的重試上限(per (code, basis_date, staged));超限才落 None
 _BASIS_MAX_RETRIES = 2
 _DROP_LOG_EVERY = 20  # 丟棄計數每 N 筆記一次(避免爆量時 log 自己變瓶頸)
@@ -383,6 +386,10 @@ class SignalHub:
         # 整體 review F-28:0 / 負數會讓每趟只印「本趟零列」看似正常、T+1/T+2 永遠不補
         if not isinstance(cfg.policy_outcome_days, int) or cfg.policy_outcome_days < 1:
             raise ValueError(f"訊號設定 policy_outcome_days 必須 ≥ 1:{cfg.policy_outcome_days!r}")
+        # #225:0 會讓閘讀 close[-1] 對 close[-1] 恆 0%,整站 CDP 靜默停用而且每檔一行 INFO 看似正常
+        if not isinstance(cfg.cdp_gate_days, int) or cfg.cdp_gate_days < 1:
+            raise ValueError(f"訊號設定 cdp_gate_days 必須 ≥ 1:{cfg.cdp_gate_days!r}")
+        self._basis_bars = cfg.cdp_gate_days + _BASIS_BARS_SLACK
         self._rules_path = self._data_dir / _RULES_FILE
         # 壞規則檔在此往外拋(R9):`app._boot` 傘接手 → hub None + signals routes 503。
         # 靜默套預設會在盤中無預警改變推播行為,所以這裡要大聲。
@@ -927,7 +934,7 @@ class SignalHub:
             logger.info("捨棄過期的基準 job:%s(%s,staged=%s)", code, basis_date, staged)
             return False
         try:
-            bars = await self._daily_bars(code, _BASIS_BARS)
+            bars = await self._daily_bars(code, self._basis_bars)
         except Exception as exc:
             # 具體處理 = 有限重試(X-2b,收窄 design §4.2),超限才落 None
             # (CDP 跳過、其他 kind 照常)。過期的失敗不排重試 —— 日別都換了,
@@ -948,11 +955,30 @@ class SignalHub:
             bars = []
         done = [b for b in bars if b["date"] < basis_date]  # 今日 partial bar 不得入計算
         cdp: dict[str, int] | None = None
-        if done:
+        if not done:
+            logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
+        elif (gate := _gate_return_pct(done, self._cfg.cdp_gate_days)) is None:
+            # 列閘(#225)的兩種不合格都是 INFO 不是 WARNING:這是設計上的「今天不看這檔的 CDP」,
+            # 不是資料面壞了;對帳要分得出「漲幅不足」與「日 K 不足」兩種原因
+            logger.info(
+                "CDP 列閘:%s 已完成日 K 只有 %d 根(需 %d),今日 CDP 不評(基準日 %s)",
+                code,
+                len(done),
+                self._cfg.cdp_gate_days + 1,
+                basis_date,
+            )
+        elif gate < self._cfg.cdp_gate_pct:
+            logger.info(
+                "CDP 列閘:%s 前 %d 日累計 %+.2f%% < %+.2f%%,今日 CDP 不評(基準日 %s)",
+                code,
+                self._cfg.cdp_gate_days,
+                gate,
+                self._cfg.cdp_gate_pct,
+                basis_date,
+            )
+        else:
             last = done[-1]
             cdp = compute_cdp(last["high"], last["low"], last["close"])
-        else:
-            logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
         # 走到這裡 = 這則 job 已經產出答案(含「資料面就是沒有」):抖動過去了,重試
         # 記帳歸零。**不可提前到取得 bars 之後** —— 那之後還有 `compute_cdp`,它每次
         # 都炸的話計數會被歸零成無限重試(這正是本輪先寫錯再被既有測試抓到的那條)。
@@ -1599,6 +1625,21 @@ class SignalHub:
             if isinstance(value, bool):
                 flags[key] = value
         return flags
+
+
+def _gate_return_pct(done: list[DailyBar], days: int) -> float | None:
+    """前 `days` 個交易日累計報酬(%)= (close[-1] − close[-(days+1)]) × 100 / close[-(days+1)]
+    (研究 `cdp_bt.py` 的 `own5`:`prev_rows(c, d, 6)` 首尾收盤);`done` 已剔今日 partial、升冪。
+    已完成 bar 不足 days+1 根、或分母 ≤ 0(壞資料)→ None(= 證明不了 ≥ 門檻,呼叫端視為不合格)。
+    先乘 100 再除:門檻恰等時(80.00 → 84.00 = 5%)要落在閉區間下界,`(a/b − 1) × 100` 會多出
+    4e-15 漂到門檻另一側。
+    """
+    if len(done) < days + 1:
+        return None
+    base = done[-(days + 1)]["close"]
+    if base <= 0:
+        return None
+    return (done[-1]["close"] - base) * 100 / base
 
 
 def _peer_sort_key(quote: tuple[str, float | None] | None) -> tuple[bool, float]:
