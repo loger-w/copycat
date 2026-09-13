@@ -41,6 +41,9 @@ def test_default_values() -> None:
     # #225 CDP 列閘:前 5 個交易日累計 ≥ +5%(研究 own5 口徑;全域設定,不進規則參數)
     assert cfg.cdp_gate_days == 5
     assert cfg.cdp_gate_pct == 5.0
+    # #227 大單敲檔筆數格:K = 10、窗 120 s(研究 bigtick_hits / confirm_bt 同口徑)
+    assert cfg.big_lot_ratio == 10
+    assert cfg.big_lot_window_secs == 120.0
 
 
 def test_load_policy_keys_and_exclude_groups_as_tuple(tmp_path: Path) -> None:

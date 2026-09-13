@@ -412,6 +412,15 @@ describe("政策組:標記 / 文案 / toast", () => {
     ).toBe("同伴≥3% 2・鎖過 有・+3.9%/停 -");
   });
 
+  it("#227 大單筆數格:`big_lots_120s` 在 → 第三行尾「・大單 n 筆」(0 也印);缺欄 → 與現在逐字相同", () => {
+    expect(policyContextText(policySig({ big_lots_120s: 3 }))).toBe("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%・大單 3 筆");
+    expect(policyContextText(policySig({ big_lots_120s: 0 }))).toBe("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%・大單 0 筆");
+    expect(policyContextText(policySig({ policy: "S", groups: [], peers: [], big_lots_120s: 2 }))).toBe(
+      "無族群・+0.8%/停 9.1%・大單 2 筆",
+    );
+    expect(policyContextText(policySig())).toBe("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%");
+  });
+
   it("無族群的 S 列第三行印「無族群」,不印「同伴≥3% 0・鎖過 無」(review F-14 拍板)", () => {
     // S 政策不看族群:`groups: []` 是真值、不是缺欄;「同伴 0 檔 ≥3%、沒人鎖過」在空族群上是假陳述,
     // 與同列 hover / Discord 第三行的「盤前篩選名單・無族群濾網」自相矛盾
@@ -467,6 +476,12 @@ describe("policyTitle(hover 全文,整句字面;review F-18)", () => {
   it("舊後端 / 缺欄:同伴段與時段段整段略過、缺值印 -,不印 undefined", () => {
     const bare = sig({ kind: "policy", policy: "S", pct: null });
     expect(policyTitle([bare])).toBe("政策 S｜盤前篩選名單・無族群濾網｜同伴≥3% -・鎖過 -｜較前收 -・距漲停 -");
+  });
+
+  it("#227 `big_lots_120s` 在 → 「較前收」段後接一段「大單 n 筆」;缺欄整段略過", () => {
+    expect(policyTitle([policySig({ big_lots_120s: 2 })])).toBe(
+      "政策 P｜族群 記憶體｜同伴 2344華邦電 +1.0%、2408南亞科 -0.5%｜同伴≥3% 0・鎖過 無｜較前收 +0.80%・距漲停 9.13%｜大單 2 筆｜0930・首筆",
+    );
   });
 });
 

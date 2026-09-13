@@ -59,6 +59,8 @@ _POLICY_KEYS = _SIGNAL_KEYS | {
     # 與鎖死不必另抓日 K);初值 null,與 t1/t2 同一趟補
     "d_close",
     "d_high",
+    # #227:發訊前 120 s 大單敲檔筆數(顯示脈絡,不是硬條件);raw 掃單簇列放 `detail`,政策列頂層
+    "big_lots_120s",
 }
 _SWEEP_RULE_ID = "r-1-000"
 # 治具宣告成 `Group`(review F-37):`Group` 加必填鍵時治具跟著紅,呼叫點也不必壓 type: ignore
@@ -180,6 +182,8 @@ class TestPolicyHits:
             assert msg["first_of_day"] is True and msg["late"] is False
             assert msg["tod"] == "0930"
             assert msg["sweep"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": pytest.approx(0.8)}
+            # #227:政策列頂層 `big_lots_120s`(`sweep` 鏡像維持四鍵);raw 列走 `detail`;暖機不足 → 0
+            assert msg["big_lots_120s"] == 0 and raw["detail"]["big_lots_120s"] == 0
             assert msg["self"] == {
                 "chg_pct": pytest.approx(0.8),
                 "to_limit_pct": pytest.approx((55_000 - 50_400) / 50_400 * 100),
@@ -217,6 +221,37 @@ class TestPolicyHits:
             assert rows[0]["notify"] is False and rows[1]["notify"] is True
             # 政策評估零 IO:peers_fn 只在掃單簇事件時被叫(一次)
             assert wl.peers_calls == 1
+        finally:
+            await h.hub.close()
+
+    async def test_big_lots_context_counts_hits_before_the_event(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """#227 主 seam:30 筆暖機後一筆大單(外盤、價升、10 張 ≥ 10 × 中位 1)→ 政策列頂層
+        `big_lots_120s` = 1、raw 列 `detail` 同值、`sweep` 仍四鍵、Discord 第二行尾「・大單 1 筆」。"""
+        h, _ = await _boot(
+            tmp_path,
+            clock,
+            groups=[_MEM],
+            peers={"2344": _peer("華邦電", 1.0), "2408": _peer("南亞科", -0.5)},
+        )
+        try:
+            st = _state(ref=50_000, upper=55_000)
+            for i in range(30):  # 09:59:00 起 100 ms 一筆、同價(不升 → 不命中)
+                h.hub.on_tick(
+                    "2330", _tick(50_000, cum=i + 1, time=_fmt(35_940 + i / 10), ask=50_000), st
+                )
+            h.hub.on_tick(
+                "2330", _tick(50_100, qty=10, cum=31, time="09:59:40.000", ask=50_100), st
+            )
+            _fire(h, st)
+            await h.settle()
+            raw, msg = h.published
+            assert msg["kind"] == "policy" and msg["big_lots_120s"] == 1
+            assert raw["detail"]["big_lots_120s"] == 1
+            assert set(msg["sweep"]) == {"n30", "levels", "qty", "up_pct"}
+            assert h.bot[0].split("\n")[1] == "掃單簇 2 掃・2 層・6 張・+0.80%・大單 1 筆"
+            assert h.rows()[1]["big_lots_120s"] == 1
         finally:
             await h.hub.close()
 
@@ -619,7 +654,7 @@ class TestPolicyDiscord:
             await h.settle()
             assert h.bot == [
                 "🔔 **【P】** 台積電 2330｜50.40｜10:01:30\n"
-                "掃單簇 2 掃・2 層・6 張・+0.80%\n"
+                "掃單簇 2 掃・2 層・6 張・+0.80%・大單 0 筆\n"
                 "族群 記憶體:同伴≥3% 0・最強 2344華邦電 +1.0%・鎖過 無\n"
                 "較前收 +0.80%・距漲停 9.13%"
             ]
@@ -640,7 +675,7 @@ class TestPolicyDiscord:
             lines = h.bot[0].split("\n")
             assert len(lines) == 4
             assert lines[0] == "🔔 **【B-a・B-b】** 台積電 2330｜50.40｜10:01:30"
-            assert lines[1] == "掃單簇 2 掃・2 層・6 張・+0.80%"
+            assert lines[1] == "掃單簇 2 掃・2 層・6 張・+0.80%・大單 0 筆"
             assert lines[2] == "族群 記憶體:同伴≥3% 1・最強 2344華邦電 +3.0%・鎖過 無"
             assert lines[3] == "較前收 +3.92%(族群最強)・距漲停 9.13%"
         finally:
@@ -733,6 +768,24 @@ class TestPolicyText:
             "time": "10:01:30",
         }
         assert format_signal_text(row) == "🔔 政策 B-a｜台積電 2330｜50.40｜10:01:30"
+
+    def test_policy_card_line2_without_big_lots_key_is_unchanged(self) -> None:
+        """#227 缺欄(09-14 前的舊列 / 舊後端)第二行與修改前逐字相同,不印「大單 -」。"""
+        head = {
+            "kind": "policy",
+            "policy": "P",
+            "code": "2330",
+            "name": "台積電",
+            "price": 50_400,
+            "time": "10:01:30",
+            "sweep": {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8},
+            "groups": [],
+            "self": {"chg_pct": 0.8, "to_limit_pct": 9.13},
+        }
+        lines = format_policy_group_text([head], peer_up_pct=3.0).split("\n")
+        assert lines[1] == "掃單簇 2 掃・2 層・6 張・+0.80%"
+        with_key = format_policy_group_text([{**head, "big_lots_120s": 3}], peer_up_pct=3.0)
+        assert with_key.split("\n")[1] == "掃單簇 2 掃・2 層・6 張・+0.80%・大單 3 筆"
 
     def test_policy_group_text_without_policy_rows_falls_back_to_plain_format(self) -> None:
         """對外函式自守「至少一列政策列」(review F-10):零政策列不炸 IndexError,退回一般批次文案。"""
@@ -829,7 +882,10 @@ class TestReviewFollowups:
             _fire(h, _state(ref=48_933, upper=55_000))
             await h.settle()
             assert _policies(h) == ["B-a", "B-b"]
-            assert [m["self"]["chg_pct"] for m in h.published if m["kind"] == "policy"] == [3.0, 3.0]
+            assert [m["self"]["chg_pct"] for m in h.published if m["kind"] == "policy"] == [
+                3.0,
+                3.0,
+            ]
         finally:
             await h.hub.close()
 

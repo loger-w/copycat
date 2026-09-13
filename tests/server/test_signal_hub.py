@@ -2361,7 +2361,14 @@ class TestSweepCluster:
             assert msg["time"] == "10:01:30"
             assert msg["levels"] == [] and msg["direction"] is None
             assert msg["pct"] == pytest.approx(0.8)
-            assert msg["detail"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": pytest.approx(0.8)}
+            # #227:`big_lots_120s` 只加欄(發訊前 120 s 大單敲檔筆數;暖機不足 30 筆 → 0)
+            assert msg["detail"] == {
+                "n30": 2,
+                "levels": 2,
+                "qty": 6,
+                "up_pct": pytest.approx(0.8),
+                "big_lots_120s": 0,
+            }
             assert msg["touch_count"] == 1
             assert msg["notify"] is False  # 種子口徑:掃單簇規則通知關
             assert msg["id"] == "2026-08-04-r-1-000-2330-sweep_cluster---10:01:30.500"

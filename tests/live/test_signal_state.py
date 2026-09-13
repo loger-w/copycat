@@ -1377,3 +1377,151 @@ class TestSweepClusterGoldenBounds:
         for case in fx["cases"]:
             extra = len(case["expected_prefix"]) - len(case["expected_research"])
             assert 0 <= extra <= 2, (case["code"], extra)  # 研究量測 0.7% 多發;三案現為 0
+
+
+class TestBigLots:
+    """#227 大單敲檔筆數格:掃單簇事件 `detail["big_lots_120s"]` = 發訊時刻往前 `big_lot_window_secs`
+    (含端點)內的「大單敲檔」單筆命中數。定義逐字沿研究 `bigtick_bt.py::bigtick_hits`:外盤(價 ≥ 賣一
+    且賣一 > 0)、價 > 前一筆成交價、張數 ≥ K × 當日至今 tick 張數中位(含本筆;≥ 30 筆後才算;中位取
+    最近 300 筆;`max(中位, 1)`)。只是顯示欄,不是硬條件 —— 掃單簇本身的判定零改動。
+    """
+
+    _G1 = ("10:01:10.100", [50_000, 50_100, 50_200], 50_000)
+    _G2 = ("10:01:30.500", [50_200, 50_300, 50_400], 50_200)
+    _WARM_START_MS = 9 * 3_600_000 + 59 * 60_000  # 09:59:00.000
+
+    @staticmethod
+    def _warm(
+        det: SignalDetector,
+        n: int,
+        *,
+        start_ms: int = _WARM_START_MS,
+        qty: int = 1,
+        code: str = "2330",
+    ) -> None:
+        """n 筆同價 50.00 的外盤 tick(價不升 → 永不命中),100 ms 一筆。"""
+        for i in range(n):
+            tick = _tick(
+                50_000, qty=qty, cum=i + 1, time=_ms_time(start_ms + i * 100), ask=50_000, code=code
+            )
+            det.evaluate(code, tick, _ctx(), _SWEEP)
+
+    @staticmethod
+    def _big(
+        det: SignalDetector,
+        time: str = "09:59:40.000",
+        *,
+        price: int = 50_100,
+        ask: int | None = 50_100,
+        qty: int = 10,
+        code: str = "2330",
+    ) -> None:
+        det.evaluate(
+            code, _tick(price, qty=qty, cum=99, time=time, ask=ask, code=code), _ctx(), _SWEEP
+        )
+
+    def _fire(self, det: SignalDetector, code: str = "2330", *, last_qty: int = 1) -> int:
+        """回看基準(10:00:00.000)+ 兩群 → 唯一的掃單簇事件,回 `big_lots_120s`。"""
+        det.evaluate(
+            code, _tick(50_000, code=code, time="10:00:00.000", ask=50_000), _ctx(), _SWEEP
+        )
+        out: list[SignalEvent] = []
+        for time, prices, ask in (self._G1, self._G2):
+            for i, p in enumerate(prices):
+                qty = last_qty if (time, p) == (self._G2[0], prices[-1]) else 1
+                out += det.evaluate(
+                    code,
+                    _tick(p, code=code, qty=qty, cum=i + 1, time=time, ask=ask),
+                    _ctx(),
+                    _SWEEP,
+                )
+        assert [e.kind for e in out] == ["sweep_cluster"]
+        assert out[0].detail is not None
+        return int(out[0].detail["big_lots_120s"])
+
+    def test_hit_within_window_counted(self) -> None:
+        det = _det(_Clock())
+        self._warm(det, 30)
+        self._big(det)  # 09:59:40 → 發訊 10:01:30.5,110.5 s 內
+        assert self._fire(det) == 1
+
+    def test_no_hit_leaves_zero_not_missing(self) -> None:
+        det = _det(_Clock())
+        self._warm(det, 30)
+        assert self._fire(det) == 0
+
+    @pytest.mark.parametrize(
+        ("price", "ask", "qty", "why"),
+        [
+            (50_100, 50_100, 9, "張數 < 10 × 中位 1"),
+            (50_000, 50_000, 10, "價 == 前一筆(不是 >)"),
+            (50_100, 50_200, 10, "內盤(價 < 賣一)"),
+            (50_100, None, 10, "賣一不可得"),
+            (50_100, 0, 10, "賣一 = 0(市價佇列)"),
+        ],
+    )
+    def test_each_condition_is_required(
+        self, price: int, ask: int | None, qty: int, why: str
+    ) -> None:
+        det = _det(_Clock())
+        self._warm(det, 30)
+        self._big(det, price=price, ask=ask, qty=qty)
+        assert self._fire(det) == 0, why
+
+    def test_counts_only_from_the_30th_tick(self) -> None:
+        """研究 `len(lots) >= 30` 是 append 之後判:第 30 筆本身可算、第 29 筆不算。"""
+        det = _det(_Clock())
+        self._warm(det, 28)
+        self._big(det)  # 第 29 筆
+        assert self._fire(det) == 0
+        det2 = _det(_Clock())
+        self._warm(det2, 29)
+        self._big(det2)  # 第 30 筆
+        assert self._fire(det2) == 1
+
+    def test_window_is_inclusive_at_s_minus_120(self) -> None:
+        early = 9 * 3_600_000 + 57 * 60_000  # 暖機 09:57 起,避免與命中時刻重疊
+        det = _det(_Clock())
+        self._warm(det, 30, start_ms=early)
+        self._big(det, "09:59:30.400")  # 發訊 10:01:30.500 − 120.1 s → 窗外
+        assert self._fire(det) == 0
+        det2 = _det(_Clock())
+        self._warm(det2, 30, start_ms=early)
+        self._big(det2, "09:59:30.500")  # 恰 120 s → 含端點
+        assert self._fire(det2) == 1
+
+    def test_median_uses_the_most_recent_300_ticks(self) -> None:
+        """300 筆 100 張之後再 300 筆 1 張:中位取最近 300 筆 = 1 → 10 張是大單;取整天則中位 50.5 不算。"""
+        det = _det(_Clock())
+        t0 = 9 * 3_600_000 + 50 * 60_000
+        self._warm(det, 300, start_ms=t0, qty=100)
+        self._warm(det, 300, start_ms=t0 + 60_000, qty=1)
+        self._big(det)
+        assert self._fire(det) == 1
+        control = _det(_Clock())
+        self._warm(control, 300, start_ms=t0, qty=100)
+        self._big(control)  # 中位 100 → 10 張不是大單
+        assert self._fire(control) == 0
+
+    def test_firing_tick_itself_counts_when_it_qualifies(self) -> None:
+        """研究 `sec − 120 ≤ h ≤ sec` 含發訊時刻本身:發訊那筆(50.40 > 50.30、≥ 賣一 50.20、20 張)算一筆。"""
+        det = _det(_Clock())
+        self._warm(det, 30)
+        assert self._fire(det, last_qty=20) == 1
+
+    def test_reset_day_clears_lots_and_hits(self) -> None:
+        det = _det(_Clock())
+        self._warm(det, 30)
+        self._big(det, "09:59:30.000")
+        det.reset_day()
+        self._big(det, "09:59:40.000")  # 換日後第 1 筆:筆數不足不算,舊命中也不得殘留
+        assert self._fire(det) == 0
+
+    def test_drop_code_clears_only_that_code(self) -> None:
+        det = _det(_Clock())
+        for code in ("2330", "2317"):
+            self._warm(det, 30, code=code)
+            self._big(det, code=code)
+        det.drop_code("2330")
+        assert self._fire(det, "2330") == 0
+        assert self._fire(det, "2317") == 1

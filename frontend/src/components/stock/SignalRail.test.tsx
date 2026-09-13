@@ -526,6 +526,17 @@ describe("SignalRail 政策列(spec #192)", () => {
     expect(context.getAttribute("title")).toContain("距漲停 9.13%");
   });
 
+  it("#227 政策列帶 big_lots_120s → 第三行尾「・大單 n 筆」、hover 也有;舊列缺欄第三行不變", () => {
+    renderRail({ signals: [sig({ ...POLICY, big_lots_120s: 3 })] });
+    const list = within(screen.getByTestId("signal-rail-list"));
+    const context = list.getByText("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%・大單 3 筆");
+    expect(context.getAttribute("title")).toContain("大單 3 筆");
+    cleanup();
+    renderRail({ signals: [POLICY] });
+    const old = within(screen.getByTestId("signal-rail-list")).getByText("同伴≥3% 0・鎖過 無・+0.8%/停 9.1%");
+    expect(old.getAttribute("title")).not.toContain("大單");
+  });
+
   it("chip 色:P = accent、B-a / B-b = bull、S = 灰", () => {
     renderRail({
       signals: [
