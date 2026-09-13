@@ -78,7 +78,8 @@ function toneOf(sig: SignalMsg): string {
   if (sig.kind === "surge") return "text-bull";
   if (sig.kind === "crash") return "text-bear";
   if (sig.kind === "surge_pullback") return "text-bear"; // 自峰值回落,方向向下
-  if (sig.kind === "limit_lock" || sig.kind === "limit_open") {
+  if (sig.kind === "limit_lock" || sig.kind === "limit_open" || sig.kind === "vol_breakout") {
+    // 放量離開(#226)= 離帶方向:向上紅 / 向下綠
     return sig.direction === "down" ? "text-bear" : "text-bull";
   }
   if (sig.kind === "cdp_cross") {

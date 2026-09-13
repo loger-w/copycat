@@ -16,6 +16,7 @@ export type SignalKind =
   | "limit_lock"
   | "limit_open"
   | "sweep_cluster"
+  | "vol_breakout"
   | "policy";
 
 /** 四條影子政策的標記(spec #192;後端 `signal_policy.POLICIES` 同字面)。 */
@@ -145,6 +146,11 @@ export function kindLabel(sig: SignalMsg): string {
   }
   if (kind === "vol_burst") {
     return sig.pct === null ? "爆量" : `爆量 ${sig.pct.toFixed(1)} 倍`;
+  }
+  if (kind === "vol_breakout") {
+    // #226:pct = 離帶分鐘量 ÷ 迴盪均量;方向字與後端 `_kind_text` 逐字(缺值退向上,同 limit_* 慣例)
+    const side = sig.direction === "down" ? "向下" : "向上";
+    return sig.pct === null ? "放量離開" : `放量${side}離開 ${sig.pct.toFixed(1)} 倍`;
   }
   // spec #192:與後端 `_kind_text` 逐字對齊(「掃單簇 +0.80%」/「政策 P」)
   if (kind === "sweep_cluster") return sweepLabel(sig.pct);

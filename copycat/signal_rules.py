@@ -47,6 +47,7 @@ RULE_KINDS: tuple[str, ...] = (
     "vol_burst",
     "limit_lock",
     "sweep_cluster",
+    "vol_breakout",
 )
 CDP_LEVELS: tuple[str, ...] = ("ah", "nh", "cdp", "nl", "al")
 COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
@@ -54,8 +55,8 @@ COOLDOWN_MIN, COOLDOWN_MAX = 60, 86_400
 MAX_RULES = 30
 #: v1 = 初版;v2 = cdp_cross params 多了 `rearm_dwell_secs`;v3 = append 兩張
 #: surge_pullback 種子卡(spec #174);v4 = append 掃單簇種子卡 + cdp_cross / vol_burst
-#: 通知一次性翻 false(spec #192;見 `load_rules` 的遷移鏈)。
-_CACHE_VERSION = 4
+#: 通知一次性翻 false(spec #192);v5 = append 放量離開種子卡(#226;見 `load_rules` 的遷移鏈)。
+_CACHE_VERSION = 5
 #: 可載入版本 = 1.._CACHE_VERSION 推導(review F-10):bump 時白名單自動跟上,
 #: 忘了寫轉換會在 `load_rules` 的遷移鏈斷點炸出來,而不是所有舊檔靜默變壞檔 503。
 _SUPPORTED_VERSIONS: tuple[int, ...] = tuple(range(1, _CACHE_VERSION + 1))
@@ -86,6 +87,8 @@ PARAM_SPECS: dict[str, dict[str, tuple[float, float]]] = {
         "up_pct": (0, 10),
         "up_window_secs": (1, 600),
     },
+    # #226 放量離開:帶寬 %(錨 ±)/ 最短停留秒 / 離帶分鐘量 ÷ 迴盪均量的倍率;全 float 鍵
+    "vol_breakout": {"band_pct": (0.1, 5), "min_dwell_secs": (60, 3600), "ratio": (1, 100)},
 }
 
 #: 這些鍵在 `SignalsConfig` 是 int 欄位 —— 2.5 個 tick / 半張 / 半個掃單都不存在,非整數值
@@ -100,15 +103,21 @@ _DEFAULT_NAMES: dict[str, str] = {
     "vol_burst": "爆量",
     "limit_lock": "鎖漲跌停",
     "sweep_cluster": "掃單簇",
+    "vol_breakout": "放量離開",
 }
 #: 掃單簇種子卡名(v3→v4 遷移撞名判準與 `_DEFAULT_NAMES` 同源)。
 _SWEEP_SEED_NAME = _DEFAULT_NAMES["sweep_cluster"]
+#: 放量離開種子卡名(v4→v5 遷移撞名判準,#226)。
+_BREAKOUT_SEED_NAME = _DEFAULT_NAMES["vol_breakout"]
 
 #: 種子 / 遷移把通知關掉的 kind(spec #192 拍板):CDP 穿越、爆量在 09-05~07 組合回測每筆
 #: 為負,停推播但事件照記;掃單簇是政策層的原料,自己不推、由政策列推。
 #: 「通知」語意自 spec #192 起 = Discord + 瀏覽器 toast / 嗶 / 桌面通知(wire 名 `notify_discord`
 #: 不改),jsonl 與 WS 永遠不受它影響(W3)。
-_QUIET_KINDS: frozenset[str] = frozenset({"cdp_cross", "vol_burst", "sweep_cluster"})
+#: #226 放量離開加入靜音集合:影子期只上 rail 淡色列 + jsonl,不推播、不響。
+_QUIET_KINDS: frozenset[str] = frozenset(
+    {"cdp_cross", "vol_burst", "sweep_cluster", "vol_breakout"}
+)
 #: v3→v4 遷移**翻旗**的 kind(spec #193 字面:cdp_cross、vol_burst);與種子集合分開寫(spec review
 #: F-02)—— 掃單簇在 v3 檔不存在,把它放進翻旗集合是「順手」,哪天這段被拿去對 v4+ 檔用就會把
 #: 使用者開回的通知靜默再關掉。
@@ -299,6 +308,12 @@ def _seed_params(kind: str, cfg: SignalsConfig) -> dict[str, float]:
             "up_pct": float(cfg.sweep_up_pct),
             "up_window_secs": float(cfg.sweep_up_window_secs),
         }
+    elif kind == "vol_breakout":
+        raw = {
+            "band_pct": float(cfg.breakout_band_pct),
+            "min_dwell_secs": float(cfg.breakout_min_dwell_secs),
+            "ratio": float(cfg.breakout_ratio),
+        }
     spec = PARAM_SPECS[kind]
     return {key: _clamp(f"{kind}.{key}", value, *spec[key]) for key, value in raw.items()}
 
@@ -311,6 +326,7 @@ def _seed_cooldown(kind: str, cfg: SignalsConfig) -> int:
         "vol_burst": cfg.vol_cooldown_secs,
         "limit_lock": cfg.limit_cooldown_secs,
         "sweep_cluster": cfg.sweep_cooldown_secs,
+        "vol_breakout": cfg.breakout_cooldown_secs,
     }[kind]
     return int(_clamp(f"{kind}.cooldown_secs", float(int(source)), COOLDOWN_MIN, COOLDOWN_MAX))
 
@@ -346,6 +362,24 @@ def _sweep_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
         "notify_discord": False,
         "cooldown_secs": _seed_cooldown("sweep_cluster", cfg),
         "params": _seed_params("sweep_cluster", cfg),
+        "cdp_levels": [],
+    }
+
+
+def _breakout_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
+    """放量離開種子卡(#226):enabled、**通知關**(影子期只上 rail 列)、冷卻與參數走 `cfg` 的
+    `breakout_*` 欄。只供 v4→v5 遷移;全新安裝走 `default_rules` 通用分支(與 `_sweep_seed_rule`
+    同款兩邊必須一致:`test_v4_file_gets_breakout_seed_and_flags_untouched` 與
+    `test_seed_notify_flags_quiet_for_negative_kinds` 各釘一邊)。
+    """
+    return {
+        "id": rule_id,
+        "name": _BREAKOUT_SEED_NAME,
+        "kind": "vol_breakout",
+        "enabled": True,
+        "notify_discord": False,
+        "cooldown_secs": _seed_cooldown("vol_breakout", cfg),
+        "params": _seed_params("vol_breakout", cfg),
         "cdp_levels": [],
     }
 
@@ -499,27 +533,46 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
     return out
 
 
+def _migrate_v4(items: list[Any]) -> list[Any]:
+    """v4 → v5(#226 一次性):append 放量離開種子卡,**不翻任何旗**(v4 檔可能是使用者在規則視窗
+    開回 cdp_cross / vol_burst 通知後落的,v3→v4 的翻旗不重跑)。種子路徑同前兩段:`SignalsConfig()`
+    預設值、撞名 / 滿 30 條跳過並 WARNING、id 去重、輸入不就地修改、v4 空陣列也照塞(升級注入)。
+    """
+    out: list[Any] = list(items)
+    _append_seed(
+        out,
+        "v4→v5",
+        _BREAKOUT_SEED_NAME,
+        lambda rid: _breakout_seed_rule(rid, SignalsConfig()),
+        skip_note="(放量離開種子沒進去 = 影子期 rail 零放量離開列)",
+    )
+    return out
+
+
 def load_rules(path: Path) -> list[Rule] | None:
     """三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。
 
     「空陣列 ≠ 缺檔」是刻意的:使用者把規則刪光後重啟不得復活預設
-    (在當前版本 v4 上原樣成立;v2 / v3 空檔照樣拿到後續版本的種子卡 —— 那是升級注入,見下)。
+    (在當前版本 v5 上原樣成立;v2 / v3 / v4 空檔照樣拿到後續版本的種子卡 —— 那是升級注入,見下)。
     壞檔 / 驗證失敗 / 版本不符 / 超過 MAX_RULES 一律 raise —— 靜默套預設會在盤中
     無預警地改變推播行為;raise 走 `_boot` 傘 → hub None → routes 503,大聲。
 
-    **遷移鏈(D6 + spec #174 + spec #192)**:v1 → `_migrate_v1` 補 cdp 的
+    **遷移鏈(D6 + spec #174 + spec #192 + #226)**:v1 → `_migrate_v1` 補 cdp 的
     `rearm_dwell_secs` → v2;v2(含補完的 v1)→ `_migrate_v2` append 兩張 surge_pullback
     種子卡 → v3;v3(含鏈上來的)→ `_migrate_v3` append 掃單簇種子卡 + cdp_cross / vol_burst
-    通知翻 false → v4,之後照常驗證;**載入時不回寫檔案**,磁碟要到第一次 upsert 才以 v4
-    落檔 —— 這段就是回退窗:期間舊碼可直接讀原檔。
+    通知翻 false → v4;v4(含鏈上來的)→ `_migrate_v4` append 放量離開種子卡(不翻旗)→ v5,
+    之後照常驗證;**載入時不回寫檔案**,磁碟要到第一次 upsert 才以 v5 落檔 —— 這段就是回退窗:
+    期間舊碼可直接讀原檔。
     回退手順(已 upsert 過):停 server → 編輯 `data/signal_rules.json`:
-    - 退到 v3:刪掉「掃單簇」種子卡、把 cdp_cross / vol_burst 規則的 `notify_discord` 改回
+    - 退到 v4:刪掉「放量離開」種子卡、`_cache_version` 改回 4 → 起舊碼(v4 碼不認 `vol_breakout`
+      kind,卡沒刪乾淨會 raise)。再升回 v5 碼只會重新 append 一張種子卡(撞名則跳過),不翻旗。
+    - 退到 v3:另刪「掃單簇」種子卡、把 cdp_cross / vol_burst 規則的 `notify_discord` 改回
       true、`_cache_version` 改回 3 → 起舊碼(v3 碼不認 `sweep_cluster` kind,卡沒刪乾淨會 raise)。
-      **再升回 v4 碼時翻旗會重跑**(遷移只看 `version != 4`):若刻意要保留 cdp_cross / vol_burst
-      的通知,升級後要在規則視窗再開一次(整體 review F-30)。
+      **再升回 v4+ 碼時翻旗會重跑**(v3→v4 段只在 `version <= 3` 跑):若刻意要保留 cdp_cross /
+      vol_burst 的通知,升級後要在規則視窗再開一次(整體 review F-30)。
     - 再退到 v2 / v1:刪兩張 surge_pullback 種子卡、(v1)刪 cdp 的 `rearm_dwell_secs` 鍵、
       `_cache_version` 改回 2(或 1)。
-    v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1..4 以外的版本一律 raise。
+    v2 檔缺 cdp 新鍵不走遷移(是壞檔,不是舊檔);1..5 以外的版本一律 raise。
     """
     if not path.exists():
         return None
@@ -550,7 +603,9 @@ def load_rules(path: Path) -> list[Rule] | None:
             items = _migrate_v1(items)
         if version <= 2:
             items = _migrate_v2(items)
-        items = _migrate_v3(items)
+        if version <= 3:
+            items = _migrate_v3(items)
+        items = _migrate_v4(items)
     rules: dict[str, Rule] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -636,5 +691,13 @@ def rule_config(rule: Rule, base: SignalsConfig) -> SignalsConfig:
             sweep_up_pct=params["up_pct"],
             sweep_up_window_secs=params["up_window_secs"],
             sweep_cooldown_secs=cooldown,
+        )
+    if kind == "vol_breakout":
+        return replace(
+            base,
+            breakout_band_pct=params["band_pct"],
+            breakout_min_dwell_secs=params["min_dwell_secs"],
+            breakout_ratio=params["ratio"],
+            breakout_cooldown_secs=cooldown,
         )
     raise _bad()  # normalize_rule 把關後不可達;新增 kind 忘了映射時在此炸出來

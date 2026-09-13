@@ -32,6 +32,7 @@ const KIND_LABEL: Record<RuleKind, string> = {
   vol_burst: "爆量",
   limit_lock: "鎖漲跌停",
   sweep_cluster: "掃單簇",
+  vol_breakout: "放量離開",
 };
 
 /** CDP 線顯示名。`cdp` 顯示「中軸」而不是「CDP」—— 與 `signal-model.LEVEL_LABEL` 同款。 */
@@ -111,6 +112,9 @@ function ruleSummary(rule: SignalRule): string {
   }
   if (rule.kind === "sweep_cluster") {
     return `${num(p.cluster_window_secs)} 秒內 ${num(p.min_sweeps)} 掃 · ${num(p.min_levels)} 層 · ${num(p.up_window_secs)} 秒漲 ${num(p.up_pct)}% · ${cooldown}`;
+  }
+  if (rule.kind === "vol_breakout") {
+    return `±${num(p.band_pct)}% 帶內 ${num(p.min_dwell_secs)} 秒 · 離帶 ${num(p.ratio)} 倍 · ${cooldown}`;
   }
   return cooldown;
 }

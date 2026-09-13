@@ -18,6 +18,7 @@ export const RULE_KINDS = [
   "vol_burst",
   "limit_lock",
   "sweep_cluster",
+  "vol_breakout", // #226 放量離開(爆量家族的兄弟卡,參數鍵集不同)
 ] as const;
 export type RuleKind = (typeof RULE_KINDS)[number];
 

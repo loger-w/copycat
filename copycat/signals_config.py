@@ -47,6 +47,15 @@ class SignalsConfig:
     vol_min_window_lots: int = 100  # 窗內量地板(張)
     vol_min_day_lots: int = 500  # 全日量地板(張)— 擋低量股
     vol_cooldown_secs: float = 1800.0  # per code 冷卻
+    # --- 放量離開(#226,2026-09-14;研究 review 09-09 §17 `cdp_oscillation.py`)---
+    # 價在錨(區段首筆價)± band_pct 帶內停留 ≥ min_dwell_secs,離帶那一分鐘的量(自離帶筆起累積、
+    # 即時判)≥ ratio × 迴盪期每分鐘均量(分母 = 有成交的分鐘數,< 4 分鐘不算)→ 發,標離帶方向。
+    # 三個預設值 = 研究值(user 2026-09-14 拍板);不綁價位(§17:真價位與隨機價位 ±2 點內)。
+    breakout_band_pct: float = 0.6
+    breakout_min_dwell_secs: float = 600.0
+    breakout_ratio: float = 4.0
+    # per code 冷卻(每次離帶錨就換新,一檔要再發至少再迴盪 10 分;只防同一分鐘 flapping)
+    breakout_cooldown_secs: float = 600.0
     # --- 鎖漲跌停 / 打開(SC-4)---
     limit_cooldown_secs: float = 600.0
     # --- 掃單簇(spec #192;定義與研究 `combo_events.py::find_sweeps` + sweepc 段同源)---
