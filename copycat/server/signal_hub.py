@@ -51,6 +51,7 @@ from typing import Any, cast
 
 from copycat.fileio import atomic_write_bytes
 from copycat.live.signal_state import (
+    BIG_LOTS_KEY,
     SWITCH_KEYS,
     SignalDetector,
     SignalEvent,
@@ -240,6 +241,10 @@ def format_policy_group_text(rows: list[dict[str, Any]], *, peer_up_pct: float) 
         f"掃單簇 {sweep.get('n30', '-')} 掃・{sweep.get('levels', '-')} 層・{qty_text} 張"
         f"・{_pct_text(sweep.get('up_pct'))}"
     )
+    big = head.get(BIG_LOTS_KEY)
+    if isinstance(big, (int, float)) and not isinstance(big, bool):
+        # #227:尾接一段(0 也印 —— 「無大單」是研究分層的第一桶);缺欄(舊列)第二行逐字如前
+        line2 += f"・大單 {int(big)} 筆"
     groups = head.get("groups") if isinstance(head.get("groups"), list) else []
     if groups:
         peer_max = cast(
@@ -1134,6 +1139,11 @@ class SignalHub:
         end_secs = tick_secs(cfg.policy_push_end)
         late = secs is not None and end_secs is not None and secs > end_secs
         tod = tod_bucket(secs) if secs is not None else "1200"
+        detail = dict(event.detail or {})
+        # #227:大單筆數自 `detail` 拆出來放頂層(user 指名的離線讀者鍵);`sweep` 鏡像維持四鍵 ——
+        # 它是「掃單簇參數袋」,大單是脈絡不是參數
+        big_raw = detail.pop(BIG_LOTS_KEY, None)
+        big_lots = int(big_raw) if isinstance(big_raw, (int, float)) else None
         me = {
             "chg_pct": chg,
             "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
@@ -1166,7 +1176,8 @@ class SignalHub:
                 "first_of_day": first,
                 "late": late,
                 "tod": tod,
-                "sweep": dict(event.detail or {}),
+                "sweep": dict(detail),
+                BIG_LOTS_KEY: big_lots,
                 "self": dict(me),
                 "groups": list(ctx.groups),
                 "screen_member": ctx.screen_member,
