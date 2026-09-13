@@ -91,8 +91,9 @@ export interface SignalMsg {
   t2_open?: number | null;
   t2_date?: string | null;
   /** #227:掃單簇發訊前 120 s 的「大單敲檔」筆數(政策列頂層;raw 掃單簇列同值在 `detail`)。
-   *  顯示脈絡不是硬條件;**缺欄(09-14 前的舊列 / 舊後端)= 整段不印**,不印「大單 -」。 */
-  big_lots_120s?: number;
+   *  顯示脈絡不是硬條件;**缺欄(09-14 前的舊列 / 舊後端)或 null(後端 detail 缺鍵時的守門值)
+   *  = 整段不印**,不印「大單 -」。與 `t1_open` 等回填欄同款 `| null`(two-axis std F-01)。 */
+  big_lots_120s?: number | null;
 }
 
 /** 通知閘:`notify === false` 才靜音;true / 缺欄一律提示(CLAUDE.md §4 契約:缺欄 = true)。 */

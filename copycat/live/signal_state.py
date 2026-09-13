@@ -366,13 +366,13 @@ class SignalDetector:
         key = tick.time or _clock_key(now)
         # 掃單簇走自己的時間軸(tick 時刻),且首 tick 也要進回看窗 / 可能是同毫秒群的首筆
         # —— 所以在「首 tick 只初始化」gate 之前推進(其餘 kind 的首 tick 語意不變)
-        sweep_events = self._eval_sweep(code, tick, key, mono, enabled)
-        # 放量離開(#226)同款:區段首筆就是當日首筆,所以也在首 tick gate 之前推進
-        sweep_events += self._eval_breakout(code, tick, key, mono, enabled)
+        # 首 tick gate **之前**推進的兩軸(tick 時刻軸):掃單簇、放量離開(#226:區段首筆就是當日首筆)
+        pre_gate_events = self._eval_sweep(code, tick, key, mono, enabled)
+        pre_gate_events += self._eval_breakout(code, tick, key, mono, enabled)
         if code not in self._prev:  # 首 tick 只初始化(無前值可比,任何判定都是猜)
             self._prev[code] = price
             self._window[code] = deque([(mono, price, tick.qty)])
-            return sweep_events
+            return pre_gate_events
 
         prev = self._prev[code]
         window = self._window.setdefault(code, deque())
@@ -388,7 +388,7 @@ class SignalDetector:
         events.extend(self._eval_pullback(code, price, key, window, mono, enabled))
         events.extend(self._eval_volume(code, ctx, key, window, now, mono, enabled))
         events.extend(self._eval_limit_tick(code, price, ctx, key, mono, enabled))
-        events.extend(sweep_events)
+        events.extend(pre_gate_events)
         return events
 
     def evaluate_book(
