@@ -45,7 +45,7 @@ const FIXTURE_PATH = path.resolve(HERE, "../../../tests/fixtures/signal_param_sp
 describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一份)", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8")) as Fixture;
 
-  it("fixture 自身健檢:六種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
+  it("fixture 自身健檢:七種 kind 齊全、含零參數的 limit_lock、int_keys 都是真鍵", () => {
     // 沒有這條的話 fixture 被改瘦(只剩一個 kind)時 parity 仍然全綠 = 空談
     expect(Object.keys(fixture.specs).sort()).toEqual([
       "cdp_cross",
@@ -53,6 +53,7 @@ describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一�
       "surge_crash",
       "surge_pullback",
       "sweep_cluster",
+      "vol_breakout",
       "vol_burst",
     ]);
     expect(fixture.specs.limit_lock).toEqual({});
@@ -102,6 +103,12 @@ describe("訊號規則參數值域 parity(共用 fixture,pytest 側斷言同一�
       min_levels: "2",
       up_pct: "0.3",
       up_window_secs: "60",
+    });
+    // #226 放量離開:預設 = 研究值(帶 ±0.6% / 停留 600 s / 離帶分鐘 4×),與後端種子同口徑
+    expect(paramDefaults("vol_breakout")).toEqual({
+      band_pct: "0.6",
+      min_dwell_secs: "600",
+      ratio: "4",
     });
     expect(COOLDOWN_DEFAULT).toBe("300");
   });

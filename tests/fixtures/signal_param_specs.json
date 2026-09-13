@@ -28,6 +28,11 @@
       "min_levels": [1, 10],
       "up_pct": [0, 10],
       "up_window_secs": [1, 600]
+    },
+    "vol_breakout": {
+      "band_pct": [0.1, 5],
+      "min_dwell_secs": [60, 3600],
+      "ratio": [1, 100]
     }
   },
   "int_keys": ["rearm_ticks", "min_window_lots", "min_day_lots", "min_sweeps", "min_levels"],

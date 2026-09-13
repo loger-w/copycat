@@ -25,7 +25,14 @@ from copycat.live.tc4 import HistoryTimeoutError
 from copycat.server import signal_hub as hub_mod
 from copycat.server.signal_hub import SignalHub, format_signal_group_text, format_signal_text
 from copycat.server.signal_policy import PeerQuote
-from copycat.signal_rules import CDP_LEVELS, MAX_RULES, RuleError, default_rules, load_rules
+from copycat.signal_rules import (
+    _CACHE_VERSION,
+    CDP_LEVELS,
+    MAX_RULES,
+    RuleError,
+    default_rules,
+    load_rules,
+)
 from copycat.signals_config import SignalsConfig
 from copycat.stock_watchlist import Group
 
@@ -71,6 +78,7 @@ _RULE_PARAMS: dict[str, dict[str, float]] = {
         "up_pct": 0.3,
         "up_window_secs": 60,
     },
+    "vol_breakout": {"band_pct": 0.6, "min_dwell_secs": 600, "ratio": 4},
 }
 
 
@@ -93,11 +101,13 @@ def _rule(kind: str, rid: str, **over: Any) -> dict[str, Any]:
 def _write_rules(tmp_path: Path, rules: list[dict[str, Any]]) -> None:
     """預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。
 
-    寫**當前版本 v4**:寫舊版會觸發遷移鏈 append surge_pullback / 掃單簇種子卡並翻通知旗,
-    「注入的集合 = 受測的集合」這個前提就破了(遷移行為由 test_signal_rules 專測)。
+    寫**當前版本**(`_CACHE_VERSION`,不寫字面):寫舊版會觸發遷移鏈 append surge_pullback /
+    掃單簇 / 放量離開種子卡並翻通知旗,「注入的集合 = 受測的集合」這個前提就破了(遷移行為由
+    test_signal_rules 專測)。#226 之前這裡是字面 4,版本 bump 時整檔 hub 測試會被多塞一張卡。
     """
     (tmp_path / _RULES_FILE).write_text(
-        json.dumps({"_cache_version": 4, "rules": rules}, ensure_ascii=False), encoding="utf-8"
+        json.dumps({"_cache_version": _CACHE_VERSION, "rules": rules}, ensure_ascii=False),
+        encoding="utf-8",
     )
 
 
@@ -2181,11 +2191,11 @@ class TestRuleEngine:
     async def test_migration_defaults(self, tmp_path: Path, clock: _Clock) -> None:
         """邊界 8:缺規則檔 + 缺 legacy 檔 → 每 kind 一條、全開,並立刻落檔。
 
-        spec #192 起種子通知旗分兩批:cdp_cross / vol_burst / sweep_cluster 關,其餘開。
+        spec #192 起種子通知旗分兩批:cdp_cross / vol_burst / sweep_cluster 關,其餘開;#226 放量離開關。
         """
         h = _Harness(tmp_path, clock)
         rules = h.hub.rules()
-        # surge_pullback 種子是兩張卡(1% / 2%,spec #174);掃單簇一張(spec #192)
+        # surge_pullback 種子是兩張卡(1% / 2%,spec #174);掃單簇一張(spec #192);放量離開一張(#226)
         assert [r["kind"] for r in rules] == [
             "cdp_cross",
             "surge_crash",
@@ -2194,6 +2204,7 @@ class TestRuleEngine:
             "vol_burst",
             "limit_lock",
             "sweep_cluster",
+            "vol_breakout",
         ]
         assert all(r["enabled"] for r in rules)
         assert {r["kind"]: r["notify_discord"] for r in rules} == {
@@ -2203,6 +2214,7 @@ class TestRuleEngine:
             "vol_burst": False,
             "limit_lock": True,
             "sweep_cluster": False,
+            "vol_breakout": False,
         }
         assert load_rules(tmp_path / _RULES_FILE) == rules
 
@@ -2219,6 +2231,7 @@ class TestRuleEngine:
             "vol_burst": False,
             "limit_lock": True,
             "sweep_cluster": True,  # 同上
+            "vol_breakout": True,  # 同上(#226)
         }
 
     async def test_bad_rules_file_raises_on_construct(self, tmp_path: Path, clock: _Clock) -> None:
@@ -2577,6 +2590,14 @@ class TestDiscordText:
     def test_rule_name_appended(self) -> None:
         """R14b:同 kind 多規則在 Discord 要分得出是哪一條發的。"""
         assert format_signal_text(self._row(rule_name="爆量-緊")).endswith("｜爆量-緊")
+
+    def test_vol_breakout_kind_text_by_direction(self) -> None:
+        """#226:「放量向上 / 向下離開 x.x 倍」與前端 `kindLabel` 逐字;方向缺值退向上(與 limit_* 同慣例)。"""
+        # 不用 4.25:Python `:.1f` 半偶捨入 vs JS `toFixed` 半進,恰半時兩邊分岐(既有 kind 同款盲點)
+        up = self._row(kind="vol_breakout", direction="up", pct=4.26)
+        down = self._row(kind="vol_breakout", direction="down", pct=4.0)
+        assert format_signal_text(up).startswith("🔔 放量向上離開 4.3 倍｜")
+        assert format_signal_text(down).startswith("🔔 放量向下離開 4.0 倍｜")
 
     def test_legacy_row_without_rule_name(self) -> None:
         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
@@ -3041,7 +3062,15 @@ class TestSweepClusterBoundaries:
     def _rules(tmp_path: Path) -> None:
         _write_rules(
             tmp_path,
-            [_rule("sweep_cluster", "r-1-000", name="掃單簇", notify_discord=False, cooldown_secs=60)],
+            [
+                _rule(
+                    "sweep_cluster",
+                    "r-1-000",
+                    name="掃單簇",
+                    notify_discord=False,
+                    cooldown_secs=60,
+                )
+            ],
         )
 
     async def test_sweep_exactly_at_cluster_window_edge_counts(
@@ -3103,3 +3132,48 @@ class TestSweepClusterBoundaries:
             assert h.published == []
         finally:
             await h.hub.close()
+
+
+class TestVolBreakoutRule:
+    """#226 主 seam:一條 `vol_breakout` 規則(種子口徑通知關)→ 合成 tick 十分鐘帶內迴盪後放量離帶
+    → 一列 quiet 的 `vol_breakout` 訊號(WS + jsonl),列形狀沿一般訊號契約(無 detail)。"""
+
+    async def test_breakout_row_shape_and_quiet(self, tmp_path: Path, clock: _Clock) -> None:
+        _write_rules(
+            tmp_path,
+            [_rule("vol_breakout", "r-1-000", name="放量離開", notify_discord=False)],
+        )
+        h = _Harness(tmp_path, clock)
+        h.attach_bot()
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            state = _state()
+            t0 = 9 * 3600 + 30 * 60
+            for i in range(10):  # 09:30–09:39 每分鐘一筆 10 張、同價 → 均量 10 / 分
+                h.hub.on_tick(
+                    "2330", _tick(50_000, qty=10, cum=i + 1, time=_fmt_secs(t0 + i * 60)), state
+                )
+            # 09:40:00 離帶(+0.8%)40 張 = 4 × 10 → 即發
+            h.hub.on_tick("2330", _tick(50_400, qty=40, cum=11, time="09:40:00.000"), state)
+            await h.settle()
+            assert len(h.published) == 1
+            msg = h.published[0]
+            assert set(msg) == _SIGNAL_KEYS
+            assert msg["kind"] == "vol_breakout" and msg["direction"] == "up"
+            assert msg["pct"] == pytest.approx(4.0)
+            assert msg["price"] == 50_400 and msg["time"] == "09:40:00"
+            assert msg["id"] == "2026-08-04-r-1-000-2330-vol_breakout-up-09:40:00.000"
+            assert msg["notify"] is False
+            assert h.bot == [] and h.fallback == []
+            rows = h.rows()
+            assert len(rows) == 1 and rows[0]["kind"] == "vol_breakout"
+        finally:
+            await h.hub.close()
+
+
+def _fmt_secs(secs: int) -> str:
+    hh, rem = divmod(secs, 3600)
+    mm, ss = divmod(rem, 60)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}.000"

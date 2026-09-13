@@ -164,7 +164,7 @@ describe("SignalRulesDialog 刪除", () => {
 });
 
 describe("SignalRulesDialog 編輯表單", () => {
-  it("新增規則 → 表單出現,種類 select 六類中文;通知開關文案「通知」", () => {
+  it("新增規則 → 表單出現,種類 select 七類中文;通知開關文案「通知」", () => {
     open();
     fireEvent.click(screen.getByRole("button", { name: "新增規則" }));
     const select = screen.getByLabelText("種類") as HTMLSelectElement;
@@ -175,6 +175,7 @@ describe("SignalRulesDialog 編輯表單", () => {
       "爆量",
       "鎖漲跌停",
       "掃單簇",
+      "放量離開",
     ]);
     expect(screen.getByLabelText("名稱")).toBeTruthy();
     expect(screen.getByLabelText("冷卻秒數")).toBeTruthy();
