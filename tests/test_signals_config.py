@@ -38,6 +38,9 @@ def test_default_values() -> None:
     assert cfg.policy_exclude_groups == ("ALL IN",)
     assert cfg.policy_outcome_time == "13:40:00"
     assert cfg.policy_outcome_days == 5
+    # #225 CDP 列閘:前 5 個交易日累計 ≥ +5%(研究 own5 口徑;全域設定,不進規則參數)
+    assert cfg.cdp_gate_days == 5
+    assert cfg.cdp_gate_pct == 5.0
 
 
 def test_load_policy_keys_and_exclude_groups_as_tuple(tmp_path: Path) -> None:
