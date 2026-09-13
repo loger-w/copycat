@@ -89,6 +89,7 @@ def _policy_row(code: str, policy: str = "P", **over: Any) -> dict[str, Any]:
         "late": False,
         "tod": "0930",
         "sweep": {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8},
+        "big_lots_120s": 0,
         "self": {"chg_pct": 0.8, "to_limit_pct": 9.1, "touched_upper": False, "locked_up": False},
         "groups": ["記憶體"],
         "screen_member": False,
