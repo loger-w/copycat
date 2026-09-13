@@ -89,6 +89,9 @@ export interface SignalMsg {
   t1_date?: string | null;
   t2_open?: number | null;
   t2_date?: string | null;
+  /** #227:掃單簇發訊前 120 s 的「大單敲檔」筆數(政策列頂層;raw 掃單簇列同值在 `detail`)。
+   *  顯示脈絡不是硬條件;**缺欄(09-14 前的舊列 / 舊後端)= 整段不印**,不印「大單 -」。 */
+  big_lots_120s?: number;
 }
 
 /** 通知閘:`notify === false` 才靜音;true / 缺欄一律提示(CLAUDE.md §4 契約:缺欄 = true)。 */
@@ -308,7 +311,15 @@ export function policyContextText(sig: SignalMsg): string {
   const chg = pct1(sig.self?.chg_pct, true);
   const limit = pct1(sig.self?.to_limit_pct, false);
   const head = noGroups(sig) ? "無族群" : peerPhrase(sig);
-  return `${head}・${chg}/停 ${limit}`;
+  const big = bigLotsPhrase(sig);
+  return `${head}・${chg}/停 ${limit}${big === "" ? "" : `・${big}`}`;
+}
+
+/** 「大單 n 筆」(#227;與 Discord 四行卡第二行尾同字面):欄在(含 0)才印,缺欄回空字串
+ *  —— 0 是研究分層的第一桶(無大單),與「不知道」是兩件事,只有後者省略。 */
+function bigLotsPhrase(sig: SignalMsg): string {
+  const n = sig.big_lots_120s;
+  return typeof n === "number" && Number.isFinite(n) ? `大單 ${n} 筆` : "";
 }
 
 function firstness(sig: SignalMsg): string {
@@ -352,6 +363,7 @@ export function policyTitle(policies: readonly SignalMsg[]): string {
     // 無族群(`groups` 在且為空)略去「同伴≥3% n・鎖過」段:與第三行 / Discord 同口徑,同一字串內不自相矛盾
     noGroups(sig) ? "" : peerPhrase(sig),
     `較前收 ${chgText}・距漲停 ${limitText}`,
+    bigLotsPhrase(sig),
     when,
   ]
     .filter((x) => x !== "")

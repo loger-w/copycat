@@ -56,6 +56,12 @@ class SignalsConfig:
     sweep_up_pct: float = 0.3  # 群高 ÷ 回看窗前最後一筆價 − 1 的門檻(%)
     sweep_up_window_secs: float = 60.0  # 回看窗
     sweep_cooldown_secs: float = 60.0  # per code 冷卻(= 研究的 60 s 去重)
+    # 大單敲檔筆數格(#227,2026-09-14;定義逐字沿研究 `bigtick_bt.py::bigtick_hits`):掃單簇列
+    # `detail.big_lots_120s` / 政策列頂層 `big_lots_120s` = 發訊時刻往前 big_lot_window_secs(含端點)內
+    # 「外盤、價 > 前一筆、張數 ≥ big_lot_ratio × 當日至今 tick 張數中位」的命中數。只是顯示脈絡不是
+    # 硬條件。**欄名是影子期口徑的字面**(user 09-14 指名),改窗欄名不跟 —— 影子期四週內別動。
+    big_lot_ratio: int = 10
+    big_lot_window_secs: float = 120.0
     # --- 政策層(spec #192;接線層 `signal_hub` 讀,只在掃單簇事件時評估)---
     policy_peer_up_pct: float = 3.0  # 同伴「已動」門檻(較前收 %)
     policy_max_chg_pct: float = 6.0  # 自己較前收上限(P / B-a / S 用;B-b 不看)

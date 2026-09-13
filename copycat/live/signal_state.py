@@ -44,6 +44,7 @@ import logging
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from statistics import median
 
 from copycat.live.stock_models import StockTick
 from copycat.market import tick_size_milli
@@ -52,6 +53,7 @@ from copycat.signals_config import SignalsConfig
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "BIG_LOTS_KEY",
     "KIND_SWITCH",
     "SWITCH_KEYS",
     "SignalDetector",
@@ -63,6 +65,13 @@ __all__ = [
 _SESSION_START = _dt.time(9, 0)
 _SESSION_END = _dt.time(13, 30)  # end-exclusive:13:30 起是收盤撮合
 _EPOCH = _dt.datetime(1970, 1, 1)
+
+#: 掃單簇事件 `detail` 的大單筆數鍵(#227)。字面是影子期口徑(窗 120 s),`SignalsConfig.big_lot_window_secs`
+#: 改了欄名也不跟 —— hub 政策列頂層同名欄、前端 `SignalMsg.big_lots_120s`、研究離線讀者都認這個字串。
+BIG_LOTS_KEY = "big_lots_120s"
+#: 大單敲檔(研究 `bigtick_hits` 逐字):當日至今 tick 數 ≥ 30 才開始判;中位取最近 300 筆(含本筆)。
+_BIG_LOT_MIN_TICKS = 30
+_BIG_LOT_MEDIAN_TICKS = 300
 
 #: 事件 kind → enabled 開關鍵(design §4.4;2026-09-02 起五鍵,spec #192 起六鍵)。
 KIND_SWITCH: dict[str, str] = {
@@ -208,6 +217,13 @@ class SignalDetector:
         self._sweep_group: dict[str, _SweepGroup] = {}
         self._sweeps: dict[str, deque[float]] = {}
         self._lookback: dict[str, deque[tuple[float, int]]] = {}
+        # 大單敲檔(#227)四份狀態,與掃單簇同一條 tick 時刻軸、同一道 0 價 / 0 量 / 解析失敗閘:
+        # 最近 300 筆張數(中位母體)/ 當日至今 tick 數(≥ 30 才判)/ 前一筆成交價 / 命中時刻(升冪,
+        # 剪到窗)。每條規則的 detector 都推進(狀態是 per-detector),只有掃單簇規則讀它。
+        self._lots: dict[str, deque[int]] = {}
+        self._lot_count: dict[str, int] = {}
+        self._big_prev: dict[str, int] = {}
+        self._big_hits: dict[str, deque[float]] = {}
 
     # ---- 基準(CDP)----
 
@@ -271,6 +287,10 @@ class SignalDetector:
         self._sweep_group.clear()
         self._sweeps.clear()
         self._lookback.clear()
+        self._lots.clear()
+        self._lot_count.clear()
+        self._big_prev.clear()
+        self._big_hits.clear()
 
     def drop_code(self, code: str) -> None:
         self._basis.pop(code, None)
@@ -286,6 +306,10 @@ class SignalDetector:
         self._sweep_group.pop(code, None)
         self._sweeps.pop(code, None)
         self._lookback.pop(code, None)
+        self._lots.pop(code, None)
+        self._lot_count.pop(code, None)
+        self._big_prev.pop(code, None)
+        self._big_hits.pop(code, None)
 
     # ---- 主入口 ----
 
@@ -715,6 +739,8 @@ class SignalDetector:
         if secs is None:
             return []
         cfg = self._cfg
+        # 大單敲檔先推進(#227):發訊筆自己若命中也要算進窗(研究 `sec − 120 ≤ h ≤ sec` 含端點)
+        big_hits = self._advance_big_lots(code, tick, price, secs)
         # 回看價序列:保留最後一筆「時刻 ≤ s − up_window」的 tick 當基準(其餘更早的剪掉)
         lookback = self._lookback.setdefault(code, deque())
         lookback.append((secs, price))
@@ -774,9 +800,45 @@ class SignalDetector:
                     "levels": levels,
                     "qty": group.qty,
                     "up_pct": up_pct,
+                    BIG_LOTS_KEY: big_hits,  # 只加鍵(W1):既有四鍵值零改動
                 },
             )
         ]
+
+    def _advance_big_lots(self, code: str, tick: StockTick, price: int, secs: float) -> int:
+        """推進大單敲檔狀態並回「窗內命中數」(含本筆若命中)。定義逐字沿研究 `bigtick_hits`:
+
+        `lots.append(q)` **先於**判定(中位含本筆、筆數門檻也含本筆);命中 = 有前一筆 且 當日至今
+        ≥ 30 筆 且 賣一可得 > 0 且 價 ≥ 賣一 且 價 > 前一筆 且 張數 ≥ K × max(中位, 1);中位取最近
+        300 筆。中位只在「外盤且價升」的候選筆才算(sorted 300 個 int ≈ 20 µs,非候選筆 O(1))。
+        窗 [s − window, s]:剪掉 `< s − window` 後 deque 長度就是窗內命中數(時刻單調,`≤ s` 恆真)。
+        已知差異:研究的命中母體含同毫秒群內**晚於**發訊筆的成交,線上看不到(≤ 群內差)。
+        """
+        cfg = self._cfg
+        lots = self._lots.get(code)
+        if lots is None:
+            lots = self._lots[code] = deque(maxlen=_BIG_LOT_MEDIAN_TICKS)
+        lots.append(tick.qty)
+        count = self._lot_count.get(code, 0) + 1
+        self._lot_count[code] = count
+        hits = self._big_hits.setdefault(code, deque())
+        prev = self._big_prev.get(code)
+        ask = tick.ask_milli
+        if (
+            prev is not None
+            and count >= _BIG_LOT_MIN_TICKS
+            and ask is not None
+            and ask > 0
+            and price >= ask
+            and price > prev
+            and tick.qty >= cfg.big_lot_ratio * max(median(lots), 1)
+        ):
+            hits.append(secs)
+        self._big_prev[code] = price
+        window_start = secs - cfg.big_lot_window_secs
+        while hits and hits[0] < window_start:
+            hits.popleft()
+        return len(hits)
 
     # ---- 鎖漲跌停 / 打開(SC-4)----
 
