@@ -124,6 +124,17 @@ _BAR_B = _bar("2026-08-04", 95_000, 85_000, 90_000)
 _BAR_C = _bar("2026-08-05", 125_000, 115_000, 120_000)
 
 
+def _flat_hist(close: int, n: int = 5) -> list[DailyBar]:
+    """`n` 根同收盤的歷史日 K(2026-07-25 起,恆早於 _BAR_A):CDP 列閘(#225)要 ≥ 6 根已完成
+    日 K 才評,`close[-1] / close[-6] − 1` 的分母就是這幾根的收盤。"""
+    return [_bar(f"2026-07-{25 + i:02d}", close + 2_000, close - 2_000, close) for i in range(n)]
+
+
+#: 預設歷史:五根低收盤(50.00)→ 之後任一根「最後一根」(_BAR_A 75.00 / _BAR_B 90.00 / _BAR_C 120.00)
+#: 都以 +50% 以上過閘,既有「基準 = 最後一根 CDP」的斷言不受閘影響。閘本身的案例在 TestCdpGate。
+_HIST = _flat_hist(50_000)
+
+
 def _tick(
     price: int,
     *,
@@ -328,7 +339,7 @@ class _Harness:
         self.notify_ok = True
         self.date = _DATE
         self.data_dir = tmp_path
-        self.bars = bars if bars is not None else _FakeBars([_BAR_A])
+        self.bars = bars if bars is not None else _FakeBars([*_HIST, _BAR_A])
         # gap 預設 0(測試不等待),`**over` 可覆寫(回填逐檔 gap 案要它 > 0)
         cfg = replace(SignalsConfig(), **{"basis_gap_secs": 0.0, **over})  # type: ignore[arg-type]
         if loud_seeds and not (tmp_path / _RULES_FILE).exists():
@@ -1364,7 +1375,7 @@ class TestBasisWorker:
             await h.settle()
             assert _cache(h) == (_DATE, 80_000)  # 基準快照歸 hub 持有(SC-3)
             # stage1:盤前預抓次日基準(多一根 08-04 日 K → nh 由 80_000 變 95_000)
-            h.bars.bars = [_BAR_A, _BAR_B]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()
             assert h.published == []  # 暫存不生效
@@ -1395,7 +1406,7 @@ class TestBasisWorker:
             await h.settle()
             assert len(h.bars.calls) == 1
 
-            h.bars.bars = [_BAR_A, _BAR_B]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B]
             h.date = _NEXT
             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
             h.hub.on_rollover()  # stage1 沒跑過 → swap 失敗 → 清空重抓
@@ -1428,7 +1439,7 @@ class TestBasisWorker:
             await h.settle()
 
             # 第一輪換日:pending 與 rollover 之間沒有讓 worker 跑的機會
-            h.bars.bars = [_BAR_A, _BAR_B]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             h.date = _NEXT
             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
@@ -1444,7 +1455,7 @@ class TestBasisWorker:
             h.published.clear()
 
             # 第二輪換日:同樣的快路徑。基準必須換成 _BAR_C 的(nh = 125_000)
-            h.bars.bars = [_BAR_A, _BAR_B, _BAR_C]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B, _BAR_C]
             h.hub.on_rollover_pending(_THIRD)
             h.date = _THIRD
             clock.now = _dt.datetime(2026, 8, 6, 10, 0, 0)
@@ -1501,13 +1512,13 @@ class TestBasisWorker:
         成功路徑早有日別尺(R18),例外路徑沒有 —— 同一個劇本只要 worker 這一則
         剛好炸掉,結果就從「丟棄」變成「整天沒有 CDP」。
         """
-        gated = _GatedBars([_BAR_A])
+        gated = _GatedBars([*_HIST, _BAR_A])
         h = _Harness(tmp_path, clock, gated)
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330"])
             await h.settle()
-            gated.bars = [_BAR_A, _BAR_B]
+            gated.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()  # 暫存區備妥次日基準
 
@@ -1543,13 +1554,13 @@ class TestBasisWorker:
         成功路徑的日別尺(R18)現在改在 `_daily_bars` 之前也判一次,這條是它的迴歸鎖:
         判斷提前之後,「排隊時還新鮮、收工時已過期」這一格仍必須丟棄。
         """
-        gated = _GatedBars([_BAR_A])
+        gated = _GatedBars([*_HIST, _BAR_A])
         h = _Harness(tmp_path, clock, gated)
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330"])
             await h.settle()
-            gated.bars = [_BAR_A, _BAR_B]
+            gated.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()
 
@@ -1561,7 +1572,7 @@ class TestBasisWorker:
             h.date = _NEXT
             clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
             h.hub.on_rollover()
-            gated.bars = [_BAR_A]  # 舊 job 拿到的是舊資料(nh = 80_000)
+            gated.bars = [*_HIST, _BAR_A]  # 舊 job 拿到的是舊資料(nh = 80_000)
             gate.set()
             await h.settle()
 
@@ -1582,7 +1593,7 @@ class TestBasisWorker:
         try:
             h.hub.on_watchlist(["2330"])
             await h.settle()
-            h.bars.bars = [_BAR_A, _BAR_B]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()
 
@@ -1610,7 +1621,7 @@ class TestBasisWorker:
         try:
             h.hub.on_watchlist(["2330"])
             await h.settle()
-            h.bars.bars = [_BAR_A, _BAR_B]
+            h.bars.bars = [*_HIST, _BAR_A, _BAR_B]
             h.hub.on_rollover_pending(_NEXT)
             await h.settle()
 
@@ -1627,7 +1638,7 @@ class TestBasisWorker:
     async def test_daily_bars_failure_disables_cdp_only(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
-        h = _Harness(tmp_path, clock, _FakeBars([_BAR_A], error=True))
+        h = _Harness(tmp_path, clock, _FakeBars([*_HIST, _BAR_A], error=True))
         await h.hub.start()
         try:
             h.hub.on_watchlist(["2330"])
@@ -1659,6 +1670,136 @@ class TestBasisWorker:
             await h.hub.close()
 
 
+class TestCdpGate:
+    """CDP 列閘(#225):基準只餵給「前 `cdp_gate_days` 個交易日累計 ≥ `cdp_gate_pct`」的檔
+    (`(close[-1] − close[-6]) × 100 / close[-6]`,研究 `own5` 同口徑);不過閘 = 該檔基準 None
+    (detector 既有語意「CDP 跳過、其他 kind 照常」)+ INFO 一行,**不是**取得失敗(不重試)。
+    歷史不足 6 根已完成日 K 同樣不合格(證明不了 ≥ 5%)。圖上 CDP 五線走 overlay 端點,與此無關。
+    """
+
+    async def test_below_threshold_feeds_none_logs_info_and_keeps_other_kinds(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bars = _FakeBars([*_flat_hist(75_000), _BAR_A])  # 75.00 → 75.00 = +0.00%
+        h = _Harness(tmp_path, clock, bars)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.INFO):
+                h.hub.on_watchlist(["2330", "2317"])
+                await h.settle()
+            assert _cache(h) == (_DATE, None)
+            assert len(bars.calls) == 2, "閘不過不是失敗,不得重試"
+            gate_lines = [r for r in caplog.records if "CDP 列閘" in r.getMessage()]
+            assert [r.levelno for r in gate_lines] == [logging.INFO, logging.INFO]
+            line_2330 = next(r.getMessage() for r in gate_lines if "2330" in r.getMessage())
+            assert "+0.00%" in line_2330 and "+5.00%" in line_2330
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.published == [], "閘不過的檔當日不得有任何 cdp_cross"
+            h.lock_up(_state(upper=110_000, locked_up=True), code="2317")
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["limit_lock"]  # 其他 kind 照常
+        finally:
+            await h.hub.close()
+
+    async def test_exactly_at_threshold_passes_with_unchanged_cdp_semantics(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        # 80.00 → 84.00 = +5.00% 整(閉區間下界);compute_cdp(90_000, 80_000, 84_000) → nh 89_000
+        last = _bar("2026-08-01", 90_000, 80_000, 84_000)
+        h = _Harness(tmp_path, clock, _FakeBars([*_flat_hist(80_000), last]))
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert _cache(h) == (_DATE, 89_000)
+            state = _state()
+            h.hub.on_tick("2330", _tick(88_000), state)
+            h.hub.on_tick("2330", _tick(89_500, cum=2), state)
+            await h.settle()
+            assert [(m["kind"], m["levels"], m["direction"]) for m in h.published] == [
+                ("cdp_cross", ["nh"], "from_below")
+            ]
+        finally:
+            await h.hub.close()
+
+    async def test_insufficient_history_is_not_qualified(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """只有 5 根已完成日 K(需 6):不合格、INFO 講「日 K 不足」、不重試。"""
+        bars = _FakeBars([*_flat_hist(50_000, n=4), _BAR_A])
+        h = _Harness(tmp_path, clock, bars)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.INFO):
+                h.hub.on_watchlist(["2330"])
+                await h.settle()
+            assert _cache(h) == (_DATE, None)
+            assert len(bars.calls) == 1
+            lines = [r.getMessage() for r in caplog.records if "CDP 列閘" in r.getMessage()]
+            assert len(lines) == 1 and "日 K" in lines[0] and "5" in lines[0]
+            h.cross_nh(_state())
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_staged_rollover_path_applies_the_same_gate(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """stage1 預抓的次日基準也過閘:次日前 5 日累計 0% → 暫存 None → promote 後整天無 CDP。"""
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert _cache(h) == (_DATE, 80_000)
+            # _NEXT 的已完成 bar = 五根 90.00 + _BAR_A(75.00)+ _BAR_B(90.00):close[-6] = 90.00 → +0%
+            h.bars.bars = [*_flat_hist(90_000), _BAR_A, _BAR_B]
+            h.hub.on_rollover_pending(_NEXT)
+            await h.settle()
+            assert h.hub._staged_cache == {"2330": None}
+            h.date = _NEXT
+            clock.now = _dt.datetime(2026, 8, 5, 10, 0, 0)
+            h.hub.on_rollover()
+            assert _cache(h) == (_NEXT, None)
+            state = _state()
+            h.hub.on_tick("2330", _tick(94_000, trade_date=_NEXT), state)
+            h.hub.on_tick("2330", _tick(95_500, cum=2, trade_date=_NEXT), state)
+            await h.settle()
+            assert h.published == []
+        finally:
+            await h.hub.close()
+
+    async def test_daily_bars_fetch_size_follows_gate_days(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """抓幾根由設定推導(days + 1 根已完成 + 今日 partial + 1 緩衝),不再字面 5。"""
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert h.bars.calls == [("2330", 8)]
+        finally:
+            await h.hub.close()
+        h3 = _Harness(tmp_path, clock, cdp_gate_days=3)
+        await h3.hub.start()
+        try:
+            h3.hub.on_watchlist(["2330"])
+            await h3.settle()
+            assert h3.bars.calls == [("2330", 6)]
+            assert _cache(h3) == (_DATE, 80_000)  # 50 → 75 仍過閘
+        finally:
+            await h3.hub.close()
+
+    async def test_gate_days_below_one_rejected_at_construction(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        with pytest.raises(ValueError, match="cdp_gate_days"):
+            _Harness(tmp_path, clock, cdp_gate_days=0)
+
+
 class TestBasisRetry:
     """X-2b:例外(連線 / 傳輸層,暫時性)有限重試;資料面的空 bars 不重試。
 
@@ -1669,7 +1810,7 @@ class TestBasisRetry:
     async def test_transient_failure_retried_until_success(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
-        bars = _FlakyBars([_BAR_A], fail_times=1)
+        bars = _FlakyBars([*_HIST, _BAR_A], fail_times=1)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
         await h.hub.start()
         try:
@@ -1685,7 +1826,7 @@ class TestBasisRetry:
 
     async def test_retry_capped_then_basis_none(self, tmp_path: Path, clock: _Clock) -> None:
         """連續失敗 = 不是抖動:重試上限後落 None 定格,不得無限重打 TC4。"""
-        bars = _FakeBars([_BAR_A], error=True)
+        bars = _FakeBars([*_HIST, _BAR_A], error=True)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
         await h.hub.start()
         try:
@@ -1707,7 +1848,7 @@ class TestBasisRetry:
         盤前 basis sweep 逐檔 0.2s,TC4 忙窗一來就是幾十份 traceback,把真正該看的
         例外(型別錯 / 解析爆)整段沖掉 —— 而那正是 traceback 唯一有用的場合。
         """
-        bars = _FakeBars([_BAR_A], error_exc=HistoryTimeoutError("first page not ready"))
+        bars = _FakeBars([*_HIST, _BAR_A], error_exc=HistoryTimeoutError("first page not ready"))
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
         await h.hub.start()
         try:
@@ -1726,7 +1867,7 @@ class TestBasisRetry:
         self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
     ) -> None:
         """逾時之外的例外照舊 `logger.exception` —— 逾時那條分支不得把整個 except 降級。"""
-        bars = _FakeBars([_BAR_A], error_exc=ValueError("wrapper 內部型別錯"))
+        bars = _FakeBars([*_HIST, _BAR_A], error_exc=ValueError("wrapper 內部型別錯"))
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.0)
         await h.hub.start()
         try:
@@ -1756,7 +1897,7 @@ class TestBasisRetry:
         self, tmp_path: Path, clock: _Clock
     ) -> None:
         """重試 job 帶原 basis_date 走同一條佇列 → 跨日後由 `_stale` 丟棄,不打 TC4。"""
-        bars = _FakeBars([_BAR_A], error=True)
+        bars = _FakeBars([*_HIST, _BAR_A], error=True)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
         await h.hub.start()
         try:
@@ -1774,7 +1915,7 @@ class TestBasisRetry:
         """同鍵兩筆 job 先後失敗(rollover 差集補抓 race 的形)→ 第二次排程必須取消
         第一支 timer。孤兒 timer 照樣醒來:重試預算被雙倍燒掉、TC4 被多打一次,而且
         它 pop 掉 dict 條目後,close() 再也看不到真正在途的那支。"""
-        bars = _FakeBars([_BAR_A], error=True)
+        bars = _FakeBars([*_HIST, _BAR_A], error=True)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.15)
         await h.hub.start()
         try:
@@ -1791,7 +1932,7 @@ class TestBasisRetry:
     async def test_drop_code_cancels_pending_retry(self, tmp_path: Path, clock: _Clock) -> None:
         """移出自選後在途重試必須取消:醒來的重試不只白打 TC4,`_basis_failed` 還會把
         `_drop_code` 刻意清掉的 cache 條目寫回去(復活成 (date, None))。"""
-        bars = _FakeBars([_BAR_A], error=True)
+        bars = _FakeBars([*_HIST, _BAR_A], error=True)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=0.1)
         await h.hub.start()
         try:
@@ -1811,7 +1952,7 @@ class TestBasisRetry:
         """換日清舊要一次清齊:舊日別與 staged 的在途 timer 取消(醒來也只會被 `_stale`
         丟掉,白走一趟換日最忙窗的佇列);staged 計數不得帶進新的一天 —— `_staged_date`
         此刻歸 None,那些鍵再也不會被讀到,留著就是 `on_rollover` 自己要防的慢性洩漏。"""
-        bars = _FakeBars([_BAR_A], error=True)
+        bars = _FakeBars([*_HIST, _BAR_A], error=True)
         h = _Harness(tmp_path, clock, bars, basis_retry_delay_secs=5.0)
         await h.hub.start()
         try:
