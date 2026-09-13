@@ -945,8 +945,9 @@ class SignalDetector:
                 ev = self._breakout_event(code, pending, price, key, mono, enabled)
                 if ev is not None:
                     events.append(ev)
-        else:
-            self._break.pop(code, None)
+        # 不合格的離帶**不碰**在飛的離帶分鐘累加器(two-axis spec S-01):跨分鐘的舊 pending 已在 (1)
+        # 丟掉,走到這裡的 pending 只可能是本分鐘的 —— 離帶後同分鐘續跑出新錨的帶(§17 續走率最高的
+        # 那一類)也是「離帶分鐘的成交」,研究 `bvol` 整分鐘計量不看價位。
         self._dwell[code] = _Dwell(anchor=price, start=secs, vol=tick.qty, minutes={minute})
         return events
 
