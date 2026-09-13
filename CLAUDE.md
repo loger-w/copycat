@@ -381,6 +381,27 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   30 / 2 / 2 / 0.3 / 60 由 `signal-param-parity.test.ts` 字面 golden 釘。掃單簇**定義**另由研究 golden fixture
   `tests/fixtures/sweep_cluster_golden.json`(產生腳本 `record_sweep_cluster_golden.py`,參考碼逐字沿研究
   `combo_events.py`)釘住:線上 `SignalDetector._eval_sweep` 必須與 `expected_prefix` 集合相等、研究事件時刻 ⊆ 線上。
+- **掃單簇 / 政策列的大單筆數欄 `big_lots_120s`**(2026-09-14 起,#227):產生點 `copycat/live/signal_state.py::
+  BIG_LOTS_KEY`(`_advance_big_lots` 在 `_eval_sweep` 內先推進,發訊筆自己命中也算;定義逐字沿研究 `bigtick_hits`,
+  K / 窗走 `SignalsConfig.big_lot_ratio / big_lot_window_secs`,**欄名字面固定**,改窗欄名不跟)→ raw 掃單簇列
+  `detail.big_lots_120s`;`signal_hub._emit_policies` 把它自 `detail` 拆出放政策列**頂層**同名欄,`sweep` 鏡像維持四鍵。
+  讀者 = Discord `format_policy_group_text` 第 2 行尾「・大單 n 筆」(0 也印)、前端 `lib/signal-model.ts::bigLotsPhrase`
+  (rail 第三行尾 + hover 一段;**缺欄整段不印**,不印「大單 -」)、研究離線讀者(四週後分層)。後端漏帶 → rail / Discord
+  靜默退回 09-14 前的樣子;前端改成缺欄印「-」→ 舊列整批多一段假陳述;兩邊都零錯誤訊號。
+  `tests/server/test_signal_policy.py::test_big_lots_context_counts_hits_before_the_event` + `signal-model.test.ts`「#227」案釘住。
+- **放量離開 kind `vol_breakout`**(2026-09-14 起,#226):第七種規則 kind,`PARAM_SPECS["vol_breakout"]` 三鍵
+  (`band_pct` / `min_dwell_secs` / `ratio`,全 float)已入 `tests/fixtures/signal_param_specs.json`,parity 沿「訊號規則
+  參數契約」;前端「新規則」預設 0.6 / 600 / 4 由 `signal-param-parity.test.ts` 字面釘。文案「放量向上離開 x.x 倍」/
+  「放量向下離開 x.x 倍」`signal_hub._kind_text` ↔ `signal-model.kindLabel` 逐字(`direction` = up / down,缺值退向上;
+  `pct` = 離帶分鐘量 ÷ 迴盪均量,恰半時 Python `:.1f` 與 JS `toFixed` 分岐是既有 kind 同款盲點)。規則檔 `_cache_version`
+  4 → 5(v4 → v5 只 append 種子卡「放量離開」通知關,不翻旗;回退手順 `load_rules` doc)。**研究離線讀者以 kind 白名單
+  分桶,不含它**(W1:新 kind 值允許)。舊 dist 對新後端:列印英文代號、規則視窗那張卡「編輯」按了沒反應 —— 部署前後端同版。
+- **CDP 列閘**(2026-09-14 起,#225):產生點 `signal_hub._resolve_basis` + `_gate_return_pct`(`(close[-1] − close[-6])
+  × 100 / close[-6]` 先乘後除,恰 5.00% 落閉區間下界);門檻 `SignalsConfig.cdp_gate_days / cdp_gate_pct`(全域,不進規則
+  參數);抓取根數 `hub._basis_bars = days + 3`。閘不過 = 該檔基準餵 None(detector 既有語意「CDP 跳過、其他 kind 照常」)
+  + **INFO**「CDP 列閘:…」一行(漲幅不足 / 日 K 不足兩種文案),不重試、不與取得失敗(WARNING + 重試)混淆;圖上五線走
+  overlay 端點與此無關。盤後判準:`grep "CDP 列閘" logs/server-*.log` 每檔至多一行;**整批全「日 K 不足」= 抓取根數被改小**
+  (`_BASIS_BARS_SLACK`),不是資料源壞。`tests/server/test_signal_hub.py::TestCdpGate` 六案釘住。
 - **T+1 / T+2 回填原地補欄 + 離線讀者契約**(2026-09-07 起):產生點 `signal_hub.py::backfill_policy_outcomes`
   (每日 `policy_outcome_time`;起動時**只在已過當日時點才立即跑**,開盤前起動不跑 —— 回填 DK 與 CDP 基準暖機共用
   同一把 TC4 `api.lock`,整體 review F-10 拍板;只碰日期**同時小於** hub 日別與牆鐘日的最近 `policy_outcome_days`
