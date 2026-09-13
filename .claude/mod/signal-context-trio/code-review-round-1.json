@@ -1,0 +1,22 @@
+{
+  "fixed_point": "1a032b9b (merge-base master..mod/signal-context-trio)",
+  "reviewed_head": "8bc115ab(review 當下 HEAD;之後收修 commit 見 disposition)",
+  "reviewers": "code-review-two-axis:Standards / Spec 各一 sub-agent(model opus),白名單 W-1..W-14 附進兩個 prompt",
+  "standards": [
+    {"id": "F-01", "severity": "Should", "file": "frontend/src/lib/signal-model.ts:95", "finding": "`big_lots_120s?: number` 與 wire 不符:後端 `_emit_policies` 恆寫該鍵、值可為 null;同介面其他回填欄寫 `| null`。runtime 由 `bigLotsPhrase` 的 typeof 擋住,但型別是假陳述。"},
+    {"id": "F-02", "severity": "Should", "file": "copycat/server/signal_hub.py:968-976", "finding": "`_gate_return_pct` 對「bar 不足」與「分母 close ≤ 0」都回 None,呼叫端一律印「已完成日 K 只有 N 根(需 M)」;壞資料時印出「只有 6 根(需 6)」自相矛盾,違背同段註解「對帳要分得出兩種原因」。"},
+    {"id": "F-03", "severity": "Should", "file": "tests/live/test_signal_state.py:1325-1390", "finding": "順手重排既有格式(TestSweepClusterGates 三處純換行),違反 backend-conventions「不順手重排既存格式」。"},
+    {"id": "F-04", "severity": "Nice", "file": "copycat/live/signal_state.py:369-371", "finding": "Mysterious Name:`sweep_events` 之後 `+= _eval_breakout(...)`,名已不只裝掃單簇。"},
+    {"id": "F-05", "severity": "Nice", "file": "copycat/signal_rules.py:351-384", "finding": "Duplicated Code:`_breakout_seed_rule` 與 `_sweep_seed_rule` 只差 name/kind,`notify_discord: False` 是 `_QUIET_KINDS` 的第三份複本。"},
+    {"id": "F-06", "severity": "Nice", "file": "copycat/server/signal_hub.py:248 vs :1149", "finding": "bool 防禦兩處不一致:Discord 端擋 bool、政策列取值不擋(True 會變 1)。"},
+    {"id": "F-07", "severity": "Nice", "file": "(架構)", "finding": "Shotgun Surgery:新增一個 kind 需同動約 15 處(後端 9 + 前端 6);既有架構,本 diff 只是再證一次;`rule_config` 尾端 raise 是唯一機驗。判斷題。"}
+  ],
+  "spec": [
+    {"id": "S-01", "severity": "Must", "file": "copycat/live/signal_state.py:948-949", "finding": "`_eval_breakout` 步驟 (2) 的 `else: self._break.pop(code, None)`:跨分鐘的舊 pending 已在步驟 (1) 刪掉,這個 pop 只可能誤殺本分鐘在飛的即時判累加器 —— 離帶後同分鐘續跑 > 0.6%(離開新錨的帶)的成交被丟掉,違反 #226 AC「達標那筆就發」與研究 `bvol` 整分鐘計量不看價位;被丟掉的正是 §17 續走率最高的那一類,零錯誤訊號。實測:跟進筆 +0.10% 5 張 → 100 張發;跟進筆 +0.79% 5 張 → 100 張不發。"},
+    {"id": "S-02", "severity": "Nice", "file": "copycat/live/signal_state.py:775-781", "finding": "大單母體與研究不同且不在「已知差異」紀錄:研究 `bigtick_hits` 的 30 筆門檻與中位母體含 0 價 / 0 量列,線上掛在壞 tick 閘之後不含。"},
+    {"id": "S-03", "severity": "Nice", "file": "copycat/server/signal_hub.py:161-163 / frontend/src/lib/signal-model.ts:150-153", "finding": "W-11 半邊未達成:白名單原文「缺 pct / direction 時退回只印名」,實作 direction 缺值印「放量向上離開」(沿 limit_* 慣例,兩邊逐字一致且測試已釘)。改白名單文字或改實作擇一。"},
+    {"id": "S-04", "severity": "Nice", "file": "copycat/server/signal_hub.py:1155-1162", "finding": "政策列頂層 `big_lots_120s` 恆帶鍵、`detail` 缺鍵時值為 null 而非鍵不在;#227 AC「頂層與 raw 列 detail 同值」在這一格是 null vs 缺鍵。實務不可達(`_eval_sweep` 恆帶鍵),屬契約精確度。"},
+    {"id": "S-OK", "severity": "info", "file": "-", "finding": "#225 / #226 / #227 全部 AC 逐條有 code + 測試;W-1~W-13 保住(golden fixture 零改動且綠、sweep 四鍵、vol_burst 零改動、v3→v4 翻旗以 version <= 3 收窄不重跑);無 scope creep。"}
+  ],
+  "disposition": "Standards 7 條:F-01 收修(型別 `number | null` + doc,9e2d9485);F-02 收修(拆三支:日 K 不足 INFO / 分母 ≤ 0 WARNING 壞資料 / 漲幅不足 INFO;紅先行 test_zero_close_base_is_bad_data_warning_not_insufficient_history,ddc98768);F-03 收修(還原兩段既有格式 a897d3ae;根因 = PostToolUse formatter hook 對 Edit 後整檔 format,第二次又動到、再還原一次併入 S-01 收修前;沉澱進 ops-discipline);F-04 收修(改名 pre_gate_events,9e2d9485);F-05 收修(收成 `_quiet_seed_rule(kind, …)`,靜音真值只剩 `_QUIET_KINDS` + assert,9e2d9485);F-06 收修(bool 守門與 Discord 端同口徑,ddc98768);F-07 判斷題不動(既有架構,`rule_config` 尾端 raise 仍是唯一機驗,記 next-time 候選)。Spec 4 條:S-01 Must 收修(刪 else pop;紅先行 test_follow_up_tick_leaving_the_new_anchor_band_keeps_the_break_minute_accumulating,兩筆 commit);S-02 查證後**研究 `bigtick_bt.load()` 也濾 0 價 / 0 量列**(reviewer 誤讀 `json.load` 一行),兩邊一致 —— 記錄進 change-spec §3 Q13 已知差異 (2) 免下次再查,不改 code;S-03 採「改白名單文字」(direction 缺值退向上沿 limit_* 慣例,實作 / 測試 / 後端 `_kind_text` 三邊已一致),change-spec W-11 改字、spec issue #224 留言追記;S-04 記錄不改(頂層鍵恆在是給離線讀者的穩定 schema,W1「只加欄」精神;前端 type 已 `| null`、CLAUDE.md 契約寫「缺欄或 null 不印」)。"
+}

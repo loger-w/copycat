@@ -1,0 +1,151 @@
+{
+ "signals": [
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-000-2330-cdp_cross-nh-09:21:00.000",
+   "rule_id": "r-1789322117-000",
+   "rule_name": "CDP 穿越",
+   "kind": "cdp_cross",
+   "code": "2330",
+   "name": "台積電",
+   "price": 50600,
+   "time": "09:21:00",
+   "levels": [
+    "nh"
+   ],
+   "direction": "from_below",
+   "pct": null,
+   "touch_count": 1,
+   "notify": false,
+   "trade_date": "2026-09-14"
+  },
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-000-2454-cdp_cross-nh-09:40:00.000",
+   "rule_id": "r-1789322117-000",
+   "rule_name": "CDP 穿越",
+   "kind": "cdp_cross",
+   "code": "2454",
+   "name": "聯發科",
+   "price": 101000,
+   "time": "09:40:00",
+   "levels": [
+    "nh"
+   ],
+   "direction": "from_below",
+   "pct": null,
+   "touch_count": 1,
+   "notify": false,
+   "trade_date": "2026-09-14"
+  },
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-007-2454-vol_breakout-up-09:40:00.000",
+   "rule_id": "r-1789322117-007",
+   "rule_name": "放量離開",
+   "kind": "vol_breakout",
+   "code": "2454",
+   "name": "聯發科",
+   "price": 101000,
+   "time": "09:40:00",
+   "levels": [],
+   "direction": "up",
+   "pct": 4.356435643564357,
+   "touch_count": 1,
+   "notify": false,
+   "trade_date": "2026-09-14"
+  },
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-000-2330-cdp_cross-ah-09:33:30.500",
+   "rule_id": "r-1789322117-000",
+   "rule_name": "CDP 穿越",
+   "kind": "cdp_cross",
+   "code": "2330",
+   "name": "台積電",
+   "price": 51100,
+   "time": "09:33:30",
+   "levels": [
+    "ah"
+   ],
+   "direction": "from_below",
+   "pct": null,
+   "touch_count": 1,
+   "notify": false,
+   "trade_date": "2026-09-14"
+  },
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-006-2330-sweep_cluster---09:33:30.500",
+   "rule_id": "r-1789322117-006",
+   "rule_name": "掃單簇",
+   "kind": "sweep_cluster",
+   "code": "2330",
+   "name": "台積電",
+   "price": 51100,
+   "time": "09:33:30",
+   "levels": [],
+   "direction": null,
+   "pct": 0.7889546351084853,
+   "touch_count": 1,
+   "notify": false,
+   "detail": {
+    "n30": 2,
+    "levels": 2,
+    "qty": 6,
+    "up_pct": 0.7889546351084853,
+    "big_lots_120s": 1
+   },
+   "trade_date": "2026-09-14"
+  },
+  {
+   "type": "signal",
+   "id": "2026-09-14-r-1789322117-006-2330-policy-S-09:33:30.500",
+   "rule_id": "r-1789322117-006",
+   "rule_name": "掃單簇",
+   "kind": "policy",
+   "policy": "S",
+   "code": "2330",
+   "name": "台積電",
+   "price": 51100,
+   "time": "09:33:30",
+   "levels": [],
+   "direction": null,
+   "pct": 0.7889546351084853,
+   "touch_count": 1,
+   "notify": true,
+   "first_of_day": true,
+   "late": false,
+   "tod": "0930",
+   "sweep": {
+    "n30": 2,
+    "levels": 2,
+    "qty": 6,
+    "up_pct": 0.7889546351084853
+   },
+   "big_lots_120s": 1,
+   "self": {
+    "chg_pct": 2.2,
+    "to_limit_pct": 7.632093933463796,
+    "touched_upper": false,
+    "locked_up": false
+   },
+   "groups": [],
+   "screen_member": true,
+   "peers": [],
+   "peers_up": 0,
+   "peer_max": null,
+   "leader": false,
+   "peer_touched": false,
+   "t1_open": null,
+   "t1_date": null,
+   "t2_open": null,
+   "t2_date": null,
+   "d_close": null,
+   "d_high": null,
+   "trade_date": "2026-09-14"
+  }
+ ],
+ "trade_date": "2026-09-14",
+ "today": "2026-09-14"
+}

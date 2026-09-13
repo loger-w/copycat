@@ -383,6 +383,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `combo_events.py`)釘住:線上 `SignalDetector._eval_sweep` 必須與 `expected_prefix` 集合相等、研究事件時刻 ⊆ 線上。
 - **掃單簇 / 政策列的大單筆數欄 `big_lots_120s`**(2026-09-14 起,#227):產生點 `copycat/live/signal_state.py::
   BIG_LOTS_KEY`(`_advance_big_lots` 在 `_eval_sweep` 內先推進,發訊筆自己命中也算;定義逐字沿研究 `bigtick_hits`,
+  母體同研究 `load()` 濾掉 0 價 / 0 量列;已知差異只有同毫秒群內**晚於**發訊筆的命中線上看不到;
   K / 窗走 `SignalsConfig.big_lot_ratio / big_lot_window_secs`,**欄名字面固定**,改窗欄名不跟)→ raw 掃單簇列
   `detail.big_lots_120s`;`signal_hub._emit_policies` 把它自 `detail` 拆出放政策列**頂層**同名欄,`sweep` 鏡像維持四鍵。
   讀者 = Discord `format_policy_group_text` 第 2 行尾「・大單 n 筆」(0 也印)、前端 `lib/signal-model.ts::bigLotsPhrase`
