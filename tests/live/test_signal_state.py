@@ -1587,6 +1587,19 @@ class TestVolBreakout:
         ]
         assert got[0].pct == pytest.approx(4.0)
 
+    def test_follow_up_tick_leaving_the_new_anchor_band_keeps_the_break_minute_accumulating(
+        self,
+    ) -> None:
+        """two-axis spec S-01(Must):離帶筆之後同分鐘續跑 +0.79%(離開**新錨** 50.40 的帶)不得把離帶
+        分鐘的累加器丟掉 —— 研究 `bvol` 是整分鐘所有成交、不看價位;被丟掉的正好是 §17 續走率最高的那一類。"""
+        det = _det(_Clock())
+        self._dwell(det)
+        assert self._bo(det, 50_400, 15, self._T0 + 600) == []  # 離帶筆 15 < 40
+        assert self._bo(det, 50_800, 5, self._T0 + 610) == []  # 續跑,離開新錨的帶(新區段又換錨)
+        got = self._bo(det, 50_900, 20, self._T0 + 620)  # 同分鐘累積 15 + 5 + 20 = 40 → 發
+        assert [(e.direction, e.price_milli) for e in got] == [("up", 50_900)]
+        assert got[0].pct == pytest.approx(4.0)
+
     def test_minute_ends_without_reaching_ratio_never_fires(self) -> None:
         det = _det(_Clock())
         self._dwell(det)
