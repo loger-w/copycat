@@ -28,3 +28,6 @@ frontend/dist/
 
 # /pr-review 臨時 worktree(claude-pr-review,review 結束自動移除)
 .worktrees/
+
+# graphify 中間快取(含本機絕對路徑),只版控 graph.json / graph.html / 報告
+graphify-out/.graphify_*
