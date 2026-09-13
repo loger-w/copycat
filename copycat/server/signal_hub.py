@@ -965,7 +965,7 @@ class SignalHub:
         cdp: dict[str, int] | None = None
         if not done:
             logger.warning("%s 無 %s 之前的已完成日 K,CDP 停用", code, basis_date)
-        elif (gate := _gate_return_pct(done, self._cfg.cdp_gate_days)) is None:
+        elif len(done) < self._cfg.cdp_gate_days + 1:
             # 列閘(#225)的兩種不合格都是 INFO 不是 WARNING:這是設計上的「今天不看這檔的 CDP」,
             # 不是資料面壞了;對帳要分得出「漲幅不足」與「日 K 不足」兩種原因
             logger.info(
@@ -973,6 +973,14 @@ class SignalHub:
                 code,
                 len(done),
                 self._cfg.cdp_gate_days + 1,
+                basis_date,
+            )
+        elif (gate := _gate_return_pct(done, self._cfg.cdp_gate_days)) is None:
+            # 第三種:分母收盤 ≤ 0 —— 這才是資料面壞了,WARNING(two-axis std F-02:與「日 K 不足」分開講)
+            logger.warning(
+                "CDP 列閘:%s 第 %d 根前的日 K 收盤 ≤ 0(壞資料),今日 CDP 不評(基準日 %s)",
+                code,
+                self._cfg.cdp_gate_days,
                 basis_date,
             )
         elif gate < self._cfg.cdp_gate_pct:
@@ -1146,7 +1154,12 @@ class SignalHub:
         # #227:大單筆數自 `detail` 拆出來放頂層(user 指名的離線讀者鍵);`sweep` 鏡像維持四鍵 ——
         # 它是「掃單簇參數袋」,大單是脈絡不是參數
         big_raw = detail.pop(BIG_LOTS_KEY, None)
-        big_lots = int(big_raw) if isinstance(big_raw, (int, float)) else None
+        # bool 先擋(與 `format_policy_group_text` 同口徑,std F-06):`True` 不該變成「大單 1 筆」
+        big_lots = (
+            int(big_raw)
+            if isinstance(big_raw, (int, float)) and not isinstance(big_raw, bool)
+            else None
+        )
         me = {
             "chg_pct": chg,
             "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
@@ -1644,7 +1657,8 @@ class SignalHub:
 def _gate_return_pct(done: list[DailyBar], days: int) -> float | None:
     """前 `days` 個交易日累計報酬(%)= (close[-1] − close[-(days+1)]) × 100 / close[-(days+1)]
     (研究 `cdp_bt.py` 的 `own5`:`prev_rows(c, d, 6)` 首尾收盤);`done` 已剔今日 partial、升冪。
-    已完成 bar 不足 days+1 根、或分母 ≤ 0(壞資料)→ None(= 證明不了 ≥ 門檻,呼叫端視為不合格)。
+    呼叫端先擋「不足 days+1 根」(INFO 日 K 不足);這裡的 None 只剩分母 ≤ 0(壞資料,呼叫端 WARNING)
+    —— 長度守門仍留著(回 None)以免被別的呼叫端拿到 IndexError,但兩種原因的 log 由呼叫端分開講。
     先乘 100 再除:門檻恰等時(80.00 → 84.00 = 5%)要落在閉區間下界,`(a/b − 1) × 100` 會多出
     4e-15 漂到門檻另一側。
     """
