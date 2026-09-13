@@ -348,38 +348,23 @@ def _pullback_seed_rule(name: str, pct: float, rule_id: str, cfg: SignalsConfig)
     }
 
 
-def _sweep_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
-    """掃單簇種子卡(spec #192):enabled、**通知關**、冷卻與參數走 `cfg` 的六個 `sweep_*` 欄。
-    只供 v3→v4 遷移;全新安裝走 `default_rules` 的通用分支(review F-15 刪了專屬分支),兩邊欄位
-    必須一致 —— 改一邊要改兩邊(`test_v3_file_gets_sweep_seed_and_quiet_flags` 與
-    `test_seed_notify_flags_quiet_for_negative_kinds` 各釘一邊)。
+def _quiet_seed_rule(kind: str, rule_id: str, cfg: SignalsConfig) -> Rule:
+    """遷移用的靜音種子卡(掃單簇 spec #192 / 放量離開 #226,同一形狀,two-axis std F-05 收成一份):
+    enabled、通知關(`kind` 必須在 `_QUIET_KINDS`,靜音真值只有那一份)、名字 / 冷卻 / 參數走
+    `_DEFAULT_NAMES` / `cfg`。只供 v3→v4 / v4→v5 遷移;全新安裝走 `default_rules` 的通用分支
+    (review F-15 刪了專屬分支),兩邊欄位必須一致 —— 改一邊要改兩邊
+    (`test_v3_file_gets_sweep_seed_and_quiet_flags` / `test_v4_file_gets_breakout_seed_and_flags_untouched`
+    與 `test_seed_notify_flags_quiet_for_negative_kinds` 各釘一邊)。
     """
+    assert kind in _QUIET_KINDS, kind
     return {
         "id": rule_id,
-        "name": _SWEEP_SEED_NAME,
-        "kind": "sweep_cluster",
+        "name": _DEFAULT_NAMES[kind],
+        "kind": kind,
         "enabled": True,
         "notify_discord": False,
-        "cooldown_secs": _seed_cooldown("sweep_cluster", cfg),
-        "params": _seed_params("sweep_cluster", cfg),
-        "cdp_levels": [],
-    }
-
-
-def _breakout_seed_rule(rule_id: str, cfg: SignalsConfig) -> Rule:
-    """放量離開種子卡(#226):enabled、**通知關**(影子期只上 rail 列)、冷卻與參數走 `cfg` 的
-    `breakout_*` 欄。只供 v4→v5 遷移;全新安裝走 `default_rules` 通用分支(與 `_sweep_seed_rule`
-    同款兩邊必須一致:`test_v4_file_gets_breakout_seed_and_flags_untouched` 與
-    `test_seed_notify_flags_quiet_for_negative_kinds` 各釘一邊)。
-    """
-    return {
-        "id": rule_id,
-        "name": _BREAKOUT_SEED_NAME,
-        "kind": "vol_breakout",
-        "enabled": True,
-        "notify_discord": False,
-        "cooldown_secs": _seed_cooldown("vol_breakout", cfg),
-        "params": _seed_params("vol_breakout", cfg),
+        "cooldown_secs": _seed_cooldown(kind, cfg),
+        "params": _seed_params(kind, cfg),
         "cdp_levels": [],
     }
 
@@ -403,7 +388,7 @@ def default_rules(cfg: SignalsConfig, legacy_flags: dict[str, bool]) -> list[Rul
                 rule["enabled"] = legacy_flags.get(kind, True)
                 rules.append(rule)
             continue
-        # 掃單簇**不另開分支**(review F-15):通用分支產出的欄位與 `_sweep_seed_rule` 一模一樣,
+        # 掃單簇 / 放量離開**不另開分支**(review F-15):通用分支產出的欄位與 `_quiet_seed_rule` 一模一樣,
         # 專屬分支會讓 `_QUIET_KINDS` 裡的 sweep_cluster 變成沒人讀的死資料(靜音真值只剩種子卡字面)
         rules.append(
             {
@@ -527,7 +512,7 @@ def _migrate_v3(items: list[Any]) -> list[Any]:
         out,
         "v3→v4",
         _SWEEP_SEED_NAME,
-        lambda rid: _sweep_seed_rule(rid, SignalsConfig()),
+        lambda rid: _quiet_seed_rule("sweep_cluster", rid, SignalsConfig()),
         skip_note="(掃單簇是政策層唯一的觸發源:種子沒進去 = 影子期零政策列)",
     )
     return out
@@ -543,7 +528,7 @@ def _migrate_v4(items: list[Any]) -> list[Any]:
         out,
         "v4→v5",
         _BREAKOUT_SEED_NAME,
-        lambda rid: _breakout_seed_rule(rid, SignalsConfig()),
+        lambda rid: _quiet_seed_rule("vol_breakout", rid, SignalsConfig()),
         skip_note="(放量離開種子沒進去 = 影子期 rail 零放量離開列)",
     )
     return out
