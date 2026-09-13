@@ -1754,6 +1754,25 @@ class TestCdpGate:
         finally:
             await h.hub.close()
 
+    async def test_zero_close_base_is_bad_data_warning_not_insufficient_history(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """分母收盤 ≤ 0 是資料面壞了:WARNING 講「壞資料」,不得印成「只有 6 根(需 6)」(two-axis std F-02)。"""
+        bars = _FakeBars([*_flat_hist(0), _BAR_A])  # 六根已完成,close[-6] = 0
+        h = _Harness(tmp_path, clock, bars)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.INFO):
+                h.hub.on_watchlist(["2330"])
+                await h.settle()
+            assert _cache(h) == (_DATE, None)
+            assert len(bars.calls) == 1
+            lines = [r for r in caplog.records if "CDP 列閘" in r.getMessage()]
+            assert len(lines) == 1 and lines[0].levelno == logging.WARNING
+            assert "壞資料" in lines[0].getMessage() and "只有" not in lines[0].getMessage()
+        finally:
+            await h.hub.close()
+
     async def test_staged_rollover_path_applies_the_same_gate(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
