@@ -1325,19 +1325,11 @@ class TestSweepClusterGates:
     @staticmethod
     def _seq(det: SignalDetector, ctx: TickContext, base_time: str, g1: tuple, g2: tuple) -> list:
         out: list[SignalEvent] = []
-        out += det.evaluate(
-            "2330",
-            _tick(50_000, time=base_time, ask=50_000, trade_date=ctx.trade_date),
-            ctx,
-            _SWEEP,
-        )
+        out += det.evaluate("2330", _tick(50_000, time=base_time, ask=50_000, trade_date=ctx.trade_date), ctx, _SWEEP)
         for time, prices, ask in (g1, g2):
             for i, p in enumerate(prices):
                 out += det.evaluate(
-                    "2330",
-                    _tick(p, cum=i + 1, time=time, ask=ask, trade_date=ctx.trade_date),
-                    ctx,
-                    _SWEEP,
+                    "2330", _tick(p, cum=i + 1, time=time, ask=ask, trade_date=ctx.trade_date), ctx, _SWEEP
                 )
         return out
 
@@ -1370,19 +1362,12 @@ class TestSweepClusterGates:
         # 回看基準先餵(否則毒值也會卡在 lookback[0],漲幅恆 0 而遮住這條路)
         det.evaluate("2330", _tick(50_000, time="10:10:00.000", ask=50_000), _ctx(), _SWEEP)
         bogus = "bogus"  # `tick_secs` 回 None
-        for i, p in enumerate(
-            [50_000, 50_100, 50_200]
-        ):  # 同 key 三筆、2 層、外盤 → 若登記就是一個掃單
-            assert (
-                det.evaluate("2330", _tick(p, cum=i + 1, time=bogus, ask=50_000), _ctx(), _SWEEP)
-                == []
-            )
+        for i, p in enumerate([50_000, 50_100, 50_200]):  # 同 key 三筆、2 層、外盤 → 若登記就是一個掃單
+            assert det.evaluate("2330", _tick(p, cum=i + 1, time=bogus, ask=50_000), _ctx(), _SWEEP) == []
         # 之後只有**一個**合格掃單 → n30 = 1 → 不發;毒值留在 deque 時 n30 = 2、60 s 漲 +0.4% 而多發
         out: list[SignalEvent] = []
         for i, p in enumerate([50_000, 50_100, 50_200]):
-            out += det.evaluate(
-                "2330", _tick(p, cum=i + 1, time="10:11:10.100", ask=50_000), _ctx(), _SWEEP
-            )
+            out += det.evaluate("2330", _tick(p, cum=i + 1, time="10:11:10.100", ask=50_000), _ctx(), _SWEEP)
         assert out == []
 
 
