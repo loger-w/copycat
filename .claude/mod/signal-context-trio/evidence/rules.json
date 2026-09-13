@@ -1,0 +1,120 @@
+{
+ "rules": [
+  {
+   "id": "r-1789322117-000",
+   "name": "CDP 穿越",
+   "kind": "cdp_cross",
+   "enabled": true,
+   "notify_discord": false,
+   "cooldown_secs": 600,
+   "params": {
+    "rearm_ticks": 5.0,
+    "rearm_dwell_secs": 300.0
+   },
+   "cdp_levels": [
+    "ah",
+    "nh",
+    "cdp",
+    "nl",
+    "al"
+   ]
+  },
+  {
+   "id": "r-1789322117-001",
+   "name": "爆拉爆跌",
+   "kind": "surge_crash",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 1800,
+   "params": {
+    "pct": 2.0,
+    "window_secs": 300.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-002",
+   "name": "爆拉回檔 1%",
+   "kind": "surge_pullback",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 60,
+   "params": {
+    "surge_pct": 2.0,
+    "window_secs": 300.0,
+    "pct": 1.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-003",
+   "name": "爆拉回檔 2%",
+   "kind": "surge_pullback",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 60,
+   "params": {
+    "surge_pct": 2.0,
+    "window_secs": 300.0,
+    "pct": 2.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-004",
+   "name": "爆量",
+   "kind": "vol_burst",
+   "enabled": true,
+   "notify_discord": false,
+   "cooldown_secs": 1800,
+   "params": {
+    "ratio": 3.0,
+    "window_secs": 300.0,
+    "min_elapsed_min": 15.0,
+    "min_window_lots": 100.0,
+    "min_day_lots": 500.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-005",
+   "name": "鎖漲跌停",
+   "kind": "limit_lock",
+   "enabled": true,
+   "notify_discord": true,
+   "cooldown_secs": 600,
+   "params": {},
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-006",
+   "name": "掃單簇",
+   "kind": "sweep_cluster",
+   "enabled": true,
+   "notify_discord": false,
+   "cooldown_secs": 60,
+   "params": {
+    "cluster_window_secs": 30.0,
+    "min_sweeps": 2.0,
+    "min_levels": 2.0,
+    "up_pct": 0.3,
+    "up_window_secs": 60.0
+   },
+   "cdp_levels": []
+  },
+  {
+   "id": "r-1789322117-007",
+   "name": "放量離開",
+   "kind": "vol_breakout",
+   "enabled": true,
+   "notify_discord": false,
+   "cooldown_secs": 600,
+   "params": {
+    "band_pct": 0.6,
+    "min_dwell_secs": 600.0,
+    "ratio": 4.0
+   },
+   "cdp_levels": []
+  }
+ ]
+}
