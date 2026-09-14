@@ -1,0 +1,21 @@
+{
+  "fixed_point": "285c4b11 (merge-base master..mod/batch-a-real-money)",
+  "commits_reviewed": ["360de8cc #233", "dc8ea638 #234", "2dfd7036 #235", "8187d5b0 #236", "eb6a0454 #237"],
+  "standards": [
+    {"id": "S-01", "severity": "judgement", "file": "copycat/capital/chain_stats.py:23-31 ↔ copycat/capital/client.py::_log_chain_stage", "finding": "`_STAGE_RE` 逐字複製 `_log_chain_stage` 的 log 格式字串,無 parity 測試;合成行測試正是漂移源。改一字 log → chain-stats 靜默回 0 條。Duplicated Code + Shotgun Surgery。"},
+    {"id": "S-02", "severity": "judgement", "file": "frontend/src/lib/query-client.ts / commit eb6a0454", "finding": "commit 宣稱「全站 QueryClient 收成單一工廠」,實際 `new QueryClient(` 仍散在 20+ 測試檔(含 OrderPanel.test / ArmRow.characterization.test 等真錢 mutation 測試),它們仍跑 TanStack 預設 online 形狀。"},
+    {"id": "S-03", "severity": "judgement", "file": "tests/capital/test_chain_stats.py:94", "finding": "`capsys` 無型別 + `# noqa: ANN001`,違 backend-conventions「Type hints 無例外」。"},
+    {"id": "S-04", "severity": "judgement", "file": "tests/capital/test_reply_watch.py:78", "finding": "`test_probe_interval_is_ten_seconds` 斷言 `REPLY_PROBE_SECS == 10.0` 同義反覆,不經公開行為;節流已由上一案真測到。"},
+    {"id": "S-05", "severity": "judgement", "file": "copycat/capital/client.py:832", "finding": "`_probe_reply` 掛進 `_pump_once`,`_run` 每次 `_cmd_q.get` 前必跑 → 下單 / 平倉命令排在一次同步 COM `IsConnectedByID` 之後;真錢延遲預算多一筆未量測阻塞。"},
+    {"id": "S-06", "severity": "judgement", "file": "copycat/server/signal_hub.py:179 vs :1173", "finding": "`_skipped_policy_ctx` 與評過的 `policy_ctx` 是兩份字面 dict,鍵集靠人同步(Duplicated Code / Data Clump);日後加欄漏改 skip 版不會紅。"},
+    {"id": "S-07", "severity": "judgement", "file": "copycat/capital/chain_stats.py:32-33", "finding": "09:00–13:30 盤中窗又一份字面常數;`_1019_RE` 對整行 search,任何含 rc=1019 的行都計入,比 docstring「查詢處理中」口徑略寬。"}
+  ],
+  "spec": [
+    {"id": "P-01", "severity": "judgement", "file": "copycat/server/clock_monitor.py:4-6", "finding": "模組 docstring 寫本機「超前」2.6 s,與 spec 證據「落後」方向相反(sign 實作正確)。"},
+    {"id": "P-02", "severity": "judgement", "file": "copycat/capital/com.py:292-297", "finding": "#235 驗收「sink 兩案(forward / 例外)」,Solace 兩個方法裸呼 logger 無 try/except,測試只覆蓋 forward,例外案缺席。"},
+    {"id": "P-03", "severity": "judgement", "file": "copycat/server/signal_hub.py:1141", "finding": "註解「raw 列已記,不讓整顆事件消失」在 #233 重排後失真;`resolve_groups` / `evaluate_policies` 若拋,`_fanout` 傘會把整顆事件(含 raw 列)丟掉,修前只丟政策列。"},
+    {"id": "P-04", "severity": "judgement", "file": "tests/server/test_signal_policy.py:467-472", "finding": "#233 驗收寫「零 assertion 改動」,`test_emit_policies_drops_bool_big_lots_to_none` 的斷言被改(`[\"P\"]` → `[None, \"P\"]`、索引 0→1)。"},
+    {"id": "P-05", "severity": "judgement/scope", "file": "copycat/capital/client.py:840 / chain_stats._classify", "finding": "`_probe_reply` 多一道 status 早退;`chain_stats` 多 `no_start` / `unfinished` 兩種排除(spec 只列三種)。知情加碼。"}
+  ],
+  "disposition": "S-01 接受:加 TestParityWithClientLogFormat(真 CapitalClient 走 prod basicConfig format 印四段餵 summarize)。S-02 反駁部分接受:spec / ticket 只要求 main.tsx 與 test-utils 同形,其餘測試檔各自 new QueryClient 是既有現況且 jsdom 下 navigator.onLine 恆 true、無行為差;commit 訊息措辭過頭,入 next-time(收攏 20+ 測試檔的 client 建立,屬 test-hygiene 批)。S-03 接受:改 pytest.CaptureFixture[str]。S-04 接受:刪該測試。S-05 接受(量而非搬):probe 耗時 > 50 ms 印 WARNING,第一個交易日看數字再決定要不要搬出幫浦圈。S-06 接受:收成 _policy_ctx_payload 單一 builder,skip 版餵空殼 PolicyContext。S-07 反駁:1019 判準本來就是 grep -c rc=1019 全行(CLAUDE §1 / V2 §2.4 同口徑,GetProfitLossGW 的 1019 也是鏈的尾巴);盤中窗常數各模組語意不同(detector 是 gate、chain_stats 是統計母體)刻意不共用,docstring 已述。P-01 接受(review 前已自行發現並修):方向是「超前」,spec 正文與 CLAUDE 舊句讀反,#232 已留言勘誤、docstring / CLAUDE / test docstring 三處改正。P-02 反駁:Solace 兩方法沒有回呼可炸、只呼 logger,加 try/except 是「不懂的 error 不要 catch」的反面;ticket 驗收那句「回呼例外不炸」對這對事件不適用,關 ticket 時註明。P-03 接受:_emit 內對 _policy_context 加傘,炸了 raw 列照記 + policy_ctx.skip=error + traceback 一行;skip 值域加 error(CLAUDE §4 / 前端 union / 新測試 test_evaluation_error_keeps_raw_row_with_skip_error);註解改正。P-04 接受說明不改:該測試直呼私有 _emit_policies,簽名改動是 spec 明文「政策評估搬到 raw 列 publish 之前」的機械後果,改成走 _emit 是更高的 seam;ticket 驗收句「零 assertion 改動」指的是政策列形狀 / 值的斷言(仍成立)。P-05 知情接受:status 早退避免登入前無意義 COM 呼叫;no_start / unfinished 是 V2 §2.3 第二種污染指紋(缺庫存段起點)與 log 截斷的必要分桶,不分出來會混進 non_monotonic。"
+}
