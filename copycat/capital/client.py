@@ -320,9 +320,11 @@ class CapitalClient:
             self._balance_abandoned = False
             self._profit_abandoned = False
             self._oi_abandoned = False
-            # 量測欄與守門旗標同組清(#234 之後 `_finalize_positions` 清五項,這裡要對齊;pr-238 review F-05):
-            # 斷線前的成交起點若活到重連後第一輪鏈,`_chain_covers_fill()` 成立、印出一條含斷線時長的
-            # 「乾淨」樣本 —— 正是 #234 要消滅的那種假 p99。
+            # 量測欄(#234)與守門旗標同組清(pr-238 review F-05)。兩處清點**不是同一個集合**:
+            # `_finalize_positions` 只在鏈涵蓋成交時清 `_fill_seen_at` / `_fill_count`(沒涵蓋要留給下一輪),
+            # 這裡是「連線斷過、沒有任何在途鏈」,三顆全清含 `_chain_started_at`。斷線前的成交起點若活到
+            # 重連後第一輪鏈,`_chain_covers_fill()` 成立、印出一條含斷線時長的「乾淨」樣本 —— 正是
+            # #234 要消滅的那種假 p99。
             self._fill_seen_at = None
             self._fill_count = 0
             self._chain_started_at = None
