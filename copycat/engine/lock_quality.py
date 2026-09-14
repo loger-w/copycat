@@ -100,9 +100,6 @@ class LockTracker:
     def n_reopens(self) -> int:
         return self._n_reopens
 
-    def current_lock_start(self) -> int | None:
-        return self._bars[self._run_start].m if self._run_start is not None else None
-
     def finalize(self) -> LockQualitySignals | None:
         cfg = self._cfg
         if self._first_touch is None or not self._in_limit or self._run_start is None:

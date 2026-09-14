@@ -131,9 +131,6 @@ class ChainAggregator:
             self._last_cum[symbol] = max(cum, self._last_cum.get(symbol, 0))
         return rebuilt
 
-    def last_cum(self, symbol: str) -> int | None:
-        return self._last_cum.get(symbol)
-
     def _contract_rows(self) -> list[dict]:
         """SC-1 per-contract 明細:strike 升冪、同 strike C 在前(deterministic)。"""
         rows: list[dict] = []
