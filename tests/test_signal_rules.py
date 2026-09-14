@@ -1045,6 +1045,8 @@ class TestMigrationV4ToV5:
         assert loaded is not None and [r["kind"] for r in loaded] == ["vol_burst"]
         hits = [r for r in caplog.records if "跳過種子卡" in r.getMessage()]
         assert len(hits) == 1 and hits[0].levelname == "WARNING"
+        # 後果句與 v3→v4 撞名案同口徑(review F-29 / pr-228 review F-11):`:971` 抓的「放量離開」是規則名
+        assert "rail 零放量離開列" in hits[0].getMessage()
 
     def test_v4_seed_skipped_when_full(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
