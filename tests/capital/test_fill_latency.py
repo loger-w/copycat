@@ -13,6 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -223,10 +224,14 @@ def _elapsed_info(caplog: pytest.LogCaptureFixture) -> list[int]:
 
 
 def _landed_info(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """INFO 級「部位落地 … 自成交回報到達起」行(與 `_elapsed_info` 同口徑:只看 client logger)。"""
     return [
         r.getMessage()
         for r in caplog.records
-        if r.levelno == logging.INFO and "部位落地" in r.getMessage() and "自成交" in r.getMessage()
+        if r.levelno == logging.INFO
+        and r.name == "copycat.capital.client"
+        and "部位落地" in r.getMessage()
+        and "自成交" in r.getMessage()
     ]
 
 
@@ -244,8 +249,12 @@ def test_fill_in_flight_keeps_chain_timer_origin(
     broker = _Broker(client, com)
     client._balance_last_ts = time.monotonic()  # 開機首圈的 60 s 輪詢已過;走成交 debounce 路徑
 
+    def balance_queries() -> int:
+        return sum(1 for e in com.sent if e[0] == "get_real_balance")
+
     client._handle_reply(_fill_evt_raw(seq="S1"))
     broker.run(until=lambda: len(_elapsed_info(caplog)) >= 1, budget_s=3.0)  # 庫存段收齊
+    assert _elapsed_info(caplog), "3 s 內庫存段沒收齊(broker 預算用盡)"
     assert _elapsed_info(caplog)[0] >= 500  # 0.5 s debounce 在裡面
     client._handle_reply(_fill_evt_raw(seq="S2"))  # 鏈飛行中第二筆成交
     broker.run(until=lambda: bool(_landed_info(caplog)), budget_s=3.0)
@@ -254,7 +263,6 @@ def test_fill_in_flight_keeps_chain_timer_origin(
     assert len(elapsed) == 4, elapsed
     assert elapsed == sorted(elapsed), f"累積值倒退(計時器被中途歸零):{elapsed}"
     assert "涵蓋 2 筆成交" in _landed_info(caplog)[0]
-    balance_queries = lambda: sum(1 for e in com.sent if e[0] == "get_real_balance")  # noqa: E731
     assert balance_queries() == 1  # 落地當下只出過一次庫存查詢(鏈中不重發)
     broker.run(until=lambda: balance_queries() >= 2, budget_s=3.0)
     assert balance_queries() == 2  # fill B 武裝的重查在落地後出手:成交不漏(白名單)
@@ -272,11 +280,17 @@ def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
     client.store.set_positions([])
     broker = _Broker(client, com)
     landings: list[int] = []
-    client.set_broadcast(
-        lambda payload: landings.append(1)
-        if payload["event"] == "capital_position" and payload["data"].get("source") != "fill"  # type: ignore[union-attr]
-        else None
-    )
+
+    def count_landing(payload: dict[str, Any]) -> None:
+        data = payload["data"]
+        if (
+            payload["event"] == "capital_position"
+            and isinstance(data, dict)
+            and data.get("source") != "fill"
+        ):
+            landings.append(1)
+
+    client.set_broadcast(count_landing)
 
     client._pump_once()  # `_balance_last_ts` 初值 0 → 開機首圈就是 60 s 定時輪詢那輪
     assert any(e[0] == "get_real_balance" for e in com.sent), "定時輪詢未出手"
@@ -290,4 +304,5 @@ def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
     elapsed = _elapsed_info(caplog)
     assert len(elapsed) == 4 and elapsed == sorted(elapsed), elapsed
     assert elapsed[0] >= 500
+    assert _landed_info(caplog), "第二輪落地行沒印(broker 預算用盡)"
     assert "涵蓋 1 筆成交" in _landed_info(caplog)[0]

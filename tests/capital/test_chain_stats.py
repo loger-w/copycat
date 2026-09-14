@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,20 @@ from copycat.capital.safety import SafetyConfig
 from tests.capital.fake_com import FakeCom
 
 _P = "copycat.capital.client INFO balance 鏈: "
+_MAIN_PY = Path(__file__).resolve().parents[2] / "copycat" / "server" / "__main__.py"
+
+
+def _prod_log_format() -> str:
+    """prod 的 log 前綴格式 = `__main__.py` 的 `basicConfig(format=…)` **原文**(pr-238 review F-01):
+    這裡不再手抄第二份字面 —— 抄的那份與 prod 零程式連結,prod 改一字(如加 `[%(threadName)s]`)
+    測試照綠、`chain-stats` 對真 log 卻靜默回「0 條」而判準 `non_monotonic = 0` 字面通過(偽 PASS)。
+    沿 `tests/server/test_shutdown_budget.py` 讀 `run.ps1` 原文的做法。"""
+    text = _MAIN_PY.read_text(encoding="utf-8")
+    m = re.search(r'logging\.basicConfig\([^)]*?format="([^"]+)"', text)
+    assert m is not None, (
+        '__main__.py 找不到 basicConfig(format="…"):prod log 格式的產生點搬家了,這支 parity 測試要跟'
+    )
+    return m.group(1)
 
 
 def _chain(hhmmss: str, e: tuple[int, int, int, int], *, fills: int | None = None) -> list[str]:
@@ -108,7 +123,15 @@ class TestCli:
 class TestParityWithClientLogFormat:
     """two-axis S-01:`_STAGE_RE` 逐字複製 `_log_chain_stage` 的 log 格式 —— 產生點改一字,
     `chain-stats` 就靜默回「0 條」、驗收尺歸零。這裡不餵合成行:讓真的 `CapitalClient` 走 prod 的
-    `basicConfig` format(`__main__.py`)印出四段,再餵給 `summarize`。"""
+    `basicConfig` format(**讀 `__main__.py` 原文取得**,見 `_prod_log_format`)印出四段,再餵給
+    `summarize` —— 訊息半邊與前綴半邊都與 prod 同源。"""
+
+    def test_prod_log_format_is_read_from_main_not_retyped(self) -> None:
+        """守門:`_prod_log_format` 真的從 `__main__.py` 取到一串含 asctime / name / levelname / message
+        的 format(四個欄位缺一 `_STAGE_RE` 就對不上),不是回一個固定字面。"""
+        fmt = _prod_log_format()
+        for token in ("%(asctime)s", "%(name)s", "%(levelname)s", "%(message)s"):
+            assert token in fmt, fmt
 
     def test_real_stage_lines_parse_into_one_clean_chain(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -127,8 +150,9 @@ class TestParityWithClientLogFormat:
                 lines.append(self.format(record))
 
         sink = _Sink()
-        sink.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        sink.setFormatter(logging.Formatter(_prod_log_format()))
         log = logging.getLogger("copycat.capital.client")
+        prev_level = log.level  # finally 還原:留 INFO 會讓後面檔案的 caplog 案順序相依(review F-10)
         log.addHandler(sink)
         log.setLevel(logging.INFO)
         try:
@@ -149,6 +173,7 @@ class TestParityWithClientLogFormat:
             client._log_chain_stage("部位落地 %d 列", 4, fills=2)
         finally:
             log.removeHandler(sink)
+            log.setLevel(prev_level)
         assert len(lines) == 4
         s = summarize(lines)
         assert (s.total, s.clean, s.excluded) == (1, 1, {})
