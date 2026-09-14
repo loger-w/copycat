@@ -1,0 +1,86 @@
+{
+  "round": 1,
+  "scope": "fix/pr-228-review-followups(pr-review #228 十二條 findings 的收修;handoff %TEMP%/copycat-handoff-2026-09-14-pr228-review-fixes.md)",
+  "fixed_point": "e60024cd(master = PR #228 rebase merge 後 HEAD)",
+  "reviewed_head": "f1c4c7af(三筆:1b220515 test / 41ffb98a fix / f1c4c7af chore;收修 commit 見 disposition)",
+  "reviewers": "code-review-two-axis:Standards / Spec 各一 sub-agent(model opus);spec = pr-228-review.md 發現總覽 + handoff 處置表(F-09 / F-10 user 拍板「兩個都做」)",
+  "standards": [
+    {
+      "id": "S-01",
+      "severity": "Hard",
+      "file": "CLAUDE.md:400-405",
+      "finding": "§4「CDP 列閘」條未同步:41ffb98a 改了該條所述 log 分桶(尾根 = 0 納入 WARNING)但仍寫「INFO 兩種文案」與「TestCdpGate 六案」(base 已七案、本批八案)。"
+    },
+    {
+      "id": "S-02",
+      "severity": "Judgement",
+      "file": "tests/server/test_signal_policy.py:805",
+      "finding": "Divergent Change:`test_emit_policies_drops_bool_big_lots_to_none` 斷的是 `_emit_policies` 欄位映射,放進 TestPolicyText(文字格式類);`big_lots_120s` 發射面的家是 TestPolicyHits。"
+    },
+    {
+      "id": "S-03",
+      "severity": "Judgement",
+      "file": "tests/server/test_signal_hub.py:1773 vs 1794",
+      "finding": "相鄰姊妹案一個寫 `len(lines) == 1 and lines[0].levelno == WARNING`,新案寫 `[r.levelno for r in lines] == [WARNING]`,同義兩式並排。"
+    },
+    {
+      "id": "S-04",
+      "severity": "Judgement",
+      "file": "copycat/live/signal_state.py:104-105",
+      "finding": "`# ... | sweep_cluster` 後接孤行 `# | vol_breakout`,續行以分隔符起頭不易讀。"
+    },
+    {
+      "id": "S-05",
+      "severity": "Judgement",
+      "file": "tests/server/test_signal_hub.py::TestCdpGate",
+      "finding": "Duplicated Code:兩個 bad-data 案共用 ~10 行 harness 樣板 —— 但八案全同形,現在才抽反而 Shotgun Surgery,建議不動。"
+    },
+    {
+      "id": "S-06",
+      "severity": "Judgement",
+      "file": "tests/server/test_signal_policy.py::_card_head",
+      "finding": "該檔唯一 class 內 @staticmethod helper(他處 helper 皆 module 層),但 test_signal_hub / test_signal_state 有同款先例,可接受。"
+    }
+  ],
+  "standards_checks": {
+    "no_unrelated_reformat": "PASS —— ruff format --diff hunk 數 base / HEAD 逐檔相同(test_signal_hub 4/4、test_signal_state 2/2、test_signal_rules 1/1、signal_hub.py 3/3、test_signal_policy 0/0),首 hunk 內容逐字同",
+    "private_method_call_in_test": "可接受 —— 同組既有先例 `hub._send_discord` ×5 / `_group_suffix` ×4 / `_staged_cache` ×8;docstring 明示公開 tick 路徑餵不出 bool",
+    "commit_classes": "test / fix / chore 三類分開、F-02 紅先行(1b220515 紅、41ffb98a 綠)"
+  },
+  "spec": {
+    "missing_or_partial": "零 —— F-01..F-11 全落地;突變體逐條實跑(F-04 / F-05 ×2 / F-07 ×2 / F-08 / F-06 前後端 / F-10 ×2 / F-11 / F-02 還原)全 FAIL 後 git 還原;F-12 未動(`\"sweep\": dict(detail)` 仍在)",
+    "scope_creep": [
+      {
+        "item": "signal_state.py:104 `SignalEvent.kind` 註解補 vol_breakout(F-01 只點名 :3 與 CLAUDE.md:60)",
+        "verdict": "同型陳舊、零 runtime,in-intent"
+      },
+      {
+        "item": "test_signal_policy.py 既有測試的 dict 抽成 `_card_head()`(F-10 只要求補一案)",
+        "verdict": "既有斷言與輸入逐字不變、風險零;但屬 🔵 純重構混進 test commit,與 §B 三類分開有輕微張力(僅此一處,知情接受:第二份 dict 會是 Duplicated Code,兩害取輕)"
+      },
+      {
+        "item": "`_gate_return_pct` docstring 改寫 + WARNING 去掉 cdp_gate_days arg",
+        "verdict": "原句「None 只剩分母 ≤ 0」改後即假陳述,必要連帶;該數只被「日 K 不足」INFO 判準讀,in-intent"
+      }
+    ],
+    "looks_wrong": [
+      {
+        "id": "P-01",
+        "severity": "LOW",
+        "file": "tests/server/test_signal_hub.py::test_insufficient_history_is_not_qualified",
+        "finding": "F-08 收修整條換成「只有 5 根(需 6)」時丟掉「日 K」子字串;docstring 仍說「INFO 講『日 K 不足』」卻無斷言 —— 與 F-06 同型缺陷。"
+      }
+    ],
+    "f02_outcome_unchanged": "PASS —— basis None / `_cache == (_DATE, None)` / `bars.calls == 1`(不重試)/ 其他 kind 不受影響;既有 `test_zero_close_base_is_bad_data_warning_not_insufficient_history` 在新文案下仍有意義"
+  },
+  "disposition": {
+    "S-01": "修 —— cm5(CLAUDE.md §4 條補第三桶 WARNING 與「八案」)",
+    "S-02": "修 —— cm4(搬 TestPolicyHits,Discord 半邊留 TestPolicyText,docstring 互指)",
+    "S-03": "修 —— cm4(改與姊妹案同式)",
+    "S-04": "修 —— cm5(拆成「… | limit_open」/「| sweep_cluster | vol_breakout」兩行)",
+    "S-05": "不動(reviewer 自己建議不動)",
+    "S-06": "不動(有先例)",
+    "P-01": "修 —— cm4(補回 `\"日 K\" in lines[0]`)",
+    "scope_creep_2(_card_head)": "知情接受,記本 JSON"
+  }
+}
