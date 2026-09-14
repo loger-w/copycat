@@ -375,6 +375,13 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   **訊號列**對舊 dist 不炸(未知 kind 印英文代號);**規則視窗不在此保證**:舊 dist 的 `PARAM_FIELDS` 沒有
   新 kind,那張卡的「編輯」按了沒反應(onClick 內 TypeError、零 ErrorBoundary)—— 改規則種類的部署一律
   前後端同版,畫面「版本落差」膠囊亮起先 `npm run build`(整體 review F-20)。
+- **raw 掃單簇列的族群快照 `policy_ctx`(每顆事件都帶,不只命中的)**(2026-09-14 起,#233):產生點
+  `signal_hub._policy_context`(在 raw 列 publish **之前**評;鍵集 `groups / screen_member / self / peers / peers_up /
+  peer_max / leader / peer_touched / hits / skip`,`skip ∈ {null, no_ref, no_group}`,非 null 時其餘欄空值);政策列的
+  同名欄是它的副本、`_emit_policies` 吃評好的 ctx 不重算(`peers_fn` 一顆一次)。讀者 = jsonl 離線對帳(四週後門檻
+  敏感度分析拿 raw 列重算四條政策;修前 36% 未命中事件零快照、自選群組覆寫式落檔不可還原)、WS 與 jsonl 同一份
+  (前端 `SignalMsg.policy_ctx` optional 不讀)。W1 只加欄;舊列缺欄 = 09-14 前。漂掉的症狀:後端改回只在命中時
+  評 → 未命中列又零快照,零錯誤訊號;`tests/server/test_signal_policy.py::TestPolicyCtxOnRawRow` 四案釘住。
 - **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
   `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
   `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值

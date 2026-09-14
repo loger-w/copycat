@@ -2410,7 +2410,8 @@ class TestSweepCluster:
 
             assert len(h.published) == 1
             msg = h.published[0]
-            assert set(msg) == _SIGNAL_KEYS | {"detail"}
+            # #233:raw 掃單簇列恆帶族群快照 `policy_ctx`(零組 / 無參考價也帶,`skip` 說明)
+            assert set(msg) == _SIGNAL_KEYS | {"detail", "policy_ctx"}
             assert msg["kind"] == "sweep_cluster"
             assert msg["price"] == 50_400  # 發訊那一筆(群內第三筆)的成交價
             assert msg["time"] == "10:01:30"
