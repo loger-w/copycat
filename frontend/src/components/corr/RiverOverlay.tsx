@@ -197,5 +197,3 @@ export function RiverOverlay({ entries, window: win, baseKey }: Props) {
     </figure>
   );
 }
-
-

@@ -91,5 +91,3 @@ export function CorrPanel({ state, wsStatus }: Props) {
     </div>
   );
 }
-
-

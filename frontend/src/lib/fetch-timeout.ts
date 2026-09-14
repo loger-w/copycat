@@ -14,7 +14,7 @@
  *  AbortController 把「外層 signal(TQ 取消)」與「計時器」都接上,成功 / 失敗都清計時器。
  *  TimeoutError 的訊息不帶 URL(它會被 `FuturesChart` 原樣印在畫面上)。
  *
- *  純函式、零 React;caller 自己決定 timeoutMs(bars 那條路是 `useFuturesBars.BARS_FETCH_TIMEOUT_MS`)。 */
+ *  純函式、零 React;caller 自己決定 timeoutMs(bars 那條路是 `useFuturesBars.ts` 內的 `BARS_FETCH_TIMEOUT_MS`,module-private)。 */
 export interface FetchWithTimeoutOptions {
   timeoutMs: number;
   /** 外層(TanStack Query queryFn context)的 signal;abort 時原樣轉發 reason。 */

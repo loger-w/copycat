@@ -114,5 +114,3 @@ export function RiverCards({ order, legs, window: win }: Props) {
     </div>
   );
 }
-
-

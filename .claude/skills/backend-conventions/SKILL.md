@@ -41,7 +41,7 @@ description: Python / FastAPI 後端風格慣例(專案特化)。寫或改 copyc
 - **`statistics.correlation` 是 stdlib(3.10+)且夠快**:1800 樣本 0.15ms、六腿五對三窗完整 tick
   6.43ms。相關係數不必自寫增量統計量(整批重算讓「增量 vs 整批一致」恆真);常數序列拋
   `StatisticsError`,catch 後回 `None`。(2026-07-30,Trigger:要算相關/共變異數想引 numpy 或自寫時)
-- **長跑 pipeline 必須有進度 log**:round 1 fade-search 跑 6 小時全程黑箱。fold/arm/generation
+- **長跑 pipeline 必須有進度 log**:round 1 fade-search(fade 回測家族,2026-09-14 已刪)跑 6 小時全程黑箱。fold/arm/generation
   邊界各 log 一行(含完成比例與耗時)。(2026-07-11,Trigger:預期 >10 分鐘的批次/搜索迴圈)
 
 ## env / 設定讀取
