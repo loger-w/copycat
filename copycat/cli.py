@@ -93,48 +93,6 @@ def main(argv: list[str] | None = None) -> int:
     p_le.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
     p_le.add_argument("--verify-existing", action="store_true", help="只比對既有標籤,不寫檔")
 
-    p_fd = sub.add_parser("fade-diagnose", help="三池無條件 fade 複驗(主問題判定式)")
-    p_fd.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_fd.add_argument("--out", type=Path, default=Path("out/fade_diagnose"))
-    p_fd.add_argument("--config", type=Path, default=None)
-    p_fd.add_argument("--report-date", required=True)
-    p_fd.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
-    p_fd.add_argument("--label-cutoff", required=True, help="標記截止日(共同期間上界)")
-    p_fd.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
-
-    p_fc = sub.add_parser("fade-cells", help="UC 池劇本格子評估(pre-registered,D5 判定)")
-    p_fc.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_fc.add_argument("--out", type=Path, default=Path("out/fade_cells"))
-    p_fc.add_argument("--config", type=Path, default=None)
-    p_fc.add_argument("--report-date", required=True)
-    p_fc.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
-    p_fc.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
-
-    p_fa = sub.add_parser("fade-anatomy", help="round 4 §0 前置描述統計(設計輸入,不入判定)")
-    p_fa.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_fa.add_argument("--out", type=Path, default=Path("out/fade_anatomy"))
-    p_fa.add_argument("--config", type=Path, default=None)
-    p_fa.add_argument("--report-date", required=True)
-    p_fa.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
-    p_fa.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
-
-    p_fe = sub.add_parser(
-        "fade-entry-anatomy", help="round 5 §0 進場訊號解剖(流向反轉/位階對決,不入判定)"
-    )
-    p_fe.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_fe.add_argument("--out", type=Path, default=Path("out/fade_entry_anatomy"))
-    p_fe.add_argument("--config", type=Path, default=None)
-    p_fe.add_argument("--report-date", required=True)
-    p_fe.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
-    p_fe.add_argument("--watchlist", type=Path, default=Path("watchlists/five_tigers.json"))
-
-    p_fs = sub.add_parser("fade-search", help="T+1 fade 回測:GA 搜索 + 報告")
-    p_fs.add_argument("--data-dir", type=Path, default=Path("data"))
-    p_fs.add_argument("--out", type=Path, default=Path("out/fade_ga"))
-    p_fs.add_argument("--config", type=Path, default=None)
-    p_fs.add_argument("--report-date", required=True)
-    p_fs.add_argument("--report-dir", type=Path, default=Path("docs/evidence"))
-
     sub.add_parser("refresh-stkfut-map", help="重抓期交所股票期貨對映(期現對照用)")
 
     sub.add_parser("refresh-stock-names", help="重抓 TWSE ISIN 全市場股票名稱表(搜尋提示用)")
@@ -272,78 +230,6 @@ def main(argv: list[str] | None = None) -> int:
             f"標籤完成:命中 {stats['labeled_hit']}、無命中 {stats['labeled_no_hit']}、"
             f"無分點檔 {stats['uncovered']}、既有標籤 {stats['already_labeled']}\n"
         )
-        return 0
-    if args.command == "fade-diagnose":
-        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
-        from copycat.backtest.fade_diagnose import run_pool_diagnose
-
-        diag_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        report = run_pool_diagnose(
-            args.data_dir,
-            args.out,
-            diag_cfg,
-            args.report_date,
-            args.label_cutoff,
-            args.watchlist,
-            report_dir=args.report_dir,
-        )
-        sys.stdout.write(f"三池複驗報告 → {report}\n")
-        return 0
-    if args.command == "fade-cells":
-        from copycat.backtest.fade_cells import run_cells
-        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
-
-        cells_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        report = run_cells(
-            args.data_dir,
-            args.out,
-            cells_cfg,
-            args.report_date,
-            args.watchlist,
-            report_dir=args.report_dir,
-        )
-        sys.stdout.write(f"劇本格子報告 → {report}\n")
-        return 0
-    if args.command == "fade-anatomy":
-        from copycat.backtest.fade_anatomy import run_anatomy
-        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
-
-        anat_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        report = run_anatomy(
-            args.data_dir,
-            args.out,
-            anat_cfg,
-            args.report_date,
-            args.watchlist,
-            report_dir=args.report_dir,
-        )
-        sys.stdout.write(f"§0 前置統計報告 → {report}\n")
-        return 0
-    if args.command == "fade-entry-anatomy":
-        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
-        from copycat.backtest.fade_entry_anatomy import run_entry_anatomy
-
-        entry_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        report = run_entry_anatomy(
-            args.data_dir,
-            args.out,
-            entry_cfg,
-            args.report_date,
-            args.watchlist,
-            report_dir=args.report_dir,
-        )
-        sys.stdout.write(f"進場訊號解剖報告 → {report}\n")
-        return 0
-    if args.command == "fade-search":
-        from copycat.backtest.fade_config import FadeBacktestConfig, load_fade_config
-        from copycat.backtest.fade_pipeline import run_fade_pipeline
-
-        fade_cfg = load_fade_config(args.config) if args.config else FadeBacktestConfig.default()
-        result = run_fade_pipeline(
-            args.data_dir, args.out, fade_cfg, args.report_date,
-            evidence_dir=args.report_dir,
-        )
-        sys.stdout.write(f"fade 回測報告 → {result.get('report', args.out)}\n")
         return 0
     if args.command == "notify-test":
         from copycat import notify

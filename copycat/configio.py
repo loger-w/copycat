@@ -1,8 +1,7 @@
 """Dataclass config JSON 載入樣板 — 唯一實作,取代三份 loader 手刻.
 
 樣板 = unknown-key 檢查(raise ValueError,錯誤字串由 caller 定)+ 指定欄位
-list → tuple 轉換 + dataclass 建構。載入後的額外不變式檢查(如 fade_config 的
-validate_*)留在 caller。
+list → tuple 轉換 + dataclass 建構。載入後的額外不變式檢查(validate_* 類)留在 caller。
 """
 
 from __future__ import annotations
