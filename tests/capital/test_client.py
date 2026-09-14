@@ -846,11 +846,12 @@ def test_pump_once_swallows_exceptions(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 async def test_audit_pre_write_failure_fails_whole_request(tmp_path: Path) -> None:
-    # audit_base 位置被檔案佔住 → mkdir 失敗 → 前置審計寫不進去 = 整筆失敗、錢不動
+    # audit_base 位置被檔案佔住 → 開檔 / 補建目錄都失敗 → 前置審計寫不進去 = 整筆失敗、錢不動
+    # (perf #245 起 ctor 會先 ensure_audit_dir 建好目錄,這裡先拆掉再以檔案佔住,意圖不變)
     com = FakeCom()
     client = _client(com, tmp_path)
     _mark_ready(client)
-    client._audit_base.parent.mkdir(parents=True, exist_ok=True)
+    client._audit_base.rmdir()
     client._audit_base.write_text("occupied", encoding="utf-8")
     with pytest.raises(AuditWriteError):
         await client.submit_stock_order(_stock_req())

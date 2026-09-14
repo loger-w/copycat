@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from copycat.server.audit import AuditWriteError, append_audit, audit_path
+from copycat.server.audit import AuditWriteError, append_audit, audit_path, ensure_audit_dir
 
 WHEN = date(2026, 7, 19)
 
@@ -35,6 +36,36 @@ class TestAppendAudit:
         lines = path.read_text(encoding="utf-8").splitlines()
         assert json.loads(lines[0])["event"] == "existing"
         assert json.loads(lines[1])["event"] == "new"
+
+    def test_existing_dir_appends_without_mkdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """perf #245:目錄已在(啟動時 `ensure_audit_dir` 建過)→ append 熱路徑零 `mkdir`;
+        下一案(目錄缺時自建)仍是行為合約,兩案合起來 = 「只在缺的時候才建」。"""
+        base = tmp_path / "audit"
+        ensure_audit_dir(base)
+        calls = {"n": 0}
+        real_mkdir = Path.mkdir
+
+        def counting_mkdir(self: Path, *a: object, **kw: object) -> None:
+            calls["n"] += 1
+            real_mkdir(self, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "mkdir", counting_mkdir)
+        append_audit(base, {"a": 1}, when=WHEN)
+        append_audit(base, {"a": 2}, when=WHEN)
+        assert calls["n"] == 0
+        assert audit_path(base, WHEN).read_text(encoding="utf-8").count("\n") == 2
+
+    def test_ensure_audit_dir_never_raises(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """建不起來只 WARNING(server 照起),失敗留給首筆 append 以 AuditWriteError 報。"""
+        blocker = tmp_path / "file"
+        blocker.write_text("x", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="copycat.server.audit"):
+            ensure_audit_dir(blocker / "audit")  # 父路徑是檔案 → mkdir 必失敗
+        assert any("審計目錄建立失敗" in r.getMessage() for r in caplog.records)
 
     def test_creates_missing_dirs(self, tmp_path: Path) -> None:
         base = tmp_path / "nested" / "audit"
