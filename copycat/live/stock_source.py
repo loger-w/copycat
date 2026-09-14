@@ -746,7 +746,7 @@ class StockQuoteSource(TC4QuoteSource):
         self._ensure_connected()
         sym = stock_symbol(code)
         start, end = stock_window(self._trade_date)
-        # 首頁 poll 走基底 `_collect_history`(SubHistory → 0.15 s 起加倍退避 → 收割),
+        # 首頁 poll 走基底 `_collect_history`(SubHistory → 0.02 s 起加倍退避 → 收割),
         # 不再自寫一份「首頁沒備妥就睡滿 poll_wait」的迴圈(perf/opening-backfill-parallel
         # S1-a):prod 08-28 log 單工 worker 一秒一檔、40 檔一分鐘,每檔那 1 s 幾乎全是
         # 這道固定睡眠(probe 真資料成本 0.02–0.98 s)。預算與 `poll_wait <= 0` 不等待
