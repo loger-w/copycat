@@ -94,6 +94,26 @@ export interface SignalMsg {
    *  顯示脈絡不是硬條件;**缺欄(09-14 前的舊列 / 舊後端)或 null(後端 detail 缺鍵時的守門值)
    *  = 整段不印**,不印「大單 -」。與 `t1_open` 等回填欄同款 `| null`(two-axis std F-01)。 */
   big_lots_120s?: number | null;
+  /** #233:raw 掃單簇列的族群快照(後端 `signal_hub._policy_context`),**每顆事件都帶**(不只命中的);
+   *  `hits` 是命中的政策清單(可空)、`skip` 是不評原因(`no_ref` / `no_group`,評了 = null)。
+   *  **wire 存證欄、前端不讀**(讀者是 jsonl 對帳,四週後門檻敏感度分析用);缺欄 = 09-14 前的舊列 / 舊後端。 */
+  policy_ctx?: {
+    groups: string[];
+    screen_member: boolean;
+    self: {
+      chg_pct: number | null;
+      to_limit_pct: number | null;
+      touched_upper: boolean;
+      locked_up: boolean;
+    } | null;
+    peers: PeerSnap[];
+    peers_up: number;
+    peer_max: { code: string; name: string; chg_pct: number } | null;
+    leader: boolean;
+    peer_touched: boolean;
+    hits: PolicyTag[];
+    skip: "no_ref" | "no_group" | null;
+  };
 }
 
 /** 通知閘:`notify === false` 才靜音;true / 缺欄一律提示(CLAUDE.md §4 契約:缺欄 = true)。 */

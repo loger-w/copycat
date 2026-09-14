@@ -447,7 +447,8 @@ class TestPolicyHits:
     ) -> None:
         """bool 守門的 hub 半邊(Discord 半邊 = `TestPolicyText::test_policy_card_line2_ignores_bool_big_lots`;
         pr-228 review F-10):`detail[BIG_LOTS_KEY]` 是 bool → 政策列頂層 None(不是 1),`sweep` 鏡像照舊
-        四鍵。直呼 `_emit_policies`:線上 `_advance_big_lots` 恆回 int,tick 路徑餵不進 bool。"""
+        四鍵。直呼 `_emit`(#233 起政策評估在 raw 列之前、`_emit_policies` 吃評好的 ctx,
+        `_emit` 是最低的一條能餵進合成 event 的入口):線上 `_advance_big_lots` 恆回 int,tick 路徑餵不進 bool。"""
         h, _ = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})
         try:
             event = SignalEvent(
@@ -463,13 +464,138 @@ class TestPolicyHits:
                 detail={"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8, BIG_LOTS_KEY: True},
             )
             rule = next(r for r in h.hub.rules() if r["id"] == _SWEEP_RULE_ID)  # `_boot` 寫的那條
-            h.hub._emit_policies(
-                event, rule, _state(ref=50_000, upper=55_000), {"name": "台積電"}, _DATE
-            )
+            h.hub._emit(event, rule, _state(ref=50_000, upper=55_000))
             await h.settle()
-            assert [m["policy"] for m in h.published] == ["P"]
-            assert h.published[0]["big_lots_120s"] is None
-            assert h.published[0]["sweep"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8}
+            assert [m.get("policy") for m in h.published] == [None, "P"]
+            assert h.published[1]["big_lots_120s"] is None
+            assert h.published[1]["sweep"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8}
+        finally:
+            await h.hub.close()
+
+
+class TestPolicyCtxOnRawRow:
+    """#233(spec #232 T5):**每顆**掃單簇事件的 raw 列都落族群快照 `policy_ctx`,不只命中的。
+
+    命中 / 未命中兩案形狀一致(`hits` 是空清單與否的差別);零組與無參考價兩案帶 `skip` 原因、
+    其餘欄空值 —— 離線讀者拿 raw 列就能重算四條政策,73 / 205 顆未命中事件不再零快照。
+    政策列 34 鍵、id、計數逐字不變(白名單);`peers_fn` 仍只在掃單簇事件時叫一次。
+    """
+
+    async def test_hit_raw_row_carries_ctx_with_hits(self, tmp_path: Path, clock: _Clock) -> None:
+        h, wl = await _boot(
+            tmp_path,
+            clock,
+            groups=[_MEM],
+            peers={"2344": _peer("華邦電", 1.0), "2408": _peer("南亞科", -0.5)},
+        )
+        try:
+            _fire(h, _state(ref=50_000, upper=55_000))
+            await h.settle()
+            raw, msg = h.published
+            assert raw["kind"] == "sweep_cluster" and msg["policy"] == "P"
+            ctx = raw["policy_ctx"]
+            assert set(ctx) == {
+                "groups",
+                "screen_member",
+                "self",
+                "peers",
+                "peers_up",
+                "peer_max",
+                "leader",
+                "peer_touched",
+                "hits",
+                "skip",
+            }
+            assert ctx["hits"] == ["P"] and ctx["skip"] is None
+            # 與政策列同一份快照(政策列上的是副本)
+            for k in (
+                "groups",
+                "screen_member",
+                "self",
+                "peers",
+                "peers_up",
+                "peer_max",
+                "leader",
+                "peer_touched",
+            ):
+                assert ctx[k] == msg[k], k
+            assert set(msg) == _POLICY_KEYS  # 政策列形狀不變
+            assert wl.peers_calls == 1  # 快照只取一次,raw 列與政策列共用
+            rows = h.rows()
+            assert rows[0]["policy_ctx"] == ctx  # jsonl 與 WS 同一份
+            assert set(rows[1]) == _POLICY_KEYS | {"trade_date"}
+        finally:
+            await h.hub.close()
+
+    async def test_miss_raw_row_carries_ctx_with_empty_hits(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """同伴鎖過 → P / B 全不評、非盤前篩選成員 → 零政策列;raw 列仍有完整快照、`hits=[]`。"""
+        h, wl = await _boot(
+            tmp_path,
+            clock,
+            groups=[_MEM],
+            peers={"2344": _peer("華邦電", 4.0, touched=True), "2408": _peer("南亞科", 0.2)},
+        )
+        try:
+            _fire(h, _state(ref=50_000, upper=55_000))
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            ctx = h.published[0]["policy_ctx"]
+            assert ctx["hits"] == [] and ctx["skip"] is None
+            assert ctx["groups"] == ["記憶體"] and ctx["screen_member"] is False
+            assert ctx["peer_touched"] is True and ctx["peers_up"] == 1
+            assert ctx["peer_max"] == {"code": "2344", "name": "華邦電", "chg_pct": 4.0}
+            assert ctx["leader"] is False
+            assert ctx["self"] == {
+                "chg_pct": pytest.approx(0.8),
+                "to_limit_pct": pytest.approx((55_000 - 50_400) / 50_400 * 100),
+                "touched_upper": False,
+                "locked_up": False,
+            }
+            assert [p["code"] for p in ctx["peers"]] == ["2344", "2408"]
+            assert wl.peers_calls == 1
+            assert h.rows()[0]["policy_ctx"] == ctx
+        finally:
+            await h.hub.close()
+
+    async def test_no_group_raw_row_ctx_skip(self, tmp_path: Path, clock: _Clock) -> None:
+        """零組且非盤前篩選成員 → 沒東西可評:`skip="no_group"`、其餘空值、快照不取。"""
+        h, wl = await _boot(tmp_path, clock, groups=[_ALL_IN], peers={"2317": _peer("鴻海", 4.0)})
+        try:
+            _fire(h, _state(ref=50_000, upper=55_000))
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            ctx = h.published[0]["policy_ctx"]
+            assert ctx == {
+                "groups": [],
+                "screen_member": False,
+                "self": None,
+                "peers": [],
+                "peers_up": 0,
+                "peer_max": None,
+                "leader": False,
+                "peer_touched": False,
+                "hits": [],
+                "skip": "no_group",
+            }
+            assert wl.peers_calls == 0
+        finally:
+            await h.hub.close()
+
+    async def test_no_ref_raw_row_ctx_skip(self, tmp_path: Path, clock: _Clock) -> None:
+        """參考價缺 → 不評(spec「沒有猜出來的政策」):`skip="no_ref"`,族群有也不列(沒評就沒有快照)。"""
+        h, wl = await _boot(
+            tmp_path, clock, groups=[_MEM, _SCREEN], peers={"2344": _peer("華邦電", 1.0)}
+        )
+        try:
+            _fire(h, _state(ref=None, upper=None))
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            ctx = h.published[0]["policy_ctx"]
+            assert ctx["skip"] == "no_ref" and ctx["hits"] == []
+            assert ctx["self"] is None and ctx["peers"] == [] and ctx["groups"] == []
+            assert wl.peers_calls == 0
         finally:
             await h.hub.close()
 

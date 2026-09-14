@@ -70,6 +70,7 @@ from copycat.server.overlay import compute_cdp
 from copycat.server.screen_engine import SCREEN_GROUP
 from copycat.server.signal_policy import (
     PeerQuote,
+    PolicyContext,
     evaluate_policies,
     locked_up_flag,
     resolve_groups,
@@ -173,6 +174,23 @@ def _kind_text(row: dict[str, Any]) -> str:
     if kind == "limit_open":
         return "漲停打開" if direction == "up" else "跌停打開"
     return kind
+
+
+def _skipped_policy_ctx(skip: str) -> dict[str, Any]:
+    """raw 掃單簇列 `policy_ctx` 的「不評」形狀(#233):`skip` 說原因(`no_ref` / `no_group`),
+    其餘欄空值 / 空清單 —— 與評過的列同鍵集,離線讀者不必分兩種形狀。"""
+    return {
+        "groups": [],
+        "screen_member": False,
+        "self": None,
+        "peers": [],
+        "peers_up": 0,
+        "peer_max": None,
+        "leader": False,
+        "peer_touched": False,
+        "hits": [],
+        "skip": skip,
+    }
 
 
 def format_signal_text(row: dict[str, Any]) -> str:
@@ -1074,34 +1092,34 @@ class SignalHub:
         }
         if event.detail is not None:
             payload["detail"] = dict(event.detail)  # 只有掃單簇列帶;既有 kind 列形狀不變(W1)
+        ctx: PolicyContext | None = None
+        if event.kind == "sweep_cluster" and event.detail is not None:
+            # #233:族群快照在 raw 列 publish **之前**評,每顆掃單簇事件都落 `policy_ctx`
+            # (含 `hits` 與不評原因 `skip`)—— 未命中的 36% 事件不再零快照,離線讀者拿 raw 列
+            # 就能重算四條政策。W1 只加欄;政策列(下面)的快照是同一份的副本。
+            payload["policy_ctx"], ctx = self._policy_context(event, state)
         self._publish(payload)  # WS 同步先送(前端要即時)
         self._enqueue({**payload, "trade_date": trade_date}, notify=notify)
-        if event.kind == "sweep_cluster" and event.detail is not None:
+        if ctx is not None and ctx.hits:
             # 政策層只掛掃單簇事件(任一條該 kind 規則;列上記 rule_id)。與 raw 列同在
             # `_emit` 的同步區塊內 —— 零 await、零 IO(快照是 engine 記憶體讀)。
-            self._emit_policies(event, rule, state, payload, trade_date)
+            self._emit_policies(event, rule, payload, trade_date, ctx)
 
-    def _emit_policies(
-        self,
-        event: SignalEvent,
-        rule: Rule,
-        state: StockDayState,
-        raw: dict[str, Any],
-        trade_date: str,
-    ) -> None:
-        """一顆掃單簇事件 → 評四條政策,每命中一條各發一列 `kind="policy"`(WS + jsonl)。
+    def _policy_context(
+        self, event: SignalEvent, state: StockDayState
+    ) -> tuple[dict[str, Any], PolicyContext | None]:
+        """一顆掃單簇事件的族群快照(raw 列 `policy_ctx` 欄)+ 評估結果。
 
-        不評(raw 列照記、零政策列)的情況:參考價缺 / 價 ≤ 0(spec「沒有猜出來的政策」);
-        零組且非盤前篩選成員(沒有東西可評)。快照 `peers_fn` 只在有同伴時才取 —— 熱路徑
-        判準是「只在掃單簇事件時被叫」。
-        `notify` = 同檔同政策當日首筆且時刻 ≤ `policy_push_end`;其餘只記(`first_of_day` /
-        `late` 兩欄讓對帳分得出「沒推是因為哪一條」)。
+        不評(`skip` 非 null、其餘欄空值、零政策列)的情況:參考價缺 / 價 ≤ 0(`no_ref`,spec
+        「沒有猜出來的政策」);零組且非盤前篩選成員(`no_group`,沒有東西可評)。快照 `peers_fn`
+        只在有同伴時才取 —— 熱路徑判準是「只在掃單簇事件時被叫,一顆一次」。
+        評了就回 ctx(`hits` 可空);`self` 四值與同伴同一份定義(review F-03)。
         """
         meta = state.meta
         price = event.price_milli
         ref = meta.ref_milli if meta is not None else None
         if ref is None or ref <= 0 or price <= 0:
-            return
+            return _skipped_policy_ctx("no_ref"), None
         code = event.code
         cfg = self._cfg
         names, peer_codes, screen_member = resolve_groups(
@@ -1111,7 +1129,7 @@ class SignalHub:
             exclude=cfg.policy_exclude_groups,
         )
         if not names and not screen_member:
-            return
+            return _skipped_policy_ctx("no_group"), None
         if len(names) > 1 and code not in self._multi_group_warned:
             self._multi_group_warned.add(code)
             logger.warning("政策族群:%s 落在多個族群組 %s,取成員聯集(當日只警告一次)", code, names)
@@ -1140,12 +1158,50 @@ class SignalHub:
             peer_up_pct=cfg.policy_peer_up_pct,
             max_chg_pct=cfg.policy_max_chg_pct,
         )
-        if not ctx.hits:
-            return
         upper = meta.upper_milli if meta is not None else None
         high = state.high_milli
         book = state.book
         asks = book.asks if book is not None else []
+        me = {
+            "chg_pct": chg,
+            "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
+            # 與 engine `policy_quotes`(同伴)同一份定義(review F-03);自己這一檔 price 必有、
+            # 漲停缺 → 兩旗標 None 收成 False(列上是 bool 欄)
+            "touched_upper": touched_upper_flag(high, upper) is True,
+            "locked_up": locked_up_flag(price, upper, asks) is True,
+        }
+        policy_ctx: dict[str, Any] = {
+            "groups": list(ctx.groups),
+            "screen_member": ctx.screen_member,
+            "self": me,
+            "peers": [dict(p) for p in ctx.peers],
+            "peers_up": ctx.peers_up,
+            "peer_max": dict(ctx.peer_max) if ctx.peer_max is not None else None,
+            "leader": ctx.leader,
+            "peer_touched": ctx.peer_touched,
+            "hits": list(ctx.hits),
+            "skip": None,
+        }
+        return policy_ctx, ctx
+
+    def _emit_policies(
+        self,
+        event: SignalEvent,
+        rule: Rule,
+        raw: dict[str, Any],
+        trade_date: str,
+        ctx: PolicyContext,
+    ) -> None:
+        """一顆掃單簇事件(已評、`ctx.hits` 非空)→ 每命中一條各發一列 `kind="policy"`(WS + jsonl)。
+
+        快照直接取 raw 列的 `policy_ctx`(同一份、零重算、`peers_fn` 一顆一次);列形狀 34 鍵不變。
+        `notify` = 同檔同政策當日首筆且時刻 ≤ `policy_push_end`;其餘只記(`first_of_day` /
+        `late` 兩欄讓對帳分得出「沒推是因為哪一條」)。
+        """
+        code = event.code
+        price = event.price_milli
+        cfg = self._cfg
+        me: dict[str, Any] = raw["policy_ctx"]["self"]
         secs = tick_secs(event.time_key)
         end_secs = tick_secs(cfg.policy_push_end)
         late = secs is not None and end_secs is not None and secs > end_secs
@@ -1160,14 +1216,6 @@ class SignalHub:
             if isinstance(big_raw, (int, float)) and not isinstance(big_raw, bool)
             else None
         )
-        me = {
-            "chg_pct": chg,
-            "to_limit_pct": (upper - price) / price * 100 if upper is not None else None,
-            # 與 engine `policy_quotes`(同伴)同一份定義(review F-03);自己這一檔 price 必有、
-            # 漲停缺 → 兩旗標 None 收成 False(列上是 bool 欄)
-            "touched_upper": touched_upper_flag(high, upper) is True,
-            "locked_up": locked_up_flag(price, upper, asks) is True,
-        }
         for policy in ctx.hits:  # 已依 POLICIES 固定序(evaluate_policies 保證)
             key = (code, policy)
             count = self._policy_touch.get(key, 0) + 1
