@@ -454,5 +454,3 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
     </div>
   );
 }
-
-

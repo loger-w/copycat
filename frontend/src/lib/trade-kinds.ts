@@ -1,8 +1,8 @@
 /** 交易別值域與標籤(自 `components/stock/PriceLadder.tsx` 搬出,**行為零變更**)。
  *
  *  閃電梯之外,自選列 / 單檔 header / 群組卡也要把 `Position.kind` 印成人看得懂的
- *  標籤 —— 值域與標籤表只能有一份。`PriceLadder` 仍 re-export `TRADE_KINDS` 與
- *  `TradeKind`,既有 import 路徑(`RightRail` 等)不變。
+ *  標籤 —— 值域與標籤表只能有一份。`PriceLadder` 只剩 `export type { TradeKind }`
+ *  (2026-09-14 專案瘦身:`TRADE_KINDS` 的 re-export 零外部 import,已拿掉;要用一律從本檔 import)。
  */
 
 import type { PositionKind } from "@/types";

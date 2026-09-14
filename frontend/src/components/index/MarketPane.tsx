@@ -559,5 +559,3 @@ export function MarketPane({
     </section>
   );
 }
-
-
