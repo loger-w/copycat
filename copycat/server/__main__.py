@@ -18,7 +18,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence, TextIO, cast
+from typing import Any, Callable, Iterable, Sequence, TextIO, cast
 
 import uvicorn
 
@@ -148,7 +148,7 @@ PROD_LOG_DATEFMT: str | None = None
 #: 時 0.001 與 0.005 都被夾成 15.6 ms(批 B 本機實量 58 ms 零差異)—— 順序必須在 timer 之後。
 #: 0.0005 那一階 p99 再降到 2.5 ms 但吞吐 −43%,不進。
 SWITCH_INTERVAL_SECS: float = 0.001
-_set_switch_interval = sys.setswitchinterval  # 佈線測試以替身取代(真呼叫會改掉 pytest 進程)
+_set_switch_interval: Callable[[float], None] = sys.setswitchinterval  # 佈線測試以替身取代
 
 
 def main(argv: Sequence[str] | None = None) -> None:

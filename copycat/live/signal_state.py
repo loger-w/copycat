@@ -69,6 +69,10 @@ _EPOCH = _dt.datetime(1970, 1, 1)
 #: 掃單簇事件 `detail` 的大單筆數鍵(#227)。字面是影子期口徑(窗 120 s),`SignalsConfig.big_lot_window_secs`
 #: 改了欄名也不跟 —— hub 政策列頂層同名欄、前端 `SignalMsg.big_lots_120s`、研究離線讀者都認這個字串。
 BIG_LOTS_KEY = "big_lots_120s"
+#: 鎖板 latch 的兩個方向;`evaluate_book` 短路閘與其下方的 (direction, limit, reopened) 迴圈同一組
+#: —— 加第三向時兩處一起改(perf #249)。
+_LATCH_DIRECTIONS = ("up", "down")
+
 #: 大單敲檔(研究 `bigtick_hits` 逐字):當日至今 tick 數 ≥ 30 才開始判;中位取最近 300 筆(含本筆)。
 _BIG_LOT_MIN_TICKS = 30
 _BIG_LOT_MEDIAN_TICKS = 300
@@ -414,7 +418,7 @@ class SignalDetector:
         latch 先查(perf #249):簿更新每則 × 每 slot 都進來,常態是該檔沒鎖板 —— 兩個 dict 查詢就回,
         不先取時鐘 / 算盤中閘 / mono / clock key。無 latch 時本函式本來就零狀態推進,順序對調語意相同。
         """
-        if not (self._latch.get((code, "up"), False) or self._latch.get((code, "down"), False)):
+        if not any(self._latch.get((code, d), False) for d in _LATCH_DIRECTIONS):
             return []
         now = self._now_fn()
         if not self._in_session(now):
@@ -730,7 +734,9 @@ class SignalDetector:
         if avg_per_min <= 0:
             return []
         window_min = self._cfg.surge_window_secs / 60
-        window_vol = self._window_vol.get(code, 0)  # running sum(perf #242),恆 == sum(qty)
+        # running sum(perf #242),恆 == sum(qty);直接索引不給預設 —— 四處維護漏一處要炸開,
+        # 不能退化成「永遠不發爆量」(守門測試釘的正是這個)
+        window_vol = self._window_vol[code]
         ratio = window_vol / (avg_per_min * window_min)
         if (
             ratio < self._cfg.vol_ratio

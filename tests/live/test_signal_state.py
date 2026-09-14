@@ -570,7 +570,12 @@ class TestWindowVolumeRunningSum:
             else:
                 code = rng.choice(codes)
                 qty = rng.randint(1, 500)
-                det.evaluate(code, _tick(100_000 + (i % 50) * 100, qty=qty, cum=i, code=code), _ctx(day_volume=i), frozenset())
+                det.evaluate(
+                    code,
+                    _tick(100_000 + (i % 50) * 100, qty=qty, cum=i, code=code),
+                    _ctx(day_volume=i),
+                    frozenset(),
+                )
                 clock.advance(rng.choice((0.0, 0.1, 1.0, 5.0, 120.0, 400.0)))
             for code in codes:
                 window = det._window.get(code)
@@ -590,7 +595,10 @@ class TestWindowVolumeRunningSum:
         # 灌錯:evaluate 會再加上本筆 qty(600),所以灌一個大負值讓窗內量變負 → 不得發爆量;
         # 若 _eval_volume 仍整窗 sum() 重算,這裡會照發(既有 test_vol_burst_emits 同輸入)。
         det._window_vol["2330"] = -1_000_000
-        assert det.evaluate("2330", _tick(100_000, qty=600, cum=1_000), _ctx(day_volume=1_000), _ALL) == []
+        events = det.evaluate(
+            "2330", _tick(100_000, qty=600, cum=1_000), _ctx(day_volume=1_000), _ALL
+        )
+        assert events == []
 
 
 class TestVolumeBurst:
