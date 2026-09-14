@@ -1,8 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import { ymdOf } from "@/lib/ladder-lots";
+import { createQueryClient } from "@/lib/query-client";
 import type { CapitalFill } from "@/types";
 
 /**
@@ -11,9 +12,10 @@ import type { CapitalFill } from "@/types";
  * 全新是重點 —— 共用 client 會讓上一個 it 的 query cache 洩到下一個;retry 關掉則是
  * 錯誤路徑測試不必等重試退避。個股頁五個元件測試各抄一份逐字相同的定義,任何一處
  * 想調 defaultOptions 都會變成「這檔的 wrap 跟別檔不一樣」。
+ * 走 `createQueryClient`(#237):mutation 預設(networkMode always)與 prod 同形,只疊 retry。
  */
 export function wrap(ui: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = createQueryClient({ queries: { retry: false } });
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 

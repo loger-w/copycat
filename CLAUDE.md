@@ -404,6 +404,16 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   `SpecialPollInterval=3600` + `Start-Service W32Time` + `w32tm /resync`(盤後跑;之後每小時自動校)。判準:重啟後
   `grep 時鐘偏差 logs/server-<日>.log` 首行 |offset| < 250 ms、一天約 144 行、零 ERROR;WARNING 又出現 = 校時服務
   又停了。`tests/server/test_clock_monitor.py` 釘住(含本段閾值字面 parity)。
+- **前端 QueryClient 只有一個工廠,mutation 預設 `networkMode: "always"`**(2026-09-14 起,#237):產生點
+  `frontend/src/lib/query-client.ts::createQueryClient`(`main.tsx` 與 `test-utils.tsx` 都經它建,測試只疊
+  `queries.retry:false`)。理由 = 真錢:TanStack 預設 `"online"` 時瀏覽器判離線(`navigator.onLine`,與同機
+  loopback 的 127.0.0.1 路徑無關)mutation **不送、排隊**,要等「網路恢復 **且** 分頁聚焦」兩者都成立才一次放行,
+  曝險窗沒有時間上界(限價單可能幾小時後以失效價送出)。五個 mutation 點(送單 / 平倉 / 改價 / 刪單、自選 PUT、
+  規則 upsert / delete、TXO series)全靠這份預設,hook 不另設。**絕不能放進 `queries` 層**:TanStack
+  `defaultQueryOptions` 會在 `refetchOnReconnect` 未設時算成 `networkMode !== "always"` → 全站輪詢 hook 重連後
+  不重抓,零錯誤訊號。`lib/query-client.test.tsx` 釘三件:mutations 層 always、queries 層無 networkMode 且
+  `refetchOnReconnect === true`、離線時 mutation 立即 error 不 `isPaused`(對照 TanStack 預設 client 會暫停)。
+  真環境判準(build 後):DevTools Offline → 存自選立即失敗 → Online → 切分頁再切回 → Network 零新 PUT。
 - **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
   `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
   `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值
