@@ -162,11 +162,9 @@ class TestExceptions:
             flag_label="現股",
             price=1085.0,
             qty=1,
-            **{
-                f.name: None
-                for f in dataclasses.fields(FillRecord)
-                if f.name not in {"seq_no", "stock_no", "buy_sell", "flag_label", "price", "qty"}
-            },
+            unit="張",
+            date="2026-09-15",
+            time="09:00:01",
         ),
         Position(market="sec", stock_no="2330", qty=3, avg_price=1085.5, avg_source="broker"),
     ],
