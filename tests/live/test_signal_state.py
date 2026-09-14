@@ -512,6 +512,38 @@ class TestSurgeCrash:
         assert det.evaluate("2330", _tick(102_100), _ctx(), _ALL) == []
 
 
+class TestEvaluateBookLatchShortCircuit:
+    """perf/batch-b-tier0 0-9(#249):簿更新沒鎖板(常態,股票 REALTIME 87% 是簿更新)時
+    `evaluate_book` 直接回 [],不先取時鐘 / 盤中閘 / mono / clock key —— 無 latch 本來就零狀態推進,
+    順序對調語意相同;有 latch 的 limit_open 路徑逐字不變(既有 TestLimitLock 案釘住)。"""
+
+    def test_no_latch_returns_without_reading_clock(self) -> None:
+        clock = _Clock(_dt.datetime(2026, 8, 4, 10, 0, 0))
+        calls = {"n": 0}
+
+        def counting_clock() -> _dt.datetime:
+            calls["n"] += 1
+            return clock()
+
+        det = SignalDetector(SignalsConfig(), now_fn=counting_clock)
+        assert det.evaluate_book("2330", _ctx(upper=110_000, lower=90_000), _ALL) == []
+        assert calls["n"] == 0
+
+    def test_latched_book_still_reads_clock_and_emits_open(self) -> None:
+        clock = _Clock(_dt.datetime(2026, 8, 4, 10, 0, 0))
+        calls = {"n": 0}
+
+        def counting_clock() -> _dt.datetime:
+            calls["n"] += 1
+            return clock()
+
+        det = SignalDetector(SignalsConfig(), now_fn=counting_clock)
+        det._latch[("2330", "up")] = True
+        events = det.evaluate_book("2330", _ctx(upper=110_000, lower=90_000), _ALL)
+        assert [e.kind for e in events] == ["limit_open"]
+        assert calls["n"] == 1
+
+
 class TestWindowVolumeRunningSum:
     """perf/batch-b-tier0 0-2(#242):爆量窗的量改 running sum,必須恆等於現算式 `sum(qty)`。
 

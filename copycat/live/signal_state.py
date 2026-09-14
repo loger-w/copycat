@@ -410,7 +410,12 @@ class SignalDetector:
         """純簿更新 → 只評估「鎖停打開」(尾盤解鎖無成交也抓得到,design §3.5b)。
 
         日別防護不在這裡:換日 pending 期間 engine 不呼叫本方法(design §4.1 R2-2)。
+
+        latch 先查(perf #249):簿更新每則 × 每 slot 都進來,常態是該檔沒鎖板 —— 兩個 dict 查詢就回,
+        不先取時鐘 / 算盤中閘 / mono / clock key。無 latch 時本函式本來就零狀態推進,順序對調語意相同。
         """
+        if not (self._latch.get((code, "up"), False) or self._latch.get((code, "down"), False)):
+            return []
         now = self._now_fn()
         if not self._in_session(now):
             return []
