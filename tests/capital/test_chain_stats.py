@@ -8,10 +8,16 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from copycat import cli
 from copycat.capital.chain_stats import format_report, summarize
+from copycat.capital.client import CapitalClient
+from copycat.capital.safety import SafetyConfig
+from tests.capital.fake_com import FakeCom
 
 _P = "copycat.capital.client INFO balance 鏈: "
 
@@ -91,9 +97,59 @@ class TestReport:
 
 
 class TestCli:
-    def test_chain_stats_dispatch(self, tmp_path: Path, capsys) -> None:  # noqa: ANN001
+    def test_chain_stats_dispatch(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         log = tmp_path / "server-20260914-0905.log"
         log.write_text("\n".join(LINES) + "\n", encoding="utf-8")
         assert cli.main(["chain-stats", "--log", str(log)]) == 0
         out = capsys.readouterr().out
         assert "乾淨 2 條" in out and "1019 × 2" in out
+
+
+class TestParityWithClientLogFormat:
+    """two-axis S-01:`_STAGE_RE` 逐字複製 `_log_chain_stage` 的 log 格式 —— 產生點改一字,
+    `chain-stats` 就靜默回「0 條」、驗收尺歸零。這裡不餵合成行:讓真的 `CapitalClient` 走 prod 的
+    `basicConfig` format(`__main__.py`)印出四段,再餵給 `summarize`。"""
+
+    def test_real_stage_lines_parse_into_one_clean_chain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import datetime as _dt
+        import time
+
+        from copycat.capital import chain_stats
+
+        monkeypatch.setattr(chain_stats, "SESSION_START", _dt.time(0, 0))
+        monkeypatch.setattr(chain_stats, "SESSION_END", _dt.time(23, 59, 59))
+        lines: list[str] = []
+
+        class _Sink(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                lines.append(self.format(record))
+
+        sink = _Sink()
+        sink.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        log = logging.getLogger("copycat.capital.client")
+        log.addHandler(sink)
+        log.setLevel(logging.INFO)
+        try:
+            client = CapitalClient(
+                FakeCom(),
+                user_id="u",
+                password="p",
+                full_account="1234567890A",
+                env="test",
+                safety=SafetyConfig(order_enabled=True, max_qty=5, max_amount=None),
+                audit_base=tmp_path / "audit",
+            )
+            client._fill_seen_at = time.monotonic() - 1.0  # 成交 1 s 前到達
+            client._chain_started_at = time.monotonic()  # 本輪鏈起於成交之後
+            client._log_chain_stage("庫存段收齊 %d 列", 4)
+            client._log_chain_stage("損益段收齊 %d 列", 5)
+            client._log_chain_stage("期貨部位段收齊 %d 列", 0)
+            client._log_chain_stage("部位落地 %d 列", 4, fills=2)
+        finally:
+            log.removeHandler(sink)
+        assert len(lines) == 4
+        s = summarize(lines)
+        assert (s.total, s.clean, s.excluded) == (1, 1, {})
+        assert s.landed_ms[0] >= 1000

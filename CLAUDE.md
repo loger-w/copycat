@@ -378,7 +378,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   前後端同版,畫面「版本落差」膠囊亮起先 `npm run build`(整體 review F-20)。
 - **raw 掃單簇列的族群快照 `policy_ctx`(每顆事件都帶,不只命中的)**(2026-09-14 起,#233):產生點
   `signal_hub._policy_context`(在 raw 列 publish **之前**評;鍵集 `groups / screen_member / self / peers / peers_up /
-  peer_max / leader / peer_touched / hits / skip`,`skip ∈ {null, no_ref, no_group}`,非 null 時其餘欄空值);政策列的
+  peer_max / leader / peer_touched / hits / skip`,`skip ∈ {null, no_ref, no_group, error}`,非 null 時其餘欄空值;
+  `error` = 評估拋例外、raw 列照記 + traceback 一行,對帳分得出「沒評」與「評壞了」);政策列的
   同名欄是它的副本、`_emit_policies` 吃評好的 ctx 不重算(`peers_fn` 一顆一次)。讀者 = jsonl 離線對帳(四週後門檻
   敏感度分析拿 raw 列重算四條政策;修前 36% 未命中事件零快照、自選群組覆寫式落檔不可還原)、WS 與 jsonl 同一份
   (前端 `SignalMsg.policy_ctx` optional 不讀)。W1 只加欄;舊列缺欄 = 09-14 前。漂掉的症狀:後端改回只在命中時
@@ -399,8 +400,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   **250 ms WARNING**、≥ **2 s ERROR**(常數不進 config;文案含「本機鐘落後 / 超前,校時服務可能沒在跑」),三台
   全失敗一行 WARNING 不重試到下一輪;最近結果掛 `app.state.clock_skew`,**不加 API、不進前端、不改任何 gate**。
   接線 = `__main__` prod 顯式傳 `clock_probe=clock_monitor.probe`(測試 / --verify 預設關;`test_main_wiring` 釘)。
-  **修的那一半是 user 端**:W32Time 實測 Stopped / Manual、2026-09-14 本機落後 2.6 s(09-11 有 4 則 13:30:00 tick
-  穿過 end-exclusive 盤中閘就是它)—— 管理員 PowerShell 跑 `Set-Service W32Time -StartupType Automatic` +
+  **修的那一半是 user 端**:W32Time 實測 Stopped / Manual、2026-09-14 本機**超前** 2.6 s(17:32)→ 2.9 s(20:30),
+  三小時漂 +0.24 s(09-11 有 4 則 13:30:00 tick 穿過 end-exclusive 盤中閘 = 那天是落後;方向會變、幅度秒級)——
+  管理員 PowerShell 跑 `Set-Service W32Time -StartupType Automatic` +
   `SpecialPollInterval=3600` + `Start-Service W32Time` + `w32tm /resync`(盤後跑;之後每小時自動校)。判準:重啟後
   `grep 時鐘偏差 logs/server-<日>.log` 首行 |offset| < 250 ms、一天約 144 行、零 ERROR;WARNING 又出現 = 校時服務
   又停了。`tests/server/test_clock_monitor.py` 釘住(含本段閾值字面 parity)。

@@ -112,7 +112,7 @@ export interface SignalMsg {
     leader: boolean;
     peer_touched: boolean;
     hits: PolicyTag[];
-    skip: "no_ref" | "no_group" | null;
+    skip: "no_ref" | "no_group" | "error" | null;
   };
 }
 

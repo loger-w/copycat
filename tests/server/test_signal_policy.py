@@ -599,6 +599,34 @@ class TestPolicyCtxOnRawRow:
         finally:
             await h.hub.close()
 
+    async def test_evaluation_error_keeps_raw_row_with_skip_error(
+        self,
+        tmp_path: Path,
+        clock: _Clock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """two-axis P-03:評估搬到 raw 列 publish **之前**後,評估炸了不得連 raw 列一起消失(修前
+        raw 列已 publish 才評,`_fanout` 的傘只吞政策列)。`skip="error"` + traceback 一行、零政策列。"""
+        import copycat.server.signal_hub as hub_mod
+
+        def boom(**_kw: Any) -> Any:
+            raise RuntimeError("evaluate_policies 炸了")
+
+        monkeypatch.setattr(hub_mod, "evaluate_policies", boom)
+        caplog.set_level(logging.ERROR, logger=hub_mod.__name__)
+        h, _wl = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})
+        try:
+            _fire(h, _state(ref=50_000, upper=55_000))
+            await h.settle()
+            assert [m["kind"] for m in h.published] == ["sweep_cluster"]
+            ctx = h.published[0]["policy_ctx"]
+            assert ctx["skip"] == "error" and ctx["hits"] == [] and ctx["self"] is None
+            assert [r["kind"] for r in h.rows()] == ["sweep_cluster"]
+            assert sum("policy_ctx.skip=error" in r.getMessage() for r in caplog.records) == 1
+        finally:
+            await h.hub.close()
+
 
 class TestGroupResolution:
     async def test_multi_group_union_dedup_and_one_warning(

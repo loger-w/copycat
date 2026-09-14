@@ -846,6 +846,11 @@ class CapitalClient:
             return
         self._reply_probe_next = now + REPLY_PROBE_SECS
         value = int(self._com.is_reply_connected(self._user_id))
+        # 同步 COM 呼叫排在 `_cmd_q.get` 之前 = 下單命令會等它(two-axis S-05):耗時未量,
+        # 超過 50 ms 就留一行,第一個交易日看有沒有必要搬出幫浦圈
+        cost_ms = (time.monotonic() - now) * 1000
+        if cost_ms > 50:
+            logger.warning("群益回報線 IsConnectedByID 耗時 %.0f ms(佔幫浦圈,下單命令排在其後)", cost_ms)
         prev = self._reply_connected
         self._reply_connected = value
         if value == prev:
