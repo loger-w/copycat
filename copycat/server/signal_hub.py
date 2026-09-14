@@ -176,21 +176,34 @@ def _kind_text(row: dict[str, Any]) -> str:
     return kind
 
 
-def _skipped_policy_ctx(skip: str) -> dict[str, Any]:
-    """raw 掃單簇列 `policy_ctx` 的「不評」形狀(#233):`skip` 說原因(`no_ref` / `no_group`),
-    其餘欄空值 / 空清單 —— 與評過的列同鍵集,離線讀者不必分兩種形狀。"""
+def _policy_ctx_payload(
+    ctx: PolicyContext, me: dict[str, Any] | None, skip: str | None
+) -> dict[str, Any]:
+    """raw 掃單簇列 `policy_ctx` 欄的**唯一**形狀(#233;two-axis S-06:評過 / 不評共用一份鍵集,
+    加欄只改這裡)。`skip` 非 null = 不評(`no_ref` / `no_group` / `error`),此時 ctx 是空殼、`me` 為 None。"""
     return {
-        "groups": [],
-        "screen_member": False,
-        "self": None,
-        "peers": [],
-        "peers_up": 0,
-        "peer_max": None,
-        "leader": False,
-        "peer_touched": False,
-        "hits": [],
+        "groups": list(ctx.groups),
+        "screen_member": ctx.screen_member,
+        "self": dict(me) if me is not None else None,
+        "peers": [dict(p) for p in ctx.peers],
+        "peers_up": ctx.peers_up,
+        "peer_max": dict(ctx.peer_max) if ctx.peer_max is not None else None,
+        "leader": ctx.leader,
+        "peer_touched": ctx.peer_touched,
+        "hits": list(ctx.hits),
         "skip": skip,
     }
+
+
+_EMPTY_POLICY_CTX = PolicyContext(
+    groups=[], screen_member=False, peers=[], peers_up=0, peer_max=None,
+    leader=False, peer_touched=False, hits=[],
+)
+
+
+def _skipped_policy_ctx(skip: str) -> dict[str, Any]:
+    """「不評」的 `policy_ctx`:同一個 builder 餵空殼 ctx,離線讀者不必分兩種形狀。"""
+    return _policy_ctx_payload(_EMPTY_POLICY_CTX, None, skip)
 
 
 def format_signal_text(row: dict[str, Any]) -> str:
@@ -1097,7 +1110,14 @@ class SignalHub:
             # #233:族群快照在 raw 列 publish **之前**評,每顆掃單簇事件都落 `policy_ctx`
             # (含 `hits` 與不評原因 `skip`)—— 未命中的 36% 事件不再零快照,離線讀者拿 raw 列
             # 就能重算四條政策。W1 只加欄;政策列(下面)的快照是同一份的副本。
-            payload["policy_ctx"], ctx = self._policy_context(event, state)
+            try:
+                payload["policy_ctx"], ctx = self._policy_context(event, state)
+            except Exception:
+                # 評估炸了不得連 raw 列一起消失(修前 raw 列已 publish 才評,`_fanout` 的傘只吞政策列;
+                # 搬到 publish 前之後這條傘要自己撐 —— two-axis P-03)。`skip="error"` 讓對帳分得出
+                # 「沒評」與「評壞了」;traceback 每顆事件一次(掃單簇一天 ~41 顆,不會洗版)
+                logger.exception("政策族群快照評估失敗,raw 列照記(policy_ctx.skip=error):%s", event.code)
+                payload["policy_ctx"] = _skipped_policy_ctx("error")
         self._publish(payload)  # WS 同步先送(前端要即時)
         self._enqueue({**payload, "trade_date": trade_date}, notify=notify)
         if ctx is not None and ctx.hits:
@@ -1138,7 +1158,8 @@ class SignalHub:
             try:
                 quotes = self._peers_fn(peer_codes)
             except Exception:
-                # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列已記,不讓整顆事件消失。
+                # 快照失敗 = 同伴全無報價 → P / B 不評、S 照評;raw 列隨後照記(#233 起評估在 publish 前,
+                # 這裡不拋出去就不會影響 raw 列)。
                 # traceback 每日一次(review F-09):同步熱路徑,持續壞掉時逐 tick 印會自己變瓶頸
                 self._peers_fn_failures += 1
                 if self._peers_fn_failures == 1:
@@ -1170,19 +1191,7 @@ class SignalHub:
             "touched_upper": touched_upper_flag(high, upper) is True,
             "locked_up": locked_up_flag(price, upper, asks) is True,
         }
-        policy_ctx: dict[str, Any] = {
-            "groups": list(ctx.groups),
-            "screen_member": ctx.screen_member,
-            "self": me,
-            "peers": [dict(p) for p in ctx.peers],
-            "peers_up": ctx.peers_up,
-            "peer_max": dict(ctx.peer_max) if ctx.peer_max is not None else None,
-            "leader": ctx.leader,
-            "peer_touched": ctx.peer_touched,
-            "hits": list(ctx.hits),
-            "skip": None,
-        }
-        return policy_ctx, ctx
+        return _policy_ctx_payload(ctx, me, None), ctx
 
     def _emit_policies(
         self,

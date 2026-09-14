@@ -1,7 +1,8 @@
 """時鐘偏差監測(#236):假 SNTP 回應 bytes 進、offset 出;閾值三案;三台全失敗案;監測 loop。
 
 期望值來自獨立的手算(不是照 code 重算):伺服器兩個時戳都比本機**快 2.6 s**、往返 6 ms →
-offset = −2600 ms、RTT = 6 ms;與 2026-09-14 17:32 對 time.google.com 的實測(−2627 ms / 6 ms)同量級。
+offset = −2600 ms、RTT = 6 ms(本機落後為負);2026-09-14 對 time.google.com 的實測是反向的
++2627 ms(17:32)→ +2861 ms(20:30),本機**超前**且三小時漂 +0.24 s,量級相同、符號相反。
 """
 
 from __future__ import annotations

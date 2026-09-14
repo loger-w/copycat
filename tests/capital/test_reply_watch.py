@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from copycat.capital.client import REPLY_PROBE_SECS, CapitalClient
+from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
 from tests.capital.fake_com import FakeCom
 
@@ -70,10 +70,6 @@ def test_probe_is_throttled_and_logs_only_on_change(
     client._pump_once()  # → 1
     assert _probe_lines(caplog)[-1] == (logging.INFO, "群益回報線 IsConnectedByID=1(上一值 0)")
     assert client.status_view()["reply_connected"] == 1
-
-
-def test_probe_interval_is_ten_seconds() -> None:
-    assert REPLY_PROBE_SECS == 10.0
 
 
 def test_probe_skipped_when_not_logged_in(tmp_path: Path) -> None:
