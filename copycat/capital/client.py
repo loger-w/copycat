@@ -73,7 +73,7 @@ from copycat.capital.safety import (
 )
 from copycat.capital.store import CapitalStore
 from copycat.live.trade_models import BrokerRejectedError
-from copycat.server.audit import AuditWriteError, append_audit
+from copycat.server.audit import AuditWriteError, append_audit, ensure_audit_dir
 from copycat.trading_calendar import WEEKEND_ONLY, TradingCalendar, load_trading_calendar
 
 logger = logging.getLogger(__name__)
@@ -213,6 +213,7 @@ class CapitalClient:
         self._env = env
         self._safety = safety
         self._audit_base = audit_base
+        ensure_audit_dir(audit_base)  # 建一次,append 熱路徑不再每筆 mkdir(perf #245)
         self._cmd_q: queue.Queue[_Cmd | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
