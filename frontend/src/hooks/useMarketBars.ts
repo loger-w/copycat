@@ -27,7 +27,7 @@ import {
  * 30/60/90 分與 2–10 分**共用同一份 `tf=1` 原料**,由前端 `aggregateBars` 聚合。
  */
 
-export const MARKET_MINUTE_DAYS = 30;
+const MARKET_MINUTE_DAYS = 30;
 const POLL_MS = 60_000;
 
 /** 這一趟取數的結果(N104;後端 `copycat/live/stock_source.py::BarsStatus`)。
@@ -36,7 +36,7 @@ const POLL_MS = 60_000;
  *  `status` 答「這一趟問到了沒」。同為字串,不可互換。 */
 export type BarsStatus = "ok" | "timeout" | "disconnected";
 
-export interface BarsMeta {
+interface BarsMeta {
   source: string;
   coverage_from: string | null;
   coverage_to: string | null;

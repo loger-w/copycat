@@ -69,7 +69,7 @@ function beepFor(policy: boolean): void {
 /** 短嗶。**任何失敗都吞掉**:提示音是附加價值,自動播放政策 / 無 Web Audio /
  *  context 被系統回收都不該影響 toast 出現。
  *  `offsetS` = 自現在起延後幾秒發聲(政策列雙嗶用;預設立即)。 */
-export function playBeep(offsetS = 0): void {
+function playBeep(offsetS = 0): void {
   try {
     // 每次重讀全域:舊瀏覽器沒有 Web Audio(jsdom 也沒有)→ 靜默略過
     const Ctor = globalThis.AudioContext as typeof AudioContext | undefined;

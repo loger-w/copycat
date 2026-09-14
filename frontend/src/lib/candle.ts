@@ -122,7 +122,7 @@ export function movingAverage(bars: readonly Bar[], n: number): (number | null)[
   return out;
 }
 
-export interface Candle {
+interface Candle {
   x: number;
   w: number;
   cx: number;
@@ -133,7 +133,7 @@ export interface Candle {
   dir: "up" | "down" | "flat";
 }
 
-export interface VolBar {
+interface VolBar {
   x: number;
   w: number;
   y: number;
@@ -143,7 +143,7 @@ export interface VolBar {
 
 /** 內外盤雙柱高度(SC-8)。x / 柱寬走同索引的 `VolBar`,這裡只給兩段高度 ——
  *  幾何來源單一,元件不必自己重算 slot 與量區比例(同 `priceBottom` 的理由)。 */
-export interface DeltaVolBar {
+interface DeltaVolBar {
   /** 外盤(uv)柱高 */
   uvH: number;
   /** 內盤(dv)柱高 */

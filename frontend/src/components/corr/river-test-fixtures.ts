@@ -11,7 +11,7 @@ import type { RiverState } from "@/types";
  *  而行為檔要看真幾何數字,兩者不能共存(見 memo 檔檔頭)。 */
 
 /** 日盤窗(08:45–13:45,分鐘序號)。`xAt` 的換算與重疊圖 x 軸同源。 */
-export const DAY = { start_min: 525, end_min: 825 };
+const DAY = { start_min: 525, end_min: 825 };
 
 /** 三腿:台指(漲)/ 富台(跌)/ 道瓊(全窗無點)。`over` 讓行為檔覆寫 session 等欄位。 */
 export function riverState(over: Partial<RiverState> = {}): RiverState {

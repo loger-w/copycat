@@ -19,7 +19,7 @@ export interface RiverSize {
 }
 
 /** 上下留邊(像素,不是價格域放寬):讓貼邊的線不被裁掉半條 stroke。 */
-export const PAD_Y = 4;
+const PAD_Y = 4;
 
 /** 並排卡片的 autofit 上下外推(比例);單點退化時用 SINGLE_PAD 撐開域。 */
 const FIT_PAD = 0.0005;
@@ -27,7 +27,7 @@ const SINGLE_PAD = 0.001;
 /** 重疊圖的 % 域外推(百分點) */
 const PCT_PAD = 0.05;
 
-export interface LegPoint {
+interface LegPoint {
   x: number;
   y: number;
   offset: number;
@@ -46,14 +46,14 @@ export interface LegGeometry {
   pct: number | null;
 }
 
-export interface OverlayPoint {
+interface OverlayPoint {
   x: number;
   y: number;
   offset: number;
   pct: number;
 }
 
-export interface OverlayLine {
+interface OverlayLine {
   key: string;
   label: string;
   colorIndex: number;

@@ -50,7 +50,7 @@ export function useServerBuild() {
  *  - `range` —— dev + middleware 答過:以 `behind` 判(唯一能表達「後端落後」的來源)
  *  - `equal` —— build 產物語意:define 凍結 sha vs 後端 sha 等值比對
  *  - `unknown` —— 冷態或 transient 失敗:**不判定**(不是「沒落差」) */
-export type DriftMode = "range" | "equal" | "unknown";
+type DriftMode = "range" | "equal" | "unknown";
 
 export interface BuildDrift {
   mode: DriftMode;

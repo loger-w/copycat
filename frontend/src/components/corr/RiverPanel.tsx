@@ -139,4 +139,4 @@ export function RiverPanel({ state }: Props) {
   );
 }
 
-export default RiverPanel;
+

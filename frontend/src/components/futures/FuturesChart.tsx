@@ -455,4 +455,4 @@ export function FuturesChart({ product, state, resolvedYm, active = true }: Prop
   );
 }
 
-export default FuturesChart;
+

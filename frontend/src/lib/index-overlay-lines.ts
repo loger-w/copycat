@@ -57,7 +57,7 @@ interface Row {
 const SORTED_ROWS = new WeakMap<IndexSeries, readonly Row[]>();
 
 /** `minutes` → 依分鐘升冪的 (minute, p) 列;壞 key / 0 值剔除。同一個 series 物件只算一次。 */
-export function sortedIndexRows(s: IndexSeries): readonly Row[] {
+function sortedIndexRows(s: IndexSeries): readonly Row[] {
   const hit = SORTED_ROWS.get(s);
   if (hit !== undefined) return hit;
   const rows: Row[] = [];

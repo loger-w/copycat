@@ -55,7 +55,7 @@ export function isModeAvailable(key: MarketKey, mode: MarketMode): boolean {
 
 /** 每個標的的預設模式。切標的與初始化都經過 `coerceMode`,兩處必須是同一支
  *  —— 各判各的會出現「落回一個 disabled 的模式」這種停在空白畫面的組合(review P1-5)。 */
-export function defaultMode(key: MarketKey): MarketMode {
+function defaultMode(key: MarketKey): MarketMode {
   return key === "TXF" || key === "MXF" || key === "TMF" ? "m1" : "intraday";
 }
 

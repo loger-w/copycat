@@ -4,7 +4,7 @@ import { parseError } from "@/lib/api-error";
 import { WATCHLIST_LIMIT } from "@/lib/constants";
 import type { Group, Watchlist } from "@/lib/watchlist-model";
 
-export type { Group, Watchlist };
+export type { Watchlist };
 
 /** 群組聯集(首見序去重)—— 與後端 v2→v3 讀時遷移同一條規則。 */
 function unionCodes(groups: Group[]): string[] {

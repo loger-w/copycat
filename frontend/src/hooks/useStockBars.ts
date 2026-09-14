@@ -20,7 +20,7 @@ import { inTradingHours, msUntilTradingOpen, offHoursInterval } from "@/lib/trad
 
 /** 分 K 由 1/5 兩檔擴為 1–10 連續(SC-6.1)。union 展開而非 template literal 型別 ——
  *  後者在 noUncheckedIndexedAccess 下的推導比較難駕馭,而這裡只有十個值。 */
-export type MinuteMode =
+type MinuteMode =
   | "m1" | "m2" | "m3" | "m4" | "m5"
   | "m6" | "m7" | "m8" | "m9" | "m10";
 export type ChartMode = "intraday" | "day" | MinuteMode;
@@ -41,7 +41,7 @@ export function minutesOf(mode: ChartMode): number {
  *  - `ok`:TC4 有回應但窗內無 bar(= 真無資料的最接近表述)
  *  - `timeout`:等滿 deadline 沒等到首頁備妥(慢**或**查無,TC4 協定不可分)
  *  - `disconnected`:TC4 連線中斷(engine 層 ConnectionError) */
-export type BarsStatus = "ok" | "timeout" | "disconnected";
+type BarsStatus = "ok" | "timeout" | "disconnected";
 export type BarsPayload = { bars: Bar[]; status: BarsStatus };
 
 const STATUSES: readonly string[] = ["ok", "timeout", "disconnected"];

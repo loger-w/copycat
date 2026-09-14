@@ -17,7 +17,7 @@ export const LOCK_WS_TITLE = "連線未就緒,無法鎖定";
 /** capital WS 非 `open` 時**武裝**鈕 disabled 的說明(N081)。
  *  與 `LOCK_WS_TITLE` 分開兩句:同一列上兩顆鈕、兩種動作,共用一句話會讓使用者
  *  以為自己按錯了哪一顆。 */
-export const ARM_WS_TITLE = "連線未就緒,無法武裝";
+const ARM_WS_TITLE = "連線未就緒,無法武裝";
 
 /** 武裝鈕的 `disabled` + `title`(N081)。三座梯共用一支,不各寫一次三元式。
  *

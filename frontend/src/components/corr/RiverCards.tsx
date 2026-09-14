@@ -115,4 +115,4 @@ export function RiverCards({ order, legs, window: win }: Props) {
   );
 }
 
-export default RiverCards;
+

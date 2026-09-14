@@ -15,7 +15,7 @@ import type { CapitalMarket, CapitalOrder } from "@/types";
 /** 群益市場碼的期貨家族(OrderRecord.market;其餘含 null 歸證券)。 */
 const FUT_MARKETS = new Set(["TF", "TO", "OF", "OO"]);
 
-export function isFutMarket(market: string | null): boolean {
+function isFutMarket(market: string | null): boolean {
   return market !== null && FUT_MARKETS.has(market);
 }
 

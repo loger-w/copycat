@@ -57,7 +57,7 @@ export type _KindDomainsMatch = Expect<AssertEqual<TradeKind, PositionKind>>;
 
 /** 值域外字串(舊 dist / 舊後端 / 未來新 kind)的預設政策:全稅、無借券費、不鎖買側、
  *  殿後 —— 與收斂前各散點的 else 分支逐一相同(ladder-position characterization 釘住)。 */
-export const UNKNOWN_KIND_TRAITS: KindTraits = {
+const UNKNOWN_KIND_TRAITS: KindTraits = {
   buyLocked: false,
   halfTaxToday: false,
   borrowFee: false,

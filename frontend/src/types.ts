@@ -1,6 +1,6 @@
 import type { HandoverProgress } from "@/components/ConnectionBadge";
 
-export type SnapshotStatus =
+type SnapshotStatus =
   | "connecting"
   | "backfilling"
   | "live"
@@ -13,7 +13,7 @@ export type SnapshotStatus =
  *  `connecting` = 建 socket 中(含每次重連)/ `open` = onopen 後 / `closed` = 斷線或 watchdog 放棄後。 */
 export type WsStatus = "connecting" | "open" | "closed";
 
-export interface SnapshotTotals {
+interface SnapshotTotals {
   call_net_qty: number;
   put_net_qty: number;
   contracts_active: number;
@@ -243,14 +243,14 @@ export interface FuturesState {
 }
 
 /** 相關係數面板(realtime-correlation SC-6/7)。 */
-export interface CorrLegState {
+interface CorrLegState {
   label: string; // 繁中顯示名(後端帶,前端不寫死對照表)
   mid: number | null; // 毫點中價;stale 或無報價 → null
   stale: boolean;
 }
 
 /** 一條腿對 base 的各窗結果:`w<秒>` = 相關係數(樣本不足/常數序列 → null)、`n<秒>` = 樣本數。 */
-export type CorrPairState = Record<string, number | null>;
+type CorrPairState = Record<string, number | null>;
 
 export interface CorrState {
   type: string; // "corr"

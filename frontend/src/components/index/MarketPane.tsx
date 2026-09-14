@@ -560,4 +560,4 @@ export function MarketPane({
   );
 }
 
-export default MarketPane;
+

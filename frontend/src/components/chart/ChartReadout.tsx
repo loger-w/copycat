@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  * 欄位順序與數量由呼叫端固定給,缺值給 "-" 而非移除欄位(防寬度跳動)。
  * 高度由外層容器決定(B8 的 chrome 對稱要求:兩張圖頂列同為 h-[1.375rem])。 */
 
-export type ReadoutTone = "bull" | "bear" | "muted";
+type ReadoutTone = "bull" | "bear" | "muted";
 
 export interface ReadoutField {
   /** 前綴標籤;空字串 = 只顯示值(時間欄用) */

@@ -35,7 +35,7 @@ export interface SecSummary {
   kinds: SecKind[];
 }
 
-export interface SecKind {
+interface SecKind {
   /** 群益原始交易別(顯示 key 用,標籤走 `label`) */
   kind: string;
   label: string;
@@ -53,7 +53,7 @@ export interface FutSummary {
   rows: FutRow[];
 }
 
-export interface FutRow {
+interface FutRow {
   /** 期交所契約碼(CDFI6 / QFFI6) */
   contract: string;
   qty: number;

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
-export interface ConfirmRow {
+interface ConfirmRow {
   label: string;
   value: string;
 }

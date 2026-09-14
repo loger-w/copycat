@@ -14,7 +14,7 @@ export interface Scales {
 }
 
 /** x 軸 domain 單一來源:buildScales 與 invertX 皆由此取值,單邊修改不破互逆(DR-2)。 */
-export function xDomain(curve: CurvePoint[]): { minX: number; spanX: number } {
+function xDomain(curve: CurvePoint[]): { minX: number; spanX: number } {
   const xs = curve.map(([x]) => x);
   const minX = Math.min(...xs);
   const maxX = Math.max(...xs);
