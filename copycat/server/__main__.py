@@ -23,6 +23,7 @@ from typing import Any, Iterable, Sequence, TextIO, cast
 import uvicorn
 
 from copycat.breadth_config import BreadthConfig
+from copycat.server import clock_monitor
 from copycat.server.app import (
     DEFAULT_BREADTH,
     DEFAULT_CORR,
@@ -184,6 +185,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             # 交易日曆只在 prod 顯式載(SC-8):假日 / 週末冷啟動時各引擎改抓最近
             # 交易日。--verify 的 fake 資料綁牆鐘 today,傳了反而整片空。
             trading_calendar=load_trading_calendar(),
+            # 時鐘偏差監測只在 prod 顯式起(#236):--verify 的 fake 世界不需要,測試預設關
+            clock_probe=clock_monitor.probe,
         )
         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
         if log_path is not None:
