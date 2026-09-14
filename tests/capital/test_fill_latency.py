@@ -8,9 +8,13 @@ fill → `capital_position` ≈ 0.5 s debounce + 3 × 150 ms ≈ 0.95 s;修後�
 
 from __future__ import annotations
 
+import logging
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
@@ -167,3 +171,123 @@ def test_fill_covered_by_watermark_is_not_reapplied(tmp_path: Path) -> None:
     client._pump_once()
     p = client.store.position_for("3357")
     assert p is not None and p.qty == 1, f"水位前成交被重套成雙計:qty={p.qty if p else None}"
+
+
+# ---------------------------------------------------------------- #234 回報鏈量測去污染
+
+
+class _Broker:
+    """跨多輪鏈的假券商:每看到一次新查詢就在 `_SIM_RTT_S` 後餵一次回覆(`_run_chain` 只答一次,
+    要驗「第二輪鏈才涵蓋成交」得能答兩輪)。"""
+
+    def __init__(self, client: CapitalClient, com: FakeCom) -> None:
+        self._client = client
+        self._com = com
+        self._replies: dict[str, tuple[Callable[[str], None], list[str]]] = {
+            "get_real_balance": (client._handle_balance, [RAW_T_HELD, "##"]),
+            "get_profit_loss_gw": (client._handle_profit, ["000,查詢成功", _PROFIT_ROW, "##,,,,"]),
+            "get_open_interest": (client._handle_open_interest, [_OI_ROW, "##"]),
+        }
+        self._answered = dict.fromkeys(self._replies, 0)
+        self._due: dict[str, float] = {}
+
+    def run(self, *, until: Callable[[], bool], budget_s: float) -> None:
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline and not until():
+            self._client._pump_once()
+            now = time.monotonic()
+            for name, (handler, rows) in self._replies.items():
+                sent = sum(1 for entry in self._com.sent if entry[0] == name)
+                if sent > self._answered[name] and name not in self._due:
+                    self._due[name] = now
+                if name in self._due and now - self._due[name] >= _SIM_RTT_S:
+                    for row in rows:
+                        handler(row)
+                    self._answered[name] += 1
+                    del self._due[name]
+            time.sleep(0.005)
+
+
+_ELAPSED = re.compile(r"自成交回報到達起 (\d+) ms")
+
+
+def _elapsed_info(caplog: pytest.LogCaptureFixture) -> list[int]:
+    """INFO 級「balance 鏈」行上的累積值,依出現序。"""
+    out: list[int] = []
+    for r in caplog.records:
+        if r.levelno == logging.INFO and r.name == "copycat.capital.client":
+            m = _ELAPSED.search(r.getMessage())
+            if m:
+                out.append(int(m.group(1)))
+    return out
+
+
+def _landed_info(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.INFO and "部位落地" in r.getMessage() and "自成交" in r.getMessage()
+    ]
+
+
+def test_fill_in_flight_keeps_chain_timer_origin(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """鏈飛行中(庫存段已收、損益段未回)再來一筆成交,計時器**不歸零**:四段累積值單調遞增、
+    落地印「涵蓋 2 筆成交」。修前 `_fill_seen_at` 每筆成交覆寫 → 損益段的數字比庫存段還小
+    (V2 抓到的「累積值非單調」指紋,8 / 178 條)。白名單:群益查詢節奏不變 —— 落地時只出過
+    一次庫存查詢,fill B 武裝的重查在落地**之後**才出手(成交不漏)。"""
+    caplog.set_level(logging.INFO, logger="copycat.capital.client")
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    client.store.set_positions([])
+    broker = _Broker(client, com)
+    client._balance_last_ts = time.monotonic()  # 開機首圈的 60 s 輪詢已過;走成交 debounce 路徑
+
+    client._handle_reply(_fill_evt_raw(seq="S1"))
+    broker.run(until=lambda: len(_elapsed_info(caplog)) >= 1, budget_s=3.0)  # 庫存段收齊
+    assert _elapsed_info(caplog)[0] >= 500  # 0.5 s debounce 在裡面
+    client._handle_reply(_fill_evt_raw(seq="S2"))  # 鏈飛行中第二筆成交
+    broker.run(until=lambda: bool(_landed_info(caplog)), budget_s=3.0)
+
+    elapsed = _elapsed_info(caplog)
+    assert len(elapsed) == 4, elapsed
+    assert elapsed == sorted(elapsed), f"累積值倒退(計時器被中途歸零):{elapsed}"
+    assert "涵蓋 2 筆成交" in _landed_info(caplog)[0]
+    balance_queries = lambda: sum(1 for e in com.sent if e[0] == "get_real_balance")  # noqa: E731
+    assert balance_queries() == 1  # 落地當下只出過一次庫存查詢(鏈中不重發)
+    broker.run(until=lambda: balance_queries() >= 2, budget_s=3.0)
+    assert balance_queries() == 2  # fill B 武裝的重查在落地後出手:成交不漏(白名單)
+
+
+def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """60 s 定時輪詢的鏈飛行中來了成交:那輪鏈**沒涵蓋**這筆成交(查詢早於成交出手),各段維持
+    DEBUG、落地不印耗時;成交武裝的下一輪才印 INFO 且「涵蓋 1 筆成交」。修前:成交點亮 `_fill_seen_at`
+    後,輪詢那輪的剩餘段就印出幾百 ms 的假數字(V2 的「缺庫存段起點」指紋,4 條)。"""
+    caplog.set_level(logging.INFO, logger="copycat.capital.client")
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    client.store.set_positions([])
+    broker = _Broker(client, com)
+    landings: list[int] = []
+    client.set_broadcast(
+        lambda payload: landings.append(1)
+        if payload["event"] == "capital_position" and payload["data"].get("source") != "fill"  # type: ignore[union-attr]
+        else None
+    )
+
+    client._pump_once()  # `_balance_last_ts` 初值 0 → 開機首圈就是 60 s 定時輪詢那輪
+    assert any(e[0] == "get_real_balance" for e in com.sent), "定時輪詢未出手"
+    client._handle_reply(_fill_evt_raw(seq="S1"))  # 成交在輪詢鏈飛行中到達
+    broker.run(until=lambda: len(landings) >= 1, budget_s=3.0)
+    assert landings == [1]
+    assert _elapsed_info(caplog) == [], "輪詢那輪沒涵蓋這筆成交,不得印耗時"
+
+    broker.run(until=lambda: len(landings) >= 2, budget_s=3.0)
+    assert landings == [1, 1]
+    elapsed = _elapsed_info(caplog)
+    assert len(elapsed) == 4 and elapsed == sorted(elapsed), elapsed
+    assert elapsed[0] >= 500
+    assert "涵蓋 1 筆成交" in _landed_info(caplog)[0]

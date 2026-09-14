@@ -219,9 +219,13 @@ class CapitalClient:
         # (pr-167 F-02;缺注入 = 只擋週末,假日前夜盤成交會提早一個交易日落出)
         self.store = CapitalStore(calendar=_calendar)
         self._broadcast: Callable[[dict[str, object]], None] | None = None
-        # 最近一筆成交到達的 monotonic(F5 觀測):回查鏈三段收尾各印「自成交起 N ms」,
-        # 讓真成交的耗時有數字可報;鏈落地即清,60s 定時輪詢那些輪不印(避免洗版)。
+        # **最早未落地**成交到達的 monotonic(F5 觀測;#234 起不再每筆覆寫):回查鏈三段收尾各印
+        # 「自成交回報到達起 N ms」,讓真成交的耗時有數字可報;只有**起於成交之後**的那輪鏈才印、
+        # 才在落地時清它(`_chain_covers_fill`);鏈飛行中再來的成交不重設起點(修前 79% 污染樣本
+        # 集中在開機 backlog 重播,方向是把數字拉小 —— V2 §2.3)。60s 定時輪詢那些輪不印(避免洗版)。
         self._fill_seen_at: float | None = None
+        self._fill_count: int = 0  # 自 `_fill_seen_at` 起累積的成交筆數(落地印「涵蓋 n 筆」)
+        self._chain_started_at: float | None = None  # 本輪鏈的庫存查詢出手時刻(rc==0 才記)
         self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
         self._profit = BalanceCollector(
             on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
@@ -419,7 +423,9 @@ class CapitalClient:
         t0 = time.monotonic()
         changed = self.store.apply_reply(rec)
         if rec.status_raw == "D":  # 成交 → debounce 重查(連續成交只查尾端一次)
-            self._fill_seen_at = t0
+            if self._fill_seen_at is None:  # 起點 = 最早未落地的成交;鏈飛行中再來的不重設(#234)
+                self._fill_seen_at = t0
+            self._fill_count += 1
             self._mark_balance_dirty()
             if changed:
                 # 成交當下就把部位推出去(F5):回查鏈 0.5 s debounce + 三段串行往返是使用者
@@ -523,6 +529,9 @@ class CapitalClient:
         # 查詢真的出手才交棒給 collector 的欠帳窗:rc≠0 時鏈沒啟動、放棄輪的 `##`
         # 還在路上,旗標先清掉會讓下一次成功查詢的 reset 順手關掉窗(review F3)
         self._balance_abandoned = False
+        # 量測用(#234):本輪鏈的起點。只有起於 `_fill_seen_at` 之後的鏈才「涵蓋」那筆成交 ——
+        # 60 s 輪詢飛行中到達的成交由下一輪(`_balance_due` 已武裝)涵蓋,那輪才印耗時
+        self._chain_started_at = now
         # 涵蓋水位:此刻之後到達的成交,這一輪快照必然沒看到 —— set_positions 落地時
         # 據此重套增量,部位不倒退(next-time L57;同執行緒,與查詢出手同刻無競速)
         self.store.begin_snapshot()
@@ -667,22 +676,44 @@ class CapitalClient:
         # 落地後 store 列數 ≠ len(merged):水位後增量重套可能加列(新倉)/ 刪列(沖銷歸零)
         # —— log 與 count 讀 store 實況,才對得上重套 INFO(pr-163 F-05)
         landed = len(self.store.positions())
-        self._log_chain_stage("部位落地 %d 列", landed)
-        self._fill_seen_at = None
+        if self._chain_covers_fill():
+            self._log_chain_stage("部位落地 %d 列", landed, fills=self._fill_count)
+            # 涵蓋了才清:沒涵蓋(輪詢鏈飛行中才到的成交)留給下一輪量,那輪必因 `_balance_due` 出手
+            self._fill_seen_at = None
+            self._fill_count = 0
+        else:
+            self._log_chain_stage("部位落地 %d 列", landed)
         self._emit({"event": "capital_position", "data": {"count": landed}})
 
-    def _log_chain_stage(self, what: str, *args: object) -> None:
-        """回查鏈進度(F5 觀測)。成交觸發的輪印 INFO 並附「自成交回報到達起 N ms」
-        (量的是回報進 handler 的時刻,不是券商撮合時刻);60s 定時輪詢的輪降 DEBUG ——
-        現狀成功路徑零 log,真成交的耗時無從量起。`what` 走 lazy %-args,與檔內其餘 log 同款。"""
-        if self._fill_seen_at is None:
+    def _chain_covers_fill(self) -> bool:
+        """本輪鏈是否起於最早未落地成交之後(#234)—— 是,才印耗時、落地才清起點。
+        鏈起點早於成交 = 券商快照沒看到那筆(60 s 輪詢飛行中到達),耗時歸下一輪。"""
+        return (
+            self._fill_seen_at is not None
+            and self._chain_started_at is not None
+            and self._chain_started_at >= self._fill_seen_at
+        )
+
+    def _log_chain_stage(self, what: str, *args: object, fills: int | None = None) -> None:
+        """回查鏈進度(F5 觀測)。涵蓋成交的輪印 INFO 並附「自成交回報到達起 N ms」
+        (量的是回報進 handler 的時刻,不是券商撮合時刻;起點 = 最早未落地的成交,鏈中再來的
+        成交不重設 —— 這把尺是 Tier 2-6 的驗收判準,`chain-stats` 讀的就是這幾行);
+        60s 定時輪詢的輪與沒涵蓋成交的輪降 DEBUG。`fills` 只在落地那行帶(「涵蓋 n 筆成交」)。
+        `what` 走 lazy %-args,與檔內其餘 log 同款。"""
+        if not self._chain_covers_fill():
             logger.debug("balance 鏈: " + what, *args)
             return
-        logger.info(
-            "balance 鏈: " + what + "(自成交回報到達起 %.0f ms)",
-            *args,
-            (time.monotonic() - self._fill_seen_at) * 1000,
-        )
+        assert self._fill_seen_at is not None  # `_chain_covers_fill` 已保證
+        elapsed_ms = (time.monotonic() - self._fill_seen_at) * 1000
+        if fills is None:
+            logger.info("balance 鏈: " + what + "(自成交回報到達起 %.0f ms)", *args, elapsed_ms)
+        else:
+            logger.info(
+                "balance 鏈: " + what + "(自成交回報到達起 %.0f ms,涵蓋 %d 筆成交)",
+                *args,
+                elapsed_ms,
+                fills,
+            )
 
     def _poll_pending(self) -> None:
         """幫浦圈 watchdog:損益/期貨查詢零事件卡死時,pending 逾時以已收資料寫入。

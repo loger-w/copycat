@@ -6,6 +6,7 @@ import argparse
 import io
 import logging
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 from copycat.data.import_neigui import run_import
@@ -112,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="覆寫自選群組「盤前篩選」(直接落檔 —— server 跑著時別用:它讀得到檔,但訂閱池與前端廣播不會跟上,症狀 = 群組出現但整排空卡片)",
     )
+
+    p_cs = sub.add_parser(
+        "chain-stats",
+        help="回報鏈統計(#234):server log 的乾淨子集(盤中到達 / 單調 / 庫存段 ≥ 500 ms)落地 p50/p90/p99 + 1019 次數",
+    )
+    p_cs.add_argument("--log", type=Path, nargs="+", required=True, help="logs/server-*.log,可多檔(依序合併)")
 
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
@@ -242,6 +249,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         sys.stderr.write("Discord webhook 發送失敗(詳見 log)\n")
         return 1
+    if args.command == "chain-stats":
+        from copycat.capital.chain_stats import format_report, summarize
+
+        def _lines() -> Iterator[str]:
+            for path in args.log:
+                with path.open(encoding="utf-8", errors="replace") as fh:
+                    yield from fh
+
+        sys.stdout.write(format_report(summarize(_lines())))
+        return 0
     if args.command == "screen":
         import asyncio
         import datetime as _dt
