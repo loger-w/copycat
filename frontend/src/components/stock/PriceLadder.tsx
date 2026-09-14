@@ -41,7 +41,7 @@ const CLICK_DEBOUNCE_MS = 500;
 const HINT_MS = 3_000;
 
 /** 交易別值域 / 標籤本體搬到 `lib/trade-kinds.ts`(三處倉位顯示共用);此處只剩型別
- *  re-export(測試 import `type TradeKind` 的既有路徑)。`TRADE_KINDS` 的 re-export 於
+ *  re-export(`components/rail/RightRail` 與測試 import `type TradeKind` 的既有路徑)。`TRADE_KINDS` 的 re-export 於
  *  2026-09-14 專案瘦身拿掉:全 repo 零外部 import。 */
 export type { TradeKind } from "@/lib/trade-kinds";
 

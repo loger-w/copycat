@@ -52,7 +52,9 @@ type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : fa
 type Expect<T extends true> = T;
 /** 值域雙向相等機驗:`TradeKind`(標籤表推導)⇄ `PositionKind`(wire 型別)。
  *  單邊加值 / 減值不跟,這行 TS2344(pr-166 F-02;實測同域編過、兩向皆紅。
- *  `_SameDomain<A extends B, B extends A = A>` 型式是 circular constraint 編不過,不要換回)。 */
+ *  `_SameDomain<A extends B, B extends A = A>` 型式是 circular constraint 編不過,不要換回)。
+ *  **`export` 不可拿掉**:零 in-file 引用,降私有會撞 `noUnusedLocals` TS6196(2026-09-14 瘦身實際紅過一次);
+ *  knip 會把它報成未使用 export,屬已知誤報。 */
 export type _KindDomainsMatch = Expect<AssertEqual<TradeKind, PositionKind>>;
 
 /** 值域外字串(舊 dist / 舊後端 / 未來新 kind)的預設政策:全稅、無借券費、不鎖買側、
