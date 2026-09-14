@@ -97,6 +97,10 @@ _PENDING_TIMEOUT_S = 8.0
 # 可看,鏈又可能零事件卡死(collector 沒收到任何列就不會 flush)→ 逾期即放行重查
 _BALANCE_CHAIN_TIMEOUT_S = 10.0
 
+#: 回報線主動問(`IsConnectedByID`)的間隔(#235 辨識階段):同步 COM 呼叫佔幫浦圈,10 s 一次
+#: 足以在盤中 ≤ 15 s 內看到掉線;值變化才印一行(每 10 s 一行會洗版)。不依賴任何 SKCOM 事件。
+REPLY_PROBE_SECS: float = 10.0
+
 # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
 # 證券側用 reply.SEC_MARKETS 同一份)
 _FUT_REPLY_MARKETS: frozenset[str] = frozenset({"TF", "TO", "OF", "OO"})
@@ -226,6 +230,10 @@ class CapitalClient:
         self._fill_seen_at: float | None = None
         self._fill_count: int = 0  # 自 `_fill_seen_at` 起累積的成交筆數(落地印「涵蓋 n 筆」)
         self._chain_started_at: float | None = None  # 本輪鏈的庫存查詢出手時刻(rc==0 才記)
+        # 回報線主動問(#235):最近一次 `IsConnectedByID` 的原始 int(None = 尚未問過)+ 下次到期
+        # (monotonic;0 = 立刻)。只 log + 進 status_view,不翻 status —— 語意未實證(辨識階段)
+        self._reply_connected: int | None = None
+        self._reply_probe_next: float = 0.0
         self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
         self._profit = BalanceCollector(
             on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
@@ -274,6 +282,8 @@ class CapitalClient:
             "account_masked": _mask_account(self._full_account),
             "futures_account_masked": _mask_account(self._futures_account),
             "order_enabled": self._safety.order_enabled,
+            # #235:回報線主動問的原始值(None = 尚未問過);前端不讀,給 curl / 盤中對帳
+            "reply_connected": self._reply_connected,
         }
 
     def set_broadcast(self, fn: Callable[[dict[str, object]], None]) -> None:
@@ -819,9 +829,29 @@ class CapitalClient:
             self._oi.poll()
             self._maybe_query_balance()  # 成交後 debounce / 60s 定時重查
             self._poll_pending()  # pending 合併逾時 watchdog
+            self._probe_reply()  # 回報線主動問(#235;每 REPLY_PROBE_SECS 一次)
         except Exception:  # noqa: BLE001 — 單輪故障記 log 續命,見 docstring
             logger.exception("COM 幫浦圈例外(本輪略過)")
             time.sleep(1.0)  # 持續性故障時防 log 洪水
+
+    def _probe_reply(self) -> None:
+        """回報線保底偵測(#235 辨識階段):`IsConnectedByID` 每 `REPLY_PROBE_SECS` 問一次,
+        值變化才印一行(首次「上一值 None」;≠ 1 印 WARNING、= 1 印 INFO)。**不翻 status、不重連**
+        —— 值語意未實證,第一個交易日看 log 的值序列再定接不接 degraded。登入前(status 非
+        ok / degraded)不問。COM 例外走幫浦圈既有的傘。"""
+        if self._status not in ("ok", "degraded"):
+            return
+        now = time.monotonic()
+        if now < self._reply_probe_next:
+            return
+        self._reply_probe_next = now + REPLY_PROBE_SECS
+        value = int(self._com.is_reply_connected(self._user_id))
+        prev = self._reply_connected
+        self._reply_connected = value
+        if value == prev:
+            return
+        level = logging.INFO if value == 1 else logging.WARNING
+        logger.log(level, "群益回報線 IsConnectedByID=%s(上一值 %s)", value, prev)
 
     def _run(self) -> None:
         # pythoncom 動態載入(對齊 com.py 慣例):CI/測試無 COM 環境時跳過 CoInitialize

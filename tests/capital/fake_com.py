@@ -30,6 +30,10 @@ class FakeCom:
         # 查詢面 rc 可注入(GetRealBalance 吃 1019「查詢處理中」是真實失敗態,
         # 且此時鏈完全沒啟動 → 守門旗標與 due 的收尾行為要能測)
         self.balance_rc = 0
+        # 回報線主動問(#235)的回答序列:每問一次取一個,取完停在最後一個;空 = 恆 1。
+        # 真實 SKCOM 的值語意未實證,client 只比「變了沒」→ 測試餵 [1, 1, 0, 1] 這種序列。
+        self.reply_connected_seq: list[int] = []
+        self.reply_connected_calls = 0
 
     def setup(
         self,
@@ -60,6 +64,13 @@ class FakeCom:
 
     def connect_reply(self, user_id: str) -> int:
         return 0
+
+    def is_reply_connected(self, user_id: str) -> int:
+        self.reply_connected_calls += 1
+        if not self.reply_connected_seq:
+            return 1
+        idx = min(self.reply_connected_calls, len(self.reply_connected_seq)) - 1
+        return self.reply_connected_seq[idx]
 
     def send_stock_order(self, user_id: str, fields: dict[str, object]) -> tuple[str, int]:
         self.sent.append(("stock", fields))
