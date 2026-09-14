@@ -13,7 +13,6 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -282,7 +281,7 @@ def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
     broker = _Broker(client, com)
     landings: list[int] = []
 
-    def count_landing(payload: dict[str, Any]) -> None:
+    def count_landing(payload: dict[str, object]) -> None:  # 與 `set_broadcast` 的契約同尺
         data = payload["data"]
         if (
             payload["event"] == "capital_position"

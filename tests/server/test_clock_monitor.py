@@ -122,13 +122,13 @@ class TestSntpQueryWithInjectedExchange:
 
     def test_t0_is_taken_by_the_exchange_after_dns_not_before(self) -> None:
         """pr-238 review F-07:t0 / t3 由傳輸層在送出前 / 收到後當場取,DNS 解析那段不算進去。
-        修前 t0 在 `sntp_query` 進 exchange 之前取,冷 DNS 200 ms 全算成去程 → offset 偏 −100 ms、
-        RTT 膨脹 200 ms —— 首發(server 啟動當下)正是 T1 判準「首行 |offset| < 250 ms」那一行。
-        這裡用 exchange 內 sleep 0.2 s 模擬解析,期望 offset / RTT 都不受它影響。"""
+        修前 t0 在 `sntp_query` 進 exchange 之前取,冷 DNS 全算成去程 → offset 偏 −dns/2、RTT 膨脹 dns
+        —— 首發(server 啟動當下)正是 T1 判準「首行 |offset| < 250 ms」那一行。這裡用 exchange 內
+        sleep 50 ms 模擬解析(修前 offset 偏 −25 ms,遠超 abs=1 ms 容差),期望 offset / RTT 都不受它影響。"""
         import time
 
         def exchange(host: str, request: bytes, timeout: float) -> tuple[float, bytes, float]:
-            time.sleep(0.2)  # 「DNS 解析」:在傳輸層取 t0 之前
+            time.sleep(0.05)  # 「DNS 解析」:在傳輸層取 t0 之前
             t0 = time.time()
             data = _response(t0 + 1.0 + 0.003, t0 + 1.0 + 0.003)  # 伺服器快 1 s、單程 3 ms
             t3 = t0 + 0.006
