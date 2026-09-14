@@ -161,7 +161,10 @@ class RiverState:
             last_minute = max(minutes) if minutes else None
             legs[key] = {
                 "label": labels.get(key, key),
-                "minutes": dict(minutes),
+                # 鍵轉字串(perf #250,1-1):JSON 本來就只有字串鍵、前端 `Object.keys(...).map(Number)`
+                # 一直拿到的都是字串 → wire 逐位元不變;in-memory `_minutes` 仍 int 鍵。理由 = orjson
+                # 預設對 int 鍵 `TypeError: Dict key must be str`(T1 §6.3),WS 換 orjson 前置。
+                "minutes": {str(m): p for m, p in minutes.items()},
                 "last": minutes[last_minute] if last_minute is not None else None,
                 "last_minute": last_minute,
             }

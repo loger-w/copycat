@@ -176,7 +176,8 @@ def _engine(
     )
 
 
-def _minutes(eng: CorrelationEngine, key: str) -> dict[int, int]:
+def _minutes(eng: CorrelationEngine, key: str) -> dict[str, int]:
+    """snapshot 的 `minutes` 鍵是字串(perf #250 起在 wire 邊界轉;in-memory 仍 int)。"""
     return eng.river_snapshot()["legs"][key]["minutes"]
 
 
@@ -189,7 +190,7 @@ class TestLiveFeed:
             assert src.cb is not None
             src.cb(_trade_quote("TC.F.CME.NQ.HOT", 27_638_000))
             await _drain()
-            assert _minutes(eng, "NQ") == {136: 27_638_000}  # 11:01 → offset 136
+            assert _minutes(eng, "NQ") == {"136": 27_638_000}  # 11:01 → offset 136
         finally:
             await eng.close()
 
@@ -216,7 +217,7 @@ class TestLiveFeed:
             assert src.cb is not None
             src.cb(_foreign_trade_quote("TC.F.CME.NQ.HOT", 27_638_000))
             await _drain()
-            assert _minutes(eng, "NQ") == {208: 27_638_000}  # 12:13 → offset 208
+            assert _minutes(eng, "NQ") == {"208": 27_638_000}  # 12:13 → offset 208
         finally:
             await eng.close()
 
@@ -231,7 +232,7 @@ class TestLiveFeed:
             quote["FilledTime"] = ""
             src.cb(quote)
             await _drain()
-            assert _minutes(eng, "NQ") == {136: 27_638_000}
+            assert _minutes(eng, "NQ") == {"136": 27_638_000}
         finally:
             await eng.close()
 
@@ -241,7 +242,7 @@ class TestLiveFeed:
         await eng.start()
         try:
             eng.tick_once()
-            assert _minutes(eng, "TXF") == {136: 40_400_000}
+            assert _minutes(eng, "TXF") == {"136": 40_400_000}
         finally:
             await eng.close()
 
@@ -256,7 +257,7 @@ class TestLiveFeed:
             await _drain()
             eng.tick_once()
             assert _minutes(eng, "TXF") == {}
-            assert _minutes(eng, "NQ") == {136: 27_638_000}
+            assert _minutes(eng, "NQ") == {"136": 27_638_000}
             assert eng.river_snapshot()["legs"]["TXF"]["last"] is None
         finally:
             await eng.close()
@@ -270,7 +271,7 @@ class TestBackfill:
         await eng.start()
         try:
             await _drain()
-            assert _minutes(eng, "NQ") == {75: 27_600_000, 76: 27_610_000}
+            assert _minutes(eng, "NQ") == {"75": 27_600_000, "76": 27_610_000}
         finally:
             await eng.close()
 
@@ -282,7 +283,7 @@ class TestBackfill:
         await eng.start()
         try:
             await _drain()
-            assert _minutes(eng, "NQ") == {75: 27_600_000}
+            assert _minutes(eng, "NQ") == {"75": 27_600_000}
             assert _minutes(eng, "SXF") == {}
         finally:
             await eng.close()
@@ -312,7 +313,7 @@ class TestBackfill:
         try:
             await _drain()
             assert seen == ["TXF"]  # leg.key == 期貨產品碼(design §4 假設)
-            assert _minutes(eng, "TXF") == {175: 40_300_000}
+            assert _minutes(eng, "TXF") == {"175": 40_300_000}
         finally:
             await eng.close()
 
@@ -325,7 +326,7 @@ class TestBackfill:
             assert src.cb is not None
             src.cb(_trade_quote("TC.F.CME.NQ.HOT", 27_638_000))  # live 先到,桶 661
             await _drain()
-            assert _minutes(eng, "NQ") == {136: 27_638_000}
+            assert _minutes(eng, "NQ") == {"136": 27_638_000}
         finally:
             await eng.close()
 
@@ -353,7 +354,7 @@ class TestBackfillTimeoutRetry:
             await wait_until(lambda: bool(_minutes(eng, "SXF")))
             # 首輪逾時 → 第二發把它補回來(次數即證據;中途狀態會隨排程時序漂,不斷言)
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
-            assert _minutes(eng, "SXF") == {76: 12_000_000}
+            assert _minutes(eng, "SXF") == {"76": 12_000_000}
             # 只重補 pending 腿:成功的腿不該被再打一次(TC4 歷史通道是稀缺資源)
             assert src.fetched.count("TC.F.CME.NQ.HOT") == 1
         finally:
@@ -415,7 +416,7 @@ class TestBackfillTimeoutRetry:
             await asyncio.sleep(0.3)  # 若沒取消,舊 task 會在這段醒來打第三發
             await _drain()
             assert src.fetched.count("TC.F.TWF.SXF.HOT") == 2
-            assert _minutes(eng, "SXF") == {76: 12_000_000}
+            assert _minutes(eng, "SXF") == {"76": 12_000_000}
         finally:
             await eng.close()
 
@@ -591,7 +592,7 @@ class TestBackfillSessionOrdering:
         try:
             await _drain()
             eng.tick_once()  # 夜盤點入帳
-            assert _minutes(eng, "TXF") == {481: 40_400_000}
+            assert _minutes(eng, "TXF") == {"481": 40_400_000}
 
             sessions[0] = ("20260730", "day")  # 回補以「日盤」身分晚到
             await eng._backfill_river()
@@ -599,7 +600,7 @@ class TestBackfillSessionOrdering:
             snap = eng.river_snapshot()
             assert snap["session"] == "night"
             assert snap["window"] == {"start_min": 900, "end_min": 1740}
-            assert _minutes(eng, "TXF") == {481: 40_400_000}  # 夜盤點沒被清掉
+            assert _minutes(eng, "TXF") == {"481": 40_400_000}  # 夜盤點沒被清掉
             assert _minutes(eng, "NQ") == {}  # 日盤回補資料不得混入夜盤
         finally:
             await eng.close()
