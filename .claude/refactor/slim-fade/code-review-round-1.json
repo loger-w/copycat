@@ -1,0 +1,27 @@
+{
+  "fixed_point": "cda8b849 (merge-base master..HEAD)",
+  "reviewers": "code-review-two-axis:兩個 sub-agent model=opus effort=high,2026-09-14",
+  "standards": [
+    {"id": "S-01", "severity": "硬違規", "file": "frontend/package.json:22 + package-lock.json", "finding": "`@eslint/js` 補列 devDependencies 混進 refactor(frontend) 0b435f48 同一筆。違反 user CLAUDE.md 鐵則 B「不順手升 dependency」、專案 CLAUDE.md §6 三類分開 commit,且不在 change-spec 白名單。修得對(eslint.config.js:1 本來就 import 它,幽靈依賴),但屬另一筆 chore。"},
+    {"id": "S-02", "severity": "判斷", "file": ".claude/skills/backend-conventions/SKILL.md:44", "finding": "仍引已刪 CLI `fade-search`;同批已改 tc4-market-facts 兩處,兩支 live skill 處置不一致;skills 不在「歷史文件允許留」名單。"},
+    {"id": "S-03", "severity": "判斷", "file": "frontend/src/lib/trade-kinds.ts:4-5", "finding": "註解「`PriceLadder` 仍 re-export `TRADE_KINDS` 與 `TradeKind`」已假(PriceLadder.tsx:45 只剩 `export type`)。frontend-conventions 要求註解陳述為真。"},
+    {"id": "S-04", "severity": "判斷", "file": "frontend/src/components/stock/PriceLadder.tsx:43-44", "finding": "註解「此處 re-export 保住既有 import 路徑(`RightRail` / 測試)」;全 repo 零 `RightRail` 檔、零外部 `TRADE_KINDS` from PriceLadder。"},
+    {"id": "S-05", "severity": "判斷", "file": "frontend/src/App.memo.test.tsx:49-50", "finding": "partial mock 的存在理由兩半皆已假:「`PriceLadder` 模組帶 `TRADE_KINDS`」與「`CapitalOrdersList` 模組帶 `isFutMarket`」(後者已降私有)。frontend-testing 的 mock 策略靠這段註解防人改回全量 mock。"},
+    {"id": "S-06", "severity": "判斷", "file": "CLAUDE.md §4", "finding": "§4 逐字點名的三顆符號被降為 module-private:`lib/ladder-position.ts:24 SELL_TAX_DAYTRADE`、`lib/trade-kinds.ts:60 UNKNOWN_KIND_TRAITS`、`lib/signal-model.ts:10 SignalKind`。行為不變、契約未要求 export,但 §4 條文以可引用符號表述,未同步。"},
+    {"id": "S-07", "severity": "判斷", "file": "9 個元件檔尾", "finding": "刪 `export default` 留下兩行檔尾空行(機械殘跡,eslint 未擋):CorrPanel / RiverCards / RiverOverlay / RiverPanel / FuturesChart / AdvanceDeclineChart / BreadthBand / LimitListSection / MarketPane。"},
+    {"id": "S-08", "severity": "smell / 判斷", "file": "copycat/backtest/report_fmt.py:1-17", "finding": "Speculative Generality:模組存在理由是「兩份 _fmt 並存不合併 + _fmtq 收斂」,刪後只剩 `fmt_cell` 一函式、唯一 caller backtest/report.py:9。獨立模組已無承載價值。"},
+    {"id": "S-09", "severity": "smell / 判斷", "file": "tests/test_shared_infra_characterization.py:1 + copycat/configio.py:1", "finding": "Mysterious Name:檔名 / docstring 稱 shared infra characterization,實剩 3 條;configio.py 仍寫「取代三份 loader 手刻」,測試 docstring 改成「兩份」,兩句不同調。"},
+    {"id": "S-10", "severity": "grep 結果", "file": "HEAD", "finding": "活引用:一條(S-02)。其餘命中全屬歷史 artifact 或同名不同義(`_last_cum` 私有欄位)。runtime 路徑零命中。前端跨檔 import:零;9 個 default export 移除的元件全由具名 import 消費;`Group` re-export 的消費者本來就從 `@/lib/watchlist-model` 取;`DAY` 僅檔內自用。"}
+  ],
+  "spec": [
+    {"id": "P-01", "type": "只做一半 / spec 數字錯", "file": "change-spec.md:27", "finding": "A7 只做 9 / 12:App + CorrPage / FuturesPage / IndexPage / StockPage 走 `lazy(() => import(...))`,default 必須留,屬盤點 A7「12」高估,非漏做。但 commit 訊息寫 9、spec 未記差額。"},
+    {"id": "P-02", "type": "spec 數字錯", "file": "change-spec.md:17", "finding": "「CLI 其餘 20 個子指令原樣」錯:master 21 → HEAD 16,刪的正是 5 支 fade。code 對,spec 的「20」錯。"},
+    {"id": "P-03", "type": "白名單落地", "file": "全 repo", "finding": "「刪」列其餘全數落地,全 repo 零 dangling `fade|quantiles|market_features` 引用。"},
+    {"id": "P-04", "type": "scope creep", "file": ".claude/skills/tc4-market-facts/SKILL.md:110,262-264", "finding": "不只改路徑,重寫了一條累積教訓(`TRADEABLE_STATUSES` 單一定義 → 改述為 `pipeline._TRADEABLE`)。語意有保住,但這是知識 artifact,建議 user 過目。"},
+    {"id": "P-05", "type": "scope creep(未宣告)", "file": "copycat/configio.py:4-5 / frontend/package.json", "finding": "configio docstring 去掉 fade_config 舉例(無害,未宣告);package.json +@eslint/js 在盤點 A 桶內但 spec 範圍段隻字未提。"},
+    {"id": "P-06", "type": "行為不變驗證", "file": "五項", "finding": "1 report.py 仍 import fmt_cell 且本體零改動 PASS;2 HEAD 16 add_parser ↔ 16 dispatch 一個不少 PASS;3 留下的三條斷言與 cda8b849 逐字相同 PASS;4 aggregate `_last_cum` 六處內部使用全在 PASS;5 抽查 FEE_BASE / SELL_TAX* / BARS_*_MS / loadDiscount 定義與 in-file 使用全在、`_KindDomainsMatch` 仍 export PASS。"},
+    {"id": "P-07", "type": "新增缺陷(非行為)", "file": "trade-kinds.ts:4-5 / PriceLadder.tsx:43-44 / App.memo.test.tsx:49 / fetch-timeout.ts:17", "finding": "註解變假 4 處(與 S-03 / S-04 / S-05 同,另加 fetch-timeout.ts 引「`useFuturesBars.BARS_FETCH_TIMEOUT_MS`」已非 export)。"},
+    {"id": "P-08", "type": "新增缺陷(非行為)", "file": "9 個元件檔尾", "finding": "`export default X;` 被換成空行,檔尾多留一行空白(同 S-07)。"}
+  ],
+  "disposition": "S-01 接受:git reset --soft 拆成 refactor(frontend) + chore(frontend) 兩筆(未推送分支)。S-02 接受:backend-conventions:44 改述為「(fade 回測家族,2026-09-14 已刪)」。S-03 / S-04 / S-05 / P-07 接受:四處註解改寫為現況(partial mock 保留、理由改寫為「不再必要但仍是安全預設」)。S-07 / P-08 接受:九檔尾去掉多餘空行。P-01 / P-02 / P-05 接受:change-spec 數字改 16、A7 記 9/12 與 lazy 理由、文件層同動與 A8 獨立 commit 寫進範圍段。S-06 不修(判斷):§4 條文以「位置 + 語意」表述,export 與否不是契約,三顆符號仍在原檔原名;若日後要引用再開。S-08 不修(判斷):一函式模組不值一次搬家,鐵則 B 不為縮短而改;記 next-time 候選。S-09 不修(判斷):configio「三份」是歷史事實、測試 docstring「兩份」是現況,各自為真;記 next-time 一併整理時再改名。P-04 不修但列給 user 過目:教訓語意保留、只把已刪路徑改述為現存路徑。P-03 / P-06 無事。收修後 gate:tsc 0 / eslint 0 / vitest 全量重跑(見 verification.md)。"
+}

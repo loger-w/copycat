@@ -14,7 +14,7 @@ A 桶做、B1 fade 家族全刪。
 ## 行為不變承諾(Spec 軸對照)
 
 1. `python -m copycat.server` 啟動路徑零改動(app.py / engines 未動)。
-2. CLI 其餘 20 個子指令原樣;只少 5 個 `fade-*`。
+2. CLI 其餘 16 個子指令原樣(21 → 16);只少 5 個 `fade-*`。
 3. `copycat validate` golden 結果與 master 相同(replay / engine 未動;A4 只刪零 caller 方法)。
 4. `backtest/report.py`(T 日)輸出逐字不變:`fmt_cell` 原樣,只刪 `fmt_num` / `fmt_quantiles`。
 5. 前端:只拿掉未被任何檔 import 的 `export` 關鍵字與未使用的 default export;bundle 行為不變。
@@ -24,7 +24,9 @@ A 桶做、B1 fade 家族全刪。
 刪:`copycat/backtest/fade_*.py`、`market_features.py`、`quantiles.py`、`tests/backtest/test_fade_*`、
 `tests/test_fade_*.py`、`tests/test_cli_fade.py`、`tests/test_market_features.py`、`configs/fade_uc_round*.json`、
 `cli.py` 五個子指令、`report_fmt.fmt_num / fmt_quantiles`、`aggregate.last_cum`、`LockTracker.current_lock_start`、
-前端 knip 33 export / 33 type / 未使用 default export。
+前端 knip 33 export / 33 type / 9 個未使用 default export(盤點 A7 寫 12,其中 App / CorrPage / FuturesPage / IndexPage / StockPage 走 `lazy(() => import())`,default 必須留;A7 高估,非漏做)。
+另兩處文件層同動:`.claude/skills/{tc4-market-facts,backend-conventions}/SKILL.md` 三條指向已刪路徑的教訓改寫(語意保留、路徑改述)、`configio.py` docstring 去掉 fade_config 舉例。
+A8(`@eslint/js` 補列 devDependencies)獨立 chore commit,不混進 refactor commit(review Standards #1)。
 
 不動:`docs/**`、`.claude/mod/fade-round-2`(歷史 artifact)、`backtest/{config,universe,features,simulate,search,stats,pipeline,report}.py`(T 日)、
 `replay/ engine/ data/`、`spikes/`、任何 runtime 行為。
