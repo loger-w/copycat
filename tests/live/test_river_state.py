@@ -19,7 +19,7 @@ class TestPush:
         s = _state()
         s.push("TXF", 600, 40_646_000, DAY)
         s.push("TXF", 600, 40_650_000, DAY)
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {75: 40_650_000}
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {"75": 40_650_000}
 
     def test_out_of_window_minute_dropped(self) -> None:
         s = _state()
@@ -38,14 +38,14 @@ class TestPush:
         s.push("ES", 600, 7_388_000, DAY)
         s.push("TXF", 901, 40_700_000, NIGHT)  # 15:01
         legs = s.snapshot(LABELS, 2)["legs"]
-        assert legs["TXF"]["minutes"] == {1: 40_700_000}
+        assert legs["TXF"]["minutes"] == {"1": 40_700_000}
         assert legs["ES"]["minutes"] == {}
 
     def test_utc_date_change_clears(self) -> None:
         s = _state()
         s.push("TXF", 600, 40_646_000, DAY)
         s.push("TXF", 600, 40_800_000, NEXT_DAY)
-        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"] == {75: 40_800_000}
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"] == {"75": 40_800_000}
 
 
 class TestCloseClampPush:
@@ -59,14 +59,14 @@ class TestCloseClampPush:
         s = _state()
         s.push("TXF", 825, 40_646_000, DAY)  # 13:44:30 的取樣落 13:45 桶
         s.push("TXF", 826, 40_650_000, DAY)  # 13:45:02 收盤撮合
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_650_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]["300"] == 40_650_000
 
     def test_stale_minute_does_not_overwrite_end_slot(self) -> None:
         s = _state()
         s.push("TXF", 825, 40_646_000, DAY)
         s.push("TXF", 826, 40_650_000, DAY)
         s.push("TXF", 829, 40_700_000, DAY)  # 13:48 殘留取樣 → 丟棄
-        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_650_000
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"]["300"] == 40_650_000
 
     def test_first_stale_minute_is_already_blocked(self) -> None:
         # rank >= 2 的**下邊界**:13:46 就已經是「收盤後殘留」。門檻若鬆成 rank >= 3,
@@ -75,7 +75,7 @@ class TestCloseClampPush:
         s.push("TXF", 825, 40_646_000, DAY)
         s.push("TXF", 826, 40_650_000, DAY)
         s.push("TXF", 827, 40_700_000, DAY)  # 13:46 = clamp rank 2 → 丟棄
-        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"][300] == 40_650_000
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"]["300"] == 40_650_000
 
     def test_night_close_clamp_uses_the_expanded_scale(self) -> None:
         # 夜盤 end = 05:00,而 05:0x 的 minute-of-day(300–305)全都 < 窗首 900 →
@@ -84,7 +84,7 @@ class TestCloseClampPush:
         s.push("TXF", 1740, 40_600_000, NIGHT)  # 05:00 bar 本身,offset 840
         s.push("TXF", 301, 40_650_000, NIGHT)  # 05:00:xx 收盤撮合(桶 05:01)= rank 1 → 要進得來
         s.push("TXF", 302, 40_700_000, NIGHT)  # 05:01 殘留 = rank 2 → 丟棄
-        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"] == {840: 40_650_000}
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"] == {"840": 40_650_000}
 
     def test_guard_runs_after_the_session_switch(self) -> None:
         # 守門必須在 `set_session` **之後**:換場後新場的 end 格是空的,rank 2 的第一筆
@@ -95,7 +95,7 @@ class TestCloseClampPush:
         s.push("ES", 825, 7_400_000, DAY)
         s.push("TXF", 827, 40_900_000, NEXT_DAY)  # 換日 + clamp rank 2
         legs = s.snapshot(LABELS, 2)["legs"]
-        assert legs["TXF"]["minutes"] == {300: 40_900_000}
+        assert legs["TXF"]["minutes"] == {"300": 40_900_000}
         assert legs["ES"]["minutes"] == {}  # 舊場的點一併清掉
 
     def test_discarded_push_does_not_become_a_delta_point(self) -> None:
@@ -108,11 +108,11 @@ class TestCloseClampPush:
         # 13:45 真收盤可能因 tick 稀疏而沒落 end 格 → 13:46 的取樣仍是最佳近似
         s = _state()
         s.push("TXF", 827, 40_700_000, DAY)
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {300: 40_700_000}
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"] == {"300": 40_700_000}
         # clamp 窗最後一分鐘(13:50 = rank 5)同理:名次再大,end 格空著就照寫
         s2 = _state()
         s2.push("ES", 830, 7_400_000, DAY)
-        assert s2.snapshot(LABELS, 1)["legs"]["ES"]["minutes"] == {300: 7_400_000}
+        assert s2.snapshot(LABELS, 1)["legs"]["ES"]["minutes"] == {"300": 7_400_000}
 
     def test_smaller_rank_wins_over_a_farther_stale_sample(self) -> None:
         """N015:守門改「名次小者贏」—— 先到的 13:48 不得把更接近收盤的 13:46 擋在外面。
@@ -123,17 +123,17 @@ class TestCloseClampPush:
         s = _state()
         s.push("TXF", 829, 40_700_000, DAY)  # 13:48 = rank 4(end 格空著 → 進得來)
         s.push("TXF", 827, 40_660_000, DAY)  # 13:46 = rank 2,名次更小 → 應覆寫
-        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_660_000
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"]["300"] == 40_660_000
         # 反向:名次更大的再來一次仍不得覆寫(單調性)
         s.push("TXF", 830, 40_900_000, DAY)  # 13:49 = rank 5
-        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"][300] == 40_660_000
+        assert s.snapshot(LABELS, 3)["legs"]["TXF"]["minutes"]["300"] == 40_660_000
 
     def test_equal_rank_does_not_overwrite(self) -> None:
         """同名次不覆寫 —— 「小者贏」是嚴格小於,不是「後到就贏」(那等於沒有守門)。"""
         s = _state()
         s.push("TXF", 827, 40_700_000, DAY)
         s.push("TXF", 827, 40_900_000, DAY)  # 同為 rank 2
-        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"][300] == 40_700_000
+        assert s.snapshot(LABELS, 2)["legs"]["TXF"]["minutes"]["300"] == 40_700_000
 
     def test_non_clamp_minutes_keep_last_write_wins(self) -> None:
         s = _state()
@@ -142,7 +142,38 @@ class TestCloseClampPush:
         s.push("TXF", 825, 40_646_000, DAY)  # 13:45 bar,offset 300
         s.push("TXF", 825, 40_648_000, DAY)
         minutes = s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]
-        assert minutes == {299: 40_610_000, 300: 40_648_000}
+        assert minutes == {"299": 40_610_000, "300": 40_648_000}
+
+
+class TestSnapshotMinuteKeysAreStrings:
+    """perf #250(1-1):snapshot 的 `minutes` 鍵在 wire 邊界轉字串,in-memory `_minutes` 仍 int。
+
+    JSON 本來就只有字串鍵(json.dumps 會轉),所以 wire 逐位元不變、前端零改動;改的理由是 orjson
+    對 int 鍵直接 TypeError(T1 §6.3),WS 換 orjson 前置。守門:鍵全是 str、json.dumps 輸出與
+    「int 鍵版」逐位元相同、in-memory 型別沒被順手改掉(delta 的 `m` 是值不是鍵,照舊 int)。
+    """
+
+    def test_snapshot_keys_str_wire_unchanged_memory_int(self) -> None:
+        import json
+
+        s = _state()
+        s.push("TXF", 600, 40_650_000, DAY)
+        s.push("TXF", 825, 40_700_000, DAY)
+        snap = s.snapshot(LABELS, 1)
+        minutes = snap["legs"]["TXF"]["minutes"]
+        assert minutes == {"75": 40_650_000, "300": 40_700_000}
+        assert all(isinstance(k, str) for k in minutes)
+        assert all(isinstance(k, int) for k in s._minutes["TXF"])
+        int_keyed = {
+            **snap,
+            "legs": {
+                **snap["legs"],
+                "TXF": {**snap["legs"]["TXF"], "minutes": {75: 40_650_000, 300: 40_700_000}},
+            },
+        }
+        dumps = lambda o: json.dumps(o, separators=(",", ":"))  # noqa: E731
+        assert dumps(snap) == dumps(int_keyed)
+        assert s.delta(2)["legs"]["TXF"] == {"m": 300, "p": 40_700_000}
 
 
 class TestSetSession:
@@ -165,8 +196,8 @@ class TestApplyBackfill:
         filled = s.apply_backfill("ES", [(599, 7_380_000), (600, 7_390_000)], DAY)
         minutes = s.snapshot(LABELS, 1)["legs"]["ES"]["minutes"]
         assert filled == 1
-        assert minutes[74] == 7_380_000
-        assert minutes[75] == 7_400_000  # live 優先,不被回補覆蓋
+        assert minutes["74"] == 7_380_000
+        assert minutes["75"] == 7_400_000  # live 優先,不被回補覆蓋
 
     def test_out_of_window_rows_skipped(self) -> None:
         s = _state()
@@ -192,7 +223,7 @@ class TestApplyBackfill:
         s = _state()
         s.push("TXF", 827, 40_700_000, DAY)  # 13:46 殘留取樣;end 格還空著 → 進得來
         assert s.apply_backfill("TXF", [(825, 40_646_000)], DAY) == 1
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_646_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]["300"] == 40_646_000
 
     def test_backfill_overwrites_the_end_slot_only_once(self) -> None:
         """「覆寫一次」:寫進去的就是真值,第二趟回補回到既有的「只補空缺」。"""
@@ -200,7 +231,7 @@ class TestApplyBackfill:
         s.push("TXF", 827, 40_700_000, DAY)
         s.apply_backfill("TXF", [(825, 40_646_000)], DAY)
         assert s.apply_backfill("TXF", [(825, 40_000_000)], DAY) == 0
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_646_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]["300"] == 40_646_000
 
     def test_backfill_does_not_overwrite_the_close_auction_minute(self) -> None:
         """rank 1(13:45:xx 收盤撮合)是**真成交**不是近似 —— 回補不得覆寫它。
@@ -211,14 +242,14 @@ class TestApplyBackfill:
         s = _state()
         s.push("TXF", 826, 40_650_000, DAY)  # rank 1
         assert s.apply_backfill("TXF", [(825, 40_646_000)], DAY) == 0
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][300] == 40_650_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]["300"] == 40_650_000
 
     def test_backfill_does_not_overwrite_a_plain_live_minute(self) -> None:
         """白名單:非 end 格(rank 0)的「回補只補空缺」逐字不變。"""
         s = _state()
         s.push("TXF", 600, 40_646_000, DAY)
         assert s.apply_backfill("TXF", [(600, 40_000_000)], DAY) == 0
-        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"][75] == 40_646_000
+        assert s.snapshot(LABELS, 1)["legs"]["TXF"]["minutes"]["75"] == 40_646_000
 
 
 class TestSnapshot:
