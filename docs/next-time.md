@@ -981,3 +981,18 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 - [x] ~~**`TestWsBroadcasterBackpressure` 五份 `WsBroadcaster(...) + stream() + try/finally aclose()` + caplog 骨架抽 fixture**(收修 review 標準軸 F-06,LOW 判斷題):第 5 份是本批的單筆窗案,前四份(:1098 / :1119 / :1133 / :1161)為既有;動它們屬順手 refactor,依鐵則 B 另開 🔵 test-hygiene 批。~~
   → 09-09 refactor/w3-b2-test-scaffolds 出貨:該 class 住 `tests/server/test_capital_api.py`(非 test_ws_disconnect;到 09-09 已長成八份),收成模組內 async fixture `ws_stream`(測後統一 aclose)+ `_queue_full_warnings`。
+
+## 2026-09-14(mod/batch-a-real-money two-axis round-1 留尾,spec #232)
+
+- [ ] **前端測試檔各自 `new QueryClient(` 收攏到 `createQueryClient`**(std S-02,🔵 test-hygiene 批):#237 只收了 `main.tsx` 與
+  `test-utils.tsx`;20+ 測試檔(含 `OrderPanel.test` / `ArmRow.characterization.test` 等真錢 mutation 測試)仍各自 `new QueryClient`,
+  跑的是 TanStack 預設 `online` 形狀。jsdom 下 `navigator.onLine` 恆 true → 無行為差,但「測試 client 與 prod 同形」只對 wrap 成立。
+  機械替換 + 一條 lint(禁 `new QueryClient(` 出現在 `lib/query-client.ts` 之外)。
+- [ ] **`IsConnectedByID` 耗時實錄後決定要不要搬出幫浦圈**(std S-05):現版 > 50 ms 印 WARNING;第一個交易日 `grep "IsConnectedByID 耗時"`
+  零命中 = 留在幫浦圈;有命中 = 改成獨立節奏(或 `_cmd_q` 空才問)。
+- [ ] **回報線「修」的那一半**(#235 辨識後):看一個交易日 `grep "回報線\|Solace" logs/server-<日>.log` —— Solace 那對響了 → 接
+  `on_disconnect` 翻 degraded + 重連(store.clear 前置,review R7);兩對都沒響、只有 IsConnectedByID 翻 0 → 以它翻 degraded。
+  另:送出 rc=0 的單 N 秒內沒收到自己的 OnNewData 的相關性 watchdog(grilling Q6 (b))仍是候選。
+- [ ] **零股 / 權證上閃電梯**(user 09-14 問「手機下的單閃電梯沒顯示」):3008 十股是零股,`ladder-lots.ts` 排除 `unit === "股"`
+  是設計(CLAUDE §4);要顯示得另開 /mod 決定零股格的語意(張數 < 1 的位置怎麼畫)。
+
