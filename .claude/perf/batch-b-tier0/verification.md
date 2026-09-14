@@ -7,7 +7,7 @@ fixed point `1e0720be`(origin/master)。python 一律主樹 venv 絕對路徑(wo
 
 | gate | 指令 | 結果 |
 |---|---|---|
-| pytest 全量 | `C:/side-project/copycat/.venv/Scripts/python -m pytest -q`(worktree) | **3419 passed, 3 skipped**,214 s,exit 0(baseline master 3394 passed;+25 = 本批新測試) |
+| pytest 全量(最終,review 收修後) | `C:/side-project/copycat/.venv/Scripts/python -m pytest -q`(worktree,TCPY 已複製) | **3421 passed, 1 skipped**,210 s,exit 0(baseline master 3394;+27 = 本批新測試;首輪 3419 / 3 skipped 見下列) |
 | 3 skipped 追查 | `pytest -rs tests/live/test_tc4.py tests/backtest/test_characterization.py`(Copy-Item `spikes/TCPY` 進 worktree 後) | test_tc4 **104 passed**(2 個 skip 是 worktree 缺 gitignored TCPY);剩 1 skip = backtest characterization 需 `data/` 種子(本批未動 backtest;主樹 baseline 含它全綠) |
 | ruff | `ruff check copycat tests` | All checks passed,exit 0 |
 | ruff format(新檔) | `ruff format --check` 於 corr_state / win_timer / test_ws_has_clients / test_win_timer / test_models | already formatted |
