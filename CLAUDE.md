@@ -57,7 +57,7 @@ copycat/                  # Python 3.13 package(stdlib-only runtime;pytest/ruff/
 │                         #   search/stats/pipeline(outcome cache 三重失效)/report
 ├── live/                 #   TXO 看盤:models/payoff/aggregate/handover/tc4(唯一碰 ZMQ)
 │                         #   個股:stock_models(五檔位移歸一/試撮窗)、stock_state、stock_source
-│                         #   個股訊號:signal_state(CDP 穿越/爆拉跌/爆量/鎖板/掃單簇,零 IO)
+│                         #   個股訊號:signal_state(CDP 穿越/爆拉跌/爆拉回檔/爆量/鎖板/掃單簇/放量離開,零 IO)
 │                         #   期貨:futures_models(HOT YYYYMM 解析)、futures_source
 │                         #   相關係數:corr_models/corr_state/corr_source(海外腿全天窗)
 │                         #   六腿江波圖:river_models/river_state/river_backfill

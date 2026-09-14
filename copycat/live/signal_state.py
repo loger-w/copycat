@@ -1,6 +1,6 @@
 """個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6;spec #192 掃單簇)。
 
-六類訊號:CDP 五線穿越 / 爆拉跌 / 爆拉回檔 / 爆量 / 鎖漲跌停與打開 / 掃單簇。設計要點:
+七類訊號:CDP 五線穿越 / 爆拉跌 / 爆拉回檔 / 爆量 / 鎖漲跌停與打開 / 掃單簇 / 放量離開。設計要點:
 
 - **零 IO、時鐘可注入**:窗判定、elapsed、cooldown、rearm 全部讀 `now_fn()`
   (台北牆鐘,恆單調);`SignalEvent.time` 只放 tick 時刻,純顯示用。兩條時間軸
@@ -102,6 +102,7 @@ _BREAKOUT_MIN_MINUTES = 4
 @dataclass(frozen=True)
 class SignalEvent:
     # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open | sweep_cluster
+    # | vol_breakout
     kind: str
     code: str
     price_milli: int

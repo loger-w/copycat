@@ -50,7 +50,7 @@
   實作與測試兩邊逐字一致)。
 - W-12 `notify` 閘契約(缺欄視為 true)不動;新 kind 種子 `notify_discord=false` → 列帶 `notify:false` → 前端 toast / 嗶 / 桌面通知全靜音、rail 淡色仍列。
 - W-13 `SignalEvent` 既有建構點零改動(新增狀態全在 detector 私有欄;`detail` 仍是唯一選配欄)。
-- W-14 熱路徑:大單中位只在候選 tick(外盤且價升)才算;非掃單簇規則的 detector 不維護大單狀態以外的新東西(狀態是 per-detector,但只有掃單簇規則讀它;開銷 = 每 tick 一次 deque append)。
+- W-14 熱路徑:兩軸狀態機(大單敲檔 / 放量離開)per-detector 各一份,每個 detector 對每個 tick 都推進兩軸(狀態推進與事件產出分離,design R2),非該 kind 的規則只推進不產出;per-tick 是 O(1)(deque append / dict 更新),大單中位只在候選 tick(外盤且價升)才 sorted 300 個 int。實測 4.33 µs/tick/detector(pr-228 review F-03 bench);原句「非掃單簇規則不維護新東西」與實作不符,已改寫。
 
 ## 3. Grilling(`/auto` 疊加:frontier 逐題採建議解)
 
