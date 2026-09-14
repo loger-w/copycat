@@ -442,6 +442,37 @@ class TestPolicyHits:
         finally:
             await h.hub.close()
 
+    async def test_emit_policies_drops_bool_big_lots_to_none(
+        self, tmp_path: Path, clock: _Clock
+    ) -> None:
+        """bool 守門的 hub 半邊(Discord 半邊 = `TestPolicyText::test_policy_card_line2_ignores_bool_big_lots`;
+        pr-228 review F-10):`detail[BIG_LOTS_KEY]` 是 bool → 政策列頂層 None(不是 1),`sweep` 鏡像照舊
+        四鍵。直呼 `_emit_policies`:線上 `_advance_big_lots` 恆回 int,tick 路徑餵不進 bool。"""
+        h, _ = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})
+        try:
+            event = SignalEvent(
+                kind="sweep_cluster",
+                code="2330",
+                price_milli=50_400,
+                time="10:01:30",
+                time_key="10:01:30.500",
+                levels=(),
+                direction=None,
+                pct=0.8,
+                touch_count=1,
+                detail={"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8, BIG_LOTS_KEY: True},
+            )
+            rule = next(r for r in h.hub.rules() if r["id"] == _SWEEP_RULE_ID)  # `_boot` 寫的那條
+            h.hub._emit_policies(
+                event, rule, _state(ref=50_000, upper=55_000), {"name": "台積電"}, _DATE
+            )
+            await h.settle()
+            assert [m["policy"] for m in h.published] == ["P"]
+            assert h.published[0]["big_lots_120s"] is None
+            assert h.published[0]["sweep"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8}
+        finally:
+            await h.hub.close()
+
 
 class TestGroupResolution:
     async def test_multi_group_union_dedup_and_one_warning(
@@ -801,36 +832,6 @@ class TestPolicyText:
             [{**self._card_head(), "big_lots_120s": True}], peer_up_pct=3.0
         )
         assert text.split("\n")[1] == "掃單簇 2 掃・2 層・6 張・+0.80%"
-
-    async def test_emit_policies_drops_bool_big_lots_to_none(
-        self, tmp_path: Path, clock: _Clock
-    ) -> None:
-        """同一道守門的 hub 半邊:`detail[BIG_LOTS_KEY]` 是 bool → 政策列頂層 None(不是 1),`sweep`
-        鏡像照舊四鍵。直呼 `_emit_policies`:線上 `_advance_big_lots` 恆回 int,tick 路徑餵不進 bool。"""
-        h, _ = await _boot(tmp_path, clock, groups=[_MEM], peers={"2344": _peer("華邦電", 1.0)})
-        try:
-            event = SignalEvent(
-                kind="sweep_cluster",
-                code="2330",
-                price_milli=50_400,
-                time="10:01:30",
-                time_key="10:01:30.500",
-                levels=(),
-                direction=None,
-                pct=0.8,
-                touch_count=1,
-                detail={"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8, BIG_LOTS_KEY: True},
-            )
-            rule = next(r for r in h.hub.rules() if r["id"] == _SWEEP_RULE_ID)  # `_boot` 寫的那條
-            h.hub._emit_policies(
-                event, rule, _state(ref=50_000, upper=55_000), {"name": "台積電"}, _DATE
-            )
-            await h.settle()
-            assert [m["policy"] for m in h.published] == ["P"]
-            assert h.published[0]["big_lots_120s"] is None
-            assert h.published[0]["sweep"] == {"n30": 2, "levels": 2, "qty": 6, "up_pct": 0.8}
-        finally:
-            await h.hub.close()
 
     def test_policy_group_text_without_policy_rows_falls_back_to_plain_format(self) -> None:
         """對外函式自守「至少一列政策列」(review F-10):零政策列不炸 IndexError,退回一般批次文案。"""

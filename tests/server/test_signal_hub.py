@@ -1749,7 +1749,7 @@ class TestCdpGate:
             lines = [r.getMessage() for r in caplog.records if "CDP 列閘" in r.getMessage()]
             # 實得 / 需求兩個數一起斷(pr-228 review F-08):盤後判準「整批全『日 K 不足』= 抓取根數被改小」
             # 讀的正是這兩個數,需求根數印錯(`cdp_gate_days` 少 +1)只斷「5」仍綠
-            assert len(lines) == 1 and "只有 5 根(需 6)" in lines[0]
+            assert len(lines) == 1 and "日 K" in lines[0] and "只有 5 根(需 6)" in lines[0]
             h.cross_nh(_state())
             await h.settle()
             assert h.published == []
@@ -1790,7 +1790,7 @@ class TestCdpGate:
             assert _cache(h) == (_DATE, None)
             assert len(bars.calls) == 1
             lines = [r for r in caplog.records if "CDP 列閘" in r.getMessage()]
-            assert [r.levelno for r in lines] == [logging.WARNING]
+            assert len(lines) == 1 and lines[0].levelno == logging.WARNING
             text = lines[0].getMessage()
             assert "首尾日 K 收盤 ≤ 0(壞資料)" in text and "累計" not in text
         finally:
