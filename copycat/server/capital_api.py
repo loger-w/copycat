@@ -255,7 +255,10 @@ async def capital_orders(request: Request) -> dict:
     client = _capital(request)
     return {
         "orders": [
-            {**dataclasses.asdict(o), "code": _fill_code(o.unit, o.stock_no)}
+            # `__dict__` 展開取代 `asdict`(perf #246):三個 record 全是純量欄,asdict 的遞迴 +
+            # deepcopy 全是白工(n=400 列 794 → ~90 µs);`tests/capital/test_models.py` parity 案釘
+            # 「__dict__ == asdict」,將來加巢狀欄位那條會紅、這裡跟著改。
+            {**o.__dict__, "code": _fill_code(o.unit, o.stock_no)}
             for o in client.store.orders()
         ]
     }
@@ -268,7 +271,7 @@ async def capital_fills(request: Request) -> dict:
     client = _capital(request)
     return {
         "fills": [
-            {**dataclasses.asdict(f), "code": _fill_code(f.unit, f.stock_no)}
+            {**f.__dict__, "code": _fill_code(f.unit, f.stock_no)}  # perf #246,同 orders
             for f in client.store.fills()
         ]
     }
@@ -285,7 +288,7 @@ async def capital_positions(request: Request) -> dict:
     client = _capital(request)
     return {
         "positions": [
-            {**dataclasses.asdict(p), "code": stock_code_of(p.market, p.stock_no)}
+            {**p.__dict__, "code": stock_code_of(p.market, p.stock_no)}  # perf #246,同 orders
             for p in client.store.positions()
         ]
     }
