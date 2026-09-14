@@ -37,6 +37,7 @@ from copycat.server.breadth_engine import (
     StockInfoFetch,
 )
 from copycat.server.capital_api import register_capital
+from copycat.server.clock_monitor import ClockSample, run_clock_monitor
 from copycat.server.oi_levels import register_oi
 from copycat.server.ws import WsBroadcaster, relay, send_seed
 from copycat.server.corr_engine import CorrelationEngine, CorrSource
@@ -526,10 +527,14 @@ def create_app(
     stock_watchlist_path: Path | None = None,
     stock_names_path: Path | None = None,
     trading_calendar: TradingCalendar | None = None,
+    clock_probe: Callable[[], ClockSample | None] | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
     """`trading_calendar=None`(預設)= 無日曆 = 牆鐘,逐字等於改動前的行為。
+
+    `clock_probe=None`(預設)= 不起時鐘偏差監測(#236);prod 由 `__main__` 顯式傳
+    `clock_monitor.probe`(同「prod 顯式、測試預設關」慣例:預設開會讓每個 create_app 測試打真 UDP)。
 
     prod 由 `__main__` 顯式傳 `load_trading_calendar()`(對齊 DEFAULT_STOCK /
     DEFAULT_BREADTH 的「prod 顯式、測試預設關」慣例):39 個既有測試呼叫點以
@@ -1141,9 +1146,28 @@ def create_app(
                 await app.state.stkfut_catalog.prewarm()
 
         boot_task = asyncio.create_task(_boot_all())
+        # 時鐘偏差監測(#236):與引擎無關(不需要 TC4),boot 序列之外獨立起;最近一次結果掛
+        # app.state(診斷 / 測試同步點),只 log 不進任何 gate。`clock_probe=None` = 不起(測試預設)
+        app.state.clock_skew = None
+        clock_task: asyncio.Task[None] | None = None
+        if clock_probe is not None:
+
+            def _remember_skew(sample: ClockSample | None) -> None:
+                app.state.clock_skew = sample
+
+            clock_task = asyncio.create_task(run_clock_monitor(clock_probe, sink=_remember_skew))
         try:
             yield
         finally:
+            if clock_task is not None:
+                # 最先收:純 log 的旁支,`to_thread` 裡的 UDP 最多再等一個 timeout(2 s)
+                clock_task.cancel()
+                try:
+                    await clock_task
+                except asyncio.CancelledError:
+                    logger.info("時鐘偏差監測已取消(關機)")
+                except BaseException:
+                    logger.exception("時鐘偏差監測以例外結束(關機續行)")
             if not boot_task.done():
                 boot_task.cancel()
             try:

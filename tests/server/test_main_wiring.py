@@ -31,6 +31,7 @@ from copycat.server.app import (
     DEFAULT_STOCK,
 )
 from copycat.server.verify import FAIL_ENV_KEY, FakeTxoSource
+from copycat.server import clock_monitor
 from copycat.trading_calendar import TradingCalendar
 from tests.helpers.boot import BootedClient
 
@@ -89,6 +90,9 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
         # 家數帶(market-overview R2):prod 必須顯式 DEFAULT_BREADTH,漏傳 = 整條
         # FinMind 管線靜默不啟動而面板只寫「FinMind 未設定」(與真的沒設同形)
         "breadth_fetchers": DEFAULT_BREADTH,
+        # 時鐘偏差監測(#236):prod 顯式 `clock_monitor.probe`,漏傳 = 整條監測靜默不起、
+        # 盤後 `grep 時鐘偏差` 零行(與「校時正常」在 log 上分不出來)
+        "clock_probe": clock_monitor.probe,
     }
     # 明寫:trade 路已除役,sentinel 借用語意不得復活
     assert cap.create_kwargs is not None and "trade_source" not in cap.create_kwargs

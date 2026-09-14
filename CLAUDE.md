@@ -393,6 +393,17 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   optional **不讀**。**status 燈不動、不自動重連**(值語意未實證,誤判會在盤中亮假黃字);看過一個交易日
   `grep "回報線\|Solace" logs/server-<日>.log` 的值序列再決定接不接 degraded(那是下一批的「修」)。
   `tests/capital/test_reply_watch.py` + `test_com.py::test_reply_events_solace_pair_logs_only` 釘住。
+- **時鐘偏差監測(本機鐘 vs NTP)只看不改**(2026-09-14 起,#236):產生點 `copycat/server/clock_monitor.py`
+  (stdlib SNTP,啟動立即量一次、之後每 10 分鐘,主機序 time.google.com → time.windows.com → pool.ntp.org,單台
+  timeout 2 s;`offset = 本機 − NTP`,負 = 本機落後);INFO 每次「時鐘偏差:±N ms(主機,RTT)」,|offset| ≥
+  **250 ms WARNING**、≥ **2 s ERROR**(常數不進 config;文案含「本機鐘落後 / 超前,校時服務可能沒在跑」),三台
+  全失敗一行 WARNING 不重試到下一輪;最近結果掛 `app.state.clock_skew`,**不加 API、不進前端、不改任何 gate**。
+  接線 = `__main__` prod 顯式傳 `clock_probe=clock_monitor.probe`(測試 / --verify 預設關;`test_main_wiring` 釘)。
+  **修的那一半是 user 端**:W32Time 實測 Stopped / Manual、2026-09-14 本機落後 2.6 s(09-11 有 4 則 13:30:00 tick
+  穿過 end-exclusive 盤中閘就是它)—— 管理員 PowerShell 跑 `Set-Service W32Time -StartupType Automatic` +
+  `SpecialPollInterval=3600` + `Start-Service W32Time` + `w32tm /resync`(盤後跑;之後每小時自動校)。判準:重啟後
+  `grep 時鐘偏差 logs/server-<日>.log` 首行 |offset| < 250 ms、一天約 144 行、零 ERROR;WARNING 又出現 = 校時服務
+  又停了。`tests/server/test_clock_monitor.py` 釘住(含本段閾值字面 parity)。
 - **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
   `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
   `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值
