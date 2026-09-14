@@ -1160,7 +1160,9 @@ def create_app(
             yield
         finally:
             if clock_task is not None:
-                # 最先收:純 log 的旁支,`to_thread` 裡的 UDP 最多再等一個 timeout(2 s)
+                # 最先收:純 log 的旁支。cancel 只讓 await 早退,`to_thread` 裡的 UDP 探針執行緒不可
+                # cancel、`asyncio.run` 收尾會 join 它:最壞 = len(NTP_HOSTS) × TIMEOUT_SECS(+DNS),
+                # 已列進 `shutdown_budget.CLOCK_PROBE_WORST_SECS`(pr-238 review F-06)
                 clock_task.cancel()
                 try:
                     await clock_task

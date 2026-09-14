@@ -228,7 +228,7 @@ class CapitalClient:
         # 才在落地時清它(`_chain_covers_fill`);鏈飛行中再來的成交不重設起點(修前 79% 污染樣本
         # 集中在開機 backlog 重播,方向是把數字拉小 —— V2 §2.3)。60s 定時輪詢那些輪不印(避免洗版)。
         self._fill_seen_at: float | None = None
-        self._fill_count: int = 0  # 自 `_fill_seen_at` 起累積的成交筆數(落地印「涵蓋 n 筆」)
+        self._fill_count: int = 0  # 自 `_fill_seen_at` 起累積的成交筆數(落地印「累計 n 筆成交」)
         self._chain_started_at: float | None = None  # 本輪鏈的庫存查詢出手時刻(rc==0 才記)
         # 回報線主動問(#235):最近一次 `IsConnectedByID` 的原始 int(None = 尚未問過)+ 下次到期
         # (monotonic;0 = 立刻)。只 log + 進 status_view,不翻 status —— 語意未實證(辨識階段)
@@ -320,6 +320,12 @@ class CapitalClient:
             self._balance_abandoned = False
             self._profit_abandoned = False
             self._oi_abandoned = False
+            # 量測欄與守門旗標同組清(#234 之後 `_finalize_positions` 清五項,這裡要對齊;pr-238 review F-05):
+            # 斷線前的成交起點若活到重連後第一輪鏈,`_chain_covers_fill()` 成立、印出一條含斷線時長的
+            # 「乾淨」樣本 —— 正是 #234 要消滅的那種假 p99。
+            self._fill_seen_at = None
+            self._fill_count = 0
+            self._chain_started_at = None
             # 走 `clear()` 不走 `reset()`(N018):reset 的語意是「發新查詢」,會把
             # collector 標成 `_awaiting = True` —— 但重連落地這一刻**沒有任何在途查詢**,
             # 標了之後下一次 pending watchdog 的 abandon() 就記帳成功,白吞一輪
@@ -708,8 +714,11 @@ class CapitalClient:
         """回查鏈進度(F5 觀測)。涵蓋成交的輪印 INFO 並附「自成交回報到達起 N ms」
         (量的是回報進 handler 的時刻,不是券商撮合時刻;起點 = 最早未落地的成交,鏈中再來的
         成交不重設 —— 這把尺是 Tier 2-6 的驗收判準,`chain-stats` 讀的就是這幾行);
-        60s 定時輪詢的輪與沒涵蓋成交的輪降 DEBUG。`fills` 只在落地那行帶(「涵蓋 n 筆成交」)。
-        `what` 走 lazy %-args,與檔內其餘 log 同款。"""
+        60s 定時輪詢的輪與沒涵蓋成交的輪降 DEBUG。`fills` 只在落地那行帶(「累計 n 筆成交」):
+        n = 自起點起到落地為止到達的成交筆數,**含鏈起飛後才到的**。那些成交在部位意義上確實被
+        這一輪涵蓋(`store.begin_snapshot` 水位 + `set_positions` 重套),但「它自己等了多久」沒有
+        另量 —— 耗時只從第一筆算、落地就清起點(pr-238 review F-15 拍板只改文案;要每筆都量是
+        Tier 2-6 的事)。`what` 走 lazy %-args,與檔內其餘 log 同款。"""
         if not self._chain_covers_fill():
             logger.debug("balance 鏈: " + what, *args)
             return
@@ -719,7 +728,7 @@ class CapitalClient:
             logger.info("balance 鏈: " + what + "(自成交回報到達起 %.0f ms)", *args, elapsed_ms)
         else:
             logger.info(
-                "balance 鏈: " + what + "(自成交回報到達起 %.0f ms,涵蓋 %d 筆成交)",
+                "balance 鏈: " + what + "(自成交回報到達起 %.0f ms,累計 %d 筆成交)",
                 *args,
                 elapsed_ms,
                 fills,
