@@ -124,7 +124,7 @@ docs/superpowers/         # spec 與 implementation plan
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
 | 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定**目標交易日**(名單服務的交易日;預設 = 排程判定值:交易日 08:00 起 = 今天,之前 / 非交易日 = 前一交易日;資料日 = 其前一交易日自動推;給非交易日直接擋、exit 2);`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內交易日 08:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
-| **回報鏈驗收尺(#234,Tier 2-6 前置)** | `.venv\Scripts\python -m copycat chain-stats --log logs/server-<日>.log`(可多檔):只算「成交回報**盤中 09:00–13:30 到達**、四段累積值單調、庫存段 ≥ 500 ms」的乾淨子集印 p50 / p90 / p99 + `rc=1019` 次數。**改回報鏈速度一律用這把尺,不用 `grep 'balance 鏈'` 的 p50** —— 那把會被開機次數操縱(修前每筆成交重設起點、backlog 重播集中開機兩分鐘)。基線 2026-09-14(全部 log):乾淨 150 / 198 條,p50 1952 / p90 2993 / p99 6433 ms,1019 × 342;判準:重啟後當日 `non_monotonic` = 0 | repo root |
+| **回報鏈驗收尺(#234,Tier 2-6 前置)** | `.venv\Scripts\python -m copycat chain-stats --log logs/server-<日>.log`(可多檔):只算「成交回報**盤中 09:00–13:30 到達**、**四段齊全**(缺中段 = `partial_chain`,pending 逾時強制落地 / 損益段 rc≠0 跳段)且累積值單調、庫存段 ≥ 500 ms」的乾淨子集印 p50 / p90 / p99 + `rc=1019` 次數。**改回報鏈速度一律用這把尺,不用 `grep 'balance 鏈'` 的 p50** —— 那把會被開機次數操縱(修前每筆成交重設起點、backlog 重播集中開機兩分鐘)。基線 2026-09-14(全部 log):乾淨 150 / 198 條,p50 1952 / p90 2993 / p99 6433 ms,1019 × 342 —— **由 09-14 前舊 client 的 log 算出**(舊碼每筆成交重設起點、輪詢鏈飛行中到達的成交記成 `no_start`,母體與新碼不同批;pr-238 review F-04 重建新碼口徑 p90 / p99 零位移),重啟後第一個交易日的數字寫回取代,兩邊 p90 / p99 不直接相減;判準:重啟後當日 `non_monotonic` = 0,**且鏈條數 > 0**(format 被改會靜默 0 條、`non_monotonic = 0` 字面照過 —— parity 測試已改讀 `__main__.py` 原文,review F-01) | repo root |
 | **訊號影子期判準(spec #192,2026-09-08 起四週)** | 盤後:`curl -s 127.0.0.1:8721/api/stock/signals/rules` 含「掃單簇」且 CDP 穿越 / 爆量 `notify_discord=false`;啟動 log 有「T+1/T+2 回填」一行(無 stock engine 時是「無日 K 來源,worker 不啟動」)。盤中:`grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記);Discord 收到四行卡且同 tick 合併;rail 政策列三行 + toast 帶【標記】+ 雙嗶;CDP 穿越 / 爆量 jsonl 有列但無 Discord / 無 toast;`grep 佇列滿 logs/server-*.log` 為 0;13:40 log「回填 n 列」;次日 `t1_open` 已補、再次日 `t2_open` | repo root |
 
 完成前 gate:`pytest -q` + `ruff check` + `pyright` + `copycat validate` 全 PASS(validate 需先跑過
@@ -240,8 +240,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   (bars **非空**時才成立)。兩者並存不合併 —— 處置不同(等重試 vs 看當日段完整性)。
 - **關機預算三方同源**(2026-08-26 起,A1):產生點 `copycat/server/shutdown_budget.py`
   (`run_grace_secs()` = `WS_DRAIN_SECS` + `TC4_LANE_DEPTH` × `tc4.close_worst_secs()` +
-  `COM_JOIN_TIMEOUT_SECS` + slack;現值 83 s = TC4 半死**可計段**的上界,`Disconnect()` 的 KeepAlive
-  `term()` 無上界不計;健康路徑實測 1–3 s)。讀者 =
+  `COM_JOIN_TIMEOUT_SECS` + `CLOCK_PROBE_WORST_SECS`(SNTP 探針執行緒不可 cancel,`asyncio.run` 收尾
+  join 它,最壞 = 台數 × timeout = 6 s;pr-238 review F-06 起列入)+ slack;現值 89 s = TC4 半死
+  **可計段**的上界,`Disconnect()` 的 KeepAlive `term()` 與探針的 DNS 解析無上界不計;健康路徑實測 1–3 s)。讀者 =
   `run.ps1`(啟動時 `python -c` 讀 `run_grace_secs()` 當 Ctrl+C 後的 graceful 上限,超時才
   `taskkill /T /F`)、`copycat/server/__main__.py`(uvicorn `timeout_graceful_shutdown=WS_DRAIN_SECS`)、
   `app.py` lifespan(TC4 session **並行 lane**:corr→futures 串鏈 ‖ index ‖ stock ‖ txo,capital 最後;
