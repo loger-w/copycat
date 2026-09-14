@@ -840,6 +840,30 @@ class TestHistoryAndId:
 
 
 class TestEnabled:
+    async def test_distribute_skips_disabled_cdp_slots(self, tmp_path: Path, clock: _Clock) -> None:
+        """perf/batch-b-tier0 0-8(#248):基準分發對**停用**的 CDP slot 不呼叫 `set_basis`(純死工);
+        啟用 slot 照舊。安全前提 = 停用 → 啟用一律走 `upsert_rule` 換新 detector + `_seed_slot`
+        補基準,所以停用期間漏掉的分發不會留到啟用後(下半段釘住這個前提)。"""
+        _write_rules(
+            tmp_path,
+            [_rule("cdp_cross", "r-1-000"), _rule("cdp_cross", "r-1-001", enabled=False)],
+        )
+        h = _Harness(tmp_path, clock)
+        await h.hub.start()
+        try:
+            seen: dict[str, list[str]] = {"r-1-000": [], "r-1-001": []}
+            for rid, slot in h.hub._slots.items():
+                slot.detector.set_basis = lambda code, cdp, _rid=rid: seen[_rid].append(code)  # type: ignore[method-assign]
+            h.hub.on_watchlist(["2330"])
+            await h.settle()
+            assert seen == {"r-1-000": ["2330"], "r-1-001": []}
+
+            # 重新啟用 = 新 slot,_seed_slot 補上在手的當日基準(不靠 _distribute)
+            await h.hub.upsert_rule(_rule("cdp_cross", "r-1-001"), rule_id="r-1-001")
+            assert h.hub._slots["r-1-001"].detector._basis.get("2330") is not None
+        finally:
+            await h.hub.close()
+
     async def test_disabled_rule_emits_nothing_and_persists(
         self, tmp_path: Path, clock: _Clock
     ) -> None:
