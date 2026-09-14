@@ -46,8 +46,8 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 /** 三支葉子一律 **partial mock**(`importOriginal` 攤平後只換元件)。原始理由(2026-09-14 前)
- *  是這三個模組除了元件還 re-export 別的 runtime 符號(`PriceLadder` 的 `TRADE_KINDS`、
- *  `CapitalOrdersList` 的 `isFutMarket`),全量 mock 會把它們一起吃掉,症狀是同一棵樹上某個
+ *  是其中兩個模組除了元件還 re-export 別的 runtime 符號(`PriceLadder` 的 `TRADE_KINDS`、
+ *  `CapitalOrdersList` 的 `isFutMarket`;`FuturesLadder` 從來只有元件本身),全量 mock 會把它們一起吃掉,症狀是同一棵樹上某個
  *  看似無關的地方拿到 `undefined`。專案瘦身後那些 re-export 已拿掉(只剩型別),partial mock
  *  不再是必要,但仍是安全預設:日後任何模組再多出 runtime export,這裡不必跟著改。 */
 vi.mock("@/components/stock/PriceLadder", async (importOriginal) => ({

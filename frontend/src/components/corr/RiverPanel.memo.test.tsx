@@ -17,7 +17,7 @@ import type { RiverLeg, RiverState } from "@/types";
  *
  *  量法(refactor-plan R11):`importOriginal` partial mock `@/lib/river-chart-svg`,
  *  **只包住** `buildOverlayGeometry` / `buildLegGeometry` 兩支計次,其餘 export
- *  (`offsetAtX` / `spreadLabelYs` / `timeTicks` / `PAD_Y` …)一律保留真身 ——
+ *  (`offsetAtX` / `spreadLabelYs` / `timeTicks` …;`PAD_Y` 自 2026-09-14 起 module-private)一律保留真身 ——
  *  漏了 `offsetAtX` 游標換算就變 NaN、漏了 `timeTicks` 時間軸整條不見,
  *  測試會以為自己在量 memo,其實在量壞掉的圖。
  *  跨腿案採「同輪對照組」:未變的腿(台指)與變了的腿(富台)在同一次 rerender 內比較。
@@ -69,7 +69,7 @@ vi.mock("@/components/corr/RiverOverlay", async (importOriginal) => {
     hoisted.overlayRenders += 1;
     return actual.RiverOverlay(props);
   };
-  return { ...actual, RiverOverlay: Wrapped, default: Wrapped };
+  return { ...actual, RiverOverlay: Wrapped };
 });
 
 vi.mock("@/lib/river-chart-svg", async (importOriginal) => {
