@@ -63,6 +63,11 @@ class _Capture:
             "apply_timer_1ms",
             lambda: self.process_calls.append(("timer_1ms", True)) or True,
         )
+        monkeypatch.setattr(
+            main_mod,
+            "_set_switch_interval",
+            lambda secs: self.process_calls.append(("switchinterval", secs)),
+        )
         # 佈線測試不得真的動 sys.stdout/stderr 或寫 logs/(prod 路徑才有,計數驗證)
         monkeypatch.setattr(main_mod, "_setup_prod_log", lambda: self._count_prod_log())
         monkeypatch.setattr(
@@ -129,7 +134,9 @@ def test_main_applies_timer_1ms_once_on_both_paths(
 
     main_mod.main(argv)
 
-    assert [name for name, _v in cap.process_calls] == ["timer_1ms"]
+    # 順序契約(perf #247):switchinterval 的收益掛在 timer 1 ms 上,必須排在它之後
+    assert cap.process_calls == [("timer_1ms", True), ("switchinterval", 0.001)]
+    assert main_mod.SWITCH_INTERVAL_SECS == 0.001
 
 
 def test_main_argv_defaults_to_sys_argv_prod(monkeypatch: pytest.MonkeyPatch) -> None:
