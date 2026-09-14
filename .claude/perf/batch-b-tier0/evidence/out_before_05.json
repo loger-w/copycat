@@ -1,0 +1,11 @@
+{
+ "repo": "C:/side-project/copycat",
+ "has_ensure_audit_dir": false,
+ "n": 3000,
+ "lines_written": 3000,
+ "append_us": {
+  "p50": 207.0,
+  "p90": 258.9,
+  "p99": 322.7
+ }
+}

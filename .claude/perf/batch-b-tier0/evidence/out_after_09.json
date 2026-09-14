@@ -1,0 +1,9 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "iters": 20000,
+ "no_latch_us": {
+  "p50": 0.1,
+  "p90": 0.2
+ },
+ "with_latch_first_call_us": 35.8
+}

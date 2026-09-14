@@ -1,0 +1,41 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "rows": [
+  {
+   "rate_per_s": 1,
+   "window_len": 301,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 4.3,
+    "p90": 4.5,
+    "p99": 6.1
+   }
+  },
+  {
+   "rate_per_s": 10,
+   "window_len": 3001,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 4.3,
+    "p90": 4.5,
+    "p99": 5.4
+   }
+  },
+  {
+   "rate_per_s": 33,
+   "window_len": 9901,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 4.3,
+    "p90": 4.6,
+    "p99": 6.8
+   }
+  }
+ ]
+}

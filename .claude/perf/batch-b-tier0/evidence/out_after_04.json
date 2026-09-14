@@ -1,0 +1,25 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "legs": 11,
+ "windows": [
+  60,
+  300,
+  1800
+ ],
+ "warm": 1900,
+ "measure": 300,
+ "push_ms": {
+  "p50": 0.0345,
+  "p90": 0.0409
+ },
+ "correlations_ms": {
+  "p50": 0.0265,
+  "p90": 0.0294,
+  "max": 6.867
+ },
+ "per_second_total_ms_p50": 0.061,
+ "drift": {
+  "n_mismatch": 0,
+  "max_abs_dr": 3.0031532816110484e-14
+ }
+}

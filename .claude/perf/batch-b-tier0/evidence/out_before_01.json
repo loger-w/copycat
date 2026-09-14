@@ -1,0 +1,25 @@
+{
+ "repo": "C:/side-project/copycat",
+ "poll_backoff_start": {
+  "tc4": 0.15,
+  "river_backfill": 0.15
+ },
+ "ready_ms": "15,40",
+ "ready_dist": "exp",
+ "timer_1ms": true,
+ "n": 60,
+ "tc4_collect_history_ms": {
+  "p50": 150.5,
+  "p90": 150.6,
+  "max": 150.7,
+  "mean": 150.4,
+  "polls_mean": 4.0
+ },
+ "river_collect_1k_ms": {
+  "p50": 150.4,
+  "p90": 150.5,
+  "max": 150.6,
+  "mean": 150.3,
+  "polls_mean": 4.0
+ }
+}

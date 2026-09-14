@@ -1,0 +1,38 @@
+{
+  "fixed_point": "1e0720be",
+  "branch": "perf/batch-b-tier0",
+  "reviewed_head": "4bcecb2a",
+  "reviewers": {"standards": "opus (general-purpose, effort high)", "spec": "opus (general-purpose, effort high)"},
+  "standards": [
+    "[H] tests/live/test_signal_state.py:573, 593;tests/live/test_corr_state.py:134(空行 ×2)、231 — Ruff line-length 100 / 格式對齊 — 新增碼 `ruff format --check` 會 reformat(長行 128/104、方法間多一個空行);該兩檔存量本就未 format,但這 4 處是本批新寫的。",
+    "[H] copycat/server/__main__.py:151 — module-level globals 型別 hint 無例外 — `_set_switch_interval = sys.setswitchinterval` 沒註記,同檔 `SWITCH_INTERVAL_SECS: float` / `PROD_LOG_FORMAT: str` 都有。",
+    "[J] tests/live/test_corr_state.py:196、231 — 註解對不上實作 — docstring 寫「釘在實測值上一級(實測 3.0e-14,見 assert 旁註解)」,assert 卻是 `< 1e-9`(鬆 5 個數量級),旁註又寫「見 commit 訊息…同量級 1e-15」:三處數字互指且互相矛盾。",
+    "[J] copycat/live/corr_state.py:44–45、207 — Mysterious Name — `_VAR_FLOOR` / 檔頭稱「中心化二階動差」,但 `vx = sxx − sx²/n` 是平方和(未除 n),絕對門檻實際隨 n 放大;應正名「中心化平方和」。",
+    "[J] corr_state.py:176–212 — Primitive Obsession — `list[float]` 六格 + 魔術索引 0–5,且 n 同時存在 `s[0]` 與 `len(dq)` 兩份真相。",
+    "[J] tests/server/test_win_timer.py:87 — 與同批紀律相反 — `test_default_fns_are_the_win32_wrappers` 真呼叫 Win32(永久改掉 pytest 進程 timer,非 Windows 直接炸);test_main_wiring 同批刻意用替身,此處至少該加 `skipif`。",
+    "[J] copycat/live/signal_state.py:417 vs 425–427 — Shotgun Surgery — `\"up\"/\"down\"` 字面與下方迴圈重複兩份,加第三向時短路閘會靜默漏。",
+    "[J] signal_state.py:733 — 防禦性預設遮蔽失效 — `_window_vol.get(code, 0)`:四處維護漏一處時退化成「永遠不發爆量」而非炸開,與該案守門測試的意圖相反。",
+    "[J] copycat/server/audit.py:37–42 — §E「catch 後只 log」形狀 — `ensure_audit_dir` 吞 OSError,但失敗在首筆 `append_audit` 以 `AuditWriteError` 再現且有測試釘住,判可接受(僅記錄)。",
+    "合規(逐項看過):append_audit 的 FileNotFoundError 補建重試 = 具體 catch + 具體處理;capital_api `import dataclasses` 仍被 6 處單物件 asdict 使用;backend-conventions §8 改寫對得上實作;test_river_state / test_corr_engine_river int→str 鍵批次替換無漏改無改壞;兩處既有測試改動判合理(test_client rmdir = ctor 先建目錄後的等效前置;test_stock_bars +1e-9 = 0.02·2^k 浮點尾差非放寬預算);win_timer restype/argtypes、回傳值、非 Windows 分支、WARNING 含錯誤碼皆合規。總數 9 條(H 2 / J 7);最嚴重 = tests 兩檔新增碼未過 ruff format。"
+  ],
+  "spec": [
+    "(a) 0-1 #241 `.claude/perf/batch-b-tier0/`(全目錄 untracked)—「artifact `.claude/perf/batch-b-tier0/`」— 十項 before/after 全靠它,卻未入版控;前例 `.claude/perf/opening-backfill-parallel/` 已 tracked。",
+    "(a) 0-1 #241 全 repo 無此檔 —「重啟後盤後 `bench_04_prod_overlay.py 150` ≤ 3 s」— 腳本不存在,該收尾判準無法執行。",
+    "(a) 0-2 #242 stock_engine.py:1349-1352(SC-5)—「四處即全部」— 更正成立:signal_state 無 apply_backfill,四處已齊,10 萬次守門 + 灌錯突變案在。",
+    "(a) 0-4 #244 test_corr_engine.py:271,297 + test_ws_has_clients.py —「has_clients 三案」— 實質齊備,只是不按三個 test function 切。1800 邊界 / w+1 / 16,200 全日 / 常數 None / 檔頭 / SKILL.md §8 全數到位。",
+    "(a) 0-3 #243 / 0-7 #247 win_timer.py:96-108、__main__.py:164-166 — 兩行順序、兩個回傳值、WARNING 不炸、test_main_wiring 釘 [timer_1ms, switchinterval 0.001] — 全符。",
+    "(a) 1-1 #250 evidence/out_after_11.json — wire sha 前後同 ✓,但欄名 `in_memory_minute_key_types` 實際讀的是 snapshot 鍵,值 \"str\" 與白名單「in-memory `_minutes` 型別不動」字面矛盾(真值由 test_river_state 釘 int)。",
+    "(b) 0-4 corr_state.py:45,207 —「常數序列(分母 ≤ 0)回 None」— `_VAR_FLOOR=1e-18` 擴大了 None 區,是增量 sums 的必要防護(檔頭有論證),但已非 spec 字面,建議留並在白名單補記。",
+    "(b) 0-4 corr_state.py:212 clamp [-1,1]:舊 statistics.correlation 無此行為(差 ≤1 ulp),新增但無害;`_sub` 歸零同屬白名單外、檔頭有據且有測試。",
+    "(b) 0-6 capital_api.py:258 用 `{**o.__dict__, …}` 正是 ticket #246 原句,非偏離。",
+    "(b) 0-3 tests/server/test_win_timer.py:87 真呼叫 Win32 且無 skipif,每次 pytest 都永久替測試進程套 EcoQoS 豁免 + timeBeginPeriod(1)(無 timeEndPeriod),非 Windows 必紅。建議加 skipif + 標 smoke。",
+    "(b) 兩處既有測試改動不是改行為合約:test_stock_bars.py:466 容差 1e-9 = 假鐘 0.02·2^k 浮點尾差;test_client.py:854 rmdir 只是配合 ctor 先建目錄,佔位意圖不變。",
+    "(c) 0-4 corr_state.py:134 `dq[0][1] < floor`(prev_ts)確實鏡像舊版「前一筆被逐出即配不成」;`_cap` 與同 ts 重複 push 亦等價。",
+    "(c) 0-4 corr_state.py:169 —「n{w} 與現況完全相等」— 唯一真縫:新版 correlations(now) 是破壞性逐出,now 回頭時(#236 w32tm /resync 會把本機鐘往回撥約 3 s)舊版重掃可還原、新版該幾筆永久消失,n60 短時偏小。建議記入白名單例外而非改碼。",
+    "(c) 0-9 signal_state.py:418 安全:舊版無 latch 路徑唯一寫入都在 latch 為真的分支內;latch 真 + 盤外仍回 []。",
+    "(c) 0-8 signal_hub.py:1059 前提成立:upsert_rule → _make_slot 換新 detector → _seed_slot 自 _basis_cache 補當日基準,測試下半段已釘。",
+    "(c) 0-4 has_clients 不碰 HTTP corr_state(app.py:2013 直呼 corr.state())與 WS seed(:2024 在進 stream() generator 前算)— 閘只在 tick_once。",
+    "總計 17 條(a 6 / b 6 / c 5),零 Must-fix 行為錯誤。最嚴重:evidence 全目錄未入版控。四項未達標判決:0-5 算完成(機制目標有測試釘,140 是 T1 機器絕對值);0-7 需 user 拍板(4.40 vs ≤4 差 10%,吞吐 −7.6% 在 spec 預告的 −8.7% 內,建議接受);0-3 算完成(p99 2.007 在雜訊內),但 tbp-only 60 秒未被收回 = 本批證據沒重現 T4「3 秒後收回」,EcoQoS 那一行的必要性論證需改口(留著無害,不擋出貨);0-1 算完成(目標是 p50 ≤ 45,p90 61 = 倍增第二輪 20+40 的結構性落點,非回歸)。"
+  ],
+  "disposition": "Standards H1 收:test_signal_state 兩處長行拆行(其餘 25 行 diff 為 master 既有未 format,不動);test_corr_state 多的空行刪。H2 收:`_set_switch_interval: Callable[[float], None]`。J1 收:docstring 統一寫「容差 1e-9;實測 3.0e-14」,assert 旁註只指 docstring。J2 收:`_VAR_FLOOR` → `_SS_FLOOR`,檔頭改「中心化平方和(未除 n,門檻隨 n 放大是刻意)」。J3 部分收:n 不再存在 sums(唯一真相 = len(deque));list 保留(每秒 30 次加減,索引比屬性便宜、歸零是一個 slice)但以 `_SUMS_LAYOUT` + `_SX…_SXY` 具名索引取代魔術數字。J4 收:smoke 加 `skipif(sys.platform != 'win32')` + finally `timeEndPeriod(1)`。J5 收:`_LATCH_DIRECTIONS` 模組常數,短路閘用它、迴圈旁註「加第三向兩處一起改」。J6 收:`_window_vol[code]` 直接索引(漏維護要炸開)。J7 不改(reviewer 亦判可接受)。Spec (a)-1 收:artifact 目錄依 closeout §4 隨分支 commit。(a)-2 收:`bench_04_prod_overlay.py` 逐字複製進 evidence(標明來源)。(a)-4 不改(三案語意齊備)。(a)-6 收:check_11 欄名改 `snapshot_minute_key_types` + 新增真 in-memory 欄(重跑 out_*_11:snapshot int→str、in-memory int→int)。(b)-1/2 收為文件:spec #240 留言補記白名單「常數序列判法 = 中心化平方和 ≤ 1e-18、clamp [-1,1]、deque 清空歸零」三條實作細節。(b)-4 同 J4。(c)-2 反駁 + 文件:engine 的 now_fn 與 push ts 同源 `time.monotonic`(corr_engine.py ctor 預設),w32tm 回撥碰不到;寫進 corr_state 檔頭前提,不列白名單例外。四項未達標:0-5 / 0-3 / 0-1 依 reviewer 判完成並在 verification §4 如實記;0-7 交 user 拍板(收尾回報列出)。收修後全量 gate 重跑:ruff / pyright 0 錯、受影響套件 238 passed、bench_04 after 0.061 ms(n_mismatch 0)。"
+}
