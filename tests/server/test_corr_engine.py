@@ -91,6 +91,7 @@ def _engine(
     txf_state: Callable[[], dict],
     clock: _Clock,
     broadcast: Callable[[dict], None] | None = None,
+    has_clients: Callable[[], bool] | None = None,
     resub_interval_secs: float = 10.0,
 ) -> CorrelationEngine:
     return CorrelationEngine(
@@ -98,6 +99,7 @@ def _engine(
         config=CONFIG,
         txf_state_getter=txf_state,
         broadcast=broadcast,
+        has_clients=has_clients,
         tick_secs=1.0,
         now_fn=clock,
         session_fn=lambda: NIGHT,
@@ -263,6 +265,46 @@ class TestBroadcastAndState:
             assert len(sent) == 5
             assert [m["seq"] for m in sent] == [1, 2, 3, 4, 5]
             assert all(m["type"] == "corr" for m in sent)
+        finally:
+            await eng.close()
+
+    async def test_no_clients_skips_state_and_broadcast(self) -> None:
+        """perf #244:沒人聽就不算 —— `has_clients` 回 False 時 tick 不呼叫 broadcast(也就不算
+        `state()`),push / seq 照走;翻成 True 的下一拍立刻恢復,seq 連續(中間那幾拍沒被吃掉)。"""
+        src = _FakeSource()
+        sent: list[dict] = []
+        listening = {"on": False}
+        eng = _engine(
+            src,
+            txf_state=lambda: _futures_state(1, 2),
+            clock=_Clock(),
+            broadcast=sent.append,
+            has_clients=lambda: listening["on"],
+        )
+        await eng.start()
+        try:
+            eng.tick_once()
+            eng.tick_once()
+            assert sent == []
+            listening["on"] = True
+            eng.tick_once()
+            assert [m["seq"] for m in sent] == [3]
+            assert eng.state()["seq"] == 3
+        finally:
+            await eng.close()
+
+    async def test_has_clients_not_injected_keeps_broadcasting(self) -> None:
+        """未注入 = 舊語意:每秒都廣播(上一案 5 拍 5 則已釘,這裡只釘「None 不等於 False」)。"""
+        src = _FakeSource()
+        sent: list[dict] = []
+        eng = _engine(
+            src, txf_state=lambda: _futures_state(1, 2), clock=_Clock(), broadcast=sent.append
+        )
+        assert eng._has_clients is None
+        await eng.start()
+        try:
+            eng.tick_once()
+            assert len(sent) == 1
         finally:
             await eng.close()
 
