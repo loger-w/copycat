@@ -62,6 +62,11 @@ class WsBroadcaster:
         self.window_dropped = 0
         self._drop_warned_at: float | None = None
 
+    def has_clients(self) -> bool:
+        """有沒有人在聽(perf #244):供只為廣播而算的引擎(corr `state()` 每秒 9 ms 整批重算時代
+        的閘;增量後仍留著 —— 沒人聽就不算)。連線登記 / 除名在 `stream()` 的 try / finally。"""
+        return bool(self._clients)
+
     def publish(self, msg: dict) -> None:
         self._settle_drop_window(time.monotonic())
         for queue in self._clients:

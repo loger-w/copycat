@@ -1006,6 +1006,7 @@ def create_app(
                         lambda: futures_engine.state() if futures_engine is not None else {}
                     ),
                     broadcast=corr_ws.publish,
+                    has_clients=corr_ws.has_clients,
                     river_broadcast=river_ws.publish,
                     # 台指腿的 1K 必須從持有 TXF 訂閱的 futures session 問(CLAUDE.md §8)
                     futures_minutes_fetch=(

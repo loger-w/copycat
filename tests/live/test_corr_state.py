@@ -132,6 +132,121 @@ class TestWindowThresholds:
         assert abs(got - expected) < 1e-9
 
 
+    def test_longest_window_boundary_matches_mid_series_eviction(self) -> None:
+        """perf #244 守門(T2 §9 意外 1):最長窗的 off-by-one 只在這裡發生。
+
+        中價序列以 `ts < now − 1800` 逐出 → 現存樣本 1801 個 → 配對報酬 **1800** 筆(不是 1801);
+        60 窗那條(上一案)量不到這個邊界,因為 60 窗的中價沒被逐出。斷 n 完全相等 + r 對照
+        獨立 Pearson(容差 1e-9 抓得到差一筆的 1e-3)。
+        """
+        state = CorrState(["TXF", "NQ"], "TXF", windows=(1800,), min_samples={1800: 300})
+        base = _walk(4, 3601)
+        leg = _walk(8, 3601)
+
+        ts = _feed(state, base, leg)
+        out = state.correlations(ts)["NQ"]
+
+        expected = _pearson(_returns(base[-1801:]), _returns(leg[-1801:]))
+        assert out["n1800"] == 1800
+        assert out["w1800"] is not None
+        assert abs(out["w1800"] - expected) < 1e-9
+
+    def test_short_windows_keep_w_plus_one_returns(self) -> None:
+        """短窗(未撞到中價逐出)的舊語意 = `ts >= now − w` → w+1 筆報酬;增量版必須同數。"""
+        state = CorrState(["TXF", "NQ"], "TXF", windows=(60, 300, 1800))
+        ts = _feed(state, _walk(4, 2000), _walk(8, 2000))
+        out = state.correlations(ts)["NQ"]
+        assert (out["n60"], out["n300"], out["n1800"]) == (61, 301, 1800)
+
+    def test_full_day_parity_with_batch_reference(self) -> None:
+        """perf #244 全日對照:同一串 16,200 次 push(11 腿、SXF / VX 25% 有值、洞 + 相鄰判定
+        全部走真實路徑),每 100 筆與檔內**整批**參考(自行逐出的中價序列 → 重掃配對 →
+        `_pearson`)比:`n{w}` 全部 `==`(不用容差,差一筆一定抓到),r 的 max|Δr| 釘在實測值
+        上一級(2026-09-15 本機實測 3.0e-14,見 assert 旁註解)。
+        """
+        import random
+
+        legs = ["TXF", "TWN", "YM", "ES", "NQ", "SXF", "NK225M", "VX", "CL", "GC", "TSMC"]
+        sparse = {"SXF", "VX"}
+        windows = (60, 300, 1800)
+        min_n = {60: 30, 300: 100, 1800: 300}
+        state = CorrState(legs, "TXF", windows=windows, min_samples=min_n)
+        rng = random.Random(244)
+        px = {k: 20_000_000 + i * 1_000_000 for i, k in enumerate(legs)}
+        series: dict[str, list[tuple[float, int | None]]] = {k: [] for k in legs}
+
+        def reference(now: float, leg: str) -> dict[str, float | int | None]:
+            base = series["TXF"]
+            other = dict(series[leg])
+            pairs: list[tuple[float, float, float]] = []
+            prev: tuple[float, int | None, int | None] | None = None
+            for t, b in base:
+                o = other.get(t)
+                if (
+                    prev is not None
+                    and prev[1] is not None
+                    and prev[2] is not None
+                    and b is not None
+                    and o is not None
+                    and abs((t - prev[0]) - 1.0) <= 0.5
+                ):
+                    pairs.append((t, math.log(b / prev[1]), math.log(o / prev[2])))
+                prev = (t, b, o)
+            row: dict[str, float | int | None] = {}
+            for w in windows:
+                xs = [rb for t, rb, _ in pairs if t >= now - w]
+                ys = [rl for t, _, rl in pairs if t >= now - w]
+                row[f"n{w}"] = len(xs)
+                row[f"w{w}"] = _pearson(xs, ys) if len(xs) >= max(min_n[w], 2) else None
+            return row
+
+        max_dr = 0.0
+        checks = 0
+        ts = 0.0
+        for i in range(16_200):
+            ts += 1.0
+            common = rng.gauss(0, 8e-5)
+            mids: dict[str, int | None] = {}
+            for k in legs:
+                px[k] = int(round(px[k] * math.exp(common * 0.6 + rng.gauss(0, 8e-5))))
+                mids[k] = None if (k in sparse and rng.random() > 0.25) else px[k]
+            state.push(ts, mids, DAY)
+            for k in legs:
+                series[k].append((ts, mids[k]))
+                while series[k] and series[k][0][0] < ts - 1800:
+                    series[k].pop(0)
+            if i % 100 != 99 and i < 16_150:
+                continue
+            got = state.correlations(ts)
+            for leg in legs[1:]:
+                ref = reference(ts, leg)
+                for w in windows:
+                    assert got[leg][f"n{w}"] == ref[f"n{w}"], (i, leg, w)
+                    gv, rv = got[leg][f"w{w}"], ref[f"w{w}"]
+                    assert (gv is None) == (rv is None), (i, leg, w)
+                    if gv is not None and rv is not None:
+                        max_dr = max(max_dr, abs(float(gv) - float(rv)))
+                        checks += 1
+        assert checks > 1000
+        assert max_dr < 1e-9  # 實測 2026-09-15:見 commit 訊息;閉式公式 vs 定義式 Pearson 同量級 1e-15
+
+    def test_constant_window_after_movement_returns_none(self) -> None:
+        """running sums 加減後的殘差不得把「整窗零波動」算成一個亂數 r。
+
+        先走 100 秒隨機漫步(sums 非零),再 61 秒完全不動 → 60 窗內報酬全 0 → w60 None;
+        300 窗仍含前段波動 → 有值。
+        """
+        state = CorrState(["TXF", "NQ"], "TXF", windows=(60, 300), min_samples={60: 30, 300: 100})
+        base = _walk(4, 101)
+        leg = _walk(8, 101)
+        base = base + [base[-1]] * 62
+        leg = leg + [leg[-1]] * 62
+        ts = _feed(state, base, leg)
+        out = state.correlations(ts)["NQ"]
+        assert out["n60"] == 61 and out["w60"] is None
+        assert out["w300"] is not None and math.isfinite(out["w300"])
+
+
 class TestSessionReset:
     def test_session_change_clears_all_series(self) -> None:
         """SC-4:盤別切換清窗。日盤累積的樣本不得延續到夜盤。"""

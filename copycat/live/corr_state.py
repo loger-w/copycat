@@ -2,20 +2,31 @@
 
 每秒一筆取樣 → 多窗滾動 Pearson。設計要點:
 
-- **整批重算,不維護增量統計量**:`statistics.correlation`(stdlib,內部用 fsum)對
-  1800 樣本實測 0.15 ms,整輪 tick 外推不到 1 ms。增量滑動窗的浮點誤差會隨執行時間
-  累積,整批重算讓「增量 vs 整批一致」這件事恆真,不必寫測試去追誤差上界。
+- **增量維護,不整批重算**(perf #244,2026-09-15 改寫):舊版每秒把 1800 筆中價重掃一次
+  重建配對報酬、再對每窗 `statistics.correlation`,event loop 每秒同步停 9 ms(X4-02;檔頭原寫
+  「不到 1 ms」只量了 `statistics.correlation` 一次,沒量整支)。現版 `push()` 時就把新的一筆
+  配對報酬算好,per-(腿, 窗) 維護 deque + running sums `(n, Σx, Σy, Σxx, Σyy, Σxy)`,
+  `correlations()` 只做逐出 + 閉式公式 → 每秒 < 0.1 ms。
+  舊檔頭的顧慮「增量滑動窗的浮點誤差會隨執行時間累積」實測不成立(T2 §9 意外 1:32,400 次
+  push 後 max|Δr| 3.9e-15,比前端 `toFixed(2)` 解析度小 12 個數量級);**真正會咬人的是窗邊界**
+  —— 差一筆就是 1e-3 的錯。所以逐出語意**兩道鏡像舊版**(見 `push` / `correlations` 註解),
+  守門測試斷 `n{w}` 完全相等而不是 r 在容差內。
 - **報酬不跨洞接合**:只有相鄰取樣秒且兩腿皆有中價時才產生一筆報酬。跨洞報酬涵蓋的
   時間長度與其餘不一致,而缺值最常發生在流動性最差的腿(費半),汙染方向與中價取樣
   要防的 Epps 效應同向。
 - **時間戳逐出**而非固定長度:每秒 tick 若因 event loop 延遲漏拍,固定長度 deque
   涵蓋的實際時間會超過窗長,窗語意失真。
+- 常數序列(窗內零波動)→ None,不是 0 也不是 NaN。閉式公式下「零波動」以 `_VAR_FLOOR`
+  判(running sums 加減後的殘差量級 ~1e-21,真實最小一檔報酬的變異 ≥ 1e-12,中間留六個
+  數量級);deque 清空即把 sums 歸回精確零,稀疏腿不累積殘差。
+
+前提:`push` 的 ts 單調不減(engine 每秒取樣);同 ts 重複 push 不產生報酬(相鄰判定不成立)。
 """
 
 from __future__ import annotations
 
 import logging
-import statistics
+import math
 from collections import deque
 from collections.abc import Mapping, Sequence
 
@@ -29,6 +40,12 @@ SessionKey = tuple[str, str]  # (ymd_utc, "day" | "night");copycat.live.session 
 
 _DEFAULT_WINDOWS = (60, 300, 1800)
 _DEFAULT_MIN_SAMPLES = {60: 30, 300: 100, 1800: 300}
+
+#: 中心化二階動差低於此值視為常數序列(回 None)。見檔頭。
+_VAR_FLOOR = 1e-18
+
+#: (ts, prev_ts, base 報酬, leg 報酬):prev_ts 是逐出用(鏡像舊版「前一筆中價被逐出 → 配不成」)。
+_Pair = tuple[float, float, float, float]
 
 
 class CorrState:
@@ -52,24 +69,78 @@ class CorrState:
         self._adjacent_tol = sample_secs * 0.5
         self._max_window = max(windows)
         self._cap = int(2 * self._max_window / sample_secs) if sample_secs > 0 else 4096
+        # 中價序列仍保留:它定義「哪些樣本還活著」(時間逐出 + `_cap`),配對報酬的逐出以它為準
         self._series: dict[str, deque[tuple[float, int | None]]] = {
             k: deque() for k in [base, *self._legs]
+        }
+        # per-(腿, 窗):配對報酬 deque + running sums [n, Σx, Σy, Σxx, Σyy, Σxy]
+        self._pairs: dict[str, dict[int, deque[_Pair]]] = {
+            leg: {w: deque() for w in windows} for leg in self._legs
+        }
+        self._sums: dict[str, dict[int, list[float]]] = {
+            leg: {w: [0.0] * 6 for w in windows} for leg in self._legs
         }
         self._session: SessionKey | None = None
 
     # ---- 寫入 ----
 
     def push(self, ts: float, mids: Mapping[str, int | None], session: SessionKey) -> None:
-        """一次每秒取樣;盤別(含 UTC 日期)變更 → 先清空所有序列再寫入本筆(SC-4)。"""
+        """一次每秒取樣;盤別(含 UTC 日期)變更 → 先清空所有序列再寫入本筆(SC-4)。
+
+        新的一筆配對報酬在這裡算好(舊版在 `correlations()` 重掃時才算):前一筆 = 各序列的
+        尾筆(舊版迭代時的 `prev_*` 同義,None 也照推進),相鄰 + 兩端皆有值才成一對。
+        逐出第一道:中價序列照舊版逐出(時間 + `_cap`)後,**前一筆中價 ts 早於最老倖存樣本**
+        的配對一併丟 —— 舊版那一對是在重掃時「配不到前一筆」而自然消失,這裡顯式做同一件事。
+        """
         if self._session is not None and session != self._session:
-            for series in self._series.values():
-                series.clear()
+            self._clear()
         self._session = session
+        base_series = self._series[self._base]
+        prev_base = base_series[-1] if base_series else None
+        base_mid = mids.get(self._base)
+        for leg in self._legs:
+            leg_series = self._series[leg]
+            prev_leg = leg_series[-1] if leg_series else None
+            leg_mid = mids.get(leg)
+            if (
+                prev_base is not None
+                and prev_leg is not None
+                and prev_base[1] is not None
+                and prev_leg[1] is not None
+                and base_mid is not None
+                and leg_mid is not None
+                and abs((ts - prev_base[0]) - self._sample_secs) <= self._adjacent_tol
+            ):
+                rb = log_return(prev_base[1], base_mid)
+                rl = log_return(prev_leg[1], leg_mid)
+                if rb is not None and rl is not None:
+                    pair: _Pair = (ts, prev_base[0], rb, rl)
+                    pairs = self._pairs[leg]
+                    sums = self._sums[leg]
+                    for w in self._windows:
+                        pairs[w].append(pair)
+                        _add(sums[w], rb, rl)
         for key, series in self._series.items():
             series.append((ts, mids.get(key)))
             while len(series) > self._cap:
                 series.popleft()
         self._evict(ts)
+        floor = base_series[0][0]  # 本筆剛 append,非空
+        for leg in self._legs:
+            pairs = self._pairs[leg]
+            sums = self._sums[leg]
+            for w in self._windows:
+                dq = pairs[w]
+                while dq and dq[0][1] < floor:
+                    _sub(sums[w], dq.popleft())
+
+    def _clear(self) -> None:
+        for series in self._series.values():
+            series.clear()
+        for leg in self._legs:
+            for w in self._windows:
+                self._pairs[leg][w].clear()
+                self._sums[leg][w] = [0.0] * 6
 
     def _evict(self, now: float) -> None:
         cutoff = now - self._max_window
@@ -79,58 +150,63 @@ class CorrState:
 
     # ---- 讀出 ----
 
-    def _paired_returns(self, leg: str, now: float) -> list[tuple[float, float, float]]:
-        """(ts, base 報酬, leg 報酬) —— 僅取相鄰取樣秒且兩腿皆有中價者。
-
-        回傳含 ts 是為了讓各窗以時間過濾同一份計算結果,不必逐窗重掃序列。
-        """
-        base_series = self._series[self._base]
-        leg_series = self._series.get(leg)
-        if leg_series is None or len(base_series) < 2:
-            return []
-        leg_by_ts = dict(leg_series)
-        out: list[tuple[float, float, float]] = []
-        prev_ts: float | None = None
-        prev_base: int | None = None
-        prev_leg: int | None = None
-        for ts, base_mid in base_series:
-            leg_mid = leg_by_ts.get(ts)
-            if (
-                prev_ts is not None
-                and prev_base is not None
-                and prev_leg is not None
-                and base_mid is not None
-                and leg_mid is not None
-                and abs((ts - prev_ts) - self._sample_secs) <= self._adjacent_tol
-            ):
-                rb = log_return(prev_base, base_mid)
-                rl = log_return(prev_leg, leg_mid)
-                if rb is not None and rl is not None:
-                    out.append((ts, rb, rl))
-            prev_ts, prev_base, prev_leg = ts, base_mid, leg_mid
-        return [row for row in out if row[0] >= now - self._max_window]
-
     def correlations(self, now: float) -> dict[str, dict[str, float | int | None]]:
-        """{leg: {"w60": r|None, "n60": int, ...}};樣本不足或常數序列 → None。"""
+        """{leg: {"w60": r|None, "n60": int, ...}};樣本不足或常數序列 → None。
+
+        逐出第二道:各窗以 `ts < now − w` 丟(舊版逐窗 `ts >= cutoff` 過濾的補集);`now` 是
+        呼叫端此刻的時鐘,與最後一筆 push 的 ts 可能差幾 µs,語意與舊版同(同一個 now 過濾)。
+        最長窗與 `push` 的第一道合起來 = 舊版「最長窗實際 1800 筆、短窗 w+1 筆」的邊界語意。
+        """
         result: dict[str, dict[str, float | int | None]] = {}
         for leg in self._legs:
-            paired = self._paired_returns(leg, now)
+            pairs = self._pairs[leg]
+            sums = self._sums[leg]
             row: dict[str, float | int | None] = {}
-            for window in self._windows:
-                cutoff = now - window
-                xs = [rb for ts, rb, _ in paired if ts >= cutoff]
-                ys = [rl for ts, _, rl in paired if ts >= cutoff]
-                row[f"n{window}"] = len(xs)
-                row[f"w{window}"] = self._corr(xs, ys, self._min_samples.get(window, 0))
+            for w in self._windows:
+                dq = pairs[w]
+                s = sums[w]
+                cutoff = now - w
+                while dq and dq[0][0] < cutoff:
+                    _sub(s, dq.popleft())
+                n = len(dq)
+                row[f"n{w}"] = n
+                row[f"w{w}"] = _corr(s, n, self._min_samples.get(w, 0))
             result[leg] = row
         return result
 
-    @staticmethod
-    def _corr(xs: list[float], ys: list[float], min_n: int) -> float | None:
-        if len(xs) < max(min_n, 2):
-            return None
-        try:
-            return statistics.correlation(xs, ys)
-        except statistics.StatisticsError:
-            # 任一序列為常數(整窗零波動)→ 分母為零。回 None,不是 0 也不是 NaN。
-            return None
+
+def _add(s: list[float], x: float, y: float) -> None:
+    s[0] += 1
+    s[1] += x
+    s[2] += y
+    s[3] += x * x
+    s[4] += y * y
+    s[5] += x * y
+
+
+def _sub(s: list[float], pair: _Pair) -> None:
+    _ts, _prev, x, y = pair
+    s[0] -= 1
+    if s[0] <= 0:
+        # deque 清空 → 歸回精確零,不讓加減殘差(~1e-21)留給下一批樣本
+        s[:] = [0.0] * 6
+        return
+    s[1] -= x
+    s[2] -= y
+    s[3] -= x * x
+    s[4] -= y * y
+    s[5] -= x * y
+
+
+def _corr(s: list[float], n: int, min_n: int) -> float | None:
+    if n < max(min_n, 2):
+        return None
+    sx, sy, sxx, syy, sxy = s[1], s[2], s[3], s[4], s[5]
+    vx = sxx - sx * sx / n
+    vy = syy - sy * sy / n
+    if vx <= _VAR_FLOOR or vy <= _VAR_FLOOR:
+        # 任一序列為常數(整窗零波動)→ 分母為零。回 None,不是 0 也不是 NaN。
+        return None
+    r = (sxy - sx * sy / n) / math.sqrt(vx * vy)
+    # 閉式公式的捨入可能讓 |r| 超出 1 一個 ulp;夾回定義域
+    return max(-1.0, min(1.0, r))

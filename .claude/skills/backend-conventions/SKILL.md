@@ -38,9 +38,12 @@ description: Python / FastAPI 後端風格慣例(專案特化)。寫或改 copyc
   要含它,否則長跑批次中途炸。(2026-07-07,Trigger:寫任何 HTTP retry)
 - **純 `uvicorn` 沒有 WebSocket protocol 支援**,WS upgrade 直接 404(錯誤訊息不提示缺件)—
   要 `uvicorn[standard]`。(2026-07-18,Trigger:新增 WS endpoint / 部署裝依賴)
-- **`statistics.correlation` 是 stdlib(3.10+)且夠快**:1800 樣本 0.15ms、六腿五對三窗完整 tick
-  6.43ms。相關係數不必自寫增量統計量(整批重算讓「增量 vs 整批一致」恆真);常數序列拋
-  `StatisticsError`,catch 後回 `None`。(2026-07-30,Trigger:要算相關/共變異數想引 numpy 或自寫時)
+- **滾動相關係數走純 Python 增量 running sums,不整批重算、不引 numpy**(2026-09-15 perf #244 改寫
+  2026-07-30 舊條):舊條「`statistics.correlation` 1800 樣本 0.15 ms、整輪不到 1 ms」只量了函式一次,
+  整支 `correlations()` 每秒重掃 1800 筆重建配對報酬實測 9 ms(X4-02),增量後 0.07 ms(208x)。
+  T2 §9 意外 1:「增量會浮點漂移」實測不成立(32,400 次 push 後 3.9e-15),**真正咬人的是窗邊界**
+  —— 差一筆 = 1e-3,守門測試要斷 `n{w}` 完全相等,不是 r 在容差內。numpy 只有 10–23x 且破 stdlib-only。
+  常數序列以變異下限判回 `None`(不是 0 / NaN)。(Trigger:要算相關/共變異數想引 numpy 或整批重算時)
 - **長跑 pipeline 必須有進度 log**:round 1 fade-search(fade 回測家族,2026-09-14 已刪)跑 6 小時全程黑箱。fold/arm/generation
   邊界各 log 一行(含完成比例與耗時)。(2026-07-11,Trigger:預期 >10 分鐘的批次/搜索迴圈)
 

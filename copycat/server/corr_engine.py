@@ -90,6 +90,7 @@ class CorrelationEngine:
         config: CorrConfig,
         txf_state_getter: Callable[[], dict],
         broadcast: Callable[[dict], None] | None = None,
+        has_clients: Callable[[], bool] | None = None,
         river_broadcast: Callable[[dict], None] | None = None,
         futures_minutes_fetch: Callable[[str], list[tuple[int, int]]] | None = None,
         tick_secs: float = 1.0,
@@ -102,6 +103,9 @@ class CorrelationEngine:
         self._config = config
         self._txf_state_getter = txf_state_getter
         self._broadcast = broadcast
+        # None = 舊語意(每秒都算都廣播);注入 = 沒 client 時跳過 state()(perf #244)。
+        # 只閘「算 + 廣播」這一步:push / seq / 江波圖 tick 照走,HTTP route 與 WS 首則 seed 各自即時算。
+        self._has_clients = has_clients
         self._river_broadcast = river_broadcast
         self._futures_minutes_fetch = futures_minutes_fetch
         self._tick_secs = tick_secs
@@ -319,7 +323,7 @@ class CorrelationEngine:
         session = self._session_fn()
         self._state.push(now, mids, session)
         self._seq += 1
-        if self._broadcast is not None:
+        if self._broadcast is not None and (self._has_clients is None or self._has_clients()):
             self._broadcast(self.state())
         self._river_tick(session)
 
