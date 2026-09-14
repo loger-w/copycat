@@ -1,0 +1,72 @@
+{
+  "round": 1,
+  "scope": "fix/pr-238-review-followups(pr-review #238 二十二條 findings 的收修;handoff %TEMP%/copycat-handoff-2026-09-14-batch-a-review-followups.md;user 兩輪 AskUserQuestion 拍板)",
+  "fixed_point": "d9c39023(master = PR #238 rebase merge 後 HEAD)",
+  "reviewed_head": "7748e55d(三筆:b08fc477 test / f48607c1 fix / 7748e55d chore(docs);收修 commit 見 disposition)",
+  "reviewers": "code-review-two-axis:Standards / Spec 各一 sub-agent(model opus);spec = pr-238-review.md 發現總覽 + inline comments + user 拍板(F-13/14 等 log、F-15 只文案、F-16 只緩衝、F-17~20 併 test-hygiene)",
+  "standards": [
+    {
+      "id": "S-01",
+      "severity": "Judgement",
+      "file": "copycat/capital/client.py:325-328 vs :698-700",
+      "finding": "Shotgun Surgery:三個量測欄散在 _set_status(\"ok\") 與 _finalize_positions 兩處靠註解人工同步,建議抽 _reset_chain_measurement();附帶註解不準 —— finalize 其實不清 _chain_started_at,兩組不相等。"
+    },
+    {
+      "id": "S-02",
+      "severity": "Judgement",
+      "file": "tests/capital/test_chain_stats.py:25-38",
+      "finding": "F-01 用 regex 掃 __main__.py 原文抓 format=\"…\":參數含 ) / 改單引號 / 改變數即靜默失配(靠 assert m is not None 才不假綠)。真 SoT = __main__ 提 LOG_FORMAT 常數,basicConfig 與測試各自 import,零解析。"
+    },
+    {
+      "id": "S-03",
+      "severity": "Judgement",
+      "file": "copycat/capital/chain_stats.py:7-12 vs :75-90",
+      "finding": "module docstring 的排除列序與 _classify 實際 precedence(no_start → unfinished → partial_chain → off_session → non_monotonic → short_balance)不同,讀者會誤推分桶歸屬。"
+    },
+    {
+      "id": "S-04",
+      "severity": "Judgement",
+      "file": "tests/server/test_clock_monitor.py:141-175",
+      "finding": "clock_monitor 檔頭宣告「測試零網路」,新 TestUdpExchangeOnLoopback 綁真 UDP + thread 是例外(settimeout 2.0 / join 2.0 有 flake 面);宣告那句建議補「_udp_exchange 本身走 loopback」。"
+    },
+    {
+      "id": "S-05",
+      "severity": "Judgement",
+      "file": "tests/server/test_clock_monitor.py:131",
+      "finding": "time.sleep(0.2) 真睡進單元測試,可改注入時鐘。"
+    },
+    {
+      "id": "S-06",
+      "severity": "Judgement",
+      "file": "tests/capital/test_fill_latency.py:284-294",
+      "finding": "count_landing(payload: dict[str, Any]) 為此新引 typing.Any;set_broadcast 契約是 Callable[[dict[str, object]], None],用 object 即與產生點同尺。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "P-01",
+      "severity": "MED",
+      "file": "CLAUDE.md:127",
+      "finding": "F-03 口徑寫實只做一半:敘述改了(四段齊全)但基線數字沒跟 —— 仍寫 150 / 198、p50 1952 / p90 2993,加了 partial_chain 後同一份 log 是 149 / 1953 / 3027 / 6433。那一列數字用現在這把尺跑不出來,而它正是重啟後首日寫回要比對的起點。"
+    },
+    {
+      "id": "P-02",
+      "severity": "LOW",
+      "file": "copycat/capital/chain_stats.py:4 / tests/capital/test_chain_stats.py:3-5",
+      "finding": "docstring 口徑殘留:chain_stats 檔頭仍寫「四道排除」(底下已六道);test_chain_stats 檔頭只寫「四段累積值單調遞增」沒提「四段齊全」閘。"
+    },
+    {
+      "id": "P-03",
+      "severity": "LOW",
+      "file": "tests/capital/test_chain_stats.py:26-36",
+      "finding": "F-01 只擋住 format= 半邊:__main__.py 若加 datefmt=,asctime 形狀變、_STAGE_RE 對不上,而 sink 用預設 datefmt → 測試照綠、尺照樣靜默歸零。"
+    },
+    {
+      "id": "P-04",
+      "severity": "LOW",
+      "file": "copycat/server/clock_monitor.py:26 / tests/server/test_clock_monitor.py:142",
+      "finding": "為測試而加的 prod 常數 NTP_PORT(唯一用途 = loopback 案 monkeypatch)+ 真 socket 測試,偏離白名單「Exchange-based tests inject zero network」;F-16 只要求 buffer 放大。其餘零越界、白名單五項全數未動、(c) 做錯零條。"
+    }
+  ],
+  "disposition": "Standards 零硬違反 6 判斷題 / Spec 1 MED + 3 LOW,零越界零做錯。收修於 refactor(backend,test) + chore(docs) 兩筆:S-02 + P-03 合併解 —— __main__ 抽 PROD_LOG_FORMAT / PROD_LOG_DATEFMT 常數、parity 案 import 同一顆建 Formatter,另以子字串斷 basicConfig 真的引用兩顆(繞過常數寫字面 / 另加 datefmt 兩種偽 PASS 都關;突變體 3/3 KILLED);S-01 只改註解寫明「兩處清點不是同一集合(finalize 只在涵蓋時清兩顆、這裡三顆全清)」,不抽 helper(集合本就不等,抽了反而要傳旗標);S-03 / P-02 docstring 依 _classify 順序列六道 + test 檔頭補四段齊全;S-04 檔頭宣告 loopback 案為零網路的唯一例外;S-05 sleep 0.2 → 0.05(修前偏 −25 ms 仍遠超 abs=1 ms 容差,不注入時鐘);S-06 改 dict[str, object] 退回 Any import;P-01 用現行尺對主樹 81 份 log 實跑寫回 149 / 198、1953 / 3027 / 6433、1019 × 342。P-04 知情保留:NTP_PORT 取代魔數 123 是正當常數,loopback 案是 F-16 在 Windows 上唯一的真證據(修前紅在 WinError 10040),對外零封包、2 s 上界,flake 面可接受;F-07 對 _udp_exchange 本身只斷 t0 <= t3 的弱點與之同源(順序性質無法從外部觀測),由注入 exchange 的案釘。"
+}
