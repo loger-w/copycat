@@ -436,6 +436,23 @@ class TestCollectHistoryWaiting:
         assert max(slept) <= 1.0  # 退避上限 = 原 poll_wait
         assert sum(slept) <= 10.0  # 不超過 bars 專屬 budget
 
+    def test_backoff_first_wait_is_twenty_ms(self) -> None:
+        """perf/batch-b-tier0 0-1(#241):首輪落空只睡 0.02 s,第二輪 0.04 s。
+
+        C1 §4.1 對真 TC4 逐發拆解:一次冷日 K 153 ms 裡 150.5 ms 是我們自己的 sleep,
+        首頁其實 15–40 ms 就備妥。起點 0.15 → 0.02;倍增與 poll_wait 封頂不動,壞股號的
+        總輪數只從 ~13 增到 ~18。斷第二筆 = 倍增係數也釘住(改成固定 20 ms 會紅)。
+        """
+        src = StockQuoteSource(
+            api=FakeApi(_pager({"1K": {}})),
+            session="s1",
+            trade_date="2026-07-28",
+            poll_wait_secs=1.0,
+        )
+        _, slept = self._run_with_fake_clock(src, "2330", "1", "2026-07-24", "2026-07-24")
+        assert [round(x, 6) for x in slept[:2]] == [0.02, 0.04]
+        assert max(slept) <= 1.0
+
     def test_fallback_1k_also_uses_short_deadline(self) -> None:
         """tf=D 的 DK→1K fallback 也要傳短 budget,否則無資料標的仍是 10+30=40s。"""
         src = StockQuoteSource(
@@ -446,8 +463,9 @@ class TestCollectHistoryWaiting:
         )
         out, slept = self._run_with_fake_clock(src, "2330", "D", "2026-07-24", "2026-07-24")
         assert out == ([], "timeout")
-        # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束
-        assert sum(slept) <= 20.0
+        # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束(假鐘序列 0.02·2^k 的浮點累加尾差
+        # 4e-15 不是預算變長,容 1e-9;perf #241 起點 0.15 → 0.02 後才浮出)
+        assert sum(slept) <= 20.0 + 1e-9
 
 
 class TestDkWindowVariant:

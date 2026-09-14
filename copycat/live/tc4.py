@@ -51,7 +51,10 @@ logger = logging.getLogger(__name__)
 BARS_POLL_DEADLINE = 10.0
 #: 歷史收割的退避輪詢起點;逐次加倍到 poll_wait 封頂(隨 _collect_history 自
 #: stock_source 上提 — index-board R-3)
-_POLL_BACKOFF_START = 0.15
+#: 首頁輪詢起點(秒)。C1 §4.1 對真 TC4 逐發拆解:首頁 15–40 ms 就備妥,舊值 0.15 讓每次
+#: 冷取固定多睡 ~130 ms(一次冷日 K 153 ms 裡 150.5 ms 是 sleep)。倍增與 poll_wait 封頂不動,
+#: 壞股號的總輪數只從 ~13 增到 ~18(+3.5 ms 鎖時間)。river_backfill 同一把值(perf #241)。
+_POLL_BACKOFF_START = 0.02
 
 
 class HistoryResult(NamedTuple):
@@ -980,7 +983,7 @@ class TC4QuoteSource:
         30s 預算只有在「TC4 根本沒有這檔」時才會用滿,而那條路徑一次要付兩段(歷史 +
         當日)= 60s。
 
-        輪詢改**退避**:首輪落空後只睡 0.15s 再問,逐次加倍到原 `poll_wait` 封頂。
+        輪詢改**退避**:首輪落空後只睡 `_POLL_BACKOFF_START`(0.02s)再問,逐次加倍到原 `poll_wait` 封頂。
         舊制固定睡滿 1.0s,讓所有冷載入無條件多等約 0.9 秒。
 
         `poll_wait == 0` 是測試組態,語意 = 不等待 → 探測一次就回,不 busy loop。

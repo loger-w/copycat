@@ -104,6 +104,38 @@ class TestCorrSourceFetchDay1k:
             src.fetch_day_1k("TC.F.SGX.TWN.HOT")
         assert time.monotonic() - started < 0.5  # poll_wait=0 → 探測一次就回
 
+    def test_first_page_poll_backoff_starts_at_twenty_ms(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """perf/batch-b-tier0 0-1(#241):江波圖 1K 首頁輪詢與 tc4 同一把起點 0.02 s、倍增不動。
+
+        sleep / monotonic 換假鐘(不真睡);首頁前兩發回空、第三發備妥 → 睡了 [0.02, 0.04]。
+        """
+        slept: list[float] = []
+        now = {"t": 0.0}
+
+        def fake_sleep(secs: float) -> None:
+            slept.append(secs)
+            now["t"] += secs
+
+        monkeypatch.setattr(river_backfill_mod.time, "sleep", fake_sleep)
+        monkeypatch.setattr(river_backfill_mod.time, "monotonic", lambda: now["t"])
+        polls = {"n": 0}
+
+        def get_history(symbol: str, start: str, end: str, qi: str, dtype: str) -> dict:
+            polls["n"] += 1
+            if polls["n"] < 3:
+                return {"HisData": []}
+            return {"HisData": [_row(1, "01000000", "22000")] if qi == "0" else []}
+
+        river_backfill_mod.collect_1k_minutes(
+            sub_history=lambda *a: None,
+            get_history=get_history,
+            symbol="TC.F.TWF.TXF.HOT",
+            poll_wait=1.0,
+        )
+        assert slept == [pytest.approx(0.02), pytest.approx(0.04)]
+
     def test_ready_first_page_with_zero_harvested_rows_returns_empty(self) -> None:
         """首頁備妥(非逾時)但收割 0 列 → 回空、**不** raise。
 
