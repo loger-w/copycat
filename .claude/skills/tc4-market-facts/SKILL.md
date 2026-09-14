@@ -107,7 +107,7 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
 (Trigger:內外盤判定 / 五檔顯示 / 鎖停偵測 / 拿 `book.bids[0]` 當最佳價 / 對簿做 sum/max)
 
 - **`derive_side` 與回測的內外盤是兩條獨立鏈路**(2026-07-31):`derive_side` 只在
-  `copycat/live/stock_models.py`;回測(`backtest/fade_*.py`、`data/models.py`)用 TC4 1K row 的
+  `copycat/live/stock_models.py`;回測(`data/models.py`;fade 家族已於 2026-09-14 刪除)用 TC4 1K row 的
   `UpVolume`/`DownVolume`/`UnchVolume`(`Bar1K`),無呼叫關係。改 live 判定不影響回測口徑。
   (Trigger:評估改 live 內外盤判定的 blast radius)
 
@@ -259,9 +259,9 @@ live 期間判好的值每次切檔被洗掉;那層靠 `relabel_locked_side`(鎖
   `scan-events` CLI 已自產補全(產物 `data/events/events.csv` + limitup_all 同步);
   引用種子池結論或做母體統計前先跑 scan-events。
   (2026-07-07/10,Trigger:引用回測結論 / 算 base rate / 以事件池當母體)
-- **模擬器出場 status 的入統計集合 = `fade_simulate.TRADEABLE_STATUSES` 單一定義**;新增出場
-  status 只改這一處(曾因 guard_exit 只加一邊 → 最差虧損被靜默剔除 → 期望值灌水)。
-  `pipeline.py`(舊 T 日)另有自己的 `_TRADEABLE`,兩者不通用。(2026-07-11,Trigger:模擬器出場 status)
+- **模擬器出場 status 的入統計集合要單一定義**(教訓來自已刪除的 fade 家族 `TRADEABLE_STATUSES`:
+  曾因 guard_exit 只加一邊 → 最差虧損被靜默剔除 → 期望值灌水);現存的是 `backtest/pipeline.py`
+  (T 日)的 `_TRADEABLE`,新增出場 status 只改那一處。(2026-07-11,Trigger:模擬器出場 status)
 
 ## 群益 Capital(SKCOM)
 
