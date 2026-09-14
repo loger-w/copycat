@@ -37,6 +37,7 @@ class CapitalCom(Protocol):
     def init_order(self) -> int: ...
     def read_cert(self, user_id: str) -> int: ...
     def connect_reply(self, user_id: str) -> int: ...  # 連回報主機,OnNewData 才會推
+    def is_reply_connected(self, user_id: str) -> int: ...  # 主動問回報線(#235);回原始 int
     def send_stock_order(self, user_id: str, fields: dict[str, object]) -> tuple[str, int]: ...
     def send_future_order(
         self, user_id: str, fields: dict[str, object], *, is_option: bool
@@ -145,6 +146,11 @@ class SkcomCapitalCom:
     def connect_reply(self, user_id: str) -> int:
         # 連上回報主機後,OnNewData 才會推委託/成交/刪單回報(並重播當日 backlog)。
         return self._reply.SKReplyLib_ConnectByID(user_id)
+
+    def is_reply_connected(self, user_id: str) -> int:
+        # 主動問回報線連著沒(#235 辨識階段):typelib 只給 int,語意(1 = 連著?)未實證 ——
+        # 回原始值不轉 bool,第一個交易日看 log 的值序列再定;不依賴任何 SKCOM 事件會不會響。
+        return self._reply.SKReplyLib_IsConnectedByID(user_id)
 
     def send_stock_order(self, user_id: str, fields: dict[str, object]) -> tuple[str, int]:
         order = self._sk.STOCKORDER()
@@ -277,6 +283,17 @@ class _ReplyEvents:
                 self._on_disconnect(nErrorCode)
             except Exception:
                 logger.exception("reply 斷線回呼例外(已忽略,COM 事件迴圈不可炸)")
+
+    # ---- Solace 那一對(dispid 9 / 10;#235 辨識階段,只 log)----
+    # 22 天 65 次登入 `OnConnect` / `OnDisconnect` 零觸發、綁定逐層查過沒壞(V2 §3.1);typelib 裡
+    # 同一個 sink 還宣告這一對,而 comtypes 對 sink 未實作的事件**靜默丟棄** —— 頭號假說是這版
+    # SKCOM 的回報線走 Solace、事件從 9 / 10 出來。先掛上看它會不會響;響了再談翻 status /
+    # 重連(那是「修」,不在辨識批)。簽名與 typelib 逐位相符:(BSTR bstrUserID, c_int nErrorCode)。
+    def OnSolaceReplyConnection(self, bstrUserID: str, nErrorCode: int) -> None:
+        logger.info("Capital Solace reply connection (user=%s, code=%s)", bstrUserID, nErrorCode)
+
+    def OnSolaceReplyDisconnect(self, bstrUserID: str, nErrorCode: int) -> None:
+        logger.warning("Capital Solace reply disconnect (user=%s, code=%s)", bstrUserID, nErrorCode)
 
     def OnNewData(self, bstrUserID: str, bstrData: str) -> None:
         # 主動回報(委託/成交)轉給 client;回呼例外不可炸 COM 迴圈,但必須留痕 —

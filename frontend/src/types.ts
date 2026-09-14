@@ -72,6 +72,9 @@ export interface CapitalStatus {
   account_masked?: string | null;
   futures_account_masked?: string | null;
   order_enabled?: boolean;
+  /** #235:回報線主動問(`IsConnectedByID`)的原始 int;null = 尚未問過、缺欄 = 舊後端。
+   *  辨識階段:值語意未實證,**前端不讀**(給 curl / 盤中對帳);不要拿它推 degraded。 */
+  reply_connected?: number | null;
 }
 
 /** OrderRecord asdict(委託清單一列;qty 已換算顯示單位)。 */

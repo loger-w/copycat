@@ -13,6 +13,8 @@ import sys
 import types
 from collections.abc import Callable
 
+import pytest
+
 from copycat.capital.com import (
     CapitalCom,
     SkcomCapitalCom,
@@ -143,6 +145,23 @@ def test_reply_events_disconnect_notifies_and_swallows() -> None:
 
     _ReplyEvents(on_disconnect=boom).OnDisconnect("u", 1)
     _ReplyEvents().OnDisconnect("u", 1)
+
+
+def test_reply_events_solace_pair_logs_only(caplog: pytest.LogCaptureFixture) -> None:
+    """#235 辨識階段:dispid 9 / 10 那一對只留痕(Connection INFO / Disconnect WARNING),
+    **不**接 `on_disconnect`、不改任何狀態 —— 語意未實證前翻 degraded 會在盤中亮假黃字。
+    簽名與 typelib 逐位相符(bstrUserID, nErrorCode),comtypes 才 dispatch 得到。"""
+    caplog.set_level(logging.INFO, logger="copycat.capital.com")
+    got: list[int] = []
+    sink = _ReplyEvents(on_disconnect=got.append)
+    sink.OnSolaceReplyConnection("u", 0)
+    sink.OnSolaceReplyDisconnect("u", 3002)
+    assert got == []  # 不走既有 OnDisconnect 的降級回呼
+    lines = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "copycat.capital.com"]
+    assert lines == [
+        (logging.INFO, "Capital Solace reply connection (user=u, code=0)"),
+        (logging.WARNING, "Capital Solace reply disconnect (user=u, code=3002)"),
+    ]
 
 
 def test_order_events_balance_and_profit_forward_and_swallow() -> None:
@@ -281,6 +300,9 @@ class _StubCom:
 
     def connect_reply(self, user_id: str) -> int:
         return 0
+
+    def is_reply_connected(self, user_id: str) -> int:
+        return 1
 
     def send_stock_order(self, user_id: str, fields: dict[str, object]) -> tuple[str, int]:
         return "", 0

@@ -383,6 +383,16 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   敏感度分析拿 raw 列重算四條政策;修前 36% 未命中事件零快照、自選群組覆寫式落檔不可還原)、WS 與 jsonl 同一份
   (前端 `SignalMsg.policy_ctx` optional 不讀)。W1 只加欄;舊列缺欄 = 09-14 前。漂掉的症狀:後端改回只在命中時
   評 → 未命中列又零快照,零錯誤訊號;`tests/server/test_signal_policy.py::TestPolicyCtxOnRawRow` 四案釘住。
+- **群益回報線「辨識而非修」:`/api/capital/status` 的 `reply_connected` + Solace 事件 log**(2026-09-14 起,#235):
+  22 天 65 次登入 `OnConnect` / `OnDisconnect` 零觸發、綁定逐層查過沒壞(V2 §3.1),頭號假說 = 這版 SKCOM 回報線走
+  Solace(typelib dispid 9 / 10 `OnSolaceReplyConnection` / `OnSolaceReplyDisconnect`,comtypes 對 sink 未實作的事件
+  **靜默丟棄**)。產生點 `capital/com.py::_ReplyEvents`(那一對只 log:INFO / WARNING,**不接** `on_disconnect`)+
+  `capital/client.py::_probe_reply`(幫浦圈每 `REPLY_PROBE_SECS` 10 s 呼 `SKReplyLib_IsConnectedByID`,**回原始 int
+  不轉 bool**、值變化才印「群益回報線 IsConnectedByID=n(上一值 m)」、≠ 1 WARNING;登入前不問)→ `status_view()`
+  新欄 `reply_connected: int | null`(null = 尚未問過)。讀者 = curl / 盤中對帳;前端 `CapitalStatus.reply_connected`
+  optional **不讀**。**status 燈不動、不自動重連**(值語意未實證,誤判會在盤中亮假黃字);看過一個交易日
+  `grep "回報線\|Solace" logs/server-<日>.log` 的值序列再決定接不接 degraded(那是下一批的「修」)。
+  `tests/capital/test_reply_watch.py` + `test_com.py::test_reply_events_solace_pair_logs_only` 釘住。
 - **掃單簇參數 parity 走既有 fixture**(2026-09-07 起):`PARAM_SPECS["sweep_cluster"]` 五鍵(`cluster_window_secs` /
   `min_sweeps` / `min_levels` / `up_pct` / `up_window_secs`;`min_sweeps` / `min_levels` 進 `INT_PARAM_KEYS`)已入
   `tests/fixtures/signal_param_specs.json`,兩邊 parity 測試沿既有(上條「訊號規則參數契約」);前端「新規則」預設值
