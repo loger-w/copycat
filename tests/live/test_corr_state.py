@@ -131,7 +131,6 @@ class TestWindowThresholds:
         assert got is not None
         assert abs(got - expected) < 1e-9
 
-
     def test_longest_window_boundary_matches_mid_series_eviction(self) -> None:
         """perf #244 守門(T2 §9 意外 1):最長窗的 off-by-one 只在這裡發生。
 
@@ -161,8 +160,9 @@ class TestWindowThresholds:
     def test_full_day_parity_with_batch_reference(self) -> None:
         """perf #244 全日對照:同一串 16,200 次 push(11 腿、SXF / VX 25% 有值、洞 + 相鄰判定
         全部走真實路徑),每 100 筆與檔內**整批**參考(自行逐出的中價序列 → 重掃配對 →
-        `_pearson`)比:`n{w}` 全部 `==`(不用容差,差一筆一定抓到),r 的 max|Δr| 釘在實測值
-        上一級(2026-09-15 本機實測 3.0e-14,見 assert 旁註解)。
+        `_pearson`)比:`n{w}` 全部 `==`(不用容差,差一筆一定抓到);r 的 max|Δr| 容差 1e-9 ——
+        2026-09-15 本機實測 3.0e-14(harness bench_04 --drift 對 statistics.correlation),留五個數量級,
+        仍比窗邊界差一筆的 1e-3 小六個數量級(抓得到)。
         """
         import random
 
@@ -228,7 +228,7 @@ class TestWindowThresholds:
                         max_dr = max(max_dr, abs(float(gv) - float(rv)))
                         checks += 1
         assert checks > 1000
-        assert max_dr < 1e-9  # 實測 2026-09-15:見 commit 訊息;閉式公式 vs 定義式 Pearson 同量級 1e-15
+        assert max_dr < 1e-9  # 容差理由與實測值見 docstring
 
     def test_constant_window_after_movement_returns_none(self) -> None:
         """running sums 加減後的殘差不得把「整窗零波動」算成一個亂數 r。

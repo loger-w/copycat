@@ -10,6 +10,7 @@ ctypes 呼叫沒設 restype / argtypes 時 `SetProcessInformation` 會**靜默�
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 
@@ -84,9 +85,17 @@ def test_non_windows_is_a_noop(caplog: pytest.LogCaptureFixture) -> None:
     assert [r.levelname for r in caplog.records] == ["INFO"]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 API smoke,只在 Windows 跑")
 def test_default_fns_are_the_win32_wrappers() -> None:
     """預設走真 ctypes 包裝(不是 stub);在 Windows 上實際呼叫一次應該成功 —— 這是本機
-    (Windows 11)的 smoke,也是 T4「沒設 restype 靜默回 False」那顆地雷的守門。"""
+    (Windows 11)的 smoke,也是 T4「沒設 restype 靜默回 False」那顆地雷的守門。
+    佈線測試(test_main_wiring)刻意用替身,這裡是唯一真呼叫的地方:timeBeginPeriod 用完立刻
+    timeEndPeriod 歸還,不讓 pytest 進程剩下的時間帶著 1 ms timer(EcoQoS 豁免無需歸還)。"""
+    import ctypes
+
     ok, err = win_timer._qos_exempt()
     assert ok is True, f"SetProcessInformation 回 False,GetLastError={err}"
-    assert win_timer._time_begin_period() == 0
+    try:
+        assert win_timer._time_begin_period() == 0
+    finally:
+        ctypes.WinDLL("winmm").timeEndPeriod(1)
