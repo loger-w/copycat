@@ -24,7 +24,8 @@ A 桶做、B1 fade 家族全刪。
 刪:`copycat/backtest/fade_*.py`、`market_features.py`、`quantiles.py`、`tests/backtest/test_fade_*`、
 `tests/test_fade_*.py`、`tests/test_cli_fade.py`、`tests/test_market_features.py`、`configs/fade_uc_round*.json`、
 `cli.py` 五個子指令、`report_fmt.fmt_num / fmt_quantiles`、`aggregate.last_cum`、`LockTracker.current_lock_start`、
-前端 knip 33 export / 33 type / 9 個未使用 default export(盤點 A7 寫 12,其中 App / CorrPage / FuturesPage / IndexPage / StockPage 走 `lazy(() => import())`,default 必須留;A7 高估,非漏做)。
+`tests/test_shared_infra_characterization.py` 12 → 3 條(移除的 9 條全為已刪符號的特徵化:quantile_round / quantile_trunc / quantiles_round ×6、fmt_num、fmt_quantiles、load_fade_config;pr-230 review F-03 補列)、
+前端 knip 33 export / **32** type export(盤點 A6 寫 33,差額 1 = `_KindDomainsMatch` 型別機驗必須保留 export;`export type { Group, Watchlist }` 只降 Group 一個符號;pr-230 review F-07)/ 9 個未使用 default export(盤點 A7 寫 12,其中 App / CorrPage / FuturesPage / IndexPage / StockPage 走 `lazy(() => import())`,default 必須留;A7 高估,非漏做)。
 另兩處文件層同動:`.claude/skills/{tc4-market-facts,backend-conventions}/SKILL.md` 三條指向已刪路徑的教訓改寫(語意保留、路徑改述)、`configio.py` docstring 去掉 fade_config 舉例。
 A8(`@eslint/js` 補列 devDependencies)獨立 chore commit,不混進 refactor commit(review Standards #1)。
 
