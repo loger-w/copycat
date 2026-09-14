@@ -1056,7 +1056,9 @@ class SignalHub:
             logger.warning("basis cache 日別不符,不分發:%s(%s)", code, basis_date)
             return
         for slot in self._slots.values():
-            if slot.rule["kind"] != "cdp_cross":
+            if slot.rule["kind"] != "cdp_cross" or not slot.enabled:
+                # 停用 slot 不分發(perf #248):它的 detector 不評估,set_basis 是純死工;
+                # 停用 → 啟用一律走 upsert_rule 換新 slot + _seed_slot 補基準,漏掉的不會留到啟用後。
                 continue
             slot.detector.set_basis(code, _filter_levels(cdp, slot.rule["cdp_levels"]))
 
