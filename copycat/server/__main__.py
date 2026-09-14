@@ -133,6 +133,14 @@ def _setup_prod_log() -> Path | None:
     return path
 
 
+#: prod log 每行的前綴形狀 —— `chain-stats` 的 `_STAGE_RE` 逐字對這個形狀(含 asctime 的預設 datefmt
+#: `YYYY-MM-DD HH:MM:SS,mmm`)。`tests/capital/test_chain_stats.py` 的 parity 案 import 同一顆常數建 Formatter,
+#: 並斷言下方 `basicConfig` 真的用它們(pr-238 review F-01 + 收修 S-02 / P-03):改這裡任一顆,parity 案就把
+#: 尺歸零的事實照出來,而不是「測試自己抄一份照綠、prod 尺靜默 0 條」。
+PROD_LOG_FORMAT: str = "%(asctime)s %(name)s %(levelname)s %(message)s"
+PROD_LOG_DATEFMT: str | None = None
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     unknown = [a for a in args if a != "--verify"]
@@ -141,7 +149,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     verify = "--verify" in args
 
     log_path = None if verify else _setup_prod_log()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=PROD_LOG_FORMAT, datefmt=PROD_LOG_DATEFMT)
 
     if verify:
         neutralize_external_env()

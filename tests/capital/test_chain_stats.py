@@ -1,15 +1,15 @@
 """`chain-stats`(#234):從 server log 算回報鏈「乾淨子集」的統計。
 
 這把尺是 Tier 2-6(回報鏈變快)的驗收判準,判準定義寫死在這裡:只算**成交回報在盤中
-09:00–13:30 到達**、四段累積值**單調遞增**、**庫存段 ≥ 500 ms**(0.5 s debounce 結構上不可能更短,
-更短 = 計時器被重設)的鏈;同時數群益 1019(查詢處理中)出現幾次 —— 每次 +1,060 ms 是尾巴的唯一來源。
+09:00–13:30 到達**、**四段齊全**(缺中段 = `partial_chain`,pr-238 review F-03)且累積值**單調遞增**、
+**庫存段 ≥ 500 ms**(0.5 s debounce 結構上不可能更短,更短 = 計時器被重設)的鏈;同時數群益 1019
+(查詢處理中)出現幾次 —— 每次 +1,060 ms 是尾巴的唯一來源。
 合成 log 行逐字沿 prod 格式(`logs/server-*.log`),含 09-14 起落地行的「累計 n 筆成交」尾綴。
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 import pytest
@@ -18,23 +18,11 @@ from copycat import cli
 from copycat.capital.chain_stats import format_report, summarize
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
+from copycat.server.__main__ import PROD_LOG_DATEFMT, PROD_LOG_FORMAT
 from tests.capital.fake_com import FakeCom
 
 _P = "copycat.capital.client INFO balance 鏈: "
 _MAIN_PY = Path(__file__).resolve().parents[2] / "copycat" / "server" / "__main__.py"
-
-
-def _prod_log_format() -> str:
-    """prod 的 log 前綴格式 = `__main__.py` 的 `basicConfig(format=…)` **原文**(pr-238 review F-01):
-    這裡不再手抄第二份字面 —— 抄的那份與 prod 零程式連結,prod 改一字(如加 `[%(threadName)s]`)
-    測試照綠、`chain-stats` 對真 log 卻靜默回「0 條」而判準 `non_monotonic = 0` 字面通過(偽 PASS)。
-    沿 `tests/server/test_shutdown_budget.py` 讀 `run.ps1` 原文的做法。"""
-    text = _MAIN_PY.read_text(encoding="utf-8")
-    m = re.search(r'logging\.basicConfig\([^)]*?format="([^"]+)"', text)
-    assert m is not None, (
-        '__main__.py 找不到 basicConfig(format="…"):prod log 格式的產生點搬家了,這支 parity 測試要跟'
-    )
-    return m.group(1)
 
 
 def _chain(hhmmss: str, e: tuple[int, int, int, int], *, fills: int | None = None) -> list[str]:
@@ -131,15 +119,18 @@ class TestCli:
 class TestParityWithClientLogFormat:
     """two-axis S-01:`_STAGE_RE` 逐字複製 `_log_chain_stage` 的 log 格式 —— 產生點改一字,
     `chain-stats` 就靜默回「0 條」、驗收尺歸零。這裡不餵合成行:讓真的 `CapitalClient` 走 prod 的
-    `basicConfig` format(**讀 `__main__.py` 原文取得**,見 `_prod_log_format`)印出四段,再餵給
-    `summarize` —— 訊息半邊與前綴半邊都與 prod 同源。"""
+    log 前綴(**import `__main__.PROD_LOG_FORMAT` / `PROD_LOG_DATEFMT` 同一顆常數**,pr-238 review F-01;
+    手抄第二份字面與 prod 零程式連結,prod 改一字測試照綠、尺靜默 0 條)印出四段,再餵給 `summarize`
+    —— 訊息半邊與前綴半邊都與 prod 同源。"""
 
-    def test_prod_log_format_is_read_from_main_not_retyped(self) -> None:
-        """守門:`_prod_log_format` 真的從 `__main__.py` 取到一串含 asctime / name / levelname / message
-        的 format(四個欄位缺一 `_STAGE_RE` 就對不上),不是回一個固定字面。"""
-        fmt = _prod_log_format()
+    def test_basic_config_really_uses_the_shared_constants(self) -> None:
+        """常數同源只擋住一半:有人在 `basicConfig` 直接寫字面 / 另加 `datefmt=` 而不經常數,
+        parity 案仍照綠。讀 `__main__.py` 原文斷言那一行真的引用兩顆常數(沿 `test_shutdown_budget`
+        讀 `run.ps1` 原文的做法;純子字串,不解析)。"""
+        text = _MAIN_PY.read_text(encoding="utf-8")
+        assert "format=PROD_LOG_FORMAT" in text and "datefmt=PROD_LOG_DATEFMT" in text
         for token in ("%(asctime)s", "%(name)s", "%(levelname)s", "%(message)s"):
-            assert token in fmt, fmt
+            assert token in PROD_LOG_FORMAT, PROD_LOG_FORMAT  # 四個欄位缺一 `_STAGE_RE` 就對不上
 
     def test_real_stage_lines_parse_into_one_clean_chain(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -158,7 +149,7 @@ class TestParityWithClientLogFormat:
                 lines.append(self.format(record))
 
         sink = _Sink()
-        sink.setFormatter(logging.Formatter(_prod_log_format()))
+        sink.setFormatter(logging.Formatter(PROD_LOG_FORMAT, datefmt=PROD_LOG_DATEFMT))
         log = logging.getLogger("copycat.capital.client")
         prev_level = log.level  # finally 還原:留 INFO 會讓後面檔案的 caplog 案順序相依(review F-10)
         log.addHandler(sink)
