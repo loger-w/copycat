@@ -141,6 +141,15 @@ def _setup_prod_log() -> Path | None:
 PROD_LOG_FORMAT: str = "%(asctime)s %(name)s %(levelname)s %(message)s"
 PROD_LOG_DATEFMT: str | None = None
 
+#: GIL 交棒間隔(perf #247;預設 0.005)。4 條 CPU 執行緒(TC4 listener / KeepAlive / executor)在跑時
+#: event loop 等 GIL 的 p50 16.8 → 4.0 ms、p99 75 → 21 ms(T4 §3.4,套 timer 1 ms 後量);代價 =
+#: 飽和 CPU 執行緒吞吐 −8.7%(09-14 開盤峰值 2,932 msg/s 離 14k 掉包點遠,user 拍板接受)。
+#: **收益掛在 `apply_timer_1ms` 上**:GIL 等待走 condvar timeout,同吃 timer quantum,不豁免 EcoQoS
+#: 時 0.001 與 0.005 都被夾成 15.6 ms(批 B 本機實量 58 ms 零差異)—— 順序必須在 timer 之後。
+#: 0.0005 那一階 p99 再降到 2.5 ms 但吞吐 −43%,不進。
+SWITCH_INTERVAL_SECS: float = 0.001
+_set_switch_interval = sys.setswitchinterval  # 佈線測試以替身取代(真呼叫會改掉 pytest 進程)
+
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
@@ -155,6 +164,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     # 一切之前(事件迴圈與各 engine 的 call_later / sleep 全吃這一顆);失敗只 WARNING 不炸啟動。
     # --verify 也套:fake 世界不受影響,側車量 timer drift 走的正是這條路。
     apply_timer_1ms()
+    _set_switch_interval(SWITCH_INTERVAL_SECS)
+    logger.info("switchinterval %.4f s(perf #247;預設 0.005)", SWITCH_INTERVAL_SECS)
 
     if verify:
         neutralize_external_env()
