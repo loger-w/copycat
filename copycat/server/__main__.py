@@ -39,6 +39,7 @@ from copycat.server.verify import (
     fake_breadth_fetchers,
     neutralize_external_env,
 )
+from copycat.server.win_timer import apply_timer_1ms
 from copycat.trading_calendar import load_trading_calendar
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     log_path = None if verify else _setup_prod_log()
     logging.basicConfig(level=logging.INFO, format=PROD_LOG_FORMAT, datefmt=PROD_LOG_DATEFMT)
+    # timer 1 ms(perf #243):EcoQoS 豁免 + timeBeginPeriod 兩行缺一不可,放 logging 之後、其餘
+    # 一切之前(事件迴圈與各 engine 的 call_later / sleep 全吃這一顆);失敗只 WARNING 不炸啟動。
+    # --verify 也套:fake 世界不受影響,側車量 timer drift 走的正是這條路。
+    apply_timer_1ms()
 
     if verify:
         neutralize_external_env()

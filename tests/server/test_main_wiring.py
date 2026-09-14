@@ -43,6 +43,9 @@ class _Capture:
         self.run_kwargs: dict[str, Any] | None = None
         self.neutralized = False
         self.prod_log_calls = 0
+        #: 啟動期「進程級」呼叫的順序紀錄(perf #243 timer / #247 switchinterval):佈線測試在
+        #: pytest 進程內跑 main(),真呼叫會改掉測試進程的 timer 解析度 / GIL 交棒間隔 → 一律替身
+        self.process_calls: list[tuple[str, object]] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _fake_create_app(*args: Any, **kwargs: Any) -> object:
@@ -55,6 +58,11 @@ class _Capture:
 
         monkeypatch.setattr(main_mod, "create_app", _fake_create_app)
         monkeypatch.setattr(uvicorn, "run", _fake_run)
+        monkeypatch.setattr(
+            main_mod,
+            "apply_timer_1ms",
+            lambda: self.process_calls.append(("timer_1ms", True)) or True,
+        )
         # 佈線測試不得真的動 sys.stdout/stderr 或寫 logs/(prod 路徑才有,計數驗證)
         monkeypatch.setattr(main_mod, "_setup_prod_log", lambda: self._count_prod_log())
         monkeypatch.setattr(
@@ -105,6 +113,23 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
     # 關機預算同源(A1):uvicorn 先等 WS 收攤才進 lifespan,那段要有上限,否則 run.ps1
     # 的 graceful 窗再怎麼算都可能整段被 WS drain 吃掉、lifespan 一步都輪不到
     assert cap.run_kwargs["timeout_graceful_shutdown"] == shutdown_budget.WS_DRAIN_SECS
+
+
+@pytest.mark.parametrize("argv", [[], ["--verify"]])
+def test_main_applies_timer_1ms_once_on_both_paths(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    """perf #243:prod 與 --verify 都在啟動最前套 timer 1 ms(EcoQoS 豁免 + timeBeginPeriod),恰一次。
+    漏掉的失效樣態 = 所有 call_later / sleep 尾巴回到 ~12–14 ms,畫面與 log 零異狀 —— 只有盤後
+    `grep "timer 1 ms 已套用"` 零行看得出來。"""
+    cap = _Capture()
+    cap.install(monkeypatch)
+    if argv:
+        monkeypatch.setenv("TXO_SERVER_PORT", "8722")
+
+    main_mod.main(argv)
+
+    assert [name for name, _v in cap.process_calls] == ["timer_1ms"]
 
 
 def test_main_argv_defaults_to_sys_argv_prod(monkeypatch: pytest.MonkeyPatch) -> None:
