@@ -400,9 +400,11 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
 - **CDP 列閘**(2026-09-14 起,#225):產生點 `signal_hub._resolve_basis` + `_gate_return_pct`(`(close[-1] − close[-6])
   × 100 / close[-6]` 先乘後除,恰 5.00% 落閉區間下界);門檻 `SignalsConfig.cdp_gate_days / cdp_gate_pct`(全域,不進規則
   參數);抓取根數 `hub._basis_bars = days + 3`。閘不過 = 該檔基準餵 None(detector 既有語意「CDP 跳過、其他 kind 照常」)
-  + **INFO**「CDP 列閘:…」一行(漲幅不足 / 日 K 不足兩種文案),不重試、不與取得失敗(WARNING + 重試)混淆;圖上五線走
-  overlay 端點與此無關。盤後判準:`grep "CDP 列閘" logs/server-*.log` 每檔至多一行;**整批全「日 K 不足」= 抓取根數被改小**
-  (`_BASIS_BARS_SLACK`),不是資料源壞。`tests/server/test_signal_hub.py::TestCdpGate` 六案釘住。
+  + **INFO**「CDP 列閘:…」一行(漲幅不足 / 日 K 不足兩種文案),不重試、不與取得失敗(WARNING + 重試)混淆;第三桶
+  **WARNING**「首尾日 K 收盤 ≤ 0(壞資料)」= 資料面壞了(分母 ≤ 0 除不了;尾根 = 0 算得出 −100% 但不得混進「漲幅
+  不足」,pr-228 review F-02),同樣不重試;圖上五線走 overlay 端點與此無關。盤後判準:`grep "CDP 列閘"
+  logs/server-*.log` 每檔至多一行;**整批全「日 K 不足」= 抓取根數被改小**(`_BASIS_BARS_SLACK`),不是資料源壞。
+  `tests/server/test_signal_hub.py::TestCdpGate` 八案釘住。
 - **T+1 / T+2 回填原地補欄 + 離線讀者契約**(2026-09-07 起):產生點 `signal_hub.py::backfill_policy_outcomes`
   (每日 `policy_outcome_time`;起動時**只在已過當日時點才立即跑**,開盤前起動不跑 —— 回填 DK 與 CDP 基準暖機共用
   同一把 TC4 `api.lock`,整體 review F-10 拍板;只碰日期**同時小於** hub 日別與牆鐘日的最近 `policy_outcome_days`

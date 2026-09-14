@@ -101,8 +101,8 @@ _BREAKOUT_MIN_MINUTES = 4
 
 @dataclass(frozen=True)
 class SignalEvent:
-    # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open | sweep_cluster
-    # | vol_breakout
+    # cdp_cross | surge | crash | surge_pullback | vol_burst | limit_lock | limit_open
+    # | sweep_cluster | vol_breakout
     kind: str
     code: str
     price_milli: int
