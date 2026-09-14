@@ -12,7 +12,7 @@ import pytest
 
 from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
-from tests.capital.fake_com import FakeCom
+from tests.capital.fake_com import FakeCom, RecordingCom
 
 
 def _client(com: FakeCom, tmp_path: Path) -> CapitalClient:
@@ -31,10 +31,12 @@ def _client(com: FakeCom, tmp_path: Path) -> CapitalClient:
 
 
 def _probe_lines(caplog: pytest.LogCaptureFixture) -> list[tuple[int, str]]:
+    """只取值序列那一行(「IsConnectedByID=n」);同 logger 的耗時 WARNING「IsConnectedByID 耗時 … ms」
+    沒有 `=`,cost > 50 ms(GC / 防毒停頓)時不會混進來讓 `==` 斷言紅在錯的方向(review F-11)。"""
     return [
         (r.levelno, r.getMessage())
         for r in caplog.records
-        if r.name == "copycat.capital.client" and "回報線" in r.getMessage()
+        if r.name == "copycat.capital.client" and "IsConnectedByID=" in r.getMessage()
     ]
 
 
@@ -42,9 +44,10 @@ def test_probe_is_throttled_and_logs_only_on_change(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="copycat.capital.client")
-    com = FakeCom()
+    com = RecordingCom()  # `calls` 記 COM 方法名:白名單「不重連」要能斷 connect_reply 沒被叫
     com.reply_connected_seq = [1, 1, 0, 1]
     client = _client(com, tmp_path)
+    calls_before = list(com.calls)
     assert client.status_view()["reply_connected"] is None  # 尚未問過
 
     client._pump_once()  # 首圈就問
@@ -64,7 +67,13 @@ def test_probe_is_throttled_and_logs_only_on_change(
     client._pump_once()  # → 0
     assert client.status_view()["reply_connected"] == 0
     assert _probe_lines(caplog)[-1] == (logging.WARNING, "群益回報線 IsConnectedByID=0(上一值 1)")
-    assert client.status == "ok"  # 辨識階段不翻 degraded(白名單)
+    # 白名單兩半(spec #232「不新增自動重連」):不翻 degraded **且** 不重連 —— 值翻 0 之後 COM 上
+    # 沒有任何啟動序列方法被叫(connect_reply / login / init_order …)。只斷 status 證不到後半:
+    # 在 `_probe_reply` 偷插一行 `connect_reply(...)` 520 條測試照綠(pr-238 review F-02)。
+    assert client.status == "ok"
+    assert com.calls == calls_before, (
+        f"值翻 0 後不得有任何 COM 啟動序列呼叫:{com.calls[len(calls_before) :]}"
+    )
 
     client._reply_probe_next = 0.0
     client._pump_once()  # → 1

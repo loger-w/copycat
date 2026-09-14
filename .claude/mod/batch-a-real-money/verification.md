@@ -97,7 +97,7 @@ w32tm /resync
 |---|---|
 | 時鐘:gate / cooldown / 回填時點不改 | `clock_monitor` 只 log + `app.state.clock_skew`;signal_state / signal_hub 零改動(diff) |
 | queries 層零改動、refetchOnReconnect 不變 | `query-client.test.tsx` 斷 `refetchOnReconnect === true`;真環境 reqid 58–74 重抓 |
-| OnNewData / 既有 OnDisconnect→degraded / 送單路徑不動、不重連 | `test_com.py` 既有案綠;Solace 兩方法只 logger;`_probe_reply` 不碰 `_status`(`test_reply_watch` 斷 status == ok) |
+| OnNewData / 既有 OnDisconnect→degraded / 送單路徑不動、不重連 | `test_com.py` 既有案綠;Solace 兩方法只 logger;`_probe_reply` 不碰 `_status` 也不重連(`test_reply_watch` 以 `RecordingCom` 斷值翻 0 後 status == ok **且** `com.calls` 零新增 —— 09-14 出貨版只斷 status,「不重連」那半零覆蓋,pr-238 review F-02 補) |
 | 回報鏈 debounce / 60 s / 1019 退避 / begin_snapshot / 樂觀套用 / _pending_deadline 不動 | `test_fill_latency` 既有 4 案綠 + 新案斷「落地前恰一次庫存查詢、fill B 重查在落地後」 |
 | 政策列 34 鍵、_policy_touch、notify、Discord 卡不變;raw 列只加欄 | `TestPolicyHits` / `TestDailyCounting` / `TestPolicyDiscord` 全綠零 assertion 改;`_POLICY_KEYS` 未動 |
 
