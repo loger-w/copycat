@@ -196,6 +196,37 @@ class TestMonitorLoop:
         assert any("時鐘偏差量測例外" in r.getMessage() for r in caplog.records)
 
 
+class TestAppWiring:
+    """lifespan 起 task 的那半邊(#236 驗收「lifespan 起一條 task…關機 cancel;最近結果放 app.state」):
+    `clock_probe` 有傳 → boot 後 `app.state.clock_skew` 是第一次量測;沒傳(測試預設)→ None 且 probe 零呼叫。"""
+
+    def test_probe_result_lands_on_app_state_and_default_is_off(self) -> None:
+        import time
+
+        from copycat.server.app import create_app
+        from tests.helpers.boot import BootedClient
+        from tests.server.test_app import FakeQuoteSource
+
+        calls: list[int] = []
+        sample = ClockSample(offset_ms=-12.0, rtt_ms=3.0, host="fake")
+
+        def probe_fn() -> ClockSample | None:
+            calls.append(1)
+            return sample
+
+        app = create_app(FakeQuoteSource(), throttle_secs=0.01, clock_probe=probe_fn)
+        with BootedClient(app):
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and app.state.clock_skew is None:
+                time.sleep(0.02)
+            assert app.state.clock_skew == sample
+        assert calls == [1]  # 啟動立即量一次;interval 600 s 內不會有第二次;關機後不再量
+
+        off = create_app(FakeQuoteSource(), throttle_secs=0.01)
+        with BootedClient(off):
+            assert off.state.clock_skew is None
+
+
 def test_thresholds_documented_in_claude_md() -> None:
     """閾值是契約的一半(另一半是 user 校時動作):CLAUDE.md 寫的數字要與常數同值。"""
     text = (Path(__file__).resolve().parents[2] / "CLAUDE.md").read_text(encoding="utf-8")
