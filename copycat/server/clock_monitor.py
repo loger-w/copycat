@@ -7,7 +7,8 @@
 Automatic + 每小時輪詢),這裡只做「看」:每 `INTERVAL_SECS` 問一台 NTP,INFO 印 offset,超閾另印
 WARNING / ERROR。閾值為常數不進 config:250 ms = 校時沒在跑,2 s = 已經會改變 gate 結果。
 
-網路傳輸可注入(`exchange`),測試零網路;prod 由 app 用 `asyncio.to_thread` 跑同步 UDP,不佔 loop。
+網路傳輸可注入(`exchange`),測試零網路 —— 唯一例外是 `_udp_exchange` 本身的 loopback 案(對外零封包,
+只證 Winsock 緩衝行為);prod 由 app 用 `asyncio.to_thread` 跑同步 UDP,不佔 loop。
 """
 
 from __future__ import annotations
