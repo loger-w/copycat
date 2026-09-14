@@ -22,7 +22,8 @@ type SignalKind =
 /** 四條影子政策的標記(spec #192;後端 `signal_policy.POLICIES` 同字面)。 */
 export type PolicyTag = "P" | "B-a" | "B-b" | "S";
 
-/** 政策列的族群同伴快照一筆(後端 `_emit_policies` 的 `peers[]`)。 */
+/** 族群同伴快照一筆:raw 掃單簇列 `policy_ctx.peers[]`(後端 `_policy_context` 產生)與政策列頂層
+ *  `peers[]`(`_emit_policies` 抄同一份)共用。 */
 interface PeerSnap {
   code: string;
   name: string;
@@ -95,7 +96,8 @@ export interface SignalMsg {
    *  = 整段不印**,不印「大單 -」。與 `t1_open` 等回填欄同款 `| null`(two-axis std F-01)。 */
   big_lots_120s?: number | null;
   /** #233:raw 掃單簇列的族群快照(後端 `signal_hub._policy_context`),**每顆事件都帶**(不只命中的);
-   *  `hits` 是命中的政策清單(可空)、`skip` 是不評原因(`no_ref` / `no_group`,評了 = null)。
+   *  `hits` 是命中的政策清單(可空)、`skip` 是不評原因(`no_ref` / `no_group`,評了 = null;`error` = 評了但
+   *  拋例外,其餘欄是空殼 —— 「有 ctx」不等於「評過了」,對帳分桶要看 `skip`)。
    *  **wire 存證欄、前端不讀**(讀者是 jsonl 對帳,四週後門檻敏感度分析用);缺欄 = 09-14 前的舊列 / 舊後端。 */
   policy_ctx?: {
     groups: string[];
