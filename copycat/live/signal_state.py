@@ -227,6 +227,10 @@ class SignalDetector:
         self._staged_date: str | None = None  # 暫存區的基準日(MFS-2:跨日殘渣的唯一辨識)
         self._prev: dict[str, int] = {}
         self._window: dict[str, deque[tuple[float, int, int]]] = {}
+        # 窗內張數 running sum(perf #242):與 `_window` 同生同滅 —— 首 tick 初始化 / append 加 /
+        # popleft 減 / reset_day 清 / drop_code 丟,四處即全部(回補重放不經 detector,SC-5)。
+        # `_eval_volume` 只讀它,不再每 tick `sum()` 整窗(X4-01:窗 3000 筆 90 µs → O(1))。
+        self._window_vol: dict[str, int] = {}
         # 值 = 「連續線外」的起算 mono(None = 目前在帶內 / 尚未起算)
         self._suppressed: dict[tuple[str, str], float | None] = {}
         # (code, level) → (線價, 側別 −1/0/+1);線價一起存,基準換線即自動失效
@@ -309,6 +313,7 @@ class SignalDetector:
         self._basis.clear()
         self._prev.clear()
         self._window.clear()
+        self._window_vol.clear()
         self._suppressed.clear()
         self._side.clear()
         self._cooldown.clear()
@@ -330,6 +335,7 @@ class SignalDetector:
         self._staged.pop(code, None)
         self._prev.pop(code, None)
         self._window.pop(code, None)
+        self._window_vol.pop(code, None)
         self._suppressed = {k: v for k, v in self._suppressed.items() if k[0] != code}
         self._side = {k: v for k, v in self._side.items() if k[0] != code}
         self._cooldown = {k: v for k, v in self._cooldown.items() if k[0] != code}
@@ -373,14 +379,17 @@ class SignalDetector:
         if code not in self._prev:  # 首 tick 只初始化(無前值可比,任何判定都是猜)
             self._prev[code] = price
             self._window[code] = deque([(mono, price, tick.qty)])
+            self._window_vol[code] = tick.qty
             return pre_gate_events
 
         prev = self._prev[code]
         window = self._window.setdefault(code, deque())
         window.append((mono, price, tick.qty))
+        window_vol = self._window_vol.get(code, 0) + tick.qty
         cutoff = mono - self._cfg.surge_window_secs
         while window and window[0][0] < cutoff:
-            window.popleft()
+            window_vol -= window.popleft()[2]
+        self._window_vol[code] = window_vol
         self._prev[code] = price
 
         events: list[SignalEvent] = []
@@ -716,7 +725,7 @@ class SignalDetector:
         if avg_per_min <= 0:
             return []
         window_min = self._cfg.surge_window_secs / 60
-        window_vol = sum(qty for _ts, _price, qty in window)
+        window_vol = self._window_vol.get(code, 0)  # running sum(perf #242),恆 == sum(qty)
         ratio = window_vol / (avg_per_min * window_min)
         if (
             ratio < self._cfg.vol_ratio
