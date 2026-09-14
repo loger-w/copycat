@@ -1506,6 +1506,19 @@ class TestBigLots:
         self._big(control)  # 中位 100 → 10 張不是大單
         assert self._fire(control) == 0
 
+    def test_median_window_is_exactly_300_ticks(self) -> None:
+        """釘 `_BIG_LOT_MEDIAN_TICKS` = 300(pr-228 review F-07;CLAUDE.md §4 契約「中位取最近 300 筆」)。
+        母體 = 最舊 1 筆 100 張 + 150 筆 1 張 + 149 筆 2 張 + 本筆 15 張:最近 300 筆(剛好排掉那筆 100 張)
+        中位 = (1 + 2) / 2 = 1.5 → 15 ≥ 10 × 1.5 命中;301 筆(含 100 張)中位 2 → 15 < 20;299 筆中位 2
+        亦不命中 —— 窗長往任一邊漂結果都翻(上一案只要求窗長落在 (0, 600))。"""
+        det = _det(_Clock())
+        t0 = 9 * 3_600_000 + 50 * 60_000
+        self._warm(det, 1, start_ms=t0, qty=100)
+        self._warm(det, 150, start_ms=t0 + 1_000, qty=1)
+        self._warm(det, 149, start_ms=t0 + 20_000, qty=2)
+        self._big(det, qty=15)
+        assert self._fire(det) == 1
+
     def test_firing_tick_itself_counts_when_it_qualifies(self) -> None:
         """研究 `sec − 120 ≤ h ≤ sec` 含發訊時刻本身:發訊那筆(50.40 > 50.30、≥ 賣一 50.20、20 張)算一筆。"""
         det = _det(_Clock())
@@ -1515,7 +1528,9 @@ class TestBigLots:
     def test_reset_day_clears_lots_and_hits(self) -> None:
         det = _det(_Clock())
         self._warm(det, 30)
-        self._big(det, "09:59:30.000")
+        # 10:00:30 落在發訊 10:01:30.5 的 120 s 窗內(pr-228 review F-04):09:59:30 會被窗自己剪掉,
+        # reset_day 不清 `_big_hits` 也是 0 —— 跨日殘留的守門要靠窗內那筆才鑑別得了
+        self._big(det, "10:00:30.000")
         det.reset_day()
         self._big(det, "09:59:40.000")  # 換日後第 1 筆:筆數不足不算,舊命中也不得殘留
         assert self._fire(det) == 0
@@ -1576,6 +1591,20 @@ class TestVolBreakout:
         det = _det(_Clock())
         self._dwell(det)
         assert self._bo(det, 50_400, 400, self._T0 + 599) == []  # 停留 599 s
+
+    def test_exactly_four_traded_minutes_is_enough_for_an_average(self) -> None:
+        """均量分母地板 `_BREAKOUT_MIN_MINUTES` = 4(研究 `len(vols) >= 4`;pr-228 review F-05):
+        恰 4 個有成交分鐘 → 發;下一案 3 個 → 不發。停留秒數兩案都是 600(那一界另有專案),只翻分鐘數。"""
+        det = _det(_Clock())
+        self._dwell(det, minutes=4)  # 09:30–09:33 四個分鐘、均量 10
+        got = self._bo(det, 50_400, 40, self._T0 + 600)  # 停留 600 s、40 = 4 × 10
+        assert [e.kind for e in got] == ["vol_breakout"]
+        assert got[0].pct == pytest.approx(4.0)
+
+    def test_three_traded_minutes_has_no_average_and_does_not_fire(self) -> None:
+        det = _det(_Clock())
+        self._dwell(det, minutes=3)  # 09:30–09:32 三個分鐘:停留仍 600 s,只是分鐘數不足
+        assert self._bo(det, 50_400, 400, self._T0 + 600) == []
 
     def test_break_minute_volume_accumulates_and_fires_on_the_reaching_tick(self) -> None:
         det = _det(_Clock())

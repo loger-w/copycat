@@ -1747,7 +1747,9 @@ class TestCdpGate:
             assert _cache(h) == (_DATE, None)
             assert len(bars.calls) == 1
             lines = [r.getMessage() for r in caplog.records if "CDP 列閘" in r.getMessage()]
-            assert len(lines) == 1 and "日 K" in lines[0] and "5" in lines[0]
+            # 實得 / 需求兩個數一起斷(pr-228 review F-08):盤後判準「整批全『日 K 不足』= 抓取根數被改小」
+            # 讀的正是這兩個數,需求根數印錯(`cdp_gate_days` 少 +1)只斷「5」仍綠
+            assert len(lines) == 1 and "只有 5 根(需 6)" in lines[0]
             h.cross_nh(_state())
             await h.settle()
             assert h.published == []
@@ -1770,6 +1772,27 @@ class TestCdpGate:
             lines = [r for r in caplog.records if "CDP 列閘" in r.getMessage()]
             assert len(lines) == 1 and lines[0].levelno == logging.WARNING
             assert "壞資料" in lines[0].getMessage() and "只有" not in lines[0].getMessage()
+        finally:
+            await h.hub.close()
+
+    async def test_zero_last_close_is_bad_data_warning_not_below_threshold(
+        self, tmp_path: Path, clock: _Clock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """分子端(最後一根已完成)收盤 = 0 同樣是壞資料(pr-228 review F-02):WARNING 講「首尾日 K 收盤 ≤ 0」,
+        不得算成 −100% 落進「漲幅不足」INFO —— 對帳會把壞資料檔記成「今天漲幅不夠」。"""
+        bars = _FakeBars([*_flat_hist(75_000), _bar("2026-08-01", 80_000, 70_000, 0)])
+        h = _Harness(tmp_path, clock, bars)
+        await h.hub.start()
+        try:
+            with caplog.at_level(logging.INFO):
+                h.hub.on_watchlist(["2330"])
+                await h.settle()
+            assert _cache(h) == (_DATE, None)
+            assert len(bars.calls) == 1
+            lines = [r for r in caplog.records if "CDP 列閘" in r.getMessage()]
+            assert [r.levelno for r in lines] == [logging.WARNING]
+            text = lines[0].getMessage()
+            assert "首尾日 K 收盤 ≤ 0(壞資料)" in text and "累計" not in text
         finally:
             await h.hub.close()
 
@@ -2617,6 +2640,9 @@ class TestDiscordText:
         down = self._row(kind="vol_breakout", direction="down", pct=4.0)
         assert format_signal_text(up).startswith("🔔 放量向上離開 4.3 倍｜")
         assert format_signal_text(down).startswith("🔔 放量向下離開 4.0 倍｜")
+        # 缺值退向上(pr-228 review F-06:docstring 早就這麼說,斷言現在才有);前端 `kindLabel` 同一案
+        missing = self._row(kind="vol_breakout", pct=4.0)  # 舊 / 外來列沒有 direction 鍵
+        assert format_signal_text(missing).startswith("🔔 放量向上離開 4.0 倍｜")
 
     def test_legacy_row_without_rule_name(self) -> None:
         """升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。"""
@@ -3153,6 +3179,12 @@ class TestSweepClusterBoundaries:
             await h.hub.close()
 
 
+def _fmt_secs(secs: int) -> str:
+    hh, rem = divmod(secs, 3600)
+    mm, ss = divmod(rem, 60)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}.000"
+
+
 class TestVolBreakoutRule:
     """#226 主 seam:一條 `vol_breakout` 規則(種子口徑通知關)→ 合成 tick 十分鐘帶內迴盪後放量離帶
     → 一列 quiet 的 `vol_breakout` 訊號(WS + jsonl),列形狀沿一般訊號契約(無 detail)。"""
@@ -3190,9 +3222,3 @@ class TestVolBreakoutRule:
             assert len(rows) == 1 and rows[0]["kind"] == "vol_breakout"
         finally:
             await h.hub.close()
-
-
-def _fmt_secs(secs: int) -> str:
-    hh, rem = divmod(secs, 3600)
-    mm, ss = divmod(rem, 60)
-    return f"{hh:02d}:{mm:02d}:{ss:02d}.000"
