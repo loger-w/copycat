@@ -512,6 +512,55 @@ class TestSurgeCrash:
         assert det.evaluate("2330", _tick(102_100), _ctx(), _ALL) == []
 
 
+class TestWindowVolumeRunningSum:
+    """perf/batch-b-tier0 0-2(#242):爆量窗的量改 running sum,必須恆等於現算式 `sum(qty)`。
+
+    X4-01:`_eval_volume` 每 tick 對整個 300 秒窗 `sum()`,窗 3000 筆 90 µs、10000 筆 288 µs。
+    改成進一筆加、出一筆減之後,唯一風險是四個會動 `_window` 的地方漏維護一個(首 tick 初始化 /
+    append + popleft / reset_day / drop_code;回補重放不經 detector,SC-5)。守門 = 10 萬次隨機
+    tick(隨機 qty、隨機時距含跨窗)+ 隨機 drop_code / reset_day,逐步斷 running sum == sum(window)。
+    """
+
+    def test_running_sum_equals_window_sum_over_100k_random_ops(self) -> None:
+        import random
+
+        rng = random.Random(242)
+        clock = _Clock(_dt.datetime(2026, 8, 4, 9, 30, 0))
+        det = _det(clock)
+        codes = ["2330", "2317", "3008"]
+        mismatches = 0
+        for i in range(100_000):
+            r = rng.random()
+            if r < 0.002:
+                det.drop_code(rng.choice(codes))
+            elif r < 0.003:
+                det.reset_day()
+            else:
+                code = rng.choice(codes)
+                qty = rng.randint(1, 500)
+                det.evaluate(code, _tick(100_000 + (i % 50) * 100, qty=qty, cum=i, code=code), _ctx(day_volume=i), frozenset())
+                clock.advance(rng.choice((0.0, 0.1, 1.0, 5.0, 120.0, 400.0)))
+            for code in codes:
+                window = det._window.get(code)
+                expected = sum(q for _t, _p, q in window) if window is not None else None
+                got = det._window_vol.get(code)
+                if got != expected:
+                    mismatches += 1
+        assert mismatches == 0
+        assert det._window_vol.keys() == det._window.keys()
+
+    def test_volume_ratio_uses_running_sum_not_recompute(self) -> None:
+        """突變守門:把 running sum 灌錯值,事件 pct 必須跟著錯 —— 證明 `_eval_volume` 真的讀它。"""
+        clock = _Clock(_dt.datetime(2026, 8, 4, 9, 30, 0))
+        det = _det(clock)
+        det.evaluate("2330", _tick(100_000, qty=1, cum=400), _ctx(day_volume=400), _ALL)
+        clock.advance(10)
+        # 灌錯:evaluate 會再加上本筆 qty(600),所以灌一個大負值讓窗內量變負 → 不得發爆量;
+        # 若 _eval_volume 仍整窗 sum() 重算,這裡會照發(既有 test_vol_burst_emits 同輸入)。
+        det._window_vol["2330"] = -1_000_000
+        assert det.evaluate("2330", _tick(100_000, qty=600, cum=1_000), _ctx(day_volume=1_000), _ALL) == []
+
+
 class TestVolumeBurst:
     def test_vol_burst_emits(self) -> None:
         clock = _Clock(_dt.datetime(2026, 8, 4, 9, 30, 0))
