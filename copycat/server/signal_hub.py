@@ -976,11 +976,11 @@ class SignalHub:
                 basis_date,
             )
         elif (gate := _gate_return_pct(done, self._cfg.cdp_gate_days)) is None:
-            # 第三種:分母收盤 ≤ 0 —— 這才是資料面壞了,WARNING(two-axis std F-02:與「日 K 不足」分開講)
+            # 第三種:首尾收盤 ≤ 0 —— 這才是資料面壞了,WARNING(two-axis std F-02:與「日 K 不足」分開講;
+            # pr-228 review F-02:尾根 = 0 也算,否則 −100% 會印成「漲幅不足」)
             logger.warning(
-                "CDP 列閘:%s 第 %d 根前的日 K 收盤 ≤ 0(壞資料),今日 CDP 不評(基準日 %s)",
+                "CDP 列閘:%s 首尾日 K 收盤 ≤ 0(壞資料),今日 CDP 不評(基準日 %s)",
                 code,
-                self._cfg.cdp_gate_days,
                 basis_date,
             )
         elif gate < self._cfg.cdp_gate_pct:
@@ -1657,15 +1657,16 @@ class SignalHub:
 def _gate_return_pct(done: list[DailyBar], days: int) -> float | None:
     """前 `days` 個交易日累計報酬(%)= (close[-1] − close[-(days+1)]) × 100 / close[-(days+1)]
     (研究 `cdp_bt.py` 的 `own5`:`prev_rows(c, d, 6)` 首尾收盤);`done` 已剔今日 partial、升冪。
-    呼叫端先擋「不足 days+1 根」(INFO 日 K 不足);這裡的 None 只剩分母 ≤ 0(壞資料,呼叫端 WARNING)
-    —— 長度守門仍留著(回 None)以免被別的呼叫端拿到 IndexError,但兩種原因的 log 由呼叫端分開講。
+    呼叫端先擋「不足 days+1 根」(INFO 日 K 不足);這裡的 None 只剩首尾收盤 ≤ 0(壞資料,呼叫端
+    WARNING):分母 ≤ 0 除不了,分子 = 0 算得出來但是 −100%,會混進「漲幅不足」那一桶(pr-228 review
+    F-02)—— 長度守門仍留著(回 None)以免被別的呼叫端拿到 IndexError,但兩種原因的 log 由呼叫端分開講。
     先乘 100 再除:門檻恰等時(80.00 → 84.00 = 5%)要落在閉區間下界,`(a/b − 1) × 100` 會多出
     4e-15 漂到門檻另一側。
     """
     if len(done) < days + 1:
         return None
     base = done[-(days + 1)]["close"]
-    if base <= 0:
+    if base <= 0 or done[-1]["close"] <= 0:
         return None
     return (done[-1]["close"] - base) * 100 / base
 
