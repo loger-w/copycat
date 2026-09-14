@@ -1,0 +1,22 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "snapshot_sha256": "01f4bb75b59caf8e53c495150850d3c9ef97692d9b4de25af69ad1a5587cea9a",
+ "delta_sha256": "3a34b497d642af39351c4d5690150bf1de26b453ba39a71a26d035deaece0b09",
+ "snapshot_minute_key_types": [
+  "str"
+ ],
+ "in_memory_minute_key_types": [
+  "int"
+ ],
+ "snapshot_legs_TXF": {
+  "label": "台指",
+  "minutes": {
+   "1": 45600000,
+   "2": 45610000,
+   "300": 45700000
+  },
+  "last": 45700000,
+  "last_minute": 300
+ },
+ "snapshot_len": 393
+}

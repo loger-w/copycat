@@ -1,0 +1,25 @@
+{
+ "repo": "C:/side-project/copycat",
+ "legs": 11,
+ "windows": [
+  60,
+  300,
+  1800
+ ],
+ "warm": 1900,
+ "measure": 300,
+ "push_ms": {
+  "p50": 0.0084,
+  "p90": 0.0112
+ },
+ "correlations_ms": {
+  "p50": 9.033,
+  "p90": 9.7042,
+  "max": 14.2942
+ },
+ "per_second_total_ms_p50": 9.0414,
+ "drift": {
+  "n_mismatch": 0,
+  "max_abs_dr": 0.0
+ }
+}

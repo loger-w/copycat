@@ -1,0 +1,17 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "n": 400,
+ "iters": 300,
+ "positions_us": {
+  "p50": 98.7,
+  "p90": 101.3
+ },
+ "orders_us": {
+  "p50": 193.3,
+  "p90": 200.7
+ },
+ "fills_us": {
+  "p50": 97.4,
+  "p90": 112.2
+ }
+}

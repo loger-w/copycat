@@ -1,0 +1,9 @@
+{
+ "repo": "C:/side-project/copycat",
+ "iters": 20000,
+ "no_latch_us": {
+  "p50": 2.3,
+  "p90": 2.3
+ },
+ "with_latch_first_call_us": 25.1
+}

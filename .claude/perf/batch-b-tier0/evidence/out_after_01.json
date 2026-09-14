@@ -1,0 +1,25 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "poll_backoff_start": {
+  "tc4": 0.02,
+  "river_backfill": 0.02
+ },
+ "ready_ms": "15,40",
+ "ready_dist": "exp",
+ "timer_1ms": true,
+ "n": 60,
+ "tc4_collect_history_ms": {
+  "p50": 20.6,
+  "p90": 60.8,
+  "max": 61.2,
+  "mean": 30.5,
+  "polls_mean": 4.25
+ },
+ "river_collect_1k_ms": {
+  "p50": 20.6,
+  "p90": 60.8,
+  "max": 61.1,
+  "mean": 35.8,
+  "polls_mean": 4.38
+ }
+}

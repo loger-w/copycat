@@ -1,0 +1,11 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/perf-batch-b-tier0",
+ "has_ensure_audit_dir": true,
+ "n": 3000,
+ "lines_written": 3000,
+ "append_us": {
+  "p50": 148.2,
+  "p90": 186.0,
+  "p99": 231.1
+ }
+}

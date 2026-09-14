@@ -1,0 +1,41 @@
+{
+ "repo": "C:/side-project/copycat",
+ "rows": [
+  {
+   "rate_per_s": 1,
+   "window_len": 301,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 12.9,
+    "p90": 13.7,
+    "p99": 17.6
+   }
+  },
+  {
+   "rate_per_s": 10,
+   "window_len": 3001,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 89.7,
+    "p90": 93.4,
+    "p99": 121.2
+   }
+  },
+  {
+   "rate_per_s": 33,
+   "window_len": 9901,
+   "enabled": [
+    "vol_burst"
+   ],
+   "per_tick_us": {
+    "p50": 286.3,
+    "p90": 295.9,
+    "p99": 402.0
+   }
+  }
+ ]
+}
