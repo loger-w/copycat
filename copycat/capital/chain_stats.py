@@ -4,9 +4,12 @@
 就重設起點、開機 backlog 重播集中在前兩分鐘),所以判準寫死成四道排除:
 
 - `off_session`:成交回報**到達時刻**(段時刻 − 累積值)不在 09:00–13:30;
-- `non_monotonic`:四段累積值不遞增(計時器被中途歸零的指紋);
+- `non_monotonic`:累積值不遞增(計時器被中途歸零的指紋);
 - `short_balance`:庫存段 < 500 ms(0.5 s debounce 結構上不可能被跳過);
-- `no_start` / `unfinished`:缺庫存段起點(輪詢鏈中途被成交點亮)/ log 在鏈中間結束。
+- `no_start` / `unfinished`:缺庫存段起點(輪詢鏈中途被成交點亮)/ log 在鏈中間結束;
+- `partial_chain`:首尾都對但中段缺(pending 8 s watchdog 強制落地只兩段、`get_profit_loss_gw`
+  rc≠0 跳損益段三段)—— 不是四段齊全的鏈,不與四段的比(pr-238 review F-03;prod 198 條真語料
+  只 1 條乾淨鏈缺段,剔除後 p50/p90/p99 1953/3027/6433,尺沒壞、只是口徑寫實)。
 
 同時數 `rc=1019`(群益「查詢處理中」)出現幾次 —— 每次精準 +1,060 ms,是尾巴的唯一來源;
 改回報鏈的批次要同時看它有沒有變少。純 stdlib、純函式;CLI `chain-stats` 是薄包裝。
@@ -75,6 +78,8 @@ def _classify(chain: list[tuple[str, _dt.datetime, int]]) -> str | None:
         return "no_start"
     if stages[-1] != _STAGES[-1]:
         return "unfinished"
+    if set(stages) != set(_STAGES):
+        return "partial_chain"
     _s0, t0, e0 = chain[0]
     if not _in_session(t0, e0):
         return "off_session"

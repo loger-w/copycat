@@ -29,6 +29,15 @@ describe("createQueryClient(#237)", () => {
     }
   });
 
+  it("呼叫端傳 mutations.networkMode 蓋不掉 always(安全預設最後贏);其他 mutation 鍵照常生效", () => {
+    // pr-238 review F-09:修前是呼叫端後蓋,createQueryClient({ mutations: { networkMode: "online" } })
+    // 可以靜默把 #237 整個關掉;今天兩個呼叫端都不傳 mutations,所以是「沒守門」不是「已破」
+    const client = createQueryClient({ mutations: { networkMode: "online", retry: 2 } });
+    const d = client.getDefaultOptions();
+    expect(d.mutations?.networkMode).toBe("always");
+    expect(d.mutations?.retry).toBe(2);
+  });
+
   it("瀏覽器判離線時 mutation 立即失敗、不暫停排隊", async () => {
     onlineManager.setOnline(false);
     const client = createQueryClient({ queries: { retry: false } });

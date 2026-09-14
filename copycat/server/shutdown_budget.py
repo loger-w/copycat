@@ -25,6 +25,7 @@ import math
 
 from copycat.capital.client import COM_JOIN_TIMEOUT_SECS
 from copycat.live.tc4 import close_worst_secs
+from copycat.server.clock_monitor import NTP_HOSTS, TIMEOUT_SECS as _CLOCK_TIMEOUT_SECS
 
 #: uvicorn `timeout_graceful_shutdown`:WS 收攤上限(int:uvicorn 的型別是 `int | None`)。
 #: 正常情況瀏覽器毫秒級回 close frame;到期後 uvicorn 自己 cancel 剩餘 WS task,relay 的
@@ -46,10 +47,21 @@ LIFESPAN_SLACK_SECS: float = 5.0
 #: 「等在途 Connect 的鎖」或「REQ 撞 RCVTIMEO」兩種)。
 SLOW_CLOSE_WARN_SECS: float = 2.0
 
+#: 時鐘偏差探針(#236)的執行緒:lifespan 只能 cancel 那條 task,`to_thread` 裡的同步 UDP 探針
+#: 不可 cancel,`asyncio.run` 收尾的 `shutdown_default_executor` 會 join 它 —— 最壞 = 依序試完每一台
+#: 各撞一個 timeout(DNS 解析另計、無上界,與 KeepAlive `term()` 同待遇不計)。健康路徑 < 100 ms。
+#: (pr-238 review F-06:原註解寫「最多再等一個 timeout」,低估三倍。)
+CLOCK_PROBE_WORST_SECS: float = len(NTP_HOSTS) * _CLOCK_TIMEOUT_SECS
+
 
 def lifespan_close_worst_secs() -> float:
     """lifespan `finally` 反序 close 的最壞耗時(秒)。"""
-    return TC4_LANE_DEPTH * close_worst_secs() + COM_JOIN_TIMEOUT_SECS + LIFESPAN_SLACK_SECS
+    return (
+        TC4_LANE_DEPTH * close_worst_secs()
+        + COM_JOIN_TIMEOUT_SECS
+        + CLOCK_PROBE_WORST_SECS
+        + LIFESPAN_SLACK_SECS
+    )
 
 
 def run_grace_secs() -> int:

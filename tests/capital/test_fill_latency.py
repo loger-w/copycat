@@ -239,7 +239,8 @@ def test_fill_in_flight_keeps_chain_timer_origin(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """鏈飛行中(庫存段已收、損益段未回)再來一筆成交,計時器**不歸零**:四段累積值單調遞增、
-    落地印「涵蓋 2 筆成交」。修前 `_fill_seen_at` 每筆成交覆寫 → 損益段的數字比庫存段還小
+    落地印「累計 2 筆成交」(起點是第一筆;第二筆自己等了多久**不另量**,見 `_log_chain_stage`
+    docstring —— pr-238 review F-15 拍板只改文案)。修前 `_fill_seen_at` 每筆成交覆寫 → 損益段的數字比庫存段還小
     (V2 抓到的「累積值非單調」指紋,8 / 178 條)。白名單:群益查詢節奏不變 —— 落地時只出過
     一次庫存查詢,fill B 武裝的重查在落地**之後**才出手(成交不漏)。"""
     caplog.set_level(logging.INFO, logger="copycat.capital.client")
@@ -262,7 +263,7 @@ def test_fill_in_flight_keeps_chain_timer_origin(
     elapsed = _elapsed_info(caplog)
     assert len(elapsed) == 4, elapsed
     assert elapsed == sorted(elapsed), f"累積值倒退(計時器被中途歸零):{elapsed}"
-    assert "涵蓋 2 筆成交" in _landed_info(caplog)[0]
+    assert "累計 2 筆成交" in _landed_info(caplog)[0]
     assert balance_queries() == 1  # 落地當下只出過一次庫存查詢(鏈中不重發)
     broker.run(until=lambda: balance_queries() >= 2, budget_s=3.0)
     assert balance_queries() == 2  # fill B 武裝的重查在落地後出手:成交不漏(白名單)
@@ -272,7 +273,7 @@ def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """60 s 定時輪詢的鏈飛行中來了成交:那輪鏈**沒涵蓋**這筆成交(查詢早於成交出手),各段維持
-    DEBUG、落地不印耗時;成交武裝的下一輪才印 INFO 且「涵蓋 1 筆成交」。修前:成交點亮 `_fill_seen_at`
+    DEBUG、落地不印耗時;成交武裝的下一輪才印 INFO 且「累計 1 筆成交」。修前:成交點亮 `_fill_seen_at`
     後,輪詢那輪的剩餘段就印出幾百 ms 的假數字(V2 的「缺庫存段起點」指紋,4 條)。"""
     caplog.set_level(logging.INFO, logger="copycat.capital.client")
     com = FakeCom()
@@ -305,4 +306,4 @@ def test_fill_during_stale_poll_chain_is_measured_by_the_next_chain(
     assert len(elapsed) == 4 and elapsed == sorted(elapsed), elapsed
     assert elapsed[0] >= 500
     assert _landed_info(caplog), "第二輪落地行沒印(broker 預算用盡)"
-    assert "涵蓋 1 筆成交" in _landed_info(caplog)[0]
+    assert "累計 1 筆成交" in _landed_info(caplog)[0]

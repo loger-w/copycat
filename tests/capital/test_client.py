@@ -1642,6 +1642,23 @@ def test_reconnect_ok_clears_abandon_debt(tmp_path: Path) -> None:
     ]
 
 
+def test_reconnect_ok_clears_chain_measurement_fields(tmp_path: Path) -> None:
+    """pr-238 review F-05:`_set_status("ok")` 的清點必須與 `_finalize_positions` 同組 —— #234 之後那邊
+    多清 `_fill_seen_at` / `_fill_count`,這邊也要,連 `_chain_started_at` 一起。今天唯一的 ok caller 是
+    `_init_com`(全初值)無行為差;下一批接重連時漏清 = 斷線前的成交起點活到重連後第一輪鏈,
+    `_chain_covers_fill()` 成立、印出一條含斷線時長的「乾淨」樣本(正是 #234 要消滅的假 p99)。"""
+    com = FakeCom()
+    client = _client(com, tmp_path)
+    _mark_ready(client)
+    client._status = "degraded"
+    client._fill_seen_at = 123.0
+    client._fill_count = 2
+    client._chain_started_at = 456.0
+
+    client._set_status("ok")
+    assert (client._fill_seen_at, client._fill_count, client._chain_started_at) == (None, 0, None)
+
+
 def test_late_oi_end_marker_after_watchdog_keeps_fut_positions(tmp_path: Path) -> None:
     """T3/T4(b):pending watchdog 逾時放棄的是 **OI 段**,它的 `##` 同樣會遲到。
     `_query_open_interest` 必須用 `reset(keep_abandoned=...)` 把欠帳窗帶進下一輪 —

@@ -108,17 +108,72 @@ class TestSntpQueryWithInjectedExchange:
     def test_uses_exchange_and_reports_host(self) -> None:
         seen: list[tuple[str, int, float]] = []
 
-        def exchange(host: str, request: bytes, timeout: float) -> bytes:
+        def exchange(host: str, request: bytes, timeout: float) -> tuple[float, bytes, float]:
             seen.append((host, len(request), timeout))
             import time
 
             now = time.time()
-            return _response(now + 1.0, now + 1.0)  # 伺服器快 1 s
+            return now, _response(now + 1.0, now + 1.0), now  # 伺服器快 1 s
 
         s = sntp_query("x.example", timeout=1.5, exchange=exchange)
         assert seen == [("x.example", 48, 1.5)]
         assert s.host == "x.example"
         assert s.offset_ms == pytest.approx(-1000.0, abs=50.0)
+
+    def test_t0_is_taken_by_the_exchange_after_dns_not_before(self) -> None:
+        """pr-238 review F-07:t0 / t3 由傳輸層在送出前 / 收到後當場取,DNS 解析那段不算進去。
+        修前 t0 在 `sntp_query` 進 exchange 之前取,冷 DNS 200 ms 全算成去程 → offset 偏 −100 ms、
+        RTT 膨脹 200 ms —— 首發(server 啟動當下)正是 T1 判準「首行 |offset| < 250 ms」那一行。
+        這裡用 exchange 內 sleep 0.2 s 模擬解析,期望 offset / RTT 都不受它影響。"""
+        import time
+
+        def exchange(host: str, request: bytes, timeout: float) -> tuple[float, bytes, float]:
+            time.sleep(0.2)  # 「DNS 解析」:在傳輸層取 t0 之前
+            t0 = time.time()
+            data = _response(t0 + 1.0 + 0.003, t0 + 1.0 + 0.003)  # 伺服器快 1 s、單程 3 ms
+            t3 = t0 + 0.006
+            return t0, data, t3
+
+        s = sntp_query("x.example", exchange=exchange)
+        assert s.offset_ms == pytest.approx(-1000.0, abs=1.0)
+        assert s.rtt_ms == pytest.approx(6.0, abs=1.0)
+
+
+class TestUdpExchangeOnLoopback:
+    def test_response_longer_than_48_bytes_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pr-238 review F-16:Winsock 對「datagram 比 recv 緩衝長」回 WSAEMSGSIZE(WinError 10040)
+        **不截斷**,`recvfrom(48)` 遇到帶認證欄的 NTP 回應(> 48 bytes)就整台恆失敗。緩衝放大到 512、
+        解析仍只看前 48。這裡起一個 loopback UDP 假伺服器回 68 bytes(48 + 20 bytes MAC 形狀)。"""
+        import socket
+        import threading
+
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.settimeout(2.0)
+        port = srv.getsockname()[1]
+        monkeypatch.setattr(cm, "NTP_PORT", port)
+        got: list[bytes] = []
+
+        def serve() -> None:
+            data, addr = srv.recvfrom(512)
+            got.append(data)
+            srv.sendto(_response(1.0, 2.0) + b"\0" * 20, addr)
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        try:
+            t0, data, t3 = cm._udp_exchange("127.0.0.1", cm._REQUEST, 2.0)
+        finally:
+            t.join(2.0)
+            srv.close()
+        assert got == [cm._REQUEST]
+        assert len(data) == 68
+        assert t0 <= t3
+        # 前 48 bytes 照常解析(多出來的尾巴不影響)
+        offset_s, _rtt = parse_offset(data, 0.0, 0.0)
+        assert offset_s == pytest.approx(-1.5, abs=1e-6)
 
 
 class TestLogLines:

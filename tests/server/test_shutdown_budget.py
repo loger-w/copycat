@@ -60,6 +60,19 @@ class TestLifespanBound:
             sb.TC4_LANE_DEPTH * close_worst_secs() + COM_JOIN_TIMEOUT_SECS
         )
 
+    def test_lifespan_bound_covers_the_clock_probe_thread(self) -> None:
+        """pr-238 review F-06:`clock_task.cancel()` 只讓 await 早退,`to_thread` 裡的 SNTP 探針執行緒
+        不可 cancel、`asyncio.run` 收尾的 `shutdown_default_executor` 會 join 它 —— 最壞 = 依序試完
+        每一台各一個 timeout(DNS 另計、無上界不列)。這段要進算式,CLAUDE §4「可計段要進算式或明標不計」。"""
+        from copycat.server.clock_monitor import NTP_HOSTS, TIMEOUT_SECS
+
+        assert sb.CLOCK_PROBE_WORST_SECS == len(NTP_HOSTS) * TIMEOUT_SECS
+        assert sb.lifespan_close_worst_secs() >= (
+            sb.TC4_LANE_DEPTH * close_worst_secs()
+            + COM_JOIN_TIMEOUT_SECS
+            + sb.CLOCK_PROBE_WORST_SECS
+        )
+
     def test_run_grace_covers_ws_drain_and_lifespan(self) -> None:
         """run.ps1 拿到的數字必須蓋住 uvicorn 先等 WS 收攤那一段(review Spec 2 後半)。"""
         grace = sb.run_grace_secs()

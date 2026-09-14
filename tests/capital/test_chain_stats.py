@@ -3,7 +3,7 @@
 這把尺是 Tier 2-6(回報鏈變快)的驗收判準,判準定義寫死在這裡:只算**成交回報在盤中
 09:00–13:30 到達**、四段累積值**單調遞增**、**庫存段 ≥ 500 ms**(0.5 s debounce 結構上不可能更短,
 更短 = 計時器被重設)的鏈;同時數群益 1019(查詢處理中)出現幾次 —— 每次 +1,060 ms 是尾巴的唯一來源。
-合成 log 行逐字沿 prod 格式(`logs/server-*.log`),含 09-14 起「涵蓋 n 筆成交」尾綴。
+合成 log 行逐字沿 prod 格式(`logs/server-*.log`),含 09-14 起落地行的「累計 n 筆成交」尾綴。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _prod_log_format() -> str:
 
 def _chain(hhmmss: str, e: tuple[int, int, int, int], *, fills: int | None = None) -> list[str]:
     """四段一條鏈,同一時刻戳(秒級足夠,判準只看盤中與否)。"""
-    tail = f",涵蓋 {fills} 筆成交" if fills is not None else ""
+    tail = f",累計 {fills} 筆成交" if fills is not None else ""
     ts = f"2026-09-14 {hhmmss},000 "
     return [
         f"{ts}{_P}庫存段收齊 4 列(自成交回報到達起 {e[0]} ms)",
@@ -67,6 +67,13 @@ LINES = [
     f"2026-09-14 11:00:00,000 {_P}部位落地 4 列(自成交回報到達起 501 ms)",
     _1019,
     *_chain("11:30:00", (2000, 2500, 3000, 3027), fills=2),  # 乾淨(新尾綴)
+    # 缺中段(pr-238 review F-03):pending 8 s watchdog 強制落地 = 只有庫存段 + 落地兩段;
+    # `get_profit_loss_gw` rc≠0 跳損益段 = 三段。首尾都對、也單調,但不是「四段」—— 不算乾淨
+    f"2026-09-14 11:40:00,000 {_P}庫存段收齊 4 列(自成交回報到達起 1000 ms)",
+    f"2026-09-14 11:40:08,000 {_P}部位落地 4 列(自成交回報到達起 9000 ms)",
+    f"2026-09-14 11:50:00,000 {_P}庫存段收齊 4 列(自成交回報到達起 1000 ms)",
+    f"2026-09-14 11:50:00,000 {_P}期貨部位段收齊 0 列(自成交回報到達起 1300 ms)",
+    f"2026-09-14 11:50:00,000 {_P}部位落地 4 列(自成交回報到達起 1301 ms)",
     # 未落地(log 在鏈中間結束)
     f"2026-09-14 13:29:59,000 {_P}庫存段收齊 4 列(自成交回報到達起 900 ms)",
 ]
@@ -75,13 +82,14 @@ LINES = [
 class TestSummarize:
     def test_clean_subset_and_exclusion_reasons(self) -> None:
         s = summarize(LINES)
-        assert s.total == 7
+        assert s.total == 9
         assert s.excluded == {
             "non_monotonic": 1,
             "short_balance": 1,
             "off_session": 1,
             "no_start": 1,
             "unfinished": 1,
+            "partial_chain": 2,
         }
         assert s.clean == 2
         assert s.landed_ms == [1941, 3027]
@@ -105,10 +113,10 @@ class TestSummarize:
 class TestReport:
     def test_report_lines(self) -> None:
         text = format_report(summarize(LINES))
-        assert "鏈 7 條" in text and "乾淨 2 條" in text
+        assert "鏈 9 條" in text and "乾淨 2 條" in text
         assert "p50 1941 ms" in text and "p90 3027 ms" in text
         assert "1019 × 2" in text
-        assert "non_monotonic 1" in text
+        assert "non_monotonic 1" in text and "partial_chain 2" in text
 
 
 class TestCli:

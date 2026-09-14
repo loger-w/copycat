@@ -23,8 +23,13 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 NTP_HOSTS: tuple[str, ...] = ("time.google.com", "time.windows.com", "pool.ntp.org")
+NTP_PORT: int = 123
 INTERVAL_SECS: float = 600.0
 TIMEOUT_SECS: float = 2.0
+#: recv 緩衝:Winsock 對「datagram 比緩衝長」回 WSAEMSGSIZE(WinError 10040)**不截斷**,`recvfrom(48)`
+#: 遇到帶認證欄(MAC)的 NTP 回應就整台恆失敗;三台公開伺服器實務上回 48,放大只是韌性,解析仍只看
+#: 前 48(pr-238 review F-16)。
+_RECV_BUF: int = 512
 #: |offset| ≥ 此值印 WARNING:校時正常時 Windows 壓在 100 ms 內,250 ms 已是「校時沒在跑」
 WARN_MS: float = 250.0
 #: |offset| ≥ 此值印 ERROR:秒級偏差會改變 13:30 盤中閘 / 12:30 推播窗的事件集合
@@ -32,8 +37,11 @@ ERROR_MS: float = 2000.0
 _NTP_EPOCH_OFFSET = 2_208_988_800  # 1900-01-01 → 1970-01-01 秒數
 _REQUEST = b"\x1b" + 47 * b"\0"  # LI=0, VN=3, Mode=3(client)
 
-Exchange = Callable[[str, bytes, float], bytes]
-"""(host, request, timeout_secs) → 48-byte 回應;拋 OSError = 這台失敗。"""
+Exchange = Callable[[str, bytes, float], tuple[float, bytes, float]]
+"""(host, request, timeout_secs) → (t0, 回應 bytes(≥ 48), t3):t0 / t3 由傳輸層在**送出前 / 收到後**
+當場取,DNS 解析那段不算進去(pr-238 review F-07:修前 t0 在進傳輸層之前取,冷 DNS 200 ms 全算成
+去程 → offset 偏 −100 ms、RTT 膨脹 200 ms,而首發正是啟動當下最可能冷 DNS 的那一發);
+拋 OSError = 這台失敗。"""
 
 
 @dataclass(frozen=True)
@@ -61,19 +69,20 @@ def parse_offset(response: bytes, t0: float, t3: float) -> tuple[float, float]:
     return -server_minus_local, rtt
 
 
-def _udp_exchange(host: str, request: bytes, timeout: float) -> bytes:
+def _udp_exchange(host: str, request: bytes, timeout: float) -> tuple[float, bytes, float]:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(timeout)
-        sock.sendto(request, (host, 123))
-        data, _addr = sock.recvfrom(48)
-    return data
+        sock.connect((host, NTP_PORT))  # DNS 在這一步;t0 在它之後才取
+        t0 = time.time()
+        sock.send(request)
+        data = sock.recv(_RECV_BUF)
+        t3 = time.time()
+    return t0, data, t3
 
 
 def sntp_query(host: str, *, timeout: float = TIMEOUT_SECS, exchange: Exchange = _udp_exchange) -> ClockSample:
     """問一台;失敗拋 OSError(含 timeout)。"""
-    t0 = time.time()
-    data = exchange(host, _REQUEST, timeout)
-    t3 = time.time()
+    t0, data, t3 = exchange(host, _REQUEST, timeout)
     offset_s, rtt_s = parse_offset(data, t0, t3)
     return ClockSample(offset_ms=offset_s * 1000, rtt_ms=rtt_s * 1000, host=host)
 

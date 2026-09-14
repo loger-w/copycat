@@ -14,14 +14,17 @@ import { QueryClient, type DefaultOptions } from "@tanstack/react-query";
  * **絕不能放進 `queries` 層**:TanStack `defaultQueryOptions` 會在 `refetchOnReconnect` 未設時把它算成
  * `networkMode !== "always"` —— 放錯層 = 全站輪詢 hook 重連後不重抓,零錯誤訊號。`query-client.test.tsx`
  * 釘住兩層。
+ *
+ * 呼叫端傳進來的 `mutations` **蓋不掉** `networkMode`(安全預設最後展開;pr-238 review F-09):
+ * 其他 mutation 鍵(retry 等)照常由呼叫端決定。要關掉這道保護只能改這個檔,不能在呼叫端偷偷傳。
  */
-export const MUTATION_DEFAULTS = { networkMode: "always" } as const satisfies DefaultOptions["mutations"];
+const MUTATION_DEFAULTS = { networkMode: "always" } as const satisfies DefaultOptions["mutations"];
 
 export function createQueryClient(defaults: DefaultOptions = {}): QueryClient {
   return new QueryClient({
     defaultOptions: {
       ...defaults,
-      mutations: { ...MUTATION_DEFAULTS, ...defaults.mutations },
+      mutations: { ...defaults.mutations, ...MUTATION_DEFAULTS },
     },
   });
 }
