@@ -18,6 +18,7 @@ from copycat.capital.models import (
     CapitalNotReadyError,
     CorrectPriceRequest,
     DecreaseQtyRequest,
+    FillRecord,
     FutureOrderRequest,
     OrderRecord,
     OrderResult,
@@ -148,6 +149,38 @@ class TestExceptions:
         exc = CapitalGateBlockedError("no_futures_account")
         assert exc.reason == "no_futures_account"
         assert "no_futures_account" in str(exc)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        OrderRecord(seq_no="1", stock_no="2330", market="TS", buy_sell="B", price=1085.0),
+        FillRecord(
+            seq_no="1",
+            stock_no="2330",
+            buy_sell="B",
+            flag_label="現股",
+            price=1085.0,
+            qty=1,
+            **{
+                f.name: None
+                for f in dataclasses.fields(FillRecord)
+                if f.name not in {"seq_no", "stock_no", "buy_sell", "flag_label", "price", "qty"}
+            },
+        ),
+        Position(market="sec", stock_no="2330", qty=3, avg_price=1085.5, avg_source="broker"),
+    ],
+    ids=["OrderRecord", "FillRecord", "Position"],
+)
+def test_record_dict_equals_asdict(record: object) -> None:
+    """perf #246:`capital_api` 三支列表 route 以 `{**o.__dict__, "code": …}` 取代 `dataclasses.asdict`,
+    前提 = 三個 record 全是純量欄(asdict 的遞迴 / deepcopy 對它們是白工)。將來有人加巢狀
+    dataclass / list 欄位,`asdict` 會深轉、`__dict__` 不會 —— 這條先紅,route 那三行跟著改。"""
+    assert dict(record.__dict__) == dataclasses.asdict(record)  # type: ignore[call-overload]
+    assert not any(
+        dataclasses.is_dataclass(v) or isinstance(v, (list, dict, tuple))
+        for v in record.__dict__.values()
+    )
 
 
 def test_avg_source_parity_with_frontend() -> None:
