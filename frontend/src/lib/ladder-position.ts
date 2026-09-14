@@ -17,13 +17,13 @@ function isAvgSource(v: unknown): v is AvgSource {
 }
 
 /** 牌告手續費率(買賣各收一次)。 */
-export const FEE_BASE = 0.001425;
+const FEE_BASE = 0.001425;
 /** 證交稅(賣出價金 0.3%)。 */
-export const SELL_TAX = 0.003;
+const SELL_TAX = 0.003;
 /** 現股當沖證交稅(減半 0.15%;2026-08-26 user 拍板:今天成交進來的張數用這個,過往庫存 0.3%)。 */
-export const SELL_TAX_DAYTRADE = 0.0015;
+const SELL_TAX_DAYTRADE = 0.0015;
 /** 融券借券費(賣出價金 0.08%;只有 kind === "short" 計入)。 */
-export const SHORT_BORROW = 0.0008;
+const SHORT_BORROW = 0.0008;
 /** 預設手續費折數(user 實答:1.8 折)。 */
 export const FEE_DISCOUNT_DEFAULT = 1.8;
 

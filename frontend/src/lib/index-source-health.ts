@@ -11,7 +11,7 @@ export interface SourceLiveness {
 /** 「櫃買快照源(MIS)中斷」的判定寬限:加權要先累積這麼多分鐘格,才開始認為
  *  「櫃買一格都沒有」是壞掉而不是還沒輪到(MIS 是 5s poll,加權是 TC4 push)。
  *  2 格 ≈ 開盤後兩分鐘 —— 比 poll 週期大兩個量級,又短到整天空的日子一眼看得到。 */
-export const OTC_DEAD_MIN_TWSE_MINUTES = 2;
+const OTC_DEAD_MIN_TWSE_MINUTES = 2;
 
 /** 櫃買快照源是否已中斷(N108)。
  *

@@ -24,7 +24,7 @@ async function fetchStockNames(): Promise<StockName[]> {
  *  server 未起(先開前端後起 server)或啟動窗內,首載連線被拒 → `retry: 1` 兩次嘗試
  *  1-2 秒內用完就落入 error 終態,提示列與側欄股名要等 window refocus 才復原 —
  *  所以 error 終態下仍每 3 秒重抓。拿到資料(哪怕空表)即停,穩態零成本。 */
-export const NAMES_RETRY_INTERVAL_MS = 3000;
+const NAMES_RETRY_INTERVAL_MS = 3000;
 
 /** 連續失敗輪數上限(每輪 = 一次 fetch cycle 含 retry:1 共兩次嘗試)。
  *

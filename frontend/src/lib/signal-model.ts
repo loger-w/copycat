@@ -7,7 +7,7 @@
 
 import { fmt, fmtPct } from "@/lib/format";
 
-export type SignalKind =
+type SignalKind =
   | "cdp_cross"
   | "surge"
   | "crash"
@@ -23,7 +23,7 @@ export type SignalKind =
 export type PolicyTag = "P" | "B-a" | "B-b" | "S";
 
 /** 政策列的族群同伴快照一筆(後端 `_emit_policies` 的 `peers[]`)。 */
-export interface PeerSnap {
+interface PeerSnap {
   code: string;
   name: string;
   chg_pct: number | null;

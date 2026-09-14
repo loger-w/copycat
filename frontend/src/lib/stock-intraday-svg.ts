@@ -100,7 +100,7 @@ export interface EnergyBar {
   h: number;
 }
 
-export interface YTick {
+interface YTick {
   y: number;
   priceMilli: number;
   /** 這一格恰好是漲停 / 跌停價(round6 項 5:左緣要亮燈)。其餘格為 undefined。
@@ -113,7 +113,7 @@ export interface YTick {
 }
 
 /** 當日極值標記(round4 項 1)。位置 = 摸到該價位的那一分鐘,值 = tick 級極值本身。 */
-export interface ExtremeMark {
+interface ExtremeMark {
   x: number;
   y: number;
   priceMilli: number;
@@ -635,7 +635,7 @@ export function yieldToObstacles(
  *  避讓幾何一律以**中心**為單位(`EDGE_LABEL_H` 是中心距),baseline 語意的圖元進
  *  obstacle 集前要先扣掉這一段(review B-1)—— 不扣的話向上讓位那側的實際字框間距
  *  只剩半 px,兩層 halo 直接相疊,而數字上「距離夠」。 */
-export const BASELINE_TO_CENTER = 3;
+const BASELINE_TO_CENTER = 3;
 
 /** baseline → 視覺中心。**進 obstacle 集的唯一入口**:三處各寫一次 `− 3` 的話,
  *  漏掉一處的樣態是那個圖元的避讓帶整個偏 3px(仍會讓位,只是讓錯位置)。 */

@@ -47,7 +47,7 @@ export interface WatchlistQuote {
   disposition: boolean;
 }
 
-export interface StkfutQuote {
+interface StkfutQuote {
   prod: string;
   p: number;
   basis: number | null;

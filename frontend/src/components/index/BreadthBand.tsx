@@ -129,4 +129,4 @@ export function BreadthBand({ breadth }: { breadth: BreadthState | null }) {
   );
 }
 
-export default BreadthBand;
+

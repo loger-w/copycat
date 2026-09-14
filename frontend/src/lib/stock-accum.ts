@@ -41,7 +41,7 @@ export interface MinuteAgg {
  *
  *  與 `TickRow` 分開是因為序號 `n` 是**前端指派**的:後端不發它,把它寫進線上形狀
  *  等於宣告一條不存在的契約,而 tsc 只會在「誰忘了補」時指著錯的那一端。 */
-export interface WireTickRow {
+interface WireTickRow {
   t: string;
   p: number;
   q: number;

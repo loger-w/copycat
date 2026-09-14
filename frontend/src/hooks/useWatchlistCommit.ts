@@ -36,7 +36,7 @@ import { useSaveWatchlist, useStockWatchlist } from "@/hooks/useStockWatchlist";
 import { isSameWatchlist, type Watchlist } from "@/lib/watchlist-model";
 
 /** 以「最新已知內容」為基底算下一份自選;`null` = 套用當下被拒(撞名 / 保留名)。 */
-export type WatchlistTransform = (base: Watchlist) => Watchlist | null;
+type WatchlistTransform = (base: Watchlist) => Watchlist | null;
 
 interface QueueState {
   /** 串行 chain。**尾端恆 fulfilled**(唯一 catch 收斂點)—— 留在 rejected 的話之後所有

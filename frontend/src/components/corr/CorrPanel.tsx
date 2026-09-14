@@ -92,4 +92,4 @@ export function CorrPanel({ state, wsStatus }: Props) {
   );
 }
 
-export default CorrPanel;
+

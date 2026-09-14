@@ -234,4 +234,4 @@ function Plot({
   );
 }
 
-export default AdvanceDeclineChart;
+

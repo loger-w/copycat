@@ -47,7 +47,7 @@ export const PANE_FRAMES: Record<"overlay", PaneFrame> = {
  *
  *  數值與舊自繪版的 toggle 列相同(兩者都是同一組 tailwind class)—— 所以 `MarketPane`
  *  的 figure `min-h-48` 算式不必跟著改。 */
-export const INTRADAY_CHROME_Y = 26;
+const INTRADAY_CHROME_Y = 26;
 
 /** K 線態 svg 以外、但在被量測 wrapper 之內的垂直用量(px)。**這個 100 是 W-4 契約的
  *  出處**,拆解:
@@ -62,7 +62,7 @@ export const INTRADAY_CHROME_Y = 26;
  *  `h-4` / `mt-1` / `mb-1`;本專案目前無 root 縮放 media query,所以 px 與 rem 一對一)。
  *  日後若加 root 縮放 media query,本兩顆與 `INTRADAY_CHROME_Y` 必須同步改為 rem 反算,
  *  否則 chromeY 少算 → svg 溢出 figure、1:1 破 1–2%。 */
-export const CANDLE_CHROME_Y = 100;
+const CANDLE_CHROME_Y = 100;
 
 /** K 線態的水平用量(px):`CandleChart` figure 的 border 2 + `p-4` 32。與 overlay 同值
  *  是巧合不是共用 —— 兩者各自數自己的框。

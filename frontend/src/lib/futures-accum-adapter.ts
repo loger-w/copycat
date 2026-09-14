@@ -15,7 +15,7 @@ import { snapDown, tickOf } from "@/lib/stock-tick";
  *
  *  純函式、零 IO;caller(`FuturesChart`)以 `useMemo` 依 slice / live 純量折。 */
 
-export interface FuturesLive {
+interface FuturesLive {
   /** live 點的軸索引(牆上時鐘 +1 分,已過空檔 / 錨定日 / 時鐘落後三道 gate) */
   index: number;
   /** WS 現價(毫元) */

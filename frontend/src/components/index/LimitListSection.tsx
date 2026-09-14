@@ -89,7 +89,7 @@ function statusOf(row: BreadthRow): RowStatus | null {
 // 篩選(OR 狀態 × AND 門檻)
 // ---------------------------------------------------------------------------
 
-export interface LimitListFilter {
+interface LimitListFilter {
   twse: boolean;
   tpex: boolean;
   limitUp: boolean;
@@ -574,4 +574,4 @@ export function LimitListSection({
   );
 }
 
-export default LimitListSection;
+

@@ -21,7 +21,7 @@ export function getSoundOn(): boolean {
   return readLocal(SOUND_KEY) !== "off";
 }
 
-export function setSoundOn(next: boolean): void {
+function setSoundOn(next: boolean): void {
   // 寫入結果不看:`getSoundOn` 每次快照都重讀 storage,所以兩種失效態下(配額滿 / 政策鎖)
   // 通知都只會讓訂閱者讀回舊值、開關自己彈回去 —— 留著通知只是省一個分支,
   // 與 `lib/fee-discount.ts::persistDiscount` 早退的差別僅止於此,不是「真相在別的地方」。

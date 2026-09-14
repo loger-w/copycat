@@ -915,7 +915,7 @@ interface Props {
   indexSeries?: IndexOverlaySeries | null;
 }
 
-export type ChartVariant = "page" | "card";
+type ChartVariant = "page" | "card";
 
 interface CoreProps extends Props {
   /** toggles **受控**:單檔頁由 `useChartToggles` 餵、群組圖牆由圖牆頂那一份餵。

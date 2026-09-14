@@ -13,7 +13,7 @@ import { snapDown, snapUp } from "@/lib/stock-tick";
  *  `unit` = 契約單位股數(標準 2,000 / 小型 100 / ETF 10,000);後端對映表查無 → `null`。
  *  **不可用 0 表示未知**:0 會被下單前置閘讀成「非股票單位」→ 誤擋一檔本來可以下單的
  *  標的,而後端那道權威閘根本沒被觸發過(code review B2/B3)。 */
-export interface StkfutLeg {
+interface StkfutLeg {
   prod: string;
   contracts: string[];
   unit: number | null;

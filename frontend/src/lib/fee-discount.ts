@@ -9,7 +9,7 @@ import { FEE_DISCOUNT_KEY } from "@/lib/constants";
 import { clampDiscount, FEE_DISCOUNT_DEFAULT } from "@/lib/ladder-position";
 import { readLocal, writeLocal } from "@/lib/storage";
 
-export interface DiscountState {
+interface DiscountState {
   /** 受控輸入的原始值,可暫時為空 / 非法 —— 不吃掉使用者打到一半的按鍵。 */
   raw: string;
   /** 最後一次通過 clampDiscount 的值;計算恆用它。 */
@@ -18,7 +18,7 @@ export interface DiscountState {
 
 /** 讀存檔折數。讀不到(私密視窗 / storage 被政策鎖時光是存取就拋)→ 走預設,記憶體內
  *  照常運作:這是 useState initializer,拋出去就是閃電梯首次 render 掛掉。 */
-export function loadDiscount(): DiscountState {
+function loadDiscount(): DiscountState {
   const raw = readLocal(FEE_DISCOUNT_KEY);
   const value = clampDiscount(raw ?? "") ?? FEE_DISCOUNT_DEFAULT;
   return { raw: String(value), value };

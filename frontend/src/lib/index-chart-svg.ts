@@ -62,7 +62,7 @@ export function outOfDomainLevels(
   return out;
 }
 
-export interface OverlayLinePts {
+interface OverlayLinePts {
   /** 這條線在**輸入陣列**裡的原始位置(N262)。
    *
    *  呼叫端拿它去查自己那份「第 n 腿長什麼樣」的表(`MarketPane` 的 `OVERLAY_LINES`

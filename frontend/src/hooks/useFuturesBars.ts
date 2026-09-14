@@ -40,12 +40,12 @@ const SESSION = "allday";
  *  08-28 實測切回 tab 那一趟 14 s 才回 —— 太短會把「慢但會回」誤判成壞;30 s 仍 < 60 s 輪詢,
  *  凍結上界 = timeout + retry 一次 ≈ 61 s。含 body(headers 到了不算回完,見 `fetchWithTimeout`)。
  *  超時的失效樣態(改前)= TQ 把後續 refetch 併進永不回的那一趟,該商品永久凍結、換商品才好。 */
-export const BARS_FETCH_TIMEOUT_MS = 30_000;
+const BARS_FETCH_TIMEOUT_MS = 30_000;
 
 /** 一趟超過這個時間才回就 `console.warn`:抓 user 真事件用(「那一趟為什麼慢」目前零證據,
  *  uvicorn access log 只記完成的請求且無時間戳)。門檻 = 常態(0–1 s)與 14 s 實測之間留餘裕。
  *  刻意不節流:每一趟慢請求都是一筆證據,60 s 一輪的量級不會洗版。 */
-export const BARS_SLOW_WARN_MS = 15_000;
+const BARS_SLOW_WARN_MS = 15_000;
 
 /** 支援 `session=allday` 的標的 = 期指三兄弟。取自 `MarketKey` 而不是另寫一份 union:
  *  後端 `MARKET_KEYS` 是同一份值域,兩處各留一份必漂移。 */
