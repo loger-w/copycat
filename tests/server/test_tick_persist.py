@@ -1,8 +1,8 @@
 """S1 盤中 tick 存檔(spec #257):餵達錢訊息、看 jsonl。
 
-沿 `test_stock_engine` 的 fake source + engine 鷹架。觀測面 = 檔案內容、`load_day` 讀回、
-寫入端的**公開**計數器(`dup_books` / `sealed_dropped` / `books_preopen`)、契約 log 行
-(`STATS_FMT` 字面)與 `compactor.dir`;不碰 handle 物件、緩衝區與私有屬性。
+沿 `test_stock_engine` 的 fake source + engine 鷹架。觀測面 = 檔案內容(含「還沒 flush 所以檔案
+仍空」這種可見狀態)、`load_day` 讀回、寫入端的**公開**計數器(`dup_books` / `sealed_dropped` /
+`books_preopen`)、契約 log 行(`STATS_FMT` 字面)與 `compactor.dir`;不碰 handle 物件與私有屬性。
 """
 
 from __future__ import annotations
@@ -482,6 +482,13 @@ class TestAppWiring:
             return compactor_mod.CompactRun(2, "", "fake: jsonl 不存在\n")
 
         monkeypatch.setattr(compactor_mod, "run_compact_subprocess", _fake)
+
+        # 排程本體另有 S3 測試;這裡把 `tick` 換成 no-op,佈線測試才不依牆鐘(13:45 後開場
+        # `tick()` 會 seal 當日、13:45 前不會 —— 同一條測試兩種路徑,收修 round-1 Spec F-02)
+        async def _idle(self: object) -> None:
+            return None
+
+        monkeypatch.setattr(compactor_mod.TicksCompactor, "tick", _idle)
         return calls
 
     @staticmethod
@@ -522,7 +529,9 @@ class TestAppWiring:
             assert client.app.state.ticks_compactor is None  # type: ignore[attr-defined]
         assert not (tmp_path / "ticks").exists()
 
-    def test_enabled_config_boots_the_compactor_on_the_same_dir(self, tmp_path: Path) -> None:
+    def test_enabled_config_boots_the_compactor_on_the_same_dir(
+        self, tmp_path: Path, _no_real_subprocess: list[_dt.date]
+    ) -> None:
         client, _fake = self._boot(
             tmp_path, TicksConfig(dir=str(tmp_path / "ticks"), flush_secs=3600.0)
         )
@@ -530,6 +539,7 @@ class TestAppWiring:
             compactor = client.app.state.ticks_compactor  # type: ignore[attr-defined]
             assert compactor is not None
             assert compactor.dir == tmp_path / "ticks"
+        assert _no_real_subprocess == []  # 佈線測試零轉檔呼叫(連 fake 都不該被叫到)
 
 
 class _RaisingOpener:
@@ -805,7 +815,9 @@ class TestReviewRound2:
             ("trade", "2330", 1)
         ]
 
-    async def test_persist_blowing_up_does_not_block_book_broadcast(self, tmp_path: Path) -> None:
+    async def test_persist_blowing_up_does_not_block_book_broadcast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """F-19:`observe` 掛在 `_handle_quote` 真正尾端 —— 存檔炸掉(非 OSError)也不能吃掉
         同一則的五檔廣播與訊號 on_book。"""
         engine, src = await _make(tmp_path)
@@ -815,7 +827,7 @@ class TestReviewRound2:
         def _boom(**_: object) -> None:
             raise RuntimeError("persist exploded")
 
-        persist.observe = _boom  # type: ignore[method-assign]
+        monkeypatch.setattr(persist, "observe", _boom)
         got: list[dict] = []
 
         async def _collect() -> None:
@@ -885,3 +897,30 @@ class TestReviewRound2:
         assert _stat_lines(caplog) == [
             "tick 存檔 2026-07-21:成交 1 / 簿 0 / 重複簿略過 0 / flush 0 / 寫入失敗 1"
         ]
+
+    def test_level_keys_parity_with_tick_row(self) -> None:
+        """五檔 20 欄鍵名自 `BOOK_FIELDS` 切片(不再每則 f-string);四組邊界釘在測試,不放
+        module-level assert(`python -O` 會剝掉;收修 round-1 Standards F-03)。"""
+        from copycat.live import tick_persist as mod
+
+        assert mod._BID_KEYS == ("bid0", "bid1", "bid2", "bid3", "bid4")
+        assert mod._BIDQ_KEYS == ("bidq0", "bidq1", "bidq2", "bidq3", "bidq4")
+        assert mod._ASK_KEYS == ("ask0", "ask1", "ask2", "ask3", "ask4")
+        assert mod._ASKQ_KEYS == ("askq0", "askq1", "askq2", "askq3", "askq4")
+
+    async def test_preopen_skips_are_printed_next_to_the_stats_line(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """收修 round-1 Standards F-02:閘用本地鐘;時區錯 / 時鐘偏差整天簿列全丟時,
+        「簿 0」旁邊要看得到「盤前略過 n 列」才分得出是閘擋掉還是達錢沒推。"""
+        engine, src = await _make(
+            tmp_path, flush_secs=3600.0, now_fn=lambda: _dt.datetime(2026, 7, 21, 8, 20, 0)
+        )
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        src.on_message(_quote(cum=1, bid="2376"))
+        await _drain(engine)
+        with caplog.at_level(logging.INFO, logger="copycat.live.tick_persist"):
+            await engine.close()
+        msgs = [r.getMessage() for r in caplog.records]
+        assert "tick 存檔 2026-07-21 盤前(09:00 前)略過簿更新 1 列" in msgs
