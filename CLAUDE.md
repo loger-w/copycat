@@ -390,13 +390,16 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   的 `OnSolaceReplyDisconnect` / `OnDisconnect`(轉 `on_disconnect`;這版 SKCOM 回報線走 Solace,typelib dispid 9 / 10,
   09-15 05:50 prod 實錄 code=3033 真的響)與探針 `capital/client.py::_probe_reply`(幫浦圈每 `REPLY_PROBE_SECS` 10 s 呼
   `SKReplyLib_IsConnectedByID`,**回原始 int 不轉 bool**,0 = 斷、1 = 連、其他值(23:59:56 實錄首值 2 = 連線中)不動狀態);
-  任一成立 → `_set_status("degraded")` + `_schedule_reply_reconnect`(同一次斷線只排一次)。恢復訊號兩個 —— 事件
+  任一成立 → `_set_status("degraded")` + `_schedule_reply_reconnect`(同一次斷線只排一次;探針 0 在 degraded 下也排,
+  所以**開機 ConnectByID rc≠0** 那條 degraded 同樣會重連;starting / error 不排)。恢復訊號兩個 —— 事件
   `OnSolaceReplyConnection` / `OnConnect` **code 0**(轉 `on_connect`,code ≠ 0 只 WARNING)與探針翻 1;任一成立且 status
-  degraded → `_reply_recovered` → ok(`_set_status("ok")` 順帶清在途鏈旗標)。重連 = `_maybe_reconnect_reply`(幫浦圈,
+  degraded → `_reply_recovered` → ok(`_set_status("ok")` 順帶清在途鏈旗標,所以恢復當下**重新武裝一次庫存查詢**、
+  `last_error` 清空)。重連 = `_maybe_reconnect_reply`(幫浦圈,
   degraded 且退避到期):**先 `store.clear()` 再 `connect_reply`**(ConnectByID 連上就重播當日 backlog,12:32 重啟實錄
   17 筆;不清就成交在 fills / 委託聚合雙計),rc=0 標 balance dirty(重播零成交列時仍要一次快照落地才重開樂觀套用),
-  退避 `REPLY_RECONNECT_BACKOFF_SECS` 5 / 10 / 20 / 40 / 60 s、rc≠0 或一窗內未恢復再試。**斷線當下不 clear**(委託列表
-  照舊可看)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
+  退避 `REPLY_RECONNECT_BACKOFF_SECS` 等待序列 5 / 10 / 20 / 40 / 60 / 60 … s(`_reconnect_delay`)、rc≠0 或一窗內未恢復再試。
+  **斷線當下不 clear,首次退避 5 s 到期即清、之後每次出手前再清(rc≠0 那格是白清)** —— 斷線期間委託列表 / 閃電梯
+  成交點會是空的,直到某次 ConnectByID 真的連上重播;寧空勿雙計(知情接受)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
   optional 不讀,status 燈走既有 degraded。log 四行:「群益回報線斷線(<來源>)→ degraded,N s 後重連」WARNING /
   「群益回報線重連 ConnectByID 已送出(第 n 次)」INFO /「群益回報線重連失敗 rc=…」WARNING /「群益回報線恢復(<來源>;
   重連 n 次)→ ok」INFO。盤後判準:`grep "回報線\|Solace" logs/server-<日>.log` —— 每次 disconnect 後在退避內接

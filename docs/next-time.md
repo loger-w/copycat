@@ -1004,7 +1004,8 @@ prod 8721 = 6adf20d9、dist 已重建)。
   「首次 + 每日一次」節流;有 traceback → F-14 給 `_probe_reply` 自帶 try/except + 連 3 次失敗停用探測。與上節「搬出幫浦圈」同一天看。
 - [ ] **F-17 ~ F-20 併下一個 test-hygiene 批**(鐵則 B,user 拍板):F-17 `chain-stats` CLI「可多檔」語意零測(拆兩檔切在鏈中間斷
   逐欄相同)+ 不存在路徑釘 exit 2(沿 `tests/test_cli.py` 前例);F-18 🔵 `CapitalClient` 建構工廠五份(test_client / test_fill_latency /
-  test_reply_watch / test_chain_stats / test_capital_api)上提 `tests/capital/client_fixture.py`;F-19 `test_clock_monitor::
+  test_reply_watch / test_chain_stats / test_capital_api / test_reply_reconnect 六份)上提 `tests/capital/client_fixture.py`,
+  **`_fill_evt_raw` 三份(test_client / test_fill_latency / test_reply_reconnect)一併收**(09-15 two-axis S-07);F-19 `test_clock_monitor::
   test_probes_immediately_then_every_interval…` 兩個宣稱都沒被斷言(interval 0.01 + 1 s 輪詢窗不可分),真正釘「立即量」的是
   `TestAppWiring` —— 改名把責任寫明;F-20 🔵 `test_fill_latency._run_chain` 是 `_Broker` 的特例,刪掉、兩個舊 caller 改 `_Broker`。
 - [ ] **F-16 KoD 半邊不做**(user 拍板,記錄不重提):`parse_offset` 不查 stratum = 0 / LI = 3;10 分鐘一發離限速門檻遠,pool 的
