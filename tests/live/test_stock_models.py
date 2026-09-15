@@ -485,3 +485,96 @@ class TestTrialWindowsParameter:
     def test_is_trial_window_takes_the_windows_it_is_given(self) -> None:
         assert is_trial_window("08:50:00.000", ()) is False
         assert is_trial_window("08:50:00.000") is True
+
+
+class TestSideFromFlag:
+    """即時內外盤改以 `FlagOfBuySell` 為準(mod/stock-side-flag,2026-09-15)。
+
+    09-14 實測:帶成交的 REALTIME 那則五檔是**成交後簿**,同則簿比 `derive_side` 對旗標只
+    78.5%(neutral 18.6% / 矛盾 2.9%)。旗標 1 = 內盤、2 = 外盤、0 = 達錢判不出 → 退回簿比;
+    欄缺(期貨訊息 / 舊格式)同退路。`REALTIME_MSG` 本身沒有旗標,上面既有斷言 `side == "inner"`
+    照過 = 退路相容的證據。
+    """
+
+    def test_flag_outer_overrides_book_inner(self) -> None:
+        # 2380 貼 Bid(2380)→ 簿判 inner;旗標 2 → outer
+        tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": "2"})
+        assert tick is not None
+        assert tick.side == "outer"
+        assert tick.flag == "2"
+
+    def test_flag_inner_overrides_book_outer(self) -> None:
+        # 2385 = Ask → 簿判 outer;旗標 1 → inner
+        msg = {**REALTIME_MSG, "TradingPrice": "2385", "FlagOfBuySell": "1"}
+        tick, _b, _m = parse_stock_realtime(msg)
+        assert tick is not None
+        assert tick.side == "inner"
+        assert tick.flag == "1"
+
+    def test_flag_zero_falls_back_to_book(self) -> None:
+        tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": "0"})
+        assert tick is not None
+        assert tick.side == "inner"  # 同樣本簿判
+        assert tick.flag == "0"
+
+    def test_missing_or_empty_flag_is_none_and_keeps_book_side(self) -> None:
+        tick, _b, _m = parse_stock_realtime(REALTIME_MSG)
+        assert tick is not None
+        assert tick.flag is None
+        assert tick.side == "inner"
+        tick2, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": ""})
+        assert tick2 is not None
+        assert tick2.flag is None
+        assert tick2.side == "inner"
+
+    def test_unknown_flag_value_falls_back_to_book(self) -> None:
+        tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": "9"})
+        assert tick is not None
+        assert tick.side == "inner"
+        assert tick.flag == "9"
+
+    def test_hist_tick_has_no_flag(self) -> None:
+        row = {
+            "TradingPrice": "2380",
+            "TradeQuantity": "1",
+            "TradeVolume": "100",
+            "PreciseTime": "25751000000",
+            "Date": "20260721",
+            "Bid": "2380",
+            "Ask": "2385",
+        }
+        tick = parse_hist_tick("2330", row)
+        assert tick is not None
+        assert tick.flag is None
+        assert tick.side == "inner"
+
+    def test_golden_rows_from_0914_capture_follow_the_flag(self) -> None:
+        """真實列 golden(`tests/fixtures/stock_side_flag_golden.json`,09-14 raw 抓檔逐字)。"""
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).parent.parent / "fixtures" / "stock_side_flag_golden.json"
+        rows = json.loads(path.read_text(encoding="utf-8"))["rows"]
+
+        # 2426:旗標 2、同則簿 94.2 貼 Bid 94.2 → 舊碼判 inner
+        r = rows["flag_outer_book_inner"]
+        tick, _b, _m = parse_stock_realtime({"Symbol": "TC.S.TWS.2426", **r})
+        assert tick is not None
+        assert derive_side(tick.price_milli, tick.bid_milli, tick.ask_milli) == "inner"
+        assert tick.side == "outer"
+
+        # 6209:旗標 1、同則簿 80 貼 Ask 80 → 舊碼判 outer
+        r = rows["flag_inner_book_outer"]
+        tick, _b, _m = parse_stock_realtime({"Symbol": "TC.S.TWS.6209", **r})
+        assert tick is not None
+        assert derive_side(tick.price_milli, tick.bid_milli, tick.ask_milli) == "outer"
+        assert tick.side == "inner"
+
+        # 5314:鎖跌停,Ask 第一檔是市價佇列 0、Bid 空;旗標 2(鎖跌停成交必為主動買,恆等式)
+        r = rows["lock_down_market_ask_queue"]
+        tick, book, _m = parse_stock_realtime({"Symbol": "TC.S.TWS.5314", **r})
+        assert tick is not None
+        assert book.asks[0] == (0, 28543)  # 簿原樣保留市價佇列
+        assert tick.bid_milli is None
+        assert tick.side == "outer"
+        assert tick.flag == "2"

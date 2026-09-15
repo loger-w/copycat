@@ -1,0 +1,20 @@
+{
+  "_source": "2026-09-14 09:04 起 60 s REALTIME raw 抓檔(82 檔訂閱、49,610 則)去重 (Security, TradeVolume) 首見;列原文逐字,只補 TradeDate。spec 原指 1312 在抓檔中沒有「旗標 1 且同則簿判 outer」列,改取 6209(同型矛盾列首例)。",
+  "rows": {
+    "flag_outer_book_inner": {
+      "Security": "2426", "TradingPrice": "94.2", "TradeQuantity": "1", "TradeVolume": "2821",
+      "Bid": "94.2", "Bid1": "94.1", "Ask": "94.3", "Ask1": "94.4", "BidVolume": "2", "AskVolume": "6",
+      "FlagOfBuySell": "2", "PreciseTime": "10421000000", "FilledTime": "10421", "TradeDate": "20260914"
+    },
+    "flag_inner_book_outer": {
+      "Security": "6209", "TradingPrice": "80", "TradeQuantity": "6", "TradeVolume": "1020",
+      "Bid": "79.9", "Bid1": "79.8", "Ask": "80", "Ask1": "80.1", "BidVolume": "28", "AskVolume": "3",
+      "FlagOfBuySell": "1", "PreciseTime": "10421000000", "FilledTime": "10421", "TradeDate": "20260914"
+    },
+    "lock_down_market_ask_queue": {
+      "Security": "5314", "TradingPrice": "37.95", "TradeQuantity": "2", "TradeVolume": "5755",
+      "Bid": "", "Bid1": "", "Ask": "0", "Ask1": "37.95", "BidVolume": "0", "AskVolume": "28543",
+      "FlagOfBuySell": "2", "PreciseTime": "10421000000", "FilledTime": "10421", "TradeDate": "20260914"
+    }
+  }
+}
