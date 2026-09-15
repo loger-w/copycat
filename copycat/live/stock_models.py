@@ -245,7 +245,10 @@ def parse_stock_realtime(
     # 照讀,但那兩個引擎都不讀 `side` → 無行為差;欄缺退回現況。
     # `str()` 與同函式其他欄一致(review S-01):達錢哪天送 int 2,不轉型會 miss 對映且
     # `flag == "0"` 恆假 → 靜默退回簿比,每日計數兩桶雙 0 —— 正是那行 log 要抓的漂移。
-    flag = str(msg.get("FlagOfBuySell", "")) or None
+    # JSON null 也要歸「欄缺」(pr-255 review F-03):`str(None)` 是字面 "None",既不進欄缺
+    # 也不進 0 也不對映 —— 正好躲過「欄缺桶非 0 = 格式漂了」這個唯一訊號。
+    raw_flag = msg.get("FlagOfBuySell")
+    flag = (str(raw_flag) or None) if raw_flag is not None else None
     tick = StockTick(
         code=str(msg.get("Security", "")),
         price_milli=price,
