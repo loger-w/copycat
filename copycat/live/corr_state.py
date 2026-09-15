@@ -63,7 +63,9 @@ class CorrState:
         sample_secs: float = 1.0,
     ) -> None:
         self._base = base
-        self._legs = [k for k in leg_keys if k != base]
+        # 去重保序(pr-251 review F-05):舊版逐 leg 重算、重複 key 只是覆寫同一列(冪等);增量版
+        # 的 push 會對同一個 deque append 兩次 → n{w} 加倍、r 不變、零錯誤訊號。config 層另有 WARNING。
+        self._legs = [k for k in dict.fromkeys(leg_keys) if k != base]
         self._windows = windows
         self._min_samples = (
             dict(min_samples) if min_samples is not None else dict(_DEFAULT_MIN_SAMPLES)
@@ -210,7 +212,7 @@ def _sub(s: list[float], pair: _Pair, remaining: int) -> None:
 def _corr(s: list[float], n: int, min_n: int) -> float | None:
     if n < max(min_n, 2):
         return None
-    sx, sy, sxx, syy, sxy = s
+    sx, sy, sxx, syy, sxy = s[_SX], s[_SY], s[_SXX], s[_SYY], s[_SXY]  # 與 _add / _sub 同一份版面
     vx = sxx - sx * sx / n
     vy = syy - sy * sy / n
     if vx <= _SS_FLOOR or vy <= _SS_FLOOR:

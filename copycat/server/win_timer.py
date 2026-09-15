@@ -93,14 +93,23 @@ def apply_timer_1ms(
     if platform != "win32":
         logger.info("timer 1 ms:非 Windows(%s),不套用", platform)
         return False
-    qos_ok, err = qos_fn()
+    try:
+        qos_ok, err = qos_fn()
+    except (OSError, AttributeError) as exc:
+        # DLL 載不到 / 匯出不存在(pr-251 review F-06):與回傳 False 同歸「失敗」,不讓效能項炸掉啟動
+        logger.warning("EcoQoS 豁免呼叫失敗(%s: %s):視同未豁免", type(exc).__name__, exc)
+        qos_ok, err = False, -1
     if not qos_ok:
         logger.warning(
             "EcoQoS 豁免失敗(SetProcessInformation ProcessPowerThrottling 回 False,GetLastError=%d):"
             "timeBeginPeriod(1) 仍會要,但 Windows 11 約 3 秒後收回,timer drift 退回 ~12 ms",
             err,
         )
-    mm = tbp_fn()
+    try:
+        mm = tbp_fn()
+    except (OSError, AttributeError) as exc:
+        logger.warning("timeBeginPeriod 呼叫失敗(%s: %s):視同未套用", type(exc).__name__, exc)
+        mm = -1
     if mm != _TIMERR_NOERROR:
         logger.warning("timeBeginPeriod(1) 失敗(MMRESULT=%d):timer 解析度維持系統預設 15.6 ms", mm)
     ok = qos_ok and mm == _TIMERR_NOERROR
