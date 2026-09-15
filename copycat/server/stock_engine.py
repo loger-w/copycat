@@ -19,6 +19,7 @@ from collections.abc import Set as AbstractSet
 from typing import AsyncGenerator, Callable, Iterable, Protocol
 
 from copycat.live.stock_models import (
+    _FLAG_SIDE,
     TRIAL_WINDOWS,
     StockTick,
     is_trial_window,
@@ -130,6 +131,11 @@ _FLAG_STATS_FMT: str = "個股旗標 0:%d 筆 / 欄缺 %d 筆 / 總 %d 筆(%s)"
 #: 當日首見**每個值**一則 WARNING(帶值 / 股號 / 時刻),同日同值不再印,換日重新武裝
 #: (`_log_flag_stats` 歸零時一併清)。不動 `_FLAG_STATS_FMT` 字面(那是盤後判準的契約)。
 _FLAG_UNKNOWN_FMT: str = "個股旗標未知值 %r(首見 %s %s;退回簿比判定,當日同值不再印)"
+#: 未知值**種數**的當日上界(two-axis S-02 / Spec-S-01):值由達錢單方決定,欄漂成時間戳 /
+#: 價格時基數無界,逐值印會退化成每 tick 一則(PR #146 log 洪水同型)。第 cap+1 種印一則封口、
+#: 之後零輸出;`_flag_unknown_warned` 也停在 cap 不再長。前綴仍是「個股旗標未知值」,盤後同一把 grep。
+_FLAG_UNKNOWN_CAP: int = 8
+_FLAG_UNKNOWN_CAP_FMT: str = "個股旗標未知值過多(當日已 %d 種,不再逐值印;最後一種 %r %s %s)"
 
 #: TradeStatus 轉態觀測的**固定 grep 前綴 + 格式**(D6/R10)。與 parse 層值域外 warning
 #: 是同事件兩則(那邊管值域、這邊管轉態時序),蒐證對帳一律以本前綴為準。
@@ -394,7 +400,9 @@ class StockEngine:
         self._flag_zero = 0
         self._flag_missing = 0
         #: 當日已印過 WARNING 的未知旗標值(pr-255 review F-02);`_log_flag_stats` 歸零時清。
+        #: 種數到 `_FLAG_UNKNOWN_CAP` 後 `_flag_unknown_capped` 翻真、印一則封口、set 不再長。
         self._flag_unknown_warned: set[str] = set()
+        self._flag_unknown_capped = False
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
         self._signal_hub: SignalSink | None = None
@@ -1118,6 +1126,7 @@ class StockEngine:
         self._flag_zero = 0
         self._flag_missing = 0
         self._flag_unknown_warned.clear()  # 未知值 WARNING 換日重新武裝(pr-255 F-02)
+        self._flag_unknown_capped = False
 
     def _rollover_stage2(self, first_tick: StockTick) -> None:
         """階段二:首筆新日 tick 確認 → reset 全部狀態,觸發 tick 重新 ingest。"""
@@ -1349,17 +1358,23 @@ class StockEngine:
             if arms_the_day:
                 # 現貨旗標計數(mod/stock-side-flag):掛在 ingest 為真的分支內,試撮與重複
                 # tick 已被短路;期貨訊息本來就沒這欄,計進去只會把「欄缺」桶灌成假訊號。
-                # `arms_the_day`(= 現貨鍵)與計數母體是同一把尺:武裝換日的是現貨,
-                # 旗標計數的也是現貨 —— 刻意共用,不再第三次算 `is_futures_key`(pr-255 F-04)。
                 self._flag_total += 1
                 if tick.flag is None:
                     self._flag_missing += 1
                 elif tick.flag == "0":
                     self._flag_zero += 1
-                elif tick.flag not in ("1", "2") and tick.flag not in self._flag_unknown_warned:
-                    # 值域外(pr-255 F-02):三桶看不出來,當日首見每值一則,帶值 / 股號 / 時刻
-                    self._flag_unknown_warned.add(tick.flag)
-                    logger.warning(_FLAG_UNKNOWN_FMT, tick.flag, code, tick.time)
+                elif tick.flag not in _FLAG_SIDE and tick.flag not in self._flag_unknown_warned:
+                    # 值域外(pr-255 F-02):三桶看不出來,當日首見每值一則,帶值 / 股號 / 時刻。
+                    # 已知值集合直接讀 `_FLAG_SIDE`(two-axis S-01):對映加值這裡自動跟。
+                    if len(self._flag_unknown_warned) < _FLAG_UNKNOWN_CAP:
+                        self._flag_unknown_warned.add(tick.flag)
+                        logger.warning(_FLAG_UNKNOWN_FMT, tick.flag, code, tick.time)
+                    elif not self._flag_unknown_capped:
+                        # 第 cap+1 種:封口一則、set 不再長、當日之後零輸出(S-02 / Spec-S-01)
+                        self._flag_unknown_capped = True
+                        logger.warning(
+                            _FLAG_UNKNOWN_CAP_FMT, _FLAG_UNKNOWN_CAP, tick.flag, code, tick.time
+                        )
             # 收件人 = 主圖 ∪ 登記的檢視集合(#180)。**不進打包 ≠ 不處理**:下面的
             # watchlist_quote dirty / 訊號層照跑,打包只管「哪些逐筆要送到瀏覽器」。
             if code == self._main or code in self._tick_targets:
