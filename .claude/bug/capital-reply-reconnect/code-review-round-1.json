@@ -1,0 +1,21 @@
+{
+  "fixed_point": "4ad1cc22 (merge-base master..HEAD)",
+  "reviewed_head": "92fd288a",
+  "axes_model": "opus x2 (parallel sub-agents)",
+  "standards": [
+    {"id": "S-01", "severity": "hard", "file": "copycat/capital/client.py", "hunk": "_probe_reply 狀態機半邊 / _init_com", "rule": "CLAUDE.md §4 回報線條「任一成立 → degraded + _schedule_reply_reconnect」", "finding": "排重連只有兩個入口(斷線事件、探針 0 且 status==ok)。開機 connect_reply 失敗那條 degraded 沒人排;此後探針回 0 因 status 已 degraded 直接跳過 → 永不重連。文件宣稱與 code 不符,零錯誤訊號。", "disposition": "accept — 探針 0 在 degraded 下也排(排程去重)+ _init_com rc≠0 立即排;test_init_connect_reply_failure_schedules_reconnect / test_probe_zero_after_recovery_reschedules 釘住"},
+    {"id": "S-02", "severity": "judgement", "file": "copycat/capital/client.py", "hunk": "_schedule_reply_reconnect / _handle_reply_disconnect", "rule": "backend-conventions log 節 + CLAUDE §4 四行 log 判準", "finding": "排程與 status 脫鉤:starting/error 時斷線事件仍排並印「→ degraded」= 假陳述;哨兵卡住後下一次真斷線的 WARNING 不印。", "disposition": "accept — 只在 degraded 排;test_disconnect_event_outside_degraded_does_not_schedule"},
+    {"id": "S-03", "severity": "judgement", "file": "copycat/capital/client.py", "hunk": "_reply_reconnect_next = inf", "rule": "backend-conventions「Format 跟既有檔對齊」/ Primitive Obsession", "finding": "同檔到期哨兵都是 float | None,新增第三套 inf。", "disposition": "accept — 改 float | None"},
+    {"id": "S-04", "severity": "judgement", "file": "tests/capital/test_reply_reconnect.py", "hunk": "四案全寫 _reply_reconnect_next = 0.0", "rule": "鐵則 D / 契約以測試釘住", "finding": "退避表零覆蓋,min(attempt, len-1) 與 5/10/20/40/60 無斷言;常數 docstring 口徑與 code 對不上。", "disposition": "accept — _reconnect_delay helper + test_reconnect_delay_table + test_reconnect_attempts_walk_the_backoff_table(量 next − now);docstring 改寫成等待序列"},
+    {"id": "S-05", "severity": "judgement", "file": "copycat/capital/client.py + tests", "hunk": "_reply_recovered / last_error 斷言", "rule": "鐵則 D(不用恆真斷言)", "finding": "恢復不清 _last_error,ok 廣播帶舊斷線訊息;測試 `is None or '回報' in` 恆真。", "disposition": "accept — 恢復清 last_error;斷言改 is None"},
+    {"id": "S-06", "severity": "judgement", "file": "CLAUDE.md §4 / client.py 檔頭", "hunk": "「斷線當下不 clear(委託列表照舊可看)」", "rule": "文件不可假陳述", "finding": "括號那句只成立 5 s:首次退避到期即 clear,rc≠0 也清、每格再清。", "disposition": "accept — 措辭改「首次退避 5 s 到期即清、之後每次出手前再清(rc≠0 白清),寧空勿雙計」"},
+    {"id": "S-07", "severity": "judgement", "file": "tests/capital/test_reply_reconnect.py", "hunk": "_fill_evt_raw", "rule": "Duplicated Code", "finding": "與 test_client / test_fill_latency 逐字第三份。", "disposition": "defer — 既有債,併 next-time F-18 test-hygiene 批收 conftest(鐵則 B 不順手改)"}
+  ],
+  "spec": [
+    {"id": "Spec-S-01", "kind": "wrong", "file": "copycat/capital/client.py::_probe_reply", "spec_quote": "任一成立 → _set_status(degraded) + _schedule_reply_reconnect(同一次斷線只排一次)", "finding": "探針半邊 `value == 0 and status == ok`:已 degraded 時探針 0 不排。可達入口 = _init_com connect_reply rc≠0、恢復後排程已清但事件沒響只有探針 0。", "disposition": "accept — 同 S-01"},
+    {"id": "Spec-S-02", "kind": "wrong", "file": "copycat/capital/client.py::_reply_recovered / _set_status", "spec_quote": "_set_status(ok) 順帶清在途鏈旗標", "finding": "在途 balance 鏈被清成遲到丟棄,但 _reply_recovered 沒補 _mark_balance_dirty → 斷線 ≤5 s 就恢復 / rc≠0 後線自己回來,兩條路漏一次落地,最壞近 60 s 部位停更。", "disposition": "accept — _reply_recovered 補 _mark_balance_dirty();test 斷 _balance_due is not None"},
+    {"id": "Spec-S-03", "kind": "wrong", "file": "copycat/capital/client.py::_maybe_reconnect_reply", "spec_quote": "斷線當下不 clear(委託列表照舊可看)", "finding": "rc≠0 那格的 clear 是白清,斷線期間委託列表 / 成交點全空;契約與已知不救都沒記。", "disposition": "accept(文件層)— 契約 + diagnosis 已知不救補「寧空勿雙計,知情接受」;「連不上就別清」需先證 SKCOM 不在 ConnectByID 同步回傳前 dispatch 重播,本批不證"},
+    {"id": "Spec-S-04", "kind": "missing", "file": "diagnosis.md / next-time.md", "spec_quote": "判準 = prod 重啟後下一次斷線的 log 四行", "finding": "契約逐句對上、白名單全在;缺留尾記帳。", "disposition": "accept — diagnosis 已知不救三條 + next-time F-18 併 S-07"}
+  ],
+  "disposition": "Standards 7(hard 1 / judgement 6):accept 6、defer 1(S-07 → next-time)。Spec 4:accept 4(3 code / 1 文件)。收修後 tests/capital 450 passed、ruff / pyright 綠;S-01 與 Spec-S-01 是同一個洞。"
+}
