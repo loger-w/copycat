@@ -9,6 +9,10 @@
   試撮期訊息的 `FlagOfBuySell` 分佈(去重鍵 (Security, TradeVolume) 首見;分析腳本樣板 scratchpad 上層 `flag_xcheck.py` /
   `flag_zero.py`)。結果寫進 skill `tc4-market-facts` 那條「成交後簿 / 旗標」+ 本節勾銷;跑完
   `Unregister-ScheduledTask -TaskName copycat-flag-capture-0916 -Confirm:$false`。不改程式。
+  **09-15 追加(feat/tick-persist grilling)**:抓檔腳本已多寫一份 `full_<ts>.jsonl`(全欄位 + `_recv_ns`);分析時再答一題 ——
+  **簿更新訊息(同檔 `TradeVolume` 未變)全部 ~60 個欄位裡,有沒有任何一欄隨簿變動而動(像時間戳的)**。09-14 的 13 欄抓檔
+  已證 `PreciseTime` / `FilledTime` 在簿更新時 = 上一筆成交(43,289 則零例外);全欄位若仍無 → 向達錢反映「REALTIME 簿更新
+  沒有報價時間欄」(是缺欄,不是 PreciseTime 錯);tick 存檔簿列時刻不論結果都以 `recv_ns` 為準。
 - [x] **「前一列簿比先看」(回補 r1→r0,判得出 80.7% → 92.7%、錯 178 → 86)已拍板不做**(Q1 (c)):批 C tick 存檔後回補改讀
   自家存檔,這個選項就是死碼;殘餘段 464 筆任何歷史列規則都接近擲銅板(current-state §5 事實 D)。**勿重提**。
 

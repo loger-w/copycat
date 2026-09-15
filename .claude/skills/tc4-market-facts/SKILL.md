@@ -93,6 +93,11 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   tick 存檔後回補改讀自家存檔。線上落點:`parse_stock_realtime` 旗標優先、0 / 欄缺退回 `derive_side`;`parse_hist_tick`
   零改動;engine 每日一行「個股旗標 0:n 筆 / 欄缺 k 筆 / 總 m 筆」(欄缺非 0 = 格式漂了)。
   (Trigger:拿同則五檔當成交前簿 / 改內外盤判定 / 回補想補 neutral / 看到判定率說明列回到 ~80%)
+- **個股簿更新訊息的 `PreciseTime` / `TradingPrice` / `TradeQuantity` 都是上一筆成交的殘影,不是簿變動時刻**(2026-09-15
+  以 09-14 同一份 raw 抓檔重算:同檔 `TradeVolume` 未變的 43,289 則,`PreciseTime` 與上一筆成交**全部相同、零例外**,
+  `TradeQuantity` 也非空)。達錢不告訴你簿是幾點變的 —— 簿變動的唯一時刻 = server 收到當下的本機時鐘(tick 存檔簿列的
+  `recv_ns`),順序靠收到序號;本機鐘偏了(#236 時鐘偏差 WARNING)簿列時刻跟著偏。引申:區分成交 / 簿更新**不能**靠
+  `TradeQuantity` 是否為空,要靠 `TradeVolume`(累積量)有沒有前進。(Trigger:簿列時間欄 / 假單抽單分析的時間軸 / 想用 PreciseTime 排序簿更新)
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
   成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**TradeStatus=1 亦 = 盤中延緩撮合中**(2026-08-28 prod 蒐證:開盤段 11 檔
