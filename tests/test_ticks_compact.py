@@ -206,6 +206,142 @@ class TestReviewRound1:
         assert [r.msg_seq for r in load_day(_DAY, tmp_path)] == [1, 2, 3]
 
 
+class TestReviewRound2:
+    """pr-263 review 收修(F-02 / F-03 / F-07 / F-12 / F-13)。"""
+
+    def test_book_parquet_is_written_before_trade_parquet(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-02:「成交 parquet 存在」= 已轉檔的判準(CLI / 排程 / loader 三處),所以它必須最後落地;
+        被 kill 在兩檔之間才不會卡成「已轉檔但簿列永遠讀不到」。"""
+        from copycat import ticks_compact
+
+        _write_fixture(tmp_path)
+        order: list[str] = []
+        real = ticks_compact._write_parquet
+
+        def _spy(path: Path, rows: list, fields: tuple) -> None:
+            order.append(path.name)
+            real(path, rows, fields)
+
+        monkeypatch.setattr(ticks_compact, "_write_parquet", _spy)
+        compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        assert order == ["20260721-book.parquet", "20260721.parquet"]
+
+    def test_unlink_failure_rolls_back_both_parquet_and_is_a_compact_failed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-03:Windows 上 jsonl 被別的 process 開著時 unlink 拋 PermissionError;parquet 已落地會讓
+        之後每次重跑都撞「parquet 已在」exit 2 —— 要回滾成可重入狀態並以 CompactFailed 收場。"""
+        from copycat import ticks_compact
+
+        jsonl = _write_fixture(tmp_path)
+        real_unlink = Path.unlink
+
+        def _deny(self: Path, missing_ok: bool = False) -> None:
+            if self.suffix == ".jsonl":
+                raise PermissionError(32, "being used by another process")
+            real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", _deny)
+        with pytest.raises(ticks_compact.CompactFailed, match="jsonl"):
+            compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        assert jsonl.exists()
+        assert not (tmp_path / "20260721.parquet").exists()
+        assert not (tmp_path / "20260721-book.parquet").exists()
+        assert not list(tmp_path.glob("*.tmp"))
+
+    def test_cli_maps_unlink_failure_to_exit_1_with_a_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_fixture(tmp_path)
+        real_unlink = Path.unlink
+
+        def _deny(self: Path, missing_ok: bool = False) -> None:
+            if self.suffix == ".jsonl":
+                raise PermissionError(32, "being used by another process")
+            real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", _deny)
+        assert cli.main(["ticks-compact", "--date", "20260721", "--dir", str(tmp_path)]) == 1
+        assert "失敗" in capsys.readouterr().err
+
+    def test_load_day_skips_bad_jsonl_lines_like_compact_day(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F-07:同一份檔兩個讀者要同口徑 —— 壞行跳過(WARNING 帶計數),不是整天讀不回。"""
+        import logging
+
+        _write_fixture(tmp_path)  # 含一行壞 JSON
+        with caplog.at_level(logging.WARNING, logger="copycat.ticks"):
+            rows = load_day(_DAY, tmp_path)
+        assert len(rows) == 7  # 8 行 − 1 壞行(jsonl 分支不去重)
+        assert any("壞行 1" in r.getMessage() for r in caplog.records)
+
+    def test_full_chain_parity_from_writer_to_parquet(self, tmp_path: Path) -> None:
+        """F-12:列數閘擋不住「整欄靜默 null」。寫入端 → jsonl → load_day 基準 → compact_day →
+        load_day parquet,`TickRow` 逐列相等(欄名一漂這條就紅,而不是 unlink 掉唯一原始資料)。"""
+        import asyncio
+        import datetime as _dt
+
+        from copycat.live.stock_models import parse_stock_realtime
+        from copycat.live.tick_persist import TickPersist
+        from copycat.ticks_config import TicksConfig
+        from tests.server.test_stock_engine import _quote
+
+        persist = TickPersist(
+            TicksConfig(dir=str(tmp_path), flush_secs=3600.0),
+            now_fn=lambda: _dt.datetime(2026, 7, 21, 10, 0, 0),
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            persist.start(loop, "2026-07-21")
+            msgs = [
+                _quote(cum=1) | {"FlagOfBuySell": "2", "Bid1": "2370", "BidVolume1": "20"},
+                _quote(cum=1, bid="2376") | {"Bid1": "2370", "BidVolume1": "20"},  # 簿列
+                _quote(cum=3, price="2385", qty="2") | {"FlagOfBuySell": "1", "TradeStatus": "1"},
+                _quote("2317", cum=5, bid="100", ask="101"),
+            ]
+            for i, msg in enumerate(msgs):
+                tick, book, _meta = parse_stock_realtime(msg)
+                ingested = i != 1  # 第二則 cum 未前進 = engine ingest False = 簿列候選
+                persist.observe(
+                    code=msg["Security"],
+                    quote=msg,
+                    book=book,
+                    tick=tick if ingested else None,
+                    engine_seq=i + 1,
+                    trade_date="2026-07-21",
+                    recv_ns=1_800_000_000_000_000_000 + i,
+                )
+        finally:
+            persist.close()
+            loop.close()
+        before = load_day(_DAY, tmp_path)
+        assert len(before) == 4 and {r.kind for r in before} == {"trade", "book"}
+        assert before[0].flag == "2" and before[2].trade_status == "1"
+        compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        after = load_day(_DAY, tmp_path)
+        assert after == before
+
+    def test_server_process_never_imports_pyarrow(self) -> None:
+        """F-13:字面掃描掃不到 `copycat/ticks.py`(server 與 live 都 import 它);真斷言 = 起一個
+        乾淨子程序載 `copycat.server.app`,`sys.modules` 不得出現 pyarrow。"""
+        import subprocess
+        import sys
+
+        root = Path(__file__).resolve().parents[1]
+        code = (
+            "import sys; import copycat.server.app; import copycat.server.ticks_compactor; "
+            "import copycat.live.tick_persist; "
+            "raise SystemExit(1 if any(m == 'pyarrow' or m.startswith('pyarrow.') for m in sys.modules) else 0)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120
+        )
+        assert proc.returncode == 0, proc.stderr[-800:]
+
+
 class TestLoadDayParquet:
     def test_parquet_wins_over_a_stray_jsonl(self, tmp_path: Path) -> None:
         _write_fixture(tmp_path)

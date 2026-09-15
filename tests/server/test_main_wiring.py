@@ -96,7 +96,13 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
     # 日曆是實例(不是 sentinel)→ 先抽出來單獨驗型別,其餘仍逐鍵鎖死整份 dict
     calendar = cap.create_kwargs.get("trading_calendar")
     assert isinstance(calendar, TradingCalendar), "prod 必須顯式載入交易日曆"
-    assert {k: v for k, v in cap.create_kwargs.items() if k != "trading_calendar"} == {
+    # tick 存檔(spec #257):prod 顯式 `load_ticks_config()`(檔缺 = 全預設、有檔 = 覆寫),漏傳 =
+    # 整條存檔靜默不起、盤後 `grep "tick 存檔"` 零行。pr-263 F-10:比 `isinstance` 不比值 ——
+    # 比 `TicksConfig()` 等於假設這台機器沒有 configs/ticks.json,建了 `{"enabled": false}` 就整批紅
+    assert isinstance(cap.create_kwargs.get("ticks_config"), TicksConfig)
+    assert {
+        k: v for k, v in cap.create_kwargs.items() if k not in ("trading_calendar", "ticks_config")
+    } == {
         "stock_source": DEFAULT_STOCK,
         "index_source": DEFAULT_INDEX,
         "futures_source": DEFAULT_FUTURES,
@@ -107,9 +113,6 @@ def test_main_passes_explicit_default_sources(monkeypatch: pytest.MonkeyPatch) -
         # 時鐘偏差監測(#236):prod 顯式 `clock_monitor.probe`,漏傳 = 整條監測靜默不起、
         # 盤後 `grep 時鐘偏差` 零行(與「校時正常」在 log 上分不出來)
         "clock_probe": clock_monitor.probe,
-        # tick 存檔(spec #257):prod 顯式 `load_ticks_config()`(檔缺 = 全預設、enabled),
-        # 漏傳 = 整條存檔靜默不起、盤後 `grep "tick 存檔"` 零行、`data/ticks/` 空
-        "ticks_config": TicksConfig(),
     }
     # 明寫:trade 路已除役,sentinel 借用語意不得復活
     assert cap.create_kwargs is not None and "trade_source" not in cap.create_kwargs

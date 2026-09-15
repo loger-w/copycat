@@ -16,6 +16,8 @@ import threading
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 import copycat.live.tc4 as tc4_mod
 from copycat.capital.client import COM_JOIN_TIMEOUT_SECS, CapitalClient
 from copycat.live.tc4 import DEFAULT_LOCK_TIMEOUT_SECS, TC4QuoteSource, close_worst_secs
@@ -77,7 +79,9 @@ class TestLifespanBound:
         """spec #257:stock lane 的 `engine.close()` 尾端多一段 tick 存檔 flush + close(64 KB 緩衝
         一次 write syscall,預算 < 100 ms)。可計段要進算式(CLAUDE §4 關機預算)。"""
         assert 0 < sb.TICK_PERSIST_FLUSH_SECS <= 0.1
-        assert sb.lifespan_close_worst_secs() >= (
+        # pr-263 F-11:`>=` 會被 5 s slack 吞掉 0.1 s 常數(把它從算式刪掉仍綠)—— 改等式,
+        # 可計段每一項都必須真的在和式裡
+        assert sb.lifespan_close_worst_secs() - sb.LIFESPAN_SLACK_SECS == pytest.approx(
             sb.TC4_LANE_DEPTH * close_worst_secs()
             + COM_JOIN_TIMEOUT_SECS
             + sb.CLOCK_PROBE_WORST_SECS

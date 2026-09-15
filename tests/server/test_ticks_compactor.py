@@ -213,25 +213,45 @@ class TestPersistHandoff:
     ) -> None:
         """13:45 先印「tick 存檔 <日>」那行、把當日 handle flush + 關掉,再叫轉檔 —— Windows 下
         開著的檔刪不掉,子程序的「列數核對後刪 jsonl」會直接 PermissionError。"""
-        persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=3600.0))
+        persist = TickPersist(
+            TicksConfig(dir=str(tmp_path), flush_secs=3600.0),
+            now_fn=lambda: _dt.datetime(2026, 7, 21, 13, 45, 0),
+        )
         loop = asyncio.get_running_loop()
         persist.start(loop, "2026-07-21")
-        jsonl = jsonl_path(tmp_path, "2026-07-21")
-        assert jsonl.exists()
-        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
-        runner = _Runner(clock, [_OK])
-        eng = _make(tmp_path, clock, runner, persist=persist)
-        with caplog.at_level(logging.INFO, logger="copycat.live.tick_persist"):
-            await eng.tick()
-        assert len(runner.calls) == 1
-        stats = [
-            r.getMessage()
-            for r in caplog.records
-            if r.getMessage().startswith("tick 存檔 2026-07-21:")
-        ]
-        assert len(stats) == 1
-        jsonl.unlink()  # handle 已放掉才刪得掉(Windows)
-        persist.close()
+        try:  # F-26:中途 assert 紅也要收 handle 與 timer(Windows 下否則 tmp_path 刪不掉)
+            jsonl = jsonl_path(tmp_path, "2026-07-21")
+            assert jsonl.exists()
+            clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+            runner = _Runner(clock, [_OK])
+            eng = _make(tmp_path, clock, runner, persist=persist)
+            with caplog.at_level(logging.INFO, logger="copycat.live.tick_persist"):
+                await eng.tick()
+            assert len(runner.calls) == 1
+            stats = [
+                r.getMessage()
+                for r in caplog.records
+                if r.getMessage().startswith("tick 存檔 2026-07-21:")
+            ]
+            assert len(stats) == 1
+            jsonl.unlink()  # handle 已放掉才刪得掉(Windows)
+            # 平台無關的正面證據:封住後該日的列丟棄並計數(POSIX 上 unlink 不拋也擋得住 no-op 退化)
+            from copycat.live.stock_models import parse_stock_realtime
+            from tests.server.test_stock_engine import _quote
+
+            tick, book, _meta = parse_stock_realtime(_quote(cum=1))
+            persist.observe(
+                code="2330",
+                quote=_quote(cum=1),
+                book=book,
+                tick=tick,
+                engine_seq=1,
+                trade_date="2026-07-21",
+                recv_ns=1,
+            )
+            assert persist.sealed_dropped == 1
+        finally:
+            persist.close()
 
 
 class TestRealSubprocess:
@@ -265,7 +285,8 @@ class TestRealSubprocess:
         import json
 
         jsonl_path(tmp_path, "2026-07-21").write_text(json.dumps(row) + "\n", encoding="utf-8")
-        run = await run_compact_subprocess(_TUE, tmp_path)
+        # F-08:真子程序要有時間上界(repo 未裝 pytest-timeout,卡住 = 整個 pytest 掛死)
+        run = await asyncio.wait_for(run_compact_subprocess(_TUE, tmp_path), 60)
         assert run.rc == 0, run.stderr
         assert run.stdout.startswith(
             "tick 轉檔 2026-07-21:jsonl 1 列 → 成交 1 列 + 簿 0 列(去重 0、壞行 0)"
@@ -378,6 +399,104 @@ class TestReviewRound1:
     def test_dir_is_public(self, tmp_path: Path) -> None:
         clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
         assert _make(tmp_path, clock, _Runner(clock, [_OK])).dir == tmp_path
+
+
+class TestReviewRound2:
+    """pr-263 review 收修(F-05 / F-08 / F-17 / F-18 / F-27)。"""
+
+    async def test_catch_up_of_a_past_day_seals_but_does_not_print_current_counters_as_that_day(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F-05:開機補跑昨天的 jsonl 時,計數器是今天的(剛歸零),印成「昨天 成交 0 / 簿 0」
+        是假陳述 —— 過去日只 seal、不印;今天到 13:45 才印今天那行。"""
+        mon = _dt.date(2026, 7, 20)
+        _touch_jsonl(tmp_path, mon)
+        persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=3600.0))
+        persist.start(asyncio.get_running_loop(), "2026-07-21")  # 今天的 handle
+        clock = _Clock(_dt.datetime(2026, 7, 21, 8, 10, 0))
+        runner = _Runner(clock, [_OK])
+        eng = _make(tmp_path, clock, runner, persist=persist)
+        with caplog.at_level(logging.INFO, logger="copycat.live.tick_persist"):
+            await eng.tick()
+            assert [c[0] for c in runner.calls] == [mon]
+            stats = [
+                r.getMessage() for r in caplog.records if r.getMessage().startswith("tick 存檔 20")
+            ]
+            assert stats == []  # 過去日不印
+            clock.t = _dt.datetime(2026, 7, 21, 13, 45, 0)
+            await eng.tick()
+            stats = [
+                r.getMessage() for r in caplog.records if r.getMessage().startswith("tick 存檔 20")
+            ]
+            assert len(stats) == 1 and stats[0].startswith("tick 存檔 2026-07-21:")
+        persist.close()
+
+    async def test_after_a_failure_the_loop_sleeps_until_the_retry_not_until_tomorrow(
+        self, tmp_path: Path
+    ) -> None:
+        """F-17:`_sleep_secs` 的退避分支是「15 分鐘後醒來」的唯一決定點;刪掉它測試要紅。"""
+        _touch_jsonl(tmp_path)
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+        eng = _make(tmp_path, clock, _Runner(clock, [_FAIL]))
+        await eng.tick()
+        assert eng._sleep_secs(clock.now()) == 900.0
+        clock.t = _dt.datetime(2026, 7, 21, 13, 50, 0)
+        assert eng._sleep_secs(clock.now()) == 600.0
+
+    async def test_backoff_is_measured_from_the_end_of_the_attempt(self, tmp_path: Path) -> None:
+        """F-18:一次逾時嘗試耗掉 300 s 後,下一次仍要等滿 900 s(不是 900 − 300)。"""
+        _touch_jsonl(tmp_path)
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+
+        class _Slow(_Runner):
+            async def __call__(self, day: _dt.date) -> CompactRun:
+                self.calls.append((day, self.clock.t))
+                self.clock.t += _dt.timedelta(seconds=300)  # 呼叫本身耗 300 s
+                return _FAIL
+
+        runner = _Slow(clock, [_FAIL])
+        eng = _make(tmp_path, clock, runner)
+        await eng.tick()  # 13:45 → 失敗於 13:50
+        clock.t = _dt.datetime(2026, 7, 21, 14, 0, 0)  # 修前:13:45 + 900 s = 14:00 就會再叫
+        await eng.tick()
+        assert len(runner.calls) == 1
+        clock.t = _dt.datetime(2026, 7, 21, 14, 5, 0)  # 13:50 + 900 s
+        await eng.tick()
+        assert len(runner.calls) == 2
+
+    async def test_cancelling_the_runner_kills_a_still_running_subprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-27:逾時路徑真正殺人的是 `run_compact_subprocess` 的 cancel 分支(`wait_for` cancel →
+        `proc.kill()`);它零覆蓋時 Windows 孤兒子程序會握著 jsonl。以 fake proc 釘住:cancel 後
+        kill + wait 都被叫到、CancelledError 照樣往外傳(不吞)。"""
+        from copycat.server import ticks_compactor as mod
+
+        events: list[str] = []
+
+        class _Proc:
+            returncode: int | None = None
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+            def kill(self) -> None:
+                events.append("kill")
+                self.returncode = -9
+
+            async def wait(self) -> int:
+                events.append("wait")
+                return -9
+
+        async def _fake_exec(*_args: object, **_kwargs: object) -> _Proc:
+            events.append("spawn")
+            return _Proc()
+
+        monkeypatch.setattr(mod.asyncio, "create_subprocess_exec", _fake_exec)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(mod.run_compact_subprocess(_TUE, tmp_path), 0.05)
+        assert events == ["spawn", "kill", "wait"]
 
 
 class TestRetention:
