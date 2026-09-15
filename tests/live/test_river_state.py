@@ -171,7 +171,9 @@ class TestSnapshotMinuteKeysAreStrings:
                 "TXF": {**snap["legs"]["TXF"], "minutes": {75: 40_650_000, 300: 40_700_000}},
             },
         }
-        dumps = lambda o: json.dumps(o, separators=(",", ":"))  # noqa: E731
+        def dumps(o: object) -> str:
+            return json.dumps(o, separators=(",", ":"))
+
         assert dumps(snap) == dumps(int_keyed)
         assert s.delta(2)["legs"]["TXF"] == {"m": 300, "p": 40_700_000}
 

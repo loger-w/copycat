@@ -91,6 +91,26 @@ class TestLoadConfig:
     def test_missing_file_falls_back_to_default(self, tmp_path: Path) -> None:
         assert load_config(tmp_path / "nope.json") == DEFAULT_CONFIG
 
+    def test_duplicate_leg_key_keeps_first_and_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """pr-251 review F-05:設定檔是人手改的,複製貼上沒改 key 會讓 CorrState 增量版的 n{w} 加倍
+        (state 層已去重);config 層保留首見那腿並印 WARNING,不整份退回預設(其餘腿仍可用)。"""
+        path = tmp_path / "correlation.json"
+        legs = [
+            {"key": leg.key, "label": leg.label, "symbol": leg.symbol, "source": leg.source}
+            for leg in DEFAULT_CONFIG.legs
+        ]
+        legs.append({**legs[-1], "label": "複製貼上忘了改 key"})
+        path.write_text(json.dumps({"base": "TXF", "legs": legs}), encoding="utf-8")
+
+        with caplog.at_level("WARNING", logger="copycat.corr_config"):
+            cfg = load_config(path)
+
+        assert [leg.key for leg in cfg.legs] == [leg.key for leg in DEFAULT_CONFIG.legs]
+        assert cfg.legs[-1].label == DEFAULT_CONFIG.legs[-1].label  # 首見那腿勝出
+        assert any("腿 key 重複" in r.getMessage() for r in caplog.records)
+
     def test_seventh_leg_added_without_engine_change(self, tmp_path: Path) -> None:
         """SC-8:日後 TC4 上架 CME SSF 的 TSM 只需改設定檔。"""
         path = tmp_path / "correlation.json"

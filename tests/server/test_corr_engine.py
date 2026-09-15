@@ -293,6 +293,38 @@ class TestBroadcastAndState:
         finally:
             await eng.close()
 
+    async def test_no_clients_skips_the_correlation_math_itself(self) -> None:
+        """pr-251 review F-04:0-4 省的是 `correlations()` 每秒那 9 ms,不是「少送一則」——
+        上一案只斷 `sent == []`,把實作改成「先算再判 has_clients」照綠(突變體實證)。這裡直接數
+        `CorrState.correlations` 被呼叫幾次:無 client 0 次、有 client 每拍 1 次。"""
+        src = _FakeSource()
+        listening = {"on": False}
+        eng = _engine(
+            src,
+            txf_state=lambda: _futures_state(1, 2),
+            clock=_Clock(),
+            broadcast=lambda _m: None,
+            has_clients=lambda: listening["on"],
+        )
+        calls = {"n": 0}
+        real = eng._state.correlations
+
+        def counting(now: float) -> dict:
+            calls["n"] += 1
+            return real(now)
+
+        eng._state.correlations = counting  # type: ignore[method-assign]
+        await eng.start()
+        try:
+            eng.tick_once()
+            eng.tick_once()
+            assert calls["n"] == 0
+            listening["on"] = True
+            eng.tick_once()
+            assert calls["n"] == 1
+        finally:
+            await eng.close()
+
     async def test_has_clients_not_injected_keeps_broadcasting(self) -> None:
         """未注入 = 舊語意:每秒都廣播(上一案 5 拍 5 則已釘,這裡只釘「None 不等於 False」)。"""
         src = _FakeSource()

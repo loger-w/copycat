@@ -19,6 +19,19 @@ def _client(corr_source: object | None) -> TestClient:
     return BootedClient(app, raise_server_exceptions=False)
 
 
+class TestHasClientsWiring:
+    def test_engine_gate_is_the_corr_broadcaster_has_clients(self) -> None:
+        """pr-251 review F-04 另一半:把 app.py 那行 `has_clients=corr_ws.has_clients` 刪掉,閘退回
+        None = 舊語意(每秒照算照送),整組 server 測試照綠、畫面零異狀 —— 這裡釘 prod 佈線真的接上,
+        且接的是**同一顆** broadcaster 的 has_clients(接錯顆 = 永遠 False = 有人看也不算)。"""
+        with _client(FakeCorrSource()) as client:
+            app = client.app
+            assert app.state.corr is not None
+            assert app.state.corr._has_clients is not None
+            assert app.state.corr._has_clients.__self__ is app.state.corr_ws  # type: ignore[attr-defined]
+            assert app.state.corr._has_clients.__func__ is type(app.state.corr_ws).has_clients  # type: ignore[attr-defined]
+
+
 class TestCorrStateRoute:
     def test_returns_503_with_error_code_when_engine_disabled(self) -> None:
         with _client(None) as client:
