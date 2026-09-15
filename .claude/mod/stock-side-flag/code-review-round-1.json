@@ -1,0 +1,63 @@
+{
+  "fixed_point": "f57efcd2 (merge-base master..mod/stock-side-flag)",
+  "reviewed_head": "d19b4b3d (test c415d1d4 → fix b1c3fd13 → feat fec43340 → chore(docs) d19b4b3d)",
+  "reviewers": "two-axis sub-agents(opus × 2),prompt 附 current-state §3 + spec §4 白名單",
+  "standards": [
+    {
+      "id": "S-01",
+      "severity": "Should",
+      "file": "copycat/live/stock_models.py",
+      "finding": "`flag = msg.get(\"FlagOfBuySell\") or None` 是全函式唯一沒包 `str()` 的欄;msg 是 Any 來源,達錢哪天送 int 2 → `_FLAG_SIDE.get(2)` miss、`flag == \"0\"` 恆假 → 靜默退回簿比,每日計數兩桶雙 0,正是那行 log 要抓的漂移反而抓不到。",
+      "disposition": "接受。改 `str(msg.get(\"FlagOfBuySell\", \"\")) or None`,補測 `FlagOfBuySell: 2` → side outer / flag \"2\"(修前該測試紅:get(2) miss → inner、flag == 2)。commit 9df04481。"
+    },
+    {
+      "id": "S-02",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "Data Clumps:`_flag_total / _flag_zero / _flag_missing` 三欄同生同增同歸零、跨三個方法搬運;建議小型別 `_FlagStats.count(tick)` / `drain()`。",
+      "disposition": "反駁不做。三個 int 在 `_handle_quote` 熱路徑(50 檔開盤每秒數百筆),為 4 行加一層型別 + 方法呼叫是純開銷;spec T2 原描述就是 dict-of-three,三個屬性等價且更省一次 dict 查找。體量再長(第三桶 / 多維)再抽。"
+    },
+    {
+      "id": "S-03",
+      "severity": "Nice",
+      "file": "tests/live/test_stock_models.py",
+      "finding": "golden 載入用函式內 import + 區域 Path;repo 既有兩處 golden(test_overlay `_PARITY_PATH`、test_market_breadth)都是 module-level 常數。",
+      "disposition": "接受。改 `_FLAG_GOLDEN_PATH = Path(__file__).resolve().parents[1] / \"fixtures\" / …`,import 提到檔頭。commit 9df04481。"
+    },
+    {
+      "id": "S-04",
+      "severity": "Nice",
+      "file": "stock_models.py / CONTEXT.md / SKILL.md / tests",
+      "finding": "Shotgun Surgery:78.5% / 18.6% / 2.9% 同組數字散在 ≥ 5 處;CLAUDE §8 指定 skill 為 TC4 實測事實 SoT。",
+      "disposition": "部分接受。code 兩處註解(dataclass `side` / `derive_side` docstring)改成「數字見 skill tc4-market-facts,唯一一份」;CONTEXT.md 詞條保留一個數字(那是 _Avoid_ 的理由,glossary 讀者不會去翻 skill);測試 class docstring 保留(釘的就是那組事實)。commit 9df04481。"
+    },
+    {
+      "id": "S-05",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "`_FLAG_STATS_FMT` 無 type hint,違 backend-conventions「module-level globals 無例外」;緊鄰既有 `_TRADE_STATUS_FMT` 同樣沒有。",
+      "disposition": "接受(只加自己那行 `: str`,既有行不順手改)。commit bd4368ea。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "Spec-S-01",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "「欄缺非 0 = 達錢格式漂了」只蓋到改欄名;改值域(`\"3\"` / 非字串)`total` 有計、兩桶皆 0 → 零訊號。建議第三桶或 `str()` 收斂。",
+      "disposition": "半接受。非字串那半由 S-01 的 `str()` 關掉(int 2 → \"2\" 照對映;int 5 → \"5\" 進 total 不進兩桶,與字串 \"5\" 同行為)。第三桶不加:log 字面是 spec §2 T2 釘死的判準格式(「格式固定字面」),09-14 去重 6,320 筆零未知值(官方 p.9 值域只有 0/1/2),多一桶是為沒觀察到的事改契約。若 09-16 排程抓檔(試撮 / 集合競價)出現 0/1/2 以外的值再開。"
+    },
+    {
+      "id": "Spec-S-02",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "`close()` 的結算放在 `_loop = None` 之後,但之前已 `call_soon_threadsafe` 排入的 `_handle_quote` 會在 `gather` 期間累加而永不印出;註解「那一行就是全日」略有出入。",
+      "disposition": "接受,改註解為真陳述(關機瞬間數筆、判準是行存在、知情接受);不改行為。commit bd4368ea。"
+    }
+  ],
+  "known_deviation": {
+    "item": "spec §3 test 6 指名 1312 為「旗標 1 但簿判 outer」golden;09-14 raw 抓檔 1312 沒有這型列",
+    "disposition": "Spec 軸判可接受:改取 6209(同型首例),fixture `_source` 逐字記錄理由;測試先斷 `derive_side == \"outer\"` 再斷 `side == \"inner\"`,自證該型成立,換列不損 golden 證明力。"
+  },
+  "disposition": "Standards 5 條(1 Should 4 Nice)/ Spec 2 條 Nice;白名單兩軸皆驗零破壞;接受 S-01 / S-03 / S-04(部分)/ S-05 / Spec-S-02,反駁 S-02(熱路徑 4 行不包型別)與 Spec-S-01 第三桶(判準格式是 spec 釘的契約、零觀測依據)。收修兩筆 commit 9df04481(fix)+ bd4368ea(chore),fixed point 之後增量 = 這兩筆,main agent 機械快篩:S-01 改動有紅先行對照(int 2 案修前紅)、其餘為註解 / 測試鷹架 / type hint。"
+}
