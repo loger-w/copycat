@@ -10,12 +10,14 @@ Discord / TC4 各自重連回來,回報線沒有任何路徑再呼 `connect_repl
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import pytest
 
 from copycat.capital.client import REPLY_RECONNECT_BACKOFF_SECS, CapitalClient, _reconnect_delay
 from copycat.capital.safety import SafetyConfig
+from tests.capital.balance_rows import RAW_T_HELD, balance_variant
 from tests.capital.fake_com import RecordingCom
 
 
@@ -51,9 +53,14 @@ class _ReplayingCom(RecordingCom):
 
     def connect_reply(self, user_id: str) -> int:
         rc = super().connect_reply(user_id)
-        if rc == 0 and self.on_reply is not None:
-            for row in self.backlog:
-                self.on_reply(row)
+        if rc == 0:
+            # 連上 → 連線事件 → 重播;STA 同步呼叫期間 incoming 就會 dispatch,所以這些
+            # 回呼在 connect_reply 回傳**之前**就進 client(pr-review 253 F-03 / F-07)
+            if self.on_reply_connect is not None:
+                self.on_reply_connect(0)
+            if self.on_reply is not None:
+                for row in self.backlog:
+                    self.on_reply(row)
         return rc
 
 
@@ -170,7 +177,6 @@ def test_reconnect_failure_backs_off_and_stays_degraded(tmp_path: Path) -> None:
     assert client.status == "degraded"
 
 
-
 def test_reconnect_delay_table() -> None:
     """退避表:剛斷線等第 0 格,之後每出手一次等下一格,超出取最後一格 → 5, 10, 20, 40, 60, 60, 60。
     釘死索引口徑(改成 `attempt - 1` 或全 0 都會紅;two-axis S-04)。"""
@@ -180,8 +186,6 @@ def test_reconnect_delay_table() -> None:
 
 def test_reconnect_attempts_walk_the_backoff_table(tmp_path: Path) -> None:
     """每次出手後的下次到期 = now + 下一格(用 `_reply_reconnect_next - now` 量,不 monkeypatch 時鐘)。"""
-    import time
-
     com = RecordingCom()
     com.reply_connected_seq = [1, 0]
     client = _client(com, tmp_path)
@@ -256,3 +260,68 @@ def test_disconnect_event_outside_degraded_does_not_schedule(tmp_path: Path) -> 
     com.on_reply_disconnect(3033)
     assert client._reply_reconnect_next is None
     assert client.last_error is not None and "3033" in client.last_error
+
+
+def test_recovery_during_inflight_balance_chain_keeps_the_chain(tmp_path: Path) -> None:
+    """pr-review 253 F-01(HIGH):回查鏈走 SKOrderLib、與回報線(SKReplyLib)獨立,斷線期間鏈照樣在飛。
+    恢復那一刻若沿用「重登清點」(清 `_pending_sec` / inflight / collector.clear()),舊鏈剩下的列會被當
+    新一輪 flush → 落地截斷 / 空的證券快照;守門被清又補第二發 GetRealBalance(1019)。
+    場景:成交 → 鏈出手 → 收到第一列 → 斷線 → 探針 1 恢復 → 第二列 + `##` 到 → 兩列都要在。"""
+    com = RecordingCom()
+    com.reply_connected_seq = [1, 1]
+    client = _client(com, tmp_path)
+    client._balance_last_ts = float("inf")
+    client._reply_probe_next = 0.0
+    client._pump_once()  # 探針 1
+    assert com.on_reply is not None and com.on_reply_disconnect is not None
+
+    com.on_reply(_fill_evt_raw(seq="S1"))  # 成交 → debounce 重查
+    client._balance_due = 0.0
+    client._pump_once()  # 鏈出手:GetRealBalance
+    assert [e[0] for e in com.sent].count("get_real_balance") == 1
+    client._handle_balance(RAW_T_HELD)  # 第一列到(3357)
+
+    com.on_reply_disconnect(3033)  # 鏈飛行中回報線斷
+    assert client.status == "degraded"
+    client._reply_probe_next = 0.0
+    client._pump_once()  # 探針 1 → 恢復(退避未到期,沒出手重連)
+    assert client.status == "ok"
+
+    client._handle_balance(balance_variant(RAW_T_HELD, {0: "2330"}))  # 第二列到
+    client._handle_balance("##")  # 舊鏈收尾
+    assert client._pending_sec is not None
+    assert sorted(p.stock_no for p in client._pending_sec) == ["2330", "3357"], (
+        "恢復時清掉在途鏈 → 只剩恢復後那一列(截斷快照)"
+    )
+    client._balance_due = 0.0
+    client._pump_once()  # pending 段守門仍在:不得補第二發 GetRealBalance
+    assert [e[0] for e in com.sent].count("get_real_balance") == 1
+
+
+def test_connect_event_recovers_and_rearms_balance_query(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """pr-review 253 F-03 / F-04:連線事件 code 0 這半邊恢復路徑要有 client 層守門,且「恢復即重新武裝
+    庫存查詢」要在**沒出手重連**的路上斷(F-04:原案斷言前 `_maybe_reconnect_reply` 已標 dirty,恆真)。"""
+    caplog.set_level(logging.INFO, logger="copycat.capital.client")
+    com = RecordingCom()
+    client = _client(com, tmp_path)
+    assert com.on_reply_disconnect is not None and com.on_reply_connect is not None
+    com.on_reply_disconnect(3033)
+    assert client.status == "degraded"
+    assert client._reply_reconnect_next is not None
+    client._balance_due = None
+    before = list(com.calls)
+
+    com.on_reply_connect(0)  # 事件先響、探針還沒到期
+    assert client.status == "ok"
+    assert client._reply_reconnect_next is None
+    assert client.last_error is None
+    assert com.calls == before  # 沒出手重連
+    assert client._balance_due is not None  # 恢復即重新武裝(不是 _maybe_reconnect_reply 標的)
+    assert any(
+        "群益回報線恢復(連線事件 code=0;重連 0 次)→ ok" in r.getMessage()
+        for r in caplog.records
+        if r.name == "copycat.capital.client"
+    )
+

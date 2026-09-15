@@ -92,3 +92,22 @@ def test_probe_skipped_when_not_logged_in(tmp_path: Path) -> None:
     client._pump_once()
     assert com.reply_connected_calls == 0
     assert client.status_view()["reply_connected"] is None
+
+
+def test_probe_value_two_is_neutral(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """pr-review 253 F-05:`IsConnectedByID` 值 2(23:59:56 實錄首值 = 連線中)**不動狀態、不排重連**——
+    只有 0 / 1 驅動狀態機。守門寫成 `!= 1` 的話,開機首值 2 那一刻健康的回報線會被判斷線 →
+    `store.clear()` + ConnectByID 迴圈 + degraded 假黃字(正是 #235 刻意避開的事)。值照進 `status_view`。"""
+    caplog.set_level(logging.INFO, logger="copycat.capital.client")
+    com = RecordingCom()
+    com.reply_connected_seq = [1, 2, 2, 1]
+    client = _client(com, tmp_path)
+    calls_before = list(com.calls)
+    for expected in (1, 2, 2, 1):
+        client._reply_probe_next = 0.0
+        client._pump_once()
+        assert client.status_view()["reply_connected"] == expected
+        assert client.status == "ok"
+        assert client._reply_reconnect_next is None
+    assert com.calls == calls_before
+    assert [lvl for lvl, _ in _probe_lines(caplog)] == [logging.INFO, logging.WARNING, logging.INFO]
