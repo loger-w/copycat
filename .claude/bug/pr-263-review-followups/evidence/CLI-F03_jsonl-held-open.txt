@@ -1,0 +1,5 @@
+argv: python -m copycat ticks-compact --date 20260915 --dir <scratch>(jsonl 被另一 handle 開著)
+exit= 1
+stdout: 
+stderr: tick 轉檔 2026-09-15 失敗:刪 jsonl 失敗([WinError 32] 程序無法存取檔案，因為檔案正由另一個程序使用。: 'C:\\Users\\USER\\AppData\\Local\\Temp\\claude\\C--side-project-copycat\\a648da25-c9f1-435c-8c0b-0010347a8c32\\scratchpad\\cli-f03\\20260915.jsonl'),parquet 已回滾、jsonl 保留;server 跑著請等 13:45 排程
+files after: ['20260915.jsonl']

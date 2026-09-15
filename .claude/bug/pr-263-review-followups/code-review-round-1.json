@@ -1,0 +1,25 @@
+{
+  "fixed_point": "origin/master fa0a8c88",
+  "reviewed_head": "e841d089(3 commits:test 159c1fc3 / fix 706063e4 / chore e841d089)",
+  "axes": "code-review-two-axis(Standards / Spec 各一 opus sub-agent;spec = docs/superpowers/specs/pr-263-review.md + user 三條拍板)",
+  "standards": [
+    {"id": "F-01", "severity": "Should", "text": "`(OSError, ValueError)` 過寬(tick_persist.py open_day / _write):F-09 的 UnicodeDecodeError 已在 tail_msg_seq 自己攔掉,這兩處 ValueError 沒有可達的合法來源(json.dumps 循環參照 / 對已關 handle 寫 = 程式錯誤),捕它等於把 bug 降成當日停寫,踩鐵則 E;且零覆蓋。建議收回 except OSError。"},
+    {"id": "F-02", "severity": "Should", "text": "`BOOK_OPEN_TIME` 用機器本地鐘(datetime.now),機器 TZ 錯 / 時鐘偏差 → 整天簿列全丟而 STATS_FMT 只印「簿 0 / 寫入失敗 0」零訊號;sealed_dropped 有另印一行,books_preopen 沒有。擇一:台北時區 now,或 books_preopen > 0 也印一行。"},
+    {"id": "F-03", "severity": "Nice", "text": "module-level assert(python -O 剝掉;只守兩組切片邊界;全 repo 唯一一顆 top-level assert)→ 搬成 tests parity 斷言。"},
+    {"id": "F-04", "severity": "Nice", "text": "`now` 中途改寫語意(排程時刻 → 嘗試結束時刻,Mysterious Name)→ 改叫 after;tick() 一次算 now 傳給每個 day,長嘗試後第二個 day 仍拿舊 now。"},
+    {"id": "F-05", "severity": "Nice", "text": "`_REPO_ROOT` 第二份推導(parents[2] vs parent.parent),檔案搬家只壞一邊 → 子程序靜默跑到另一棵樹;直接 import 那一顆。"},
+    {"id": "F-06", "severity": "Nice", "text": "測試直接指派實例屬性 `persist.observe = _boom`;backend-conventions「Mock 走 monkeypatch」。"},
+    {"id": "F-07", "severity": "Nice", "text": "`test_server_process_never_imports_pyarrow` 裸 subprocess 載 copycat.server.app 不經 conftest 的 dotenv 中和 + delenv CAPITAL_*;顯式傳 env=,timeout 120 過鬆(實測 < 3 s)。"},
+    {"id": "F-08", "severity": "Nice", "text": "`_deny` 複製兩份 + 全域 patch Path.unlink,抽 fixture。"},
+    {"id": "F-09", "severity": "Nice", "text": "`load_day` 的 errors=\"replace\" 與 compact_day 不同口徑:壞 byte 換成 U+FFFD 後可能 json.loads 成功 → 髒資料不計 bad。"},
+    {"id": "F-10", "severity": "Nice", "text": "pyproject 自我參照 extra `copycat[ticks]`:pip ≥ 21.2 / setuptools 支援,舊 resolver 會去 index 找 copycat;註解補最低版本。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "Should", "text": "F-07 只修一半且方向反了:load_day errors=\"replace\" 讓壞 utf-8 行被 U+FFFD 靜默吃下、不計 bad、不 WARNING;同一行在 compact_day(strict utf-8)直接 UnicodeDecodeError → rc≠0 三次放棄;load_day 守門只驗 kind,缺欄合法 JSON 仍炸 TypeError(TickRow 缺必填)而 compact_day._well_formed 會放行 —— 「與 compact_day 同口徑」註解是假陳述。"},
+    {"id": "F-02", "severity": "Nice", "text": "F-16 只收 runner 半邊:app._make_ticks_compactor 仍無 now_fn 注入口,TestAppWiring 開場 tick() 依然依牆鐘(13:45 後會 seal 當日);fixture 回傳的 calls 無任何斷言消費。"},
+    {"id": "F-03", "severity": "Nice", "text": "F-18 後半未收:tick() 仍把開場的 now 傳給迴圈裡每個 day;只有 _tick_day 內 await 後重取。"},
+    {"id": "F-04", "severity": "Nice", "text": "F-30 docstring 仍不符:檔頭寫「不碰 handle 物件、緩衝區與私有屬性」,test_tick_persist.py:435 仍 `assert not (...).read_text()  # 還在緩衝`。"},
+    {"id": "scope", "severity": "info", "text": "無實質 scope creep(09:00 閘為 user 指定);附帶的 module-level assert 建議改測試。已逐項排除:09:00 閘不動 _basis 所以 09:00 首則簿必寫;_rollback 不會誤刪前一趟成功的 parquet(refuse 在前);current_day 與 engine _trade_date 13:45 對得上;F-13 子程序 cwd 真斷言有效(.pth 會把 import 拉到主樹實測);F-12 new_event_loop 只排 timer 收乾淨。F-12 突變體實殺(_write_parquet 三欄改 None → 紅)。"}
+  ],
+  "disposition": "全部接受(13 條皆小修,收修 commit 見 round-1 收修那兩筆):Standards F-01 → open_day / _write 收回 except OSError、_fail(exc: OSError);Standards F-02 → log_stats 加「盤前(09:00 前)略過簿更新 n 列」一行(> 0 才印,不動 STATS_FMT),測試 test_preopen_skips_are_printed_next_to_the_stats_line;F-03 → 拿掉 module assert,test_level_keys_parity_with_tick_row 釘四組切片;F-04 + Spec F-03 → 改名 after、tick() 對每個 day 各取一次 now;F-05 → ticks_config 開公開 REPO_ROOT,compactor import 它;F-06 → monkeypatch.setattr;F-07 → 子程序 env 顯式剔除 CAPITAL_/DISCORD_/FINMIND_TOKEN + PYTHONUTF8、timeout 20;F-08 → jsonl_unlink_denied fixture;F-09 + Spec F-01 → 抽 ticks.iter_jsonl_rows(bytes 逐行 strict decode,壞 utf-8 / 壞 JSON / 形狀不合 = None)+ 共用 well_formed(含 trade_date),load_day 與 compact_day 都走它,測試 test_load_day_counts_bad_utf8_as_a_bad_line_instead_of_replacing(同一份檔兩讀者計數相同)+ test_load_day_treats_a_row_missing_identity_fields_as_bad;F-10 → pyproject 註解補 pip ≥ 21.2 / setuptools ≥ 62;Spec F-02 → TestAppWiring fixture 再把 TicksCompactor.tick 換成 no-op(佈線測試不依牆鐘),並斷言 fake runner calls == [];Spec F-04 → docstring 改述「檔案內容(含還沒 flush 所以檔案仍空這種可見狀態)」。"
+}

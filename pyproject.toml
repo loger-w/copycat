@@ -11,7 +11,8 @@ capital = ["comtypes>=1.4", "pywin32>=306"]
 discord = ["discord.py>=2.4"]
 # tick 存檔的 parquet 轉檔 / 讀回(spec #257):server 進程不 import,`ticks-compact` 子程序與
 # loader 才用;dev 也裝(測試不允許 skip)。下限 18:cp313 wheel 自 18.0.0 起(PyPI 2026-09-15
-# 查證:17.0.0 零 cp313 wheel、18.0.0 有 13 個;pr-263 F-25)
+# 查證:17.0.0 零 cp313 wheel、18.0.0 有 13 個;pr-263 F-25)。dev 以自我參照 extra `copycat[ticks]`
+# 引用(pip ≥ 21.2 / setuptools ≥ 62 支援;更舊的 resolver 會去 index 找 `copycat` 而失敗)
 ticks = ["pyarrow>=18"]
 dev = [
     "pytest>=8",
