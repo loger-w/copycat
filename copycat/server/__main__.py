@@ -40,6 +40,7 @@ from copycat.server.verify import (
     neutralize_external_env,
 )
 from copycat.server.win_timer import apply_timer_1ms
+from copycat.ticks_config import load_ticks_config
 from copycat.trading_calendar import load_trading_calendar
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             trading_calendar=load_trading_calendar(),
             # 時鐘偏差監測只在 prod 顯式起(#236):--verify 的 fake 世界不需要,測試預設關
             clock_probe=clock_monitor.probe,
+            # tick 存檔(spec #257)同款「prod 顯式、測試預設關」:configs/ticks.json 覆寫,
+            # 檔缺全預設(enabled=true → data/ticks/);--verify 不存(fake 資料無保存價值)
+            ticks_config=load_ticks_config(),
         )
         port = int(os.environ.get("TXO_SERVER_PORT", str(PROD_PORT_DEFAULT)))
         if log_path is not None:
