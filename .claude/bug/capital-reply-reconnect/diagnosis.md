@@ -65,6 +65,16 @@ docstring、`com.py` Solace 那對註解「只 log;響了再談翻 status / 重�
   前就開始 dispatch 重播事件,本批不證。
 - `_fill_evt_raw` 在 test_client / test_fill_latency / test_reply_reconnect 三份逐字重複(two-axis S-07):既有債,
   併 next-time F-18 那條 test-hygiene 批收 conftest。
+- **重連窗內改價本地安全閘寬鬆放行**(pr-review 253 F-02,user 拍板 (a) 文件層知情接受):`store.clear()` 後 `_orders` 空 →
+  `remaining_shares` None → `check_correct_price` 放行、`market_of` None、`_fut_multiplier` 退 1;券商仍拒單、不動錢。
+  只在盤中網路抖時撞到(22 天 log 零次)。
+
+## pr-review 253 收修(fix/pr-253-review-followups)
+
+- F-01(HIGH):`_reply_recovered` 改 `_set_status("ok", reset_chain=False)` —— 回查鏈走 SKOrderLib 與回報線獨立,恢復不清
+  在途鏈;`test_recovery_during_inflight_balance_chain_keeps_the_chain` 紅先行。F-03 / F-04 / F-05 三案補齊。F-06 `reply_rc`。
+  F-07 契約改「兩行都要在、順序可互換」。F-08 / F-09 衛生。F-10 抽 `capital/reply_link.py::ReplyLink`(退避 / 去重 / 探針三態;
+  client 保留狀態燈與 IO;12 案 characterization 零行為差)。
 
 ## two-axis review round-1 收修(本分支內)
 
