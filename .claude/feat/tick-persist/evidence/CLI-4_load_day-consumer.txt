@@ -1,0 +1,3 @@
+[('trade', 1, 2375000), ('book', 2, 2376000)]
+StockTick(code='2330', price_milli=2380000, qty=1, cum_vol=1, time='10:57:51.000', trade_date='2026-09-15', side='outer', is_trial=False, bid_milli=2375000, ask_milli=2380000, flag='2')
+exit=0

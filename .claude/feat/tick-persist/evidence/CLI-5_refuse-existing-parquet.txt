@@ -1,0 +1,5 @@
+tick 轉檔 2026-09-15:parquet 已在(20260915.parquet),已轉檔;要重轉先刪 parquet
+exit=2
+20260915-book.parquet
+20260915.jsonl
+20260915.parquet

@@ -1,0 +1,14 @@
+usage: copycat screen [-h] [--date DATE] [--write]
+
+options:
+  -h, --help   show this help message and exit
+  --date DATE  目標交易日 YYYY-MM-DD(名單服務的交易日;EOD 窗自其前一交易日往回、當沖名單抓該日;預設依牆鐘推)
+  --write      覆寫自選群組「盤前篩選」(直接落檔 —— server 跑著時別用:它讀得到檔,但訂閱池與前端廣播不會跟上,症狀 =
+               群組出現但整排空卡片)
+exit=0
+usage: copycat chain-stats [-h] --log LOG [LOG ...]
+
+options:
+  -h, --help           show this help message and exit
+  --log LOG [LOG ...]  logs/server-*.log,可多檔(依序合併)
+exit=0
