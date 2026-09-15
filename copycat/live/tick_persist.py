@@ -74,6 +74,9 @@ class TickPersist:
         # 當日停寫:某日開檔 / 寫入 / flush 拋 OSError 後記在這裡,該日之後的列全部略過
         # (只 WARNING 一次);換日 `open_day` 開的是別的日期,自然重新武裝。
         self._failed_days: set[str] = set()
+        # 已轉檔封住的日(`seal_day`):該日的列不再寫,只計數;WARNING 首筆一次
+        self._sealed_days: set[str] = set()
+        self.sealed_dropped = 0
         # 簿列去重基準:code → 該檔**上一列存下的簿**(五檔 20 個數;成交列自帶的五檔也算)。
         # 「達錢重推一模一樣的簿」與「成交後緊接同一個簿」都不佔列,只進 `dup_books`。
         self._basis: dict[str, tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]] = {}
@@ -113,6 +116,17 @@ class TickPersist:
             self._day = trade_date
             self.trades = self.books = self.dup_books = self.flushes = self.write_failures = 0
         self._file_for(trade_date)
+
+    def seal_day(self, trade_date: str) -> None:
+        """轉檔前放掉該日 handle(flush + 關)並封住:之後該日的列一律丟(計 `sealed_dropped`、
+        首筆 WARNING 一次)。Windows 開著的檔刪不掉,子程序的「列數核對後刪 jsonl」會直接失敗;
+        封住而不是重開,是因為重開會在 parquet 旁邊留下一份殘餘 jsonl,loader 永遠不讀它。
+        13:45 之後現貨本來就零訊息(13:30 收盤),丟掉的只會是達錢的遲到殘影。"""
+        if not self._enabled or self._closed:
+            return
+        if trade_date in self._files:
+            self._close_file(trade_date)
+        self._sealed_days.add(trade_date)
 
     def flush(self) -> None:
         """把緩衝寫進 OS(write syscall,不 fsync)。"""
@@ -213,8 +227,15 @@ class TickPersist:
     # ---- 內部 ----
 
     def _write(self, trade_date: str, row: dict) -> bool:
-        """一列進緩衝;該日已停寫 → False(不計數);OSError → 記失敗、該日停寫、False。"""
+        """一列進緩衝;該日已停寫 / 已封住 → False(不計數);OSError → 記失敗、該日停寫、False。"""
         if trade_date in self._failed_days:
+            return False
+        if trade_date in self._sealed_days:
+            if self.sealed_dropped == 0:
+                logger.warning(
+                    "tick 存檔 %s 已轉檔封住,之後到達的列丟棄", trade_date.replace("-", "")
+                )
+            self.sealed_dropped += 1
             return False
         try:
             self._file_for(trade_date).write(json.dumps(row, ensure_ascii=False) + "\n")

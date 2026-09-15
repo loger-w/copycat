@@ -424,6 +424,11 @@ class StockEngine:
         """
         return self._trade_date
 
+    @property
+    def tick_persist(self) -> TickPersist | None:
+        """tick 存檔寫入端(None = 不存);app 層把它交給 13:45 排程(印當日行 + seal handle)。"""
+        return self._persist
+
     def attach_signal_hub(self, hub: SignalSink) -> None:
         self._signal_hub = hub
 
