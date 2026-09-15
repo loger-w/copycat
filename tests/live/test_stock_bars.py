@@ -463,9 +463,10 @@ class TestCollectHistoryWaiting:
         )
         out, slept = self._run_with_fake_clock(src, "2330", "D", "2026-07-24", "2026-07-24")
         assert out == ([], "timeout")
-        # DK 一輪 + 1K fallback 一輪,兩輪都受 10s 約束(假鐘序列 0.02·2^k 的浮點累加尾差
-        # 4e-15 不是預算變長,容 1e-9;perf #241 起點 0.15 → 0.02 後才浮出)
-        assert sum(slept) <= 20.0 + 1e-9
+        # DK 一輪 + 1K fallback 一輪,兩輪各用滿 10 s 預算(假鐘序列 0.02·2^k 的浮點累加尾差
+        # 4e-15 不是預算變長;perf #241 起點 0.15 → 0.02 後才浮出;pr-251 review F-16 改成等式,
+        # 「≤ 20 + ε」會放過預算縮短這種退化)
+        assert abs(sum(slept) - 20.0) < 1e-9
 
 
 class TestDkWindowVariant:

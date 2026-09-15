@@ -74,6 +74,35 @@ def test_tbp_failure_warns(caplog: pytest.LogCaptureFixture) -> None:
     assert "97" in warnings[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [OSError("找不到 winmm.dll"), AttributeError("function 'timeBeginPeriod' not found")],
+    ids=["OSError", "AttributeError"],
+)
+def test_exception_from_win32_wrappers_is_a_failure_not_a_crash(
+    caplog: pytest.LogCaptureFixture, exc: Exception
+) -> None:
+    """pr-251 review F-06:「不炸啟動」原本只擋了回傳值失敗;DLL 載不到(OSError)/ 匯出不存在
+    (ctypes AttributeError)會穿出 main()。兩者都歸「失敗」:WARNING、回 False、另一步照走。"""
+
+    def boom() -> tuple[bool, int]:
+        raise exc
+
+    calls: list[str] = []
+
+    def tbp() -> int:
+        calls.append("tbp")
+        return 0
+
+    with caplog.at_level(logging.INFO, logger="copycat.server.win_timer"):
+        ok = win_timer.apply_timer_1ms(qos_fn=boom, tbp_fn=tbp, platform="win32")
+
+    assert ok is False
+    assert calls == ["tbp"]
+    msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("EcoQoS 豁免呼叫失敗" in m and type(exc).__name__ in m for m in msgs)
+
+
 def test_non_windows_is_a_noop(caplog: pytest.LogCaptureFixture) -> None:
     def boom() -> tuple[bool, int]:
         raise AssertionError("非 Windows 不得碰 Win32 API")

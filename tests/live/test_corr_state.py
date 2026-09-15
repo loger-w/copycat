@@ -158,8 +158,9 @@ class TestWindowThresholds:
         assert (out["n60"], out["n300"], out["n1800"]) == (61, 301, 1800)
 
     def test_full_day_parity_with_batch_reference(self) -> None:
-        """perf #244 全日對照:同一串 16,200 次 push(11 腿、SXF / VX 25% 有值、洞 + 相鄰判定
-        全部走真實路徑),每 100 筆與檔內**整批**參考(自行逐出的中價序列 → 重掃配對 →
+        """perf #244 全日對照:同一串 16,200 次 push(11 腿、SXF / VX 25% 有值;每 97 筆 ts 跳 2 s 讓
+        相鄰判定真的拒絕一次、每 131 筆 base 缺值讓 base 側的洞也走到 —— pr-251 review F-15 前
+        ts 固定 +1、base 恆有值,那兩條路徑從沒被踩過),每 100 筆與檔內**整批**參考(自行逐出的中價序列 → 重掃配對 →
         `_pearson`)比:`n{w}` 全部 `==`(不用容差,差一筆一定抓到);r 的 max|Δr| 容差 1e-9 ——
         2026-09-15 本機實測 3.0e-14(harness bench_04 --drift 對 statistics.correlation),留五個數量級,
         仍比窗邊界差一筆的 1e-3 小六個數量級(抓得到)。
@@ -204,12 +205,14 @@ class TestWindowThresholds:
         checks = 0
         ts = 0.0
         for i in range(16_200):
-            ts += 1.0
+            ts += 2.0 if i % 97 == 96 else 1.0  # 偶爾漏一拍:相鄰判定必須拒絕那一對
             common = rng.gauss(0, 8e-5)
             mids: dict[str, int | None] = {}
             for k in legs:
                 px[k] = int(round(px[k] * math.exp(common * 0.6 + rng.gauss(0, 8e-5))))
                 mids[k] = None if (k in sparse and rng.random() > 0.25) else px[k]
+            if i % 131 == 130:
+                mids["TXF"] = None  # base 側的洞
             state.push(ts, mids, DAY)
             for k in legs:
                 series[k].append((ts, mids[k]))
@@ -229,6 +232,35 @@ class TestWindowThresholds:
                         checks += 1
         assert checks > 1000
         assert max_dr < 1e-9  # 容差理由與實測值見 docstring
+
+    def test_first_correlations_call_after_a_full_day_of_silence_is_correct(self) -> None:
+        """pr-251 review F-13:`has_clients` 閘讓 `correlations()` 可能整天不被呼叫,而它是唯一逐出短窗
+        deque 的地方(破壞性逐出)。無 client 16,200 push 後首次呼叫,n{w} 必須與「每秒都呼叫」的
+        同一串 push 相等 —— 短窗只能靠這一次呼叫的逐出補齊,漏掉就是 n 偏大、r 混入舊樣本。"""
+        silent = CorrState(["TXF", "NQ"], "TXF")
+        chatty = CorrState(["TXF", "NQ"], "TXF")
+        base = _walk(4, 16_201)
+        leg = _walk(8, 16_201)
+        ts = 1000.0
+        for i, (b, lg) in enumerate(zip(base, leg)):
+            ts = 1000.0 + i
+            silent.push(ts, {"TXF": b, "NQ": lg}, NIGHT)
+            chatty.push(ts, {"TXF": b, "NQ": lg}, NIGHT)
+            chatty.correlations(ts)
+        a = silent.correlations(ts)["NQ"]
+        b_ = chatty.correlations(ts)["NQ"]
+        assert (a["n60"], a["n300"], a["n1800"]) == (b_["n60"], b_["n300"], b_["n1800"]) == (61, 301, 1800)
+        for w in (60, 300, 1800):
+            assert a[f"w{w}"] is not None and b_[f"w{w}"] is not None
+            assert abs(a[f"w{w}"] - b_[f"w{w}"]) < 1e-9
+
+    def test_duplicate_leg_keys_do_not_double_the_sample_count(self) -> None:
+        """pr-251 review F-05:舊版逐 leg 重算、重複 key 只覆寫同一列(冪等);增量版若不去重,push 會對
+        同一個 deque append 兩次 → n60 = 18 而不是 9,r 不變、零錯誤訊號(修前實跑)。"""
+        state = CorrState(["TXF", "NQ", "NQ"], "TXF", windows=(60,), min_samples={60: 2})
+        ts = _feed(state, _walk(1, 10), _walk(2, 10))
+        assert state.correlations(ts)["NQ"]["n60"] == 9
+        assert list(state.correlations(ts)) == ["NQ"]
 
     def test_constant_window_after_movement_returns_none(self) -> None:
         """running sums 加減後的殘差不得把「整窗零波動」算成一個亂數 r。

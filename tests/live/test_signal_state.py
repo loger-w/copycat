@@ -561,12 +561,18 @@ class TestWindowVolumeRunningSum:
         det = _det(clock)
         codes = ["2330", "2317", "3008"]
         mismatches = 0
+        entered = 0
+        deepest = 0
+        session_end = _dt.datetime(2026, 8, 4, 13, 20, 0)
         for i in range(100_000):
             r = rng.random()
             if r < 0.002:
                 det.drop_code(rng.choice(codes))
-            elif r < 0.003:
+            elif r < 0.003 or clock.now >= session_end:
+                # 換日:時鐘拉回盤中(pr-251 review F-07:修前時距含 120 / 400 s,10 萬筆把假鐘推出盤外,
+                # `evaluate` 第一道 `_in_session` 早退 → 只有 18.7% 真的推進、窗最深 13 筆)
                 det.reset_day()
+                clock.now = _dt.datetime(2026, 8, 4, 9, 30, 0)
             else:
                 code = rng.choice(codes)
                 qty = rng.randint(1, 500)
@@ -576,14 +582,24 @@ class TestWindowVolumeRunningSum:
                     _ctx(day_volume=i),
                     frozenset(),
                 )
-                clock.advance(rng.choice((0.0, 0.1, 1.0, 5.0, 120.0, 400.0)))
+                entered += 1
+                # 時距全在盤中尺度:平均 ~0.25 s 讓每檔窗深到數百筆;約 0.2% 機率跳 60 s 讓 popleft
+                # 一次丟多筆(多筆逐出路徑)
+                if rng.random() < 0.002:
+                    clock.advance(60.0)
+                else:
+                    clock.advance(rng.choice((0.0, 0.0, 0.1, 0.1, 0.1, 0.1, 0.5, 1.0)))
             for code in codes:
                 window = det._window.get(code)
                 expected = sum(q for _t, _p, q in window) if window is not None else None
                 got = det._window_vol.get(code)
                 if got != expected:
                     mismatches += 1
+                if window is not None:
+                    deepest = max(deepest, len(window))
         assert mismatches == 0
+        assert entered > 90_000  # 九成以上真的進到狀態機(修前 18.7%)
+        assert deepest >= 300  # 窗真的深過(修前 max 13)
         assert det._window_vol.keys() == det._window.keys()
 
     def test_volume_ratio_uses_running_sum_not_recompute(self) -> None:

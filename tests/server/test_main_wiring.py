@@ -139,6 +139,16 @@ def test_main_applies_timer_1ms_once_on_both_paths(
     assert main_mod.SWITCH_INTERVAL_SECS == 0.001
 
 
+def test_switch_interval_seam_is_bound_to_the_real_api() -> None:
+    """pr-251 review F-03:上一案的替身只證明「main 呼叫了那顆別名」,沒證明別名接到真 API ——
+    把 `_set_switch_interval` 改成 no-op 整組佈線測試照綠(突變體實證),而 0-7 的 3.9x 就此靜默消失。
+    這條不裝 `_Capture`,直讀模組屬性;log 那行(F-03 另一半)改印 `sys.getswitchinterval()`,
+    盤後 grep 才是真判準。"""
+    import sys as _sys
+
+    assert main_mod._set_switch_interval is _sys.setswitchinterval
+
+
 def test_main_argv_defaults_to_sys_argv_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     """main() 無參數 = 讀 sys.argv(pytest 自己的 argv 不含 --verify → prod 路)。"""
     cap = _Capture()

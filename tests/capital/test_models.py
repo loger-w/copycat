@@ -175,10 +175,13 @@ def test_record_dict_equals_asdict(record: object) -> None:
     前提 = 三個 record 全是純量欄(asdict 的遞迴 / deepcopy 對它們是白工)。將來有人加巢狀
     dataclass / list 欄位,`asdict` 會深轉、`__dict__` 不會 —— 這條先紅,route 那三行跟著改。"""
     assert dict(record.__dict__) == dataclasses.asdict(record)  # type: ignore[call-overload]
-    assert not any(
-        dataclasses.is_dataclass(v) or isinstance(v, (list, dict, tuple))
-        for v in record.__dict__.values()
-    )
+    # 看**型別字面**不看實例值(pr-251 review F-14):`detail: Sub | None = None` 的實例值是 None,
+    # 值檢查照綠,route 的 `__dict__` 與 `asdict` 卻在該欄被填值時分岐。`from __future__ import
+    # annotations` 下 `f.type` 是字串,白名單純量型別名;出現別的名字就紅、route 那三行跟著改。
+    scalar = {"str", "int", "float", "bool", "None", "TradeKind", "AvgSource"}
+    for f in dataclasses.fields(record):  # type: ignore[arg-type]
+        parts = {p.strip() for p in str(f.type).replace("|", " ").split()}
+        assert parts <= scalar, f"{type(record).__name__}.{f.name}: {f.type!r} 不是純量欄"
 
 
 def test_avg_source_parity_with_frontend() -> None:
