@@ -1447,6 +1447,7 @@ class StockEngine:
                 book=book,
                 tick=ingested_tick,
                 engine_seq=state.seq,
+                trade_date=self._trade_date,  # 簿列的日別(stage2 已在上面前進)
                 recv_ns=recv_ns,
             )
         # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
