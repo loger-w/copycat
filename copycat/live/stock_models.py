@@ -51,13 +51,22 @@ class StockTick:
     cum_vol: int
     time: str  # 台北 HH:MM:SS.fff(parse 層已 +8)
     trade_date: str  # 台北 YYYY-MM-DD
-    side: str  # "outer" | "inner" | "neutral"(成交當下對照 Bid/Ask)
+    # "outer" | "inner" | "neutral"。即時以達錢 `FlagOfBuySell` 為準(`_FLAG_SIDE`),
+    # 0 / 欄缺退回同則簿比 `derive_side`;回補(歷史 TICKS 無旗標)只有同列簿比。
+    # 2026-09-14 實測:帶成交的 REALTIME 那則五檔是**成交後簿**,同則簿比對旗標只 78.5%
+    # (neutral 18.6% / 矛盾 2.9%)—— 這正是改讀旗標的理由。
+    side: str
     is_trial: bool
-    # 成交當下的最佳買賣價(= derive_side 的輸入,round5 明細欄位)。
+    # 成交當下訊息上的最佳買賣價(**成交後簿**,09-14 實測;= derive_side 退路的輸入,
+    # round5 明細欄位 / TickTape b/a)。
     # 有 default 是必要的:既有建構點(tests/live/test_stock_state.py、
     # tests/server/test_stock_engine.py)以關鍵字建構且不會帶新欄位。
     bid_milli: int | None = None
     ask_milli: int | None = None
+    # 原始 `FlagOfBuySell` 字串("0" | "1" | "2";欄缺 / 空字串 → None;歷史列恆 None)。
+    # **不上 wire**(`snapshot()` / 打包 item 不加鍵)—— 只給 engine 的每日計數
+    # (「個股旗標 0:n 筆 / 欄缺 k 筆」)用,追蹤達錢到底給不給中立。
+    flag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,7 +109,19 @@ def is_trial_window(time_taipei: str, windows: Sequence[tuple[str, str]] = TRIAL
     return any(lo <= time_taipei < hi for lo, hi in windows)
 
 
+#: 達錢 `FlagOfBuySell` → side 的唯一對映(官方電文格式 p.9:1 = 內盤(賣方主動,成交在
+#: 買一)、2 = 外盤(買方主動,成交在賣一)、0 = 無法判斷)。0 / 其他值不在表內 → 退路。
+_FLAG_SIDE: dict[str, str] = {"1": "inner", "2": "outer"}
+
+
 def derive_side(price_milli: int, bid_milli: int | None, ask_milli: int | None) -> str:
+    """成交價對照一檔簿的內外盤判定:price ≥ ask → outer;price ≤ bid → inner;否則 neutral。
+
+    兩個用途:(a) 即時路徑的**退路**(旗標 0 / 欄缺);(b) **回補路徑的唯一判法**(歷史
+    TICKS 無旗標)。兩邊餵進來的簿都是**成交後簿**(09-14 實測),所以判不出(neutral)
+    與矛盾是結構性的,不是 bug —— 回補段留灰是拍板結果(零灰的正路 = tick 存檔後回補改讀
+    自家存檔),「前一列簿比先看」+12 點的選項已拍板不做。
+    """
     if ask_milli is not None and price_milli >= ask_milli:
         return "outer"
     if bid_milli is not None and price_milli <= bid_milli:
@@ -220,6 +241,9 @@ def parse_stock_realtime(
     time_tp, date_tp = _taipei_time(str(msg.get("PreciseTime", "")), str(msg.get("TradeDate", "")))
     bid0 = _best_limit_price(book.bids)
     ask0 = _best_limit_price(book.asks)
+    # 旗標優先、簿比退路(mod/stock-side-flag):期貨 / corr 共用本函式,期貨訊息帶旗標會
+    # 照讀,但那兩個引擎都不讀 `side` → 無行為差;欄缺退回現況。
+    flag = msg.get("FlagOfBuySell") or None
     tick = StockTick(
         code=str(msg.get("Security", "")),
         price_milli=price,
@@ -227,10 +251,11 @@ def parse_stock_realtime(
         cum_vol=_to_int(msg.get("TradeVolume", "")) or 0,
         time=time_tp,
         trade_date=date_tp,
-        side=derive_side(price, bid0, ask0),
+        side=_FLAG_SIDE.get(flag or "") or derive_side(price, bid0, ask0),
         is_trial=is_trial_window(time_tp, trial_windows),
         bid_milli=bid0,
         ask_milli=ask0,
+        flag=flag,
     )
     return tick, book, meta
 
@@ -256,6 +281,8 @@ def parse_hist_tick(
     # 歷史 row 只有單一 Bid/Ask 欄,沒有「往下找第一個限價檔」的餘地 ——
     # 0(市價單佇列)一律歸零成 None,誠實地讓 derive_side 判不出來,
     # 而不是留一個假價位把判定短路(同 `_best_limit_price` 的理由)。
+    # 歷史 TICKS 沒有 `FlagOfBuySell`(09-14 實測 380,854 列無此欄)→ 只有簿比這一條,
+    # 判不出留 neutral、鎖停另由 `relabel_locked_side` 補(user 拍板,回補零改動)。
     bid = to_milli(row.get("Bid", "")) or None
     ask = to_milli(row.get("Ask", "")) or None
     tick = StockTick(
@@ -269,5 +296,6 @@ def parse_hist_tick(
         is_trial=is_trial_window(time_tp, trial_windows),
         bid_milli=bid,
         ask_milli=ask,
+        flag=None,
     )
     return tick
