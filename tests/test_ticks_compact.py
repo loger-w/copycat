@@ -179,6 +179,33 @@ class TestCompactDay:
         )
 
 
+class TestReviewRound1:
+    def test_refuses_when_the_trade_parquet_already_exists(self, tmp_path: Path) -> None:
+        """Spec F-01(CLI 側閘):parquet 已在 = 已轉檔;再轉會把它蓋掉(空對空核對會過)。
+        要重轉先刪 parquet —— 訊息要講。jsonl 與 parquet 都不動。"""
+        jsonl = _write_fixture(tmp_path)
+        (tmp_path / "20260721.parquet").write_bytes(b"real")
+        with pytest.raises(CompactRefused, match="parquet"):
+            compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        assert jsonl.exists()
+        assert (tmp_path / "20260721.parquet").read_bytes() == b"real"
+        assert not (tmp_path / "20260721-book.parquet").exists()
+
+    def test_parquet_sorted_by_code_then_msg_seq_only(self, tmp_path: Path) -> None:
+        """Spec F-03:排序鍵回到 spec 的 `(code, msg_seq)`(`msg_seq` 同日重啟自檔尾接續,
+        不再靠牆鐘 `recv_ns`)。recv_ns 倒序也不影響。"""
+        rows = [_trade("2330", 1, 1), _trade("2330", 2, 2, seq=2), _trade("2330", 3, 3, seq=3)]
+        rows[0]["recv_ns"], rows[2]["recv_ns"] = rows[2]["recv_ns"], rows[0]["recv_ns"]  # 校時回撥
+        tmp_path.mkdir(exist_ok=True)
+        jsonl_path(tmp_path, "2026-07-21").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+        )
+        compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        table = pq.read_table(tmp_path / "20260721.parquet")
+        assert table.column("msg_seq").to_pylist() == [1, 2, 3]
+        assert [r.msg_seq for r in load_day(_DAY, tmp_path)] == [1, 2, 3]
+
+
 class TestLoadDayParquet:
     def test_parquet_wins_over_a_stray_jsonl(self, tmp_path: Path) -> None:
         _write_fixture(tmp_path)
