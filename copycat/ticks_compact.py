@@ -3,7 +3,7 @@
 入口 `compact_day`(CLI `ticks-compact` 與測試 S2 共用):讀 jsonl → 依 `kind` 分流 → 成交以
 `(code, cum_vol)` 去重保首見(同日重啟後達錢重送最後一筆)→ 壞 JSON 行跳過計數 → 兩個
 parquet(zstd;成交 `<YYYYMMDD>.parquet`、簿 `<YYYYMMDD>-book.parquet`,皆依
-`(code, recv_ns, msg_seq)` 排序 —— 同檔連續區塊;`msg_seq` 重啟歸零所以中間夾 `recv_ns`)→
+`(code, msg_seq)` 排序 —— 同檔連續區塊;`msg_seq` 同日重啟自檔尾接續,不需牆鐘)→
 **讀回列數 = 去重後列數才刪 jsonl**(寫一半的檔不得把原始資料帶走)。
 
 pyarrow 只在 extras `[ticks]`,本模組只在函式內 import;server 進程永遠不 import 這裡
@@ -69,8 +69,9 @@ def _parquet_rows(path: Path) -> int:
     return pq.read_metadata(path).num_rows
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[str, int, int]:
-    return (row["code"], row["recv_ns"], row["msg_seq"])
+def _sort_key(row: dict[str, Any]) -> tuple[str, int]:
+    """spec 的 `(code, msg_seq)`:寫入端同日重啟自檔尾接續 `msg_seq`,不需要牆鐘救援。"""
+    return (row["code"], row["msg_seq"])
 
 
 def _well_formed(row: object) -> bool:
@@ -90,6 +91,11 @@ def compact_day(
         raise CompactRefused(f"{day} 是非交易日")
     if not src.exists():
         raise CompactRefused(f"jsonl 不存在:{src}")
+    existing = parquet_path(data_dir, day.isoformat())
+    if existing.exists():
+        # round-1 Spec F-01:已轉檔的日再轉 = 用殘餘 jsonl(常是盤後重啟預開的空檔)蓋掉真 parquet,
+        # 「列數核對」對空對空無效。要重轉先刪 parquet —— 訊息要講清楚。
+        raise CompactRefused(f"parquet 已在({existing.name}),已轉檔;要重轉先刪 parquet")
     started = time.monotonic()
     trades: list[dict[str, Any]] = []
     books: list[dict[str, Any]] = []

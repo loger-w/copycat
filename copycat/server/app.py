@@ -46,6 +46,7 @@ from copycat.server.futures_engine import FuturesEngine, FuturesSource
 from copycat.server.index_engine import IndexEngine, IndexSource
 from copycat.live.stock_source import Bar, BarsStatus, DailyBar
 from copycat.live.tc4 import HistoryTimeoutError
+from copycat.live.tick_persist import TickPersist
 from copycat.server.mis import OtcSnap, fetch_otc_snapshot
 from copycat.server.bars import (
     BarsCache,
@@ -73,8 +74,6 @@ from copycat.server.stock_engine import (
 from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
-from copycat.live.tick_persist import TickPersist
-from copycat.ticks_config import TicksConfig
 from copycat.stock_watchlist import (
     WATCHLIST_LIMIT,
     Group,
@@ -91,6 +90,7 @@ from copycat.tc4common import TC4_DEFAULT_PORT
 from copycat.live.session import backfill_window, session_key
 from copycat.server.screen_engine import ScreenEngine
 from copycat.server.ticks_compactor import TicksCompactor
+from copycat.ticks_config import TicksConfig
 from copycat.trading_calendar import (
     WEEKEND_ONLY,
     TradingCalendar,

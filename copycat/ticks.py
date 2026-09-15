@@ -145,12 +145,12 @@ def _row_from_dict(payload: dict) -> TickRow:
 
 
 def load_day(day: _dt.date, data_dir: Path) -> list[TickRow]:
-    """讀回某日全部列(成交 + 簿),依 `(recv_ns, msg_seq)` 排序。
+    """讀回某日全部列(成交 + 簿),依 `msg_seq` 排序 = 當天完整訊息流。
 
     parquet 優先(成交檔在就讀 parquet,簿檔可能已過保留期而不在 → 只有成交列),沒有才讀
     jsonl(當天還沒轉檔)。jsonl 走 stdlib;parquet 需 pyarrow(extras `[ticks]`,未裝 →
-    ImportError 帶安裝說明)。排序鍵不是單看 `msg_seq`:它是進程內序號,同日重啟後歸零,
-    單看會把重啟後的列排到前面;`recv_ns` 是牆鐘、跨重啟單調,同 ns 撞號再以 `msg_seq` 定序。
+    ImportError 帶安裝說明)。排序只看 `msg_seq`(寫入端同日重啟自檔尾接續,不歸零);
+    **不用 `recv_ns`** —— 它是牆鐘,校時回撥會把跨段列交錯(round-1 Spec F-03)。
     兩種檔都不存在 → FileNotFoundError。
     """
     date = day.isoformat()
@@ -171,7 +171,7 @@ def load_day(day: _dt.date, data_dir: Path) -> list[TickRow]:
                 if not line:
                     continue
                 rows.append(_row_from_dict(json.loads(line)))
-    rows.sort(key=lambda r: (r.recv_ns, r.msg_seq))
+    rows.sort(key=lambda r: r.msg_seq)
     return rows
 
 

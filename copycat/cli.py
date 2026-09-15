@@ -331,14 +331,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ticks-compact":
         import datetime as _dt
 
-        from copycat.live.tick_persist import TickPersist
         from copycat.ticks_compact import (
             CompactFailed,
             CompactRefused,
             compact_day,
             format_compact_line,
         )
-        from copycat.ticks_config import load_ticks_config
+        from copycat.ticks_config import load_ticks_config, resolve_ticks_dir
         from copycat.trading_calendar import load_trading_calendar
 
         try:
@@ -347,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"tick 轉檔:--date 須為 YYYYMMDD(收到 {args.date!r})\n")
             return 2
         # 目錄解析與寫入端同一份(相對 repo root),不另抄一次規則
-        data_dir = args.dir if args.dir is not None else TickPersist(load_ticks_config()).dir
+        data_dir = args.dir if args.dir is not None else resolve_ticks_dir(load_ticks_config())
         try:
             result = compact_day(day, data_dir, is_trading_day=load_trading_calendar().is_trading_day)
         except CompactRefused as e:
