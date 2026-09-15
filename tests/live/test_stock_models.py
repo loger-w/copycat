@@ -539,6 +539,14 @@ class TestSideFromFlag:
         assert tick.side == "outer"
         assert tick.flag == "2"
 
+    def test_null_flag_is_missing_not_the_string_none(self) -> None:
+        """pr-255 review F-03:欄在、值為 JSON null 要歸「欄缺」(None),不能變成字面 "None"
+        躲過 `欄缺` 桶 —— 那是達錢格式漂移的唯一訊號。"""
+        tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": None})
+        assert tick is not None
+        assert tick.flag is None
+        assert tick.side == "inner"
+
     def test_unknown_flag_value_falls_back_to_book(self) -> None:
         tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": "9"})
         assert tick is not None

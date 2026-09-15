@@ -4390,6 +4390,44 @@ class TestFlagStatsLog:
             await engine.close()
         assert self._flag_lines(caplog) == ["個股旗標 0:0 筆 / 欄缺 0 筆 / 總 0 筆(2026-07-21)"]
 
+    async def test_unknown_flag_value_warns_once_per_day_per_value(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """pr-255 review F-02:0 / 1 / 2 以外的旗標值靜默走退路,三桶數字看不出來 —— 當日首見
+        每個未知值印一則 WARNING(帶值、股號、時刻),同日同值不再印;換日(stage2)後重新武裝。
+        不動 `_FLAG_STATS_FMT` 字面(round-1 Spec-S-01 反駁成立)。"""
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+
+        def _unknown(caplog_: pytest.LogCaptureFixture) -> list[str]:
+            return [
+                r.getMessage()
+                for r in caplog_.records
+                if r.levelno == logging.WARNING and r.getMessage().startswith("個股旗標未知值")
+            ]
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            src.on_message(_quote(cum=1) | {"FlagOfBuySell": "3"})
+            src.on_message(_quote(cum=2) | {"FlagOfBuySell": "3"})  # 同日同值不再印
+            src.on_message(_quote(cum=3) | {"FlagOfBuySell": "4"})  # 另一個值 → 另一則
+            src.on_message(_quote(cum=4) | {"FlagOfBuySell": "2"})  # 已知值不印
+            await _drain(engine)
+            warns = _unknown(caplog)
+            assert len(warns) == 2
+            assert "'3'" in warns[0] and "2330" in warns[0]
+            assert "'4'" in warns[1]
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=50, date="20260722") | {"FlagOfBuySell": "3"})  # 換日重新武裝
+            await _drain(engine)
+            assert len(_unknown(caplog)) == 3
+            await engine.close()
+        # 三桶字面不變:未知值只進「總」,不進 0 / 欄缺
+        assert self._flag_lines(caplog) == [
+            "個股旗標 0:0 筆 / 欄缺 0 筆 / 總 4 筆(2026-07-21)",
+            "個股旗標 0:0 筆 / 欄缺 0 筆 / 總 1 筆(2026-07-22)",
+        ]
+
     async def test_futures_key_ticks_are_not_counted(self, caplog: pytest.LogCaptureFixture) -> None:
         engine, src = await _make()
         await engine.set_main_contract(_CONTRACT)
