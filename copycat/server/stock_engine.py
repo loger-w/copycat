@@ -125,6 +125,7 @@ def _spot_trial_window_now() -> bool:
 #: 旗標(09-14 去重 6,320 筆只 1 筆 0)。`欄缺` 非 0 = 達錢格式漂了;零筆也印 —— 盤後判準
 #: 是「那行存在」不是數字。`/api/health` 刻意不含。
 _FLAG_STATS_FMT: str = "個股旗標 0:%d 筆 / 欄缺 %d 筆 / 總 %d 筆(%s)"
+
 #: 0 / 1 / 2 以外的旗標值(pr-255 review F-02):它們靜默走簿比退路,上面三桶看不出來 ——
 #: 當日首見**每個值**一則 WARNING(帶值 / 股號 / 時刻),同日同值不再印,換日重新武裝
 #: (`_log_flag_stats` 歸零時一併清)。不動 `_FLAG_STATS_FMT` 字面(那是盤後判準的契約)。
@@ -1345,9 +1346,11 @@ class StockEngine:
             if self._backfill_wanted(code):
                 self._enqueue_backfill(code)
         if tick is not None and state.ingest(tick):
-            if not is_futures_key(code):
+            if arms_the_day:
                 # 現貨旗標計數(mod/stock-side-flag):掛在 ingest 為真的分支內,試撮與重複
                 # tick 已被短路;期貨訊息本來就沒這欄,計進去只會把「欄缺」桶灌成假訊號。
+                # `arms_the_day`(= 現貨鍵)與計數母體是同一把尺:武裝換日的是現貨,
+                # 旗標計數的也是現貨 —— 刻意共用,不再第三次算 `is_futures_key`(pr-255 F-04)。
                 self._flag_total += 1
                 if tick.flag is None:
                     self._flag_missing += 1
