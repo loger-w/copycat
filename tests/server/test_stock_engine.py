@@ -4346,3 +4346,57 @@ class TestPolicyQuotesFollowups:
         assert q["price"] == 2_550_000 and q["upper"] == 2_550_000
         assert q["touched_upper"] is True and q["locked_up"] is False
         await engine.close()
+
+
+class TestFlagStatsLog:
+    """換日 / 關機印一行「個股旗標 0:n 筆 / 欄缺 k 筆 / 總 m 筆(<交易日>)」(mod/stock-side-flag)。
+
+    追蹤達錢到底給不給中立旗標(09-14 去重 6,320 筆只 1 筆 0);`欄缺` 非 0 = 達錢格式漂了。
+    判準是「那行存在」不是數字 —— 零筆也印。只數現貨 ingest 為真的 tick(試撮 / 重複已被短路);
+    期貨鍵不計。`/api/health` 不含。
+    """
+
+    _LOGGER = "copycat.server.stock_engine"
+
+    @staticmethod
+    def _flag_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.getMessage() for r in caplog.records if r.getMessage().startswith("個股旗標 ")]
+
+    async def test_stage2_prints_old_day_counts_then_close_prints_new_day(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            src.on_message(_quote(cum=1) | {"FlagOfBuySell": "2"})
+            src.on_message(_quote(cum=2) | {"FlagOfBuySell": "0"})
+            src.on_message(_quote(cum=3))  # 欄缺
+            src.on_message(_quote(cum=3))  # 重複(ingest False)不計
+            await _drain(engine)
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=50, date="20260722") | {"FlagOfBuySell": "1"})
+            await _drain(engine)
+            assert self._flag_lines(caplog) == ["個股旗標 0:1 筆 / 欄缺 1 筆 / 總 3 筆(2026-07-21)"]
+            await engine.close()
+        assert self._flag_lines(caplog) == [
+            "個股旗標 0:1 筆 / 欄缺 1 筆 / 總 3 筆(2026-07-21)",
+            "個股旗標 0:0 筆 / 欄缺 0 筆 / 總 1 筆(2026-07-22)",  # stage2 後歸零,新日只有那一筆
+        ]
+
+    async def test_close_prints_even_with_zero_ticks(self, caplog: pytest.LogCaptureFixture) -> None:
+        engine, _src = await _make()
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            await engine.close()
+        assert self._flag_lines(caplog) == ["個股旗標 0:0 筆 / 欄缺 0 筆 / 總 0 筆(2026-07-21)"]
+
+    async def test_futures_key_ticks_are_not_counted(self, caplog: pytest.LogCaptureFixture) -> None:
+        engine, src = await _make()
+        await engine.set_main_contract(_CONTRACT)
+        assert src.on_message is not None
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            src.on_message(_fut_quote(cum=7))  # 期貨訊息欄缺 → 若被計入會落「欄缺 1」
+            await _drain(engine)
+            assert engine.snapshot(_CONTRACT)["last"]["cum_vol"] == 7  # 前提:確實 ingest 了
+            await engine.close()
+        assert self._flag_lines(caplog) == ["個股旗標 0:0 筆 / 欄缺 0 筆 / 總 0 筆(2026-07-21)"]
