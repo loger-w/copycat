@@ -1029,3 +1029,11 @@ prod 8721 = 6adf20d9、dist 已重建)。
 - [ ] **F-16 KoD 半邊不做**(user 拍板,記錄不重提):`parse_offset` 不查 stratum = 0 / LI = 3;10 分鐘一發離限速門檻遠,pool 的
   RATE KoD 實務帶真時戳。`recvfrom(48)` 那半已修(512)。
 - [ ] **`test_warn_if_year_missing_is_atomic_across_threads` 全量 flake 根因 = `tests/live/test_stock_source` 洩漏的自癒 timer 執行緒**(2026-09-15 fix/pr-251-review-followups 兩輪全量各紅一次,caplog 第二筆是 `stock_source.py:699`「個股零推播自癒 … attempt 6」;單檔 3/3 綠、`tests/server + 該檔` 1645 綠):併 test-hygiene 批 —— 該測試改成只數 `r.name == "copycat.trading_calendar"` 的記錄(caplog 掛 root 跨 logger 全收),並修 test_stock_source 的 heal timer 洩漏(ops-discipline「_listen_loop 測後洩漏」同族)。
+
+## 2026-09-16(pr-review 263 拍板留尾;收修 PR 見 fix/pr-263-review-followups)
+
+- [ ] **F-01 tick 轉檔記憶體(整日 jsonl 全入記憶體,review 推估 2.64 KB/列 → 700 MB 檔約 4 GB+)先量不改**(user 拍板):
+  上線第一個交易日 13:45–13:46 抓轉檔子程序峰值 RSS + jsonl 實際大小(判準見 `.claude/feat/tick-persist/verification.md` §7-5);
+  超過機器可用記憶體一半才開 `/mod` 改分批 `pa.RecordBatch`(每 N 萬列 flush、最後 `Table.from_batches().sort_by`)。
+- [ ] **F-32 `copycat.ticks` → `copycat.live.stock_models` 反向依賴**(參考用,不動):`to_stock_tick` 搬層留給「回補改讀自家存檔」那案一起決定。
+- [ ] **簿列 09:00 開盤閘的副作用觀察**:`log_stats` 的 `books_preopen` 不進 log 行;第一週若要看盤前簿更新量,臨時 `grep` 不到 —— 需要再加一行就補(目前刻意不加)。
