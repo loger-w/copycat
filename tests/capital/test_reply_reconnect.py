@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from copycat.capital.client import REPLY_RECONNECT_BACKOFF_SECS, CapitalClient, _reconnect_delay
+from copycat.capital.client import CapitalClient
 from copycat.capital.safety import SafetyConfig
 from tests.capital.balance_rows import RAW_T_HELD, balance_variant
 from tests.capital.fake_com import RecordingCom
@@ -91,7 +91,7 @@ def test_solace_disconnect_then_probe_zero_degrades_reconnects_and_recovers(
     assert client.status == "degraded"
 
     # 修前:這裡之後永遠沒人再呼 connect_reply(prod 05:50 → 08:14 全程)。
-    client._reply_reconnect_next = 0.0  # 退避到期
+    client._reply_link.next = 0.0  # 退避到期
     client._pump_once()
     assert _new_calls(com, before) == ["connect_reply"], (
         f"斷線後退避到期必須重連回報線;實際 COM 呼叫:{_new_calls(com, before)}"
@@ -118,7 +118,7 @@ def test_probe_zero_alone_degrades_and_reconnects(tmp_path: Path) -> None:
     client._pump_once()  # 0
     assert client.status == "degraded"
 
-    client._reply_reconnect_next = 0.0
+    client._reply_link.next = 0.0
     client._pump_once()
     assert "connect_reply" in _new_calls(com, before)
 
@@ -146,7 +146,7 @@ def test_reconnect_clears_store_before_backlog_replay(tmp_path: Path) -> None:
     assert com.on_reply_disconnect is not None
     com.on_reply_disconnect(3033)
     before = list(com.calls)
-    client._reply_reconnect_next = 0.0
+    client._reply_link.next = 0.0
     client._pump_once()  # 重連 → 重播
     assert "connect_reply" in com.calls[len(before) :]  # 先確定真的重連了,守門才有意義
     assert len(client.store.fills()) == 1, "重播前未 clear → 同一筆成交雙計"
@@ -164,28 +164,21 @@ def test_reconnect_failure_backs_off_and_stays_degraded(tmp_path: Path) -> None:
     com.on_reply_disconnect(3033)
 
     com.connect_reply_rc = 3001
-    client._reply_reconnect_next = 0.0
+    client._reply_link.next = 0.0
     client._pump_once()
     client._pump_once()  # 同一退避窗內不再試
     client._pump_once()
     assert _new_calls(com, before).count("connect_reply") == 1
     assert client.status == "degraded"
 
-    client._reply_reconnect_next = 0.0
+    client._reply_link.next = 0.0
     client._pump_once()
     assert _new_calls(com, before).count("connect_reply") == 2
     assert client.status == "degraded"
 
 
-def test_reconnect_delay_table() -> None:
-    """退避表:剛斷線等第 0 格,之後每出手一次等下一格,超出取最後一格 → 5, 10, 20, 40, 60, 60, 60。
-    釘死索引口徑(改成 `attempt - 1` 或全 0 都會紅;two-axis S-04)。"""
-    assert REPLY_RECONNECT_BACKOFF_SECS == (5.0, 10.0, 20.0, 40.0, 60.0)
-    assert [_reconnect_delay(n) for n in range(7)] == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0]
-
-
 def test_reconnect_attempts_walk_the_backoff_table(tmp_path: Path) -> None:
-    """每次出手後的下次到期 = now + 下一格(用 `_reply_reconnect_next - now` 量,不 monkeypatch 時鐘)。"""
+    """每次出手後的下次到期 = now + 下一格(用 `_reply_link.next - now` 量,不 monkeypatch 時鐘)。"""
     com = RecordingCom()
     com.reply_connected_seq = [1, 0]
     client = _client(com, tmp_path)
@@ -193,14 +186,14 @@ def test_reconnect_attempts_walk_the_backoff_table(tmp_path: Path) -> None:
     client._pump_once()
     assert com.on_reply_disconnect is not None
     com.on_reply_disconnect(3033)
-    assert client._reply_reconnect_next is not None
-    assert abs(client._reply_reconnect_next - time.monotonic() - 5.0) < 0.5  # 斷線 → 第 0 格
+    assert client._reply_link.next is not None
+    assert abs(client._reply_link.next - time.monotonic() - 5.0) < 0.5  # 斷線 → 第 0 格
     com.connect_reply_rc = 3001
     for expected in (10.0, 20.0, 40.0, 60.0, 60.0):
-        client._reply_reconnect_next = 0.0
+        client._reply_link.next = 0.0
         client._pump_once()
-        assert client._reply_reconnect_next is not None
-        assert abs(client._reply_reconnect_next - time.monotonic() - expected) < 0.5
+        assert client._reply_link.next is not None
+        assert abs(client._reply_link.next - time.monotonic() - expected) < 0.5
 
 
 def test_init_connect_reply_failure_schedules_reconnect(tmp_path: Path) -> None:
@@ -220,13 +213,13 @@ def test_init_connect_reply_failure_schedules_reconnect(tmp_path: Path) -> None:
     )
     assert client._init_com() is True
     assert client.status == "degraded"
-    assert client._reply_reconnect_next is not None  # 已排
+    assert client._reply_link.next is not None  # 已排
     client._balance_last_ts = float("inf")
     before = list(com.calls)
     client._reply_probe_next = 0.0
     client._pump_once()  # 探針 0:仍 degraded,排程不重複
     com.connect_reply_rc = 0
-    client._reply_reconnect_next = 0.0
+    client._reply_link.next = 0.0
     client._pump_once()
     assert _new_calls(com, before).count("connect_reply") == 1
     client._reply_probe_next = 0.0
@@ -243,11 +236,11 @@ def test_probe_zero_after_recovery_reschedules(tmp_path: Path) -> None:
         client._reply_probe_next = 0.0
         client._pump_once()  # 1 → 0(排) → 1(恢復、清排程)
     assert client.status == "ok"
-    assert client._reply_reconnect_next is None
+    assert client._reply_link.next is None
     client._reply_probe_next = 0.0
     client._pump_once()  # 0:第二次斷線
     assert client.status == "degraded"
-    assert client._reply_reconnect_next is not None
+    assert client._reply_link.next is not None
 
 
 def test_disconnect_event_outside_degraded_does_not_schedule(tmp_path: Path) -> None:
@@ -258,7 +251,7 @@ def test_disconnect_event_outside_degraded_does_not_schedule(tmp_path: Path) -> 
     client._status = "error"
     assert com.on_reply_disconnect is not None
     com.on_reply_disconnect(3033)
-    assert client._reply_reconnect_next is None
+    assert client._reply_link.next is None
     assert client.last_error is not None and "3033" in client.last_error
 
 
@@ -309,13 +302,13 @@ def test_connect_event_recovers_and_rearms_balance_query(
     assert com.on_reply_disconnect is not None and com.on_reply_connect is not None
     com.on_reply_disconnect(3033)
     assert client.status == "degraded"
-    assert client._reply_reconnect_next is not None
+    assert client._reply_link.next is not None
     client._balance_due = None
     before = list(com.calls)
 
     com.on_reply_connect(0)  # 事件先響、探針還沒到期
     assert client.status == "ok"
-    assert client._reply_reconnect_next is None
+    assert client._reply_link.next is None
     assert client.last_error is None
     assert com.calls == before  # 沒出手重連
     assert client._balance_due is not None  # 恢復即重新武裝(不是 _maybe_reconnect_reply 標的)

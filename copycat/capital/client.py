@@ -64,6 +64,7 @@ from copycat.capital.models import (
     TradeKind,
 )
 from copycat.capital.reply import SEC_MARKETS, parse_onnewdata
+from copycat.capital.reply_link import ReplyLink
 from copycat.capital.safety import (
     GateResult,
     SafetyConfig,
@@ -103,17 +104,6 @@ _BALANCE_CHAIN_TIMEOUT_S = 10.0
 #: 回報線主動問(`IsConnectedByID`)的間隔(#235 辨識階段):同步 COM 呼叫佔幫浦圈,10 s 一次
 #: 足以在盤中 ≤ 15 s 內看到掉線;值變化才印一行(每 10 s 一行會洗版)。不依賴任何 SKCOM 事件。
 REPLY_PROBE_SECS: float = 10.0
-#: 回報線重連退避(秒):斷線後等第 0 格才第一次出手,之後每出手一次(不論 rc)等下一格,超出取最後一格
-#: → 等待序列 5, 10, 20, 40, 60, 60, …(`_reconnect_delay`)。首格 5 s:05:50 實錄裡 Discord 與 TC4 都在
-#: 兩分鐘內自己回來,網路抖一下就立刻打 ConnectByID 只會在 SKCOM 還沒收拾好時再吃一次 3033;上限 60 s
-#: 與 balance 定時輪詢同節奏,回報線死一整夜也只是每分鐘一行 WARNING。
-REPLY_RECONNECT_BACKOFF_SECS: tuple[float, ...] = (5.0, 10.0, 20.0, 40.0, 60.0)
-
-
-def _reconnect_delay(attempts_done: int) -> float:
-    """已出手 `attempts_done` 次之後要等多久再打 ConnectByID(0 = 剛斷線、還沒出手)。"""
-    idx = min(attempts_done, len(REPLY_RECONNECT_BACKOFF_SECS) - 1)
-    return REPLY_RECONNECT_BACKOFF_SECS[idx]
 
 # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
 # 證券側用 reply.SEC_MARKETS 同一份)
@@ -250,11 +240,10 @@ class CapitalClient:
         # 其他值(23:59:56 實錄首值 2 = 連線中)不動狀態。
         self._reply_connected: int | None = None
         self._reply_probe_next: float = 0.0
-        # 回報線重連(fix/capital-reply-reconnect):下次 ConnectByID 到期(monotonic;None = 未排,
-        # 與 `_balance_due` / `_pending_deadline` 同款哨兵)+ 已出手次數(決定退避格;恢復 ok 時歸零)。
-        # 只在 COM 執行緒碰(comtypes sink 在 `pump()` 內同執行緒 dispatch,事件回呼與幫浦圈是同一條)。
-        self._reply_reconnect_next: float | None = None
-        self._reply_reconnect_attempt: int = 0
+        # 回報線重連排程(純狀態機 `reply_link.ReplyLink`:下次 ConnectByID 到期 + 已出手次數;退避表 /
+        # 去重 / 探針值三態都在那邊表驗)。只在 COM 執行緒碰(comtypes sink 在 `pump()` 內同執行緒
+        # dispatch,事件回呼與幫浦圈是同一條)。
+        self._reply_link = ReplyLink()
         self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
         self._profit = BalanceCollector(
             on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
@@ -523,10 +512,11 @@ class CapitalClient:
         """排下一次 ConnectByID。只在 degraded 排(starting / error 沒有回報線可重連,排了也沒人出手,
         哨兵卡住反而吃掉下一次真斷線的那行 WARNING;two-axis S-02);已排則不動 —— 事件與探針都會
         叫進來,同一次斷線只排一次。"""
-        if self._status != "degraded" or self._reply_reconnect_next is not None:
+        if self._status != "degraded":
             return
-        delay = _reconnect_delay(self._reply_reconnect_attempt)
-        self._reply_reconnect_next = time.monotonic() + delay
+        delay = self._reply_link.schedule(time.monotonic())
+        if delay is None:
+            return
         logger.warning("群益回報線斷線(%s)→ degraded,%.0f s 後重連", reason, delay)
 
     def _reply_recovered(self, source: str) -> None:
@@ -535,9 +525,7 @@ class CapitalClient:
         獨立,在途的那一輪照常落地(pr-review 253 F-01)。仍**重新武裝一次庫存查詢**:`store.clear()` 已把
         `_positions_seeded` 打掉,需要一次快照重 seed 才會重開樂觀套用;在途鏈存在時它會被
         `_maybe_query_balance` 既有的 pending / inflight 守門自然壓到鏈落地之後(two-axis Spec S-02)。"""
-        self._reply_reconnect_next = None
-        attempts = self._reply_reconnect_attempt
-        self._reply_reconnect_attempt = 0
+        attempts = self._reply_link.recovered()
         self._last_error = None
         self._set_status("ok", reset_chain=False)
         self._mark_balance_dirty()
@@ -555,14 +543,10 @@ class CapitalClient:
         樂觀套用。"""
         if self._status != "degraded":
             return
-        due = self._reply_reconnect_next
         now = time.monotonic()
-        if due is None or now < due:
+        if not self._reply_link.due(now):
             return
-        attempt = self._reply_reconnect_attempt + 1
-        self._reply_reconnect_attempt = attempt
-        delay = _reconnect_delay(attempt)
-        self._reply_reconnect_next = now + delay
+        attempt, delay = self._reply_link.begin_attempt(now)
         self.store.clear()
         rc = self._com.connect_reply(self._user_id)
         if rc == 0:
@@ -967,11 +951,12 @@ class CapitalClient:
         # 狀態機半邊每次都評(不只變值時):事件先把 status 翻了、探針值沒變也要能收尾。
         # 0 在 degraded 下也要排(排程去重):開機 ConnectByID 失敗、或恢復後又掉但事件沒響,
         # 都靠這一條把重連排回去(two-axis S-01 / Spec S-01)
-        if value == 0:
+        verdict = ReplyLink.classify_probe(value)  # 0 / 1 以外(2 = 連線中)不動狀態
+        if verdict == "down":
             if self._status == "ok":
                 self._set_status("degraded", error="回報線探針 IsConnectedByID=0,委託/成交回報停更")
             self._schedule_reply_reconnect("探針 IsConnectedByID=0")
-        elif value == 1 and self._status == "degraded":
+        elif verdict == "up" and self._status == "degraded":
             self._reply_recovered("探針 IsConnectedByID=1")
 
     def _run(self) -> None:
