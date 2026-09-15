@@ -48,7 +48,12 @@ class TickPersist:
         self._flush_timer: asyncio.TimerHandle | None = None
         self._closed = False
         self._msg_seq = 0
+        # 簿列去重基準:code → 該檔**上一列存下的簿**(五檔 20 個數;成交列自帶的五檔也算)。
+        # 「達錢重推一模一樣的簿」與「成交後緊接同一個簿」都不佔列,只進 `dup_books`。
+        self._basis: dict[str, tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]] = {}
         self.trades = 0
+        self.books = 0
+        self.dup_books = 0
         self.flushes = 0
 
     @property
@@ -98,25 +103,30 @@ class TickPersist:
         book: StockBook,
         tick: StockTick | None,
         engine_seq: int,
+        trade_date: str,
         recv_ns: int,
     ) -> None:
-        """每一則現貨 REALTIME 訊息呼叫一次;`tick` 只在 engine `ingest` 為真時非 None。"""
+        """每一則現貨 REALTIME 訊息呼叫一次;`tick` 只在 engine `ingest` 為真時非 None。
+
+        `trade_date` = engine 當前交易日,給**簿列**用(簿更新訊息沒有可信的日期欄);
+        成交列用 `tick.trade_date`。區分成交 / 簿更新只看 `tick`(= 累積量有沒有前進),
+        不看 `TradeQuantity` —— 那是上一筆成交的殘影。
+        """
         if self._closed:
             return
         self._msg_seq += 1
+        key = (tuple(book.bids), tuple(book.asks))
         if tick is None:
+            if self._basis.get(code) == key:
+                self.dup_books += 1
+                return
+            self._basis[code] = key
+            row = self._common(code, trade_date, quote, book, recv_ns, kind="book")
+            self._file_for(trade_date).write(json.dumps(row, ensure_ascii=False) + "\n")
+            self.books += 1
             return
-        row: dict = {
-            "kind": "trade",
-            "code": code,
-            "trade_date": tick.trade_date,
-            "msg_seq": self._msg_seq,
-            "recv_ns": recv_ns,
-            "precise_time": _raw_str(quote.get("PreciseTime")),
-            "trade_status": _raw_str(quote.get("TradeStatus")),
-        }
-        _put_levels(row, book.bids, "bid", "bidq")
-        _put_levels(row, book.asks, "ask", "askq")
+        self._basis[code] = key  # 成交列自帶的五檔也是「上一列存下的簿」
+        row = self._common(code, tick.trade_date, quote, book, recv_ns, kind="trade")
         row["time"] = tick.time
         row["ms"] = taipei_ms(tick.time)
         row["price_milli"] = tick.price_milli
@@ -127,6 +137,23 @@ class TickPersist:
         row["seq"] = engine_seq
         self._file_for(tick.trade_date).write(json.dumps(row, ensure_ascii=False) + "\n")
         self.trades += 1
+
+    def _common(
+        self, code: str, trade_date: str, quote: dict, book: StockBook, recv_ns: int, *, kind: str
+    ) -> dict:
+        """兩種列的共同欄(順序 = `TickRow` 欄序):身分 + 時刻 + 達錢原始字串 + 五檔 20 欄。"""
+        row: dict = {
+            "kind": kind,
+            "code": code,
+            "trade_date": trade_date,
+            "msg_seq": self._msg_seq,
+            "recv_ns": recv_ns,
+            "precise_time": _raw_str(quote.get("PreciseTime")),
+            "trade_status": _raw_str(quote.get("TradeStatus")),
+        }
+        _put_levels(row, book.bids, "bid", "bidq")
+        _put_levels(row, book.asks, "ask", "askq")
+        return row
 
     # ---- 內部 ----
 
