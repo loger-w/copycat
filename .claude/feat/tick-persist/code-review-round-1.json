@@ -1,0 +1,31 @@
+{
+  "fixed_point": "origin/master 654bb1fe",
+  "reviewed_head": "05441e4e(11 commits,T1–T5 + docs)",
+  "axes": "code-review-two-axis(Standards / Spec 各一 opus sub-agent)",
+  "standards": [
+    {"id": "F-01", "severity": "Should", "text": "`ticks_compactor._loop` 的 `await self.tick()` 無 `except Exception`;任一意外(glob / create_subprocess_exec OSError)會讓排程 task 靜默死透,例外只在關機 `_close_segment` 才浮現。建議照 screen_engine 收。"},
+    {"id": "F-02", "severity": "Should", "text": "`tick()` 只看今天:當日 jsonl 不存在即 `_done_for = today`。server 13:45 沒開著、當天 crash、或未 rollover 使列落進昨日檔時,那份 jsonl 永無自動轉檔。補跑邏輯建議掃目錄內所有過期 jsonl。"},
+    {"id": "F-03", "severity": "Nice", "text": "cli.py 為了解析相對 repo root 建一個寫入端物件(`TickPersist(load_ticks_config()).dir`);抽成 `resolve_ticks_dir(cfg)` 兩邊共用。"},
+    {"id": "F-04", "severity": "Nice", "text": "`log_stats(day)` 的 `day` 與內部 `_day` 不校驗;compactor 傳牆鐘 today、engine 傳 `_trade_date`。未 rollover 時會印「今日標籤 + 昨日計數」。"},
+    {"id": "F-05", "severity": "Nice", "text": "同前綴兩種日期字面:stats `tick 存檔 2026-07-21:`、停寫 / 封住 WARNING `tick 存檔 20260721 …`。判準 grep 靠正則區分,易漂。"},
+    {"id": "F-06", "severity": "Nice", "text": "`sealed_dropped` 不進 STATS_FMT、`open_day` 也不歸零;「WARNING 一次」是全進程一次,第二個 sealed 日的丟棄零訊號。"},
+    {"id": "F-07", "severity": "Nice", "text": "Data Clumps:`observe(code, quote, book, tick, engine_seq, trade_date, recv_ns)` 七參數 + `_common` 六參數,可包成 `QuoteEvent`。"},
+    {"id": "F-08", "severity": "Nice", "text": "`BOOK_FIELDS = TRADE_FIELDS[:index(\"time\")]` 位置切片:日後在 `side` 之後新增共同欄會靜默不進簿檔。"},
+    {"id": "F-09", "severity": "Nice", "text": "`_cutoff_trading_day` 的 `while True` 無界。"},
+    {"id": "F-10", "severity": "Nice", "text": "app.py 新 import 插進 `copycat.s*` 區塊中間;`tick_persist._REPO_ROOT` 與 `build_info._REPO_ROOT` 各一份。"},
+    {"id": "F-11", "severity": "Nice", "text": "`test_tick_persist.py:508` 斷言私有 `compactor._dir`。"},
+    {"id": "F-12", "severity": "Nice", "text": "`_handle_quote(..., recv_ns: int | None = None)` 的預設值只為測試直呼存在(輕微 Speculative Generality)。"},
+    {"id": "F-13", "severity": "Nice", "text": "`symbol` 未對映 / `state is None` 的早退在 `observe` 之前,「每則現貨訊息都佔號」對池外訊息不成立(文件宣稱為全集)。"}
+  ],
+  "spec": [
+    {"id": "F-01", "severity": "Must", "text": "同日盤後重啟 → 當日 parquet 被空檔覆蓋、資料全毀。`open_day` 無條件 `open(...,\"a\")` 把 jsonl 建出來,spec §22「當日 jsonl 還在就補轉」永遠成立;`compact_day` 0 列 == 0 列核對通過 → `os.replace` 蓋掉真 parquet → `src.unlink()`。reviewer 於 worktree 實跑證實。"},
+    {"id": "F-02", "severity": "Must", "text": "開檔端 OSError 未被接住:`start()` → `open_day` → 拋 → `_boot(\"stock\")` 接住 → 整個 stock engine 停用;`_rollover_stage2` → `open_day` → 拋進 `_handle_quote`,`_trade_date` 已前進但全池 reset / on_rollover 全跳過。違反 spec §13。"},
+    {"id": "F-03", "severity": "Should", "text": "排序主鍵 `recv_ns` 在時鐘回撥時打亂訊息流(#236 W32Time 每小時 resync);`msg_seq` 只是同 ns tiebreak 救不回。建議以「重啟分段 + 段內 msg_seq」排。"},
+    {"id": "F-04", "severity": "Should", "text": "換日後舊日列計進新日計數器:stage2 先 `log_stats(舊日)` 再 `open_day`(歸零),舊日成交列(`tick.trade_date` 為舊日)後到仍寫進舊日檔,卻計進新日 `trades`。spec §29「計數器 = 當日 jsonl 實際內容」。"},
+    {"id": "F-05", "severity": "Should", "text": "排程用日曆今天、writer 用 engine `trade_date`:engine 未換日的日子今天 jsonl 不存在 → `tick()` 直接 `_done_for = today`,舊日那份檔永不自動轉且隔天也不會補。"},
+    {"id": "F-07", "severity": "Nice", "text": "`book_keep_days <= 0` → `_cutoff_trading_day` 回 today,一次刪光所有簿檔;config 無值域檢查。"},
+    {"id": "AC-T5", "severity": "Nice", "text": "ticket #262 AC「最多 3 次,第 4 次不叫」vs 實作 1+3=4 次呼叫;與 spec 本文「再試至 retry_max 次」一致,建議改 ticket 字面而非改碼。"},
+    {"id": "scope", "severity": "info", "text": "未要求的行為:seal_day + 遲到列丟棄 / WARNING、每日行印三處、.tmp + rename、CompactFailed 時刪壞 parquet —— 都有正當理由(Windows 檔鎖、判準可 grep),無其他越界。缺項:無。"}
+  ],
+  "disposition": "Spec F-01 接受(Must):三層閘 —— 寫入端 open_day 見 parquet 已在改封住不開 jsonl(test_restart_after_compaction_does_not_recreate_the_jsonl)、排程側 parquet 在但殘餘 jsonl 不轉 WARNING 一次(test_jsonl_next_to_an_existing_parquet_is_not_compacted)、CLI compact_day 拒轉 CompactRefused exit 2(test_refuses_when_the_trade_parquet_already_exists;真 argv 證據 evidence/CLI-5)。Spec F-02 接受(Must):open_day 的 _file_for 走 try/except OSError → _fail 停寫(test_open_error_at_start_warns_once_and_keeps_the_engine_alive,engine.start 不 raise、換日重武裝)。Spec F-03 + Standards 排序疑慮接受:msg_seq 同日重啟自檔尾 64 KB 讀最後一列完整列接續(tail_msg_seq),當機半行先補換行隔開;排序回 spec 的 (code, msg_seq)、load_day 只看 msg_seq(test_same_day_restart_continues_msg_seq_from_the_file_tail / test_partial_trailing_line… / test_parquet_sorted_by_code_then_msg_seq_only);verification §4 偏差 1 撤銷。Standards F-02 + Spec F-05 接受:排程改掃目錄所有 jsonl,過去日隨時轉(啟動即補)、今天 13:45 後、每日一台 _DayState(test_stale_jsonl_from_a_previous_day_is_compacted_at_boot_before_1345 / test_stale_jsonl_on_a_non_trading_day_is_left_alone)。Standards F-01 接受:_loop 存活邊界 logger.exception 續行 + 呼叫端例外算失敗一次(test_loop_survives_an_exception_raised_by_tick / test_unexpected_exception_in_the_runner…)。Standards F-03 / F-05 / F-06 / F-09 / F-10 / F-11 / Spec F-07 接受(便宜):resolve_ticks_dir 共用、WARNING 日期字面統一 ISO、封住 WARNING 每個日一次(test_sealed_warning_is_once_per_sealed_day)、回溯保險絲 RuntimeError、import 歸位、compactor.dir 公開、TicksConfig __post_init__ 值域(test_out_of_range_values_are_rejected_at_construction)。知情接受不改:Spec F-04 = Standards F-04(換日邊界遲到列計進新日,判準只看「行存在、寫入失敗 0」,已寫進 log_stats docstring 與 verification §4)、Standards F-07(熱路徑不包物件)、F-08(位置切片 + 註解)、F-12(文件已說明)、F-13(改 docstring 為「每則進到引擎路由的現貨訊息」)。AC-T5:改 ticket #262 留言註明 1+3 語意,不改碼。收修 commit:8380cc21(test)+ d8cce448(fix)。"
+}
