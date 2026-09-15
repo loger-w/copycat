@@ -1768,7 +1768,9 @@ def test_reply_disconnect_degrades_and_keeps_store(tmp_path: Path) -> None:
     client._handle_reply_disconnect(3002)
     assert client.status == "degraded"
     assert client.last_error is not None and "3002" in client.last_error
-    assert len(client.store.orders()) == 1  # 不 clear store、不自動重連(review R7)
+    # 斷線當下不 clear:clear 只在重連出手前一刻做(ConnectByID 會重播 backlog;review R7),
+    # 斷線期間委託列表照舊可看 —— 重連那半見 test_reply_reconnect
+    assert len(client.store.orders()) == 1
 
 
 async def test_degraded_still_allows_writes(tmp_path: Path) -> None:

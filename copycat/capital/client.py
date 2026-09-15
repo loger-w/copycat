@@ -11,7 +11,9 @@
   → COM(10s timeout → 結果未知)→ 審計後置(失敗只 log,不改 OrderResult)。
 - 審計走 copycat/server/audit.append_audit;檔名 prefix 耦合點只在 _audit() 一處
   (prefix="capital" → capital-*.jsonl,與 TC4 trade 的 orders-* 分檔)。
-- 回報斷線 → degraded、不自動重連、不 clear store(design §8 / review R7)。
+- 回報斷線(Solace / OnDisconnect 事件,或探針 `IsConnectedByID` 翻 0)→ degraded → 退避重連
+  (`_maybe_reconnect_reply`:`store.clear()` 先於 `ConnectByID`,重播的當日 backlog 才不雙計;
+  review R7)→ 探針回 1 / 連線事件 code 0 → ok。2026-09-15 05:50 prod 實錄:斷線後零重連直到重啟。
 """
 
 from __future__ import annotations
@@ -100,6 +102,10 @@ _BALANCE_CHAIN_TIMEOUT_S = 10.0
 #: 回報線主動問(`IsConnectedByID`)的間隔(#235 辨識階段):同步 COM 呼叫佔幫浦圈,10 s 一次
 #: 足以在盤中 ≤ 15 s 內看到掉線;值變化才印一行(每 10 s 一行會洗版)。不依賴任何 SKCOM 事件。
 REPLY_PROBE_SECS: float = 10.0
+#: 回報線重連退避(秒;第 n 次失敗後等第 n 格,超出取最後一格)。首格 5 s:05:50 實錄裡 Discord
+#: 與 TC4 都在兩分鐘內自己回來,網路抖一下就立刻打 ConnectByID 只會在 SKCOM 還沒收拾好時再吃一次
+#: 3033;上限 60 s 與 balance 定時輪詢同節奏,回報線死一整夜也只是每分鐘一行 WARNING。
+REPLY_RECONNECT_BACKOFF_SECS: tuple[float, ...] = (5.0, 10.0, 20.0, 40.0, 60.0)
 
 # reply idx1 期權市場別(cancel/correct/decrease 的 market 交叉驗證用;
 # 證券側用 reply.SEC_MARKETS 同一份)
@@ -232,9 +238,14 @@ class CapitalClient:
         self._fill_count: int = 0  # 自 `_fill_seen_at` 起累積的成交筆數(落地印「累計 n 筆成交」)
         self._chain_started_at: float | None = None  # 本輪鏈的庫存查詢出手時刻(rc==0 才記)
         # 回報線主動問(#235):最近一次 `IsConnectedByID` 的原始 int(None = 尚未問過)+ 下次到期
-        # (monotonic;0 = 立刻)。只 log + 進 status_view,不翻 status —— 語意未實證(辨識階段)
+        # (monotonic;0 = 立刻)。值進 status_view;0 / 1 也驅動狀態機(0 → degraded、1 → ok),
+        # 其他值(23:59:56 實錄首值 2 = 連線中)不動狀態。
         self._reply_connected: int | None = None
         self._reply_probe_next: float = 0.0
+        # 回報線重連(fix/capital-reply-reconnect):下次 ConnectByID 到期(inf = 未排)+ 已試次數
+        # (決定退避格;恢復 ok 時歸零)。只在 COM 執行緒碰(事件回呼與幫浦圈同一條)。
+        self._reply_reconnect_next: float = float("inf")
+        self._reply_reconnect_attempt: int = 0
         self._balance = BalanceCollector(on_complete=self._on_balance_complete, name="balance")
         self._profit = BalanceCollector(
             on_complete=self._on_profit_complete, parse=parse_profit_line, name="profit"
@@ -308,8 +319,8 @@ class CapitalClient:
         self._status = new
         if new == "ok":
             # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查。
-            # 目前唯一的 ok caller 是 _init_com(啟動時全為初值,此分支等同 no-op);
-            # 這裡是 reconnect 落地時的預留 —— 清點必須與 _finalize_positions 同組
+            # ok caller = _init_com(啟動時全為初值,此分支等同 no-op)與回報線恢復
+            # (`_reply_recovered`,degraded → ok)—— 清點必須與 _finalize_positions 同組
             # (三個旗標),只清 inflight 會留下半清狀態卡在 _pending_sec 守門判上,
             # 鏈永遠不再放行(pending 段無 collector 事件時只有 _poll_pending 能解,
             # 而它同樣看 _pending_deadline)。
@@ -478,13 +489,69 @@ class CapitalClient:
             }})
 
     def _handle_reply_disconnect(self, error_code: int) -> None:
-        """OnDisconnect:回報主機斷線 → degraded(送單通道獨立可用),
-        不自動重連、不 clear store(重播 backlog 前必須先 clear,另案;review R7)。"""
+        """OnDisconnect / OnSolaceReplyDisconnect(COM 執行緒,pump 期間):回報主機斷線 → degraded
+        (送單通道獨立可用)+ 排退避重連。store **此刻不清**:clear 只在 ConnectByID 出手前一刻做
+        (`_maybe_reconnect_reply`),斷線期間委託列表照舊可看。"""
         msg = f"回報連線中斷 (code={error_code}),委託/成交回報停更"
         if self._status == "ok":
             self._set_status("degraded", error=msg)
         else:
             self._last_error = msg
+        self._schedule_reply_reconnect(f"斷線事件 code={error_code}")
+
+    def _handle_reply_connect(self, error_code: int) -> None:
+        """OnConnect / OnSolaceReplyConnection code 0(COM 執行緒):回報線連上。
+        只在 degraded 時翻 ok —— `_init_com` 期間(status starting)的首次連線事件由 init 自己收尾,
+        這裡不搶。"""
+        if self._status == "degraded":
+            self._reply_recovered(f"連線事件 code={error_code}")
+
+    def _schedule_reply_reconnect(self, reason: str) -> None:
+        """排下一次 ConnectByID;已排(next 非 inf)則不動 —— 事件與探針都會叫進來,同一次斷線只排一次。"""
+        if self._reply_reconnect_next != float("inf"):
+            return
+        delay = REPLY_RECONNECT_BACKOFF_SECS[0]
+        self._reply_reconnect_next = time.monotonic() + delay
+        logger.warning("群益回報線斷線(%s)→ degraded,%.0f s 後重連", reason, delay)
+
+    def _reply_recovered(self, source: str) -> None:
+        """回報線回來(探針 1 或連線事件 0):degraded → ok、重連狀態機歸零。
+        `_set_status("ok")` 會清在途鏈旗標(斷線前的鏈跨不過重連)。"""
+        self._reply_reconnect_next = float("inf")
+        attempts = self._reply_reconnect_attempt
+        self._reply_reconnect_attempt = 0
+        self._set_status("ok")
+        logger.info("群益回報線恢復(%s;重連 %d 次)→ ok", source, attempts)
+
+    def _maybe_reconnect_reply(self) -> None:
+        """幫浦圈:degraded 且退避到期 → `store.clear()` + `ConnectByID`。
+
+        clear 必須在 ConnectByID **之前**:群益連上就重播當日 backlog(12:32 重啟實錄 17 筆),
+        不清就同一筆成交在委託聚合 / fills 雙計(store.py 檔頭;review R7)。連上與否不在這裡判 ——
+        rc=0 只代表請求送出,恢復由探針 1 / 連線事件 0 判;一個退避窗內沒恢復就再試(再 clear 再重播,
+        重播是冪等重建)。rc≠0 同樣等下一格。成功送出後標 balance dirty:重播若零成交列,
+        `_positions_seeded` 仍要靠一次快照落地才會重新打開樂觀套用。"""
+        if self._status != "degraded":
+            return
+        now = time.monotonic()
+        if now < self._reply_reconnect_next:
+            return
+        attempt = self._reply_reconnect_attempt + 1
+        self._reply_reconnect_attempt = attempt
+        delay = REPLY_RECONNECT_BACKOFF_SECS[min(attempt, len(REPLY_RECONNECT_BACKOFF_SECS) - 1)]
+        self._reply_reconnect_next = now + delay
+        self.store.clear()
+        rc = self._com.connect_reply(self._user_id)
+        if rc == 0:
+            self._mark_balance_dirty()
+            logger.info(
+                "群益回報線重連 ConnectByID 已送出(第 %d 次);%.0f s 內未恢復再試", attempt, delay
+            )
+        else:
+            logger.warning(
+                "群益回報線重連失敗 rc=%s: %s(第 %d 次,%.0f s 後再試)",
+                rc, self._com.return_code_message(rc), attempt, delay,
+            )
 
     def _handle_balance(self, raw: str) -> None:
         self._balance.feed(raw)
@@ -780,6 +847,7 @@ class CapitalClient:
                 self._handle_profit,
                 on_reply_disconnect=self._handle_reply_disconnect,
                 on_open_interest=self._handle_open_interest,
+                on_reply_connect=self._handle_reply_connect,
             )
             rc = self._com.set_authority(2 if self._env == "test" else 0)
             if rc != 0:
@@ -842,15 +910,17 @@ class CapitalClient:
             self._maybe_query_balance()  # 成交後 debounce / 60s 定時重查
             self._poll_pending()  # pending 合併逾時 watchdog
             self._probe_reply()  # 回報線主動問(#235;每 REPLY_PROBE_SECS 一次)
+            self._maybe_reconnect_reply()  # degraded 且退避到期 → clear + ConnectByID
         except Exception:  # noqa: BLE001 — 單輪故障記 log 續命,見 docstring
             logger.exception("COM 幫浦圈例外(本輪略過)")
             time.sleep(1.0)  # 持續性故障時防 log 洪水
 
     def _probe_reply(self) -> None:
-        """回報線保底偵測(#235 辨識階段):`IsConnectedByID` 每 `REPLY_PROBE_SECS` 問一次,
-        值變化才印一行(首次「上一值 None」;≠ 1 印 WARNING、= 1 印 INFO)。**不翻 status、不重連**
-        —— 值語意未實證,第一個交易日看 log 的值序列再定接不接 degraded。登入前(status 非
-        ok / degraded)不問。COM 例外走幫浦圈既有的傘。"""
+        """回報線保底偵測(#235):`IsConnectedByID` 每 `REPLY_PROBE_SECS` 問一次,值變化才印一行
+        (首次「上一值 None」;≠ 1 印 WARNING、= 1 印 INFO)。值語意 2026-09-15 實證:斷線事件後 1.4 s
+        翻 0、三次開機 3 s 內為 1(23:59 首值 2 = 連線中,10 s 後 1)—— 0 / 1 驅動狀態機:0 且 ok →
+        degraded + 排重連;1 且 degraded → ok(事件沒響也救得回來)。登入前(status 非 ok / degraded)
+        不問。COM 例外走幫浦圈既有的傘。"""
         if self._status not in ("ok", "degraded"):
             return
         now = time.monotonic()
@@ -858,17 +928,22 @@ class CapitalClient:
             return
         self._reply_probe_next = now + REPLY_PROBE_SECS
         value = int(self._com.is_reply_connected(self._user_id))
-        # 同步 COM 呼叫排在 `_cmd_q.get` 之前 = 下單命令會等它(two-axis S-05):耗時未量,
-        # 超過 50 ms 就留一行,第一個交易日看有沒有必要搬出幫浦圈
+        # 同步 COM 呼叫排在 `_cmd_q.get` 之前 = 下單命令會等它(two-axis S-05):09-15 全日零命中,
+        # 留著當守門
         cost_ms = (time.monotonic() - now) * 1000
         if cost_ms > 50:
             logger.warning("群益回報線 IsConnectedByID 耗時 %.0f ms(佔幫浦圈,下單命令排在其後)", cost_ms)
         prev = self._reply_connected
         self._reply_connected = value
-        if value == prev:
-            return
-        level = logging.INFO if value == 1 else logging.WARNING
-        logger.log(level, "群益回報線 IsConnectedByID=%s(上一值 %s)", value, prev)
+        if value != prev:
+            level = logging.INFO if value == 1 else logging.WARNING
+            logger.log(level, "群益回報線 IsConnectedByID=%s(上一值 %s)", value, prev)
+        # 狀態機半邊每次都評(不只變值時):事件先把 status 翻了、探針值沒變也要能收尾
+        if value == 0 and self._status == "ok":
+            self._set_status("degraded", error="回報線探針 IsConnectedByID=0,委託/成交回報停更")
+            self._schedule_reply_reconnect("探針 IsConnectedByID=0")
+        elif value == 1 and self._status == "degraded":
+            self._reply_recovered("探針 IsConnectedByID=1")
 
     def _run(self) -> None:
         # pythoncom 動態載入(對齊 com.py 慣例):CI/測試無 COM 環境時跳過 CoInitialize
