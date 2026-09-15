@@ -4400,10 +4400,10 @@ class TestFlagStatsLog:
         await engine.set_main("2330")
         assert src.on_message is not None
 
-        def _unknown(caplog_: pytest.LogCaptureFixture) -> list[str]:
+        def _unknown() -> list[str]:
             return [
                 r.getMessage()
-                for r in caplog_.records
+                for r in caplog.records
                 if r.levelno == logging.WARNING and r.getMessage().startswith("個股旗標未知值")
             ]
 
@@ -4413,20 +4413,55 @@ class TestFlagStatsLog:
             src.on_message(_quote(cum=3) | {"FlagOfBuySell": "4"})  # 另一個值 → 另一則
             src.on_message(_quote(cum=4) | {"FlagOfBuySell": "2"})  # 已知值不印
             await _drain(engine)
-            warns = _unknown(caplog)
+            warns = _unknown()
             assert len(warns) == 2
             assert "'3'" in warns[0] and "2330" in warns[0]
             assert "'4'" in warns[1]
             engine.rollover_stage1("2026-07-22")
             src.on_message(_quote(cum=50, date="20260722") | {"FlagOfBuySell": "3"})  # 換日重新武裝
             await _drain(engine)
-            assert len(_unknown(caplog)) == 3
+            assert len(_unknown()) == 3
             await engine.close()
         # 三桶字面不變:未知值只進「總」,不進 0 / 欄缺
         assert self._flag_lines(caplog) == [
             "個股旗標 0:0 筆 / 欄缺 0 筆 / 總 4 筆(2026-07-21)",
             "個股旗標 0:0 筆 / 欄缺 0 筆 / 總 1 筆(2026-07-22)",
         ]
+
+    async def test_unknown_flag_values_are_capped_per_day(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """two-axis S-02 / Spec-S-01:未知值集合由達錢單方決定基數,欄漂成時間戳 / 價格時不能
+        退化成每 tick 一則(PR #146 log 洪水的同型問題)。當日最多逐值印 `_FLAG_UNKNOWN_CAP` 則,
+        第 cap+1 個不同值印一則封口彙總,之後零輸出;換日重新武裝。"""
+        engine, src = await _make()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        cap = stock_engine_mod._FLAG_UNKNOWN_CAP
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            for i in range(cap + 2):  # cap 個逐值 + 第 cap+1 個封口 + 第 cap+2 個零輸出
+                src.on_message(_quote(cum=i + 1) | {"FlagOfBuySell": f"X{i}"})
+            await _drain(engine)
+            warns = [
+                r.getMessage()
+                for r in caplog.records
+                if r.levelno == logging.WARNING and r.getMessage().startswith("個股旗標未知值")
+            ]
+            assert len(warns) == cap + 1
+            assert all(f"'X{i}'" in warns[i] for i in range(cap))
+            assert "過多" in warns[cap] and str(cap) in warns[cap]
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=100, date="20260722") | {"FlagOfBuySell": "X0"})  # 換日再印
+            await _drain(engine)
+            assert (
+                sum(
+                    1
+                    for r in caplog.records
+                    if r.levelno == logging.WARNING and r.getMessage().startswith("個股旗標未知值")
+                )
+                == cap + 2
+            )
+            await engine.close()
 
     async def test_futures_key_ticks_are_not_counted(self, caplog: pytest.LogCaptureFixture) -> None:
         engine, src = await _make()
