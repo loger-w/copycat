@@ -1296,7 +1296,8 @@ class StockEngine:
         # **期貨 instrument 不武裝換日**(D14a,夜盤雙保險之一):個股期夜盤跨午夜,
         # 那些 tick 的 `trade_date` 會比日盤主圖早一天到 → 拿它武裝 stage1 會在夜盤把
         # 全部現貨狀態 reset(當日分時線整條消失,而畫面上只是「圖突然空了」)。
-        arms_the_day = not is_futures_key(code)
+        is_spot = not is_futures_key(code)
+        arms_the_day = is_spot  # 換日武裝政策只改這一行;下面的旗標計數母體讀 `is_spot`,不跟著漂
         if (
             tick is not None
             and arms_the_day
@@ -1355,9 +1356,12 @@ class StockEngine:
             if self._backfill_wanted(code):
                 self._enqueue_backfill(code)
         if tick is not None and state.ingest(tick):
-            if arms_the_day:
+            if is_spot:
                 # 現貨旗標計數(mod/stock-side-flag):掛在 ingest 為真的分支內,試撮與重複
                 # tick 已被短路;期貨訊息本來就沒這欄,計進去只會把「欄缺」桶灌成假訊號。
+                # 母體讀上面算好的 `is_spot`(pr-255 F-04 / two-axis S-03):不再第三次算
+                # `is_futures_key`,也不借用 `arms_the_day` —— 換日武裝政策漂了(E-3 放寬過一次)
+                # 計數母體不該靜默跟著變。
                 self._flag_total += 1
                 if tick.flag is None:
                     self._flag_missing += 1
