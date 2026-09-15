@@ -1,0 +1,27 @@
+{
+  "fixed_point": "f5ba99ac",
+  "branch": "fix/pr-251-review-followups",
+  "reviewed_head": "6877dfc7",
+  "reviewers": {"standards": "opus (general-purpose, effort high)", "spec": "opus (general-purpose, effort high; 5 突變體全 KILLED)"},
+  "standards": [
+    "[H] copycat/server/win_timer.py:96-108 — 假陳述 WARNING(repo 明文紀律)— 例外路徑 `qos_ok, err = False, -1` 後緊接著印「EcoQoS 豁免失敗(SetProcessInformation … 回 False,GetLastError=-1)」—— 實際是拋例外、且 -1 不是 GetLastError 值;`mm = -1` 同理印「MMRESULT=-1」。catch 本身符合 §E,壞的是第二行 log 說了沒發生的事。",
+    "[H] copycat/corr_config.py:150-157 — WARNING 時點違反同檔明文 — `_parse_legs` docstring 寫死「腿層 WARNING 只蒐集不 log,等 load_config 確定採用這份 config 之後才印」;新的「腿 key 重複」印在 base 早退之前。",
+    "[J] .claude/perf/batch-b-tier0/verification.md:60 — 與同批 code 漂掉 — §4 仍寫 `sum(slept) <= 20.0` 容 +1e-9,同批 F-16 已改成等式。(其餘抽查一致:0-1 uniform 60.7/60.6、0-7 base 72.1/58.3、0-4 0.061 148x 與 JSON 全對;SKILL.md §8 與 corr_state._corr 一致。)",
+    "[J] copycat/corr_config.py:150 vs copycat/live/corr_state.py:66 — 同一個 F-05 兩種去重寫法;可接受,但去重更該放在 _parse_legs。",
+    "[J] copycat/live/river_backfill.py:31-32 — 懸空註解(留在被刪常數的位置、描述 20 行前的 import);跨模組 import 底線私名有先例(signal_policy.py:37),不構成違規。",
+    "[J] tests/server/test_corr_routes.py:30-33 — 斷言綁死實作形狀(`__self__` / `__func__`);日後改成 lambda 會假紅。",
+    "[J] tests/live/test_stock_bars.py:466(§C 檢核)判定「更誠實」;test_signal_state clock.now 是公開欄;test_main_wiring 函式內 import 有先例 —— 皆無發現。總數 6 條(H 2 / J 4)。"
+  ],
+  "spec": [
+    "(a) F-03 / F-04 / F-05 / F-06 / F-08 / F-09 / F-10 / F-11 / F-12 / F-13 / F-14 / F-15 / F-17 / F-18 / F-19 / F-20 / F-21 完整(逐條對 diff;F-04 佈線案比原建議更嚴;F-09 三數字對 out_after_04.json 與 corr_state.py:24;F-15 把 _adjacent_tol ×1.5 該案轉紅,修前不會)。",
+    "(a) F-07 部分:`deepest >= 300` 有效(舊時距塞回 → 13 紅);但 `entered > 90_000` 量的是呼叫 evaluate 次數不是過 _in_session,突變後仍 99,689 照綠,行內註解是假陳述。",
+    "(a) F-16 部分:test_stock_bars 等式已改、#240 補記已貼;但 verification.md:66 §4 仍寫「≤ 20.0 容 +1e-9」。",
+    "(a) F-22 部分:verification.md:38 0-5 列仍稱「第二次 212 → 155」,§4 同一輪稱「首輪未存檔那次」,標籤互斥。",
+    "(a) F-01 / F-02 對得上拍板(相對量 150 → 20–61;重啟後立刻、前端先別開 + 順序);F-02 同時併採了報告的 B 案(第 3 段 p50 須高於第 2 段熱取),嚴於 user 所選的 A,commit 宣稱已拍板。",
+    "(a) F-08 out_bench_07 兩檔存在且 diagnosis 引用逐格相符;惟 72.1 vs 58.3(差 24%)仍敘為「零差異」略牽強。",
+    "(b) Scope creep:無。25 個檔案全部對得上某條 finding 或 closeout 報告落檔;runtime 改動皆落在白名單。",
+    "(c) 突變全 KILLED:__main__ `_set_switch_interval → lambda` 紅;corr_engine 先算再判閘 紅;刪 app.py has_clients 佈線 紅;F-07 舊時距 → deepest 13 紅(entered 綠,佐證部分判定);corr_state _adjacent_tol ×1.5 → 全日對照案紅。",
+    "總計 20 條中 17 完整、3 部分(F-07 / F-16 / F-22),0 漏 0 錯;最嚴重 = F-07 entered 斷言無鑑別力。"
+  ],
+  "disposition": "Standards H1 收:例外路徑改 try/except/else,例外只印例外本身一則(含後果句),回傳值失敗才印錯誤碼;測試斷恰一則且不含「回 False」「GetLastError」。H2 收:重複 key 先蒐集到 `duplicated`,base 檢查通過、「確定採用這份 config」之後才印。J1 收:verification §4 改成等式敘述。J2 不改(去重放 load_config 是為了同時取得 WARNING 清單;state 層 dict.fromkeys 是純去重,兩處目的不同;記錄)。J3 收:註解併到 import 行上方。J4 收:佈線案改斷行為 —— 對 corr_ws._clients 登記 / 除名一個 queue,閘 False → True → False。Spec F-07 收:`entered += det._in_session(clock.now)`,真的過閘才算(舊時距下 ≈ 18.6k 必紅)。F-16 / F-22 收:verification 兩處文字跟上。F-02 收為文字:熱取對照標為「review 建議的額外守門,不在 user 選的 A 內」,順序 A 不變。F-08 收為文字:改「同量級、無 0.001 更好的方向」。收修後 ruff / pyright 0 錯、win_timer ruff format(整檔本批新寫)、受影響套件 207 passed;全量 pytest 見 verification。"
+}
