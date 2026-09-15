@@ -18,10 +18,13 @@ from pathlib import Path
 
 from copycat.configio import load_dataclass_json
 
-__all__ = ["CONFIG_PATH", "TicksConfig", "load_ticks_config", "resolve_ticks_dir"]
+__all__ = ["CONFIG_PATH", "REPO_ROOT", "TicksConfig", "load_ticks_config", "resolve_ticks_dir"]
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = _REPO_ROOT / "configs" / "ticks.json"
+#: repo root 的唯一推導點(`copycat/` 的上一層);寫入端目錄解析與轉檔子程序的 cwd 都引這一顆,
+#: 不各自 `parents[n]` 一份(檔案搬家只壞一邊 → 子程序靜默跑到另一棵樹)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = REPO_ROOT
+CONFIG_PATH = REPO_ROOT / "configs" / "ticks.json"
 
 
 def _parse_hhmm(value: str) -> _dt.time:

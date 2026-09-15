@@ -13,7 +13,6 @@ pyarrow 只在 extras `[ticks]`,本模組只在函式內 import;server 進程永
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import logging
 import os
 import time
@@ -22,7 +21,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from copycat.ticks import BOOK_FIELDS, TRADE_FIELDS, book_parquet_path, jsonl_path, parquet_path
+from copycat.ticks import (
+    BOOK_FIELDS,
+    TRADE_FIELDS,
+    book_parquet_path,
+    iter_jsonl_rows,
+    jsonl_path,
+    parquet_path,
+)
 
 __all__ = [
     "CompactFailed",
@@ -74,14 +80,6 @@ def _sort_key(row: dict[str, Any]) -> tuple[str, int]:
     return (row["code"], row["msg_seq"])
 
 
-def _well_formed(row: object) -> bool:
-    """形狀閘:是物件、`kind` 在值域、排序鍵與去重鍵齊全;其餘欄缺就是 parquet 的 null。"""
-    if not isinstance(row, dict) or row.get("kind") not in ("trade", "book"):
-        return False
-    needed = ("code", "recv_ns", "msg_seq") + (("cum_vol",) if row["kind"] == "trade" else ())
-    return all(k in row for k in needed)
-
-
 def compact_day(
     day: _dt.date, data_dir: Path, *, is_trading_day: Callable[[_dt.date], bool]
 ) -> CompactResult:
@@ -101,29 +99,21 @@ def compact_day(
     books: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     total = dups = bad = 0
-    with src.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
+    # 與 `ticks.load_day` 同一個讀行器(逐行 strict decode;壞 utf-8 / 壞 JSON / 形狀不合 = 壞行計數)
+    for row in iter_jsonl_rows(src):
+        total += 1
+        if row is None:
+            bad += 1
+            continue
+        if row["kind"] == "trade":
+            key = (row["code"], row["cum_vol"])
+            if key in seen:
+                dups += 1
                 continue
-            total += 1
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                bad += 1
-                continue
-            if not _well_formed(row):
-                bad += 1
-                continue
-            if row["kind"] == "trade":
-                key = (row["code"], row["cum_vol"])
-                if key in seen:
-                    dups += 1
-                    continue
-                seen.add(key)
-                trades.append(row)
-            else:
-                books.append(row)
+            seen.add(key)
+            trades.append(row)
+        else:
+            books.append(row)
     trades.sort(key=_sort_key)
     books.sort(key=_sort_key)
 

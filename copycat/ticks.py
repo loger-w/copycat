@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -32,10 +33,12 @@ __all__ = [
     "TRADE_FIELDS",
     "TickRow",
     "book_parquet_path",
+    "iter_jsonl_rows",
     "jsonl_path",
     "load_day",
     "parquet_path",
     "taipei_ms",
+    "well_formed",
 ]
 
 DEPTH = 5
@@ -170,26 +173,46 @@ def load_day(day: _dt.date, data_dir: Path) -> list[TickRow]:
             raise FileNotFoundError(path)
         rows = []
         bad = 0
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                # 與 `ticks_compact.compact_day` 同口徑(pr-263 F-07):當機留下的半行 / 壞行跳過
-                # 計數,不讓一行壞資料把整天讀回炸掉
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    bad += 1
-                    continue
-                if not isinstance(payload, dict) or payload.get("kind") not in ("trade", "book"):
-                    bad += 1
-                    continue
-                rows.append(_row_from_dict(payload))
+        for payload in iter_jsonl_rows(path):
+            if payload is None:
+                bad += 1
+                continue
+            rows.append(_row_from_dict(payload))
         if bad:
             logger.warning("load_day %s:jsonl 壞行 %d 行已跳過(%s)", date, bad, path.name)
     rows.sort(key=lambda r: r.msg_seq)
     return rows
+
+
+def well_formed(row: object) -> bool:
+    """列的形狀閘(`load_day` 與 `compact_day` **同一顆**):是物件、`kind` 在值域、身分 / 排序鍵齊全、
+    成交列另有去重鍵 `cum_vol`;其餘欄缺 = parquet 的 null / `TickRow` 預設 None。"""
+    if not isinstance(row, dict) or row.get("kind") not in ("trade", "book"):
+        return False
+    needed = ("code", "trade_date", "recv_ns", "msg_seq") + (
+        ("cum_vol",) if row["kind"] == "trade" else ()
+    )
+    return all(k in row for k in needed)
+
+
+def iter_jsonl_rows(path: Path) -> Iterator[dict | None]:
+    """逐行讀 jsonl:合格列 yield dict,壞行(壞 utf-8 / 壞 JSON / 形狀不合)yield None 讓呼叫端計數。
+
+    以 bytes 逐行 **strict** decode:文字模式的 `errors="replace"` 會把壞 byte 換成 U+FFFD 後
+    「解析成功」,一列髒資料悄悄混進去而不進壞行計數;strict 文字模式則一撞壞 byte 整檔中斷。
+    兩個讀者(`load_day` / `compact_day`)都走這裡,口徑機械相同。
+    """
+    with path.open("rb") as fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                yield None
+                continue
+            yield payload if well_formed(payload) else None
 
 
 def _read_parquet(path: Path) -> list[TickRow]:

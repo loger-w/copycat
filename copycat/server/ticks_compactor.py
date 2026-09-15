@@ -28,14 +28,14 @@ from pathlib import Path
 
 from copycat.live.tick_persist import TickPersist
 from copycat.ticks import parquet_path
-from copycat.ticks_config import TicksConfig
+from copycat.ticks_config import REPO_ROOT, TicksConfig
 
 __all__ = ["CompactRun", "TicksCompactor", "run_compact_subprocess"]
 
 logger = logging.getLogger(__name__)
 
-#: 子程序的 cwd:本檔所屬 repo root(`copycat/server/` 上兩層),與 `ticks_config._REPO_ROOT` 同一棵樹
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+#: 子程序的 cwd = repo root,與寫入端目錄解析同一顆常數(`ticks_config.REPO_ROOT`),不另推導一份
+_REPO_ROOT = REPO_ROOT
 #: 排程迴圈醒來的最短間隔 / 到點後的緩衝(避免踩在 13:45:00.000 判定邊上)
 _MIN_SLEEP_SECS = 5.0
 _AFTER_DUE_SECS = 5.0
@@ -203,7 +203,8 @@ class TicksCompactor:
             return
         now = self._now_fn()
         for day in self._pending_days(now):
-            await self._tick_day(day, now)
+            # 每一天各取一次時刻:前一天的嘗試可能耗掉整個 timeout,後面幾天的退避判定不該用過期的 now
+            await self._tick_day(day, self._now_fn())
 
     async def _tick_day(self, day: _dt.date, now: _dt.datetime) -> None:
         st = self._days.setdefault(day, _DayState())
@@ -237,10 +238,10 @@ class TicksCompactor:
         reason = await self._attempt_once(day, st.attempts)
         # 嘗試本身可能耗掉整個 `compact_timeout_secs`:退避與保留都用 await **之後**的時刻
         # (pr-263 F-18),否則一次逾時後下一次只等 900 − 300 s
-        now = self._now_fn()
+        after = self._now_fn()
         if reason is None:
             st.done = True
-            self._retain_books(now.date())
+            self._retain_books(after.date())
             return
         if st.attempts > self._cfg.retry_max:
             # 最後一次失敗與放棄合成同一行(screen_engine 同款)
@@ -253,7 +254,7 @@ class TicksCompactor:
                 day.strftime("%Y%m%d"),
             )
             return
-        st.next_attempt_at = now + _dt.timedelta(seconds=self._cfg.retry_secs)
+        st.next_attempt_at = after + _dt.timedelta(seconds=self._cfg.retry_secs)
         logger.warning(
             "tick 轉檔 %s 第 %d 次%s;%.0f s 後再試", day, st.attempts, reason, self._cfg.retry_secs
         )
