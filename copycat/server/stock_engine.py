@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import time
 from collections.abc import Set as AbstractSet
 from typing import AsyncGenerator, Callable, Iterable, Protocol
 
@@ -35,6 +36,7 @@ from copycat.live.stock_source import (
 )
 from copycat.live.stock_state import StockDayState
 from copycat.live.tc4 import HistoryTimeoutError
+from copycat.live.tick_persist import TickPersist
 from copycat.server.bars import BarsResult
 from copycat.server.signal_policy import PeerQuote, locked_up_flag, touched_upper_flag
 from copycat.server.ws import WsBroadcaster
@@ -272,9 +274,14 @@ class StockEngine:
         # 處置股名單(L75):breadth 引擎的 FinMind 處置名單 late-bound 注入;
         # None(breadth 停用 / 無 token)= 恆空 → trial 全部照標(緩)= 降級即修前行為。
         disposition_codes: Callable[[], AbstractSet[str]] | None = None,
+        # tick 存檔(spec #257):None = 不存(測試預設 / `enabled=false`);prod 由 app 層
+        # 依 `TicksConfig` 建。引擎只在 `_handle_quote` 尾端對每則現貨訊息呼叫一次 `observe`,
+        # 生命週期(預開 handle / 換日 / 關機 flush)跟著引擎走。
+        tick_persist: TickPersist | None = None,
     ) -> None:
         self._source = source
         self._trade_date = trade_date
+        self._persist = tick_persist
         self._pending_date: str | None = None
         self._throttle = throttle_secs
         # 逐筆打包(mod/group-grid-ticks,#180):成交不再一筆一則,累積到 `_pending_ticks`,
@@ -442,6 +449,9 @@ class StockEngine:
         self._tasks.append(asyncio.create_task(self._retry_subscribe_loop()))
         if self._checkpoint_enabled:
             self._tasks.append(asyncio.create_task(self._checkpoint_loop()))
+        if self._persist is not None:
+            # 預開當日 handle + 武裝定時 flush(spec #257 §盤中寫入):開檔不落在盤中第一筆
+            self._persist.start(self._loop, self._trade_date)
 
     async def close(self) -> None:
         # 先斷 threadsafe callback 入口(比照 index_engine):close 期間 TC4 推播不得再
@@ -472,6 +482,10 @@ class StockEngine:
         for task, result in zip(tasks, await asyncio.gather(*tasks, return_exceptions=True)):
             if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 logger.exception("close: 背景 task %r 帶例外結束", task.get_name(), exc_info=result)
+        if self._persist is not None:
+            # 在 gather **之後**:斷入口前已排進 loop 的幾則 `_handle_quote` 在上面的 await
+            # 期間跑完,這裡 flush + 關檔才不會漏掉它們(收盤前最後 30 秒的列)
+            self._persist.close()
         await asyncio.to_thread(self._source.close)
 
     # ---- refcount 訂閱池 ----
@@ -1136,6 +1150,8 @@ class StockEngine:
         self._log_flag_stats(self._trade_date)
         self._trade_date = self._pending_date
         self._pending_date = None
+        if self._persist is not None:
+            self._persist.open_day(self._trade_date)  # 預開新日 handle、關舊日
         # **快照後迭代**:`_acquire` 在 executor thread 對 `_states` setdefault 新鍵
         # (自選新增 / 重試輪 / stkfut 腿隨時可能發生),直接迭代 `.values()` 撞上就是
         # RuntimeError —— 迴圈之後的每一步(記帳清空、主圖重回補、hub 的 on_rollover)
@@ -1188,7 +1204,9 @@ class StockEngine:
     def _on_raw_threadsafe(self, quote: dict) -> None:
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._handle_quote, quote)
+            # 收到時刻在 source thread 蓋章(tick 存檔的 `recv_ns`):loop 排隊的延遲不算進
+            # 「server 收到」—— 開盤峰值 loop 落後時,存檔量出來的仍是達錢推播的節奏
+            loop.call_soon_threadsafe(self._handle_quote, quote, time.time_ns())
 
     def _on_no_data_threadsafe(self, code: str) -> None:
         loop = self._loop
@@ -1225,7 +1243,10 @@ class StockEngine:
         if self._main is not None:
             self._enqueue_backfill(self._main)
 
-    def _handle_quote(self, quote: dict) -> None:
+    def _handle_quote(self, quote: dict, recv_ns: int | None = None) -> None:
+        """`recv_ns` = source thread 收到的 `time.time_ns()`;直呼(測試)不帶就當下取。"""
+        if recv_ns is None:
+            recv_ns = time.time_ns()
         symbol = str(quote.get("Symbol", ""))
         # 期現對照腿的判定是 **`.HOT` 後綴**,不是 `TC.F.` 前綴(D1):後者會把月契約
         # leaf(`TC.F.TWF.CDF.202609`)一起吃掉 → 合約主圖永遠收不到自己的推播,
@@ -1355,7 +1376,9 @@ class StockEngine:
             self._tick_armed.add(code)
             if self._backfill_wanted(code):
                 self._enqueue_backfill(code)
+        ingested_tick: StockTick | None = None  # tick 存檔的成交列母體 = 這個分支收下的那筆
         if tick is not None and state.ingest(tick):
+            ingested_tick = tick
             if is_spot:
                 # 現貨旗標計數(mod/stock-side-flag):掛在 ingest 為真的分支內,試撮與重複
                 # tick 已被短路;期貨訊息本來就沒這欄,計進去只會把「欄缺」桶灌成假訊號。
@@ -1415,6 +1438,17 @@ class StockEngine:
                 # 掛在 `ingest` 為真的分支內:試撮與重複 tick 已被短路,訊號層天然
                 # 不必重複判(回補重放走 `apply_backfill`,不經過這裡 — SC-5)
                 self._signal_hub.on_tick(code, tick, state)
+        if is_spot and self._persist is not None:
+            # tick 存檔(spec #257):**每一則現貨訊息**都報到(訊息序號每則 +1,被擋的也佔號),
+            # 成交列只在 `ingest` 為真時寫 —— 與看盤成交明細、訊號同一母體。期貨鍵不存(只做個股)。
+            self._persist.observe(
+                code=code,
+                quote=quote,
+                book=book,
+                tick=ingested_tick,
+                engine_seq=state.seq,
+                recv_ns=recv_ns,
+            )
         # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
         # 「無資料」復原同理。冷門股整天可能只有簿更新、盤後更是零成交,
         # `_dirty_watchlist` 永遠不會被加進去 → 不補推就永遠是 `-`。
