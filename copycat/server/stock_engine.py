@@ -125,6 +125,11 @@ def _spot_trial_window_now() -> bool:
 #: 旗標(09-14 去重 6,320 筆只 1 筆 0)。`欄缺` 非 0 = 達錢格式漂了;零筆也印 —— 盤後判準
 #: 是「那行存在」不是數字。`/api/health` 刻意不含。
 _FLAG_STATS_FMT: str = "個股旗標 0:%d 筆 / 欄缺 %d 筆 / 總 %d 筆(%s)"
+#: 0 / 1 / 2 以外的旗標值(pr-255 review F-02):它們靜默走簿比退路,上面三桶看不出來 ——
+#: 當日首見**每個值**一則 WARNING(帶值 / 股號 / 時刻),同日同值不再印,換日重新武裝
+#: (`_log_flag_stats` 歸零時一併清)。不動 `_FLAG_STATS_FMT` 字面(那是盤後判準的契約)。
+_FLAG_UNKNOWN_FMT: str = "個股旗標未知值 %r(首見 %s %s;退回簿比判定,當日同值不再印)"
+
 #: TradeStatus 轉態觀測的**固定 grep 前綴 + 格式**(D6/R10)。與 parse 層值域外 warning
 #: 是同事件兩則(那邊管值域、這邊管轉態時序),蒐證對帳一律以本前綴為準。
 _TRADE_STATUS_FMT = "trade-status-observe code=%s %s->%s t=%s trial_window=%s qty=%s"
@@ -387,6 +392,8 @@ class StockEngine:
         self._flag_total = 0
         self._flag_zero = 0
         self._flag_missing = 0
+        #: 當日已印過 WARNING 的未知旗標值(pr-255 review F-02);`_log_flag_stats` 歸零時清。
+        self._flag_unknown_warned: set[str] = set()
         # 未 attach 時全部掛點跳過:訊號層是可選功能(lifespan `_boot` 失敗即降級),
         # 引擎本體不得因它缺席而改變行為
         self._signal_hub: SignalSink | None = None
@@ -1109,6 +1116,7 @@ class StockEngine:
         self._flag_total = 0
         self._flag_zero = 0
         self._flag_missing = 0
+        self._flag_unknown_warned.clear()  # 未知值 WARNING 換日重新武裝(pr-255 F-02)
 
     def _rollover_stage2(self, first_tick: StockTick) -> None:
         """階段二:首筆新日 tick 確認 → reset 全部狀態,觸發 tick 重新 ingest。"""
@@ -1345,6 +1353,10 @@ class StockEngine:
                     self._flag_missing += 1
                 elif tick.flag == "0":
                     self._flag_zero += 1
+                elif tick.flag not in ("1", "2") and tick.flag not in self._flag_unknown_warned:
+                    # 值域外(pr-255 F-02):三桶看不出來,當日首見每值一則,帶值 / 股號 / 時刻
+                    self._flag_unknown_warned.add(tick.flag)
+                    logger.warning(_FLAG_UNKNOWN_FMT, tick.flag, code, tick.time)
             # 收件人 = 主圖 ∪ 登記的檢視集合(#180)。**不進打包 ≠ 不處理**:下面的
             # watchlist_quote dirty / 訊號層照跑,打包只管「哪些逐筆要送到瀏覽器」。
             if code == self._main or code in self._tick_targets:
