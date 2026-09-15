@@ -251,8 +251,9 @@ class TestWindowThresholds:
         b_ = chatty.correlations(ts)["NQ"]
         assert (a["n60"], a["n300"], a["n1800"]) == (b_["n60"], b_["n300"], b_["n1800"]) == (61, 301, 1800)
         for w in (60, 300, 1800):
-            assert a[f"w{w}"] is not None and b_[f"w{w}"] is not None
-            assert abs(a[f"w{w}"] - b_[f"w{w}"]) < 1e-9
+            av, bv = a[f"w{w}"], b_[f"w{w}"]
+            assert av is not None and bv is not None
+            assert abs(av - bv) < 1e-9
 
     def test_duplicate_leg_keys_do_not_double_the_sample_count(self) -> None:
         """pr-251 review F-05:舊版逐 leg 重算、重複 key 只覆寫同一列(冪等);增量版若不去重,push 會對
