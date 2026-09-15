@@ -1,0 +1,11 @@
+# graphify 掃描排除(gitignore 語法;explicit 規則對 git 追蹤檔也有效)
+# .claude/** = 各批流程 artifact(verification / review / 截圖),對知識圖零貢獻、佔母體六成
+.claude/
+# 非 code 檔(md / html / 圖)目前不做 semantic 抽取(2026-09-15 拍板 code-only),
+# 若留在母體會因 manifest 未蓋章而每次 --update 都被列為新檔;日後要納入 docs 時刪掉這段
+*.md
+*.html
+*.png
+*.jpg
+*.jpeg
+*.gif
