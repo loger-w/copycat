@@ -404,7 +404,9 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   成交點會是空的,直到某次 ConnectByID 真的連上重播;寧空勿雙計(知情接受)。**同一窗內改價的本地安全閘也跟著空**
   (`_orders` 清空 → `remaining_shares` None → `check_correct_price` 寬鬆放行、`market_of` None、`_fut_multiplier` 退 1):
   退化為券商兜底(拒單),不動錢,但 defence-in-depth 在窗內不存在、零訊號 —— 知情接受(pr-review 253 F-02,user 拍板 (a));
-  盤中網路抖才會撞到(22 天 log 零次;每日 05:50 那次固定斷網時手上沒活單)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
+  盤中網路抖才會撞到(22 天 log 零次;每日 05:50 那次固定斷網時手上沒活單)。**重連重播的當日成交會重設
+  `_fill_seen_at`**(起點為 None 時本來就會),chain-stats 當日母體多出「重播 → 落地」樣本 —— 與開機 backlog 同性質,
+  知情;恢復不清量測欄是對的(鏈與回報線獨立,清了會丟掉成交後 0.5 s 內斷又恢復那種合法樣本;two-axis Spec-S-01)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
   optional 不讀,status 燈走既有 degraded。log 四行:「群益回報線斷線(<來源>)→ degraded,N s 後重連」WARNING /
   「群益回報線重連 ConnectByID 已送出(第 n 次)」INFO /「群益回報線重連失敗 rc=…」WARNING /「群益回報線恢復(<來源>;
   重連 n 次)→ ok」INFO。盤後判準:`grep "回報線\|Solace" logs/server-<日>.log` —— 每次 disconnect 後在退避內
