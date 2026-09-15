@@ -120,6 +120,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_cs.add_argument("--log", type=Path, nargs="+", required=True, help="logs/server-*.log,可多檔(依序合併)")
 
+    p_tc = sub.add_parser(
+        "ticks-compact",
+        help="tick 存檔轉檔(spec #257):當日 jsonl → 成交 / 簿兩個 parquet(去重、壞行計數、列數核對才刪 jsonl);server 13:45 以子程序呼叫,排程失敗可手動重跑",
+    )
+    p_tc.add_argument("--date", required=True, help="交易日 YYYYMMDD(非交易日 / jsonl 不存在 → exit 2)")
+    p_tc.add_argument(
+        "--dir", type=Path, default=None, help="tick 存檔目錄(預設 configs/ticks.json 的 dir,相對 repo root)"
+    )
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -318,6 +327,36 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stderr.write(f"寫入自選失敗:{e}\n")
                 return 1
             sys.stdout.write(f"已覆寫群組「{SCREEN_GROUP}」(自選共 {len(saved['codes'])} 檔)\n")
+        return 0
+    if args.command == "ticks-compact":
+        import datetime as _dt
+
+        from copycat.live.tick_persist import TickPersist
+        from copycat.ticks_compact import (
+            CompactFailed,
+            CompactRefused,
+            compact_day,
+            format_compact_line,
+        )
+        from copycat.ticks_config import load_ticks_config
+        from copycat.trading_calendar import load_trading_calendar
+
+        try:
+            day = _dt.datetime.strptime(args.date, "%Y%m%d").date()
+        except ValueError:
+            sys.stderr.write(f"tick 轉檔:--date 須為 YYYYMMDD(收到 {args.date!r})\n")
+            return 2
+        # 目錄解析與寫入端同一份(相對 repo root),不另抄一次規則
+        data_dir = args.dir if args.dir is not None else TickPersist(load_ticks_config()).dir
+        try:
+            result = compact_day(day, data_dir, is_trading_day=load_trading_calendar().is_trading_day)
+        except CompactRefused as e:
+            sys.stderr.write(f"tick 轉檔 {day}:{e}\n")
+            return 2
+        except CompactFailed as e:
+            sys.stderr.write(f"tick 轉檔 {day} 失敗:{e}\n")
+            return 1
+        sys.stdout.write(format_compact_line(day, result) + "\n")
         return 0
     if args.command == "refresh-stkfut-map":
         from copycat.stkfut_map import refresh

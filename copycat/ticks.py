@@ -22,7 +22,17 @@ from pathlib import Path
 
 from copycat.live.stock_models import StockTick
 
-__all__ = ["DEPTH", "TickRow", "jsonl_path", "load_day", "taipei_ms"]
+__all__ = [
+    "BOOK_FIELDS",
+    "DEPTH",
+    "TRADE_FIELDS",
+    "TickRow",
+    "book_parquet_path",
+    "jsonl_path",
+    "load_day",
+    "parquet_path",
+    "taipei_ms",
+]
 
 DEPTH = 5
 
@@ -30,6 +40,16 @@ DEPTH = 5
 def jsonl_path(data_dir: Path, trade_date: str) -> Path:
     """`<dir>/<YYYYMMDD>.jsonl`;`trade_date` 為 `YYYY-MM-DD`(StockTick 同尺)。"""
     return data_dir / f"{trade_date.replace('-', '')}.jsonl"
+
+
+def parquet_path(data_dir: Path, trade_date: str) -> Path:
+    """成交 parquet `<dir>/<YYYYMMDD>.parquet`(永久保留)。"""
+    return data_dir / f"{trade_date.replace('-', '')}.parquet"
+
+
+def book_parquet_path(data_dir: Path, trade_date: str) -> Path:
+    """簿 parquet `<dir>/<YYYYMMDD>-book.parquet`(保留 `book_keep_days` 個交易日)。"""
+    return data_dir / f"{trade_date.replace('-', '')}-book.parquet"
 
 
 def taipei_ms(time_taipei: str) -> int:
@@ -114,7 +134,10 @@ def _best_limit(*levels: int | None) -> int | None:
     return None
 
 
-_FIELD_NAMES = frozenset(f.name for f in fields(TickRow))
+#: `TickRow` 欄序 = parquet 欄序;成交檔全欄、簿檔只有共同欄(到 `askq4` 為止)。
+TRADE_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(TickRow))
+BOOK_FIELDS: tuple[str, ...] = TRADE_FIELDS[: TRADE_FIELDS.index("time")]
+_FIELD_NAMES = frozenset(TRADE_FIELDS)
 
 
 def _row_from_dict(payload: dict) -> TickRow:
@@ -124,19 +147,40 @@ def _row_from_dict(payload: dict) -> TickRow:
 def load_day(day: _dt.date, data_dir: Path) -> list[TickRow]:
     """讀回某日全部列(成交 + 簿),依 `(recv_ns, msg_seq)` 排序。
 
-    排序鍵不是單看 `msg_seq`:它是進程內序號,同日重啟後歸零,單看會把重啟後的列排到
-    前面;`recv_ns` 是牆鐘、跨重啟單調,同 ns 撞號再以 `msg_seq` 定序。
-    檔不存在 → FileNotFoundError。
+    parquet 優先(成交檔在就讀 parquet,簿檔可能已過保留期而不在 → 只有成交列),沒有才讀
+    jsonl(當天還沒轉檔)。jsonl 走 stdlib;parquet 需 pyarrow(extras `[ticks]`,未裝 →
+    ImportError 帶安裝說明)。排序鍵不是單看 `msg_seq`:它是進程內序號,同日重啟後歸零,
+    單看會把重啟後的列排到前面;`recv_ns` 是牆鐘、跨重啟單調,同 ns 撞號再以 `msg_seq` 定序。
+    兩種檔都不存在 → FileNotFoundError。
     """
-    path = jsonl_path(data_dir, day.isoformat())
-    if not path.exists():
-        raise FileNotFoundError(path)
-    rows: list[TickRow] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(_row_from_dict(json.loads(line)))
+    date = day.isoformat()
+    trade_pq = parquet_path(data_dir, date)
+    if trade_pq.exists():
+        rows = _read_parquet(trade_pq)
+        book_pq = book_parquet_path(data_dir, date)
+        if book_pq.exists():
+            rows.extend(_read_parquet(book_pq))
+    else:
+        path = jsonl_path(data_dir, date)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        rows = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rows.append(_row_from_dict(json.loads(line)))
     rows.sort(key=lambda r: (r.recv_ns, r.msg_seq))
     return rows
+
+
+def _read_parquet(path: Path) -> list[TickRow]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise ImportError(
+            f"讀 {path.name} 需要 pyarrow:pip install -e .[ticks](當天未轉檔的 jsonl 不需要)"
+        ) from exc
+    table = pq.read_table(path)
+    return [_row_from_dict(r) for r in table.to_pylist()]
