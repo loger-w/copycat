@@ -1,0 +1,25 @@
+{
+ "repo": "C:/side-project/copycat/.claude/worktrees/fix-pr-251-review-followups",
+ "poll_backoff_start": {
+  "tc4": 0.02,
+  "river_backfill": 0.02
+ },
+ "ready_ms": "15,40",
+ "ready_dist": "uniform",
+ "timer_1ms": true,
+ "n": 60,
+ "tc4_collect_history_ms": {
+  "p50": 60.7,
+  "p90": 61.0,
+  "max": 61.3,
+  "mean": 50.0,
+  "polls_mean": 4.73
+ },
+ "river_collect_1k_ms": {
+  "p50": 60.6,
+  "p90": 60.9,
+  "max": 61.1,
+  "mean": 53.3,
+  "polls_mean": 4.82
+ }
+}

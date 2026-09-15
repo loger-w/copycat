@@ -1,0 +1,42 @@
+{
+ "python": "3.13.13",
+ "timer_1ms": false,
+ "rows": [
+  {
+   "cpu_threads": 4,
+   "switchinterval": 0.005,
+   "loop_p50_ms": 72.142,
+   "loop_p90_ms": 167.019,
+   "loop_p99_ms": 275.236,
+   "loop_mean_ms": 81.944,
+   "worker_units_per_s": 523989.1
+  },
+  {
+   "cpu_threads": 4,
+   "switchinterval": 0.001,
+   "loop_p50_ms": 58.299,
+   "loop_p90_ms": 166.651,
+   "loop_p99_ms": 326.307,
+   "loop_mean_ms": 83.265,
+   "worker_units_per_s": 525726.9
+  },
+  {
+   "cpu_threads": 4,
+   "switchinterval": 0.005,
+   "loop_p50_ms": 57.512,
+   "loop_p90_ms": 165.456,
+   "loop_p99_ms": 310.923,
+   "loop_mean_ms": 81.42,
+   "worker_units_per_s": 522688.2
+  },
+  {
+   "cpu_threads": 4,
+   "switchinterval": 0.001,
+   "loop_p50_ms": 58.107,
+   "loop_p90_ms": 149.38,
+   "loop_p99_ms": 340.636,
+   "loop_mean_ms": 79.448,
+   "worker_units_per_s": 531456.1
+  }
+ ]
+}

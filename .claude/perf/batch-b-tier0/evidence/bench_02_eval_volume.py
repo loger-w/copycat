@@ -1,7 +1,8 @@
 """0-2 `_eval_volume` 窗和:SignalDetector.evaluate 每 tick 成本 vs 300 s 窗內筆數。
 
 先以 rate 筆/秒灌滿 300 s 窗(窗長穩定在 rate × 300 筆),再量之後 `measure` 筆的每 tick
-牆鐘(µs)。`enabled` 只開 vol_burst 隔離該 kind;`--all` 另加四種 kind 看整體。
+牆鐘(µs)。`enabled` 只開 vol_burst 隔離該 kind(**committed 數字是這個母體,不是 prod 每 tick evaluate 總成本**);
+`--all` 開 `KIND_SWITCH` 全部 kind 看整體。
 時鐘注入 10:00 起(開盤 60 分鐘後,過 vol_min_elapsed_min 閘)。
 
 用法:python bench_02_eval_volume.py [--repo <root>] [--rates 1,10,33] [--measure 2000]
@@ -106,7 +107,9 @@ def main() -> None:
     sys.path.insert(0, a.repo)
     kinds = frozenset({"vol_burst"})
     if a.all:
-        kinds = frozenset({"cdp_cross", "surge_crash", "vol_burst", "limit_lock", "surge_pullback"})
+        from copycat.live.signal_state import KIND_SWITCH  # 全集(pr-251 review F-19:字面寫死漏了兩種 kind)
+
+        kinds = frozenset(KIND_SWITCH.values())
     rows = [run(a.repo, int(r), a.measure, kinds) for r in a.rates.split(",")]
     print(json.dumps({"repo": a.repo, "rows": rows}, ensure_ascii=False, indent=1))
 
