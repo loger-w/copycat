@@ -1,7 +1,8 @@
 """盤中個股 tick 存檔的寫入端(spec #257;列形狀與讀回在 `copycat.ticks`)。
 
-由 stock engine 在 `_handle_quote` 尾端對**每一則現貨訊息**呼叫 `observe` 一次:訊息序號
-`msg_seq` 每則 +1(被試撮 / 重複擋掉的也佔號,照序號合起來才是完整訊息流);`ingest` 為真
+由 stock engine 在 `_handle_quote` 尾端對**每一則進到引擎路由的現貨訊息**(symbol 有對映、
+state 存在;池外推播早退不算)呼叫 `observe` 一次:訊息序號 `msg_seq` 每則 +1(被試撮 / 重複
+擋掉的也佔號,照序號合起來才是完整訊息流;**同日重啟自檔尾接續**,不歸零);`ingest` 為真
 的那筆寫成交列,其餘餵五檔給簿列去重。寫入 = 直接在看盤 loop 上 `write` 進 64 KB 緩衝
 handle、不 fsync、每 `flush_secs` 一次 `flush`(只是 write syscall;bakeoff T3 b5 / b6:單筆
 0.5 µs、70 萬次無 > 1 ms)。handle 在 `start` 與換日 `open_day` 預先開好,開檔那 9 ms 不落在
@@ -9,10 +10,12 @@ handle、不 fsync、每 `flush_secs` 一次 `flush`(只是 write syscall;bakeof
 
 檔名由**每一列**的 `trade_date` 決定(同日重啟 `"a"` 續寫、跨日自然分檔);同時最多握兩天
 的 handle(rollover stage1 到新日首筆之間兩日訊息會交錯),`open_day` 時關掉其他日。
+**該日 parquet 已在 = 已轉檔**:不再開 jsonl(否則盤後重啟的空 jsonl 會讓補跑把真 parquet
+蓋成空表,round-1 Spec F-01),該日的列當遲到殘影丟。
 
 **存檔永遠不影響看盤**:開檔 / 寫入 / flush 任一拋 OSError → WARNING 一次、**該日停寫**
-(計數器保留、`msg_seq` 照走),換日重新武裝;絕不 raise 進訊息處理路徑。`enabled=false`
-→ 零檔案、零 handle、零 timer(引擎照呼叫,全部 no-op)。
+(計數器保留、`msg_seq` 照走),換日重新武裝;絕不 raise 進訊息處理路徑(含 `start` 與
+`open_day` 的預開,round-1 Spec F-02)。`enabled=false` → 零檔案、零 handle、零 timer。
 """
 
 from __future__ import annotations
@@ -21,19 +24,21 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Callable, TextIO
 
 from copycat.live.stock_models import StockBook, StockTick
-from copycat.ticks import DEPTH, jsonl_path, taipei_ms
-from copycat.ticks_config import TicksConfig
+from copycat.ticks import DEPTH, jsonl_path, parquet_path, taipei_ms
+from copycat.ticks_config import TicksConfig, resolve_ticks_dir
 
-__all__ = ["STATS_FMT", "TickPersist"]
+__all__ = ["STATS_FMT", "TickPersist", "tail_msg_seq"]
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _BUFFER_BYTES = 64 * 1024
+#: 重啟接續 `msg_seq` 時讀檔尾的量:一列 < 1 KB,64 KB 內必有完整尾列(除非檔案更短)
+_TAIL_BYTES = 64 * 1024
 
 #: 每日一行的字面 = 盤後判準(CLAUDE.md §4 契約;`grep "tick 存檔" logs/server-*.log`,寫入失敗
 #: 應為 0)。換日 stage2 印舊日、關機印當日、13:45 轉檔前再印一次(T5);同日多行取最後。
@@ -42,6 +47,33 @@ STATS_FMT = "tick 存檔 %s:成交 %d / 簿 %d / 重複簿略過 %d / flush %d /
 
 def _open_append(path: Path) -> TextIO:
     return open(path, "a", buffering=_BUFFER_BYTES, encoding="utf-8", newline="\n")  # noqa: SIM115
+
+
+def tail_msg_seq(path: Path) -> int:
+    """既有 jsonl 最後一列**完整**列的 `msg_seq`(重啟接續用);檔不在 / 空 / 尾列壞 → 0。
+
+    只讀最後 `_TAIL_BYTES`。上一個 process 當機留下的半行(檔尾不是換行)不算完整列,
+    由呼叫端先補一個換行把它隔開,再從最後一列完整列接號 —— 半行裡的號碼不可信。
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size == 0:
+        return 0
+    with path.open("rb") as fh:
+        fh.seek(max(0, size - _TAIL_BYTES))
+        chunk = fh.read()
+    complete = chunk if chunk.endswith(b"\n") else chunk[: chunk.rfind(b"\n") + 1]
+    for line in reversed(complete.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            seq = json.loads(line).get("msg_seq")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        return int(seq) if isinstance(seq, int) else 0
+    return 0
 
 
 def _put_levels(out: dict, levels: list[tuple[int, int]], price_key: str, qty_key: str) -> None:
@@ -57,14 +89,17 @@ class TickPersist:
         self,
         config: TicksConfig,
         *,
-        base_dir: Path = _REPO_ROOT,
+        base_dir: Path | None = None,
         opener: Callable[[Path], TextIO] = _open_append,
     ) -> None:
         """`opener` 是測試注入壞 handle(OSError)的唯一入口;prod 用預設的 append 開檔。"""
         self._cfg = config
         self._enabled = config.enabled
-        d = Path(config.dir)
-        self._dir = d if d.is_absolute() else base_dir / d
+        self._dir = (
+            resolve_ticks_dir(config)
+            if base_dir is None
+            else resolve_ticks_dir(config, base_dir=base_dir)
+        )
         self._opener = opener
         self._files: dict[str, TextIO] = {}  # trade_date → 開著的 handle(最多兩天)
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -74,8 +109,10 @@ class TickPersist:
         # 當日停寫:某日開檔 / 寫入 / flush 拋 OSError 後記在這裡,該日之後的列全部略過
         # (只 WARNING 一次);換日 `open_day` 開的是別的日期,自然重新武裝。
         self._failed_days: set[str] = set()
-        # 已轉檔封住的日(`seal_day`):該日的列不再寫,只計數;WARNING 首筆一次
+        # 已轉檔封住的日(`seal_day` / parquet 已在):該日的列不再寫,只計數;每個封住日
+        # WARNING 首筆一次(`_sealed_warned`)
         self._sealed_days: set[str] = set()
+        self._sealed_warned: set[str] = set()
         self.sealed_dropped = 0
         # 簿列去重基準:code → 該檔**上一列存下的簿**(五檔 20 個數;成交列自帶的五檔也算)。
         # 「達錢重推一模一樣的簿」與「成交後緊接同一個簿」都不佔列,只進 `dup_books`。
@@ -98,7 +135,7 @@ class TickPersist:
     # ---- 生命週期 ----
 
     def start(self, loop: asyncio.AbstractEventLoop, trade_date: str) -> None:
-        """預開當日 handle + 武裝定時 flush;engine.start 呼叫。"""
+        """預開當日 handle + 武裝定時 flush;engine.start 呼叫。不 raise(預開失敗 = 當日停寫)。"""
         if not self._enabled:
             return
         self._loop = loop
@@ -107,7 +144,7 @@ class TickPersist:
 
     def open_day(self, trade_date: str) -> None:
         """預開 `trade_date` 的 handle(換日 stage2 呼叫),其他日的 handle flush + 關;
-        計數器歸零(呼叫端先 `log_stats` 舊日)。"""
+        計數器歸零(呼叫端先 `log_stats` 舊日)。該日 parquet 已在 → 不開,封住。不 raise。"""
         if not self._enabled or self._closed:
             return
         for day in [d for d in self._files if d != trade_date]:
@@ -115,11 +152,20 @@ class TickPersist:
         if self._day != trade_date:
             self._day = trade_date
             self.trades = self.books = self.dup_books = self.flushes = self.write_failures = 0
-        self._file_for(trade_date)
+        if trade_date in self._failed_days or trade_date in self._sealed_days:
+            return
+        if parquet_path(self._dir, trade_date).exists():
+            self._sealed_days.add(trade_date)
+            logger.info("tick 存檔 %s 已有 parquet(已轉檔),本日不再開 jsonl", trade_date)
+            return
+        try:
+            self._file_for(trade_date)
+        except OSError as exc:
+            self._fail(trade_date, "開檔", exc)
 
     def seal_day(self, trade_date: str) -> None:
         """轉檔前放掉該日 handle(flush + 關)並封住:之後該日的列一律丟(計 `sealed_dropped`、
-        首筆 WARNING 一次)。Windows 開著的檔刪不掉,子程序的「列數核對後刪 jsonl」會直接失敗;
+        該日首筆 WARNING 一次)。Windows 開著的檔刪不掉,子程序的「列數核對後刪 jsonl」會直接失敗;
         封住而不是重開,是因為重開會在 parquet 旁邊留下一份殘餘 jsonl,loader 永遠不讀它。
         13:45 之後現貨本來就零訊息(13:30 收盤),丟掉的只會是達錢的遲到殘影。"""
         if not self._enabled or self._closed:
@@ -138,7 +184,12 @@ class TickPersist:
         self.flushes += 1
 
     def log_stats(self, day: str) -> None:
-        """印當日那一行(字面 `STATS_FMT`);零筆也印,判準是「那行存在」。"""
+        """印當日那一行(字面 `STATS_FMT`);零筆也印,判準是「那行存在」。
+
+        `day` 是呼叫端的標籤(engine 傳 `_trade_date`、排程傳牆鐘今天),計數器是自上次
+        `open_day` 起的累計 —— 換日邊界遲到的舊日列會計進新日(round-1 F-04 知情接受:
+        判準只看「行存在、寫入失敗 0」,不對帳列數)。
+        """
         if not self._enabled:
             return
         logger.info(
@@ -231,10 +282,9 @@ class TickPersist:
         if trade_date in self._failed_days:
             return False
         if trade_date in self._sealed_days:
-            if self.sealed_dropped == 0:
-                logger.warning(
-                    "tick 存檔 %s 已轉檔封住,之後到達的列丟棄", trade_date.replace("-", "")
-                )
+            if trade_date not in self._sealed_warned:
+                self._sealed_warned.add(trade_date)
+                logger.warning("tick 存檔 %s 已轉檔封住,之後到達的列丟棄", trade_date)
             self.sealed_dropped += 1
             return False
         try:
@@ -245,11 +295,19 @@ class TickPersist:
         return True
 
     def _file_for(self, trade_date: str) -> TextIO:
-        """該日 handle,沒有就開(`open_day` 預開;停寫日不會走到這裡)。可能拋 OSError。"""
+        """該日 handle,沒有就開(`open_day` 預開;停寫 / 封住日不會走到這裡)。可能拋 OSError。
+
+        開既有檔時先接 `msg_seq`(檔尾最後一列完整列 +1 起跳),檔尾若是當機留下的半行先補
+        一個換行把它隔開 —— 新列黏在半行後面 = 一行壞資料吃掉一列好資料。
+        """
         fh = self._files.get(trade_date)
         if fh is None:
             self._dir.mkdir(parents=True, exist_ok=True)
-            fh = self._opener(jsonl_path(self._dir, trade_date))
+            path = jsonl_path(self._dir, trade_date)
+            self._msg_seq = max(self._msg_seq, tail_msg_seq(path))
+            fh = self._opener(path)
+            if _ends_without_newline(path):
+                fh.write("\n")
             self._files[trade_date] = fh
         return fh
 
@@ -267,7 +325,7 @@ class TickPersist:
                 fh.close()
         logger.warning(
             "tick 存檔 %s 停寫(%s 失敗:%s)—— 看盤不受影響,換日自動重試",
-            trade_date.replace("-", ""),
+            trade_date,
             stage,
             exc,
         )
@@ -290,6 +348,19 @@ class TickPersist:
             return
         self.flush()
         self._arm_flush()
+
+
+def _ends_without_newline(path: Path) -> bool:
+    """既有非空檔的最後一個 byte 不是換行 = 上次當機留下半行。檔不在 / 空 → False。"""
+    try:
+        size = os.path.getsize(path)
+        if size == 0:
+            return False
+        with open(path, "rb") as fh:
+            fh.seek(size - 1)
+            return fh.read(1) != b"\n"
+    except OSError:
+        return False
 
 
 def _raw_str(value: object) -> str | None:
