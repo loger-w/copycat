@@ -124,7 +124,7 @@ def _spot_trial_window_now() -> bool:
 #: 每日一行「個股旗標」計數的**固定字面**(mod/stock-side-flag):追蹤達錢到底給不給中立
 #: 旗標(09-14 去重 6,320 筆只 1 筆 0)。`欄缺` 非 0 = 達錢格式漂了;零筆也印 —— 盤後判準
 #: 是「那行存在」不是數字。`/api/health` 刻意不含。
-_FLAG_STATS_FMT = "個股旗標 0:%d 筆 / 欄缺 %d 筆 / 總 %d 筆(%s)"
+_FLAG_STATS_FMT: str = "個股旗標 0:%d 筆 / 欄缺 %d 筆 / 總 %d 筆(%s)"
 #: TradeStatus 轉態觀測的**固定 grep 前綴 + 格式**(D6/R10)。與 parse 層值域外 warning
 #: 是同事件兩則(那邊管值域、這邊管轉態時序),蒐證對帳一律以本前綴為準。
 _TRADE_STATUS_FMT = "trade-status-observe code=%s %s->%s t=%s trial_window=%s qty=%s"
@@ -431,7 +431,9 @@ class StockEngine:
         # 先斷 threadsafe callback 入口(比照 index_engine):close 期間 TC4 推播不得再
         # `call_soon_threadsafe` 到即將關閉的 loop
         self._loop = None
-        # 關機結算當日旗標計數(斷入口之後:之後不會再有 tick 計進來,那一行就是全日)
+        # 關機結算當日旗標計數。放在斷入口之後:此後 TC4 推播進不來;斷入口前已排入 loop 的
+        # 幾則仍會在下面 `gather` 期間跑 `_handle_quote` 累加,但不再印 —— 關機瞬間數筆,
+        # 判準是「那行存在」不是數字,知情接受(review Spec-S-02)。
         self._log_flag_stats(self._trade_date)
         # 在途的逾時重排 timer 不歸 `_tasks` 管(它們是 `call_later` handle 不是 task)
         # → 這裡是唯一的取消點。留著的話 callback 會在已關閉的 engine 上起
