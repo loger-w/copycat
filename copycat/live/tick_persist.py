@@ -53,15 +53,19 @@ BOOK_OPEN_TIME = _dt.time(9, 0)
 STATS_FMT = "tick 存檔 %s:成交 %d / 簿 %d / 重複簿略過 %d / flush %d / 寫入失敗 %d"
 #: 封住後仍到達而丟棄的列數,> 0 才另印一行(不動 `STATS_FMT` 字面;pr-263 F-04)
 _SEALED_FMT = "tick 存檔 %s 封住後丟棄 %d 列(該日已轉檔;09:00 後的遲到列)"
+#: 09:00 前略過的簿更新,> 0 才另印一行:閘用本地鐘,機器時區錯 / 時鐘偏差整天簿列全丟時,
+#: 「簿 0」與「盤前略過 n 列」放一起才分得出是閘擋掉還是達錢沒推(收修 round-1 Standards F-02)
+_PREOPEN_FMT = "tick 存檔 %s 盤前(09:00 前)略過簿更新 %d 列"
 
 #: 五檔 20 欄的鍵名,與 `TickRow` 同源(`BOOK_FIELDS` 尾段),熱路徑不再每則 f-string 現組
 #: (pr-263 F-22)
+#: 四組切片邊界由 `tests/server/test_tick_persist.py::test_level_keys_parity_with_tick_row` 釘住
+#: (不放 module-level assert:`python -O` 會剝掉,repo 慣例是 parity 測試)
 _LEVEL_KEYS = BOOK_FIELDS[BOOK_FIELDS.index("bid0") :]
 _BID_KEYS = _LEVEL_KEYS[0:DEPTH]
 _BIDQ_KEYS = _LEVEL_KEYS[DEPTH : 2 * DEPTH]
 _ASK_KEYS = _LEVEL_KEYS[2 * DEPTH : 3 * DEPTH]
 _ASKQ_KEYS = _LEVEL_KEYS[3 * DEPTH : 4 * DEPTH]
-assert _BID_KEYS == ("bid0", "bid1", "bid2", "bid3", "bid4") and _ASKQ_KEYS[-1] == "askq4"
 
 
 def _open_append(path: Path) -> TextIO:
@@ -187,7 +191,7 @@ class TickPersist:
             return
         try:
             self._file_for(trade_date)
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             self._fail(trade_date, "開檔", exc)
 
     def seal_day(self, trade_date: str) -> None:
@@ -232,6 +236,8 @@ class TickPersist:
         )
         if self.sealed_dropped:
             logger.info(_SEALED_FMT, day, self.sealed_dropped)
+        if self.books_preopen:
+            logger.info(_PREOPEN_FMT, day, self.books_preopen)
 
     def close(self) -> None:
         """flush + 關全部 handle;之後 `observe` 為 no-op。engine.close 呼叫。"""
@@ -323,7 +329,7 @@ class TickPersist:
             return False
         try:
             self._file_for(trade_date).write(json.dumps(row, ensure_ascii=False) + "\n")
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             self._fail(trade_date, "寫入", exc)
             return False
         return True
@@ -345,8 +351,9 @@ class TickPersist:
             self._files[trade_date] = fh
         return fh
 
-    def _fail(self, trade_date: str, stage: str, exc: Exception) -> None:
-        """失敗的唯一處置:WARNING 一次、該日停寫、丟掉該日 handle。已停寫的日不再記。"""
+    def _fail(self, trade_date: str, stage: str, exc: OSError) -> None:
+        """OSError 的唯一處置:WARNING 一次、該日停寫、丟掉該日 handle。已停寫的日不再記。
+        只接 OSError(鐵則 E):`json.dumps` / 已關 handle 的 ValueError 是程式錯誤,不該被降成停寫。"""
         if trade_date in self._failed_days:
             return
         self._failed_days.add(trade_date)
