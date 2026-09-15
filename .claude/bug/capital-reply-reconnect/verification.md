@@ -39,7 +39,7 @@ S-02 只在 degraded 排、S-03 哨兵風格、S-04 退避表兩條測試、S-06
 修前實錄 = 判準對照(`logs/server-20260914-2359.log`):05:50:57 disconnect 3033 → 05:50:59 探針 0 → 到 08:14:30 零
 connection 事件、零 ConnectByID、status 仍 ok。
 
-判準(`grep "回報線\|Solace" logs/server-<日>.log`,一次斷線要看到這四行、順序如此):
+判準(`grep "回報線\|Solace" logs/server-<日>.log`,一次斷線要看到這四行;第 3 / 4 行順序可互換 —— STA 重入時連線事件可能先於 ConnectByID 回傳,pr-review 253 F-07):
 1. `Capital Solace reply disconnect (code=…)` WARNING(或探針先翻 0)
 2. `群益回報線斷線(<來源>)→ degraded,5 s 後重連` WARNING(只一行;事件與探針同時到也不重複)
 3. `群益回報線重連 ConnectByID 已送出(第 n 次)` INFO(退避 5 / 10 / 20 / 40 / 60 s 內)

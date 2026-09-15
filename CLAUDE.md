@@ -393,17 +393,25 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   任一成立 → `_set_status("degraded")` + `_schedule_reply_reconnect`(同一次斷線只排一次;探針 0 在 degraded 下也排,
   所以**開機 ConnectByID rc≠0** 那條 degraded 同樣會重連;starting / error 不排)。恢復訊號兩個 —— 事件
   `OnSolaceReplyConnection` / `OnConnect` **code 0**(轉 `on_connect`,code ≠ 0 只 WARNING)與探針翻 1;任一成立且 status
-  degraded → `_reply_recovered` → ok(`_set_status("ok")` 順帶清在途鏈旗標,所以恢復當下**重新武裝一次庫存查詢**、
-  `last_error` 清空)。重連 = `_maybe_reconnect_reply`(幫浦圈,
+  degraded → `_reply_recovered` → ok(`_set_status("ok", reset_chain=False)`:**不動回查鏈** —— 鏈走 SKOrderLib 與回報線
+  獨立,在途那一輪照常落地;清了會 flush 成截斷 / 空快照,pr-review 253 F-01;仍**重新武裝一次庫存查詢**讓 `store.clear()`
+  打掉的 `_positions_seeded` 靠一次快照重 seed、`last_error` 清空)。重連 = `_maybe_reconnect_reply`(幫浦圈,
   degraded 且退避到期):**先 `store.clear()` 再 `connect_reply`**(ConnectByID 連上就重播當日 backlog,12:32 重啟實錄
   17 筆;不清就成交在 fills / 委託聚合雙計),rc=0 標 balance dirty(重播零成交列時仍要一次快照落地才重開樂觀套用),
-  退避 `REPLY_RECONNECT_BACKOFF_SECS` 等待序列 5 / 10 / 20 / 40 / 60 / 60 … s(`_reconnect_delay`)、rc≠0 或一窗內未恢復再試。
+  退避 / 去重 / 探針值三態 = 純狀態機 `capital/reply_link.py::ReplyLink`(`REPLY_RECONNECT_BACKOFF_SECS` 等待序列
+  5 / 10 / 20 / 40 / 60 / 60 … s、`classify_probe`;表驗在 `tests/capital/test_reply_link.py`)、rc≠0 或一窗內未恢復再試。
   **斷線當下不 clear,首次退避 5 s 到期即清、之後每次出手前再清(rc≠0 那格是白清)** —— 斷線期間委託列表 / 閃電梯
-  成交點會是空的,直到某次 ConnectByID 真的連上重播;寧空勿雙計(知情接受)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
+  成交點會是空的,直到某次 ConnectByID 真的連上重播;寧空勿雙計(知情接受)。**同一窗內改價的本地安全閘也跟著空**
+  (`_orders` 清空 → `remaining_shares` None → `check_correct_price` 寬鬆放行、`market_of` None、`_fut_multiplier` 退 1):
+  退化為券商兜底(拒單),不動錢,但 defence-in-depth 在窗內不存在、零訊號 —— 知情接受(pr-review 253 F-02,user 拍板 (a));
+  盤中網路抖才會撞到(22 天 log 零次;每日 05:50 那次固定斷網時手上沒活單)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
   optional 不讀,status 燈走既有 degraded。log 四行:「群益回報線斷線(<來源>)→ degraded,N s 後重連」WARNING /
   「群益回報線重連 ConnectByID 已送出(第 n 次)」INFO /「群益回報線重連失敗 rc=…」WARNING /「群益回報線恢復(<來源>;
-  重連 n 次)→ ok」INFO。盤後判準:`grep "回報線\|Solace" logs/server-<日>.log` —— 每次 disconnect 後在退避內接
-  「已送出」、再接「恢復」;「恢復」缺 = 回報線真的沒回來(或 IsConnectedByID 語意變了),不是 bug 修回去。
+  重連 n 次)→ ok」INFO。盤後判準:`grep "回報線\|Solace" logs/server-<日>.log` —— 每次 disconnect 後在退避內
+  「已送出」與「恢復」**兩行都要在**(COM STA 同步呼叫期間會 dispatch incoming,連線事件可能在 ConnectByID 回傳前就進來 →
+  兩行順序可互換,pr-review 253 F-07);「恢復」缺 = 回報線真的沒回來(或 IsConnectedByID 語意變了),不是 bug 修回去。
+  **這條每個交易日都會用到**:22 天 log 顯示本機每天 05:50–05:51 固定斷網一次(DNS / Discord / TC4 / 群益同時掉,
+  路由器或 ISP 每日重撥),修前回報線自此死到 user 早上重啟 —— 「早上下單看不到委託 / 成交」即此。
   修前實錄(判準對照):05:50:57 disconnect 3033 → 05:50:59 探針 0 → 到 08:14 重啟前零 connection 事件、零 ConnectByID。
   `tests/capital/test_reply_reconnect.py`(05:50 場景逐字重播 + 探針單路 + R7 不雙計 + 失敗退避)+
   `test_reply_watch.py` + `test_com.py::test_reply_events_solace_pair_forward_and_log` 釘住。
