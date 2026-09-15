@@ -93,26 +93,41 @@ def apply_timer_1ms(
     if platform != "win32":
         logger.info("timer 1 ms:非 Windows(%s),不套用", platform)
         return False
+    # 兩種失敗分開講(round-1 H1):回傳值失敗印錯誤碼;例外(DLL 載不到 / 匯出不存在,pr-251 review F-06)
+    # 印例外本身 —— 不能讓例外路徑也印「回 False,GetLastError=-1」這種沒發生過的事,盤後 grep 會被導錯方向。
+    qos_ok = False
     try:
         qos_ok, err = qos_fn()
     except (OSError, AttributeError) as exc:
-        # DLL 載不到 / 匯出不存在(pr-251 review F-06):與回傳 False 同歸「失敗」,不讓效能項炸掉啟動
-        logger.warning("EcoQoS 豁免呼叫失敗(%s: %s):視同未豁免", type(exc).__name__, exc)
-        qos_ok, err = False, -1
-    if not qos_ok:
         logger.warning(
-            "EcoQoS 豁免失敗(SetProcessInformation ProcessPowerThrottling 回 False,GetLastError=%d):"
-            "timeBeginPeriod(1) 仍會要,但 Windows 11 約 3 秒後收回,timer drift 退回 ~12 ms",
-            err,
+            "EcoQoS 豁免呼叫失敗(%s: %s):視同未豁免;timeBeginPeriod(1) 仍會要,"
+            "但 Windows 11 約 3 秒後收回,timer drift 退回 ~12 ms",
+            type(exc).__name__,
+            exc,
         )
+    else:
+        if not qos_ok:
+            logger.warning(
+                "EcoQoS 豁免失敗(SetProcessInformation ProcessPowerThrottling 回 False,GetLastError=%d):"
+                "timeBeginPeriod(1) 仍會要,但 Windows 11 約 3 秒後收回,timer drift 退回 ~12 ms",
+                err,
+            )
+    tbp_ok = False
     try:
         mm = tbp_fn()
     except (OSError, AttributeError) as exc:
-        logger.warning("timeBeginPeriod 呼叫失敗(%s: %s):視同未套用", type(exc).__name__, exc)
-        mm = -1
-    if mm != _TIMERR_NOERROR:
-        logger.warning("timeBeginPeriod(1) 失敗(MMRESULT=%d):timer 解析度維持系統預設 15.6 ms", mm)
-    ok = qos_ok and mm == _TIMERR_NOERROR
+        logger.warning(
+            "timeBeginPeriod 呼叫失敗(%s: %s):視同未套用,timer 解析度維持系統預設 15.6 ms",
+            type(exc).__name__,
+            exc,
+        )
+    else:
+        tbp_ok = mm == _TIMERR_NOERROR
+        if not tbp_ok:
+            logger.warning(
+                "timeBeginPeriod(1) 失敗(MMRESULT=%d):timer 解析度維持系統預設 15.6 ms", mm
+            )
+    ok = qos_ok and tbp_ok
     if ok:
         logger.info("timer 1 ms 已套用(EcoQoS 豁免 + timeBeginPeriod)")
     return ok

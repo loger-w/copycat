@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
@@ -30,8 +31,16 @@ class TestHasClientsWiring:
             assert corr is not None
             gate = corr._has_clients
             assert gate is not None
-            assert gate.__self__ is app.state.corr_ws  # type: ignore[attr-defined]
-            assert gate.__func__ is type(app.state.corr_ws).has_clients  # type: ignore[attr-defined]
+            # 行為斷言(round-1 J4):不綁 bound-method 形狀 —— 對 corr_ws 登記 / 除名一個 client,閘要跟著翻
+            ws = app.state.corr_ws
+            assert gate() is False
+            q: asyncio.Queue[dict] = asyncio.Queue()
+            ws._clients.add(q)
+            try:
+                assert gate() is True
+            finally:
+                ws._clients.discard(q)
+            assert gate() is False
 
 
 class TestCorrStateRoute:

@@ -27,7 +27,7 @@ fixed point `1e0720be`(origin/master)。python 一律主樹 venv 絕對路徑(wo
 | 0-2 | `bench_02`(µs/tick p50 @ 窗 301 / 3001 / 9901;**只開 vol_burst** 隔離該 kind,不是 prod 每 tick 的 evaluate 總成本) | 12.9 / 89.7 / 286.3 | **4.3 / 4.3 / 4.3** | 三窗 ≤ 5、窗長無關 | **PASS** |
 | 0-3 | `bench_03 --mode apply` 60 s,run.ps1 同款 `Start-Process -NoNewWindow`(`out_bench_03_apply.json`) | base p50 12.586 / p99 14.2 | **全程 p50 0.57 / p90 1.01 / p99 2.004**;每 10 s 桶 p50 0.50–0.62 全程無退回 | **全程** p50 ≤ 0.6 且**每 10 s 桶** p50 < 1 ms(桶不再與 0.6 比,pr-251 review F-21);p99 ≤ 2 | **PASS**(p50);p99 2.004 差 4 µs,T4 同值 2.010 |
 | 0-4 | `bench_04 --drift`(push + correlations ms p50) | 9.041 | **0.061**(push 0.035 + corr 0.027;corr p90 0.029;review 收修前 0.067) | ≤ 0.1;n_mismatch 0 | **PASS**;n_mismatch 0、16,200 push max\|Δr\| 3.0e-14 |
-| 0-5 | `bench_05`(µs p50) | 207.0 | **148.2**(第二次 212 → 155;−28%) | ≤ 140 | **未達 8–15 µs**,見 §4 |
+| 0-5 | `bench_05`(µs p50) | 207.0 | **148.2**(−28%;首輪未存檔那次 212 → 155) | ≤ 140 | **未達 8 µs**,見 §4(user 拍板接受) |
 | 0-6 | `bench_06 --n 400`(µs/await p50) | positions 794.5 / orders 1345.7 / fills 675.5 | **98.7 / 193.3 / 97.4** | positions ≤ 100 | **PASS** |
 | 0-7 | `bench_03 --mode apply --cpu-threads 4 [--switch 0.001]` 60 s(`out_bench_03_apply_4thr*.json`) | switch 0.005:p50 17.12 / p90 52 / p99 102;worker 561k/s | **switch 0.001:p50 4.40 / p90 13.4 / p99 25.1**;worker 519k/s(−7.6%) | p50 ≤ 4 | **差 0.4 ms**,見 §4;p99 4x |
 | 0-8 | spy 測試 | 停用 slot 收到 set_basis | 停用 slot 零呼叫、upsert 後新 slot `_basis` 有值 | 機制 | PASS |
@@ -49,8 +49,8 @@ fixed point `1e0720be`(origin/master)。python 一律主樹 venv 絕對路徑(wo
 1. 啟動 log 有「timer 1 ms 已套用(EcoQoS 豁免 + timeBeginPeriod)」與「switchinterval 0.0010 s」各一行(0-3 / 0-7)。
 2. **重啟後立刻、前端先別開**(pr-251 review F-02,user 拍板):`python .claude/perf/batch-b-tier0/evidence/bench_04_prod_overlay.py 150`
    (只打 prod API,零新訂閱)。`OverlayCache` 是 per-(code, today) in-memory **無 TTL**,前端一開、進過群組,自選那批就全 hit ——
-   盤後再跑量到的是熱路徑(腳本第 2 段基線 sub-ms),150 檔必然 ≪ 3 s、假 PASS。判讀:第 3 段每檔 p50 必須**明顯高於**第 2 段
-   熱取基線(冷取有 TC4 往返),否則本次量測無效重來;150 檔牆鐘 ≤ 3 s(0-1)。順序 = 重啟 → 不開前端 → 跑腳本 → 再開前端。
+   盤後再跑量到的是熱路徑(腳本第 2 段基線 sub-ms),150 檔必然 ≪ 3 s、假 PASS。判讀(review 建議的額外守門,不在 user 選的 A 內):第 3 段每檔 p50 應**明顯高於**第 2 段
+   熱取基線(冷取有 TC4 往返),否則本次量測可能又量到熱路徑、重來;150 檔牆鐘 ≤ 3 s(0-1)。順序 = 重啟 → 不開前端 → 跑腳本 → 再開前端。
 3. 次一交易日盤後:`grep "佇列滿" logs/server-<日>.log` 為 0;相關係數分頁數字與前一日同量級;江波圖首則 snapshot 正常。
 4. 群益送單審計檔 `capital-<日>.jsonl` 照常一筆兩行(0-5;目錄由 CapitalClient 建構時建)。
 
@@ -66,8 +66,8 @@ fixed point `1e0720be`(origin/master)。python 一律主樹 venv 絕對路徑(wo
   左邊 0.4 ms;`uniform` 悲觀分佈 p50 60.7 ms(首輪落空 → 第二輪 20 + 40)。「150 → 20–61 大幅改善」在任何分佈下成立,
   「≤ 45」不是量到的性質。spec 寫「22–44 ms」是 C1 以固定 20 ms 間隔掃描得到的,倍增版第二輪必然 60 ms;
   user 拍板「倍增與上限不動」。真數字看重啟後 §3 第 2 條(冷取)。
-- 既有測試兩處改動:`test_fallback_1k_also_uses_short_deadline` 的 `sum(slept) <= 20.0` 容 +1e-9(假鐘 0.02·2^k 序列浮點累加
-  尾差 4e-15,預算未變);`test_audit_pre_write_failure_fails_whole_request` 前置改 `rmdir` 再以檔案佔住(ctor 現在先建目錄,意圖不變)。
+- 既有測試兩處改動:`test_fallback_1k_also_uses_short_deadline` 的 `sum(slept) <= 20.0` 先容 +1e-9,pr-251 review F-16 起改等式
+  `abs(sum − 20) < 1e-9`(假鐘 0.02·2^k 序列浮點累加尾差 4e-15,預算未變;等式擋得住預算縮短);`test_audit_pre_write_failure_fails_whole_request` 前置改 `rmdir` 再以檔案佔住(ctor 現在先建目錄,意圖不變)。
 - 1-1 的 25 條 int 鍵斷言依 spec 預告改 str(regex 批次,逐條 diff 過目)。
 
 ## 4.5 two-axis review round-1 收修後重跑(closeout §1 → §2 順序)
