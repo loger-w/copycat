@@ -275,6 +275,111 @@ class TestRealSubprocess:
         assert not jsonl_path(tmp_path, "2026-07-21").exists()
 
 
+class TestReviewRound1:
+    """two-axis round-1 收修(Spec F-01 / F-05、Standards F-01 / F-02 / F-11)。"""
+
+    async def test_stale_jsonl_from_a_previous_day_is_compacted_at_boot_before_1345(
+        self, tmp_path: Path
+    ) -> None:
+        """server 13:45 沒開著(或 engine 沒換日)留下的昨日 jsonl,隔天一啟動就補轉 ——
+        不受今天 13:45 閘管;今天的那份仍等 13:45。"""
+        mon = _dt.date(2026, 7, 20)
+        _touch_jsonl(tmp_path, mon)
+        _touch_jsonl(tmp_path, _TUE)
+        clock = _Clock(_dt.datetime(2026, 7, 21, 8, 10, 0))
+        runner = _Runner(clock, [_OK])
+        eng = _make(tmp_path, clock, runner)
+        await eng.tick()
+        assert [c[0] for c in runner.calls] == [mon]
+        clock.t = _dt.datetime(2026, 7, 21, 13, 45, 0)
+        await eng.tick()
+        assert [c[0] for c in runner.calls] == [mon, _TUE]
+
+    async def test_stale_jsonl_on_a_non_trading_day_is_left_alone(self, tmp_path: Path) -> None:
+        sat = _dt.date(2026, 7, 25)
+        _touch_jsonl(tmp_path, sat)
+        clock = _Clock(_dt.datetime(2026, 7, 27, 14, 0, 0))
+        runner = _Runner(clock, [_OK])
+        await _make(tmp_path, clock, runner).tick()
+        assert runner.calls == []
+
+    async def test_jsonl_next_to_an_existing_parquet_is_not_compacted(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Spec F-01 的排程側閘:parquet 已在 = 已轉檔,殘餘 jsonl(不該存在)不得再轉 ——
+        空對空核對會過、真 parquet 被蓋成空表。WARNING 一次、jsonl 留著。"""
+        _touch_jsonl(tmp_path)
+        parquet_path(tmp_path, "2026-07-21").write_bytes(b"real")
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+        runner = _Runner(clock, [_OK])
+        eng = _make(tmp_path, clock, runner)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            await eng.tick()
+            await eng.tick()
+        assert runner.calls == []
+        assert parquet_path(tmp_path, "2026-07-21").read_bytes() == b"real"
+        assert jsonl_path(tmp_path, "2026-07-21").exists()
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+    async def test_unexpected_exception_in_the_runner_is_a_failure_not_a_dead_loop(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Standards F-01 存活邊界:呼叫端拋非預期例外 → 記 traceback、算失敗一次、照排重試。"""
+        _touch_jsonl(tmp_path)
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+
+        class _Boom(_Runner):
+            async def __call__(self, day: _dt.date) -> CompactRun:
+                self.calls.append((day, self.clock.t))
+                raise RuntimeError("boom")
+
+        runner = _Boom(clock, [_OK])
+        eng = _make(tmp_path, clock, runner)
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            await eng.tick()
+            clock.t = _dt.datetime(2026, 7, 21, 14, 0, 0)
+            await eng.tick()
+        assert len(runner.calls) == 2
+        assert any(
+            r.levelno == logging.ERROR and r.exc_info and "boom" in str(r.exc_info[1])
+            for r in caplog.records
+        )
+
+    async def test_loop_survives_an_exception_raised_by_tick(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+        eng = _make(tmp_path, clock, _Runner(clock, [_OK]))
+        ticks = 0
+
+        async def _tick() -> None:
+            nonlocal ticks
+            ticks += 1
+            if ticks == 1:
+                raise RuntimeError("glob exploded")
+
+        monkeypatch.setattr(eng, "tick", _tick)
+        sleeps: list[float] = []
+
+        async def _sleep(secs: float) -> None:
+            sleeps.append(secs)
+            if len(sleeps) >= 2:
+                raise asyncio.CancelledError
+
+        from copycat.server import ticks_compactor as mod
+
+        monkeypatch.setattr(mod.asyncio, "sleep", _sleep)
+        with caplog.at_level(logging.ERROR, logger=_LOGGER):
+            with pytest.raises(asyncio.CancelledError):
+                await eng._loop()
+        assert ticks == 2  # 第一輪炸了,第二輪還是跑到
+        assert any(r.exc_info and "glob exploded" in str(r.exc_info[1]) for r in caplog.records)
+
+    def test_dir_is_public(self, tmp_path: Path) -> None:
+        clock = _Clock(_dt.datetime(2026, 7, 21, 13, 45, 0))
+        assert _make(tmp_path, clock, _Runner(clock, [_OK])).dir == tmp_path
+
+
 class TestRetention:
     async def test_book_files_older_than_keep_days_in_trading_days_are_deleted(
         self, tmp_path: Path
@@ -286,7 +391,8 @@ class TestRetention:
         days = ["2026-07-27", "2026-07-24", "2026-07-23", "2026-07-22", "2026-07-21", "2026-07-20"]
         for d in days:
             book_parquet_path(tmp_path, d).write_bytes(b"x")
-            parquet_path(tmp_path, d).write_bytes(b"x")
+            if d != "2026-07-27":  # 今天的成交 parquet 只會在轉檔後才出現(先有 = 殘餘 jsonl 閘會擋)
+                parquet_path(tmp_path, d).write_bytes(b"x")
         (tmp_path / "notes.txt").write_text("keep", encoding="utf-8")
         clock = _Clock(_dt.datetime(2026, 7, 27, 13, 45, 0))
         runner = _Runner(clock, [_OK])
@@ -294,7 +400,7 @@ class TestRetention:
         await eng.tick()
         kept = sorted(p.name for p in tmp_path.iterdir())
         assert kept == sorted(
-            [f"{d.replace('-', '')}.parquet" for d in days]
+            [f"{d.replace('-', '')}.parquet" for d in days if d != "2026-07-27"]
             + ["20260727-book.parquet", "20260724-book.parquet", "20260723-book.parquet"]
             + ["notes.txt", "20260727.jsonl"]
         )

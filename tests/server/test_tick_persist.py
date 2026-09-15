@@ -193,7 +193,7 @@ class TestFileNaming:
 
         rows = _rows(tmp_path)
         assert [r["cum_vol"] for r in rows] == [1, 7]
-        assert [r["msg_seq"] for r in rows] == [1, 1]  # 進程內序號,重啟歸零
+        assert [r["msg_seq"] for r in rows] == [1, 2]  # 同日重啟自檔尾接續(round-1 Spec F-03)
 
 
 class TestFlush:
@@ -369,7 +369,7 @@ class TestResilience:
             src.on_message(_quote(cum=2, bid="2376"))  # 簿變
             await _drain(engine)
             warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-            assert len(warnings) == 1 and "20260721" in warnings[0].getMessage()
+            assert len(warnings) == 1 and "2026-07-21" in warnings[0].getMessage()
             assert len(recorder.ticks) == 2  # 訊號層照常
             assert len(engine.snapshot("2330")["ticks"]) == 2  # 看盤成交明細照常
             await engine.close()
@@ -505,7 +505,144 @@ class TestAppWiring:
         with client:
             compactor = client.app.state.ticks_compactor  # type: ignore[attr-defined]
             assert compactor is not None
-            assert compactor._dir == tmp_path / "ticks"
+            assert compactor.dir == tmp_path / "ticks"
+
+
+class _RaisingOpener:
+    """指定日期**開檔**即 OSError(權限 / 目錄不可寫),其餘走真檔。"""
+
+    def __init__(self, days: set[str]) -> None:
+        self.days = days
+
+    def __call__(self, path: Path) -> TextIO:
+        if path.stem in self.days:
+            raise PermissionError(13, "Permission denied")
+        return open(path, "a", buffering=64 * 1024, encoding="utf-8", newline="\n")
+
+
+class TestReviewRound1:
+    """two-axis round-1 收修(Spec F-01 / F-02 / F-03、Standards F-06)。"""
+
+    async def test_open_error_at_start_warns_once_and_keeps_the_engine_alive(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Spec F-02:預開 handle 拋 OSError 不得讓 `engine.start()` 失敗(那會把整個 stock engine
+        停用);WARNING 一次、當日停寫、換日重新武裝。"""
+        src = FakeSource()
+        persist = TickPersist(
+            TicksConfig(dir=str(tmp_path), flush_secs=3600.0), opener=_RaisingOpener({"20260721"})
+        )
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
+        )
+        recorder = _TickRecorder()
+        engine.attach_signal_hub(recorder)
+        with caplog.at_level(logging.WARNING, logger="copycat.live.tick_persist"):
+            await engine.start()  # 不得 raise
+            await engine.set_main("2330")
+            assert src.on_message is not None
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2))
+            await _drain(engine)
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=5, date="20260722"))
+            await _drain(engine)
+            await engine.close()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1 and "2026-07-21" in warnings[0]
+        assert len(recorder.ticks) == 3
+        assert not (tmp_path / "20260721.jsonl").exists()
+        assert [r["cum_vol"] for r in _rows(tmp_path, "20260722")] == [5]
+
+    async def test_restart_after_compaction_does_not_recreate_the_jsonl(
+        self, tmp_path: Path
+    ) -> None:
+        """Spec F-01:當日 parquet 已在 = 已轉檔;重啟不得再預開一份空 jsonl(否則補跑會把
+        真 parquet 蓋成空表)。該日列視為遲到殘影丟棄。"""
+        (tmp_path / "20260721.parquet").write_bytes(b"real")
+        engine, src = await _make(tmp_path, flush_secs=3600.0)
+        assert not (tmp_path / "20260721.jsonl").exists()
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        await engine.close()
+        assert not (tmp_path / "20260721.jsonl").exists()
+        assert (tmp_path / "20260721.parquet").read_bytes() == b"real"
+        assert engine.tick_persist is not None and engine.tick_persist.sealed_dropped == 1
+
+    async def test_same_day_restart_continues_msg_seq_from_the_file_tail(
+        self, tmp_path: Path
+    ) -> None:
+        """Spec F-03:`msg_seq` 同日重啟自檔尾接續,不歸零 —— 排序才能只看 `msg_seq`
+        (`recv_ns` 是牆鐘,校時回撥會打亂)。"""
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        src.on_message(_quote(cum=1, bid="2376"))  # 簿列 msg_seq 2
+        await _drain(engine)
+        await engine.close()
+
+        engine2, src2 = await _make(tmp_path)
+        assert src2.on_message is not None
+        src2.on_message(_quote(cum=7))
+        await _drain(engine2)
+        await engine2.close()
+        assert [r["msg_seq"] for r in _rows(tmp_path)] == [1, 2, 3]
+        assert [r.msg_seq for r in load_day(_DAY, tmp_path)] == [1, 2, 3]
+
+    async def test_partial_trailing_line_from_a_crash_is_isolated_on_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """上一個 process 當機留下沒換行的半行:重啟續寫前先補換行,新列不得黏在半行後面
+        (黏上去 = 一行壞資料吃掉一列好資料)。"""
+        tmp_path.mkdir(exist_ok=True)
+        good = json.dumps(
+            {
+                "kind": "book",
+                "code": "2330",
+                "trade_date": "2026-07-21",
+                "msg_seq": 9,
+                "recv_ns": 1,
+                "precise_time": None,
+                "trade_status": "0",
+            }
+        )
+        (tmp_path / "20260721.jsonl").write_text(
+            good + "\n" + '{"kind":"trade","msg_seq":10,"co', encoding="utf-8"
+        )
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        await engine.close()
+        lines = (tmp_path / "20260721.jsonl").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        assert json.loads(lines[2])["msg_seq"] == 10  # 半行的 10 不可信 → 沿完整尾列 9 接 10
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(lines[1])
+
+    async def test_sealed_warning_is_once_per_sealed_day(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Standards F-06:第二個封住的日也要有自己的一則 WARNING。"""
+        engine, src = await _make(tmp_path, flush_secs=3600.0)
+        persist = engine.tick_persist
+        assert persist is not None and src.on_message is not None
+        with caplog.at_level(logging.WARNING, logger="copycat.live.tick_persist"):
+            persist.seal_day("2026-07-21")
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2))
+            await _drain(engine)
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=5, date="20260722"))
+            await _drain(engine)
+            persist.seal_day("2026-07-22")
+            src.on_message(_quote(cum=6, date="20260722"))
+            await _drain(engine)
+            await engine.close()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 2
+        assert "2026-07-21" in warnings[0] and "2026-07-22" in warnings[1]
 
 
 class TestSealDay:

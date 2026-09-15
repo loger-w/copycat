@@ -51,6 +51,30 @@ def test_load_override(tmp_path: Path) -> None:
     assert cfg.compact_time == "13:45"  # 未覆寫者保留預設
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"book_keep_days": 0},  # 0 = 一次刪光所有簿檔(round-1 Spec F-07)
+        {"retry_max": -1},
+        {"flush_secs": 0.0},
+        {"compact_timeout_secs": 0.0},
+        {"compact_time": "1345"},
+    ],
+)
+def test_out_of_range_values_are_rejected_at_construction(bad: dict) -> None:
+    with pytest.raises(ValueError):
+        TicksConfig(**bad)
+
+
+def test_resolve_dir_relative_to_repo_root_and_absolute_as_is(tmp_path: Path) -> None:
+    from copycat.ticks_config import resolve_ticks_dir
+
+    assert resolve_ticks_dir(TicksConfig(), base_dir=tmp_path) == tmp_path / "data" / "ticks"
+    assert (
+        resolve_ticks_dir(TicksConfig(dir=str(tmp_path / "x")), base_dir=tmp_path) == tmp_path / "x"
+    )
+
+
 def test_unknown_key_raises(tmp_path: Path) -> None:
     p = tmp_path / "ticks.json"
     p.write_text(json.dumps({"no_such_param": 1}), encoding="utf-8")
