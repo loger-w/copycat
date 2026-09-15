@@ -34,6 +34,8 @@ __all__ = ["CompactRun", "TicksCompactor", "run_compact_subprocess"]
 
 logger = logging.getLogger(__name__)
 
+#: 子程序的 cwd:本檔所屬 repo root(`copycat/server/` 上兩層),與 `ticks_config._REPO_ROOT` 同一棵樹
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 #: 排程迴圈醒來的最短間隔 / 到點後的緩衝(避免踩在 13:45:00.000 判定邊上)
 _MIN_SLEEP_SECS = 5.0
 _AFTER_DUE_SECS = 5.0
@@ -64,6 +66,8 @@ def make_subprocess_runner(data_dir: Path) -> Runner:
 
 
 async def run_compact_subprocess(day: _dt.date, data_dir: Path) -> CompactRun:
+    """`python -m copycat` 以 **cwd** 決定載哪一份 copycat(venv 是 editable 安裝,`.pth` 釘主樹,
+    別的 cwd 會靜默跑到另一棵樹;pr-263 F-08)—— 一律釘在本檔所屬的 repo root。"""
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -73,6 +77,7 @@ async def run_compact_subprocess(day: _dt.date, data_dir: Path) -> CompactRun:
         day.strftime("%Y%m%d"),
         "--dir",
         str(data_dir),
+        cwd=_REPO_ROOT,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -119,8 +124,7 @@ class TicksCompactor:
         self._runner = runner if runner is not None else make_subprocess_runner(data_dir)
         self._now_fn = now_fn
         self._persist = persist
-        hh, mm = config.compact_time.split(":")
-        self._due_time = _dt.time(int(hh), int(mm))
+        self._due_time = config.due_time()  # 驗證與解析同一處(pr-263 F-24)
         self._task: asyncio.Task[None] | None = None
         self._days: dict[_dt.date, _DayState] = {}
 
@@ -223,12 +227,17 @@ class TicksCompactor:
         if st.next_attempt_at is not None and now < st.next_attempt_at:
             return
         if st.attempts == 0 and self._persist is not None:
-            # 第一次嘗試前:當日那行 + 放掉 handle(見模組說明)
-            self._persist.log_stats(day.isoformat())
+            # 第一次嘗試前:當日那行 + 放掉 handle(見模組說明)。那行只對寫入端**當前**的日印
+            # (pr-263 F-05):開機補跑過去日時計數器是今天的、剛歸零,印成「昨天 成交 0」是假陳述
+            if self._persist.current_day == day.isoformat():
+                self._persist.log_stats(day.isoformat())
             self._persist.seal_day(day.isoformat())
         st.attempts += 1
         st.next_attempt_at = None
         reason = await self._attempt_once(day, st.attempts)
+        # 嘗試本身可能耗掉整個 `compact_timeout_secs`:退避與保留都用 await **之後**的時刻
+        # (pr-263 F-18),否則一次逾時後下一次只等 900 − 300 s
+        now = self._now_fn()
         if reason is None:
             st.done = True
             self._retain_books(now.date())

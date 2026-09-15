@@ -355,6 +355,10 @@ def main(argv: list[str] | None = None) -> int:
         except CompactFailed as e:
             sys.stderr.write(f"tick 轉檔 {day} 失敗:{e}\n")
             return 1
+        except OSError as e:
+            # 讀 jsonl / 寫 parquet 的 IO 失敗(權限 / 磁碟):人話一行 exit 1,不吐 traceback(pr-263 F-03)
+            sys.stderr.write(f"tick 轉檔 {day} 失敗(IO):{e}\n")
+            return 1
         sys.stdout.write(format_compact_line(day, result) + "\n")
         return 0
     if args.command == "refresh-stkfut-map":

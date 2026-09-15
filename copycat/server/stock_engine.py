@@ -489,10 +489,11 @@ class StockEngine:
                 logger.exception("close: 背景 task %r 帶例外結束", task.get_name(), exc_info=result)
         if self._persist is not None:
             # 在 gather **之後**:斷入口前已排進 loop 的幾則 `_handle_quote` 在上面的 await
-            # 期間跑完,這裡印當日那行、flush + 關檔才不會漏掉它們(收盤前最後 30 秒的列)。
+            # 期間跑完,這裡 flush + 關檔才不會漏掉它們(收盤前最後 30 秒的列);那行在關檔**之後**印,
+            # 關檔那一步的失敗才進「寫入失敗」計數(pr-263 F-21)。
             # 預算 = `shutdown_budget.TICK_PERSIST_FLUSH_SECS`(64 KB 一次 write syscall)。
-            self._persist.log_stats(self._trade_date)
             self._persist.close()
+            self._persist.log_stats(self._trade_date)
         await asyncio.to_thread(self._source.close)
 
     # ---- refcount 訂閱池 ----
@@ -1447,18 +1448,6 @@ class StockEngine:
                 # 掛在 `ingest` 為真的分支內:試撮與重複 tick 已被短路,訊號層天然
                 # 不必重複判(回補重放走 `apply_backfill`,不經過這裡 — SC-5)
                 self._signal_hub.on_tick(code, tick, state)
-        if is_spot and self._persist is not None:
-            # tick 存檔(spec #257):**每一則現貨訊息**都報到(訊息序號每則 +1,被擋的也佔號),
-            # 成交列只在 `ingest` 為真時寫 —— 與看盤成交明細、訊號同一母體。期貨鍵不存(只做個股)。
-            self._persist.observe(
-                code=code,
-                quote=quote,
-                book=book,
-                tick=ingested_tick,
-                engine_seq=state.seq,
-                trade_date=self._trade_date,  # 簿列的日別(stage2 已在上面前進)
-                recv_ns=recv_ns,
-            )
         # 轉態補推(round4 項 4):meta 由 None → 有值 = 這一檔第一次拿到參考價;
         # 「無資料」復原同理。冷門股整天可能只有簿更新、盤後更是零成交,
         # `_dirty_watchlist` 永遠不會被加進去 → 不補推就永遠是 `-`。
@@ -1473,6 +1462,20 @@ class StockEngine:
         # latch 還是昨日的,對照下去會誤發 `limit_open`(design R2-2)。
         if self._signal_hub is not None and self._pending_date is None:
             self._signal_hub.on_book(code, state)
+        if is_spot and self._persist is not None:
+            # tick 存檔(spec #257):每一則**進到這裡**的現貨訊息都報到(訊息序號每則 +1,被擋的
+            # 也佔號),成交列只在 `ingest` 為真時寫 —— 與看盤成交明細、訊號同一母體。期貨鍵不存
+            # (只做個股)。放在函式**真正尾端**(pr-263 F-19):它只擋 OSError,真有別的例外冒出來,
+            # 這一則的五檔廣播與 `on_book` 已經送完,存檔的失效不滲進看盤。
+            self._persist.observe(
+                code=code,
+                quote=quote,
+                book=book,
+                tick=ingested_tick,
+                engine_seq=state.seq,
+                trade_date=self._trade_date,  # 簿列的日別(stage2 已在上面前進)
+                recv_ns=recv_ns,
+            )
 
     def _observe_trade_status(self, code: str, quote: dict) -> None:
         """per-code `TradeStatus` 轉態觀測 log(D6)——「盤中延緩撮合」的蒐證工具。

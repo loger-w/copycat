@@ -129,17 +129,27 @@ def compact_day(
 
     trade_out = parquet_path(data_dir, day.isoformat())
     book_out = book_parquet_path(data_dir, day.isoformat())
-    _write_parquet(trade_out, trades, TRADE_FIELDS)
+    # 簿檔**先**落地、成交檔最後(pr-263 F-02):CLI / 排程 / loader 三處都以「成交 parquet 存在」當
+    # 已轉檔判準,它必須等於「兩檔都寫完」—— 被 kill 在兩次 replace 之間才不會卡成「已轉檔但簿列
+    # 永遠讀不到」
     _write_parquet(book_out, books, BOOK_FIELDS)
+    _write_parquet(trade_out, trades, TRADE_FIELDS)
     got = (_parquet_rows(trade_out), _parquet_rows(book_out))
     if got != (len(trades), len(books)):
-        for p in (trade_out, book_out):
-            p.unlink(missing_ok=True)
+        _rollback(trade_out, book_out)
         raise CompactFailed(
             f"讀回列數對不上(成交 {got[0]} / 簿 {got[1]},預期 {len(trades)} / {len(books)}),jsonl 保留"
         )
     mbytes = (trade_out.stat().st_size + book_out.stat().st_size) / 1_000_000
-    src.unlink()
+    try:
+        src.unlink()
+    except OSError as exc:
+        # pr-263 F-03:Windows 上 jsonl 被別的 process 開著(server 未 seal 就手動重跑)會在這一步
+        # PermissionError;parquet 已落地的話之後每次重跑都撞「parquet 已在」exit 2 —— 回滾成可重入
+        _rollback(trade_out, book_out)
+        raise CompactFailed(
+            f"刪 jsonl 失敗({exc}),parquet 已回滾、jsonl 保留;server 跑著請等 13:45 排程"
+        ) from exc
     return CompactResult(
         jsonl_rows=total,
         trades=len(trades),
@@ -149,6 +159,13 @@ def compact_day(
         secs=time.monotonic() - started,
         mbytes=mbytes,
     )
+
+
+def _rollback(*paths: Path) -> None:
+    """失敗收尾:兩個 parquet 與殘留 `.tmp` 都拿掉,讓狀態回到「只有 jsonl」可重入。"""
+    for p in paths:
+        p.unlink(missing_ok=True)
+        p.with_suffix(p.suffix + ".tmp").unlink(missing_ok=True)
 
 
 def _write_parquet(path: Path, rows: list[dict[str, Any]], fields: tuple[str, ...]) -> None:
