@@ -18,7 +18,7 @@ import time
 from typing import Any, Callable
 
 from copycat.live.river_models import all_day_utc_window, parse_1k_minutes
-from copycat.live.tc4 import HistoryTimeoutError
+from copycat.live.tc4 import _POLL_BACKOFF_START, HistoryTimeoutError
 from copycat.tc4common import iter_qry_pages
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,8 @@ __all__ = ["collect_1k_minutes"]
 #: 首頁備妥的等待預算 = poll_wait × 10(沿用 stock_source 的「退避輪詢 + 上限」形狀,
 #: 但預算比歷史 K 線路徑短:回補跑在背景,拉不到就降級成「只累積」,不值得等滿 30s)
 _POLL_BUDGET_FACTOR = 10.0
-_POLL_BACKOFF_START = 0.02  # 與 tc4 同一把起點(perf #241;理由見該處註解)
+# 首頁輪詢起點 `_POLL_BACKOFF_START` 直接 import tc4 那一份(perf #241;pr-251 review F-12 起不再各寫一份,
+# 單邊調值不會分岔;理由見 tc4.py 該常數註解)
 
 
 def collect_1k_minutes(

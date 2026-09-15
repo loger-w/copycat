@@ -165,7 +165,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     # --verify 也套:fake 世界不受影響,側車量 timer drift 走的正是這條路。
     apply_timer_1ms()
     _set_switch_interval(SWITCH_INTERVAL_SECS)
-    logger.info("switchinterval %.4f s(perf #247;預設 0.005)", SWITCH_INTERVAL_SECS)
+    # 印 **讀回來的** 值不印常數(pr-251 review F-03):替身 / 別名沒接到真 API 時這行才會露餡
+    logger.info("switchinterval %.4f s(perf #247;預設 0.005)", sys.getswitchinterval())
 
     if verify:
         neutralize_external_env()

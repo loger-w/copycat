@@ -389,7 +389,9 @@ class SignalDetector:
         prev = self._prev[code]
         window = self._window.setdefault(code, deque())
         window.append((mono, price, tick.qty))
-        window_vol = self._window_vol.get(code, 0) + tick.qty
+        # 嚴格索引(pr-251 review F-11):走到這裡 `code in self._prev` 必成立,`_window_vol[code]` 與它同生同滅;
+        # 給預設 0 會把漏維護遮成「窗量變負、爆量低估」,與讀路徑那句「漏一處要炸開」同一把尺
+        window_vol = self._window_vol[code] + tick.qty
         cutoff = mono - self._cfg.surge_window_secs
         while window and window[0][0] < cutoff:
             window_vol -= window.popleft()[2]

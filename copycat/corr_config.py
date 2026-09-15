@@ -147,6 +147,17 @@ def load_config(path: Path | None = None) -> CorrConfig:
         logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設腿")
         return DEFAULT_CONFIG
     legs = parsed.legs
+    seen: set[str] = set()
+    unique: list[Leg] = []
+    for leg in legs:
+        if leg.key in seen:
+            # 保留首見那腿(pr-251 review F-05):重複 key 在 CorrState 增量版會讓 n{w} 加倍;
+            # state 層已去重,這裡是給人看的訊號 —— 設定檔是人手改的,重複多半是複製貼上沒改 key
+            logger.warning("corr 設定檔腿 key 重複:%s(保留首見,略過後者)", leg.key)
+            continue
+        seen.add(leg.key)
+        unique.append(leg)
+    legs = tuple(unique)
     base = str(raw.get("base", DEFAULT_CONFIG.base))
     if base not in {leg.key for leg in legs}:
         logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
