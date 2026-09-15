@@ -1,0 +1,67 @@
+{
+  "fixed_point": "d199149b (merge-base master..fix/pr-255-review-followups = master tip after PR #255)",
+  "reviewed_head": "76d6e53e (test 0c62399f → fix 329d820b → feat 7265e6c3 → refactor 14d88bd6 → chore(docs) 76d6e53e)",
+  "reviewers": "two-axis sub-agents(opus × 2),prompt 附白名單;spec = pr-255-review.md 發現總覽 F-01..F-05",
+  "standards": [
+    {
+      "id": "S-01",
+      "severity": "Should",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "未知值判定硬寫 `(\"1\", \"2\")`,但值域產生點是 `stock_models._FLAG_SIDE`;日後加值而這裡沒跟 → 對映正常的值被當未知值發 WARNING,零反向訊號,違 CLAUDE §4 單一產生點文化。",
+      "disposition": "接受。改 `tick.flag not in _FLAG_SIDE`(`\"0\"` 已由前一 elif 吃掉),`stock_engine` 自 `stock_models` import `_FLAG_SIDE`。收修 commit 見 round-1 收修。"
+    },
+    {
+      "id": "S-02",
+      "severity": "Should",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "`_flag_unknown_warned` 當日無上界:值由達錢單方決定,欄意外裝入時間戳 / 價格時單日數萬筆 WARNING + 同量 set;repo 已為同型問題付過代價(PR #146 log 洪水降噪)。",
+      "disposition": "接受(與 Spec-S-01 同一件事)。加 `_FLAG_UNKNOWN_CAP = 8`:第 9 個不同值起不再逐值印,改印一則「未知值過多(已 8 種,當日不再逐值印)」封口、set 不再成長;紅先行一案(9 個不同值 → 8 則 + 1 則封口,第 10 個零輸出)。"
+    },
+    {
+      "id": "S-03",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "`arms_the_day` 是「要不要武裝換日」的述詞,現兼任計數母體閘;武裝政策曾放寬(E-3)顯示會漂,漂時計數母體靜默跟著變。",
+      "disposition": "接受。引入 `is_spot = not is_futures_key(code)`,`arms_the_day = is_spot`(換日武裝政策仍只改那一行),計數分支改用 `is_spot`;pr-255 F-04 選項二。"
+    },
+    {
+      "id": "S-04",
+      "severity": "Nice",
+      "file": "copycat/live/stock_models.py",
+      "finding": "`(str(raw_flag) or None) if raw_flag is not None else None` 一式兩個 None 出口,讀序與守門直覺相反。",
+      "disposition": "接受。改 `None if raw_flag is None else (str(raw_flag) or None)`,行為相同(既有 null / 空字串 / int 2 三案釘住)。"
+    },
+    {
+      "id": "S-05",
+      "severity": "Nice",
+      "file": "tests/server/test_stock_engine.py",
+      "finding": "`_unknown(caplog_)` 參數兩次都傳同一個閉包可見的 `caplog`,Middle Man。",
+      "disposition": "接受。去參數,直接閉包讀 `caplog`。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "Spec-S-01",
+      "severity": "Nice",
+      "file": "copycat/server/stock_engine.py",
+      "finding": "`_flag_unknown_warned` 是外部 feed 控制基數的無界 set;所引節流樣板(群組名 / 年份)值域有界,本欄漂成高基數字串會退化成每 tick 一則,違反 F-02 的「一天一次」。建議上限 8 後改印彙總。",
+      "disposition": "接受,與 S-02 合併同一修法(cap = 8 + 封口一則)。"
+    },
+    {
+      "id": "Spec-S-02",
+      "severity": "Nice",
+      "file": "CLAUDE.md / .claude/mod/stock-side-flag/verification.md",
+      "finding": "F-01 判準放寬成 `grep 個股旗標`,而 F-02 新訊息前綴同為「個股旗標」→ 第二條 `grep 個股旗標未知值` 是第一條真子集,CLAUDE.md「零行」措辭會誤讀。",
+      "disposition": "接受。兩處判準改 `grep \"個股旗標 0:\" logs/server-*.log`(三桶行獨有前綴),未知值判準維持 `grep 個股旗標未知值`。"
+    }
+  ],
+  "verified_by_reviewers": [
+    "`arms_the_day` :1290 無條件賦值、到 :1349 無分支 / 早退可繞 → 共用註解為真陳述",
+    "`_flag_unknown_warned.clear()` 與三桶同置 `_log_flag_stats`,唯二 caller stage2 / close 全覆蓋",
+    "WARNING 對 `\"0\"` / `None` 不觸發(elif 鏈先分流);未知值只進「總」",
+    "`(str(raw_flag) or None) if raw_flag is not None else None`:`\"\"` → None、`2` → \"2\"、鍵缺 → None、null → None 四路皆對",
+    "F-01 機制:`__main__._setup_prod_log` 檔名啟動時定死,`copycat/` + `run.ps1` 六種 sink 謂詞零命中 → 文件與機制相符",
+    "五 commit 三類分離、refactor 行為等價;白名單八項零破壞;既有 11 案斷言只增不改"
+  ],
+  "disposition": "Standards 5 條(2 Should 3 Nice)/ Spec 2 條 Nice / 零 Must;全部接受。S-02 = Spec-S-01 合併一個修法(cap 8 + 封口,紅先行);S-01 同源 `_FLAG_SIDE`;S-03 `is_spot`;S-04 讀序;S-05 helper;Spec-S-02 判準前綴 `個股旗標 0:`。收修 commit 與突變驗證見 verification.md。"
+}
