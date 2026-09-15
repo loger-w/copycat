@@ -108,6 +108,6 @@ def test_probe_value_two_is_neutral(tmp_path: Path, caplog: pytest.LogCaptureFix
         client._pump_once()
         assert client.status_view()["reply_connected"] == expected
         assert client.status == "ok"
-        assert client._reply_link.next is None
+        assert client._reply_link.next_due is None
     assert com.calls == calls_before
     assert [lvl for lvl, _ in _probe_lines(caplog)] == [logging.INFO, logging.WARNING, logging.INFO]

@@ -64,7 +64,7 @@ from copycat.capital.models import (
     TradeKind,
 )
 from copycat.capital.reply import SEC_MARKETS, parse_onnewdata
-from copycat.capital.reply_link import ReplyLink
+from copycat.capital.reply_link import ReplyLink, classify_probe
 from copycat.capital.safety import (
     GateResult,
     SafetyConfig,
@@ -951,7 +951,7 @@ class CapitalClient:
         # 狀態機半邊每次都評(不只變值時):事件先把 status 翻了、探針值沒變也要能收尾。
         # 0 在 degraded 下也要排(排程去重):開機 ConnectByID 失敗、或恢復後又掉但事件沒響,
         # 都靠這一條把重連排回去(two-axis S-01 / Spec S-01)
-        verdict = ReplyLink.classify_probe(value)  # 0 / 1 以外(2 = 連線中)不動狀態
+        verdict = classify_probe(value)  # 0 / 1 以外(2 = 連線中)不動狀態
         if verdict == "down":
             if self._status == "ok":
                 self._set_status("degraded", error="回報線探針 IsConnectedByID=0,委託/成交回報停更")
