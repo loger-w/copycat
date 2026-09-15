@@ -320,17 +320,21 @@ class CapitalClient:
         except Exception:
             logger.exception("capital broadcast 例外(已忽略):%s", payload.get("event"))
 
-    def _set_status(self, new: str, *, error: str | None = None) -> None:
+    def _set_status(self, new: str, *, error: str | None = None, reset_chain: bool = True) -> None:
+        """status 燈切換 + 廣播。`reset_chain`(預設 True)= 翻 ok 時把回查鏈狀態當作「斷過、沒有在途鏈」
+        整組清點 —— 這個前提只對**整段 COM 重登**成立(目前唯一走這條的是 `_init_com` 開機,全為初值、
+        等同 no-op)。回報線恢復(`_reply_recovered`)必須傳 `reset_chain=False`:回查鏈跑在 `SKOrderLib`
+        (GetRealBalanceReport / OnRealBalanceReport),與 `SKReplyLib_ConnectByID` 是兩條獨立連線,斷線期間
+        鏈照樣在飛、回應照樣會到 —— 清了會把舊鏈尾列 flush 成截斷 / 空快照落地,守門被清又補第二發
+        GetRealBalance 吃 1019(pr-review 253 F-01,`test_recovery_during_inflight_balance_chain_keeps_the_chain`)。"""
         if error is not None:
             self._last_error = error
         if new == self._status:
             return
         self._status = new
-        if new == "ok":
-            # 重登/重連:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查。
-            # ok caller = _init_com(啟動時全為初值,此分支等同 no-op)與回報線恢復
-            # (`_reply_recovered`,degraded → ok)—— 清點必須與 _finalize_positions 同組
-            # (三個旗標),只清 inflight 會留下半清狀態卡在 _pending_sec 守門判上,
+        if new == "ok" and reset_chain:
+            # 重登:狀態斷過就沒有「進行中的鏈」可守,舊旗標會擋住重查。清點必須與 _finalize_positions
+            # 同組(三個旗標),只清 inflight 會留下半清狀態卡在 _pending_sec 守門判上,
             # 鏈永遠不再放行(pending 段無 collector 事件時只有 _poll_pending 能解,
             # 而它同樣看 _pending_deadline)。
             # 放棄輪欠帳同組清:斷線前記的欠帳跨不過重連(那一輪的 `##` 隨連線一起沒了),
@@ -527,14 +531,15 @@ class CapitalClient:
 
     def _reply_recovered(self, source: str) -> None:
         """回報線回來(探針 1 或連線事件 0):degraded → ok、重連狀態機歸零、`last_error` 清掉
-        (status 廣播不再帶著舊斷線訊息)。`_set_status("ok")` 會清在途鏈旗標(斷線前的鏈跨不過重連)
-        —— 那條鏈剩下的回應會被當遲到丟,所以這裡**重新武裝一次庫存查詢**,否則要等 60 s stale 輪詢
-        才有下一次落地(two-axis Spec S-02:斷線 ≤ 5 s 就恢復、或 rc≠0 後線自己回來,兩條路都走到這)。"""
+        (status 廣播不再帶著舊斷線訊息)。**不動回查鏈**(`reset_chain=False`):鏈走 SKOrderLib、與回報線
+        獨立,在途的那一輪照常落地(pr-review 253 F-01)。仍**重新武裝一次庫存查詢**:`store.clear()` 已把
+        `_positions_seeded` 打掉,需要一次快照重 seed 才會重開樂觀套用;在途鏈存在時它會被
+        `_maybe_query_balance` 既有的 pending / inflight 守門自然壓到鏈落地之後(two-axis Spec S-02)。"""
         self._reply_reconnect_next = None
         attempts = self._reply_reconnect_attempt
         self._reply_reconnect_attempt = 0
         self._last_error = None
-        self._set_status("ok")
+        self._set_status("ok", reset_chain=False)
         self._mark_balance_dirty()
         logger.info("群益回報線恢復(%s;重連 %d 次)→ ok", source, attempts)
 
@@ -891,10 +896,10 @@ class CapitalClient:
             # 失敗不擋送單(送單獨立可用)→ degraded(design §2,與 treading-king
             # status=ok 不同:前端要能看出回報停更)。
             reply_error: str | None = None
-            rc = self._com.connect_reply(self._user_id)
-            if rc != 0:
-                reply_error = "回報連線失敗: " + self._com.return_code_message(rc)
-                logger.warning("Capital reply connect failed (rc=%s); 送單可用但收不到回報", rc)
+            reply_rc = self._com.connect_reply(self._user_id)
+            if reply_rc != 0:
+                reply_error = "回報連線失敗: " + self._com.return_code_message(reply_rc)
+                logger.warning("Capital reply connect failed (rc=%s); 送單可用但收不到回報", reply_rc)
             # 期貨帳號自動發現:TF 市場帳號;查無 → 期權寫入一律 no_futures_account 擋
             accounts = self._com.get_user_accounts()
             self._futures_account = next(
@@ -906,7 +911,7 @@ class CapitalClient:
                 self._set_status("degraded", error=reply_error)
                 # 開機 ConnectByID 失敗也是斷線的一種:不排就永不重連(探針 0 在 degraded 下
                 # 只會確認、不會另排;two-axis S-01 / Spec S-01)
-                self._schedule_reply_reconnect(f"開機 ConnectByID rc={rc}")
+                self._schedule_reply_reconnect(f"開機 ConnectByID rc={reply_rc}")
             else:
                 self._set_status("ok")
             logger.info(
