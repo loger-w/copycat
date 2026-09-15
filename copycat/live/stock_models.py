@@ -248,7 +248,7 @@ def parse_stock_realtime(
     # JSON null 也要歸「欄缺」(pr-255 review F-03):`str(None)` 是字面 "None",既不進欄缺
     # 也不進 0 也不對映 —— 正好躲過「欄缺桶非 0 = 格式漂了」這個唯一訊號。
     raw_flag = msg.get("FlagOfBuySell")
-    flag = (str(raw_flag) or None) if raw_flag is not None else None
+    flag = None if raw_flag is None else (str(raw_flag) or None)  # 欄缺 / null / 空字串 → None
     tick = StockTick(
         code=str(msg.get("Security", "")),
         price_milli=price,
