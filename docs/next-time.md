@@ -988,9 +988,9 @@ prod 8721 = 6adf20d9、dist 已重建)。
   `test-utils.tsx`;20+ 測試檔(含 `OrderPanel.test` / `ArmRow.characterization.test` 等真錢 mutation 測試)仍各自 `new QueryClient`,
   跑的是 TanStack 預設 `online` 形狀。jsdom 下 `navigator.onLine` 恆 true → 無行為差,但「測試 client 與 prod 同形」只對 wrap 成立。
   機械替換 + 一條 lint(禁 `new QueryClient(` 出現在 `lib/query-client.ts` 之外)。
-- [ ] **`IsConnectedByID` 耗時實錄後決定要不要搬出幫浦圈**(std S-05):現版 > 50 ms 印 WARNING;第一個交易日 `grep "IsConnectedByID 耗時"`
+- [x] **`IsConnectedByID` 耗時實錄後決定要不要搬出幫浦圈**(std S-05;**09-15 結案:全日三段 log「耗時」零命中 → 留在幫浦圈,不動**):現版 > 50 ms 印 WARNING;第一個交易日 `grep "IsConnectedByID 耗時"`
   零命中 = 留在幫浦圈;有命中 = 改成獨立節奏(或 `_cmd_q` 空才問)。
-- [ ] **回報線「修」的那一半**(#235 辨識後):看一個交易日 `grep "回報線\|Solace" logs/server-<日>.log` —— Solace 那對響了 → 接
+- [x] **回報線「修」的那一半**(#235 辨識後;**09-15 結案 → fix/capital-reply-reconnect**:05:50 實錄 Solace disconnect 3033 + 探針翻 0 同時發生、到 08:14 重啟前零重連,走第一條路 —— 事件 / 探針任一 → degraded → 退避 5/10/20/40/60 s → store.clear + ConnectByID → 探針 1 / 連線事件 0 → ok;契約入 CLAUDE §4):看一個交易日 `grep "回報線\|Solace" logs/server-<日>.log` —— Solace 那對響了 → 接
   `on_disconnect` 翻 degraded + 重連(store.clear 前置,review R7);兩對都沒響、只有 IsConnectedByID 翻 0 → 以它翻 degraded。
   另:送出 rc=0 的單 N 秒內沒收到自己的 OnNewData 的相關性 watchdog(grilling Q6 (b))仍是候選。
 - [ ] **零股 / 權證上閃電梯**(user 09-14 問「手機下的單閃電梯沒顯示」):3008 十股是零股,`ladder-lots.ts` 排除 `unit === "股"`
@@ -998,7 +998,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-09-14 晚(pr-review 238 ask-user 八條,user 拍板;收修 PR 見 fix/pr-238-review-followups)
 
-- [ ] **F-13 / F-14 回報線探針的節流與 try/except:等第一個交易日 log 再定**(user 拍板):`grep "IsConnectedByID 耗時"
+- [x] **F-13 / F-14 回報線探針的節流與 try/except:等第一個交易日 log 再定**(user 拍板;**09-15 結案:「耗時」零命中、探針零 traceback → 兩條都不動**):`grep "IsConnectedByID 耗時"
   logs/server-<日>.log` 零命中 → 兩條都不動(F-13 零節流只在 COM 本就 > 50 ms 時才會每 10 s 一行、盤中 ~2,480 行;
   F-14 `int()` 直接吃 COM 回傳,非 int / COMError 走幫浦圈傘 = 每 10 s traceback + 送單那輪多等 1 s)。有命中 → F-13 加
   「首次 + 每日一次」節流;有 traceback → F-14 給 `_probe_reply` 自帶 try/except + 連 3 次失敗停用探測。與上節「搬出幫浦圈」同一天看。

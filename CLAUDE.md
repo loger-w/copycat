@@ -385,16 +385,25 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   敏感度分析拿 raw 列重算四條政策;修前 36% 未命中事件零快照、自選群組覆寫式落檔不可還原)、WS 與 jsonl 同一份
   (前端 `SignalMsg.policy_ctx` optional 不讀)。W1 只加欄;舊列缺欄 = 09-14 前。漂掉的症狀:後端改回只在命中時
   評 → 未命中列又零快照,零錯誤訊號;`tests/server/test_signal_policy.py::TestPolicyCtxOnRawRow` 四案釘住。
-- **群益回報線「辨識而非修」:`/api/capital/status` 的 `reply_connected` + Solace 事件 log**(2026-09-14 起,#235):
-  22 天 65 次登入 `OnConnect` / `OnDisconnect` 零觸發、綁定逐層查過沒壞(V2 §3.1),頭號假說 = 這版 SKCOM 回報線走
-  Solace(typelib dispid 9 / 10 `OnSolaceReplyConnection` / `OnSolaceReplyDisconnect`,comtypes 對 sink 未實作的事件
-  **靜默丟棄**)。產生點 `capital/com.py::_ReplyEvents`(那一對只 log:INFO / WARNING,**不接** `on_disconnect`)+
-  `capital/client.py::_probe_reply`(幫浦圈每 `REPLY_PROBE_SECS` 10 s 呼 `SKReplyLib_IsConnectedByID`,**回原始 int
-  不轉 bool**、值變化才印「群益回報線 IsConnectedByID=n(上一值 m)」、≠ 1 WARNING;登入前不問)→ `status_view()`
-  新欄 `reply_connected: int | null`(null = 尚未問過)。讀者 = curl / 盤中對帳;前端 `CapitalStatus.reply_connected`
-  optional **不讀**。**status 燈不動、不自動重連**(值語意未實證,誤判會在盤中亮假黃字);看過一個交易日
-  `grep "回報線\|Solace" logs/server-<日>.log` 的值序列再決定接不接 degraded(那是下一批的「修」)。
-  `tests/capital/test_reply_watch.py` + `test_com.py::test_reply_events_solace_pair_logs_only` 釘住。
+- **群益回報線:斷線 → degraded → 退避重連 → 恢復 ok;`store.clear()` 恆在 ConnectByID 之前**(2026-09-15 起,
+  fix/capital-reply-reconnect;09-14 #235 只「辨識」的版本已升級):斷線訊號兩個 —— 事件 `capital/com.py::_ReplyEvents`
+  的 `OnSolaceReplyDisconnect` / `OnDisconnect`(轉 `on_disconnect`;這版 SKCOM 回報線走 Solace,typelib dispid 9 / 10,
+  09-15 05:50 prod 實錄 code=3033 真的響)與探針 `capital/client.py::_probe_reply`(幫浦圈每 `REPLY_PROBE_SECS` 10 s 呼
+  `SKReplyLib_IsConnectedByID`,**回原始 int 不轉 bool**,0 = 斷、1 = 連、其他值(23:59:56 實錄首值 2 = 連線中)不動狀態);
+  任一成立 → `_set_status("degraded")` + `_schedule_reply_reconnect`(同一次斷線只排一次)。恢復訊號兩個 —— 事件
+  `OnSolaceReplyConnection` / `OnConnect` **code 0**(轉 `on_connect`,code ≠ 0 只 WARNING)與探針翻 1;任一成立且 status
+  degraded → `_reply_recovered` → ok(`_set_status("ok")` 順帶清在途鏈旗標)。重連 = `_maybe_reconnect_reply`(幫浦圈,
+  degraded 且退避到期):**先 `store.clear()` 再 `connect_reply`**(ConnectByID 連上就重播當日 backlog,12:32 重啟實錄
+  17 筆;不清就成交在 fills / 委託聚合雙計),rc=0 標 balance dirty(重播零成交列時仍要一次快照落地才重開樂觀套用),
+  退避 `REPLY_RECONNECT_BACKOFF_SECS` 5 / 10 / 20 / 40 / 60 s、rc≠0 或一窗內未恢復再試。**斷線當下不 clear**(委託列表
+  照舊可看)。`status_view()` 的 `reply_connected: int | null` 不變(null = 尚未問過);前端 `CapitalStatus.reply_connected`
+  optional 不讀,status 燈走既有 degraded。log 四行:「群益回報線斷線(<來源>)→ degraded,N s 後重連」WARNING /
+  「群益回報線重連 ConnectByID 已送出(第 n 次)」INFO /「群益回報線重連失敗 rc=…」WARNING /「群益回報線恢復(<來源>;
+  重連 n 次)→ ok」INFO。盤後判準:`grep "回報線\|Solace" logs/server-<日>.log` —— 每次 disconnect 後在退避內接
+  「已送出」、再接「恢復」;「恢復」缺 = 回報線真的沒回來(或 IsConnectedByID 語意變了),不是 bug 修回去。
+  修前實錄(判準對照):05:50:57 disconnect 3033 → 05:50:59 探針 0 → 到 08:14 重啟前零 connection 事件、零 ConnectByID。
+  `tests/capital/test_reply_reconnect.py`(05:50 場景逐字重播 + 探針單路 + R7 不雙計 + 失敗退避)+
+  `test_reply_watch.py` + `test_com.py::test_reply_events_solace_pair_forward_and_log` 釘住。
 - **時鐘偏差監測(本機鐘 vs NTP)只看不改**(2026-09-14 起,#236):產生點 `copycat/server/clock_monitor.py`
   (stdlib SNTP,啟動立即量一次、之後每 10 分鐘,主機序 time.google.com → time.windows.com → pool.ntp.org,單台
   timeout 2 s;`offset = 本機 − NTP`,負 = 本機落後);INFO 每次「時鐘偏差:±N ms(主機,RTT)」,|offset| ≥
