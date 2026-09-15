@@ -53,6 +53,12 @@ SLOW_CLOSE_WARN_SECS: float = 2.0
 #: (pr-238 review F-06:原註解寫「最多再等一個 timeout」,低估三倍。)
 CLOCK_PROBE_WORST_SECS: float = len(NTP_HOSTS) * _CLOCK_TIMEOUT_SECS
 
+#: tick 存檔(spec #257)的關機 flush + close:stock lane `engine.close()` 尾端,64 KB 緩衝最多
+#: 兩個 handle 各一次 write syscall(bakeoff 穩態最壞 0.11 ms;spec 預算 < 100 ms)。stock lane
+#: 與 corr → futures 串鏈並行,這段其實不在最深 lane 上,但它是可計段 —— 列進算式勝過
+#: 「反正被別的 lane 蓋住」的口頭推理(lane 形狀改了就不成立)。
+TICK_PERSIST_FLUSH_SECS: float = 0.1
+
 
 def lifespan_close_worst_secs() -> float:
     """lifespan `finally` 反序 close 的最壞耗時(秒)。"""
@@ -60,6 +66,7 @@ def lifespan_close_worst_secs() -> float:
         TC4_LANE_DEPTH * close_worst_secs()
         + COM_JOIN_TIMEOUT_SECS
         + CLOCK_PROBE_WORST_SECS
+        + TICK_PERSIST_FLUSH_SECS
         + LIFESPAN_SLACK_SECS
     )
 

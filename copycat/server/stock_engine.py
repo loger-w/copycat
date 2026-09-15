@@ -484,7 +484,9 @@ class StockEngine:
                 logger.exception("close: 背景 task %r 帶例外結束", task.get_name(), exc_info=result)
         if self._persist is not None:
             # 在 gather **之後**:斷入口前已排進 loop 的幾則 `_handle_quote` 在上面的 await
-            # 期間跑完,這裡 flush + 關檔才不會漏掉它們(收盤前最後 30 秒的列)
+            # 期間跑完,這裡印當日那行、flush + 關檔才不會漏掉它們(收盤前最後 30 秒的列)。
+            # 預算 = `shutdown_budget.TICK_PERSIST_FLUSH_SECS`(64 KB 一次 write syscall)。
+            self._persist.log_stats(self._trade_date)
             self._persist.close()
         await asyncio.to_thread(self._source.close)
 
@@ -1148,10 +1150,12 @@ class StockEngine:
         # 舊日的旗標計數在 `_trade_date` 前進**之前**結算(帶舊日別);觸發者那一筆屬新日,
         # 在下面 `state.ingest` 才計入新的一天。
         self._log_flag_stats(self._trade_date)
+        if self._persist is not None:
+            self._persist.log_stats(self._trade_date)  # 舊日那一行(同旗標計數的時點)
         self._trade_date = self._pending_date
         self._pending_date = None
         if self._persist is not None:
-            self._persist.open_day(self._trade_date)  # 預開新日 handle、關舊日
+            self._persist.open_day(self._trade_date)  # 預開新日 handle、關舊日、計數歸零
         # **快照後迭代**:`_acquire` 在 executor thread 對 `_states` setdefault 新鍵
         # (自選新增 / 重試輪 / stkfut 腿隨時可能發生),直接迭代 `.values()` 撞上就是
         # RuntimeError —— 迴圈之後的每一步(記帳清空、主圖重回補、hub 的 on_rollover)

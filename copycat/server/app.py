@@ -73,6 +73,8 @@ from copycat.server.stock_engine import (
 from copycat.server.watchlist_service import WatchlistService
 from copycat.signal_rules import Rule, RuleError
 from copycat.signals_config import load_signals_config
+from copycat.live.tick_persist import TickPersist
+from copycat.ticks_config import TicksConfig
 from copycat.stock_watchlist import (
     WATCHLIST_LIMIT,
     Group,
@@ -528,10 +530,15 @@ def create_app(
     stock_names_path: Path | None = None,
     trading_calendar: TradingCalendar | None = None,
     clock_probe: Callable[[], ClockSample | None] | None = None,
+    ticks_config: TicksConfig | None = None,
     throttle_secs: float = 1.0,
     queue_maxsize: int = 10_000,
 ) -> FastAPI:
     """`trading_calendar=None`(預設)= 無日曆 = 牆鐘,逐字等於改動前的行為。
+
+    `ticks_config=None`(預設)= 不存 tick(spec #257;測試預設關 —— 預設開會讓每個 create_app
+    測試往 repo `data/ticks/` 寫檔);prod 由 `__main__` 顯式傳 `load_ticks_config()`,
+    `enabled=false` 時同樣不建 writer(零檔案、零 handle)。
 
     `clock_probe=None`(預設)= 不起時鐘偏差監測(#236);prod 由 `__main__` 顯式傳
     `clock_monitor.probe`(同「prod 顯式、測試預設關」慣例:預設開會讓每個 create_app 測試打真 UDP)。
@@ -755,6 +762,12 @@ def create_app(
                         b.disposition_codes()
                         if (b := getattr(app.state, "breadth", None)) is not None
                         else frozenset()
+                    ),
+                    # tick 存檔(spec #257):設定給了且開著才建;生命週期跟 engine 走
+                    tick_persist=(
+                        TickPersist(ticks_config)
+                        if ticks_config is not None and ticks_config.enabled
+                        else None
                     ),
                 )
 
