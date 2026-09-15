@@ -1,11 +1,13 @@
 """S1 盤中 tick 存檔(spec #257):餵達錢訊息、看 jsonl。
 
-沿 `test_stock_engine` 的 fake source + engine 鷹架;只斷言檔案內容與 `load_day` 讀回,
-不碰 handle / 緩衝 / 私有計數器。
+沿 `test_stock_engine` 的 fake source + engine 鷹架。觀測面 = 檔案內容、`load_day` 讀回、
+寫入端的**公開**計數器(`dup_books` / `sealed_dropped` / `books_preopen`)、契約 log 行
+(`STATS_FMT` 字面)與 `compactor.dir`;不碰 handle 物件、緩衝區與私有屬性。
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import io
 import json
@@ -36,11 +38,23 @@ _TRIAL_PRECISE = "5000000000"
 _DAY = _dt.date(2026, 7, 21)
 
 
+#: 寫入端的牆鐘(簿列 09:00 開盤閘用):預設盤中 10:00,盤前情境自己傳
+_MIDDAY = _dt.datetime(2026, 7, 21, 10, 0, 0)
+
+
 async def _make(
-    tmp_path: Path, *, flush_secs: float = 0.05, trade_date: str = "2026-07-21"
+    tmp_path: Path,
+    *,
+    flush_secs: float = 0.05,
+    trade_date: str = "2026-07-21",
+    opener: Callable[[Path], TextIO] | None = None,
+    now_fn: Callable[[], _dt.datetime] | None = None,
 ) -> tuple[StockEngine, FakeSource]:
     src = FakeSource()
-    persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=flush_secs))
+    kwargs: dict = {"now_fn": now_fn if now_fn is not None else (lambda: _MIDDAY)}
+    if opener is not None:
+        kwargs["opener"] = opener
+    persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=flush_secs), **kwargs)
     engine = StockEngine(
         src, trade_date=trade_date, throttle_secs=0.01, checkpoint=False, tick_persist=persist
     )
@@ -244,14 +258,9 @@ _BOOK3 = {  # 三層買、一層賣的基準簿
 class TestBookRow:
     async def test_book_row_only_when_any_of_twenty_numbers_changes(self, tmp_path: Path) -> None:
         """成交、簿變(第三檔量改)、簿不變(逐字重推)、只買一變 → 三列(成交 + 兩簿),重複簿計數 1。"""
-        src = FakeSource()
-        persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=0.05))
-        engine = StockEngine(
-            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
-        )
-        await engine.start()
-        await engine.set_main("2330")
-        assert src.on_message is not None
+        engine, src = await _make(tmp_path)
+        persist = engine.tick_persist
+        assert persist is not None and src.on_message is not None
         src.on_message(_quote(cum=1) | _BOOK3)  # 成交(五檔成基準)
         src.on_message(_quote(cum=1) | _BOOK3 | {"BidVolume2": "31"})  # 第三檔量改 → 簿列
         src.on_message(_quote(cum=1) | _BOOK3 | {"BidVolume2": "31"})  # 逐字重推 → 不寫、計數
@@ -460,6 +469,21 @@ class TestResilience:
 class TestAppWiring:
     """`create_app(ticks_config=…)` 真的到 engine:漏傳的失效樣態是整條存檔靜默不起。"""
 
+    @pytest.fixture(autouse=True)
+    def _no_real_subprocess(self, monkeypatch: pytest.MonkeyPatch) -> list[_dt.date]:
+        """pr-263 F-16:app 內建的 compactor 沒有 runner 注入口,開場 `tick()` 依牆鐘可能真的
+        起 `python -m copycat`;測試一律換成 fake,並記下有沒有被叫到。"""
+        from copycat.server import ticks_compactor as compactor_mod
+
+        calls: list[_dt.date] = []
+
+        async def _fake(day: _dt.date, data_dir: Path) -> compactor_mod.CompactRun:
+            calls.append(day)
+            return compactor_mod.CompactRun(2, "", "fake: jsonl 不存在\n")
+
+        monkeypatch.setattr(compactor_mod, "run_compact_subprocess", _fake)
+        return calls
+
     @staticmethod
     def _boot(tmp_path: Path, cfg: TicksConfig) -> tuple[BootedClient, FakeStockSource]:
         fake = FakeStockSource()
@@ -620,6 +644,8 @@ class TestReviewRound1:
         assert json.loads(lines[2])["msg_seq"] == 10  # 半行的 10 不可信 → 沿完整尾列 9 接 10
         with pytest.raises(json.JSONDecodeError):
             json.loads(lines[1])
+        # pr-263 F-07:同一份檔 `load_day` 要與 `compact_day` 同口徑 —— 壞行跳過,不是整天讀不回
+        assert [r.msg_seq for r in load_day(_DAY, tmp_path)] == [9, 10]
 
     async def test_sealed_warning_is_once_per_sealed_day(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -676,3 +702,186 @@ def _wait_sync(pred: Callable[[], bool], timeout: float = 2.0) -> None:
             return
         time.sleep(0.005)
     raise AssertionError(f"條件未在 {timeout}s 內成立")
+
+
+class _FlushFailingFile(io.StringIO):
+    """write 進緩衝成功、`flush` 才炸(硬碟滿的真實順序)。"""
+
+    def flush(self) -> None:
+        raise OSError(28, "No space left on device")
+
+
+class _CloseFailingFile(io.StringIO):
+    def close(self) -> None:
+        raise OSError(5, "Input/output error")
+
+
+def _opener_with(factory: Callable[[], TextIO], days: set[str]) -> Callable[[Path], TextIO]:
+    def _open(path: Path) -> TextIO:
+        if path.stem in days:
+            return factory()
+        return open(path, "a", buffering=64 * 1024, encoding="utf-8", newline="\n")
+
+    return _open
+
+
+class TestReviewRound2:
+    """pr-263 review 收修(F-04 / F-09 / F-14 / F-15 / F-19 / F-20 / F-21)。"""
+
+    async def test_book_rows_are_not_written_before_0900_but_trades_and_msg_seq_are(
+        self, tmp_path: Path
+    ) -> None:
+        """F-04(user 拍板):09:00 開盤前的簿更新不存 —— 08:00 重掛到 08:30 那批快照本來就不要,
+        也就沒有「被前一日 seal 靜默丟掉」這回事;`msg_seq` 照樣佔號、`books_preopen` 計數。"""
+        clock = {"t": _dt.datetime(2026, 7, 21, 8, 20, 0)}
+        engine, src = await _make(tmp_path, flush_secs=3600.0, now_fn=lambda: clock["t"])
+        persist = engine.tick_persist
+        assert persist is not None and src.on_message is not None
+        src.on_message(_quote(cum=1))  # 成交列不受閘管(成交本就 09:00 後才有;這裡只是播種基準)
+        src.on_message(_quote(cum=1, bid="2376"))  # 08:20 的簿更新(cum 未前進 = 簿列候選)→ 不寫
+        src.on_message(_quote(cum=1, bid="2377"))
+        await _drain(engine)
+        clock["t"] = _dt.datetime(2026, 7, 21, 9, 0, 0)
+        src.on_message(_quote(cum=1, bid="2378"))  # 09:00 起才寫(基準仍是成交列的 2375 → 有變)
+        src.on_message(_quote(cum=2, bid="2378"))
+        await _drain(engine)
+        await engine.close()
+        rows = _rows(tmp_path)
+        assert [(r["kind"], r["msg_seq"], r["bid0"]) for r in rows] == [
+            ("trade", 1, 2_375_000),
+            ("book", 4, 2_378_000),
+            ("trade", 5, 2_378_000),
+        ]
+        assert persist.books_preopen == 2
+
+    async def test_first_trade_before_0900_gate_still_counts_msg_seq_from_one(
+        self, tmp_path: Path
+    ) -> None:
+        engine, src = await _make(
+            tmp_path, flush_secs=3600.0, now_fn=lambda: _dt.datetime(2026, 7, 21, 8, 59, 59)
+        )
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 盤前拿到一筆非試撮成交(理論上不會,但成交列不走簿閘)
+        await _drain(engine)
+        await engine.close()
+        assert [(r["kind"], r["msg_seq"]) for r in _rows(tmp_path)] == [("trade", 1)]
+
+    async def test_bad_utf8_tail_does_not_break_engine_start(self, tmp_path: Path) -> None:
+        """F-09:`json.loads(bytes)` 對壞 byte 拋 UnicodeDecodeError(不是 JSONDecodeError);
+        `tail_msg_seq` 要當成「尾列壞」略過,否則 `start()` 炸掉 = 整個 stock engine 停用。"""
+        tmp_path.mkdir(exist_ok=True)
+        (tmp_path / "20260721.jsonl").write_bytes(b'{"msg_seq": 7, "x": "\xe4\xb8"}\n')
+        engine, src = await _make(tmp_path)  # 不得 raise
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        await engine.close()
+        lines = (tmp_path / "20260721.jsonl").read_bytes().split(b"\n")
+        assert json.loads(lines[1])["msg_seq"] == 1  # 尾列壞 → 接不到號,從 1 起
+
+    async def test_ask_side_change_alone_writes_a_book_row(self, tmp_path: Path) -> None:
+        """F-14:去重鍵拿掉 asks 也要紅 —— 只動賣側一層量就得出一列簿列。"""
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1) | {"Ask1": "2385", "AskVolume1": "7"})
+        src.on_message(_quote(cum=1) | {"Ask1": "2385", "AskVolume1": "8"})  # 只改賣二量
+        src.on_message(_quote(cum=1) | {"Ask1": "2385", "AskVolume1": "8"})  # 重推
+        await _drain(engine)
+        await engine.close()
+        rows = _rows(tmp_path)
+        assert [(r["kind"], r["askq1"]) for r in rows] == [("trade", 7), ("book", 8)]
+
+    async def test_futures_leg_messages_are_never_persisted(self, tmp_path: Path) -> None:
+        """F-15:只存現貨(spec 非目標:期貨 / 個股期 tick);拿掉 `is_spot` 閘要紅。"""
+        engine, src = await _make(tmp_path)
+        await engine.set_main_contract("F:CDF:202609")  # 月契約主圖:進 `_handle_quote` 主路徑
+        assert src.on_message is not None
+        src.on_message(_quote("2330", cum=1))
+        src.on_message(_quote("CDF", cum=1, symbol="TC.F.TWF.CDF.202609"))
+        src.on_message(_quote("CDF", cum=2, symbol="TC.F.TWF.CDF.202609", bid="2370"))
+        await _drain(engine)
+        await engine.close()
+        assert [(r["kind"], r["code"], r["msg_seq"]) for r in _rows(tmp_path)] == [
+            ("trade", "2330", 1)
+        ]
+
+    async def test_persist_blowing_up_does_not_block_book_broadcast(self, tmp_path: Path) -> None:
+        """F-19:`observe` 掛在 `_handle_quote` 真正尾端 —— 存檔炸掉(非 OSError)也不能吃掉
+        同一則的五檔廣播與訊號 on_book。"""
+        engine, src = await _make(tmp_path)
+        persist = engine.tick_persist
+        assert persist is not None and src.on_message is not None
+
+        def _boom(**_: object) -> None:
+            raise RuntimeError("persist exploded")
+
+        persist.observe = _boom  # type: ignore[method-assign]
+        got: list[dict] = []
+
+        async def _collect() -> None:
+            async for msg in engine.stream():
+                got.append(msg)
+                if msg["type"] == "book":
+                    return
+
+        task = asyncio.create_task(_collect())
+        await asyncio.sleep(0.02)
+        src.on_message(_quote(cum=1, bid="2376"))
+        await asyncio.wait_for(task, 2.0)
+        await engine.close()
+        assert any(m["type"] == "book" and m["bids"][0][0] == 2_376_000 for m in got)
+
+    async def test_recv_ns_is_stamped_on_the_source_thread_not_on_the_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-20:`recv_ns` 在 source thread 蓋章;loop 排隊的延遲不算進「server 收到」。"""
+        from copycat.server import stock_engine as engine_mod
+
+        counter = {"t": 1_800_000_000_000_000_000}
+        monkeypatch.setattr(engine_mod.time, "time_ns", lambda: counter["t"])
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 蓋章 = 1_800…000
+        counter["t"] += 1_000_000_000  # loop 還沒消化就過了 1 s
+        await _drain(engine)
+        await engine.close()
+        assert _rows(tmp_path)[0]["recv_ns"] == 1_800_000_000_000_000_000
+
+    async def test_flush_error_warns_once_and_keeps_the_timer_alive_for_the_next_day(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """F-21:write 進緩衝成功、flush 才炸 → 當日停寫 WARNING 一次,timer 不死,換日照寫。"""
+        engine, src = await _make(
+            tmp_path, flush_secs=0.05, opener=_opener_with(_FlushFailingFile, {"20260721"})
+        )
+        assert src.on_message is not None
+        with caplog.at_level(logging.WARNING, logger="copycat.live.tick_persist"):
+            src.on_message(_quote(cum=1))
+            await wait_until(
+                lambda: any(
+                    r.levelno == logging.WARNING and "flush" in r.getMessage()
+                    for r in caplog.records
+                )
+            )
+            await asyncio.sleep(0.15)  # 再幾輪 timer,不得再印
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=5, date="20260722"))
+            await wait_until(lambda: (tmp_path / "20260722.jsonl").exists())
+            await engine.close()
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        assert [r["cum_vol"] for r in _rows(tmp_path, "20260722")] == [5]
+
+    async def test_close_error_is_a_write_failure_not_an_exception(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engine, src = await _make(
+            tmp_path, flush_secs=3600.0, opener=_opener_with(_CloseFailingFile, {"20260721"})
+        )
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        with caplog.at_level(logging.INFO, logger="copycat.live.tick_persist"):
+            await engine.close()  # 不得 raise
+        assert _stat_lines(caplog) == [
+            "tick 存檔 2026-07-21:成交 1 / 簿 0 / 重複簿略過 0 / flush 0 / 寫入失敗 1"
+        ]

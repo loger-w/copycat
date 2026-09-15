@@ -59,11 +59,25 @@ def test_load_override(tmp_path: Path) -> None:
         {"flush_secs": 0.0},
         {"compact_timeout_secs": 0.0},
         {"compact_time": "1345"},
+        # pr-263 F-28:少掉的三條分支 + F-24 全形數字(`isdigit()` 會放行)
+        {"retry_secs": 0.0},
+        {"compact_time": "24:00"},
+        {"compact_time": "12:60"},
+        {"compact_time": "aa:bb"},
+        {"compact_time": "１３:４５"},
     ],
 )
 def test_out_of_range_values_are_rejected_at_construction(bad: dict) -> None:
     with pytest.raises(ValueError):
         TicksConfig(**bad)
+
+
+def test_due_time_is_the_parsed_compact_time() -> None:
+    """F-24:驗證與解析同一次(strptime),排程直接用,不再自己 split。"""
+    import datetime as _dt
+
+    assert TicksConfig().due_time() == _dt.time(13, 45)
+    assert TicksConfig(compact_time="09:05").due_time() == _dt.time(9, 5)
 
 
 def test_resolve_dir_relative_to_repo_root_and_absolute_as_is(tmp_path: Path) -> None:
