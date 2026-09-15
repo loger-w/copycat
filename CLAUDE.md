@@ -517,7 +517,8 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   (`stock_state._apply` / `_fold_vp`、前端 `stock-accum` / `TickTape` / `sideSummary` 都只吃三值字面);掃單簇 `_eval_sweep`
   **不讀 side**(同列 `ask_milli` 價格比較,與研究 golden 對齊;09-15 起與 `side` 不等價,見 skill `tc4-market-facts`)。
   漂掉的症狀:達錢改欄名 / 停送旗標 → 全部退回簿比,判定率說明列回到 ~80%、盤後 log「個股旗標」行的 `欄缺` 桶非 0(格式漂了的
-  唯一訊號);engine 漏印 → 盤後 `grep 個股旗標 logs/server-*.log` 對訊息尾 `(<交易日>)` 零行 —— **不限檔名**:log 檔名
+  唯一訊號);engine 漏印 → 盤後 `grep "個股旗標 0:" logs/server-*.log` 對訊息尾 `(<交易日>)` 零行(前綴帶 `0:` 才不與
+  「個股旗標未知值」WARNING 互撞,two-axis Spec-S-02)—— **不限檔名**:log 檔名
   `server-%Y%m%d-%H%M.log` 在啟動當下定死、零 rotating(`__main__._setup_prod_log`),server 不重啟跨日時 D 日那行落在啟動日檔、
   D+1 早上 stage2 才印;同日多次重啟 = 多行,桶相加(pr-255 review F-01)。0 / 1 / 2 以外的值當日首見每值一則 WARNING
   「個股旗標未知值」(F-02),`欄缺` 桶含 JSON null(F-03)。`tests/live/test_stock_models.py::TestSideFromFlag`

@@ -48,7 +48,7 @@ Standards 5 條(1 Should 4 Nice)/ Spec 2 條 Nice / 零 Must。接受 S-01(`str(
 重啟後第一個交易日:
 1. 09:30 後 `curl -s 127.0.0.1:8721/api/stock/state/<自選熱門股>` → 自訂閱起(回補段之後)的 `ticks[].side` neutral 比例 ≈ 0;
    個股頁判定率說明列 ≥ 95%(修前 ~80%)。
-2. 盤後 `grep 個股旗標 logs/server-*.log` 對訊息尾 `(<交易日>)`(**不限檔名**,pr-255 review F-01:log 檔名啟動時定死、
+2. 盤後 `grep "個股旗標 0:" logs/server-*.log` 對訊息尾 `(<交易日>)`(**不限檔名**,pr-255 review F-01:log 檔名啟動時定死、
    零 rotating;server 不重啟跨日時 D 日那行 D+1 早上 stage2 才印、落在啟動日檔;同日多次重啟 = 多行,桶相加),`0:` 桶接近 0、
    `欄缺` 桶 = 0(非 0 = 達錢格式漂了,含 JSON null);`grep 個股旗標未知值 logs/server-*.log` 零行(非零 = 值域漂了,F-02)。
 3. `grep 佇列滿 logs/server-<日>.log` 仍 0;掃單簇 / 政策列 jsonl 筆數量級與 09-15 同時段相當(掃單不讀 side)。
