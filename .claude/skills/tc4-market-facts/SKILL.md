@@ -72,12 +72,27 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   (2026-09-05~07 研究 1,883 股票日實證;spec #192 線上化):REALTIME 與歷史 TICKS 的毫秒同源(`PreciseTime` 12 位取前 9 位 =
   `StockTick.time` 的 `.fff`,研究 `pull_ticks.py` 用 `us // 1000` 同一刀),線上 `SignalDetector._eval_sweep` 與研究
   `combo_events.find_sweeps` 才能對到同一群。首筆外盤判準用 `tick.ask_milli > 0 and price >= ask`,**不用 `tick.side`**
-  —— 兩者在 prod **等價**(`ask_milli` 已由 `_best_limit_price` 把市價佇列 0 濾成 None,`derive_side` 的 outer 分支逐字
-  就是 `ask is not None and price >= ask`;鎖漲停時 `derive_side` 判的是 neutral,見下方 §鎖漲跌停),寫成價格比較只是
-  為了與研究 `find_sweeps` 的 `ask[i] > 0 and p0 >= ask[i]` 逐字對齊:研究 tick 檔 `pull_ticks.py` 保留原始 `Ask=0`。**即時判(群內首次達標即發)vs 群結束才判**:
+  —— **2026-09-15 起兩者不等價**:`tick.side` 即時改讀達錢 `FlagOfBuySell`(下條),掃單仍用同則 `ask_milli`
+  (**成交後簿**)做價格比較,與研究 `find_sweeps` 的 `ask[i] > 0 and p0 >= ask[i]` 逐字對齊(研究 tick 檔 `pull_ticks.py`
+  保留原始 `Ask=0`)。已知差異:一筆主動買**吃光整檔**後成交後簿的 ask 上移(或空),`price >= ask` 為假 → 掃單判非外盤,
+  而旗標會說外盤;要不要改讀旗標留給策略 session(改了 golden fixture 與研究定義就分岔)。09-15 前的舊說「兩者在 prod
+  等價」只在「成交後簿 ask 恰好還等於成交價」時成立(09-14 實測同則簿比對旗標 78.5%),不是恆等。
+  **即時判(群內首次達標即發)vs 群結束才判**:
   427,737 群 / 8,757 合格掃單,即時判多發 60(0.7%)、零漏發;2,925 個發訊筆早於群末、2,747 個層數低於群結束值
   (量測腳本研究目錄 `scripts/sweep_prefix_scan.py`;golden fixture `tests/fixtures/sweep_cluster_golden.json`)。
   (Trigger:任何以 tick 時刻分群 / 掃單定義 / 想改用 side 判外盤)
+- **個股 REALTIME 帶成交的那則,五檔是「成交後簿」;內外盤即時以 `FlagOfBuySell` 為準**(2026-09-14 實測,09-15
+  mod/stock-side-flag 落地):09-14 09:04 起 60 s、82 檔訂閱 49,610 則、去重 (Security, TradeVolume) 首見 6,320 筆成交 ——
+  同則簿 `derive_side` 對旗標一致 78.5% / neutral 18.6% / 矛盾 2.9%;**前一則訊息的簿** 對旗標 100%(n=6,239,零 neutral 零矛盾)
+  → 帶成交那則的 Bid/Ask 已是成交**後**的簿(引申:`StockDayState.book` 在處理成交那則當下正是成交前簿)。`FlagOfBuySell`
+  字串型,官方電文格式 p.9:1 = 內盤(賣方主動)、2 = 外盤(買方主動)、0 = 無法判斷(去重後 6,320 筆只 1 筆,6706 09:03:22
+  成交價低於當時買一,疑零股 / 簿外);試撮與 09:00 集合競價的旗標值未抓到(09-16 08:59 排程補抓,結果只改文件)。
+  鎖跌停 5314 市價佇列列旗標全 outer = 恆等式(與 `relabel_locked_side` 同理)。**歷史 TICKS 無旗標**(380,854 列無此欄)、
+  `TradeVolume` 恆 "0"、Bid/Ask 同為成交後簿 → 回補只能同列簿比(判得出 80.7% / 判得出裡對 96.5%);「前一列簿比先看」可到
+  92.7%(錯 178 → 86)但**拍板不做**,殘餘段(兩者都判不出的 464 筆)任何歷史列上規則都接近擲銅板 —— 零灰的正路是
+  tick 存檔後回補改讀自家存檔。線上落點:`parse_stock_realtime` 旗標優先、0 / 欄缺退回 `derive_side`;`parse_hist_tick`
+  零改動;engine 每日一行「個股旗標 0:n 筆 / 欄缺 k 筆 / 總 m 筆」(欄缺非 0 = 格式漂了)。
+  (Trigger:拿同則五檔當成交前簿 / 改內外盤判定 / 回補想補 neutral / 看到判定率說明列回到 ~80%)
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
   成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**TradeStatus=1 亦 = 盤中延緩撮合中**(2026-08-28 prod 蒐證:開盤段 11 檔

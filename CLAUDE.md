@@ -510,6 +510,15 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   後端若把個股 1K 改成起點標記(或 accum 分鐘 key 改語意)→ 補的根整條右移一格 / 與正式末根重疊一根,兩張圖都畫得出來零訊號;
   `lib/live-last-bar.test.ts` 案 1 / 案 2 / 案 9 釘住(突變 `+1 → +0` 9 條紅、拿掉 13:30 上限 1 條紅)。日 K 半邊
   `mergeLiveDailyBar` 的 `v` 取 `last.cum_vol`(= TC4 當日累積量,DK `v` 同源),**不取** `accum.volume`(VWAP 分母,去重口徑不同)。
+- **個股 `side` 的產生點 = `parse_stock_realtime` 旗標對映 `_FLAG_SIDE`,退路 `derive_side`;回補 `parse_hist_tick` 只有退路**
+  (2026-09-15 起,mod/stock-side-flag):即時以達錢 `FlagOfBuySell` 為準(`"1"` → inner、`"2"` → outer;`"0"` / 欄缺 / 其他值
+  → 同則簿比 `derive_side(price, bid0, ask0)`),`StockTick.flag` 存原始字串**不上 wire**(`snapshot()` / 打包 item 鍵集不加);
+  歷史 TICKS 無旗標 → 回補只有同列簿比 + `relabel_locked_side`,判不出留灰(user 拍板,零灰正路 = 批 C tick 存檔)。讀者不變
+  (`stock_state._apply` / `_fold_vp`、前端 `stock-accum` / `TickTape` / `sideSummary` 都只吃三值字面);掃單簇 `_eval_sweep`
+  **不讀 side**(同列 `ask_milli` 價格比較,與研究 golden 對齊;09-15 起與 `side` 不等價,見 skill `tc4-market-facts`)。
+  漂掉的症狀:達錢改欄名 / 停送旗標 → 全部退回簿比,判定率說明列回到 ~80%、盤後 log「個股旗標」行的 `欄缺` 桶非 0(格式漂了的
+  唯一訊號);engine 漏印 → 盤後 `grep "個股旗標 0" logs/server-<日>.log` 零行。`tests/live/test_stock_models.py::TestSideFromFlag`
+  (含 09-14 raw 三則 golden `tests/fixtures/stock_side_flag_golden.json`)+ `tests/server/test_stock_engine.py::TestFlagStatsLog` 釘住。
 
 ## 5. 資料源
 

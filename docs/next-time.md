@@ -1,3 +1,17 @@
+## 2026-09-15(mod/stock-side-flag 個股內外盤改讀達錢旗標 留尾;spec `.claude/mod/stock-side-flag/change-spec.md`)
+
+- [ ] **`/bug` 候選:歷史 TICKS row 的 `TradeVolume` 恆 "0" → `apply_backfill` 的 survivors 判準 `cum > 回補最大 cum(=0)`
+  讓回補期間已 ingest 的 live tick 全數倖存重放,重疊窗(通常 1–3 s)重複計量**(user Q2 (a) 拍板另開,本案不動):證據
+  current-state §5 事實 A —— 09-15 側車 SubHistory 09-14 窗 82 檔 380,854 列無例外,07-06 報告樣本亦然。走 `diagnosing-bugs`
+  先做能變紅的 loop(fake source 回補列 cum=0 + live 期間 ingest 兩筆 → 重放後 VP / cum_vol 是否雙計)。修法候選 = survivors
+  改以 (時刻, 價, 量) 配對鍵去重(側車 `rules_xcheck.py` 6,320 / 6,320 全對上的那把鍵),不是改 cum 判準。
+- [ ] **09-16 08:59 排程 `copycat-flag-capture-0916`(150 s 只聽不訂抓檔)結果 → 只改文件**:集合競價 09:00:00 首筆與 08:59
+  試撮期訊息的 `FlagOfBuySell` 分佈(去重鍵 (Security, TradeVolume) 首見;分析腳本樣板 scratchpad 上層 `flag_xcheck.py` /
+  `flag_zero.py`)。結果寫進 skill `tc4-market-facts` 那條「成交後簿 / 旗標」+ 本節勾銷;跑完
+  `Unregister-ScheduledTask -TaskName copycat-flag-capture-0916 -Confirm:$false`。不改程式。
+- [x] **「前一列簿比先看」(回補 r1→r0,判得出 80.7% → 92.7%、錯 178 → 86)已拍板不做**(Q1 (c)):批 C tick 存檔後回補改讀
+  自家存檔,這個選項就是死碼;殘餘段 464 筆任何歷史列規則都接近擲銅板(current-state §5 事實 D)。**勿重提**。
+
 ## 2026-09-09(refactor/w3-b2-test-scaffolds 留尾)
 
 - [ ] **`TestWsBroadcasterBackpressure`(測 `ws.py`)住在 `tests/server/test_capital_api.py`(1463 行)—— 開 `tests/server/test_ws.py`
