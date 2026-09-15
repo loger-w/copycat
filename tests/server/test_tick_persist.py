@@ -10,6 +10,8 @@ import datetime as _dt
 import json
 from pathlib import Path
 
+import pytest
+
 from copycat.live.stock_models import StockTick
 from copycat.live.stock_state import StockDayState
 from copycat.live.tick_persist import TickPersist
@@ -217,7 +219,89 @@ class TestLoadDay:
         assert rows[1].msg_seq == 2 and rows[1].bidq0 == 10
 
     def test_load_day_missing_file_raises(self, tmp_path: Path) -> None:
-        import pytest
-
         with pytest.raises(FileNotFoundError):
             load_day(_DAY, tmp_path)
+
+
+_BOOK3 = {  # 三層買、一層賣的基準簿
+    "Bid1": "2370",
+    "BidVolume1": "20",
+    "Bid2": "2365",
+    "BidVolume2": "30",
+}
+
+
+class TestBookRow:
+    async def test_book_row_only_when_any_of_twenty_numbers_changes(self, tmp_path: Path) -> None:
+        """成交、簿變(第三檔量改)、簿不變(逐字重推)、只買一變 → 三列(成交 + 兩簿),重複簿計數 1。"""
+        src = FakeSource()
+        persist = TickPersist(TicksConfig(dir=str(tmp_path), flush_secs=0.05))
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
+        )
+        await engine.start()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1) | _BOOK3)  # 成交(五檔成基準)
+        src.on_message(_quote(cum=1) | _BOOK3 | {"BidVolume2": "31"})  # 第三檔量改 → 簿列
+        src.on_message(_quote(cum=1) | _BOOK3 | {"BidVolume2": "31"})  # 逐字重推 → 不寫、計數
+        src.on_message(_quote(cum=1, bid="2376") | _BOOK3 | {"BidVolume2": "31"})  # 買一變 → 簿列
+        await _drain(engine)
+        await engine.close()
+
+        rows = _rows(tmp_path)
+        assert [(r["kind"], r["msg_seq"]) for r in rows] == [("trade", 1), ("book", 2), ("book", 4)]
+        assert persist.dup_books == 1
+        book = rows[1]
+        assert book["bidq2"] == 31 and book["bid0"] == 2_375_000
+        assert book["precise_time"] == "25751000000"  # 殘影照存(語意 = 在哪筆成交之後)
+        assert book["trade_date"] == "2026-07-21"
+        assert "price_milli" not in book and "time" not in book  # 簿列沒有成交專屬欄
+        assert rows[2]["bid0"] == 2_376_000
+
+    async def test_trade_row_updates_the_basis_so_identical_book_after_trade_is_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1) | _BOOK3)
+        src.on_message(_quote(cum=1) | _BOOK3)  # 成交後緊接相同五檔 → 不寫
+        src.on_message(_quote(cum=2) | _BOOK3)  # 再成交,五檔沒變 → 只有成交列
+        await _drain(engine)
+        await engine.close()
+        assert [r["kind"] for r in _rows(tmp_path)] == ["trade", "trade"]
+
+    async def test_basis_is_per_code(self, tmp_path: Path) -> None:
+        engine, src = await _make(tmp_path)
+        await engine.set_watchlist(["2330", "2317"])
+        assert src.on_message is not None
+        src.on_message(_quote("2330", cum=1, bid="2375"))
+        src.on_message(_quote("2317", cum=1, bid="100", ask="101"))
+        src.on_message(_quote("2330", cum=1, bid="2375"))  # 2330 沒變 → 不寫
+        src.on_message(_quote("2317", cum=1, bid="100", ask="101"))  # 2317 沒變 → 不寫
+        src.on_message(_quote("2317", cum=1, bid="99", ask="101"))  # 2317 變 → 簿列
+        await _drain(engine)
+        await engine.close()
+        assert [(r["code"], r["kind"]) for r in _rows(tmp_path)] == [
+            ("2330", "trade"),
+            ("2317", "trade"),
+            ("2317", "book"),
+        ]
+
+    async def test_load_day_returns_both_kinds_and_the_row_before_a_trade_is_the_pre_trade_book(
+        self, tmp_path: Path
+    ) -> None:
+        engine, src = await _make(tmp_path)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        src.on_message(_quote(cum=1, bid="2376"))  # 簿變 = 下一筆成交前的簿
+        src.on_message(_quote(cum=2, bid="2377"))  # 成交後簿又變
+        await _drain(engine)
+        await engine.close()
+
+        rows = load_day(_DAY, tmp_path)
+        assert [(r.kind, r.msg_seq) for r in rows] == [("trade", 1), ("book", 2), ("trade", 3)]
+        assert rows[1].bid0 == 2_376_000 and rows[2].bid0 == 2_377_000
+        assert rows[1].price_milli is None and rows[1].time is None
+        with pytest.raises(ValueError):
+            rows[1].to_stock_tick()
