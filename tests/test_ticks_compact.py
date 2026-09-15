@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -228,14 +229,10 @@ class TestReviewRound2:
         compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
         assert order == ["20260721-book.parquet", "20260721.parquet"]
 
-    def test_unlink_failure_rolls_back_both_parquet_and_is_a_compact_failed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """F-03:Windows 上 jsonl 被別的 process 開著時 unlink 拋 PermissionError;parquet 已落地會讓
-        之後每次重跑都撞「parquet 已在」exit 2 —— 要回滾成可重入狀態並以 CompactFailed 收場。"""
-        from copycat import ticks_compact
-
-        jsonl = _write_fixture(tmp_path)
+    @pytest.fixture
+    def jsonl_unlink_denied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """故障注入(不是 mock 真依賴讓測試過):只對 `.jsonl` 的 unlink 拋 Windows 那顆 PermissionError,
+        其餘路徑照常;範圍縮到副檔名,比整顆 `Path.unlink` 換掉窄(收修 round-1 Standards F-08)。"""
         real_unlink = Path.unlink
 
         def _deny(self: Path, missing_ok: bool = False) -> None:
@@ -244,6 +241,15 @@ class TestReviewRound2:
             real_unlink(self, missing_ok=missing_ok)
 
         monkeypatch.setattr(Path, "unlink", _deny)
+
+    def test_unlink_failure_rolls_back_both_parquet_and_is_a_compact_failed(
+        self, tmp_path: Path, jsonl_unlink_denied: None
+    ) -> None:
+        """F-03:Windows 上 jsonl 被別的 process 開著時 unlink 拋 PermissionError;parquet 已落地會讓
+        之後每次重跑都撞「parquet 已在」exit 2 —— 要回滾成可重入狀態並以 CompactFailed 收場。"""
+        from copycat import ticks_compact
+
+        jsonl = _write_fixture(tmp_path)
         with pytest.raises(ticks_compact.CompactFailed, match="jsonl"):
             compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
         assert jsonl.exists()
@@ -252,19 +258,44 @@ class TestReviewRound2:
         assert not list(tmp_path.glob("*.tmp"))
 
     def test_cli_maps_unlink_failure_to_exit_1_with_a_message(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, jsonl_unlink_denied: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
         _write_fixture(tmp_path)
-        real_unlink = Path.unlink
-
-        def _deny(self: Path, missing_ok: bool = False) -> None:
-            if self.suffix == ".jsonl":
-                raise PermissionError(32, "being used by another process")
-            real_unlink(self, missing_ok=missing_ok)
-
-        monkeypatch.setattr(Path, "unlink", _deny)
         assert cli.main(["ticks-compact", "--date", "20260721", "--dir", str(tmp_path)]) == 1
         assert "失敗" in capsys.readouterr().err
+
+    def test_load_day_counts_bad_utf8_as_a_bad_line_instead_of_replacing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """收修 round-1 Spec F-01:`errors="replace"` 會把壞 byte 換成 U+FFFD 後「解析成功」—— 一列髒資料
+        悄悄混進去、不計壞行;要與 `compact_day` 同一個讀行器(strict、壞 byte = 壞行)。"""
+        import logging
+
+        tmp_path.mkdir(exist_ok=True)
+        good = json.dumps(_trade("2330", 1, 1)).encode("utf-8")
+        dirty = (
+            json.dumps(_trade("2330", 2, 2) | {"flag": "x"})
+            .encode("utf-8")
+            .replace(b'"x"', b'"\xe4\xb8"')
+        )
+        jsonl_path(tmp_path, "2026-07-21").write_bytes(good + b"\n" + dirty + b"\n")
+        with caplog.at_level(logging.WARNING, logger="copycat.ticks"):
+            rows = load_day(_DAY, tmp_path)
+        assert [r.msg_seq for r in rows] == [1]
+        assert any("壞行 1" in r.getMessage() for r in caplog.records)
+        # compact_day 同口徑:同一份檔 → 成交 1 列、壞行 1
+        result = compact_day(_DAY, tmp_path, is_trading_day=_TRADING)
+        assert (result.trades, result.bad_lines) == (1, 1)
+
+    def test_load_day_treats_a_row_missing_identity_fields_as_bad(self, tmp_path: Path) -> None:
+        """合法 JSON 但缺身分 / 排序鍵(半行被截在鍵中間又剛好合法)→ 壞行,不是 `TickRow(...)` TypeError。"""
+        tmp_path.mkdir(exist_ok=True)
+        jsonl_path(tmp_path, "2026-07-21").write_text(
+            json.dumps(_trade("2330", 1, 1)) + "\n" + '{"kind": "book", "code": "2330"}\n',
+            encoding="utf-8",
+        )
+        rows = load_day(_DAY, tmp_path)
+        assert [r.msg_seq for r in rows] == [1]
 
     def test_load_day_skips_bad_jsonl_lines_like_compact_day(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -336,8 +367,24 @@ class TestReviewRound2:
             "import copycat.live.tick_persist; "
             "raise SystemExit(1 if any(m == 'pyarrow' or m.startswith('pyarrow.') for m in sys.modules) else 0)"
         )
+        # 裸子程序不經 conftest 的憑證中和:顯式拿掉 CAPITAL_* / DISCORD_* / FINMIND(backend-conventions
+        # 記錄過真憑證流入的最壞情況 = 載真 SKCOM DLL segfault;收修 round-1 Standards F-07)
+        from copycat.server.verify import CAPITAL_ENV_KEYS, DISCORD_ENV_KEYS
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in CAPITAL_ENV_KEYS and k not in DISCORD_ENV_KEYS and k != "FINMIND_TOKEN"
+        }
+        env["PYTHONUTF8"] = "1"
         proc = subprocess.run(
-            [sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120
+            [sys.executable, "-c", code],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=20,  # 實測 < 3 s
         )
         assert proc.returncode == 0, proc.stderr[-800:]
 
