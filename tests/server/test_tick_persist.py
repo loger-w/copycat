@@ -495,7 +495,40 @@ class TestAppWiring:
             fake.on_message(dict(TICK_MSG))
             engine = client.app.state.stock  # type: ignore[attr-defined]
             _wait_sync(lambda: len(engine.snapshot("2330")["ticks"]) == 1)
+            assert client.app.state.ticks_compactor is None  # type: ignore[attr-defined]
         assert not (tmp_path / "ticks").exists()
+
+    def test_enabled_config_boots_the_compactor_on_the_same_dir(self, tmp_path: Path) -> None:
+        client, _fake = self._boot(
+            tmp_path, TicksConfig(dir=str(tmp_path / "ticks"), flush_secs=3600.0)
+        )
+        with client:
+            compactor = client.app.state.ticks_compactor  # type: ignore[attr-defined]
+            assert compactor is not None
+            assert compactor._dir == tmp_path / "ticks"
+
+
+class TestSealDay:
+    async def test_sealed_day_drops_late_rows_and_releases_the_handle(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engine, src = await _make(tmp_path, flush_secs=3600.0)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        persist = engine.tick_persist
+        assert persist is not None
+        with caplog.at_level(logging.WARNING, logger="copycat.live.tick_persist"):
+            persist.seal_day("2026-07-21")
+            assert [r["cum_vol"] for r in _rows(tmp_path)] == [1]  # seal 即 flush
+            (tmp_path / "20260721.jsonl").unlink()  # handle 已放掉(Windows 才刪得掉)
+            src.on_message(_quote(cum=2))  # 遲到的列
+            src.on_message(_quote(cum=3))
+            await _drain(engine)
+        assert not (tmp_path / "20260721.jsonl").exists()  # 不重開
+        assert persist.sealed_dropped == 2
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        await engine.close()
 
 
 def _wait_sync(pred: Callable[[], bool], timeout: float = 2.0) -> None:
