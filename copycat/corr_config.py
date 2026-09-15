@@ -146,14 +146,15 @@ def load_config(path: Path | None = None) -> CorrConfig:
     if parsed is None:
         logger.warning("corr 設定檔 legs 欄格式錯誤,改用預設腿")
         return DEFAULT_CONFIG
-    legs = parsed.legs
     seen: set[str] = set()
     unique: list[Leg] = []
-    for leg in legs:
+    duplicated: list[str] = []
+    for leg in parsed.legs:
         if leg.key in seen:
-            # 保留首見那腿(pr-251 review F-05):重複 key 在 CorrState 增量版會讓 n{w} 加倍;
-            # state 層已去重,這裡是給人看的訊號 —— 設定檔是人手改的,重複多半是複製貼上沒改 key
-            logger.warning("corr 設定檔腿 key 重複:%s(保留首見,略過後者)", leg.key)
+            # 保留首見那腿(pr-251 review F-05):重複 key 在 CorrState 增量版會讓 n{w} 加倍;state 層已去重,
+            # 這裡是給人看的訊號 —— WARNING 與其他腿層旗標一樣延到「確定採用這份 config」之後才印
+            # (同檔 `_parse_legs` 明文;整份被丟掉時不該先看到「修 key」再看到「改用預設腿」,round-1 H2)
+            duplicated.append(leg.key)
             continue
         seen.add(leg.key)
         unique.append(leg)
@@ -163,6 +164,8 @@ def load_config(path: Path | None = None) -> CorrConfig:
         logger.warning("corr 設定檔 base=%s 不在 legs 內,改用預設腿", base)
         return DEFAULT_CONFIG
     # 走到這裡才確定採用這份 config,旗標類 WARNING(不降級、腿組仍可用)集中在這之後印。
+    for key in duplicated:
+        logger.warning("corr 設定檔腿 key 重複:%s(保留首見,略過後者)", key)
     for key, raw_sparse in parsed.bad_sparse:
         # 只認字面 true(fail-safe:少豁免一腿多幾發 churn),但丟掉旗標要有訊號 —— 設定檔是人手改的,
         # 打成 "true" / 1 / "yes" / null → 該腿修復靜默不生效、退回每 240 s 一發,只能事後 grep log 才知道

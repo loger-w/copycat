@@ -582,7 +582,7 @@ class TestWindowVolumeRunningSum:
                     _ctx(day_volume=i),
                     frozenset(),
                 )
-                entered += 1
+                entered += det._in_session(clock.now)  # 真的過盤中閘才算(round-1 spec:呼叫次數沒鑑別力)
                 # 時距全在盤中尺度:平均 ~0.25 s 讓每檔窗深到數百筆;約 0.2% 機率跳 60 s 讓 popleft
                 # 一次丟多筆(多筆逐出路徑)
                 if rng.random() < 0.002:
@@ -598,7 +598,7 @@ class TestWindowVolumeRunningSum:
                 if window is not None:
                     deepest = max(deepest, len(window))
         assert mismatches == 0
-        assert entered > 90_000  # 九成以上真的進到狀態機(修前 18.7%)
+        assert entered > 90_000  # 九成以上通過 _in_session 進到狀態機(修前 18.7%;舊時距下此數 ≈ 18.6k)
         assert deepest >= 300  # 窗真的深過(修前 max 13)
         assert det._window_vol.keys() == det._window.keys()
 

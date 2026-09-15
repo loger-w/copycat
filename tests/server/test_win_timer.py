@@ -100,7 +100,10 @@ def test_exception_from_win32_wrappers_is_a_failure_not_a_crash(
     assert ok is False
     assert calls == ["tbp"]
     msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert any("EcoQoS 豁免呼叫失敗" in m and type(exc).__name__ in m for m in msgs)
+    # 恰一則、講例外本身;不得再多印一則「回 False,GetLastError=-1」的假陳述(round-1 H1)
+    assert len(msgs) == 1
+    assert "EcoQoS 豁免呼叫失敗" in msgs[0] and type(exc).__name__ in msgs[0]
+    assert "回 False" not in msgs[0] and "GetLastError" not in msgs[0]
 
 
 def test_non_windows_is_a_noop(caplog: pytest.LogCaptureFixture) -> None:
