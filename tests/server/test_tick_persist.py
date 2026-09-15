@@ -7,19 +7,29 @@
 from __future__ import annotations
 
 import datetime as _dt
+import io
 import json
+import logging
+import re
+import time
 from pathlib import Path
+from typing import Callable, TextIO
 
 import pytest
 
 from copycat.live.stock_models import StockTick
 from copycat.live.stock_state import StockDayState
 from copycat.live.tick_persist import TickPersist
+from copycat.server.app import create_app
 from copycat.server.stock_engine import StockEngine
 from copycat.ticks import TickRow, load_day
 from copycat.ticks_config import TicksConfig
+from tests.helpers.boot import BootedClient
+from tests.helpers.fake_sources import FakeStockSource
+from tests.helpers.fake_txo import FakeTxoSource
 from tests.helpers.wait import wait_until
 from tests.server.test_stock_engine import FakeSource, _drain, _quote
+from tests.server.test_stock_routes import TICK_MSG
 
 #: 試撮窗內的 UTC PreciseTime(台北 08:50:00 = UTC 00:50:00)
 _TRIAL_PRECISE = "5000000000"
@@ -305,3 +315,194 @@ class TestBookRow:
         assert rows[1].price_milli is None and rows[1].time is None
         with pytest.raises(ValueError):
             rows[1].to_stock_tick()
+
+
+class _FailingFile(io.StringIO):
+    """寫入即 OSError 的 handle(硬碟滿 / 權限)。"""
+
+    def write(self, s: str) -> int:
+        raise OSError(28, "No space left on device")
+
+
+def _opener_failing_on(days: set[str]) -> Callable[[Path], TextIO]:
+    """指定日期的檔給壞 handle,其餘走真檔。"""
+
+    def _open(path: Path) -> TextIO:
+        if path.stem in days:
+            return _FailingFile()
+        return open(path, "a", buffering=64 * 1024, encoding="utf-8", newline="\n")
+
+    return _open
+
+
+def _stat_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """每日那一行(字面 `tick 存檔 <YYYY-MM-DD>:…`);停寫 WARNING 另有前綴,不混入。"""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if re.match(r"^tick 存檔 \d{4}-\d{2}-\d{2}:", r.getMessage())
+    ]
+
+
+class TestResilience:
+    _LOGGER = "copycat.live.tick_persist"
+
+    async def test_write_error_warns_once_stops_for_the_day_and_never_touches_the_engine(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        src = FakeSource()
+        persist = TickPersist(
+            TicksConfig(dir=str(tmp_path), flush_secs=3600.0),
+            opener=_opener_failing_on({"20260721"}),
+        )
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
+        )
+        recorder = _TickRecorder()
+        engine.attach_signal_hub(recorder)
+        await engine.start()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            src.on_message(_quote(cum=1))
+            src.on_message(_quote(cum=2))
+            src.on_message(_quote(cum=2, bid="2376"))  # 簿變
+            await _drain(engine)
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1 and "20260721" in warnings[0].getMessage()
+            assert len(recorder.ticks) == 2  # 訊號層照常
+            assert len(engine.snapshot("2330")["ticks"]) == 2  # 看盤成交明細照常
+            await engine.close()
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        assert not (tmp_path / "20260721.jsonl").exists()
+        assert _stat_lines(caplog) == [
+            "tick 存檔 2026-07-21:成交 0 / 簿 0 / 重複簿略過 0 / flush 0 / 寫入失敗 1"
+        ]
+
+    async def test_next_day_re_arms_after_a_failed_day(self, tmp_path: Path) -> None:
+        src = FakeSource()
+        persist = TickPersist(
+            TicksConfig(dir=str(tmp_path), flush_secs=0.05),
+            opener=_opener_failing_on({"20260721"}),
+        )
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
+        )
+        await engine.start()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))  # 當日停寫
+        await _drain(engine)
+        engine.rollover_stage1("2026-07-22")
+        src.on_message(_quote(cum=5, date="20260722"))
+        await _drain(engine)
+        await engine.close()
+        assert not (tmp_path / "20260721.jsonl").exists()
+        assert [r["cum_vol"] for r in _rows(tmp_path, "20260722")] == [5]
+
+    async def test_disabled_writes_nothing_and_creates_no_dir(self, tmp_path: Path) -> None:
+        src = FakeSource()
+        persist = TickPersist(TicksConfig(enabled=False, dir=str(tmp_path / "ticks")))
+        engine = StockEngine(
+            src, trade_date="2026-07-21", throttle_secs=0.01, checkpoint=False, tick_persist=persist
+        )
+        await engine.start()
+        await engine.set_main("2330")
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1))
+        await _drain(engine)
+        await engine.close()
+        assert not (tmp_path / "ticks").exists()
+
+    async def test_close_flushes_rows_that_never_hit_the_flush_interval(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engine, src = await _make(tmp_path, flush_secs=3600.0)
+        assert src.on_message is not None
+        src.on_message(_quote(cum=1) | _BOOK3)
+        src.on_message(_quote(cum=1) | _BOOK3)  # 重複簿
+        src.on_message(_quote(cum=1) | _BOOK3 | {"BidVolume2": "31"})  # 簿列
+        await _drain(engine)
+        assert not (tmp_path / "20260721.jsonl").read_text(encoding="utf-8")  # 還在緩衝
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            await engine.close()
+        assert [r["kind"] for r in _rows(tmp_path)] == ["trade", "book"]
+        assert _stat_lines(caplog) == [
+            "tick 存檔 2026-07-21:成交 1 / 簿 1 / 重複簿略過 1 / flush 0 / 寫入失敗 0"
+        ]
+
+    async def test_stage2_prints_old_day_then_counts_restart_for_the_new_day(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        engine, src = await _make(tmp_path, flush_secs=0.05)
+        assert src.on_message is not None
+        with caplog.at_level(logging.INFO, logger=self._LOGGER):
+            src.on_message(_quote(cum=1))
+            await wait_until(lambda: len(_rows(tmp_path)) == 1)  # 至少 flush 一次
+            engine.rollover_stage1("2026-07-22")
+            src.on_message(_quote(cum=5, date="20260722"))
+            src.on_message(_quote(cum=5, date="20260722", bid="2376"))
+            await _drain(engine)
+            lines = _stat_lines(caplog)
+            assert len(lines) == 1
+            assert re.fullmatch(
+                r"tick 存檔 2026-07-21:成交 1 / 簿 0 / 重複簿略過 0 / flush [1-9]\d* / 寫入失敗 0",
+                lines[0],
+            )
+            await engine.close()
+        lines = _stat_lines(caplog)
+        assert len(lines) == 2
+        assert re.fullmatch(
+            r"tick 存檔 2026-07-22:成交 1 / 簿 1 / 重複簿略過 0 / flush \d+ / 寫入失敗 0", lines[1]
+        )
+
+
+class TestAppWiring:
+    """`create_app(ticks_config=…)` 真的到 engine:漏傳的失效樣態是整條存檔靜默不起。"""
+
+    @staticmethod
+    def _boot(tmp_path: Path, cfg: TicksConfig) -> tuple[BootedClient, FakeStockSource]:
+        fake = FakeStockSource()
+        app = create_app(
+            FakeTxoSource(),
+            stock_source=fake,
+            stock_watchlist_path=tmp_path / "watchlist.json",
+            ticks_config=cfg,
+            throttle_secs=0.01,
+        )
+        return BootedClient(app, raise_server_exceptions=False), fake
+
+    def test_enabled_config_writes_the_trade_row_under_the_configured_dir(
+        self, tmp_path: Path
+    ) -> None:
+        client, fake = self._boot(
+            tmp_path, TicksConfig(dir=str(tmp_path / "ticks"), flush_secs=3600.0)
+        )
+        with client:
+            client.get("/api/stock/state/2330")  # set_main → 訂閱
+            assert fake.on_message is not None
+            fake.on_message(dict(TICK_MSG))
+            engine = client.app.state.stock  # type: ignore[attr-defined]
+            _wait_sync(lambda: len(engine.snapshot("2330")["ticks"]) == 1)
+        rows = _rows(tmp_path / "ticks")  # lifespan 關機 flush 後才讀得到
+        assert [(r["kind"], r["code"], r["cum_vol"]) for r in rows] == [("trade", "2330", 1)]
+
+    def test_disabled_config_creates_nothing(self, tmp_path: Path) -> None:
+        client, fake = self._boot(tmp_path, TicksConfig(enabled=False, dir=str(tmp_path / "ticks")))
+        with client:
+            client.get("/api/stock/state/2330")
+            assert fake.on_message is not None
+            fake.on_message(dict(TICK_MSG))
+            engine = client.app.state.stock  # type: ignore[attr-defined]
+            _wait_sync(lambda: len(engine.snapshot("2330")["ticks"]) == 1)
+        assert not (tmp_path / "ticks").exists()
+
+
+def _wait_sync(pred: Callable[[], bool], timeout: float = 2.0) -> None:
+    """TestClient 的同步世界:loop 在別的 thread,輪詢 `pred` 直到成立。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return
+        time.sleep(0.005)
+    raise AssertionError(f"條件未在 {timeout}s 內成立")

@@ -73,6 +73,17 @@ class TestLifespanBound:
             + sb.CLOCK_PROBE_WORST_SECS
         )
 
+    def test_lifespan_bound_covers_the_tick_persist_flush(self) -> None:
+        """spec #257:stock lane 的 `engine.close()` 尾端多一段 tick 存檔 flush + close(64 KB 緩衝
+        一次 write syscall,預算 < 100 ms)。可計段要進算式(CLAUDE §4 關機預算)。"""
+        assert 0 < sb.TICK_PERSIST_FLUSH_SECS <= 0.1
+        assert sb.lifespan_close_worst_secs() >= (
+            sb.TC4_LANE_DEPTH * close_worst_secs()
+            + COM_JOIN_TIMEOUT_SECS
+            + sb.CLOCK_PROBE_WORST_SECS
+            + sb.TICK_PERSIST_FLUSH_SECS
+        )
+
     def test_run_grace_covers_ws_drain_and_lifespan(self) -> None:
         """run.ps1 拿到的數字必須蓋住 uvicorn 先等 WS 收攤那一段(review Spec 2 後半)。"""
         grace = sb.run_grace_secs()
