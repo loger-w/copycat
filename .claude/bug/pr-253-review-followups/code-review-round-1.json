@@ -1,0 +1,22 @@
+{
+  "fixed_point": "de81c85b (merge-base master..HEAD = PR #253 merge)",
+  "reviewed_head": "dc2d46ef",
+  "axes_model": "opus x2 (parallel sub-agents)",
+  "standards": [
+    {"id": "S-01", "severity": "judgement", "file": "copycat/capital/client.py", "hunk": "_set_status(..., reset_chain=True)", "rule": "Remove Flag Argument / Speculative Generality;鐵則 B", "finding": "旗標 True 的整段清點 prod 唯一 caller 是 _init_com(全初值 no-op),只靠測試存活;但拿掉要連刪四條既有斷言(鐵則 E),維持現狀較低風險。", "disposition": "accept(不動)—— 保留旗標,docstring 已標 no-op;刪除另開 🔴 commit 由 user 拍板"},
+    {"id": "S-02", "severity": "hard", "file": "copycat/capital/reply_link.py", "hunk": "reconnect_delay(backoff=) + ReplyLink.backoff", "rule": "鐵則 B 不為未來可能加 abstraction", "finding": "backoff 注入點全庫零非預設 caller、測試只走預設。", "disposition": "accept — 兩處收掉,REPLY_RECONNECT_BACKOFF_SECS 唯一真相源"},
+    {"id": "S-03", "severity": "judgement", "file": "copycat/capital/reply_link.py", "hunk": "ReplyLink.next", "rule": "Mysterious Name(遮 builtin)", "finding": "`link.next` 讀起來像呼叫、語意不完整。", "disposition": "accept — 改 next_due(三個測試檔機械替換)"},
+    {"id": "S-04", "severity": "judgement", "file": "copycat/capital/reply_link.py", "hunk": "reconnect_delay vs classify_probe", "rule": "組織一致性", "finding": "同性質純函式一個 module level、一個 staticmethod。", "disposition": "accept — classify_probe 下放 module function"},
+    {"id": "S-05", "severity": "judgement", "file": "copycat/capital/client.py", "hunk": "_maybe_reconnect_reply rc==0", "rule": "log 為真陳述(CLAUDE §4 四行判準)", "finding": "STA 重入下 _reply_recovered 已跑完、排程已清,rc==0 仍印「N s 內未恢復再試」= 假陳述。", "disposition": "accept — 已 ok 改印「連線事件已於同一呼叫內回來」(🔴 單獨 commit)"},
+    {"id": "S-06", "severity": "hard", "file": "tests/capital/test_reply_reconnect.py", "hunk": "檔尾", "rule": "backend-conventions Format 對齊", "finding": "檔尾多一空行,ruff format 會夾帶 diff。", "disposition": "accept — 刪一行"},
+    {"id": "S-07", "severity": "judgement", "file": "copycat/capital/reply_link.py", "hunk": "整檔", "rule": "Middle Man 判定(正面)", "finding": "非 Middle Man / one-instance seam:退避 / 去重 / 三態表驗只有抽出後寫得出來;client 零殘留重複判斷。", "disposition": "note"},
+    {"id": "S-08", "severity": "judgement", "file": "tests/capital/*.py", "hunk": "_reply_reconnect_next → _reply_link.next 14 處、搬檔", "rule": "鐵則 E(正面)", "finding": "全為機械替換 / append,斷言值域逐字不變;搬檔案掉了 S-04 出處註解。", "disposition": "accept — 補回出處註解"}
+  ],
+  "spec": [
+    {"id": "Spec-S-01", "kind": "creep", "file": "copycat/capital/client.py", "spec_quote": "最省事:在途鏈存在時不清 —— reset_chain=not in_flight", "finding": "實作改成無條件 reset_chain=False,連 #234 量測三欄與 abandoned 旗標都不清;重播成交會重設 _fill_seen_at → chain-stats 多出重播樣本。", "disposition": "refute(機制)+ accept(文件)—— 回查鏈與回報線獨立,鏈不在飛時清 _fill_seen_at 反而丟掉合法樣本(成交後 0.5 s 內斷又恢復即是),無條件 False 才對;重播污染與 reset_chain 無關 —— 重播成交在恢復之後到、起點為 None 時本來就會重設,與開機 backlog 同性質;改記 CLAUDE §4「重連重播的成交會進 chain-stats 母體(知情)」"},
+    {"id": "Spec-S-02", "kind": "wrong", "file": "tests/capital/test_reply_reconnect.py", "spec_quote": "F-04 恆真斷言", "finding": "原斷言註解仍寫「在途鏈旗標被清,不能等 60 s」,F-01 後已是假陳述。", "disposition": "accept — 註解改為真陳述"},
+    {"id": "Spec-S-03", "kind": "missing", "file": "tests/capital/test_reply_reconnect.py", "spec_quote": "_mark_balance_dirty 保留…被 pending / inflight 守門壓到鏈落地之後", "finding": "F-01 案只斷不補第二發,沒斷落地後真的補一發。", "disposition": "accept(部分)—— F-01 案補斷 `_balance_due is not None`(守門早退不清 due);「刪 _mark_balance_dirty 照綠」為誤 —— F-03/F-04 合案先 `_balance_due=None` 再事件恢復斷 not None,刪掉即紅"},
+    {"id": "Spec-S-04", "kind": "creep", "file": "copycat/capital/reply_link.py", "spec_quote": "F-10 抽狀態機", "finding": "抽取邊界比報告窄(合理),但 backoff 注入點零 caller;EOF 多空行。", "disposition": "accept — 同 S-02 / S-06"}
+  ],
+  "disposition": "Standards 8(hard 2 / judgement 6):accept 6、note 2。Spec 4:accept 3(1 部分)、refute 1(Spec-S-01 機制,文件層補記)。收修 commit:refactor + fix(S-05)兩筆;capital 套件 461 passed、ruff / pyright 綠。"
+}
