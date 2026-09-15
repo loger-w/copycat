@@ -4,6 +4,8 @@
 §1 Tier 0 / Tier 1-1;`verify-bakeoff/{T1,T2,T4,C1}`;`arch-scan/{B04,B05,X4}`)已把每一條的瓶頸拆到行號與 µs,
 本檔只做兩件事:(1) 用**可重跑、stdlib-only、before / after 同一把尺**的 harness 把 baseline 在本機重新量一次
 (不引用 Opus session 的數字當 baseline);(2) 逐條寫下目標 threshold 與量測指令。
+**§1 表的數字是首輪(未存檔)**,同量級但非逐格等於後來 committed 的 `evidence/out_before_*.json`(例:0-4 push 0.005 vs 0.0084、
+0-6 orders 1328 vs 1345.7、bench_01 `--n 30` vs `--n 60`);正式 before 以 `out_before_*.json` 為準(pr-251 review F-20)。
 
 ## 0. Baseline 前置:auto-verify 全綠(壞 tree 量出的 baseline 無意義)
 
@@ -31,10 +33,10 @@ harness 全在 `evidence/`,`--repo <root>` 指向要量的那份 code(主樹 = b
 | 0-4 | `correlations()` **9.06 ms** p50 每秒(11 腿 × 3 窗 × 1800 筆;push 0.005 ms) | `bench_04_corr_state.py --warm 1900 --measure 300`(ms) | push + correlations 合計 **≤ 0.1 ms** p50;`--drift` 的 `n_mismatch == 0` | T2 §2、X4-02 |
 | 0-5 | `append_audit` **205.9 µs** p50(mkdir 在鎖內) | `bench_05_audit.py --n 3000`(µs) | **≤ 140 µs** p50 | T1 §D1-05 |
 | 0-6 | route n=400:positions **794 µs** / orders **1328 µs** / fills **670 µs** p50 | `bench_06_asdict.py --n 400`(µs/await) | positions **≤ 100 µs** p50;orders / fills 同比 | T1 §9 |
-| 0-7 | prod-like(不動 timer):loop p50 **58.0 ms**(0.005)vs **58.2 ms**(0.001)—— **零差異**;套 0-3 組態:**16.8 → 4.0 ms** | `bench_07_switchinterval.py --threads 4 --rounds 2 [--timer-1ms]`(ms) | 原目標 ≤ 4 ms **只在 0-3 組態成立**;prod-like 達不到 → 見 §2 | T4 §3.4(T4 表全程開著 timer_1ms) |
+| 0-7 | prod-like(不動 timer):loop p50 **58.0 ms**(0.005)vs **58.2 ms**(0.001)—— **零差異**(首輪未存檔;重跑存檔 `evidence/out_bench_07_base.json`:72.1 / 58.3、57.5 / 58.1,p99 275–341);套 0-3 組態:**16.8 → 4.0 ms**(重跑 `out_bench_07_timer1ms.json`:17.3 → 3.68、16.6 → 3.51) | `bench_07_switchinterval.py --threads 4 --rounds 2 [--timer-1ms]`(ms) | 原目標 ≤ 4 ms **只在 0-3 組態成立**;prod-like 達不到 → 見 §2 | T4 §3.4(T4 表全程開著 timer_1ms);artifact 於 pr-251 review F-08 補跑 |
 | 0-8 | 機制項:停用規則的 `set_basis` 死工(每次 basis 分發 × 停用 slot 數) | 測試斷言(spy)而非計時 | 停用 slot 零 `set_basis` 呼叫 | MASTER 0-8 |
 | 0-9 | `evaluate_book` 無 latch **2.2 µs** p50(每則簿更新 × 每 slot) | `bench_09_evaluate_book.py`(µs) | **≤ 0.5 µs** p50 | MASTER 0-9(推估→本機實量) |
-| 1-1 | 江波圖 snapshot in-memory 分鐘鍵 = `int`;wire sha256 `01f4bb75…`(snapshot)/ `3a34b497…`(delta) | `check_11_river_wire.py`(sha256) | **sha 逐位元相同**、in-memory 鍵型別 `str` | T1 §6.3 |
+| 1-1 | 江波圖 snapshot in-memory 分鐘鍵 = `int`;wire sha256 `01f4bb75…`(snapshot)/ `3a34b497…`(delta) | `check_11_river_wire.py`(sha256) | **sha 逐位元相同**、snapshot(wire 前)鍵型別 `str`、in-memory `_minutes` 仍 `int`(pr-251 review F-18 更正) | T1 §6.3 |
 
 ## 2. 定位結論與意外
 
