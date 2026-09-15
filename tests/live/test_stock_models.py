@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 from copycat.live.stock_models import (
     StockTick,
@@ -11,6 +13,9 @@ from copycat.live.stock_models import (
     parse_stock_realtime,
     relabel_locked_side,
 )
+
+#: 09-14 raw 抓檔三則 golden(與 test_overlay `_PARITY_PATH` 同款 module-level 常數,review S-03)
+_FLAG_GOLDEN_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "stock_side_flag_golden.json"
 
 # 2026-07-21 盤中 probe 真實樣本(docs/research/2026-07-21-stock-spot-quote-order-probe.md)
 REALTIME_MSG = {
@@ -527,6 +532,13 @@ class TestSideFromFlag:
         assert tick2.flag is None
         assert tick2.side == "inner"
 
+    def test_non_string_flag_is_normalised_like_every_other_field(self) -> None:
+        """review S-01:同函式其他欄都 `str()`;達錢哪天送 int 2 不能靜默退回簿比。"""
+        tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": 2})
+        assert tick is not None
+        assert tick.side == "outer"
+        assert tick.flag == "2"
+
     def test_unknown_flag_value_falls_back_to_book(self) -> None:
         tick, _b, _m = parse_stock_realtime({**REALTIME_MSG, "FlagOfBuySell": "9"})
         assert tick is not None
@@ -550,11 +562,7 @@ class TestSideFromFlag:
 
     def test_golden_rows_from_0914_capture_follow_the_flag(self) -> None:
         """真實列 golden(`tests/fixtures/stock_side_flag_golden.json`,09-14 raw 抓檔逐字)。"""
-        import json
-        from pathlib import Path
-
-        path = Path(__file__).parent.parent / "fixtures" / "stock_side_flag_golden.json"
-        rows = json.loads(path.read_text(encoding="utf-8"))["rows"]
+        rows = json.loads(_FLAG_GOLDEN_PATH.read_text(encoding="utf-8"))["rows"]
 
         # 2426:旗標 2、同則簿 94.2 貼 Bid 94.2 → 舊碼判 inner
         r = rows["flag_outer_book_inner"]
