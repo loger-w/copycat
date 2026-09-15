@@ -90,6 +90,7 @@ from copycat.stkfut_map import lookup_product
 from copycat.tc4common import TC4_DEFAULT_PORT
 from copycat.live.session import backfill_window, session_key
 from copycat.server.screen_engine import ScreenEngine
+from copycat.server.ticks_compactor import TicksCompactor
 from copycat.trading_calendar import (
     WEEKEND_ONLY,
     TradingCalendar,
@@ -112,6 +113,7 @@ MARKET_SESSIONS = ("day", "allday")
 #: lifespan 關機各段的**輸出序**(彙總行用;不是執行序 —— 執行序見 lifespan finally 的註解:
 #: 前三段序列、中間四條 TC4 lane 並行、capital 最後)。
 _SHUTDOWN_SEGMENTS: Final = (
+    "ticks",
     "screen",
     "breadth",
     "signals",
@@ -339,6 +341,7 @@ class _Booted:
     corr: CorrelationEngine | None = None
     breadth: BreadthEngine | None = None
     screen: ScreenEngine | None = None
+    ticks_compactor: TicksCompactor | None = None
     #: SC-7 的背景交叉檢查(不是引擎,但關機一樣要 cancel —— 沒人 await 的 task
     #: 會在 loop 關閉時留下「Task was destroyed but it is pending」)
     crosscheck_task: asyncio.Task[None] | None = None
@@ -687,6 +690,7 @@ def create_app(
         app.state.corr = None
         app.state.breadth = None
         app.state.screen = None
+        app.state.ticks_compactor = None  # tick 存檔 13:45 排程(spec #257;設定開著且 stock 在才建)
         app.state.calendar_crosscheck = None  # SC-7 背景 task(有日曆時才建)
         # 兩者必須同點初始化:少了 boot_error,正常路徑的 /api/ready 直取屬性會
         # AttributeError → 被全域 handler 轉成 502
@@ -1152,6 +1156,36 @@ def create_app(
             app.state.screen = screen
             booted.screen = screen
 
+            # tick 存檔 13:45 轉檔排程(spec #257 T5):設定開著且 stock engine 帶著寫入端才建;
+            # 子程序呼叫 CLI(pyarrow 不進本進程),失敗 / 逾時重試、啟動補跑、簿檔保留都在裡面。
+            def _make_ticks_compactor() -> TicksCompactor | None:
+                if ticks_config is None or not ticks_config.enabled:
+                    return None
+                persist = stock.tick_persist if stock is not None else None
+                if persist is None:
+                    logger.info("tick 轉檔排程停用(stock engine 未啟動,無存檔可轉)")
+                    return None
+                return TicksCompactor(
+                    ticks_config,
+                    data_dir=persist.dir,
+                    is_trading_day=(
+                        trading_calendar.is_trading_day
+                        if trading_calendar is not None
+                        else WEEKEND_ONLY.is_trading_day
+                    ),
+                    persist=persist,
+                )
+
+            ticks_compactor = await _boot(
+                "ticks",
+                "tick 轉檔排程初始化非預期失敗,盤後轉檔停用(存檔本身不受影響,手動 CLI 可轉)",
+                _make_ticks_compactor,
+                lambda o: o.start(),
+                lambda o: o.close(),
+            )
+            app.state.ticks_compactor = ticks_compactor
+            booted.ticks_compactor = ticks_compactor
+
             # 序列尾段:合約目錄預熱一次(A3)。放在**最後**而不是接線當下 —— 它是
             # 秒級查詢,插在引擎序列中間會把後面每一段都往後推(capital 登入、corr
             # 訂閱都吃啟動時序)。留在 boot task 內而不另起 detached task:關機取消與
@@ -1256,6 +1290,9 @@ def create_app(
                     # close → TC4 session / COM 執行緒 / hub worker 一次全洩漏。
                     # 這條旁支是「只讀 index 歷史的 log 任務」,更沒有資格擋關機。
                     logger.exception("交易日曆交叉檢查以例外結束(關機續行)")
+            if booted.ticks_compactor is not None:
+                # stock lane 之前收(它會 seal 寫入端的 handle;純 task cancel,在途子程序被殺)
+                await _close_segment("ticks", booted.ticks_compactor.close)
             if booted.screen is not None:
                 # breadth 之前收:純 task cancel,無外部 session,秒內完成
                 await _close_segment("screen", booted.screen.close)
