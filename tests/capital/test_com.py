@@ -147,21 +147,34 @@ def test_reply_events_disconnect_notifies_and_swallows() -> None:
     _ReplyEvents().OnDisconnect("u", 1)
 
 
-def test_reply_events_solace_pair_logs_only(caplog: pytest.LogCaptureFixture) -> None:
-    """#235 辨識階段:dispid 9 / 10 那一對只留痕(Connection INFO / Disconnect WARNING),
-    **不**接 `on_disconnect`、不改任何狀態 —— 語意未實證前翻 degraded 會在盤中亮假黃字。
-    簽名與 typelib 逐位相符(bstrUserID, nErrorCode),comtypes 才 dispatch 得到。"""
+def test_reply_events_solace_pair_forward_and_log(caplog: pytest.LogCaptureFixture) -> None:
+    """dispid 9 / 10 那一對(這版 SKCOM 回報線實際走的事件;2026-09-15 05:50 prod 實錄 disconnect 3033):
+    disconnect → WARNING + `on_disconnect`;connection code 0 → INFO + `on_connect`;connection code ≠ 0 →
+    WARNING、**不**算連上。簽名與 typelib 逐位相符(bstrUserID, nErrorCode),comtypes 才 dispatch 得到。
+    #235 辨識批只 log 的版本已由 fix/capital-reply-reconnect 升級。"""
     caplog.set_level(logging.INFO, logger="copycat.capital.com")
-    got: list[int] = []
-    sink = _ReplyEvents(on_disconnect=got.append)
+    down: list[int] = []
+    up: list[int] = []
+    sink = _ReplyEvents(on_disconnect=down.append, on_connect=up.append)
     sink.OnSolaceReplyConnection("u", 0)
-    sink.OnSolaceReplyDisconnect("u", 3002)
-    assert got == []  # 不走既有 OnDisconnect 的降級回呼
+    sink.OnSolaceReplyDisconnect("u", 3033)
+    sink.OnSolaceReplyConnection("u", 3002)
+    assert down == [3033]
+    assert up == [0]
     lines = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "copycat.capital.com"]
     assert lines == [
         (logging.INFO, "Capital Solace reply connection (user=u, code=0)"),
-        (logging.WARNING, "Capital Solace reply disconnect (user=u, code=3002)"),
+        (logging.WARNING, "Capital Solace reply disconnect (user=u, code=3033)"),
+        (logging.WARNING, "Capital Solace reply connection error (user=u, code=3002)"),
     ]
+
+    def boom(_: int) -> None:
+        raise RuntimeError("boom")
+
+    # 回呼炸掉不可炸 COM 事件迴圈(與 OnDisconnect 同款傘)
+    _ReplyEvents(on_connect=boom).OnSolaceReplyConnection("u", 0)
+    _ReplyEvents(on_disconnect=boom).OnSolaceReplyDisconnect("u", 1)
+    _ReplyEvents().OnSolaceReplyConnection("u", 0)
 
 
 def test_order_events_balance_and_profit_forward_and_swallow() -> None:
@@ -283,6 +296,7 @@ class _StubCom:
         on_profit: Callable[[str], None] | None = None,
         on_reply_disconnect: Callable[[int], None] | None = None,
         on_open_interest: Callable[[str], None] | None = None,
+        on_reply_connect: Callable[[int], None] | None = None,
     ) -> None:
         return None
 

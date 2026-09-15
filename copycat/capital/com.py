@@ -31,6 +31,7 @@ class CapitalCom(Protocol):
         on_profit: Callable[[str], None] | None = None,
         on_reply_disconnect: Callable[[int], None] | None = None,
         on_open_interest: Callable[[str], None] | None = None,
+        on_reply_connect: Callable[[int], None] | None = None,  # 回報線連上(Solace / OnConnect code 0)
     ) -> None: ...
     def set_authority(self, flag: int) -> int: ...  # 0=正式 2=測試
     def login(self, user_id: str, password: str) -> int: ...
@@ -109,6 +110,7 @@ class SkcomCapitalCom:
         on_profit: Callable[[str], None] | None = None,
         on_reply_disconnect: Callable[[int], None] | None = None,
         on_open_interest: Callable[[str], None] | None = None,
+        on_reply_connect: Callable[[int], None] | None = None,
     ) -> None:
         comtypes_client = importlib.import_module("comtypes.client")
         add_dir, module_arg = _resolve_skcom_load(self._dll_dir)
@@ -126,7 +128,9 @@ class SkcomCapitalCom:
         # OnReplyMessage 回 -1 抑制群益彈窗;OnNewData 主動回報轉給 on_reply。
         # sink 與 advise 連線都存住:丟掉會被 GC → Unadvise,登入即報
         # SK_WARNING_REGISTER_REPLYLIB_ONREPLYMESSAGE_FIRST。
-        self._reply_sink = _ReplyEvents(on_reply, on_disconnect=on_reply_disconnect)
+        self._reply_sink = _ReplyEvents(
+            on_reply, on_disconnect=on_reply_disconnect, on_connect=on_reply_connect
+        )
         self._reply_conn = comtypes_client.GetEvents(self._reply, self._reply_sink)
         self._order_sink = _OrderEvents(on_balance, on_profit, on_open_interest)
         self._order_conn = comtypes_client.GetEvents(self._order, self._order_sink)
@@ -260,40 +264,55 @@ class _ReplyEvents:
         self,
         on_reply: Callable[[str], None] | None = None,
         on_disconnect: Callable[[int], None] | None = None,
+        on_connect: Callable[[int], None] | None = None,
     ) -> None:
         self._on_reply = on_reply
         self._on_disconnect = on_disconnect
+        self._on_connect = on_connect
 
     def OnReplyMessage(self, bstrUserID: str, bstrMessage: str) -> int:
         return -1  # 群益慣例:回 -1 抑制彈窗
 
+    def _fire(self, cb: Callable[[int], None] | None, code: int, what: str) -> None:
+        """連線 / 斷線回呼;例外不可炸 COM 事件迴圈,但要留痕(client 的狀態機少吃一次事件)。"""
+        if cb is None:
+            return
+        try:
+            cb(code)
+        except Exception:
+            logger.exception("reply %s回呼例外(已忽略,COM 事件迴圈不可炸)", what)
+
     def OnConnect(self, bstrUserID: str, nErrorCode: int) -> None:
         # 回報主機連線結果;0=成功,之後 OnNewData 才會推(含當日 backlog)。
+        # 22 天 65 次登入零觸發(#235 V2 §3.1),這版 SKCOM 走下面的 Solace 那一對;留著是同語意。
         if nErrorCode == 0:
             logger.info("Capital reply connected (user=%s)", bstrUserID)
+            self._fire(self._on_connect, nErrorCode, "連上")
         else:
             logger.warning("Capital reply connect error (user=%s, code=%s)", bstrUserID, nErrorCode)
 
     def OnDisconnect(self, bstrUserID: str, nErrorCode: int) -> None:
         # 回報主機斷線(comtypes 對 sink 未實作的事件靜默忽略 → 不掛就偵測不到)。
-        # 只做偵測+通知降級;自動重連需先 store.clear() 防成交重複累計,另案處理。
         logger.error("Capital reply disconnected (user=%s, code=%s)", bstrUserID, nErrorCode)
-        if self._on_disconnect:
-            try:
-                self._on_disconnect(nErrorCode)
-            except Exception:
-                logger.exception("reply 斷線回呼例外(已忽略,COM 事件迴圈不可炸)")
+        self._fire(self._on_disconnect, nErrorCode, "斷線")
 
-    # ---- Solace 那一對(dispid 9 / 10;#235 辨識階段,只 log)----
-    # 22 天 65 次登入 `OnConnect` / `OnDisconnect` 零觸發、綁定逐層查過沒壞(V2 §3.1);typelib 裡
-    # 同一個 sink 還宣告這一對,而 comtypes 對 sink 未實作的事件**靜默丟棄** —— 頭號假說是這版
-    # SKCOM 的回報線走 Solace、事件從 9 / 10 出來。先掛上看它會不會響;響了再談翻 status /
-    # 重連(那是「修」,不在辨識批)。簽名與 typelib 逐位相符:(BSTR bstrUserID, c_int nErrorCode)。
+    # ---- Solace 那一對(dispid 9 / 10)----
+    # #235 辨識批只 log;2026-09-15 05:50 prod 實錄它真的會響:`OnSolaceReplyDisconnect code=3033`
+    # 後 1.4 s 探針 `IsConnectedByID` 翻 0,且到 08:14 重啟前零 connection 事件 —— 回報線不會自己回來。
+    # 自此與舊 OnConnect / OnDisconnect 同語意接進 client 的狀態機(degraded + 退避重連,見
+    # client._maybe_reconnect_reply)。簽名與 typelib 逐位相符:(BSTR bstrUserID, c_int nErrorCode)。
     def OnSolaceReplyConnection(self, bstrUserID: str, nErrorCode: int) -> None:
-        logger.info("Capital Solace reply connection (user=%s, code=%s)", bstrUserID, nErrorCode)
+        if nErrorCode == 0:
+            logger.info("Capital Solace reply connection (user=%s, code=%s)", bstrUserID, nErrorCode)
+            self._fire(self._on_connect, nErrorCode, "連上")
+        else:
+            logger.warning(
+                "Capital Solace reply connection error (user=%s, code=%s)", bstrUserID, nErrorCode
+            )
 
     def OnSolaceReplyDisconnect(self, bstrUserID: str, nErrorCode: int) -> None:
         logger.warning("Capital Solace reply disconnect (user=%s, code=%s)", bstrUserID, nErrorCode)
+        self._fire(self._on_disconnect, nErrorCode, "斷線")
 
     def OnNewData(self, bstrUserID: str, bstrData: str) -> None:
         # 主動回報(委託/成交)轉給 client;回呼例外不可炸 COM 迴圈,但必須留痕 —

@@ -27,6 +27,7 @@ class FakeCom:
         self.on_profit: Callable[[str], None] | None = None
         self.on_reply_disconnect: Callable[[int], None] | None = None
         self.on_open_interest: Callable[[str], None] | None = None
+        self.on_reply_connect: Callable[[int], None] | None = None
         # 查詢面 rc 可注入(GetRealBalance 吃 1019「查詢處理中」是真實失敗態,
         # 且此時鏈完全沒啟動 → 守門旗標與 due 的收尾行為要能測)
         self.balance_rc = 0
@@ -42,12 +43,14 @@ class FakeCom:
         on_profit: Callable[[str], None] | None = None,
         on_reply_disconnect: Callable[[int], None] | None = None,
         on_open_interest: Callable[[str], None] | None = None,
+        on_reply_connect: Callable[[int], None] | None = None,
     ) -> None:
         self.on_reply = on_reply
         self.on_balance = on_balance
         self.on_profit = on_profit
         self.on_reply_disconnect = on_reply_disconnect
         self.on_open_interest = on_open_interest
+        self.on_reply_connect = on_reply_connect
 
     def set_authority(self, flag: int) -> int:
         self.authority = flag
@@ -168,9 +171,12 @@ class RecordingCom(FakeCom):
         on_profit: Callable[[str], None] | None = None,
         on_reply_disconnect: Callable[[int], None] | None = None,
         on_open_interest: Callable[[str], None] | None = None,
+        on_reply_connect: Callable[[int], None] | None = None,
     ) -> None:
         self.calls.append("setup")
-        super().setup(on_reply, on_balance, on_profit, on_reply_disconnect, on_open_interest)
+        super().setup(
+            on_reply, on_balance, on_profit, on_reply_disconnect, on_open_interest, on_reply_connect
+        )
 
     def set_authority(self, flag: int) -> int:
         self.calls.append("set_authority")
