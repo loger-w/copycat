@@ -10,15 +10,16 @@ live = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "pyzmq>=26"]
 capital = ["comtypes>=1.4", "pywin32>=306"]
 discord = ["discord.py>=2.4"]
 # tick 存檔的 parquet 轉檔 / 讀回(spec #257):server 進程不 import,`ticks-compact` 子程序與
-# loader 才用;dev 也裝(測試不允許 skip)
-ticks = ["pyarrow>=17"]
+# loader 才用;dev 也裝(測試不允許 skip)。下限 18:cp313 wheel 自 18.0.0 起(PyPI 2026-09-15
+# 查證:17.0.0 零 cp313 wheel、18.0.0 有 13 個;pr-263 F-25)
+ticks = ["pyarrow>=18"]
 dev = [
     "pytest>=8",
     "ruff>=0.5",
     "pyright>=1.1",
     "httpx>=0.27",
     "pytest-asyncio>=0.24",
-    "pyarrow>=17",
+    "copycat[ticks]",
 ]
 
 [tool.ruff]

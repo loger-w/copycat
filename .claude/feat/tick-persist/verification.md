@@ -39,8 +39,11 @@
 5. `to_stock_tick()` 的 `bid_milli / ask_milli` 由存下的五檔重算 `_best_limit`(第一個 > 0 的價),與 engine 當時的值相等(S1 round-trip 釘住)。
 6. **補跑範圍比 spec §22 寬**(round-1 Standards F-02 / Spec F-05):排程掃目錄所有 jsonl,過去日的隨時轉(server 13:45 沒開著留下的昨日檔隔天一啟動就補)、今天的 13:45 後轉;非交易日殘檔 / parquet 旁殘餘 jsonl 不轉、WARNING 一次。
 7. **已轉檔的日不再開 jsonl**(round-1 Spec F-01):寫入端 `open_day` 見該日 parquet 已在 → 封住;CLI `compact_day` 見 parquet 已在 → `CompactRefused` exit 2「要重轉先刪 parquet」;排程側同閘。修前:盤後重啟預開的空 jsonl 會讓補跑把真 parquet 蓋成空表(reviewer 實跑證實)。
+8. **簿列只在 09:00 開盤後才寫**(pr-263 review F-04,user 2026-09-16 拍板「9 點開盤以前都不用更新簿更新」):`BOOK_OPEN_TIME` 牆鐘閘,盤前簿更新計 `books_preopen`、不動去重基準;成交列不受閘。原 §4-2「丟掉的只會是遲到殘影」改為:封住後會丟的 = 13:45 後遲到殘影 + 「engine 整天沒換日」尾端情形,後者靠 `log_stats` 的「封住後丟棄 n 列」那行看得到(`sealed_dropped` > 0 才印,不動 `STATS_FMT` 字面)。
+9. **F-01 記憶體(整日 jsonl 入記憶體,推估 4 GB+)不改碼**(user 拍板):上線第一個交易日先量真實 jsonl 大小與轉檔子程序峰值 RSS,再決定要不要改分批 RecordBatch;判準加在 §7-5。
+10. **收修批其餘處置**(pr-263 review,fix/pr-263-review-followups):簿檔先寫成交檔後寫(F-02);unlink 失敗回滾兩檔 → `CompactFailed`、CLI 接 OSError(F-03);補跑過去日不印 stats 行(F-05);文件三處改成碼的現況(F-06);`load_day` 壞行跳過(F-07);子程序 cwd 釘 repo root + 測試 60 s 上界(F-08);`tail_msg_seq` 接 ValueError(F-09);佈線測試 `isinstance`(F-10);預算等式(F-11);全鏈 parity(F-12);pyarrow 守門改子程序 `sys.modules`(F-13);賣側去重 / 期貨鍵 / recv_ns 蓋章 / flush・close OSError 測試(F-14 / F-15 / F-20 / F-21);app wiring 測試不起真子程序(F-16);`_sleep_secs` 退避測試(F-17);退避自嘗試結束起算(F-18);`observe` 挪到真正尾端(F-19);欄名常數化(F-22);刪 `base_dir`(F-23);`compact_time` strptime + `due_time()`(F-24);pyarrow ≥ 18 + dev 引用 `copycat[ticks]`(F-25,PyPI 查證 17.0.0 零 cp313 wheel、18.0.0 有 13);handoff 測試 try/finally + 正面斷言(F-26);kill 分支 fake proc 測試(F-27);config parametrize 補五字面(F-28);`_make(opener=, now_fn=)` 收重複(F-29,`_TickRecorder` 保留:round-trip 需 tick 本體);測試檔 docstring(F-30);本檔章節序(F-31)。F-32 分層依賴維持(參考用)。
 
-## 7. 回頭核 goal:ticket AC 逐條(`verification-before-completion`,重讀 issue 不憑記憶)
+## 5. 回頭核 goal:ticket AC 逐條(`verification-before-completion`,重讀 issue 不憑記憶)
 
 | Ticket | AC | 實作位置 | 測試 / 證據 |
 |---|---|---|---|
@@ -74,17 +77,17 @@
 | | 逾時算失敗一次(不開子程序) | `wait_for` | `test_timeout_counts_as_one_failure` |
 | | 保留 120 交易日只刪 -book | `_retain_books` / `_cutoff_trading_day` | `TestRetention` 兩案 |
 | | enabled=false 零排程 | `start` / `tick` 早退;app 不建 | `test_disabled_never_calls`、`TestAppWiring` |
-| | CLAUDE §1 / §4、預算文件、verification 三處齊 | commit 05441e4e | 本檔 §6 |
-| | pytest / ruff / pyright / validate 全綠 | — | §5 |
+| | CLAUDE §1 / §4、預算文件、verification 三處齊 | commit 05441e4e(docs)| 本檔 §3 gate 表 + §7 判準 |
+| | pytest / ruff / pyright / validate 全綠 | — | §3 / §6 |
 
-## 5. 收尾鏈數字
+## 6. 收尾鏈數字
 
 - [x] pytest 全量:收修前 3513 passed / 3 skipped(230 s);收修後 3532 passed / 3 skipped(252 s),exit 0
 - [x] validate 42/42(收修前後各一次,exit 0)
 - [x] two-axis review round-1:Standards 13 條(0 Must / 2 Should / 11 Nice)、Spec 8 條(2 Must / 3 Should / 1 Nice / 2 info);處置見 `code-review-round-1.json`,收修 commit 8380cc21(test)+ d8cce448(fix)
 - [x] graphify:worktree 內 `--update` 會把 worktree 絕對路徑寫進 graph.json 且 cache 整份翻掉(360 檔 D),已還原;merge 後回主樹跑
 
-## 6. 真環境判準(上線第一個交易日盤後;prod 重啟後生效,前端不用 build)
+## 7. 真環境判準(上線第一個交易日盤後;prod 重啟後生效,前端不用 build)
 
 1. `grep "tick 存檔\|tick 轉檔" logs/server-<日>.log`:
    - 「tick 存檔 <日>:成交 n / 簿 m / 重複簿略過 d / flush k / 寫入失敗 e」至少一行(13:45 那行 + 關機那行),**寫入失敗 = 0**
@@ -94,6 +97,6 @@
 3. `grep 佇列滿 logs/server-<日>.log` 仍為 0(存檔不影響 WS)
 4. 開盤 09:00–09:01 從 parquet 算每秒則數與 09-14 手抓樣本(82 檔 49,610 則 / 60 s、峰值 2,932 則/秒)同量級:
    `python -c "import pyarrow.parquet as pq, collections; t=pq.read_table('data/ticks/<日>-book.parquet', columns=['recv_ns']); c=collections.Counter(v//1_000_000_000 for v in t.column('recv_ns').to_pylist()); print(sorted(c.items())[:90])"`
-5. 體積覆核(上線第一週):jsonl 峰值大小(13:45 前 `ls -l`)、兩個 parquet 大小、簿列去重後列數 vs spec 估計(jsonl ~700 MB、簿 parquet 60–100 MB)
+5. 體積覆核(上線第一週):jsonl 峰值大小(13:45 前 `ls -l`)、兩個 parquet 大小、簿列去重後列數 vs spec 估計(jsonl ~700 MB、簿 parquet 60–100 MB);**同時量轉檔子程序峰值 RSS**(工作管理員或 `Get-Process python | sort WS` 在 13:45–13:46 抓一次)—— review F-01 推估 2.64 KB/列 × 列數;超過機器可用記憶體的一半就開 `/mod` 改分批 RecordBatch,否則不動(user 2026-09-16 拍板)
 6. 關機 log「關機 stock 段」不因存檔變慢(健康路徑 1–3 s 內),「關機收尾」彙總行多 `ticks` 段
 7. 手動重轉演練(任一天盤後):`python -m copycat ticks-compact --date <YYYYMMDD>` 對已轉過的日 → exit 2「jsonl 不存在」

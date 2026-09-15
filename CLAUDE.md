@@ -124,7 +124,7 @@ docs/superpowers/         # spec 與 implementation plan
 | 日線回補(一次性) | `.venv\Scripts\python -m copycat backfill-daily` | repo root |
 | 盤前篩選(手動/預覽) | `.venv\Scripts\python -m copycat screen`(`--date` 指定**目標交易日**(名單服務的交易日;預設 = 排程判定值:交易日 08:00 起 = 今天,之前 / 非交易日 = 前一交易日;資料日 = 其前一交易日自動推;給非交易日直接擋、exit 2);`--write` 直接落檔覆寫群組 —— **server 跑著時別用**:server 讀得到這份檔,但訂閱池與前端廣播只在 `WatchlistService._settle` 發生、不會跟上,症狀 = 群組出現但整排空卡片;prod 的寫入走 server 內交易日 08:00 task + 啟動補跑) | repo root |
 | T 日回測:特徵 / 搜索 | `... tday-features` / `... tday-search --report-date <YYYY-MM-DD>`(報告 → docs/evidence/) | repo root |
-| **tick 存檔轉檔(手動 / 排程失敗重跑,spec #257)** | `.venv\Scripts\python -m copycat ticks-compact --date <YYYYMMDD>`(`--dir` 預設 `configs/ticks.json` 的 `dir`,預設 `data/ticks`):當日 jsonl → `<日>.parquet`(成交,永久)+ `<日>-book.parquet`(簿,120 交易日)、成交 `(code, cum_vol)` 去重、壞行計數、**讀回列數核對才刪 jsonl**;jsonl 不存在 / 非交易日 exit 2、列數不符 exit 1(jsonl 留著)。prod 由 server 交易日 13:45 以子程序自動跑(失敗 15 分鐘 × 3 重試、啟動補跑);**server 跑著時手動跑當日要先確認 13:45 排程已 seal handle**(否則 Windows 刪不掉 jsonl 直接 exit 1)。需 extras `[ticks]`(pyarrow;dev 已含) | repo root |
+| **tick 存檔轉檔(手動 / 排程失敗重跑,spec #257)** | `.venv\Scripts\python -m copycat ticks-compact --date <YYYYMMDD>`(`--dir` 預設 `configs/ticks.json` 的 `dir`,預設 `data/ticks`):當日 jsonl → `<日>.parquet`(成交,永久)+ `<日>-book.parquet`(簿,120 交易日)、成交 `(code, cum_vol)` 去重、壞行計數、**讀回列數核對才刪 jsonl**;jsonl 不存在 / 非交易日 / parquet 已在 exit 2、列數不符或刪 jsonl 失敗 exit 1(兩個 parquet 回滾、jsonl 留著,可重跑)。prod 由 server 交易日 13:45 以子程序自動跑(失敗 15 分鐘 × 3 重試、過期 jsonl 啟動即補);**server 跑著時手動跑當日要先確認 13:45 排程已 seal handle**(否則 Windows 刪不掉 jsonl → exit 1「刪 jsonl 失敗」,parquet 已回滾,等 13:45 排程即可)。需 extras `[ticks]`(pyarrow ≥ 18,cp313 wheel 自 18.0.0 起;dev 已含) | repo root |
 | **回報鏈驗收尺(#234,Tier 2-6 前置)** | `.venv\Scripts\python -m copycat chain-stats --log logs/server-<日>.log`(可多檔):只算「成交回報**盤中 09:00–13:30 到達**、**四段齊全**(缺中段 = `partial_chain`,pending 逾時強制落地 / 損益段 rc≠0 跳段)且累積值單調、庫存段 ≥ 500 ms」的乾淨子集印 p50 / p90 / p99 + `rc=1019` 次數。**改回報鏈速度一律用這把尺,不用 `grep 'balance 鏈'` 的 p50** —— 那把會被開機次數操縱(修前每筆成交重設起點、backlog 重播集中開機兩分鐘)。**基線 2026-09-15(新 client 第一個交易日實跑,Tier 2-6 的「修前」數字)**:三檔 log 合併(`--log A B C` 一個旗標接多值;**重複 `--log` 只吃最後一個、靜默 0 條**)回報鏈 6 條、乾淨 5 條(排除 off_session 1),`non_monotonic` 0 / `partial_chain` 0,**p50 1731 / p90 1889 / p99 1889 ms**,1019 × 3(全在開機三秒內,盤中零);母體 n=5(user 當日成交數),p90 / p99 是同一筆,Tier 2-6 驗收要累積數個交易日再比。舊尺參考 2026-09-14(全部 81 份 09-14 前舊 client log,含 `partial_chain` 的現行尺實跑):乾淨 149 / 198 條,p50 1953 / p90 3027 / p99 6433 ms,1019 × 342 —— 舊碼每筆成交重設起點、輪詢鏈飛行中到達的成交記成 `no_start`,母體與新碼不同批(pr-238 review F-04),**兩邊 p90 / p99 不直接相減**;判準:當日 `non_monotonic` = 0,**且鏈條數 > 0**(format 被改會靜默 0 條、`non_monotonic = 0` 字面照過 —— parity 測試已改讀 `__main__.py` 原文,review F-01) | repo root |
 | **訊號影子期判準(spec #192,2026-09-08 起四週)** | 盤後:`curl -s 127.0.0.1:8721/api/stock/signals/rules` 含「掃單簇」且 CDP 穿越 / 爆量 `notify_discord=false`;啟動 log 有「T+1/T+2 回填」一行(無 stock engine 時是「無日 K 來源,worker 不啟動」)。盤中:`grep '"kind": "policy"' data/signals/<YYYYMMDD>.jsonl` 有列且 `first_of_day` / `late` / `notify` 對得上時刻(12:30 後只記);Discord 收到四行卡且同 tick 合併;rail 政策列三行 + toast 帶【標記】+ 雙嗶;CDP 穿越 / 爆量 jsonl 有列但無 Discord / 無 toast;`grep 佇列滿 logs/server-*.log` 為 0;13:40 log「回填 n 列」;次日 `t1_open` 已補、再次日 `t2_open` | repo root |
 
@@ -526,18 +526,23 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   「個股旗標未知值」(F-02),`欄缺` 桶含 JSON null(F-03)。`tests/live/test_stock_models.py::TestSideFromFlag`
   (含 09-14 raw 三則 golden `tests/fixtures/stock_side_flag_golden.json`)+ `tests/server/test_stock_engine.py::TestFlagStatsLog` 釘住。
 - **tick 存檔:兩行 log = 盤後判準、`kind ∈ {trade, book}`、簿列 `precise_time` 是殘影、13:45 seal**(2026-09-15 起,
-  spec #257):產生點 `copycat/live/tick_persist.py::TickPersist`(engine `_handle_quote` 尾端對**每則現貨訊息**
-  `observe` 一次;`msg_seq` 每則 +1 含被擋的、`recv_ns` 在 source thread 蓋章;成交列 = `ingest` 為真、簿列 = 五檔
-  20 數任一與該檔上一列存下的簿不同,成交列自帶五檔也更新基準)→ `data/ticks/<YYYYMMDD>.jsonl`(64 KB 緩衝 append
+  spec #257):產生點 `copycat/live/tick_persist.py::TickPersist`(engine `_handle_quote` **真正尾端**(五檔廣播與
+  `on_book` 之後)對**每則進到引擎路由的現貨訊息**(池外推播早退不算)`observe` 一次;`msg_seq` 每則 +1 含被擋的、
+  **同日重啟自檔尾接續不歸零**、`recv_ns` 在 source thread 蓋章;成交列 = `ingest` 為真、簿列 = 五檔 20 數任一與該檔
+  上一列存下的簿不同,成交列自帶五檔也更新基準;**簿列只在 09:00 開盤後才寫**(`BOOK_OPEN_TIME`,盤前 08:00–08:30
+  簿快照不存、計 `books_preopen`;pr-263 F-04 user 拍板))→ `data/ticks/<YYYYMMDD>.jsonl`(64 KB 緩衝 append
   不 fsync、每 `flush_secs` 30 s flush、OSError → WARNING 一次當日停寫、換日重武裝;`configs/ticks.json` 覆寫
-  `TicksConfig`,`enabled=false` 零檔案零排程);`copycat/server/ticks_compactor.py` 交易日 `compact_time` 13:45
-  **先印當日行、`seal_day`(flush + 關 handle,之後該日遲到列丟棄、WARNING 一次)**,再子程序 `ticks-compact`
-  (逾時 300 s kill、失敗每 900 s 重試 3 次、啟動已過 13:45 且 jsonl 在則補跑、成功後刪 > 120 交易日的簿檔)。
-  **Windows 開著的檔刪不掉**是 seal 存在的理由:漏 seal 的症狀 = 每天 13:45 起四次「失敗 rc=1:… PermissionError」
-  然後放棄、jsonl 永遠留著、parquet 永遠不出現。讀者 = `copycat/ticks.py::load_day`(parquet 優先、無則 jsonl;
-  排序 `(recv_ns, msg_seq)` —— **`msg_seq` 重啟歸零不能單看**,parquet 也依 `(code, recv_ns, msg_seq)`)、
-  `TickRow.to_stock_tick()`(只對成交列)、研究目錄自讀 parquet(repo 外)。**簿列 `precise_time` = 上一筆成交
-  殘影,不是簿變動時刻**(達錢不給;簿列時刻只有 `recv_ns`,#236 時鐘偏差 WARNING 出現 = 簿列時刻也偏)。
+  `TicksConfig`,`enabled=false` 零檔案零排程);`copycat/server/ticks_compactor.py` 掃目錄所有 jsonl:過去日隨時轉
+  (server 13:45 沒開著留下的昨日檔隔天一啟動就補)、今天交易日 `compact_time` 13:45 後轉;每日第一次嘗試前
+  **印當日行(只對寫入端當前日)、`seal_day`(flush + 關 handle,之後該日遲到列丟棄、WARNING 一次、> 0 另印
+  「封住後丟棄 n 列」)**,再子程序 `ticks-compact`(cwd 釘 repo root;逾時 300 s kill、失敗每 900 s 重試 3 次(退避從
+  嘗試**結束**起算)、成功後刪 > 120 交易日的簿檔)。**Windows 開著的檔刪不掉**是 seal 存在的理由:漏 seal 的症狀
+  = 每天 13:45 起四次「失敗 rc=1:… PermissionError」然後放棄、jsonl 永遠留著、parquet 永遠不出現;轉檔**簿檔先
+  落地、成交檔最後**,且 unlink 失敗會回滾兩檔(「成交 parquet 存在」= 兩檔都寫完 = 已轉檔,三處讀者同一判準)。
+  讀者 = `copycat/ticks.py::load_day`(parquet 優先、無則 jsonl 且壞行跳過 WARNING 計數;排序只看 `msg_seq`,
+  parquet 依 `(code, msg_seq)`;**`recv_ns` 是牆鐘、校時回撥會倒退,不當排序鍵**)、`TickRow.to_stock_tick()`
+  (只對成交列)、研究目錄自讀 parquet(repo 外)。**簿列 `precise_time` = 上一筆成交殘影,不是簿變動時刻**
+  (達錢不給;簿列時刻只有 `recv_ns`,#236 時鐘偏差 WARNING 出現 = 簿列時刻也偏)。
   盤後判準:`grep "tick 存檔\|tick 轉檔" logs/server-<日>.log` —— 「tick 存檔 <日>:成交 n / 簿 m / 重複簿略過 d /
   flush k / 寫入失敗 e」(13:45 一行 + 關機一行,同日取最後;寫入失敗應 0)與「tick 轉檔 <日>:jsonl n 列 → 成交 a
   列 + 簿 b 列(去重 x、壞行 y),耗時 s 秒,MB」(壞行應 0)兩行都在;`data/ticks/` 有 `<日>.parquet` +
