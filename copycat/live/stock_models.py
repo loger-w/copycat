@@ -53,11 +53,11 @@ class StockTick:
     trade_date: str  # 台北 YYYY-MM-DD
     # "outer" | "inner" | "neutral"。即時以達錢 `FlagOfBuySell` 為準(`_FLAG_SIDE`),
     # 0 / 欄缺退回同則簿比 `derive_side`;回補(歷史 TICKS 無旗標)只有同列簿比。
-    # 2026-09-14 實測:帶成交的 REALTIME 那則五檔是**成交後簿**,同則簿比對旗標只 78.5%
-    # (neutral 18.6% / 矛盾 2.9%)—— 這正是改讀旗標的理由。
+    # 理由 = 帶成交的 REALTIME 那則五檔是**成交後簿**(2026-09-14 實測數字見 skill
+    # `tc4-market-facts` 「成交後簿 / 旗標」條,唯一一份)。
     side: str
     is_trial: bool
-    # 成交當下訊息上的最佳買賣價(**成交後簿**,09-14 實測;= derive_side 退路的輸入,
+    # 成交當下訊息上的最佳買賣價(**成交後簿**;= derive_side 退路的輸入,
     # round5 明細欄位 / TickTape b/a)。
     # 有 default 是必要的:既有建構點(tests/live/test_stock_state.py、
     # tests/server/test_stock_engine.py)以關鍵字建構且不會帶新欄位。
@@ -118,9 +118,9 @@ def derive_side(price_milli: int, bid_milli: int | None, ask_milli: int | None) 
     """成交價對照一檔簿的內外盤判定:price ≥ ask → outer;price ≤ bid → inner;否則 neutral。
 
     兩個用途:(a) 即時路徑的**退路**(旗標 0 / 欄缺);(b) **回補路徑的唯一判法**(歷史
-    TICKS 無旗標)。兩邊餵進來的簿都是**成交後簿**(09-14 實測),所以判不出(neutral)
-    與矛盾是結構性的,不是 bug —— 回補段留灰是拍板結果(零灰的正路 = tick 存檔後回補改讀
-    自家存檔),「前一列簿比先看」+12 點的選項已拍板不做。
+    TICKS 無旗標)。兩邊餵進來的簿都是**成交後簿**(實測數字見 skill `tc4-market-facts`),
+    所以判不出(neutral)與矛盾是結構性的,不是 bug —— 回補段留灰是拍板結果(零灰的正路 =
+    tick 存檔後回補改讀自家存檔),「前一列簿比先看」的選項已拍板不做。
     """
     if ask_milli is not None and price_milli >= ask_milli:
         return "outer"
@@ -243,7 +243,9 @@ def parse_stock_realtime(
     ask0 = _best_limit_price(book.asks)
     # 旗標優先、簿比退路(mod/stock-side-flag):期貨 / corr 共用本函式,期貨訊息帶旗標會
     # 照讀,但那兩個引擎都不讀 `side` → 無行為差;欄缺退回現況。
-    flag = msg.get("FlagOfBuySell") or None
+    # `str()` 與同函式其他欄一致(review S-01):達錢哪天送 int 2,不轉型會 miss 對映且
+    # `flag == "0"` 恆假 → 靜默退回簿比,每日計數兩桶雙 0 —— 正是那行 log 要抓的漂移。
+    flag = str(msg.get("FlagOfBuySell", "")) or None
     tick = StockTick(
         code=str(msg.get("Security", "")),
         price_milli=price,
