@@ -551,9 +551,14 @@ class CapitalClient:
         rc = self._com.connect_reply(self._user_id)
         if rc == 0:
             self._mark_balance_dirty()
-            logger.info(
-                "群益回報線重連 ConnectByID 已送出(第 %d 次);%.0f s 內未恢復再試", attempt, delay
-            )
+            if self._status == "ok":
+                # STA 重入:連線事件在 ConnectByID 同步回傳前就 dispatch → `_reply_recovered` 已跑完、
+                # 排程已清;「N s 內未恢復再試」在這裡是假陳述(two-axis round-1 S-05)
+                logger.info("群益回報線重連 ConnectByID 已送出(第 %d 次);連線事件已於同一呼叫內回來", attempt)
+            else:
+                logger.info(
+                    "群益回報線重連 ConnectByID 已送出(第 %d 次);%.0f s 內未恢復再試", attempt, delay
+                )
         else:
             logger.warning(
                 "群益回報線重連失敗 rc=%s: %s(第 %d 次,%.0f s 後再試)",
