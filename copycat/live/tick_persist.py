@@ -1,12 +1,14 @@
 """盤中個股 tick 存檔的寫入端(spec #257;列形狀與讀回在 `copycat.ticks`)。
 
-由 stock engine 在 `_handle_quote` 尾端對**每一則進到引擎路由的現貨訊息**(symbol 有對映、
-state 存在;池外推播早退不算)呼叫 `observe` 一次:訊息序號 `msg_seq` 每則 +1(被試撮 / 重複
-擋掉的也佔號,照序號合起來才是完整訊息流;**同日重啟自檔尾接續**,不歸零);`ingest` 為真
-的那筆寫成交列,其餘餵五檔給簿列去重。寫入 = 直接在看盤 loop 上 `write` 進 64 KB 緩衝
-handle、不 fsync、每 `flush_secs` 一次 `flush`(只是 write syscall;bakeoff T3 b5 / b6:單筆
-0.5 µs、70 萬次無 > 1 ms)。handle 在 `start` 與換日 `open_day` 預先開好,開檔那 9 ms 不落在
-盤中第一筆。
+由 stock engine 在 `_handle_quote` **真正尾端**(五檔廣播與訊號 `on_book` 之後,pr-263 F-19)對
+**每一則進到引擎路由的現貨訊息**(symbol 有對映、state 存在;池外推播早退不算)呼叫 `observe`
+一次:訊息序號 `msg_seq` 每則 +1(被試撮 / 重複擋掉的也佔號,照序號合起來才是完整訊息流;
+**同日重啟自檔尾接續**,不歸零);`ingest` 為真的那筆寫成交列,其餘餵五檔給簿列去重。
+**簿列只在 09:00 開盤後才寫**(`BOOK_OPEN_TIME`,pr-263 F-04 user 拍板):盤前 08:00 重掛訂閱
+到 08:30 試撮那批簿快照不存(計 `books_preopen`),也就不會落在前一交易日、被前一日的 seal
+靜默丟掉。寫入 = 直接在看盤 loop 上 `write` 進 64 KB 緩衝 handle、不 fsync、每 `flush_secs`
+一次 `flush`(只是 write syscall;bakeoff T3 b5 / b6:單筆 0.5 µs、70 萬次無 > 1 ms)。handle 在
+`start` 與換日 `open_day` 預先開好,開檔那 9 ms 不落在盤中第一筆。
 
 檔名由**每一列**的 `trade_date` 決定(同日重啟 `"a"` 續寫、跨日自然分檔);同時最多握兩天
 的 handle(rollover stage1 到新日首筆之間兩日訊息會交錯),`open_day` 時關掉其他日。
@@ -15,13 +17,15 @@ handle、不 fsync、每 `flush_secs` 一次 `flush`(只是 write syscall;bakeof
 
 **存檔永遠不影響看盤**:開檔 / 寫入 / flush 任一拋 OSError → WARNING 一次、**該日停寫**
 (計數器保留、`msg_seq` 照走),換日重新武裝;絕不 raise 進訊息處理路徑(含 `start` 與
-`open_day` 的預開,round-1 Spec F-02)。`enabled=false` → 零檔案、零 handle、零 timer。
+`open_day` 的預開,round-1 Spec F-02;檔尾壞 utf-8 也只當「尾列壞」,pr-263 F-09)。
+`enabled=false` → 零檔案、零 handle、零 timer。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as _dt
 import json
 import logging
 import os
@@ -29,10 +33,10 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 from copycat.live.stock_models import StockBook, StockTick
-from copycat.ticks import DEPTH, jsonl_path, parquet_path, taipei_ms
+from copycat.ticks import BOOK_FIELDS, DEPTH, jsonl_path, parquet_path, taipei_ms
 from copycat.ticks_config import TicksConfig, resolve_ticks_dir
 
-__all__ = ["STATS_FMT", "TickPersist", "tail_msg_seq"]
+__all__ = ["BOOK_OPEN_TIME", "STATS_FMT", "TickPersist", "tail_msg_seq"]
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +44,24 @@ _BUFFER_BYTES = 64 * 1024
 #: 重啟接續 `msg_seq` 時讀檔尾的量:一列 < 1 KB,64 KB 內必有完整尾列(除非檔案更短)
 _TAIL_BYTES = 64 * 1024
 
+#: 簿列的開盤閘(台北牆鐘):此刻之前的簿更新不存。成交列不受此閘(09:00 前只有試撮成交,
+#: `ingest` 本就不收)。
+BOOK_OPEN_TIME = _dt.time(9, 0)
+
 #: 每日一行的字面 = 盤後判準(CLAUDE.md §4 契約;`grep "tick 存檔" logs/server-*.log`,寫入失敗
 #: 應為 0)。換日 stage2 印舊日、關機印當日、13:45 轉檔前再印一次(T5);同日多行取最後。
 STATS_FMT = "tick 存檔 %s:成交 %d / 簿 %d / 重複簿略過 %d / flush %d / 寫入失敗 %d"
+#: 封住後仍到達而丟棄的列數,> 0 才另印一行(不動 `STATS_FMT` 字面;pr-263 F-04)
+_SEALED_FMT = "tick 存檔 %s 封住後丟棄 %d 列(該日已轉檔;09:00 後的遲到列)"
+
+#: 五檔 20 欄的鍵名,與 `TickRow` 同源(`BOOK_FIELDS` 尾段),熱路徑不再每則 f-string 現組
+#: (pr-263 F-22)
+_LEVEL_KEYS = BOOK_FIELDS[BOOK_FIELDS.index("bid0") :]
+_BID_KEYS = _LEVEL_KEYS[0:DEPTH]
+_BIDQ_KEYS = _LEVEL_KEYS[DEPTH : 2 * DEPTH]
+_ASK_KEYS = _LEVEL_KEYS[2 * DEPTH : 3 * DEPTH]
+_ASKQ_KEYS = _LEVEL_KEYS[3 * DEPTH : 4 * DEPTH]
+assert _BID_KEYS == ("bid0", "bid1", "bid2", "bid3", "bid4") and _ASKQ_KEYS[-1] == "askq4"
 
 
 def _open_append(path: Path) -> TextIO:
@@ -54,6 +73,7 @@ def tail_msg_seq(path: Path) -> int:
 
     只讀最後 `_TAIL_BYTES`。上一個 process 當機留下的半行(檔尾不是換行)不算完整列,
     由呼叫端先補一個換行把它隔開,再從最後一列完整列接號 —— 半行裡的號碼不可信。
+    壞 utf-8(`UnicodeDecodeError` 是 ValueError、不是 JSONDecodeError)同樣算尾列壞。
     """
     try:
         size = path.stat().st_size
@@ -70,18 +90,21 @@ def tail_msg_seq(path: Path) -> int:
             continue
         try:
             seq = json.loads(line).get("msg_seq")
-        except (json.JSONDecodeError, AttributeError):
+        except (ValueError, AttributeError):
             continue
         return int(seq) if isinstance(seq, int) else 0
     return 0
 
 
-def _put_levels(out: dict, levels: list[tuple[int, int]], price_key: str, qty_key: str) -> None:
+def _put_levels(
+    out: dict, levels: list[tuple[int, int]], price_keys: tuple[str, ...], qty_keys: tuple[str, ...]
+) -> None:
     """五檔 20 欄:先五層價再五層量;不存在的層 None(價 0 = 市價佇列,原樣保留)。"""
-    for i in range(DEPTH):
-        out[f"{price_key}{i}"] = levels[i][0] if i < len(levels) else None
-    for i in range(DEPTH):
-        out[f"{qty_key}{i}"] = levels[i][1] if i < len(levels) else None
+    n = len(levels)
+    for i, key in enumerate(price_keys):
+        out[key] = levels[i][0] if i < n else None
+    for i, key in enumerate(qty_keys):
+        out[key] = levels[i][1] if i < n else None
 
 
 class TickPersist:
@@ -89,18 +112,15 @@ class TickPersist:
         self,
         config: TicksConfig,
         *,
-        base_dir: Path | None = None,
         opener: Callable[[Path], TextIO] = _open_append,
+        now_fn: Callable[[], _dt.datetime] = _dt.datetime.now,
     ) -> None:
-        """`opener` 是測試注入壞 handle(OSError)的唯一入口;prod 用預設的 append 開檔。"""
+        """`opener` 是測試注入壞 handle(OSError)的唯一入口;`now_fn` 是簿列開盤閘的牆鐘。"""
         self._cfg = config
         self._enabled = config.enabled
-        self._dir = (
-            resolve_ticks_dir(config)
-            if base_dir is None
-            else resolve_ticks_dir(config, base_dir=base_dir)
-        )
+        self._dir = resolve_ticks_dir(config)
         self._opener = opener
+        self._now_fn = now_fn
         self._files: dict[str, TextIO] = {}  # trade_date → 開著的 handle(最多兩天)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._flush_timer: asyncio.TimerHandle | None = None
@@ -113,7 +133,6 @@ class TickPersist:
         # WARNING 首筆一次(`_sealed_warned`)
         self._sealed_days: set[str] = set()
         self._sealed_warned: set[str] = set()
-        self.sealed_dropped = 0
         # 簿列去重基準:code → 該檔**上一列存下的簿**(五檔 20 個數;成交列自帶的五檔也算)。
         # 「達錢重推一模一樣的簿」與「成交後緊接同一個簿」都不佔列,只進 `dup_books`。
         self._basis: dict[str, tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]] = {}
@@ -123,6 +142,8 @@ class TickPersist:
         self.dup_books = 0
         self.flushes = 0
         self.write_failures = 0
+        self.sealed_dropped = 0
+        self.books_preopen = 0  # 09:00 前略過的簿更新(不寫、不動去重基準)
 
     @property
     def dir(self) -> Path:
@@ -131,6 +152,11 @@ class TickPersist:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def current_day(self) -> str | None:
+        """計數器所屬的交易日(`open_day` 設);排程只對這一天印 `log_stats`(pr-263 F-05)。"""
+        return self._day
 
     # ---- 生命週期 ----
 
@@ -152,6 +178,7 @@ class TickPersist:
         if self._day != trade_date:
             self._day = trade_date
             self.trades = self.books = self.dup_books = self.flushes = self.write_failures = 0
+            self.sealed_dropped = self.books_preopen = 0
         if trade_date in self._failed_days or trade_date in self._sealed_days:
             return
         if parquet_path(self._dir, trade_date).exists():
@@ -160,14 +187,16 @@ class TickPersist:
             return
         try:
             self._file_for(trade_date)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self._fail(trade_date, "開檔", exc)
 
     def seal_day(self, trade_date: str) -> None:
         """轉檔前放掉該日 handle(flush + 關)並封住:之後該日的列一律丟(計 `sealed_dropped`、
-        該日首筆 WARNING 一次)。Windows 開著的檔刪不掉,子程序的「列數核對後刪 jsonl」會直接失敗;
-        封住而不是重開,是因為重開會在 parquet 旁邊留下一份殘餘 jsonl,loader 永遠不讀它。
-        13:45 之後現貨本來就零訊息(13:30 收盤),丟掉的只會是達錢的遲到殘影。"""
+        該日首筆 WARNING 一次、`log_stats` 時 > 0 另印一行)。Windows 開著的檔刪不掉,子程序的
+        「列數核對後刪 jsonl」會直接失敗;封住而不是重開,是因為重開會在 parquet 旁邊留下一份
+        殘餘 jsonl,loader 永遠不讀它。09:00 前的簿更新本就不寫(`BOOK_OPEN_TIME`),所以封住後
+        會丟的只有 13:45 之後(13:30 收盤)達錢的遲到殘影,以及「engine 整天沒換日」那種尾端情形
+        —— 後者靠那一行丟棄計數看得到。"""
         if not self._enabled or self._closed:
             return
         if trade_date in self._files:
@@ -184,9 +213,9 @@ class TickPersist:
         self.flushes += 1
 
     def log_stats(self, day: str) -> None:
-        """印當日那一行(字面 `STATS_FMT`);零筆也印,判準是「那行存在」。
+        """印當日那一行(字面 `STATS_FMT`);零筆也印,判準是「那行存在」。封住後丟棄 > 0 另印一行。
 
-        `day` 是呼叫端的標籤(engine 傳 `_trade_date`、排程傳牆鐘今天),計數器是自上次
+        `day` 是呼叫端的標籤(engine 傳 `_trade_date`、排程傳 `current_day`),計數器是自上次
         `open_day` 起的累計 —— 換日邊界遲到的舊日列會計進新日(round-1 F-04 知情接受:
         判準只看「行存在、寫入失敗 0」,不對帳列數)。
         """
@@ -201,6 +230,8 @@ class TickPersist:
             self.flushes,
             self.write_failures,
         )
+        if self.sealed_dropped:
+            logger.info(_SEALED_FMT, day, self.sealed_dropped)
 
     def close(self) -> None:
         """flush + 關全部 handle;之後 `observe` 為 no-op。engine.close 呼叫。"""
@@ -237,6 +268,9 @@ class TickPersist:
         self._msg_seq += 1
         key = (tuple(book.bids), tuple(book.asks))
         if tick is None:
+            if self._now_fn().time() < BOOK_OPEN_TIME:
+                self.books_preopen += 1  # 開盤前不存、不動基準(09:00 第一則簿必寫)
+                return
             if self._basis.get(code) == key:
                 self.dup_books += 1
                 return
@@ -271,8 +305,8 @@ class TickPersist:
             "precise_time": _raw_str(quote.get("PreciseTime")),
             "trade_status": _raw_str(quote.get("TradeStatus")),
         }
-        _put_levels(row, book.bids, "bid", "bidq")
-        _put_levels(row, book.asks, "ask", "askq")
+        _put_levels(row, book.bids, _BID_KEYS, _BIDQ_KEYS)
+        _put_levels(row, book.asks, _ASK_KEYS, _ASKQ_KEYS)
         return row
 
     # ---- 內部 ----
@@ -289,7 +323,7 @@ class TickPersist:
             return False
         try:
             self._file_for(trade_date).write(json.dumps(row, ensure_ascii=False) + "\n")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self._fail(trade_date, "寫入", exc)
             return False
         return True
@@ -311,8 +345,8 @@ class TickPersist:
             self._files[trade_date] = fh
         return fh
 
-    def _fail(self, trade_date: str, stage: str, exc: OSError) -> None:
-        """OSError 的唯一處置:WARNING 一次、該日停寫、丟掉該日 handle。已停寫的日不再記。"""
+    def _fail(self, trade_date: str, stage: str, exc: Exception) -> None:
+        """失敗的唯一處置:WARNING 一次、該日停寫、丟掉該日 handle。已停寫的日不再記。"""
         if trade_date in self._failed_days:
             return
         self._failed_days.add(trade_date)

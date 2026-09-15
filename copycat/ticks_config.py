@@ -5,11 +5,14 @@
 `configs/ticks.json`,盤中發現存檔拖累看盤時建一份 `{"enabled": false}` 重啟即關。
 
 值域在建構當下就擋(round-1 Spec F-07):`book_keep_days` 0 會讓保留一次刪光所有簿檔、
-`flush_secs` 0 會讓 timer 空轉 —— 這些在 log 上零訊號,只能在載入時拒絕。
+`flush_secs` 0 會讓 timer 空轉、`retry_secs` 0 會讓 13:45 起每輪 tick 再開一個子程序 ——
+這些在 log 上零訊號,只能在載入時拒絕。`compact_time` 以 `strptime("%H:%M")` 驗證兼解析
+(pr-263 F-24:`isdigit()` 手刻會放行全形「１３:４５」),`due_time()` 給排程用。
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +22,16 @@ __all__ = ["CONFIG_PATH", "TicksConfig", "load_ticks_config", "resolve_ticks_dir
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = _REPO_ROOT / "configs" / "ticks.json"
+
+
+def _parse_hhmm(value: str) -> _dt.time:
+    """`HH:MM` → time;非此形(含全形數字 / 越界)→ ValueError(strptime 一次做完驗證與解析)。"""
+    if not isinstance(value, str) or not value.isascii():
+        raise ValueError(f"compact_time 須為 HH:MM(收到 {value!r})")
+    try:
+        return _dt.datetime.strptime(value, "%H:%M").time()
+    except ValueError as exc:
+        raise ValueError(f"compact_time 須為 HH:MM(收到 {value!r})") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,9 +56,11 @@ class TicksConfig:
             raise ValueError(f"compact_timeout_secs 須 > 0(收到 {self.compact_timeout_secs})")
         if self.book_keep_days < 1:
             raise ValueError(f"book_keep_days 須 ≥ 1(收到 {self.book_keep_days};0 = 一次刪光簿檔)")
-        hh, sep, mm = self.compact_time.partition(":")
-        if not (sep and hh.isdigit() and mm.isdigit() and 0 <= int(hh) < 24 and 0 <= int(mm) < 60):
-            raise ValueError(f"compact_time 須為 HH:MM(收到 {self.compact_time!r})")
+        _parse_hhmm(self.compact_time)
+
+    def due_time(self) -> _dt.time:
+        """`compact_time` 解析後的 time(排程唯一的取用點;不再各自 split)。"""
+        return _parse_hhmm(self.compact_time)
 
 
 def resolve_ticks_dir(cfg: TicksConfig, *, base_dir: Path = _REPO_ROOT) -> Path:

@@ -2,8 +2,9 @@
 
 **列**(CONTEXT.md「tick 存檔 / 成交列 / 簿列」):盤中 server 收到的每一則個股訊息,以
 `kind="trade"`(看盤引擎 `ingest` 為真的那筆成交)或 `kind="book"`(五檔任一變動)落成
-一列;兩種列共用 `msg_seq`(進程內全域序號,**重啟歸零**)與 `recv_ns`(server 收到當下的
-本機 `time.time_ns()`)。寫入端在 `copycat.live.tick_persist`,本模組只管形狀與讀回。
+一列;兩種列共用 `msg_seq`(進程內全域序號,**同日重啟自檔尾接續、不歸零**,排序只看它)與
+`recv_ns`(server 收到當下的本機 `time.time_ns()`,牆鐘、校時回撥可能倒退,**不當排序鍵**)。
+寫入端在 `copycat.live.tick_persist`,本模組只管形狀與讀回。
 
 `precise_time` 在**簿列**的語意 = 「這個簿在哪筆成交之後」,**不是簿變動時刻**:達錢簿更新
 訊息的 `PreciseTime` / `FilledTime` / `TradeQuantity` 都是上一筆成交的殘影(2026-09-14 實測
@@ -17,10 +18,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 from dataclasses import dataclass, fields
 from pathlib import Path
 
 from copycat.live.stock_models import StockTick
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BOOK_FIELDS",
@@ -71,7 +75,7 @@ class TickRow:
     kind: str  # "trade" | "book"
     code: str
     trade_date: str  # 台北 YYYY-MM-DD(檔名由此決定)
-    msg_seq: int  # 進程內全域序號(每一則個股 REALTIME 訊息佔一號,含被擋的);重啟歸零
+    msg_seq: int  # 進程內全域序號(每則進引擎路由的現貨訊息佔一號,含被擋的);同日重啟自檔尾接續
     recv_ns: int  # server 收到當下的本機 time.time_ns()
     precise_time: str | None  # 達錢原始 PreciseTime;簿列 = 上一筆成交殘影,不是簿變動時刻
     trade_status: str | None  # 達錢原始 TradeStatus
@@ -165,12 +169,25 @@ def load_day(day: _dt.date, data_dir: Path) -> list[TickRow]:
         if not path.exists():
             raise FileNotFoundError(path)
         rows = []
-        with path.open("r", encoding="utf-8") as fh:
+        bad = 0
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
-                rows.append(_row_from_dict(json.loads(line)))
+                # 與 `ticks_compact.compact_day` 同口徑(pr-263 F-07):當機留下的半行 / 壞行跳過
+                # 計數,不讓一行壞資料把整天讀回炸掉
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    bad += 1
+                    continue
+                if not isinstance(payload, dict) or payload.get("kind") not in ("trade", "book"):
+                    bad += 1
+                    continue
+                rows.append(_row_from_dict(payload))
+        if bad:
+            logger.warning("load_day %s:jsonl 壞行 %d 行已跳過(%s)", date, bad, path.name)
     rows.sort(key=lambda r: r.msg_seq)
     return rows
 
