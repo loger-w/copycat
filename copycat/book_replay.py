@@ -25,7 +25,7 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
 
 - `v`:1;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
-- `seq`:訊息序號,首項絕對值、其後逐則差值
+- `seq`:訊息序號,首項絕對值、其後逐則差值(每一項都 > 0)
 - `kind`:長 n 的字串,`t` 成交 / `b` 簿
 - `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
 - `anomalous`:達錢時刻異常、不當時鐘點的成交則號(遞增;個數 = `BookReplay.anomalous_trades`,2026-09-16
@@ -319,6 +319,7 @@ def book_at(payload: PluginPayload, index: int) -> tuple[int | None, ...]:
     """第 `index` 則的五檔,走回看頁跳轉的規則:該則之前最近的 keyframe + 其後到該則的 delta。
 
     `index` 不在 0..n−1 → IndexError:不照 list 容許負數 —— 負數或 n 在這條規則下會默默回到別則的簿。
+    本身只驗 `index` 範圍與途經的 delta;檔頭(版本、kf_every、各陣列長度)的檢查在 `decode`,先解過一次再跳轉。
     """
     code, n, every = payload["code"], payload["n"], payload["kf_every"]
     if not 0 <= index < n:
@@ -348,6 +349,9 @@ def _apply_delta(state: list[int | None], delta: Sequence[Any], code: str, index
 
 def decode(payload: PluginPayload) -> BookReplay:
     """外掛檔 payload → 簿重播(`encode` 的反函數;回看頁解碼規則的 Python 版)。
+
+    反函數對 `replay_books` 產出的簿重播成立;成交的內外盤不在三值(型別上 `Trade.side` 允許 None)時
+    `encode` 照寫、這裡拒收 —— CLI 落檔前的解回自檢會擋下,不落檔。
 
     自檢,不合格一律 PluginFormatError:
     - 檔頭與內容的形狀(`_check_header`:版本、鍵、欄序、各陣列長度、kf_every ≥ 1、kind 字元、
