@@ -55,6 +55,20 @@ Standards 5 條(1 Should 4 Nice)/ Spec 2 條 Nice / 零 Must。接受 S-01(`str(
 4. 白名單目視:VP 兩色、外盤比、能量副圖有值;鎖停股(若當日有)回補段仍靠 relabel 上色;TickTape b/a 欄照舊。
 5. 09-16 08:59 排程 `copycat-flag-capture-0916` 抓檔另案(只改文件,next-time 09-15 節)。
 
+**2026-09-16 實錄(prod 08:11 重啟到 afd77196,含 #255 + #256;server 開盤前起 → 當日逐筆全為訂閱段、無回補段)**:
+1. PASS —— 10:13 `/api/stock/state/<code>` 掃自選 78 檔 176,892 筆:inner 75,571 / outer 100,687 / **neutral 634 = 0.36%**、
+   判定率 99.64%;≥ 50 筆而判定率 < 95% 的檔 **零**(最低 3105 97.8%);個股頁 4908 底列「外盤 3682 · 內盤 3017 · 未分類 7 ·
+   外盤比 55.0%(判定率 100%)」(修前口徑 ~80%)。
+2. 13:47 盤後 —— `grep 個股旗標未知值 logs/server-20260916-0811.log` = **0**(PASS);`grep "個股旗標 0:"` 對 `(2026-09-16)` 只有
+   08:11:05 那行(07:31 那台關機時印,盤前 2 筆:`0:0 / 欄缺 0 / 總 2`),**08:11 這台當日行未印(server 未跨日),明早 stage2
+   補看**;不算 FAIL(判準是行存在與桶值,不是印出時點)。
+3. PASS —— 13:47 `grep 佇列滿 logs/server-20260916-0811.log` = 0;`data/signals/20260916.jsonl` 全日 532 列:sweep_cluster 66 /
+   policy 34(09-15 全日 429 列:55 / 51),同量級(10:15 時 47 / 25 vs 45 / 44)。
+4. PASS —— 目視 4908 單檔頁:VP 兩色、外盤比 55.0%、能量副圖有值、成交明細買價 / 賣價欄照舊(截圖
+   `%TEMP%\claude-chrome-screenshots-7zOhl9\screenshot-1789524988623-0.png`、`…-1.png`);當日無鎖停股在自選,relabel 段未驗。
+5. 結案 —— 抓檔 84,834 則全 1 / 2、零 0 零缺欄;試撮 992 則與 09:00 首筆 78 檔亦 1 / 2;寫進 skill `tc4-market-facts`
+   兩條(commit 16602753),排程已 Unregister。
+
 ## 7. 證據路徑
 
 - golden 三則來源:`%LOCALAPPDATA%\Temp\claude\C--side-project-copycat\38ca5162-…\scratchpad\flag-capture\raw_20260914_090423.jsonl`
