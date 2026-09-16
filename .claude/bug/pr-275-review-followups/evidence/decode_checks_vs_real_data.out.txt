@@ -1,0 +1,3 @@
+msg_seq 則數 2841208、相異 2841208、最小 157
+成交內外盤: {'inner': 170410, 'outer': 204972, 'neutral': 5}
+成交欄 null: {'ms': 0, 'price_milli': 0, 'qty': 0, 'time': 0, 'side': 0}

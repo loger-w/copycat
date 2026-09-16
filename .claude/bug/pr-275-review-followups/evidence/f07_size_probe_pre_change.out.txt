@@ -1,0 +1,15 @@
+(抄錄自 2026-09-16 session 的工具輸出,非重導檔;腳本 = f07_size_probe_pre_change.py,碼 = master 1c964d51)
+read tables: trade 375387 rows, book 2465821 rows, 0.2s
+trade side values: {'inner': 170410, 'outer': 204972, 'neutral': 5}
+trade null ms: 0
+trade null price_milli: 0
+trade null qty: 0
+trade null time: 0
+msg_seq total 2841208 distinct 2841208
+{'files': 80, 'frames': 2841208, 'trades': 375387, 'clock_points': 375386, 'anom': 1, 'cur': 21465024, 'a1_indices_only': 20646220, 'a2_anom_only': 19429156, 'no_clock': 19427564, 'raw_clock_json': 5538699}
+             cur:  21.47 MB (100.0%)
+ a1_indices_only:  20.65 MB ( 96.2%)
+    a2_anom_only:  19.43 MB ( 90.5%)
+        no_clock:  19.43 MB ( 90.5%)
+elapsed 131.5s
+(註:a2 變體沿用鍵名 clock,實作改名 anomalous 多 4 個字元 → CLI 實測 19,429,892,比 a2 多 736 bytes)
