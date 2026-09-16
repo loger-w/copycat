@@ -391,6 +391,49 @@ def _lock_limit_up_rows() -> list[TickRow]:
     ]
 
 
+def _golden_rows() -> list[TickRow]:
+    """外掛檔字面測試用的 4 則(2026-09-16 1815 的形狀):開機收到前一日盤後成交(時刻異常)→ 首筆成交前的
+    簿列 → 鎖漲停的成交(買一 = 價 0 的市價佇列、賣方全空)→ 蓋章早於標籤時刻的成交(時刻異常)。
+    每筆成交的時刻 / 價 / 張 / 內外盤取彼此不同的值,格序錯位才看得出來。"""
+    return [
+        _row(
+            "trade",
+            "1815",
+            157,
+            recv="07:31:22.730",
+            time="14:30:00.000",
+            price=114_500,
+            qty=2,
+            side="inner",
+            bid=[(114_500, 282)],
+            ask=[(115_000, 40)],
+        ),
+        _row("book", "1815", 28_300, recv="09:00:00.100", bid=[(115_000, 205)], ask=[(115_500, 12)]),
+        _row(
+            "trade",
+            "1815",
+            28_368,
+            recv="09:00:03.872",
+            time="09:00:03.000",
+            price=115_500,
+            qty=7,
+            side="outer",
+            bid=[(0, 1_300), (115_500, 800)],
+        ),
+        _row(
+            "trade",
+            "1815",
+            28_380,
+            recv="09:00:04.000",
+            time="09:00:02.000",
+            price=115_500,
+            qty=1,
+            side="neutral",
+            bid=[(0, 1_299), (115_500, 800)],
+        ),
+    ]
+
+
 class TestPluginEncoding:
     def test_round_trip_reproduces_every_frame_across_keyframe_boundaries(self) -> None:
         day = replay_books(_lock_limit_up_rows())["2426"]
@@ -399,6 +442,65 @@ class TestPluginEncoding:
 
         payload = encode(day, keyframe_every=3)
         wire = json.loads(json.dumps(payload))  # 外掛檔裡是 JSON:0 / null 必須分得開
+
+        assert decode(wire) == day
+
+    def test_payload_layout_matches_the_documented_v1_literal(self) -> None:
+        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v1」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
+        只有寫死的字面抓得到(pr-275 review F-01)。"""
+        day = replay_books(_golden_rows())["1815"]
+
+        payload = encode(day, keyframe_every=2)
+
+        assert payload == {
+            "v": 1,
+            "code": "1815",
+            "date": "2026-09-16",
+            "n": 4,
+            "fields": [
+                *("bid0", "bid1", "bid2", "bid3", "bid4"),
+                *("bidq0", "bidq1", "bidq2", "bidq3", "bidq4"),
+                *("ask0", "ask1", "ask2", "ask3", "ask4"),
+                *("askq0", "askq1", "askq2", "askq3", "askq4"),
+            ],
+            "kf_every": 2,
+            "seq": [157, 28_143, 68, 12],
+            "kind": "tbtt",
+            # 時刻異常、不當時鐘點的成交則號;其餘成交則都是時鐘點,標籤時刻讀 trade 裡那筆的第一格
+            "anomalous": [0, 3],
+            "recv": [27_082_730, 5_317_370, 3_772, 128],
+            "trade": [
+                *(52_200_000, 114_500, 2, "inner"),  # 前一日 14:30 的盤後成交,07:31 開機收到
+                *(32_403_000, 115_500, 7, "outer"),
+                *(32_402_000, 115_500, 1, "neutral"),  # 09:00:02 早於標籤時刻 09:00:03
+            ],
+            "kf": [
+                [114_500, None, None, None, None, 282, None, None, None, None]
+                + [115_000, None, None, None, None, 40, None, None, None, None],
+                [0, 115_500, None, None, None, 1_300, 800, None, None, None] + [None] * 10,
+            ],
+            "d": [
+                [0, 114_500, 5, 282, 10, 115_000, 15, 40],
+                [0, 115_000, 5, 205, 10, 115_500, 15, 12],
+                [0, 0, 1, 115_500, 5, 1_300, 6, 800, 10, None, 15, None],
+                [5, 1_299],
+            ],
+        }
+
+    def test_round_trip_keeps_labels_before_the_first_clock_point_and_on_anomalous_trades(
+        self,
+    ) -> None:
+        """解碼的兩條特例:首筆成交前(沒有標籤時刻,從第 1 則數起)與時刻異常的成交(pr-275 review F-02)。"""
+        day = replay_books(_golden_rows())["1815"]
+        assert [(f.clock_ms, f.after) for f in day.frames] == [
+            (None, 1),
+            (None, 2),
+            (32_403_000, 0),
+            (32_403_000, 1),
+        ]
+        assert day.anomalous_trades == 2
+
+        wire = json.loads(json.dumps(encode(day, keyframe_every=2)))
 
         assert decode(wire) == day
 
@@ -450,8 +552,6 @@ class TestPluginEncoding:
             (lambda w: w["trade"].pop(), "trade 長度"),
             (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
             (lambda w: w["recv"].__setitem__(1, -5), "倒退"),
-            (lambda w: w["clock"].pop(), "clock 長度"),
-            (lambda w: w["clock"].__setitem__(0, 1), "時鐘點"),  # 第 1 則是簿則
             (lambda w: w.pop("trade"), "缺鍵"),
         ],
         ids=[
@@ -463,8 +563,6 @@ class TestPluginEncoding:
             "trade-length",
             "kind-char",
             "recv-rewind",
-            "clock-odd-length",
-            "clock-on-book",
             "missing-key",
         ],
     )
@@ -475,6 +573,40 @@ class TestPluginEncoding:
         wire = json.loads(
             json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
         )
+        tamper(wire)
+
+        with pytest.raises(PluginFormatError, match=message):
+            decode(wire)
+
+    @pytest.mark.parametrize(
+        ("tamper", "message"),
+        [
+            (lambda w: w.update(anomalous=[3, 0]), "時刻異常成交則號"),
+            (lambda w: w.update(anomalous=[-1, 0, 3]), "時刻異常成交則號"),
+            (lambda w: w.update(anomalous=[0, 3, 4]), "時刻異常成交則號"),  # n = 4
+            (lambda w: w.update(anomalous=[0, 1, 3]), "時刻異常成交則號"),  # 第 1 則是簿則
+            # 漏列第 3 則:09:00:02 變時鐘點,標籤時刻從 09:00:03 倒退
+            (lambda w: w.update(anomalous=[0]), "早於標籤時刻"),
+            # 漏列第 0 則:前一日 14:30 變時鐘點,第 2 則的 09:00:03 倒退
+            (lambda w: w.update(anomalous=[3]), "早於標籤時刻"),
+            (lambda w: w["trade"].__setitem__(4, None), "沒有達錢時刻"),  # 第 2 則的時刻
+        ],
+        ids=[
+            "not-increasing",
+            "negative-index",
+            "index-equals-n",
+            "on-book-message",
+            "missed-rewinding-trade",
+            "missed-future-trade",
+            "clock-trade-without-time",
+        ],
+    )
+    def test_decode_refuses_an_anomalous_trade_list_that_contradicts_the_trades(
+        self, tamper: Callable[[dict[str, Any]], object], message: str
+    ) -> None:
+        """時鐘點不直接存:沒列在 `anomalous` 的成交就是時鐘點,時刻讀它自己的成交時刻。清單與成交對不上 =
+        標籤時刻會倒退或掛在簿則上,拒絕(pr-275 review F-03 / F-07)。"""
+        wire = json.loads(json.dumps(encode(replay_books(_golden_rows())["1815"], keyframe_every=2)))
         tamper(wire)
 
         with pytest.raises(PluginFormatError, match=message):
