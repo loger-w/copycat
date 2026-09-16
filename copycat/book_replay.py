@@ -6,12 +6,18 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 **一則** = 一列 tick 存檔(成交列或簿列),依 `msg_seq` 排;每列自帶完整五檔(成交列是成交後簿),
 所以第 i 則的簿就是那一列的 20 格,不需要跨列累積。
 
-**時間軸**:顯示時間 = 最近一個**時鐘點**的達錢時刻,簿列讀作「該時刻之後第 N 則」(`Frame.after`)。
-時鐘點 = 成交列,且 (a) 不早於目前時鐘(時間軸不倒退)、(b) 達錢時刻不晚於 server 收到時刻超過
-`CLOCK_FUTURE_TOLERANCE_MS`(收不到未來)。**不用 `recv_ns` 排序或當軸**:它比達錢時刻晚中位
-614 ms 但單筆 p90 約 1 秒,會把簿變動排到觸發它的成交之前。2026-09-16 實錄三種時刻:13:30:00.000
-收盤撮合晚到 5–40 秒(真時刻,推進);7772 緩撮成交晚到 118 秒(真時刻,推進);1815 開機 07:31
-收到前一日 14:30 的盤後成交(未來,不推進)。不推進的成交仍是一則,只是 `after` 照數。
+**排序** 只看 `msg_seq`(server 收到的全域順序,因果不會反)。
+
+**時間軸(拖曳 / 十字線 / 對齊委託)= server 收到時刻** `Frame.recv_ms`(交易日台北零點起毫秒;本機鐘被
+校時往回撥時沿用前一則,不倒退)。2026-09-16 實測:達錢**即時**個股成交時刻只到整秒(37.5 萬筆次秒
+全 0),收到時刻比它晚 81–1,137 ms 且各 100 ms 桶近乎均勻 = 整秒截斷 + 約 0.1 秒延遲 —— 收到時刻本身
+很穩;反過來拿整秒的達錢時刻當軸,2426「11:02:43」一格底下就有 51 則(user 2026-09-16 拍板改軸)。
+
+**文字標籤 = 交易所的尺**:最近一個**時鐘點**的達錢時刻,簿列讀作「該時刻之後第 N 則」(`Frame.after`)。
+時鐘點 = 成交列,且 (a) 不早於目前時鐘(不倒退)、(b) 達錢時刻不晚於收到時刻超過
+`CLOCK_FUTURE_TOLERANCE_MS`(收不到未來)。2026-09-16 實錄三種時刻:13:30:00.000 收盤撮合晚到
+5–40 秒(真時刻,推進);7772 緩撮成交晚到 118 秒(真時刻,推進);1815 開機 07:31 收到前一日 14:30
+的盤後成交(未來,不推進)。不推進的成交仍是一則,`after` 照數,計入 `BookReplay.anomalous_trades`。
 
 **外掛檔 v1**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
@@ -19,8 +25,11 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 - `v`:1;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
 - `seq`:訊息序號,首項絕對值、其後逐則差值
 - `kind`:長 n 的字串,`t` 成交 / `b` 簿
-- `clock`:時鐘點攤平成 `[則號, 當日毫秒, 則號, 當日毫秒, …]`(則號遞增、毫秒不減);第 i 則的顯示時間 =
+- `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
+- `clock`:時鐘點攤平成 `[則號, 當日毫秒, 則號, 當日毫秒, …]`(則號遞增、毫秒不減);第 i 則的標籤時刻 =
   則號 ≤ i 的最後一個點,`after` = i − 該則號;沒有這樣的點 = 首筆成交前,`after` = i + 1
+- `trade`:每個成交則依序 4 格攤平 `[達錢成交時刻當日毫秒, 價, 張, 內外盤]`,內外盤為
+  `"inner"` / `"outer"` / `"neutral"`;長度 = 4 × `kind` 裡 `t` 的個數,簿則不佔位
 - `kf`:第 0、K、2K… 則的完整 20 格(K = `kf_every`,個數 = ceil(n / K))
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
 
@@ -53,6 +62,7 @@ __all__ = [
     "Frame",
     "PluginFormatError",
     "PluginPayload",
+    "Trade",
     "book_at",
     "decode",
     "encode",
@@ -88,8 +98,23 @@ assert len(BOOK_LEVEL_FIELDS) == 4 * DEPTH
 _book_of: Callable[[TickRow], tuple[int | None, ...]] = attrgetter(*BOOK_LEVEL_FIELDS)
 
 
+#: 一則的種類 ↔ 外掛檔 `kind` 字元(兩個方向同一張表)
+_KIND_CODE = {"trade": "t", "book": "b"}
+_KIND_NAME = {code: name for name, code in _KIND_CODE.items()}
+
+
 class PluginFormatError(ValueError):
     """外掛檔解不回原樣:不是外掛檔、版本不認得、檔頭與內容不符,或 delta 與 keyframe 對不上。"""
+
+
+@dataclass(frozen=True, slots=True)
+class Trade:
+    """成交則上的那一筆成交(tick 存檔成交列原值)。"""
+
+    ms: int | None  # 達錢成交時刻(台北當日毫秒;即時個股只到整秒)
+    price_milli: int | None
+    qty: int | None  # 張
+    side: str | None  # "inner" | "outer" | "neutral"(看盤引擎當時的判定)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +126,8 @@ class Frame:
     book: tuple[int | None, ...]  # 20 格,欄序見 BOOK_LEVEL_FIELDS
     clock_ms: int | None  # 最近一個時鐘點的達錢時刻(台北當日毫秒);None = 首筆成交前
     after: int  # 距該時鐘點第幾則(時鐘點本身 0;首筆成交前自第 1 則數起)
+    recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
+    trade: Trade | None  # 成交則的那筆成交;簿則 None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +137,11 @@ class BookReplay:
     code: str
     trade_date: str
     frames: tuple[Frame, ...]
+
+    @property
+    def anomalous_trades(self) -> int:
+        """時刻異常、沒推進時間軸的成交則數(達錢時刻晚於收到時刻超過容差,或早於目前時鐘)。"""
+        return sum(1 for frame in self.frames if frame.trade is not None and frame.after)
 
 
 class PluginPayload(TypedDict):
@@ -124,6 +156,8 @@ class PluginPayload(TypedDict):
     seq: list[int]
     kind: str
     clock: list[int]
+    recv: list[int]
+    trade: list[int | str | None]
     kf: list[list[int | None]]
     d: list[list[int | None]]
 
@@ -156,11 +190,16 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
     clock: int | None = None
     clock_index = -1
     day_start_ms = _taipei_day_start_epoch_ms(rows[0].trade_date)
+    recv_ms = rows[0].recv_ns // 1_000_000 - day_start_ms
     for i, row in enumerate(rows):
         if _is_clock_point(row, clock, day_start_ms):
             assert row.ms is not None
             clock, clock_index = row.ms, i
-        frames.append(Frame(row.msg_seq, row.kind, _book_of(row), clock, i - clock_index))
+        recv_ms = max(recv_ms, row.recv_ns // 1_000_000 - day_start_ms)
+        trade = Trade(row.ms, row.price_milli, row.qty, row.side) if row.kind == "trade" else None
+        frames.append(
+            Frame(row.msg_seq, row.kind, _book_of(row), clock, i - clock_index, recv_ms, trade)
+        )
     return tuple(frames)
 
 
@@ -183,14 +222,21 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
     seq: list[int] = []
     kinds: list[str] = []
     clock: list[int] = []
+    recv: list[int] = []
+    trades: list[int | str | None] = []
     keyframes: list[list[int | None]] = []
     deltas: list[list[int | None]] = []
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
-    prev_seq = 0
+    prev_seq = prev_recv = 0
     for i, frame in enumerate(code_day.frames):
         seq.append(frame.msg_seq - prev_seq)
         prev_seq = frame.msg_seq
-        kinds.append("t" if frame.kind == "trade" else "b")
+        recv.append(frame.recv_ms - prev_recv)
+        prev_recv = frame.recv_ms
+        kinds.append(_KIND_CODE[frame.kind])
+        if frame.trade is not None:
+            trade = frame.trade
+            trades += [trade.ms, trade.price_milli, trade.qty, trade.side]
         if frame.after == 0:
             assert frame.clock_ms is not None
             clock += [i, frame.clock_ms]
@@ -212,6 +258,8 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         "seq": seq,
         "kind": "".join(kinds),
         "clock": clock,
+        "recv": recv,
+        "trade": trades,
         "kf": keyframes,
         "d": deltas,
     }
@@ -263,24 +311,36 @@ def decode(payload: PluginPayload) -> BookReplay:
     code, n, every, keyframes = payload["code"], payload["n"], payload["kf_every"], payload["kf"]
     if list(payload["fields"]) != list(BOOK_LEVEL_FIELDS):
         raise PluginFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
-    lengths = (len(payload["seq"]), len(payload["kind"]), len(payload["d"]))
-    if lengths != (n, n, n):
-        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / d 長度 {lengths} 不符")
+    lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d"))
+    if lengths != (n, n, n, n):
+        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / recv / d 長度 {lengths} 不符")
     if len(keyframes) != -(-n // every):
         raise PluginFormatError(
             f"{code} keyframe 個數 {len(keyframes)} 不符(n={n}、每 {every} 則一個)"
         )
+    if not set(payload["kind"]) <= _KIND_NAME.keys():
+        raise PluginFormatError(
+            f"{code} kind 有不認得的字元:{set(payload['kind']) - _KIND_NAME.keys()}"
+        )
+    trade_values = payload["trade"]
+    if len(trade_values) != 4 * payload["kind"].count(_KIND_CODE["trade"]):
+        raise PluginFormatError(
+            f"{code} trade 長度 {len(trade_values)} 不是成交則數 × 4"
+            f"({payload['kind'].count(_KIND_CODE['trade'])} 則)"
+        )
+    trades = iter(zip(*[iter(trade_values)] * 4, strict=True))
     points = iter(zip(payload["clock"][::2], payload["clock"][1::2], strict=True))
     next_point = next(points, None)
     clock: int | None = None
     clock_index = -1
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
     frames: list[Frame] = []
-    msg_seq = 0
-    for i, (seq_step, kind, delta) in enumerate(
-        zip(payload["seq"], payload["kind"], payload["d"], strict=True)
+    msg_seq = recv_ms = 0
+    for i, (seq_step, kind, recv_step, delta) in enumerate(
+        zip(payload["seq"], payload["kind"], payload["recv"], payload["d"], strict=True)
     ):
         msg_seq += seq_step
+        recv_ms += recv_step
         _apply_delta(state, delta)
         if i % every == 0 and state != keyframes[i // every]:
             raise PluginFormatError(
@@ -290,7 +350,9 @@ def decode(payload: PluginPayload) -> BookReplay:
         if next_point is not None and next_point[0] == i:
             clock, clock_index = next_point[1], i
             next_point = next(points, None)
+        kind_name = _KIND_NAME[kind]
+        trade = Trade(*next(trades)) if kind_name == "trade" else None
         frames.append(
-            Frame(msg_seq, "trade" if kind == "t" else "book", tuple(state), clock, i - clock_index)
+            Frame(msg_seq, kind_name, tuple(state), clock, i - clock_index, recv_ms, trade)
         )
     return BookReplay(code, payload["date"], tuple(frames))
