@@ -119,7 +119,7 @@ def compact_day(
 
     trade_out = parquet_path(data_dir, day.isoformat())
     book_out = book_parquet_path(data_dir, day.isoformat())
-    # 簿檔**先**落地、成交檔最後(pr-263 F-02):CLI / 排程 / loader 三處都以「成交 parquet 存在」當
+    # 簿檔**先**落地、成交檔最後(pr-263 F-02):CLI / 排程 / loader / book-replay 都以「成交 parquet 存在」當
     # 已轉檔判準,它必須等於「兩檔都寫完」—— 被 kill 在兩次 replace 之間才不會卡成「已轉檔但簿列
     # 永遠讀不到」
     _write_parquet(book_out, books, BOOK_FIELDS)
