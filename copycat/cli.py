@@ -133,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         "book-replay",
         help="簿重播外掛檔(#267):某交易日 tick 存檔 → 每檔一個 keyframe+delta 外掛檔(回看頁重播分頁懶載入);逐檔解回原樣才落檔",
     )
-    p_br.add_argument("--date", required=True, help="交易日 YYYYMMDD(沒有 tick 存檔 → exit 2)")
+    p_br.add_argument(
+        "--date",
+        required=True,
+        help="交易日 YYYYMMDD(只收已轉檔的日子:成交 + 簿兩個 parquet 都在,否則 exit 2)",
+    )
     p_br.add_argument(
         "--dir", type=Path, default=None, help="tick 存檔目錄(預設 configs/ticks.json 的 dir,相對 repo root)"
     )
@@ -447,7 +451,7 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
         sys.stderr.write(f"簿重播 {date} 失敗(IO):{e}\n")
         return 1
     sys.stdout.write(
-        f"簿重播 {date}:{len(codes)} 檔、{messages} 則(時刻異常未推進時間軸的成交 {anomalous_trades} 則),"
+        f"簿重播 {date}:{len(codes)} 檔、{messages} 則(達錢時刻異常、不當標籤時刻的成交 {anomalous_trades} 則),"
         f"外掛檔 {total_bytes / 1_000_000:.1f} MB,耗時 {time.monotonic() - started:.1f} 秒 → {out_dir}\n"
     )
     return 0

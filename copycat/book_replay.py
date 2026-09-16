@@ -16,8 +16,8 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 **文字標籤 = 交易所的尺**:最近一個**時鐘點**的達錢時刻,簿列讀作「該時刻之後第 N 則」(`Frame.after`)。
 時鐘點 = 成交列,且 (a) 不早於目前時鐘(不倒退)、(b) 達錢時刻不晚於收到時刻超過
 `CLOCK_FUTURE_TOLERANCE_MS`(收不到未來)。2026-09-16 實錄三種時刻:13:30:00.000 收盤撮合晚到
-5–40 秒(真時刻,推進);7772 緩撮成交晚到 118 秒(真時刻,推進);1815 開機 07:31 收到前一日 14:30
-的盤後成交(未來,不推進)。不推進的成交仍是一則,`after` 照數,計入 `BookReplay.anomalous_trades`。
+5–40 秒(真時刻,當時鐘點);7772 緩撮成交晚到 118 秒(真時刻,當時鐘點);1815 開機 07:31 收到前一日
+14:30 的盤後成交(未來,不當時鐘點)。不當時鐘點的成交仍是一則,`after` 照數,計入 `BookReplay.anomalous_trades`。
 
 **外掛檔 v1**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
@@ -48,6 +48,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields  # `fields` 會跟 payload 的 fields 鍵混淆
 from operator import attrgetter
 from typing import Any, TypedDict
 
@@ -87,7 +88,7 @@ KEYFRAME_EVERY = 256
 
 #: 成交的達錢時刻最多能比 server 收到時刻「晚」多少還算真成交。正常是早 ~0.6 秒;本機鐘落後
 #: (#236 時鐘偏差,實務秒級)會讓它看起來晚幾秒。超過 = 不可能收得到的未來時刻,例如開機時
-#: 收到前一日的盤後成交(2026-09-16 1815:07:31 收到、蓋 14:30),不讓它推進時間軸。
+#: 收到前一日的盤後成交(2026-09-16 1815:07:31 收到、蓋 14:30),不讓它當時鐘點(文字標籤的時刻)。
 CLOCK_FUTURE_TOLERANCE_MS = 60_000
 
 #: 一則五檔的 20 格欄序(= tick 存檔欄名):買價 0–4、買量 0–4、賣價 0–4、賣量 0–4。
@@ -99,8 +100,8 @@ _book_of: Callable[[TickRow], tuple[int | None, ...]] = attrgetter(*BOOK_LEVEL_F
 
 
 #: 一則的種類 ↔ 外掛檔 `kind` 字元(兩個方向同一張表)
-_KIND_CODE = {"trade": "t", "book": "b"}
-_KIND_NAME = {code: name for name, code in _KIND_CODE.items()}
+_KIND_CODE: dict[str, str] = {"trade": "t", "book": "b"}
+_KIND_NAME: dict[str, str] = {code: name for name, code in _KIND_CODE.items()}
 
 
 class PluginFormatError(ValueError):
@@ -117,9 +118,14 @@ class Trade:
     side: str | None  # "inner" | "outer" | "neutral"(看盤引擎當時的判定)
 
 
+#: 外掛檔 `trade` 每筆成交的格序 = `Trade` 欄序(encode 取值與 decode 建構同一個來源)
+_TRADE_CELLS: tuple[str, ...] = tuple(f.name for f in dataclass_fields(Trade))
+_trade_cells: Callable[[Trade], tuple[int | str | None, ...]] = attrgetter(*_TRADE_CELLS)
+
+
 @dataclass(frozen=True, slots=True)
 class Frame:
-    """重播的一則 = 一列 tick 存檔當下的五檔 + 它在時間軸上的位置。"""
+    """重播的一則 = 一列 tick 存檔當下的五檔 + 它在兩把時間尺上的位置(見模組說明)。"""
 
     msg_seq: int
     kind: str  # "trade" | "book"
@@ -140,8 +146,8 @@ class BookReplay:
 
     @property
     def anomalous_trades(self) -> int:
-        """時刻異常、沒推進時間軸的成交則數(達錢時刻晚於收到時刻超過容差,或早於目前時鐘)。"""
-        return sum(1 for frame in self.frames if frame.trade is not None and frame.after)
+        """達錢時刻異常、沒當成時鐘點的成交則數(晚於收到時刻超過容差,或早於目前時鐘)。"""
+        return sum(1 for frame in self.frames if frame.kind == "trade" and frame.after)
 
 
 class PluginPayload(TypedDict):
@@ -165,7 +171,7 @@ class PluginPayload(TypedDict):
 def replay_books(rows: Iterable[TickRow]) -> dict[str, BookReplay]:
     """一天的 tick 存檔列(任意順序、多檔交錯)→ 每檔的簿重播,鍵 = 代號。
 
-    一次只重播一個交易日:混到別天的列 → ValueError(時間軸以交易日換算,混日算不出對的時刻)。
+    一次只重播一個交易日:混到別天的列 → ValueError(兩把時間尺都以交易日台北零點換算,混日算不出對的時刻)。
     """
     by_code: dict[str, list[TickRow]] = defaultdict(list)
     trade_date: str | None = None
@@ -204,11 +210,11 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
 
 
 def _is_clock_point(row: TickRow, clock: int | None, day_start_ms: int) -> bool:
-    """成交列推進時間軸的條件:有達錢時刻、不早於目前時鐘、不晚於收到時刻超過容差。"""
+    """成交列當時鐘點(文字標籤時刻)的條件:有達錢時刻、不早於目前時鐘、不晚於收到時刻超過容差。"""
     if row.kind != "trade" or row.ms is None:
         return False
     if clock is not None and row.ms < clock:
-        return False  # 時間軸不倒退
+        return False  # 標籤時刻不倒退
     return day_start_ms + row.ms <= row.recv_ns // 1_000_000 + CLOCK_FUTURE_TOLERANCE_MS
 
 
@@ -234,9 +240,11 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         recv.append(frame.recv_ms - prev_recv)
         prev_recv = frame.recv_ms
         kinds.append(_KIND_CODE[frame.kind])
-        if frame.trade is not None:
-            trade = frame.trade
-            trades += [trade.ms, trade.price_milli, trade.qty, trade.side]
+        if frame.kind == "trade":
+            assert frame.trade is not None, (
+                f"{code_day.code} msg_seq={frame.msg_seq} 成交則沒帶成交"
+            )
+            trades += _trade_cells(frame.trade)
         if frame.after == 0:
             assert frame.clock_ms is not None
             clock += [i, frame.clock_ms]
@@ -322,13 +330,13 @@ def decode(payload: PluginPayload) -> BookReplay:
         raise PluginFormatError(
             f"{code} kind 有不認得的字元:{set(payload['kind']) - _KIND_NAME.keys()}"
         )
-    trade_values = payload["trade"]
-    if len(trade_values) != 4 * payload["kind"].count(_KIND_CODE["trade"]):
+    trade_values, width = payload["trade"], len(_TRADE_CELLS)
+    trade_count = payload["kind"].count(_KIND_CODE["trade"])
+    if len(trade_values) != width * trade_count:
         raise PluginFormatError(
-            f"{code} trade 長度 {len(trade_values)} 不是成交則數 × 4"
-            f"({payload['kind'].count(_KIND_CODE['trade'])} 則)"
+            f"{code} trade 長度 {len(trade_values)} 不是成交則數 × {width}({trade_count} 則)"
         )
-    trades = iter(zip(*[iter(trade_values)] * 4, strict=True))
+    trades = iter(zip(*[iter(trade_values)] * width, strict=True))
     points = iter(zip(payload["clock"][::2], payload["clock"][1::2], strict=True))
     next_point = next(points, None)
     clock: int | None = None
