@@ -71,7 +71,9 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
 - **同毫秒群 = 掃單:個股同一檔相鄰且 `PreciseTime` 毫秒相同的多筆成交,是一筆主動單一次吃掉多檔的痕跡**
   (2026-09-05~07 研究 1,883 股票日實證;spec #192 線上化):REALTIME 與歷史 TICKS 的毫秒同源(`PreciseTime` 12 位取前 9 位 =
   `StockTick.time` 的 `.fff`,研究 `pull_ticks.py` 用 `us // 1000` 同一刀),線上 `SignalDetector._eval_sweep` 與研究
-  `combo_events.find_sweeps` 才能對到同一群。首筆外盤判準用 `tick.ask_milli > 0 and price >= ask`,**不用 `tick.side`**
+  `combo_events.find_sweeps` 才能對到同一群。**⚠ 2026-09-16 實測與此衝突,待 #274 查證**:REALTIME 個股成交 `PreciseTime`
+  **只到整秒**(09-16 tick 存檔 375,387 筆次秒全 0、09-14 raw 抓檔同),歷史 TICKS 約 11% 帶毫秒(09-10 抽 10 檔)——
+  線上「同毫秒群」實際是「同一秒」相鄰成交,比研究的群粗。首筆外盤判準用 `tick.ask_milli > 0 and price >= ask`,**不用 `tick.side`**
   —— **2026-09-15 起兩者不等價**:`tick.side` 即時改讀達錢 `FlagOfBuySell`(下條),掃單仍用同則 `ask_milli`
   (**成交後簿**)做價格比較,與研究 `find_sweeps` 的 `ask[i] > 0 and p0 >= ask[i]` 逐字對齊(研究 tick 檔 `pull_ticks.py`
   保留原始 `Ask=0`)。已知差異:一筆主動買**吃光整檔**後成交後簿的 ask 上移(或空),`price >= ask` 為假 → 掃單判非外盤,
@@ -105,6 +107,10 @@ description: TC4(達錢 4)與台股市場資料的實測事實全集(專案累�
   同檔 `TradeVolume` 未變的 71,310 則,與同檔前一則相比只有五檔 / 檔量 / `Total*` 欄與本機 `_recv_ns` 在動;`PreciseTime` /
   `FilledTime` / `TradeDate` 零變動;另 23 則是試撮價 / 開高低 / `TradeStatus` 翻,也不是時間欄)= 達錢 REALTIME 簿更新**缺報價
   時間欄**,可向達錢反映;tick 存檔簿列時刻以 `recv_ns` 為準是唯一選項,不是權宜。(Trigger:簿列時間欄 / 假單抽單分析的時間軸 / 想用 PreciseTime 排序簿更新)
+- **REALTIME 個股成交時刻只到整秒,`recv_ns` 反而很穩**(2026-09-16 #267 review 實測):`recv_ns − 達錢時刻` 最小 81 ms、
+  p50 614 / p90 1,023 / p99 1,113 ms,100–1,099 ms 每 100 ms 一桶近乎均勻 = **整秒截斷 + 約 0.1 秒延遲**。舊說「recv 單筆抖動
+  p90 約 1 秒、不能當時間軸」是把整秒截斷誤讀成抖動。簿重播因此以收到時刻當時間軸(user 拍板)、達錢時刻只當文字標籤;
+  對掃單分群的影響見 #274。(Trigger:要拿 REALTIME 成交時刻分群 / 對齊 / 當時間軸,或評估 recv_ns 的精度)
 - **個股 REALTIME 實測事實**(2026-07-21,stock-terminal):上市+上櫃**全掛 `TC.S.TWS.<code>` 段**
   (TWO/TPE/OTC 段無推播);推播自帶完整五檔+漲跌停/參考價;**試撮期(13:25–13:30)TC4 不推
   成交 tick**(時間窗過濾為雙保險),`TradeStatus` 值域實測 {0=正常, 1=試撮期簿更新};**TradeStatus=1 亦 = 盤中延緩撮合中**(2026-08-28 prod 蒐證:開盤段 11 檔
