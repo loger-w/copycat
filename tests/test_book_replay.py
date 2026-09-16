@@ -408,7 +408,9 @@ def _golden_rows() -> list[TickRow]:
             bid=[(114_500, 282)],
             ask=[(115_000, 40)],
         ),
-        _row("book", "1815", 28_300, recv="09:00:00.100", bid=[(115_000, 205)], ask=[(115_500, 12)]),
+        _row(
+            "book", "1815", 28_300, recv="09:00:00.100", bid=[(115_000, 205)], ask=[(115_500, 12)]
+        ),
         _row(
             "trade",
             "1815",
@@ -606,7 +608,9 @@ class TestPluginEncoding:
     ) -> None:
         """時鐘點不直接存:沒列在 `anomalous` 的成交就是時鐘點,時刻讀它自己的成交時刻。清單與成交對不上 =
         標籤時刻會倒退或掛在簿則上,拒絕(pr-275 review F-03 / F-07)。"""
-        wire = json.loads(json.dumps(encode(replay_books(_golden_rows())["1815"], keyframe_every=2)))
+        wire = json.loads(
+            json.dumps(encode(replay_books(_golden_rows())["1815"], keyframe_every=2))
+        )
         tamper(wire)
 
         with pytest.raises(PluginFormatError, match=message):
