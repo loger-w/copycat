@@ -1,0 +1,32 @@
+#267 瀏覽器 file:// 解碼自檢(chrome-devtools MCP,頁面 = file_url_decode_check.html 放在外掛檔輸出根旁)
+頁面以 <script src> 從本機檔案懶載入外掛檔,JS 照 copycat/book_replay.py 模組說明「外掛檔 v1」獨立實作解碼(不引用 Python)。
+document.title = PASS 表示:每個 keyframe 與逐則播放逐格相等、跳轉結果與播放相等、收到時刻軸零倒退、trade 欄長度 = 成交則 × 4。
+
+== 最終格式(book_replay_out_v1b)==
+file:///.../file_url_decode_check.html?dir=book_replay_out_v1b&date=2026-09-16&code=2426&i=61630 → PASS
+  key=2426|2026-09-16 v=1 n=64512 kf_every=256 keyframes=252 (gunzip+parse 39 ms)
+  逐則播放 vs keyframe:比對 252 個 keyframe,不符 0
+  跳到第 61630 則(keyframe + delta,0.00 ms)與逐則播放逐格相等
+  收到時刻軸倒退 0 次;trade 欄 51564 格 = 成交則 12891 × 4 相符
+  第 61630 則 msg_seq=1754093 種類=簿 收到 11:02:45.669(成交 11:02:43.000 之後第 34 則)現價 99.6
+  買 [99.5×9, 99.4×10, 99.3×9, 99.2×43, 99.1×183] | 賣 [99.6×11, 99.7×431, 99.8×4066]
+
+...&code=2303&i=137042 → PASS(截圖 file_url_decode_2303.png)
+  key=2303|2026-09-16 v=1 n=137299 kf_every=256 keyframes=537 (gunzip+parse 60 ms)
+  逐則播放 vs keyframe:比對 537 個 keyframe,不符 0
+  跳到第 137042 則(keyframe + delta,0.10 ms)與逐則播放逐格相等
+  收到時刻軸倒退 0 次;trade 欄 76388 格 = 成交則 19097 × 4 相符
+  第 137042 則 msg_seq=2905907 種類=簿 收到 13:24:35.710(成交 13:24:35.000 之後第 6 則)現價 142
+  買 [142×52, 141.5×1187, 141×2780, 140.5×970, 140×2542] | 賣 [142.5×3485, 143×4298, 143.5×2204, 144×2283, 144.5×1449]
+  跨語言對照:Python book_at(payload, 137042) 同一則 msg_seq 2905907、五檔逐格相同
+
+...&code=1815&i=0 → PASS(時刻異常那一則)
+  key=1815|2026-09-16 v=1 n=81556 kf_every=256 keyframes=319 (gunzip+parse 44 ms)
+  逐則播放 vs keyframe:比對 319 個 keyframe,不符 0
+  收到時刻軸倒退 0 次;trade 欄 51096 格 = 成交則 12774 × 4 相符
+  第 0 則 msg_seq=157 種類=成交 收到 07:31:22.730(首筆成交前第 1 則)現價 114.5
+  —— 開機收到的前一日 14:30 盤後成交:仍是一則,但不當時鐘點
+console:零訊息
+
+== 第一版格式(book_replay_out,0b1dbff6)同樣 PASS ==
+2426 i=61630(252 keyframe、跳轉 0.10 ms)、3441 i=11171(買一「0×3334」市價佇列 + 賣方空,0 與 null 分得開)、2303 i=137042

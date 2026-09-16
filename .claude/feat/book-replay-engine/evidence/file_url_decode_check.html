@@ -1,0 +1,68 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>簿重播外掛檔 file:// 解碼自檢</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; margin: 16px; background: #fafafa; color: #111; }
+  pre { white-space: pre-wrap; }
+  .ok { color: #0a7a2f; } .bad { color: #b3261e; }
+</style>
+<h1>簿重播外掛檔 file:// 解碼自檢(#267)</h1>
+<p>用法:本頁放在外掛檔輸出根目錄旁,<code>?dir=&lt;輸出根&gt;&amp;date=2026-09-16&amp;code=2426&amp;i=61630</code>。
+解碼規則照 <code>copycat/book_replay.py</code> 模組說明「外掛檔 v1」逐字實作,不引用 Python。</p>
+<pre id="out">載入中…</pre>
+<script>
+  const q = new URLSearchParams(location.search);
+  const dir = q.get("dir") || "book_replay_out";
+  const date = q.get("date") || "2026-09-16";
+  const code = q.get("code") || "2426";
+  const probe = Number(q.get("i") || "61630");
+  const out = document.getElementById("out");
+  const lines = [];
+  const say = (text, cls) => { lines.push(cls ? `<span class="${cls}">${text}</span>` : text); out.innerHTML = lines.join("\n"); };
+  const hms = ms => ms == null ? "首筆成交前" : [Math.floor(ms / 3600000), Math.floor(ms / 60000) % 60, Math.floor(ms / 1000) % 60].map(v => String(v).padStart(2, "0")).join(":") + "." + String(ms % 1000).padStart(3, "0");
+  const apply = (state, d) => { for (let j = 0; j < d.length; j += 2) state[d[j]] = d[j + 1]; };
+  const ladder = b => {
+    const side = (p, q) => [0, 1, 2, 3, 4].filter(i => b[p + i] !== null).map(i => `${b[p + i] / 1000}×${b[q + i]}`).join(", ") || "空";
+    return `買 [${side(0, 5)}] | 賣 [${side(10, 15)}]`;
+  };
+  window.__bk = async (key, b64) => {
+    const t0 = performance.now();
+    const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const text = await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    const p = JSON.parse(text);
+    say(`key=${key} v=${p.v} n=${p.n} kf_every=${p.kf_every} keyframes=${p.kf.length} (gunzip+parse ${(performance.now() - t0).toFixed(0)} ms)`);
+    const K = p.kf_every;
+    const state = new Array(20).fill(null);
+    let checked = 0, bad = 0, atProbe = null;
+    for (let i = 0; i < p.n; i++) {
+      apply(state, p.d[i]);
+      if (i % K === 0) { checked++; if (p.kf[i / K].some((v, f) => v !== state[f])) bad++; }
+      if (i === probe) atProbe = state.slice();
+    }
+    say(`逐則播放 vs keyframe:比對 ${checked} 個 keyframe,不符 ${bad}`, bad ? "bad" : "ok");
+    const jump = p.kf[Math.floor(probe / K)].slice();
+    const t1 = performance.now();
+    for (let i = Math.floor(probe / K) * K + 1; i <= probe; i++) apply(jump, p.d[i]);
+    const jumpMs = performance.now() - t1;
+    const same = jump.every((v, f) => v === atProbe[f]);
+    say(`跳到第 ${probe} 則(keyframe + delta,${jumpMs.toFixed(2)} ms)與逐則播放${same ? "逐格相等" : "不符"}`, same ? "ok" : "bad");
+    let clockIdx = -1, clockMs = null;
+    for (let j = 0; j < p.clock.length && p.clock[j] <= probe; j += 2) { clockIdx = p.clock[j]; clockMs = p.clock[j + 1]; }
+    let seq = 0, recv = 0, prevRecv = -Infinity, recvRewinds = 0, trades = 0, lastPrice = null;
+    for (let i = 0; i < p.n; i++) {
+      recv += p.recv[i]; if (recv < prevRecv) recvRewinds++; prevRecv = recv;
+      if (i <= probe) { seq += p.seq[i]; if (p.kind[i] === "t") lastPrice = p.trade[trades * 4 + 1]; }
+      if (i === probe) atProbe.recv = recv;
+      if (p.kind[i] === "t") trades++;
+    }
+    const tradeOk = p.trade.length === trades * 4;
+    say(`收到時刻軸倒退 ${recvRewinds} 次;trade 欄 ${p.trade.length} 格 = 成交則 ${trades} × 4 ${tradeOk ? "相符" : "不符"}`, recvRewinds === 0 && tradeOk ? "ok" : "bad");
+    say(`第 ${probe} 則 msg_seq=${seq} 種類=${p.kind[probe] === "t" ? "成交" : "簿"} 收到 ${hms(atProbe.recv)}(成交 ${hms(clockMs)} 之後第 ${probe - clockIdx} 則)現價 ${lastPrice === null ? "—" : lastPrice / 1000}`);
+    say(ladder(jump));
+    document.title = bad === 0 && same && recvRewinds === 0 && tradeOk ? "PASS" : "FAIL";
+  };
+  const s = document.createElement("script");
+  s.src = `${dir}/${date}/${code}.js`;
+  s.onerror = () => say(`載入失敗:${s.src}`, "bad");
+  document.head.appendChild(s);
+</script>
