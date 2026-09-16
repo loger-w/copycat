@@ -168,10 +168,10 @@
     "semantic_hash": "0bf33a073b1edb6edca5d4b9197c8f4e"
   },
   "copycat/cli.py": {
-    "mtime": 1789565960.778831,
-    "seen": 1789566001.9550116,
-    "ast_hash": "66de719234042b68fbd74af1df4e850f",
-    "semantic_hash": "66de719234042b68fbd74af1df4e850f"
+    "mtime": 1789572961.7933807,
+    "seen": 1789573046.5017648,
+    "ast_hash": "2daefe39851b7e3cc5a5ad0c67267863",
+    "semantic_hash": ""
   },
   "copycat/configio.py": {
     "mtime": 1789376988.23918,
@@ -3792,10 +3792,10 @@
     "semantic_hash": "4aed09e763cf6ec77ee339ec1828228a"
   },
   "copycat/ticks_compact.py": {
-    "mtime": 1789490020.7121873,
-    "seen": 1789490040.0480802,
-    "ast_hash": "5f428a2e8f3e6f1f7c1e6c6d93aac725",
-    "semantic_hash": "5f428a2e8f3e6f1f7c1e6c6d93aac725"
+    "mtime": 1789572961.7933807,
+    "seen": 1789573046.5074267,
+    "ast_hash": "4814728c35496b93ad9f33b173acaedb",
+    "semantic_hash": ""
   },
   "copycat/ticks_config.py": {
     "mtime": 1789490020.7121873,
@@ -3828,15 +3828,15 @@
     "semantic_hash": "5db6d3c53ee653704261c0885b475548"
   },
   "copycat/book_replay.py": {
-    "mtime": 1789565960.777829,
-    "seen": 1789566001.952445,
-    "ast_hash": "e442f925abc8c8dc20d1a65e4f919248",
-    "semantic_hash": "e442f925abc8c8dc20d1a65e4f919248"
+    "mtime": 1789572961.7933807,
+    "seen": 1789573046.5008972,
+    "ast_hash": "9b20b3ada5b057232381bdc4db818764",
+    "semantic_hash": ""
   },
   "tests/test_book_replay.py": {
-    "mtime": 1789565960.7798297,
-    "seen": 1789566002.0682445,
-    "ast_hash": "e40ae79864bd0faff4783777d306e2ae",
-    "semantic_hash": "e40ae79864bd0faff4783777d306e2ae"
+    "mtime": 1789572961.7958987,
+    "seen": 1789573046.5438845,
+    "ast_hash": "b62ed12c914da42b81b30d9acf8c5a1f",
+    "semantic_hash": ""
   }
 }

@@ -1,28 +1,29 @@
 # Graph Report - copycat  (2026-09-16)
 
 ## Corpus Check
-- cluster-only mode — file stats not available
+- 640 files · ~750,078 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 13277 nodes · 29864 edges · 521 communities (433 shown, 76 thin omitted)
-- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 1308 edges (avg confidence: 0.91)
+- 13258 nodes · 30443 edges · 502 communities (424 shown, 62 thin omitted)
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 1411 edges (avg confidence: 0.91)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `efce8c03`
+- Built from commit: `541e6d8a`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - _make
-- FakeCom
+- test_client.py
 - CapitalStore
 - vitest
 - StockQuoteSource
-- _make
+- _drain
 - _Clock
 - StockEngine
-- _drain
+- _quote
 - CapitalClient
 - BarsCache
 - test_balance.py
@@ -31,129 +32,129 @@
 - FakeService
 - react
 - EngineRuntime
-- _Harness
+- Path
 - _service
 - @testing-library/react
 - @tanstack/react-query
-- make
+- load_rules
 - _state
 - test_market_breadth.py
 - TC4QuoteSource
-- test_signal_hub.py
+- _Harness
 - test_mapping.py
-- bar
-- FuturesEngine
+- _TaggedFetcher
+- FakeSource
 - SignalHub
 - BreadthEngine
-- ChainAggregator
+- aggregate.py
 - BootedClient
-- signal_hub.py
+- format_signal_group_text
 - _harness
-- wait_until
-- stock_source.py
+- _FakeSource
+- parse_1k_bars
 - MonkeyPatch
-- pipeline.py
+- search.py
 - Bar
 - discord_bot.py
-- test_stock_engine.py
+- wait_until
 - test_screen_engine.py
 - create_app
 - SignalDetector
-- BacktestConfig
+- test_features.py
 - relay
 - Bar1K
 - test_main_wiring.py
 - compact_day
-- FakeFuturesSource
+- make_client
 - Watchlist
 - SignalsConfig
 - _pager
 - atomic_write_text
 - FakeApi
-- stock_watchlist.py
+- save_watchlist
 - StockDayState
 - test_trade_models.py
 - _Clock
 - test_breadth_routes.py
 - make_client
-- stock_engine.py
+- StockSource
 - SeriesInfo
 - tick
 - FakeHttp
 - test_screening.py
 - RecordingCom
-- MonkeyPatch
+- TestTradeYmd
 - capital_api.py
 - DailyIndex
 - stkfut_map.py
 - load_trading_calendar
 - _walk
-- FakeApi
-- tc4.py
+- FuturesQuoteSource
+- OptionContract
 - _state
 - test_ws_disconnect.py
-- ._bot
+- test_discord_bot.py
 - test_notify.py
-- normalize_rule
+- make
 - stock_names.py
-- client.py
+- test_record_dict_equals_asdict
 - stock_symbol
-- HistoryTimeoutError
+- _source
 - _Clock
 - test_signal_routes.py
-- test_breadth_engine.py
-- CorrQuoteSource
+- BreadthConfig
+- FakeApi
 - CorrelationEngine
-- test_river_models.py
-- _FlakySource
+- parse_1k_minutes
+- TestReconnectReconciliation
 - ._collect
 - append_audit
-- MonkeyPatch
-- _make
+- test_calendar_wiring.py
+- test_ticks_compactor.py
 - replay/report.py
 - IndexEngine
 - FakeCorrSource
-- asyncio
-- test_safety.py
+- load_day
+- ChainAggregator
 - test_backfill_tc4.py
-- corr_engine.py
-- TestCorrSourceFetchDay1k
+- CorrState
+- .test_first_page_poll_backoff_starts_at_twenty_ms
 - TicksConfig
 - types.ts
 - session_key
 - ScreenEngine
 - test_com.py
 - TickPersist
-- test_clock_monitor.py
-- Any
-- _fut_quote
+- ClockSample
+- group_series
+- test_stock_engine.py
 - StkfutCatalog
 - stock-intraday-svg.ts
-- shutdown_budget.py
+- test_shutdown_budget.py
 - test_verify.py
 - fetch_otc_snapshot
 - get_capital
-- capital/store.py
-- StockTick
+- Rule
+- BarsResult
 - oi_levels.py
 - FakeSource
-- parse_stock_realtime
-- test_calendar_wiring.py
+- StockTick
+- BaseExcHistoryIndexSource
 - test_signal_state.py
 - test_app.py
 - test_capital_api.py
 - _tick
 - run_backfill_brokers
-- test_futures_engine.py
-- test_overlay.py
+- _EngineClosing
+- app.py
 - make_state
 - test_fill_latency.py
 - FakeHttp
-- data/models.py
+- signal_rules.py
 - replay_books
-- test_t1_open.py
+- TestShutdownLanes
 - test_limit_streaks.py
-- tests/conftest.py
+- verify.py
 - _sent
 - market.py
 - PositionCloseRequest
@@ -161,58 +162,58 @@
 - TicksCompactor
 - useCapital.ts
 - constants.ts
-- MonkeyPatch
+- _calendar
 - ConnectionError
-- simulate.py
+- build_universe
 - load_config
 - resolve_contract_ym
 - test_exception_from_win32_wrappers_is_a_failure_not_a_crash
 - signal-model.ts
 - test_tc4.py
-- test_simulate.py
-- test_chain_stats.py
+- BacktestConfig
+- main
 - ReplyLink
 - LimitListSection.tsx
-- Path
+- ._client
 - TradingCalendar
 - run_backfill_daytrade
-- import_neigui.py
-- parse_hist_tick
-- ws.py
+- run_import
+- test_river_models.py
+- send_seed
 - WatchlistSidebar.test.tsx
-- test_index_routes.py
-- book_replay.py
-- _book_replay
-- date
-- index_engine.py
-- test_market_routes.py
+- make_client
+- multiplier_of
+- MonkeyPatch
+- BarsStatus
+- WsBroadcaster
+- TestTwse
 - harness_lib.py
 - RiverPanel.tsx
-- MonkeyPatch
+- TestConnectInterruptible
 - ._src
-- test_stkfut_routes.py
-- lifespan
+- make_client
+- _boot_engines
 - _ReplyEvents
-- test_ticks_compactor.py
+- _engine
 - QuoteAPI
 - TestPolicyQuotes
-- make_client
+- Path
 - CapitalCom
 - SkcomCapitalCom
 - parse_onnewdata
 - close_clamp_rank
-- parse_offset
+- test_clock_monitor.py
 - make_repo
 - WatchlistSidebar
-- _balance_queries
+- _FakeClock
 - ws_stream
-- TestGroupSnapshot
+- to_futureorder_fields
 - App.memo.test.tsx
 - App.test.tsx
 - StockIntradayChart.tsx
 - StockIntradayChart.test.tsx
 - stock-accum.ts
-- fake_txo.py
+- test_health.py
 - ._bo
 - ._armed
 - ._run_handover_locked
@@ -222,38 +223,38 @@
 - compilerOptions
 - test_tee.py
 - _ReqApi
-- test_stats.py
-- test_corr_engine.py
+- pipeline.py
+- .test_engine_module_has_no_tc4_symbol_literals
 - test_label_events.py
 - FuturesSource
 - MarketPane.tsx
 - RightRail.test.tsx
 - read_frontend_source
 - TestBigLots
-- .test_trading_day_premarket_failure_still_waits_for_window
+- MonkeyPatch
 - ._engine
-- test_cli.py
-- app.py
+- .test_screen_date_on_non_trading_day_exits_with_explicit_error
+- bars.py
 - scan_limitup_events
-- WsBroadcaster
+- FakeHub
 - group_choices
-- finmind_token.py
-- server/__main__.py
+- TestResolveToken
+- _Tee
 - run_hook
 - watchlist-model.ts
 - _StubCom
-- test_oi_levels.py
+- _client
 - test_stock_routes.py
-- minute_end_from_utc_hhmmss
-- in_stock_heal_window_now
+- corr_legs_probe.py
+- in_index_heal_window_now
 - package.json
 - PriceLadder.test.tsx
 - useSignalAlerts.test.tsx
 - ws-reconnect.ts
 - TestDiscordFanout
 - .test_hub_start_failure_isolates_signals_only
-- TestBarsRoute
-- main
+- _FakeWebSocket
+- OSError
 - devDependencies
 - App.tsx
 - StkfutLadder.test.tsx
@@ -261,33 +262,33 @@
 - allday.ts
 - river-chart-svg.ts
 - stock-tick.ts
-- TestGroupStateRoute
-- ._boot
+- FakeFuturesSource
+- TestAppWiring
 - RiverState
 - OrderPanel.test.tsx
 - GroupGridView.test.tsx
 - record_sweep_cluster_golden.py
-- TestApplyVariant
-- ticks_compact.py
+- ._src
+- _Clock
 - run_hook
 - MarketChart.test.tsx
 - MarketPane.test.tsx
 - SignalRulesDialog.tsx
 - candle.ts
-- TestCloseLogout
-- TestOneKHealthWarnings
-- ._gate_engine
-- load_signals_config
+- _SelectiveFailApi
+- FuturesEngine
+- MonkeyPatch
+- signals_config.py
 - breadth_fetch.py
 - format-on-edit.py
 - sha-plugin.test.ts
 - CandleChart.tsx
 - StockPage.test.tsx
-- _k1_pager
+- TestFetchDayMinutesWindowVariant
 - TestPartialLast
-- _FailingStartStockSource
-- futures_engine.py
-- format_signal_text
+- stock_watchlist.py
+- test_corr_engine_river.py
+- mid_from_book
 - MarketPane.size.test.tsx
 - WatchlistManagerDialog.test.tsx
 - futures-ladder.ts
@@ -299,22 +300,22 @@
 - useSignalRules.ts
 - pnl-svg.tsx
 - stkfut.ts
-- _BadRetrySource
+- parse_taifex_html
 - TestBarsRangeProxy
 - TestDefaultConfig
-- test_validate.py
+- TestWindowThresholds
 - GroupGridView.geometry.test.tsx
 - PriceLadder.tsx
-- StockChart.livebar.test.tsx
+- CorrSource
 - StockIntradayChart.futures.test.tsx
 - useStockBars.ts
 - timeframe.ts
-- _FlakySource
-- TestSessionRollover
+- .test_non_standard_unit_not_gated
+- _TalkingWebSocket
 - .test_caller_that_only_catches_connection_error_still_degrades
-- TestStateRouteTape
-- StockMeta
-- build_info.py
+- TestGroupStateRoute
+- window_bounds
+- sntp_query
 - check_feat_tags.py
 - FuturesPage.test.tsx
 - QuoteTable.tsx
@@ -328,7 +329,7 @@
 - tick-stream.ts
 - trading-calendar.ts
 - trading-hours.ts
-- .test_real_stage_lines_parse_into_one_clean_chain
+- OverlayCache
 - ._assert_rejected
 - FakeResp
 - MonkeyPatch
@@ -346,15 +347,15 @@
 - trade-kinds.ts
 - nk225_leg_probe.py
 - ._resolve
-- _TickRecorder
-- _boot_engines
+- _session_mod
+- log_return
 - App.corr-tab.test.tsx
 - CapitalOrdersList.tsx
 - AdvanceDeclineChart.test.tsx
 - MarketPane.memo.test.tsx
 - MarketPane.storage.test.tsx
 - GroupGridView.tsx
-- GroupGridView.memo.test.tsx
+- SignalRail.test.tsx
 - StockChart.test.tsx
 - StockIntradayChart.index.test.tsx
 - StockPage
@@ -370,15 +371,15 @@
 - RejectingCom
 - .test_mixed_sides_keep_direction_of_price_move
 - TestSweepClusterState
-- TestPolicyText
+- StockIntradayChart.indexlines.test.tsx
 - .__init__
-- factory.py
-- .light_snapshot
+- test_corr_state.py
+- _RunningServer
 - CapitalOrdersList.test.tsx
 - CapitalPositionsList.test.tsx
 - AdvanceDeclineChart.tsx
 - useCapital.test.tsx
-- useFuturesBars.test.ts
+- RiverPanel.memo.test.tsx
 - useIndexStream.ts
 - useIndexStream.test.ts
 - useRiver.ts
@@ -389,7 +390,7 @@
 - trade-text.ts
 - FakeWS
 - TestDailyEntryFields
-- TestPhase5Hardening
+- bar
 - .test_same_date_reads_single_file_verbatim
 - .test_closes_inside_boot_window
 - block-no-verify.py
@@ -397,8 +398,8 @@
 - IndexPage.tsx
 - DepthBar.tsx
 - OrderBook.tsx
-- StockIntradayChart.variant.test.tsx
-- WatchlistSidebar.dragrender.test.tsx
+- TestWatchlistBootSentinel
+- register_capital
 - useCorrelation.test.ts
 - useGroupSnapshots.ts
 - useSignalAlerts.ts
@@ -408,11 +409,11 @@
 - signal-params.ts
 - tquote.ts
 - volume-profile.ts
-- .test_etf_future_close_not_tick_gated
-- .test_slow_code_times_out_all_null_and_frees_slot
+- SignalRulesDialog.test.tsx
+- StockChart.futconverge.test.tsx
 - _FakeCapital
-- TestConstants
-- intrinsic_millipts
+- test_signal_rules.py
+- useIndexOverlay.test.tsx
 - test_harness_context.py
 - rules
 - dependencies
@@ -421,10 +422,10 @@
 - CorrPanel.tsx
 - IndexBar.tsx
 - LadderView.tsx
-- useFuturesStream.ts
+- useSignalFeed.ts
 - useMarketBars.ts
-- useMarketBars.test.ts
-- useSignalSound.ts
+- useTradingCalendar.test.tsx
+- storage.test.ts
 - useStockBars.test.tsx
 - chart-crosshair.ts
 - close-order.ts
@@ -434,32 +435,31 @@
 - buildIntradayGeometry
 - txf-overlay-series.ts
 - main
-- .test_latched_book_still_reads_clock_and_emits_open
+- TestSweepClusterGates
 - TestSpotWindowOffset
 - _IdentIndexSource
 - test_create_app_passes_the_calendar_into_every_default_source
 - TestSnapshotShape
-- in_index_heal_window_now
+- TestBackfillMergesOnEventLoop
 - _reset_year_warnings
 - safety-hooks.py
 - FuturesPage.tsx
 - StockIntradayChart.synchover.test.tsx
-- useBreadthRows.test.ts
+- useBreadth.ts
 - useFuturesBars.ts
 - futures-accum-adapter.ts
 - live-last-bar.ts
 - live-last-bar.test.ts
 - position-summary.test.ts
-- river-chart-svg.test.ts
+- .test_default_clock_persists_yesterday
 - time-labels.ts
 - utils.ts
-- .test_boundary
-- DayKeyedIndexSource
-- .test_ticks_still_flow_without_a_daily_bars_source
-- TestStateRoute
-- .test_group_rename_without_code_change_reaches_the_hub
-- BookReplay
-- .status_view
+- _FakeEngine
+- AuditWriteError
+- .test_known_route_not_404_anchors_the_above
+- FakeWS
+- RaisingHistoryIndexSource
+- TestWatchWindowBoundaries
 - .set_trade_date
 - ConnectionBadge.tsx
 - MetricsBar.tsx
@@ -471,8 +471,8 @@
 - stock-search.ts
 - version-drift.ts
 - capital_typelib_probe.py
-- .test_split_batches_leave_room_for_tag
-- .test_prod_wiring_keeps_default_tick_flush_interval
+- TestDiscordMerge
+- .test_hub_data_dir_isolated_without_explicit_path
 - TestGateForPhase
 - CardIntradayChart.tsx
 - MarketOrderButtons.tsx
@@ -489,113 +489,91 @@
 - stock-view.ts
 - watchlist-avg.ts
 - tsconfig.json
-- .fetch_bars_range
-- _daytime_clock
-- _empty_fetchers
+- _FailingFile
 - backtest/__init__.py
 - copycat/capital/__init__.py
 - engine/__init__.py
 - copycat/__init__.py
 - .__init__
-- .__init__
 - live/__init__.py
-- .__init__
 - .close
 - replay/__init__.py
 - server/__init__.py
 - PegInput
-- test_daily_min_rows_parity_with_breadth
-- AbstractEventLoop
-- BaseException
-- BuySell
-- Market
-- BaseModel
-- BreadthFetchers
-- FastAPI
-- AbstractSet
-- Bar
-- BarsStatus
-- Protocol
-- Exception
 - copycat
-- Any
-- LogCaptureFixture
-- MonkeyPatch
-- parametrize
-- Task
 
 ## God Nodes (most connected - your core abstractions)
-1. `_drain()` - 172 edges
-2. `vitest` - 160 edges
-3. `TC4QuoteSource` - 155 edges
-4. `FakeIndexSource` - 148 edges
-5. `_make()` - 147 edges
-6. `FakeCom` - 145 edges
-7. `create_app()` - 142 edges
+1. `create_app()` - 187 edges
+2. `_drain()` - 173 edges
+3. `vitest` - 160 edges
+4. `TC4QuoteSource` - 158 edges
+5. `FakeIndexSource` - 148 edges
+6. `_make()` - 147 edges
+7. `FakeCom` - 145 edges
 8. `_Harness` - 135 edges
 9. `_Clock` - 126 edges
-10. `BootedClient` - 121 edges
+10. `BootedClient` - 125 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `_FailOnceFetch` --uses--> `BreadthFetchError`  [INFERRED]
-  tests/server/test_breadth_engine.py → copycat/server/breadth_fetch.py
-- `_boom()` --calls--> `BreadthFetchError`  [EXTRACTED]
-  tests/server/test_breadth_routes.py → copycat/server/breadth_fetch.py
-- `TestProdWiring` --uses--> `BreadthFetchError`  [INFERRED]
-  tests/server/test_breadth_routes.py → copycat/server/breadth_fetch.py
-- `_f()` --calls--> `BreadthFetchError`  [EXTRACTED]
-  tests/server/test_breadth_routes.py → copycat/server/breadth_fetch.py
-- `test_daily_date_echo_mismatch_raises()` --uses--> `BreadthFetchError`  [INFERRED]
-  tests/server/test_screen_engine.py → copycat/server/breadth_fetch.py
+- `test_characterization_50_samples_vs_neigui()` --uses--> `BacktestConfig`  [INFERRED]
+  tests/backtest/test_characterization.py → copycat/backtest/config.py
+- `test_structural_features_flat_base()` --uses--> `BacktestConfig`  [INFERRED]
+  tests/backtest/test_features.py → copycat/backtest/config.py
+- `test_structural_ignition_false_when_recent_limitup()` --uses--> `BacktestConfig`  [INFERRED]
+  tests/backtest/test_features.py → copycat/backtest/config.py
+- `test_structural_ignition_false_when_recent_touch()` --uses--> `BacktestConfig`  [INFERRED]
+  tests/backtest/test_features.py → copycat/backtest/config.py
+- `test_plateau_check()` --uses--> `BacktestConfig`  [INFERRED]
+  tests/backtest/test_stats.py → copycat/backtest/config.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (521 total, 76 thin omitted)
+## Communities (502 total, 62 thin omitted)
 
 ### Community 0 - "_make"
 Cohesion: 0.03
-Nodes (82): BreadthFetchError, RuntimeError, 取數失敗;`quota=True` 代表 FinMind 配額用盡(HTTP 402),呼叫端改走長退避。, Clock, FakeDaily, FakeFetch, FakeMono, _make() (+74 more)
+Nodes (83): BreadthFetchError, RuntimeError, 取數失敗;`quota=True` 代表 FinMind 配額用盡(HTTP 402),呼叫端改走長退避。, Clock, FakeDaily, FakeFetch, FakeMono, _make() (+75 more)
 
-### Community 1 - "FakeCom"
-Cohesion: 0.05
-Nodes (128): Any, CancelOrderRequest, CorrectPriceRequest, PositionCloseRequest, FakeCom, 滿足 CapitalCom Protocol 的假實作;全部呼叫成功(rc=0)。 寫入面呼叫以 tuple 收進 `sent`;帳號清單可注入(預設含 TS…, _audit_lines(), _client() (+120 more)
+### Community 1 - "test_client.py"
+Cohesion: 0.04
+Nodes (178): CancelOrderRequest, CapitalGateBlockedError, 安全閘擋下寫入動作 — 對映 403 ORDER_BLOCKED(detail 帶 reason)。, FakeCom, 滿足 CapitalCom Protocol 的假實作;全部呼叫成功(rc=0)。 寫入面呼叫以 tuple 收進 `sent`;帳號清單可注入(預設含 TS…, _audit_lines(), _balance_queries(), _client() (+170 more)
 
 ### Community 2 - "CapitalStore"
-Cohesion: 0.03
-Nodes (129): Position, CapitalStore, Market, 記下本 app 送出的價格別(送單成功且拿到 seq 時呼叫)。 `date` = 送出當日 YYYYMMDD:server 長跑跨日、券商 seq 若重用,…, 作廢某筆的價格別記憶(改價成功時呼叫)。 市價單被改成限價後標籤還在 = 唯一一條會**誤標**的路徑(其餘失效方向都只是少標)。, 改價金額閘用:未成交量(原始單位,股/口)。查無此單回 None。 終態單(已刪/全成/失敗/逾時/退單)回 0:死單沒有未成交量可改, 否則已刪單的…, 寫入鏈市場閘用:該單市場別。查無此單或缺值回 None(寬鬆放行,與顯示端同慣例)。, 清空委託聚合(部位不動)。回報重連重播前必須呼叫,否則成交量重複累計。 `_price_types` **不清**:它是送單意圖不是回報事件,重播不會重建它… (+121 more)
+Cohesion: 0.02
+Nodes (150): OrderRecord, Position, 委託清單一列 = 一張單的聚合狀態(key=13碼委託序號)。qty 已換算顯示單位。, ReplyRecord, _Agg, _anchor_trade_date(), CapitalStore, _lot_unit() (+142 more)
 
 ### Community 3 - "vitest"
 Cohesion: 0.02
-Nodes (45): DAY, bar(), bars(), fill(), futFill(), BASE, noDepth, wide (+37 more)
+Nodes (47): DAY, bar(), bars(), fill(), futFill(), BASE, noDepth, wide (+39 more)
 
 ### Community 4 - "StockQuoteSource"
 Cohesion: 0.04
-Nodes (74): SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。, StockQuoteSource, FakeApi, ok(), handler(), handler(), handler(), handler() (+66 more)
+Nodes (78): SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。, StockQuoteSource, FakeApi, ok(), handler(), handler(), _k1_pager(), handler() (+70 more)
 
-### Community 5 - "_make"
+### Community 5 - "_drain"
 Cohesion: 0.02
-Nodes (55): FakeHub, _make(), SignalSink stub:只記錄呼叫序列(順序本身是被鎖的行為)。, `loop.call_later` 的 handle 必須有取消點:關機後醒來的那一發會對已關閉的 engine 入列(`_backfill_pending`…, perf/opening-backfill-parallel S1-b:worker 出隊時把佇列裡**整批**先交給 source…, group-only 變更(建群 / 改名 / 移出群組)會以**相同 codes** 再呼叫一次…, 單筆 job 不多發一次 SubHistory:backfill 自己就會 Sub,多發一次是純代價。, review F-1/H1:prepare 逸出例外 = 整條 worker 靜默死亡、當日回補全失效。 prepare 只是預熱,失敗交逐檔… (+47 more)
+Nodes (76): _drain(), _make(), SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}` 會…, R9:`no_data` 推導式 = `code in _no_data` **或** 未訂閱。 刻意與 `snapshot()` / `engine`…, 卡片三態靠這個旗標分辨「回補中…」與「無資料」—— 沒有它,剛開的群組會有 一整排看起來像壞掉的空卡。, R1/R12 端到端:主圖是別檔時,群組成員照樣補得到當日分鐘列。, R4 的群組側:斷線期間的缺口要補得回來。reconnect 只重入列 `_main`, 成員全靠記帳清空後由下一次 group_snapshot 重新入列。, A1:batch 走 `light_snapshot()`,不得再建全量 `snapshot()`。 全量那份會把當日數千筆 tick 逐筆組成 dict… (+68 more)
 
 ### Community 6 - "_Clock"
-Cohesion: 0.06
-Nodes (45): _Clock, _ctx(), _det(), _locked_up(), 真鎖漲停簽名:ask 側無限價檔 + bids[0] 為市價佇列(design §3.5)。, 爆拉回檔(spec #174):surge 同式武裝 → 追蹤波峰 → 回落 ≥ pct 一波一則。 重武裝**兩條路**(與…, 未達 surge 門檻 → 從未武裝,之後的下跌不是「回檔」。, 武裝後峰值隨創高更新;回檔幅度以**最新**峰值起算。 (+37 more)
+Cohesion: 0.05
+Nodes (48): _Clock, _ctx(), _det(), _locked_up(), 真鎖漲停簽名:ask 側無限價檔 + bids[0] 為市價佇列(design §3.5)。, MFS-2:暫存區帶基準日 —— 日別不符 = 上一輪換日留下的殘渣。 沿用它不會有任何錯誤訊號,只是整天用昨天的 CDP 基準;所以要回 False(讓…, 爆拉回檔(spec #174):surge 同式武裝 → 追蹤波峰 → 回落 ≥ pct 一波一則。 重武裝**兩條路**(與…, 未達 surge 門檻 → 從未武裝,之後的下跌不是「回檔」。 (+40 more)
 
 ### Community 7 - "StockEngine"
 Cohesion: 0.03
-Nodes (54): BarsResult, is_futures_key(), instrument key 是否為個股期(兩段形對照腿或三段形合約)。, instrument key → 試撮窗(個股期空窗,D2)。 **單一定義**:engine(REALTIME)與 source(回補)必須同一把尺 ——…, trial_windows_for(), AbstractEventLoop, 全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。 `new_date` 非…, 常駐迴圈:每輪對帳「該訂而沒訂上的」並補訂。 與 futures/corr 的 pending-resub 不同,這裡的重試項目是**動態集合**(使用者… (+46 more)
+Nodes (63): is_futures_key(), instrument key 是否為個股期(兩段形對照腿或三段形合約)。, instrument key → 試撮窗(個股期空窗,D2)。 **單一定義**:engine(REALTIME)與 source(回補)必須同一把尺 ——…, trial_windows_for(), _in_futures_session(), _now_taipei_hhmm(), AbstractEventLoop, 全量重掛(UNSUB→SUB 冪等,新日窗);ZMQ REQ 全程 to_thread,不佔 event loop。 `new_date` 非… (+55 more)
 
-### Community 8 - "_drain"
-Cohesion: 0.05
-Nodes (56): FakeSource, _drain(), _quote(), 讓 loop 消化 call_soon_threadsafe 與背景 task。, 換日 = 日別記帳重來(`_backfill_timeouts` 已在 stage2 清空)。留著昨天排的 那一發 handle,它醒來時會用**新一天**的…, perf/opening-backfill-parallel S2(🔴):自選成員**首筆當日成交 tick** 即入列回補。…, 08:30–09:00 試撮成交帶 `is_trial=True`(`parse_stock_realtime` 標旗標、**不丟棄**), 由…, review F-2:tick 節拍是次秒級,不是 group_snapshot 的 60 s。逾時 settle 後 下一筆 tick 若立刻重排,15 s… (+48 more)
+### Community 8 - "_quote"
+Cohesion: 0.06
+Nodes (46): FakeSource, _quote(), `precise` = TC4 的 UTC PreciseTime(預設 02:57:51 = 台北 10:57:51,日盤正中)。 參數化是 SC-3…, _make(), _opener_failing_on(), _open(), _opener_with(), datetime (+38 more)
 
 ### Community 9 - "CapitalClient"
-Cohesion: 0.03
-Nodes (57): BaseException, BuySell, CapitalGateBlockedError, _ComCall, CapitalClient, _do(), AbstractEventLoop, FutureOrderRequest (+49 more)
+Cohesion: 0.02
+Nodes (130): _ComCall, _calendar(), CapitalClient, _do(), _mask_account(), AbstractEventLoop, BaseException, BuySell (+122 more)
 
 ### Community 10 - "BarsCache"
-Cohesion: 0.04
-Nodes (57): BarsFetcher, stock_bars(), BarsCache, build_daily(), build_minute(), clamp_days(), `_today` 的條目數(成長觀測用;prune 的 TTL evict 測試需要)。, 近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。 status = 兩段的 worst(SC-6)。**未實際… (+49 more)
+Cohesion: 0.07
+Nodes (31): BarsCache, build_daily(), `_today` 的條目數(成長觀測用;prune 的 TTL evict 測試需要)。, _Fetcher, don't-cache-empty:TC4 失敗與真無資料上游不可分,要留重試餘地。 round3:空結果改由短 TTL 負向快取擋一下(收斂重複的首頁…, engine.bars_range 替身:記錄每次呼叫的區間。 `statuses` 逐次對應 `by_call`(超出長度 →…, N-3:status 沿 build_* 流出,兩段以 worst 合併(SC-6)。, 已有資料的 memo 命中 = 沒發 fetch,沒有壞消息可報。 (+23 more)
 
 ### Community 11 - "test_balance.py"
 Cohesion: 0.03
@@ -603,43 +581,43 @@ Nodes (94): BalanceCollector, merge_fut_positions(), _opt_float(), parse_balance
 
 ### Community 12 - "FakeIndexSource"
 Cohesion: 0.04
-Nodes (90): FakeIndexSource, IndexSource fake(index engine / index routes / market routes 共用)。 -…, make_engine(), _quote(), IndexEngine 測試 — index-board SC-4(design v4)., N094:`_subscribe_and_backfill` 跑在 worker thread 卻直接 in-place 寫 `_twse.minutes`…, 被取消的 retry:orphan 的 executor 工作項照樣跑完 fetch,但它的結果**不得** 落進 `minutes` —— 舊碼在…, review SP5:合併點搬到 loop 端之後,orphan 的 executor 工作項仍會執行… (+82 more)
+Nodes (85): FakeIndexSource, IndexSource fake(index engine / index routes / market routes 共用)。 -…, make_engine(), _quote(), IndexEngine 測試 — index-board SC-4(design v4)., review SP5:合併點搬到 loop 端之後,orphan 的 executor 工作項仍會執行…, `close()` 先把 `_loop` 斷掉(既有不變式)—— 之後起跑的 orphan 也不得再碰 source。, 2026-08-26 12:23 只聽不訂 probe 實證:TC4 推的 IX0001 quote `FilledTime` / `PreciseTime`… (+77 more)
 
 ### Community 13 - "FakeStockSource"
-Cohesion: 0.03
-Nodes (53): FastAPI, 測試側的「引擎就緒」等待器(mod/startup-http-window D5)。 啟動序列移到背景 task 之後,`with…, 輪詢 `app.state.boot_done`(跨執行緒讀 bool = GIL 原子),逾時 raise。 done 之後檢查…, wait_boot(), FakeStockSource, StockSource fake:全部 no-op,記錄呼叫(routes 測試不需要真行情)。, 個股期合約清單(真實作 = TC4QuoteSource.list_stock_futures;StockSource Protocol 之外的能力,由…, instrument key → TC4 symbol(stkfut-contracts R2-2:engine 的推播路由鍵)。 **一律委派… (+45 more)
+Cohesion: 0.04
+Nodes (41): FastAPI, 輪詢 `app.state.boot_done`(跨執行緒讀 bool = GIL 原子),逾時 raise。 done 之後檢查…, wait_boot(), FakeStockSource, BarsStatus, StockSource fake:全部 no-op,記錄呼叫(routes 測試不需要真行情)。, 個股期合約清單(真實作 = TC4QuoteSource.list_stock_futures;StockSource Protocol 之外的能力,由…, Protocol 新增方法(change-spec R2-1);三態 status 隨 bars 一起回。 (+33 more)
 
 ### Community 14 - "FakeService"
-Cohesion: 0.05
-Nodes (45): _remove(), handle_add(), handle_group_add(), handle_group_remove(), handle_group_rename(), handle_groups(), handle_remove(), handle_ungroup() (+37 more)
+Cohesion: 0.06
+Nodes (38): _group_add(), _group_remove(), _ungroup(), handle_add(), handle_group_add(), handle_group_remove(), handle_group_rename(), handle_ungroup() (+30 more)
 
 ### Community 15 - "react"
 Cohesion: 0.02
-Nodes (46): CapitalPositionsList(), CapitalPositionsListProps, rowKeyOf(), Bucket, BUCKETS, MARKETS, Props, SOURCE_TEXT (+38 more)
+Nodes (45): CalendarBadges(), shouldShowHoliday(), CapitalPositionsList(), CapitalPositionsListProps, rowKeyOf(), Bucket, BUCKETS, MARKETS (+37 more)
 
 ### Community 16 - "EngineRuntime"
 Cohesion: 0.04
-Nodes (79): _content(), EngineRuntime, 可下單商品全集:active 序列合約(SeriesInfo 全集,非 snapshot 已成交子集)∪ TXF。 trade 白名單資料驅動(design…, 現貨(台指期)最新價;index-board txf_getter 用(IR1)。單值讀取免鎖(GIL 原子)。, 節流 snapshot 流:版本有變**且內容有變**才 yield,間隔 ≥ throttle_secs。 `seed` = 呼叫端已經送出去的首則…, 外部(如 TC4 重連後)要求重跑交接補回遺失段;thread-safe。, 內容比對用的複本:排除 `generated_at`(每次取都不同,不排除等於沒比)。 複本 —— 送出去的 dict 一個 key…, 單一 active 序列的執行時:queue 消費 + 交接 + 自癒 + 節流廣播。 (+71 more)
+Nodes (84): _content(), EngineRuntime, 可下單商品全集:active 序列合約(SeriesInfo 全集,非 snapshot 已成交子集)∪ TXF。 trade 白名單資料驅動(design…, 現貨(台指期)最新價;index-board txf_getter 用(IR1)。單值讀取免鎖(GIL 原子)。, 節流 snapshot 流:版本有變**且內容有變**才 yield,間隔 ≥ throttle_secs。 `seed` = 呼叫端已經送出去的首則…, 外部(如 TC4 重連後)要求重跑交接補回遺失段;thread-safe。, 內容比對用的複本:排除 `generated_at`(每次取都不同,不排除等於沒比)。 複本 —— 送出去的 dict 一個 key…, 單一 active 序列的執行時:queue 消費 + 交接 + 自癒 + 節流廣播。 (+76 more)
 
-### Community 17 - "_Harness"
+### Community 17 - "Path"
 Cohesion: 0.05
-Nodes (53): _cross_both(), _Harness, _long_rows(), _merge_rules(), Any, Path, 預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。…, SC-4:同 code、同 time 且在 Discord 佇列中**相鄰**的多 row → 一則訊息。 合併只發生在**送出端**:WS / jsonl… (+45 more)
+Nodes (41): _merge_rules(), Any, parametrize, Path, 預寫規則檔:hub 建構時就走 load 而非遷移(注入受測規則集合的唯一入口)。…, T-1:同 code、**不同秒**的兩筆 tick 各發一則 —— 合併粒度是 (code, time)。 既有「不合併」測試用的是兩個不同 code,把…, 連續三輪含 pending 的混排:每輪都把下一組的頭一則存進 pending。 記帳錯一格就會 `task_done() called too many…, T-4(SC-4「節流計 1 則」):同 tick 三則合併只吃掉一格額度。 逐 row 計一次的話,`discord_per_min=1`… (+33 more)
 
 ### Community 18 - "_service"
-Cohesion: 0.04
-Nodes (47): load_watchlist(), _FakeEngine, LogCaptureFixture, parametrize, Path, WatchlistService 行為合約(design §6 — SC-8 後端半 / SC-11)。 三個入口(前端 PUT / Discord…, 已在自選但不在該群組 → 仍是變更(入群組),照樣落檔廣播., canonical 零寫早退(design §6 R18/R2-10):第二次不落檔不訂閱不廣播,回傳同形. (+39 more)
+Cohesion: 0.05
+Nodes (45): load_watchlist(), LogCaptureFixture, parametrize, Path, WatchlistService 行為合約(design §6 — SC-8 後端半 / SC-11)。 三個入口(前端 PUT / Discord…, 已在自選但不在該群組 → 仍是變更(入群組),照樣落檔廣播., canonical 零寫早退(design §6 R18/R2-10):第二次不落檔不訂閱不廣播,回傳同形., 比較基準是正規化後的形:重複碼 / 群組成員未列入 codes 都算同內容. (+37 more)
 
 ### Community 19 - "@testing-library/react"
 Cohesion: 0.02
-Nodes (29): BASE, FIELDS, STATE, hoisted, OTC, TXF, ROWS, TXF_STATE (+21 more)
+Nodes (32): BASE, FIELDS, STATE, OTC, TXF, SNAP, BASE, ASKS (+24 more)
 
 ### Community 20 - "@tanstack/react-query"
 Cohesion: 0.02
-Nodes (42): CalendarBadges(), shouldShowHoliday(), ACCUM, BARS, CONTRACT, { renders }, initialMode(), MODE_LABELS (+34 more)
+Nodes (44): ROWS, TXF_STATE, OrderPanel(), STATUS_BLOCKED, useTxoContracts(), fills, GROUPS, hoisted (+36 more)
 
-### Community 21 - "make"
-Cohesion: 0.06
-Nodes (42): load_rules(), Path, 三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。 「空陣列 ≠…, atomic 落檔;**OSError 往外拋**(R12/R21)—— route 轉 500 RULE_SAVE_FAILED。…, save_rules(), make(), Any, LogCaptureFixture (+34 more)
+### Community 21 - "load_rules"
+Cohesion: 0.08
+Nodes (33): load_rules(), 三態(R15/R20):缺檔 → None(hub 走遷移);合法(**含空陣列**)→ list;其餘 raise。 「空陣列 ≠…, Any, LogCaptureFixture, MonkeyPatch, Path, #226 一次性遷移:v4(或更舊,鏈到 v4 之後)檔在載入期 append 「放量離開」種子卡(enabled、 通知關、冷卻 600、參數 0.6 /…, v5 檔(使用者刪掉放量離開卡後落的)不重播種。 (+25 more)
 
 ### Community 22 - "_state"
 Cohesion: 0.08
@@ -651,119 +629,119 @@ Nodes (88): assemble_universe(), build_name_map(), build_type_map(), classify_st
 
 ### Community 24 - "TC4QuoteSource"
 Cohesion: 0.04
-Nodes (41): HistoryResult, Any, NamedTuple, UNSUB→SUB 冪等重掛(逐 symbol 訂閱路徑共用;stock/futures/corr 三 source)。…, 已訂閱才退訂(未訂閱 = no-op),並清掉這個 symbol 的自癒帳。 帳留著的話,下一輪訂閱會**帶著上一輪的 variant 與…, 退訂後、Disconnect 前對 TC4 送 LOGOUT(fix/tc4-logout)。 wrapper 的 `Disconnect()` 只關…, 原始電文 → REALTIME 訊息 dict;無 topic 分隔 / 非 JSON / 非 REALTIME → None。 **回整則 msg 而非…, SUB socket 一則原始電文 → TXO Tick 分派(listener 與測試共用)。 子類覆寫這一支即可共用整個… (+33 more)
+Nodes (42): HistoryResult, Any, NamedTuple, UNSUB→SUB 冪等重掛(逐 symbol 訂閱路徑共用;stock/futures/corr 三 source)。…, 已訂閱才退訂(未訂閱 = no-op),並清掉這個 symbol 的自癒帳。 帳留著的話,下一輪訂閱會**帶著上一輪的 variant 與…, 退訂後、Disconnect 前對 TC4 送 LOGOUT(fix/tc4-logout)。 wrapper 的 `Disconnect()` 只關…, 原始電文 → REALTIME 訊息 dict;無 topic 分隔 / 非 JSON / 非 REALTIME → None。 **回整則 msg 而非…, SUB socket 一則原始電文 → TXO Tick 分派(listener 與測試共用)。 子類覆寫這一支即可共用整個… (+34 more)
 
-### Community 25 - "test_signal_hub.py"
+### Community 25 - "_Harness"
 Cohesion: 0.05
-Nodes (51): DailyBar, overlay 用日 bar(毫元;date = YYYY-MM-DD)。定義在 source 層避免 live→server 逆依賴。, _bar(), _boom_cdp(), _cache(), _drain(), _FakeBars, _FlakyBars (+43 more)
+Nodes (47): _bar(), _boom_cdp(), _cache(), _FakeBars, _FlakyBars, _flat_hist(), _fmt_secs(), _GatedBars (+39 more)
 
 ### Community 26 - "test_mapping.py"
-Cohesion: 0.05
-Nodes (74): contract_from_fill(), exchange_product_of(), future_price_str(), is_option_contract(), _month_year_codes(), multiplier_of(), product_of(), 群益送單欄位映射 + TC4 → 期交所契約碼轉換(純函式;唯一的 IO = 個股期對映表查詢)。 `multiplier_of`(乘數 fallback)與… (+66 more)
+Cohesion: 0.10
+Nodes (34): contract_from_fill(), exchange_product_of(), _month_year_codes(), product_of(), YYYYMM → 月碼 + 年末碼(期貨/Call A..L、Put M..X)。, 成交回報 → 期交所契約碼(部位樂觀套用用;F5)。 回報 idx8 是群益的「產品 + 兩碼月」(真樣本 `QEF06`),idx33 是…, TC4 symbol → 期交所契約碼(確定性轉換;解析不到 raise ValueError)。 期貨 "TC.F.TWF.TXF.202609" →…, TC4 期權 symbol 第 4 段 = product(multiplier_of lookup 用)。 (+26 more)
 
-### Community 27 - "bar"
-Cohesion: 0.06
-Nodes (50): build_period(), is_partial_last(), 最後一根是否仍在進行中(尚未收盤)。 **由資料判定,不是 tf 的常數**:盤中的日 K / 分 K 最後一根就是今天 / 當下那分鐘, 週末查的週 K…, 大盤頁的日 / 週 / 月 K —— 三者共用同一份長窗日 K(見 `DAILY_LONG_WINDOW_DAYS`)。 `period`:`"D"`…, TaggedBarsFetcher, bar(), _make_mutable_clock(), LogCaptureFixture (+42 more)
+### Community 27 - "_TaggedFetcher"
+Cohesion: 0.10
+Nodes (22): bars + 實際走到的資料源標籤(大盤 meta 用;與 `BarsResult` 刻意不可互換)。, TaggedBars, _make_mutable_clock(), LogCaptureFixture, time, fix/dk-frozen-snapshot 的訊號面:TC4 DK 凍結快照的失效是「refetch 成功 + 非空 + 錯值」全靜默(#168 的墊背…, 健康路徑(定稿值前進)不得鳴 —— 這行的價值就在它只有病時才出現。, 末根不是今日(休市 / 該檔今日真沒 bar)→ 重查同值是預期,不得誤鳴。 (+14 more)
 
-### Community 28 - "FuturesEngine"
-Cohesion: 0.05
-Nodes (36): FuturesEngine, 全量快照。**`seq` 是廣播游標,不是內容版本**(coalesce 後兩者不再同步): `products` 每則 quote 就即時更新,`seq`…, HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。, 當日 1K 分鐘序列 passthrough(江波圖台指腿回補;index-river-chart SC-4)。 阻塞呼叫,呼叫端負責丟…, executor thread:訂 leaf 後把結果經 call_soon_threadsafe 回寫集合 (集合只在 loop thread…, 把 dirty 商品逐一廣播(插入序,每則 `seq += 1`)。 不變式(SC-0):首行先卸 timer(之後任何早退都不會留殘骸,下一筆 quote…, FakeSource, _push() (+28 more)
+### Community 28 - "FakeSource"
+Cohesion: 0.07
+Nodes (34): _drain(), FakeSource, _make(), _push(), _quote(), N260:重連對帳只回填 HOT —— 重連若掉了 leaf 契約訂閱(`_check_stale` 的重掛 迴圈中途拋錯會讓尾段 symbol…, 只有 `_leaf_fed` 的品要清 p 重武裝 —— HOT 自己在推的品不得被清成 null (那是「重連一下右上角期貨價就空一格」的新失效)。, review SP4:重連重武裝**不得**把 `st.p` 清成 None —— 那是使用者看得到的空一格 (期貨面三檔的價位),而 leaf… (+26 more)
 
 ### Community 29 - "SignalHub"
-Cohesion: 0.04
-Nodes (39): _copy_rule(), _filter_levels(), Path, 把快照餵給每條 CDP 規則(levels 過濾 + 日別 guard,冪等)。 日別 guard 在此**再判一次**(review…, 關機盡力落檔:jsonl 是歷史真相源,Discord 這時不再送。, 每日 `policy_outcome_time`(牆鐘 `now_fn`)跑一次;起動時**只在已過當日時點才立即跑** (就算當日那一次;13:50…, 把 T+1 / T+2 開盤價(連日期)原地補進過去日檔的政策列。 範圍 = 最近 `policy_outcome_days` 個日檔中,日期**同時小於**…, 一檔的日 K;例外 → None、逾時 / 斷線 → 空 list + WARNING(兩者該檔本趟都留 null); 逐檔間隔沿 CDP 基準 worker… (+31 more)
+Cohesion: 0.03
+Nodes (51): _event_id(), _filter_levels(), _policy_ctx_payload(), _policy_row_needing_outcome(), _put_drop_oldest(), Path, Queue, 把快照餵給每條 CDP 規則(levels 過濾 + 日別 guard,冪等)。 日別 guard 在此**再判一次**(review… (+43 more)
 
 ### Community 30 - "BreadthEngine"
 Cohesion: 0.04
-Nodes (45): _make_breadth(), BreadthEngine, _cancel(), _is_bucket_row(), _monotonic(), _now(), _parse_hhmm(), AbstractSet (+37 more)
+Nodes (44): BreadthEngine, _cancel(), _is_bucket_row(), _monotonic(), _now(), _parse_hhmm(), AbstractSet, date (+36 more)
 
-### Community 31 - "ChainAggregator"
-Cohesion: 0.06
-Nodes (45): ChainAggregator, ChainAggregator:零 IO 聚合狀態機(內外盤累積 → 損益曲線 snapshot)。design.md §2。, SC-1 per-contract 明細:strike 升冪、同 strike C 在前(deterministic)。, 單一 active 序列的逐檔累積;台指期(`SPOT_PREFIX`)只更新 spot(DR-9 分流)。 其餘期貨(個股期 / 海外腿 / 費半 /…, DR-3:清空全部 per-symbol 狀態並替換合約集合(select 切換時呼叫)。, Totals, HandoverBuffer, 回補↔live 交接協定(design.md §2.3 DR-1/DR-11):訂閱先行 buffer → 回補灌入 → flush。 (+37 more)
+### Community 31 - "aggregate.py"
+Cohesion: 0.11
+Nodes (21): ChainAggregator:零 IO 聚合狀態機(內外盤累積 → 損益曲線 snapshot)。design.md §2。, SC-1 per-contract 明細:strike 升冪、同 strike C 在前(deterministic)。, build_grid(), curve_points(), extremes(), find_beps(), interp_pnl(), intrinsic_millipts() (+13 more)
 
 ### Community 32 - "BootedClient"
 Cohesion: 0.07
 Nodes (41): BootedClient, TestClient, `__enter__` 後自動等到引擎就緒的 `TestClient`(其餘行為完全相同)。, make_app(), parametrize, Path, 最小版:上一條紅掉時直接指出壞在哪一根線(注入 vs. hub 那端)。, (a) stock 缺席 **且** hub 降級(壞規則檔)→ 這條通道沒有任何生產者。 (+33 more)
 
-### Community 33 - "signal_hub.py"
-Cohesion: 0.04
-Nodes (63): _dedup(), _event_id(), format_policy_group_text(), format_signal_group_text(), _gate_return_pct(), _is_policy(), _kind_text(), _levels_of() (+55 more)
+### Community 33 - "format_signal_group_text"
+Cohesion: 0.07
+Nodes (33): _dedup(), format_policy_group_text(), format_signal_group_text(), format_signal_text(), _is_policy(), _kind_text(), _levels_of(), _pct_text() (+25 more)
 
 ### Community 34 - "_harness"
 Cohesion: 0.10
 Nodes (45): _Clock, _Outcome, _bar(), clock(), _dump(), _FakeDayBars, _harness(), _plain_row() (+37 more)
 
-### Community 35 - "wait_until"
-Cohesion: 0.07
-Nodes (37): 輪詢 `pred()` 直到成立;逾時 raise `AssertionError`。 時鐘取 `loop.time()`(單調鐘,與…, wait_until(), _book_quote(), _Clock, _drain(), _engine(), _FakeSource, _foreign_trade_quote() (+29 more)
+### Community 35 - "_FakeSource"
+Cohesion: 0.14
+Nodes (11): _book_quote(), _drain(), _FakeSource, _minutes(), snapshot 的 `minutes` 鍵是字串(perf #250 起在 wire 邊界轉;in-memory 仍 int)。, Phase 6 real-env finding:海外腿的 PreciseTime 是 6 位 → 必須用 FilledTime 分桶。, FilledTime 缺值/壞值 → 退回本機時鐘(與台指腿同款),不是丟掉這一點。, SC-4:既有 bug 1 發作(futures_engine 零推播)→ 台指腿空著,其餘腿照常。 (+3 more)
 
-### Community 36 - "stock_source.py"
-Cohesion: 0.05
-Nodes (48): FuturesQuoteSource:TXF/MXF/TMF HOT REALTIME 資料源(capital-order design §10)。 繼承…, 期指 K 線 bar(`tf` = "D" 日 K / "1" 分 K;start/end = YYYY-MM-DD 含端點)。 **必須從這條…, _aggregate_1k_rows(), aggregate_1k_to_daily(), _daily_fallback_window_days(), _delta_vol(), _fold(), _int_field() (+40 more)
+### Community 36 - "parse_1k_bars"
+Cohesion: 0.09
+Nodes (21): aggregate_1k_to_daily(), parse_1k_bars(), BarsStatus, 1K Time(UTC HHMMSS)→ 台北 HHMM 終點標記;域外回 None。 `domain_end`+1 ~ `clamp_end` clamp…, (1K row 的 UTC 日期, UTC HHMMSS) → (台北 YYYY-MM-DD, HHMM 終點標記);域外回 None。 多段域專用。**完整…, 1K rows → 分鐘 Bar(台北終點標記;域外丟棄)。 clamp 後同 t 會有多列(個股 13:31–13:35 全標 1330)→…, 1K rows → 日 Bar(DK 不支援時的 fallback;o = 當日第一根 open、v / uv / dv = 加總)。 **不套分鐘域過濾**…, K 線 bar + 空結果的原因(`tf` = "D" 日 K / "1" 分 K;start/end 含端點)。 range 型而非 days… (+13 more)
 
 ### Community 37 - "MonkeyPatch"
-Cohesion: 0.06
-Nodes (39): LogCaptureFixture, MonkeyPatch, _make_with_clock(), _observed(), 回補逾時的處置與 TC4 斷線不同:不打 `tc4 down`、不計失敗、有界重排。, 2026-08-22 review R8 P2:退訂 / 主圖切走必須取消該 code 在途的逾時重排 timer、 清掉逾時記帳。留著的話 (a) 孤兒…, 2026-08-22 review round-2 P2:release 時已在佇列 / 正跑的 job 之後逾時,worker 不得 替一支**已無…, 放棄 = **當日不再入列**(與舊行為同),而 `group_snapshot` 也是入列點之一。… (+31 more)
-
-### Community 38 - "pipeline.py"
 Cohesion: 0.07
-Nodes (64): Condition, _feature_row(), _features_path(), _load_or_simulate(), _outcomes_path(), Path, 管線 IO 邊界(design §1):run_features / run_search(outcome cache + 三段式搜索).…, 樣本身分 hash(stock_id/date/trig_idx 序列)— cache 錯位防護(review F1). (+56 more)
+Nodes (34): _make_with_clock(), _observed(), LogCaptureFixture, MonkeyPatch, `_backfill_timeouts` 是**日別**記帳:換日後那一檔要重新有完整的重試預算。 不清的話計數永久停在上限 ——…, 假時鐘**先注入再 `start()`**(D3 amendment R3)。 `_trial_on` 在 `start()` 內以現貨窗現算播種 ——…, `trade-status-observe` 前綴的紀錄(R10:蒐證對帳以固定前綴為準)。 比對前綴而不是「有沒有 WARNING」:parse 層…, SC-3:`watchlist_quote` 與 REST snapshot 的 additive `trial: bool`(D1/D2)。 現算而不落… (+26 more)
+
+### Community 38 - "search.py"
+Cohesion: 0.12
+Nodes (33): Condition, apply_rule(), build_predicates(), _entry(), _evaluate(), exhaustive_scan(), _try(), ga_search() (+25 more)
 
 ### Community 39 - "Bar"
-Cohesion: 0.05
-Nodes (50): Bar, K 線 bar(毫元整數;`t` 日 K = YYYY-MM-DD、分 K = "YYYY-MM-DD HH:MM" 台北)。 與 DailyBar…, tagged(), aggregate_period(), BarsResult, _daily_stale_or_empty(), _DailyEntry, _now_time() (+42 more)
+Cohesion: 0.06
+Nodes (35): Bar, K 線 bar(毫元整數;`t` 日 K = YYYY-MM-DD、分 K = "YYYY-MM-DD HH:MM" 台北)。 與 DailyBar…, aggregate_period(), _DailyEntry, _iter_days(), _now_time(), _period_key(), Bar (+27 more)
 
 ### Community 40 - "discord_bot.py"
 Cohesion: 0.04
-Nodes (49): Bot, _channel_id(), create_bot(), _add(), _group_ac(), _group_add(), _group_remove(), _group_rename() (+41 more)
+Nodes (51): Bot, _channel_id(), create_bot(), _add(), _group_rename(), _groups(), _list(), _remove() (+43 more)
 
-### Community 41 - "test_stock_engine.py"
-Cohesion: 0.04
-Nodes (37): Event, _IdentSource, _make_retry(), _PerCodeGateSource, 記錄每次 `subscribe_symbol` 呼叫(含失敗)—— `subscribed` 只記成功, 測不到「重試了幾次」也測不到「已移除的檔還在被重試」。, 等重試迴圈確實跑滿 `rounds` 輪(以哨兵檔被重試的次數計)。, 自選訂閱失敗的背景重試(mod/subscribe-retry-recovery SC-2)。 `_acquire` 真訂失敗回滾出 `_refs` →…, SC-4(stock 側實鎖):判準寫錯最典型的失效 = 每輪重複真訂。 (+29 more)
+### Community 41 - "wait_until"
+Cohesion: 0.07
+Nodes (27): 輪詢 `pred()` 直到成立;逾時 raise `AssertionError`。 時鐘取 `loop.time()`(單調鐘,與…, wait_until(), _FlakySource, 前 N 次 subscribe_symbol raise ConnectionError,之後成功;attempts 記每次呼叫。, bug startup-names-futures-resub 症狀 3:訂閱失敗品**零重試路徑**。 source 層 `_resub` 只重掛成功過的…, P1-2:close 後才輪到的 executor 工作項不得再碰 source(_EngineClosing 縮窗)。 cancel 正 await…, T-5:close suppress 放寬的直測 —— 迴圈圍籬失守、task 以例外終態落定時, close() 不得重拋、source.close()…, T-7:_EngineClosing 必須走專屬分支靜默結束 —— 落到 except Exception 會在 每次關機吐「訂閱重試輪失敗」假… (+19 more)
 
 ### Community 42 - "test_screen_engine.py"
-Cohesion: 0.08
-Nodes (49): TempPathFactory, _Clock, _counting_daily(), daily(), _daily_rows(), _dt_rows(), _engine(), _failing() (+41 more)
+Cohesion: 0.09
+Nodes (39): TempPathFactory, _counting_daily(), daily(), _daily_rows(), _dt_rows(), _engine(), date, screen engine 的跨模組常數 parity(review B1)+ compute() 資料完整性閘(review S3)。 演算法測試在… (+31 more)
 
 ### Community 43 - "create_app"
-Cohesion: 0.05
-Nodes (58): BreadthConfig, BreadthFetchers, ClockSample, create_app(), _breadth(), _breadth_booted(), calendar(), _calendar_crosscheck() (+50 more)
+Cohesion: 0.08
+Nodes (39): create_app(), _breadth(), _breadth_booted(), corr_state(), _index(), index_state(), list_series(), market_breadth() (+31 more)
 
 ### Community 44 - "SignalDetector"
 Cohesion: 0.07
-Nodes (40): _Break, _change_pct(), _clock_key(), _Dwell, _mono(), datetime, 個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6;spec #192 掃單簇)。 七類訊號:CDP 五線穿越 / 爆拉跌 /…, 複合簽名(design §3.5):第三項排除「首攻吃光賣盤」—— 那一筆 ask 側同樣空, 但買方市價佇列未形成、最佳限價買仍在漲停價下。 (+32 more)
+Nodes (38): _Break, _change_pct(), _clock_key(), _Dwell, _mono(), datetime, 個股即時訊號偵測狀態機(零 IO;design §3 — SC-1/2/3/4/6;spec #192 掃單簇)。 七類訊號:CDP 五線穿越 / 爆拉跌 /…, 複合簽名(design §3.5):第三項排除「首攻吃光賣盤」—— 那一筆 ask 側同樣空, 但買方市價佇列未形成、最佳限價買仍在漲停價下。 (+30 more)
 
-### Community 45 - "BacktestConfig"
-Cohesion: 0.07
-Nodes (58): BacktestConfig, load_backtest_config(), Path, 回測全參數(版本化;configs/*.json 覆寫)— 樣式同 strategy_config(spec §8/design D5-D6).…, sim_config_hash(), avg20_t1(), find_trigger(), _ignition_first() (+50 more)
+### Community 45 - "test_features.py"
+Cohesion: 0.11
+Nodes (34): avg20_t1(), find_trigger(), _ignition_first(), 觸發時點特徵(neigui extract_trigger_features.py 同源移植;characterization 錨點 SC-2)…, 靜態 6 欄(neigui daily_ctx 同源;dtr_t1 Phase A 無資料源 → None)., 位階特徵族(全部以 T-1 為基準,無 lookahead)., 第一根 high ≥ prev_close×(1+θ) − eps 的 bar index;無 → None., 啟動第一根:近 lookback 日未觸 +θ、近 5 日盤整、近 N 日無漲停(全部 T-1 止). (+26 more)
 
 ### Community 46 - "relay"
-Cohesion: 0.05
-Nodes (34): ws_index(), stream → WS 送出,並行 receive 偵測 client 斷線(review B3)+ 定時心跳。…, relay(), _FakeWebSocket, _idle_stream(), _MarkingWebSocket, _one_message(), _paced_messages() (+26 more)
+Cohesion: 0.09
+Nodes (20): ws_index(), ws_stock(), ws_capital(), ws_futures(), stream → WS 送出,並行 receive 偵測 client 斷線(review B3)+ 定時心跳。…, relay(), _one_message(), _paced_messages() (+12 more)
 
 ### Community 47 - "Bar1K"
-Cohesion: 0.07
-Nodes (51): Bar1K, bars_path(), Path, 標準化 1K 的本機 JSON 儲存(atomic write,無 DB — 沿專案慣例)., read_bars(), write_bars(), _lock_bucket(), LockQualitySignals (+43 more)
+Cohesion: 0.05
+Nodes (76): Bar1K, fmt_min(), _num(), parse_raw_bar(), 1K bar 標準模型與時間轉換(沿 neigui 研究慣例:09:01 bar = 索引 0)., UTC HHMMSS(無前導零)→ 台北分鐘索引(09:01=0 … 13:30=269)., neigui 原始 bar dict(全字串)→ Bar1K。欄位缺漏 raise ValueError., taipei_min() (+68 more)
 
 ### Community 48 - "test_main_wiring.py"
-Cohesion: 0.07
-Nodes (52): _default_corr_source(), main(), CorrConfig, _at(), _Capture, Any, date, datetime (+44 more)
+Cohesion: 0.09
+Nodes (30): CorrConfig, Leg, 本引擎需自行 SUBQUOTE 的腿(排除 base — 那條讀 futures_engine)。, _default_corr_source(), _at(), date, datetime, parametrize (+22 more)
 
 ### Community 49 - "compact_day"
-Cohesion: 0.07
-Nodes (40): CaptureFixture, compact_day(), CompactRefused, CompactResult, format_compact_line(), date, 前置不成立(jsonl 不存在 / 非交易日):零檔案、CLI exit 2。, 每日一行的字面 = 盤後判準(CLAUDE.md §4;`grep "tick 轉檔"`,壞行應為 0)。 (+32 more)
-
-### Community 50 - "FakeFuturesSource"
 Cohesion: 0.05
-Nodes (27): FakeFuturesSource, FuturesSource fake(capital routes / market routes 共用)。 `fetch_bars_range` 不在…, make_client(), TestClient, `F:TXF` 與 `IX0001` 各佔一格,不得互相取到對方的 bars。, SC-3:`?session=allday` 三層貫通 + 值域驗證(futures-allday §1.4)。, 無 session 參數 = 既有行為(既有 caller / 大盤 tab 零影響)。, 先 day 後 allday(同一個 client / 同一份 cache):近全那次必須真的拿到夜盤根。 (+19 more)
+Nodes (55): _arrow_type(), compact_day(), CompactFailed, CompactRefused, CompactResult, format_compact_line(), _parquet_rows(), Any (+47 more)
+
+### Community 50 - "make_client"
+Cohesion: 0.05
+Nodes (26): make_client(), TestClient, SC-6:櫃買無歷史來源 → 200 + refusal。4xx 會被前端 error 路徑吞成 同一種紅色,分不出「平台不支援」與「TC4 掛了」。, `F:TXF` 與 `IX0001` 各佔一格,不得互相取到對方的 bars。, SC-3:`?session=allday` 三層貫通 + 值域驗證(futures-allday §1.4)。, 無 session 參數 = 既有行為(既有 caller / 大盤 tab 零影響)。, 先 day 後 allday(同一個 client / 同一份 cache):近全那次必須真的拿到夜盤根。, 近全段是期指專屬:加權 / 櫃買沒有夜盤,靜默當 day 處理會讓前端以為有。 (+18 more)
 
 ### Community 51 - "Watchlist"
 Cohesion: 0.06
-Nodes (30): `WatchlistService` 的結構子集(測試注入 fake)。 寫入類方法一律回 `(watchlist, changed)`:handler 要靠…, WatchlistServiceLike, 盤前選股篩選引擎(#173 → W2 T4 #207 改 08:00 目標交易日制)—— 每個交易日 08:00 重算 + 啟動補跑 +…, _copy_groups(), Group, Path, Protocol, 自選清單的複合操作(design §6 — SC-8 / SC-11)。 「改自選」不是單一動作,而是**落檔 + 重設訂閱池 +… (+22 more)
+Nodes (28): `WatchlistService` 的結構子集(測試注入 fake)。 寫入類方法一律回 `(watchlist, changed)`:handler 要靠…, WatchlistServiceLike, _copy_groups(), Group, Path, Protocol, 自選清單的複合操作(design §6 — SC-8 / SC-11)。 「改自選」不是單一動作,而是**落檔 + 重設訂閱池 +…, 自自選與**所有**群組移除(留在任一群組就會被 normalize 補回 codes)。 (+20 more)
 
 ### Community 52 - "SignalsConfig"
-Cohesion: 0.07
-Nodes (40): _append_seed(), _clamp(), default_rules(), _migrate_v1(), _migrate_v2(), _migrate_v3(), _migrate_v4(), new_rule_id() (+32 more)
+Cohesion: 0.12
+Nodes (16): default_rules(), 遷移種子:每 kind 一條(surge_pullback 例外 = 兩張卡),參數 / 冷卻取自現行 全域 `SignalsConfig`;通知旗 =…, 規則 → per-rule `SignalsConfig`(`dataclasses.replace`,base 不動)。 `cooldown_secs` 依…, rule_config(), SignalsConfig, W3:0 = 舊行為(離線即解除);0 是合法值,不得被當成「沒設」而落回 base 預設。, #226:三參數 + 冷卻各落 `breakout_*` 欄;爆量欄位不動(兄弟卡不共欄)。, SignalsConfig 無 vol_window_secs;per-rule detector 讓 surge_window_secs 可共用. (+8 more)
 
 ### Community 53 - "_pager"
 Cohesion: 0.07
@@ -774,40 +752,40 @@ Cohesion: 0.07
 Nodes (55): load_dataclass_json(), Path, Dataclass config JSON 載入樣板 — 唯一實作,取代三份 loader 手刻. 樣板 = unknown-key 檢查(raise…, _dates(), fetch_day(), _fetch_retry(), _map_row(), FetchFn (+47 more)
 
 ### Community 55 - "FakeApi"
-Cohesion: 0.08
-Nodes (27): HealPolicy, REALTIME 零推播自癒的門檻與閘(一份值物件;預設**全關**,門檻由各 source 帶)。 原本是 `TC4QuoteSource` 六個…, FakeApi, _push_raw(), _push_raw_quote(), C-3:watchdog 取完快照後 engine 才退訂 —— 這一發不得把 symbol 掛回去。 幽靈訂閱(沒有任何持有者的 REALTIME…, T-5:R1 / R2 同時開啟時的分工(TXO 之外的三條 session 都是這個組態)。, T-7:實驗 G 的形狀端到端 —— 流動 → 靜默 → 重掛 → 復活後不再 churn。 (+19 more)
+Cohesion: 0.07
+Nodes (29): Any, Any, HealPolicy, REALTIME 零推播自癒的門檻與閘(一份值物件;預設**全關**,門檻由各 source 帶)。 原本是 `TC4QuoteSource` 六個…, FakeApi, _push_raw(), MonkeyPatch, C-3:watchdog 取完快照後 engine 才退訂 —— 這一發不得把 symbol 掛回去。 幽靈訂閱(沒有任何持有者的 REALTIME… (+21 more)
 
-### Community 56 - "stock_watchlist.py"
-Cohesion: 0.06
-Nodes (29): fit_group_codes(), normalize(), Path, 個股自選清單持久化(design v4 §2.5;atomic JSON、無 DB — 專案慣例)。 v3(stock-ui-round5…, 驗證(群組名 / code)+ 去重保序 + 群組成員補進 codes + 上限 —— 純函數,零 IO。 抽出來是為了讓「請求的 canonical…, normalize(見上)+ atomic 寫 v3。, `with_group_replaced` 前置的截位:把 `codes` 截到「覆蓋後總檔數 ≤ limit」。 回 (入列 codes,…, save_watchlist() (+21 more)
+### Community 56 - "save_watchlist"
+Cohesion: 0.09
+Nodes (19): normalize(), Path, 驗證(群組名 / code)+ 去重保序 + 群組成員補進 codes + 上限 —— 純函數,零 IO。 抽出來是為了讓「請求的 canonical…, normalize(見上)+ atomic 寫 v3。, save_watchlist(), Path, 上限以 codes 計 —— 未分組的股票同樣佔額度., 未分組的 code 一樣要驗(它也會進訂閱池). (+11 more)
 
 ### Community 57 - "StockDayState"
-Cohesion: 0.07
-Nodes (25): StockDayState, _ExplodingTick, M3:cum_inner/cum_outer/meta.y_close 前端零讀取 → 退出 wire。 內外盤累積量仍可由 `minutes` 的 i/o…, per-minute 高低(round4 項 1):分時圖要把當日高低標在**摸到的那一分鐘**上, 而 top-level high/low…, 前端靠 `minute.h === accum.high` 等值反查定位 —— 這條等式必須由建構保證, 否則標記會落空(或更糟:命中錯的分鐘)。, 回補重放路徑也要維持等式(apply_backfill 走 _apply,不是另一條計算)。, round5 項 1:當日最高 / 最低。 資料源刻意選「後端逐 tick running max/min」而不是 TC4 的…, 被讀任何欄位就炸 —— `tape=False` 的契約是「**跳過**逐筆展開」(D3''),不是 「展開完再把結果丟掉」。只斷言 `ticks ==… (+17 more)
+Cohesion: 0.04
+Nodes (42): StockMeta, MinuteAgg, 把一筆成交折進 VP。**規則逐條對齊前端 `stock-accum.ts::foldVp`** (parity 由…, 分鐘序列的 wire 形。**鍵名的單一定義** —— 全量 snapshot 與群組 batch 共用。 兩邊各寫一份的漂移樣態是其中一邊的 `h`/`l`…, 靜態盤別資料的 wire 形(同上,單一定義)。 缺 meta 回 `None` **不是漏鍵**:前端 `raw.meta ?? null`…, 群組 batch 專用的輕量 payload(code review A1)。 `group_snapshot` 對最多 150 檔(上限)、每 60s…, REST 全量(design §4:snapshot 為前端累算基底)。 `tape=False` =…, True = 收下(通過試撮/去重);False = 丟棄。 (+34 more)
 
 ### Community 58 - "test_trade_models.py"
 Cohesion: 0.07
-Nodes (34): AccountInfo, BrokerRejectedError, classify_is_sim(), mask_account(), millipts_from_price_str(), OrderReport, OrderRequest, parse_accounts() (+26 more)
+Nodes (32): AccountInfo, classify_is_sim(), mask_account(), millipts_from_price_str(), OrderReport, OrderRequest, parse_accounts(), parse_execution_report() (+24 more)
 
 ### Community 59 - "_Clock"
-Cohesion: 0.06
-Nodes (28): _Clock, datetime, fixture, `groups_fn` / `quotes_fn` 的替身(SC-1/2):內容可換、可設成拋例外。 生產端兩者分別是「讀自選檔」與「讀 engine…, 同群摘要(group-grid SC-1/2)。 摘要在 **Discord worker** 組(離熱路徑),所以 quotes 取的是「發送當下」的快照…, 逐字:`format_signal_text` 之後接摘要,WS/jsonl payload 零改。, bot 未 ready 走 webhook —— 兩層是同一段文字(design §4.3)。, 兩 fn 未注入(預設 None)→ 摘要停用,文字與規則化之前逐字相同。 (+20 more)
+Cohesion: 0.05
+Nodes (31): _Clock, datetime, fixture, 同一 tick 兩則 → sender 只被打一次,文案含兩段 kind + 兩個規則名 + 同群摘要。, `groups_fn` / `quotes_fn` 的替身(SC-1/2):內容可換、可設成拋例外。 生產端兩者分別是「讀自選檔」與「讀 engine…, 同群摘要(group-grid SC-1/2)。 摘要在 **Discord worker** 組(離熱路徑),所以 quotes 取的是「發送當下」的快照…, 逐字:`format_signal_text` 之後接摘要,WS/jsonl payload 零改。, bot 未 ready 走 webhook —— 兩層是同一段文字(design §4.3)。 (+23 more)
 
 ### Community 60 - "test_breadth_routes.py"
 Cohesion: 0.07
 Nodes (37): _client(), _fixed_now(), _make_app(), _mis(), _ok_fetchers(), BreadthFetchers, fixture, MonkeyPatch (+29 more)
 
 ### Community 61 - "make_client"
-Cohesion: 0.14
-Nodes (19): _capital_client(), make_client(), MonkeyPatch, Path, TestClient, 鎖定態(換標的 / 換梯 / 閒置都不解除武裝)送出的單,審計檔要看得出來 —— `source` 只有 panel / flash…, `/api/capital/position/close` 直送 close_position,只驗 price>0 —— 前端 `edgeOf`…, `configure` = 建 TestClient 前對 app 動手的鉤子(探針 route 用,見 TestErrorMapping)。 (+11 more)
+Cohesion: 0.16
+Nodes (20): _capital_client(), make_client(), MonkeyPatch, Path, TestClient, `configure` = 建 TestClient 前對 app 動手的鉤子(探針 route 用,見 TestErrorMapping)。, 成交點精確版(L76):逐筆 D 事件 wire 形 + code 衍生欄。, pr-167 F-03:`unit=="口"` 的反查分支(L444 的全部意義)—— mutation 實證改成 `return stock_no`… (+12 more)
 
-### Community 62 - "stock_engine.py"
-Cohesion: 0.04
-Nodes (36): AbstractSet, Bar, BarsStatus, BarsStatus, 期指 K 線歷史 —— **必須從本引擎的 session 問**(同 `fetch_day_1k` 的理由)。 借不到就回空、不 fallback…, _EngineClosing, _in_futures_session(), _now_taipei_hhmm() (+28 more)
+### Community 62 - "StockSource"
+Cohesion: 0.09
+Nodes (6): Protocol, 個股行情來源抽象;TC4 實作在 copycat.live.stock_source,測試注入 fake。 `code` 一律是 **instrument…, 整批預熱:對每檔先送 SubHistory 讓 TC4 平行備資料,之後逐檔 `backfill` 收割 (perf/opening-backfill-…, 訊號層掛點(實作 = `copycat.server.signal_hub.SignalHub`;測試注入 fake)。 **全部同步方法**:engine…, SignalSink, StockSource
 
 ### Community 63 - "SeriesInfo"
-Cohesion: 0.06
-Nodes (23): _PosState, 回補灌入:按 (symbol, precise_time, seq) 排序;重建 cum(Σqty)寫 _last_cum。 回傳 rebuilt…, 回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價 / spot 0 價皆 False。…, SeriesInfo, Tick, Protocol, QuoteSource, 行情來源抽象;TC4 實作在 copycat.live.tc4,測試注入 fake。 (+15 more)
+Cohesion: 0.07
+Nodes (16): SeriesInfo, Tick, 未連線則建立連線;**check + 建立 + 發布整段持 `_api_lock`**(N259)。 舊碼的 check(指標為…, _walk_strings(), Protocol, QuoteSource, 行情來源抽象;TC4 實作在 copycat.live.tc4,測試注入 fake。, FakeTxoSource (+8 more)
 
 ### Community 64 - "tick"
 Cohesion: 0.07
@@ -818,192 +796,192 @@ Cohesion: 0.08
 Nodes (29): _eod_rows(), FakeHttp, FakeResp, _http_error(), _info_rows(), _payload(), Any, Exception (+21 more)
 
 ### Community 66 - "test_screening.py"
-Cohesion: 0.08
-Nodes (52): apply_eligibility(), data_date_of(), expected_target_date(), hard_candidates(), date, datetime, 盤前選股篩選純函式(零 IO)—— spec issue #173。 輸入 = 逐日全市場 FinMind `TaiwanStockPrice`…, 三硬條件 + universe + 排序。`days` = (交易日, 全市場 rows),**新→舊**。 -… (+44 more)
+Cohesion: 0.07
+Nodes (56): apply_eligibility(), data_date_of(), expected_target_date(), hard_candidates(), date, datetime, 盤前選股篩選純函式(零 IO)—— spec issue #173。 輸入 = 逐日全市場 FinMind `TaiwanStockPrice`…, 三硬條件 + universe + 排序。`days` = (交易日, 全市場 rows),**新→舊**。 -… (+48 more)
 
 ### Community 67 - "RecordingCom"
 Cohesion: 0.08
-Nodes (43): SafetyConfig, CapitalCom 假實作治具(Task 6 client 測試;之後 server route 測試重用)。 FakeCom:滿足 CapitalCom…, 記錄啟動時呼叫到的 COM 方法順序,驗證啟動序列(SC-1)。, RecordingCom, _client(), _fill_evt_raw(), _new_calls(), LogCaptureFixture (+35 more)
+Nodes (42): CapitalCom 假實作治具(Task 6 client 測試;之後 server route 測試重用)。 FakeCom:滿足 CapitalCom…, 記錄啟動時呼叫到的 COM 方法順序,驗證啟動序列(SC-1)。, RecordingCom, _client(), _fill_evt_raw(), _new_calls(), LogCaptureFixture, Path (+34 more)
 
-### Community 68 - "MonkeyPatch"
-Cohesion: 0.07
-Nodes (42): NoReturn, _dated(), _freeze_today(), datetime, LogCaptureFixture, MonkeyPatch, parametrize, StockOrderRequest (+34 more)
+### Community 68 - "TestTradeYmd"
+Cohesion: 0.24
+Nodes (7): NoReturn, datetime, 三個時段分支。日曆注入,不吃版控真檔(假日表更新不該讓這幾條轉紅)。, 標籤路徑不得炸掉 COM 執行緒的送單結果處理:日曆載入失敗 → 只擋週末 + WARNING。, `_trade_ymd` 的替身:日曆保險絲炸掉(`last_trading_day` / `next_trading_day` 60 天內 找不到交易日 →…, TestTradeYmd, _trade_ymd_blows_fuse()
 
 ### Community 69 - "capital_api.py"
-Cohesion: 0.08
-Nodes (50): 部位列的 `stock_no` → 台股股號;對映不出來回 None(**不 raise**)。 `Position.stock_no` 在 sec…, stock_code_of(), _post(), 單次 POST;urlopen 對非 2xx 一律拋 HTTPError,由 caller 分流(429 重試/其餘記 log)., CancelBody, _capital(), capital_fills(), capital_order_cancel() (+42 more)
+Cohesion: 0.11
+Nodes (41): 部位列的 `stock_no` → 台股股號;對映不出來回 None(**不 raise**)。 `Position.stock_no` 在 sec…, stock_code_of(), _post(), 單次 POST;urlopen 對非 2xx 一律拋 HTTPError,由 caller 分流(429 重試/其餘記 log)., CancelBody, _capital(), capital_fills(), capital_order_cancel() (+33 more)
 
 ### Community 70 - "DailyIndex"
 Cohesion: 0.11
 Nodes (31): DailyIndex, _DayRow, Path, n 個交易日前的 date;不足 → None., 參考前收 = close − spread(neigui 同源,除權息安全);≤0 → None。 該 row 無 spread 資訊(None)→…, 含當日往前 n 個 close;不足 → None., 布林帶寬 = 2kσ/MA(母體 σ);MA ≤ 0 或資料不足 → None., 當日帶寬在近 window 日帶寬中的百分位 rank(嚴格小於比例);資料不足 → None. (+23 more)
 
 ### Community 71 - "stkfut_map.py"
-Cohesion: 0.07
-Nodes (34): _contract_unit(), _fetch_html(), load_map(), _parse_rows(), parse_taifex_html(), _product_index(), Path, 股號 ↔ 個股期產品碼對映(design v4.1 §2.6;v2 = stkfut-contracts SC-2)。 個股期不在 TC4… (+26 more)
+Cohesion: 0.11
+Nodes (27): _fetch_html(), load_map(), lookup_product(), _product_index(), Path, 股號 ↔ 個股期產品碼對映(design v4.1 §2.6;v2 = stkfut-contracts SC-2)。 個股期不在 TC4…, 版控對映檔 → 對映;檔不存在或版本不符 → 空表(降級不 raise,見檔頭)。, 檔案簽章(mtime_ns, size);檔不存在 → `(-1, -1)`(與任何真檔互異)。 (+19 more)
 
 ### Community 72 - "load_trading_calendar"
 Cohesion: 0.08
 Nodes (51): load_trading_calendar(), 讀假日表;檔缺 → WARNING + 只擋週末;JSON 壞 / 形狀錯 → ValueError(訊息帶路徑)。, 缺當年資料時提醒更新 config;同一年只叫一次(長跑 server 跨年會再叫)。, warn_if_year_missing(), _cal(), date, LogCaptureFixture, MonkeyPatch (+43 more)
 
 ### Community 73 - "_walk"
-Cohesion: 0.09
-Nodes (30): CorrState, _feed(), _pearson(), CorrState 純狀態機:滾動相關、三窗門檻、盤別重置、報酬不跨洞(SC-1/3/4)。 參考值一律用本檔內手寫的 Pearson 公式計算,**不呼叫…, SC-3:第 61 秒 60s 窗有值(60 筆報酬 > 30),300s/1800s 未達門檻。, 60s 窗只看最近 60 秒 —— 更早的樣本不得參與。, perf #244 守門(T2 §9 意外 1):最長窗的 off-by-one 只在這裡發生。 中價序列以 `ts < now − 1800` 逐出 →…, 短窗(未撞到中價逐出)的舊語意 = `ts >= now − w` → w+1 筆報酬;增量版必須同數。 (+22 more)
+Cohesion: 0.14
+Nodes (16): CorrState, _feed(), SC-3:第 61 秒 60s 窗有值(60 筆報酬 > 30),300s/1800s 未達門檻。, 短窗(未撞到中價逐出)的舊語意 = `ts >= now − w` → w+1 筆報酬;增量版必須同數。, pr-251 review F-13:`has_clients` 閘讓 `correlations()` 可能整天不被呼叫,而它是唯一逐出短窗 deque…, pr-251 review F-05:舊版逐 leg 重算、重複 key 只覆寫同一列(冪等);增量版若不去重,push 會對 同一個 deque…, SC-4:盤別切換清窗。日盤累積的樣本不得延續到夜盤。, 跨日:session key 含 UTC 日期,同為 night 但換日也要清(edge case 3)。 (+8 more)
 
-### Community 74 - "FakeApi"
-Cohesion: 0.07
-Nodes (25): futures_symbol(), FuturesQuoteSource, in_futures_session_now(), time, 補訂實際月份 leaf 契約(TC.F.TWF.<p>.<YYYYMM>)。 HOT 與 TXO runtime 的 spot 訂閱同 symbol…, 當日 1K → [(台北 minute_end, close 毫點)]。 台指的回補**必須從這條 session 發** ——…, SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。, 期貨盤別閘 = TXO 時段各寬 5 分(期貨與 TXO 同時段,共用 `in_txo_session`)。 prod 自癒閘 = 交易日曆 AND… (+17 more)
-
-### Community 75 - "tc4.py"
+### Community 74 - "FuturesQuoteSource"
 Cohesion: 0.05
-Nodes (30): parse_history_tick(), parse_option_symbol(), parse_realtime(), TC.O.TWF.<prod>.<expiry>.<C|P>.<strike> → (prod, expiry, cp, strike_pts)。, 歷史 TICKS row → Tick;缺 price/qty/PreciseTime → None。cum_volume 恆 None(spike 實測)。, REALTIME Quote dict → Tick(DR-4 隔離層);無成交(qty 空/0)→ None。…, _to_int(), always_active() (+22 more)
+Nodes (31): futures_symbol(), FuturesQuoteSource, in_futures_session_now(), time, 補訂實際月份 leaf 契約(TC.F.TWF.<p>.<YYYYMM>)。 HOT 與 TXO runtime 的 spot 訂閱同 symbol…, 當日 1K → [(台北 minute_end, close 毫點)]。 台指的回補**必須從這條 session 發** ——…, SUB socket 一則原始電文 → REALTIME Quote dict 分派(listener 與測試共用)。, 期貨盤別閘 = TXO 時段各寬 5 分(期貨與 TXO 同時段,共用 `in_txo_session`)。 prod 自癒閘 = 交易日曆 AND… (+23 more)
+
+### Community 75 - "OptionContract"
+Cohesion: 0.07
+Nodes (28): DR-3:清空全部 per-symbol 狀態並替換合約集合(select 切換時呼叫)。, Totals, OptionContract, parse_history_tick(), parse_option_symbol(), parse_realtime(), tick / 合約資料模型與 TC4 訊息對映(欄位事實:docs/research/2026-07-18-txo-chain-probe.md)., TC.O.TWF.<prod>.<expiry>.<C|P>.<strike> → (prod, expiry, cp, strike_pts)。 (+20 more)
 
 ### Community 76 - "_state"
 Cohesion: 0.06
 Nodes (18): RiverState, RiverState 狀態機測試(SC-1:分桶 / 換場清空 / 回補只補空缺 / snapshot & delta 形狀)。, N015:守門改「名次小者贏」—— 先到的 13:48 不得把更接近收盤的 13:46 擋在外面。 改動前的判準只有「這格有沒有值」:tick 稀疏時…, 同名次不覆寫 —— 「小者贏」是嚴格小於,不是「後到就贏」(那等於沒有守門)。, perf #250(1-1):snapshot 的 `minutes` 鍵在 wire 邊界轉字串,in-memory `_minutes` 仍 int。…, N058(取代舊 characterization `..._blocks_the_real_close_bar`,條文已標該變)。 end 格被…, 「覆寫一次」:寫進去的就是真值,第二趟回補回到既有的「只補空缺」。, rank 1(13:45:xx 收盤撮合)是**真成交**不是近似 —— 回補不得覆寫它。 少了這條界,「覆寫近似」就會順手把收盤撮合那一筆也蓋掉,而那正是… (+10 more)
 
 ### Community 77 - "test_ws_disconnect.py"
-Cohesion: 0.08
-Nodes (43): socket, _abort(), _build_capital(), _build_corr(), _build_futures(), _build_index(), _build_stock(), _drain_frames() (+35 more)
+Cohesion: 0.09
+Nodes (39): socket, _abort(), _build_capital(), _build_corr(), _build_futures(), _build_index(), _build_stock(), _drain_frames() (+31 more)
 
-### Community 78 - "._bot"
-Cohesion: 0.07
-Nodes (19): _bot(), _FakeChannel, _FakeClient, _FakeFollowup, _FakeResponse, _FakeTree, Any, Exception (+11 more)
+### Community 78 - "test_discord_bot.py"
+Cohesion: 0.06
+Nodes (23): _bot(), _FakeChannel, _FakeClient, _FakeFollowup, _FakeResponse, _FakeTree, Any, Exception (+15 more)
 
 ### Community 79 - "test_notify.py"
 Cohesion: 0.08
 Nodes (43): _build_embed(), notify_discord(), Discord webhook 發送層(泛用訊息;訊號內容由 caller 決定). 介面形狀沿 treading-king discord_notifier…, 讀取順序:env → repo root .env → None(lazy cache;測試 reset module 屬性)., 送一則 embed 訊息到 Discord webhook;URL 未設 no-op、失敗不拋例外. 回傳 True = Discord…, resolve_webhook_url(), _capture_urlopen(), fake() (+35 more)
 
-### Community 80 - "normalize_rule"
-Cohesion: 0.07
-Nodes (20): _as_int(), _bad(), _normalize_levels(), _normalize_params(), normalize_rule(), ValueError, error code 進 HTTPException detail.error(跨檔契約)。 值域僅 {"INVALID_RULE",…, int 或整數值 float → int;bool / 非整數 / 非數字 → None(呼叫端轉 INVALID_RULE)。 bool 必須先擋:它是… (+12 more)
+### Community 80 - "make"
+Cohesion: 0.12
+Nodes (13): normalize_rule(), 驗證 + 正規化成 canonical 形;任何違規一律 `RuleError("INVALID_RULE")`。 `others` =…, make(), parametrize, bool 是 int 子類 —— 不排除的話 True 會被當 1 靜默通過., D7:駐留秒數與 `window_secs` 同型 —— 秒不需要整數限制,2.5 秒必須收得下。 誤加進 `INT_PARAM_KEYS`…, R6:others 不含自身 —— 編輯規則但不改名不該被自己撞掉., 合法規則樣板;over 覆寫任一欄(含刻意的非法值)。 (+5 more)
 
 ### Community 81 - "stock_names.py"
 Cohesion: 0.09
 Nodes (28): load_names(), parse_isin_html_with_stats(), ParseStats, Path, 全市場股票代號 ↔ 名稱表(個股搜尋提示列用;change-spec stock-ui-round4 🟢-6)。 資料源 = 證交所 ISIN…, 讀名稱表。**任何讀取/格式問題都回 `{}`**(`/api/stock/names` 承諾不 500)。, 抓 ISIN 頁重生名稱表;守門任一條不成立 → 拋 `ValueError` 保留舊檔。, 逐段筆數與剔除計數 —— refresh 要 log 出來,格式漂移才看得見(禁止靜默截斷)。 (+20 more)
 
-### Community 82 - "client.py"
-Cohesion: 0.08
-Nodes (35): datetime, 群益下單 client —— 一條專屬 COM 執行緒(訊息幫浦 + 命令佇列),橋回 asyncio。 結構照搬 treading-king…, 該時刻**所屬的交易日** YYYYMMDD(N075:價格別標籤的第二個比對候選)。 夜盤 23:50 送出的單,本機日曆日是今天、交易日是明天;群益回報…, _trade_ymd(), 平倉反向單組裝 — 純函式。 證券:部位種類 → 回補單(treading-king spec §6.2 固定映射):…, CancelOrderRequest, CapitalDisabledError, CapitalDownError (+27 more)
+### Community 82 - "test_record_dict_equals_asdict"
+Cohesion: 0.67
+Nodes (3): parametrize, perf #246:`capital_api` 三支列表 route 以 `{**o.__dict__, "code": …}` 取代…, test_record_dict_equals_asdict()
 
 ### Community 83 - "stock_symbol"
 Cohesion: 0.06
-Nodes (27): instrument key → TC4 symbol(**唯一定義**;engine 經 `symbol_of` 取用)。 - 股號 →…, instrument key → TC4 symbol(`StockSource` Protocol;engine 路由表的鍵來源)。, UNSUB→SUB 冪等重掛;失敗 raise(engine refcount 回滾依賴,design §2.4)。, 排下一發健檢,並**換掉**這個 code 上待觸發的那一把(疊鏈是 C-4 的根因)。, 零推播 → 通報(僅第一次)+ 重掛,並以退避排下一輪(R3)。 回呼一律傳 **key**(engine 的 `_no_data` 以 key…, 整批先 SubHistory(TICKS、當日日盤窗),讓 TC4 平行備資料;之後逐檔 `backfill`…, 當日 tick 回補;**首頁等滿預算仍未備妥 → `HistoryTimeoutError`**。 回空的話 worker…, 當日 1K → {HHMM(台北,bar 終點標記): close 毫點}(index-board SC-4)。 1K Time 為 UTC 終點標記(實測… (+19 more)
+Nodes (30): is_contract_key(), instrument key → TC4 symbol(**唯一定義**;engine 經 `symbol_of` 取用)。 - 股號 →…, 三段形合約鍵(`F:<prod>:<ym>`)= 可當主圖的 instrument;HOT 對照腿不算。, 台北交易日 YYYY-MM-DD → 日盤 UTC 窗。 窗以**小時**為粒度(`YYYYMMDDHH`),實際回 UTC 00–06 = 台北…, instrument key → TC4 symbol(`StockSource` Protocol;engine 路由表的鍵來源)。, UNSUB→SUB 冪等重掛;失敗 raise(engine refcount 回滾依賴,design §2.4)。, 排下一發健檢,並**換掉**這個 code 上待觸發的那一把(疊鏈是 C-4 的根因)。, 零推播 → 通報(僅第一次)+ 重掛,並以退避排下一輪(R3)。 回呼一律傳 **key**(engine 的 `_no_data` 以 key… (+22 more)
 
-### Community 84 - "HistoryTimeoutError"
+### Community 84 - "_source"
 Cohesion: 0.08
-Nodes (25): HistoryTimeoutError, 歷史首頁在預算內未備妥 —— 「現在取不到」,**不是**「沒有這些資料」。 **為什麼是 `ConnectionError`…, _dk_row(), _k1_row(), 期指 K 線歷史(index-board N-2)。 **為什麼一定要從 futures session 發**:`TC.F.TWF.<prod>.HOT`…, **事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty`)。 回空時 route 的 tag 是…, 首頁備妥(非逾時)但域內無 bar → 照舊回空,不 raise。, SC-3:`session="allday"` 的近全段(日盤 + 夜盤兩半)。 台北日 D 的凌晨段(00:00–05:00)落在 **UTC 日 D−1… (+17 more)
+Nodes (23): _dk_row(), _k1_row(), 期指 K 線歷史(index-board N-2)。 **為什麼一定要從 futures session 發**:`TC.F.TWF.<prod>.HOT`…, **事前標記該變的既有斷言**(舊名 `test_empty_first_page_returns_empty`)。 回空時 route 的 tag 是…, 首頁備妥(非逾時)但域內無 bar → 照舊回空,不 raise。, SC-3:`session="allday"` 的近全段(日盤 + 夜盤兩半)。 台北日 D 的凌晨段(00:00–05:00)落在 **UTC 日 D−1…, 窗斷言只看 SUBQUOTE 的參數 —— 空頁治具現在會逾時(見 `TestFetchBarsRange`), 窗早在 raise…, 預設 session(day)的窗與行為零改動 —— 既有 caller 全不受影響。 (+15 more)
 
 ### Community 85 - "_Clock"
-Cohesion: 0.10
-Nodes (20): _Clock, _engine(), _FakeSource, _futures_state(), _quote(), SC-5:台指腿走 futures_engine,重複訂 TXF.HOT 會讓其中一邊永久零推播。, 超過 stale_secs 沒更新 → None,不得沿用最後一筆中價(SC-2 界線)。, impl review P0-3 迴歸鎖。 base 腿刻意不訂閱 → 永遠不進 _handle_quote。若沿用「收到推播才更新… (+12 more)
+Cohesion: 0.07
+Nodes (33): _BadRetrySource, _Clock, _engine(), _FakeSource, _FlakySource, _futures_state(), _GatedReconnectSource, _quote() (+25 more)
 
 ### Community 86 - "test_signal_routes.py"
 Cohesion: 0.07
-Nodes (35): _emit_rule_signal(), _pump_receive(), Any, BaseException, FastAPI, MonkeyPatch, 訊號 route 與 lifespan 組裝(design §4.5 / §7 — SC-7 / SC-8 / SC-11 / SC-12 後端半)。 hub…, T-1:engine **在場**時 hub 與 `/ws/stock` 必須共用同一顆 broadcaster。 `_make_stock` 漏傳… (+27 more)
+Nodes (33): _emit_rule_signal(), _pump_receive(), Any, BaseException, FastAPI, MonkeyPatch, 訊號 route 與 lifespan 組裝(design §4.5 / §7 — SC-7 / SC-8 / SC-11 / SC-12 後端半)。 hub…, T-1:engine **在場**時 hub 與 `/ws/stock` 必須共用同一顆 broadcaster。 `_make_stock` 漏傳… (+25 more)
 
-### Community 87 - "test_breadth_engine.py"
-Cohesion: 0.07
-Nodes (32): BreadthConfig, load_breadth_config(), Path, 家數帶 / 騰落線的輪詢與退避門檻(market-overview R2 design §5)。 慣例沿用…, 讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。, _calendar(), _eod_rows(), datetime (+24 more)
+### Community 87 - "BreadthConfig"
+Cohesion: 0.05
+Nodes (39): BreadthConfig, load_breadth_config(), Path, 家數帶 / 騰落線的輪詢與退避門檻(market-overview R2 design §5)。 慣例沿用…, 讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。, _make_breadth(), _FailOnceFetch, fast_streaks() (+31 more)
 
-### Community 88 - "CorrQuoteSource"
-Cohesion: 0.07
-Nodes (25): all_day_window(), CorrQuoteSource, 相關係數引擎的行情源:泛化任意 TC4 symbol 訂閱(SC-5;design §5.5)。 與…, 逐腿自癒閘(N051 + F4):依 symbol **前綴**分派時段閘,未列的段恆 True。 corr 是唯一一條 session…, 當日 UTC 全天窗;不隨台指盤別變動(design §5.5)。, segment_leg_gate(), 台北交易日 YYYY-MM-DD → 日盤 UTC 窗。 窗以**小時**為粒度(`YYYYMMDDHH`),實際回 UTC 00–06 = 台北…, stock_window() (+17 more)
+### Community 88 - "FakeApi"
+Cohesion: 0.06
+Nodes (40): all_day_window(), CorrQuoteSource, 相關係數引擎的行情源:泛化任意 TC4 symbol 訂閱(SC-5;design §5.5)。 與…, 逐腿自癒閘(N051 + F4):依 symbol **前綴**分派時段閘,未列的段恆 True。 corr 是唯一一條 session…, 當日 UTC 全天窗;不隨台指盤別變動(design §5.5)。, segment_leg_gate(), FakeApi, _fail() (+32 more)
 
 ### Community 89 - "CorrelationEngine"
-Cohesion: 0.06
-Nodes (19): CorrelationEngine, CorrSource, _LegState, Any, Protocol, SessionKey, 只訂 source == tc4 的腿;單腿失敗降級續行,失敗品進 `_pending_subs` 由重試迴圈接手。 (寫入安全:start() 正…, pending 腿每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。 迭代 `tc4_legs()` 而非… (+11 more)
+Cohesion: 0.09
+Nodes (14): CorrelationEngine, Any, 只訂 source == tc4 的腿;單腿失敗降級續行,失敗品進 `_pending_subs` 由重試迴圈接手。 (寫入安全:start() 正…, pending 腿每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。 迭代 `tc4_legs()` 而非…, 一次取樣 + 計算 + 廣播(tick task 每 tick_secs 呼叫;測試直接呼叫)。, 台指腿的分鐘點 + 每秒 delta 廣播。 台指腿走 pull 不走推播,分鐘桶用本機時鐘 —— `futures_engine` 的 `st.t` 在既有…, 逐腿 1K 回補(single-flight);單腿失敗只降級該腿(SC-3)。 `legs` = 只補這些腿(逾時重試輪用)。`None` =…, single-flight 互吃:把被擋下那一發的腿併回進行中那一輪的 pending。 舊碼兩處都是靜默… (+6 more)
 
-### Community 90 - "test_river_models.py"
+### Community 90 - "parse_1k_minutes"
+Cohesion: 0.10
+Nodes (18): 當日 1K → [(台北 minute_end, close 毫點)]。 **首頁在預算內未備妥 →…, collect_1k_minutes(), Any, 1K 當日回補的共用收割器(SC-3;`corr_source` 與 `futures_source` 各自的 session 都用它)。 **為什麼吃…, SubHistory(1K)→ 首頁退避輪詢 → QryIndex 收割 → `[(minute_end, close 毫點)]`。 **首頁在預算內未備妥…, all_day_utc_window(), parse_1k_minutes(), Parsed1k (+10 more)
+
+### Community 91 - "TestReconnectReconciliation"
 Cohesion: 0.07
-Nodes (29): 當日 1K → [(台北 minute_end, close 毫點)]。 **首頁在預算內未備妥 →…, collect_1k_minutes(), Any, 1K 當日回補的共用收割器(SC-3;`corr_source` 與 `futures_source` 各自的 session 都用它)。 **為什麼吃…, SubHistory(1K)→ 首頁退避輪詢 → QryIndex 收割 → `[(minute_end, close 毫點)]`。 **首頁在預算內未備妥…, all_day_utc_window(), _hh_mm(), minute_end_from_1k() (+21 more)
-
-### Community 91 - "_FlakySource"
-Cohesion: 0.05
-Nodes (22): _AlwaysBadRetrySource, _BadRetrySource, _FlakyReconnectSource, _FlakySource, _GatedRetrySource, `fetch_bars_range` 的 fake:記下每次呼叫的五個參數、回固定 `bars`(預設空)。…, 前 N 次 subscribe_symbol raise ConnectionError,之後成功;attempts 記每次呼叫。, retry 途中拋非 ConnectionError:首輪 ConnectionError、第 2 次 ValueError、第 3 次成功。 照抄… (+14 more)
+Nodes (16): _AlwaysBadRetrySource, _BadRetrySource, _FlakyReconnectSource, _GatedRetrySource, `fetch_bars_range` 的 fake:記下每次呼叫的五個參數、回固定 `bars`(預設空)。…, retry 途中拋非 ConnectionError:首輪 ConnectionError、第 2 次 ValueError、第 3 次成功。 照抄…, 首輪 ConnectionError 全品進 pending,之後每次 retry 一律拋 ValueError。, _FlakySource + on_reconnect 屬性(重連對帳 × 重試迴圈的交互測試用)。 (+8 more)
 
 ### Community 92 - "._collect"
-Cohesion: 0.06
-Nodes (23): _bundles(), `ticks` 打包訊息攤平成 item 列(mod/group-grid-ticks)。 逐筆成交自此只走 0.1 s…, A2/A3:成員回補失敗的爆炸半徑與當日冷卻。 群組檢視把「非主圖成員」也送進同一條單工 worker 之後,成員的一次 SubHistory 失敗…, 舊語意保留:主圖自己的回補失敗仍是「達錢 4 出事了」的最好證據 —— 使用者當下就在看那一檔,靜默降級會讓他以為畫面是真的。, A2 止血:同一檔當日連 3 次失敗就不再入列。 沒有這條的話,一檔壞碼會讓 60s 輪詢整天對 TC4 發同一個必敗請求(單工 worker…, A3:`_backfill_pending` 改計數,reconnect 不再清它。 舊碼把在途集合一起清掉 → 下一次…, `_handle_stkfut` 的判定改「endswith('.HOT')」—— 舊的 `startswith('TC.F.')` 會把月契約 leaf…, 逐筆改 0.1 s 打包:一則 `ticks` 含「主圖 ∪ 各連線登記的檢視集合」的全部成交,… (+15 more)
+Cohesion: 0.05
+Nodes (24): _bundles(), `ticks` 打包訊息攤平成 item 列(mod/group-grid-ticks)。 逐筆成交自此只走 0.1 s…, A2/A3:成員回補失敗的爆炸半徑與當日冷卻。 群組檢視把「非主圖成員」也送進同一條單工 worker 之後,成員的一次 SubHistory 失敗…, 舊語意保留:主圖自己的回補失敗仍是「達錢 4 出事了」的最好證據 —— 使用者當下就在看那一檔,靜默降級會讓他以為畫面是真的。, A2 止血:同一檔當日連 3 次失敗就不再入列。 沒有這條的話,一檔壞碼會讓 60s 輪詢整天對 TC4 發同一個必敗請求(單工 worker…, A3:`_backfill_pending` 改計數,reconnect 不再清它。 舊碼把在途集合一起清掉 → 下一次…, `_handle_stkfut` 的判定改「endswith('.HOT')」—— 舊的 `startswith('TC.F.')` 會把月契約 leaf…, 逐筆改 0.1 s 打包:一則 `ticks` 含「主圖 ∪ 各連線登記的檢視集合」的全部成交,… (+16 more)
 
 ### Community 93 - "append_audit"
+Cohesion: 0.10
+Nodes (22): append_audit(), _append_line(), audit_path(), ensure_audit_dir(), Any, date, Path, 下單審計 JSONL(§7 閘三):append-only、跨執行緒序列化、失敗拋 AuditWriteError。 寫者 = 群益… (+14 more)
+
+### Community 94 - "test_calendar_wiring.py"
+Cohesion: 0.08
+Nodes (50): dbar(), 日 K bar 治具(毫點;h/l 各 ±1000,v 固定 10)。, _app(), _app_warnings(), _client(), DayKeyedIndexSource, _empty_fetchers(), _freeze() (+42 more)
+
+### Community 95 - "test_ticks_compactor.py"
 Cohesion: 0.09
-Nodes (28): append_audit(), _append_line(), audit_path(), AuditWriteError, ensure_audit_dir(), Any, date, Exception (+20 more)
-
-### Community 94 - "MonkeyPatch"
-Cohesion: 0.13
-Nodes (26): _app(), _client(), _freeze(), MonkeyPatch, Path, TestClient, W2:手動 `TXO_BACKFILL_DATE` 仍是最高優先(日曆不得蓋掉 ops 通道)。, stock 缺席時 hub 的日別 fallback(jsonl 檔名 / today 端點的尺)也吃日曆。 (+18 more)
-
-### Community 95 - "_make"
-Cohesion: 0.14
-Nodes (19): _Clock, _make(), LogCaptureFixture, Path, 13:45 先印「tick 存檔 <日>」那行、把當日 handle flush + 關掉,再叫轉檔 —— Windows 下…, two-axis round-1 收修(Spec F-01 / F-05、Standards F-01 / F-02 / F-11)。, server 13:45 沒開著(或 engine 沒換日)留下的昨日 jsonl,隔天一啟動就補轉 —— 不受今天 13:45 閘管;今天的那份仍等…, Spec F-01 的排程側閘:parquet 已在 = 已轉檔,殘餘 jsonl(不該存在)不得再轉 —— 空對空核對會過、真 parquet… (+11 more)
+Nodes (30): CompactRun, 一次轉檔呼叫的結果:exit code + 子程序輸出(逾時由 compactor 用 `wait_for` 判,不在這裡)。, _Clock, _make(), date, datetime, LogCaptureFixture, MonkeyPatch (+22 more)
 
 ### Community 96 - "replay/report.py"
-Cohesion: 0.11
-Nodes (38): _delta(), _pct(), Path, 兩份 replay run 並排對照(調 config 前後的實驗工具)., _side_by_side(), write_compare(), agg_auction(), agg_gap_buckets() (+30 more)
+Cohesion: 0.08
+Nodes (49): _delta(), _pct(), Path, 兩份 replay run 並排對照(調 config 前後的實驗工具)., _side_by_side(), write_compare(), agg_auction(), agg_gap_buckets() (+41 more)
 
 ### Community 97 - "IndexEngine"
 Cohesion: 0.07
-Nodes (16): IndexEngine, _is_blank_time(), _millipt(), minute_key(), TC4 quote「沒給時間欄位」的形狀:`''` / `'0'` / `'000000'`(全零或空)。 只認全零 —— 真值 `'000000'`(UTC…, **worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,**不寫**任何共享狀態 (只讀 `_loop` /…, **event loop thread**:把回補的分鐘併進狀態;回「本次是否帶來新分鐘鍵」。 判準是鍵集合差而非值(review…, 作廢在飛的 retry:世代 +1 = 上一發(含它排在 executor 裡還沒起跑的工作項)整組 作廢(review SP5);cancel 讓已… (+8 more)
+Nodes (17): IndexEngine, _is_blank_time(), _millipt(), minute_key(), TC4 quote「沒給時間欄位」的形狀:`''` / `'0'` / `'000000'`(全零或空)。 只認全零 —— 真值 `'000000'`(UTC…, **worker thread**:訂閱 + 回補當日 1K,只回傳抓到的分鐘,**不寫**任何共享狀態 (只讀 `_loop` /…, **event loop thread**:把回補的分鐘併進狀態;回「本次是否帶來新分鐘鍵」。 判準是鍵集合差而非值(review…, 作廢在飛的 retry:世代 +1 = 上一發(含它排在 executor 裡還沒起跑的工作項)整組 作廢(review SP5);cancel 讓已… (+9 more)
 
 ### Community 98 - "FakeCorrSource"
-Cohesion: 0.08
-Nodes (20): FakeCorrSource, CorrSource fake(corr routes / river routes 共用)。, _client(), TestClient, 相關係數 REST / WS 端點(SC-6)。, pr-251 review F-04 另一半:把 app.py 那行 `has_clients=corr_ws.has_clients` 刪掉,閘退回…, 前端不寫死對照表 → label 必須由後端帶(SC-7)。, SC-5:台指腿走 futures_engine,不得由本引擎重複訂閱(本引擎只訂 source=tc4 的腿)。 (+12 more)
+Cohesion: 0.05
+Nodes (37): OtcSnap, TypedDict, TPEx 櫃買指數 MIS 快照(index-board SC-4). MIS 為非契約公開端點(design Known Risk 1):失敗一律 None…, 價格欄毫點 int;time 為 HHMMSS 字串(台北時刻)。, 測試側的「引擎就緒」等待器(mod/startup-http-window D5)。 啟動序列移到背景 task 之後,`with…, corr / river route 測試共用的腿集合 —— 單一定義處(F-20 review S3)。 來自 repo…, FakeCorrSource, server 引擎 source 的共用 fake(index / futures / corr / stock)。 `fake_txo.py`… (+29 more)
 
-### Community 99 - "asyncio"
-Cohesion: 0.07
-Nodes (34): asyncio, _best_limit(), book_parquet_path(), iter_jsonl_rows(), load_day(), parquet_path(), date, Path (+26 more)
+### Community 99 - "load_day"
+Cohesion: 0.13
+Nodes (22): _best_limit(), book_parquet_path(), iter_jsonl_rows(), load_day(), parquet_path(), date, Path, tick 存檔的列形狀與讀回(spec #257)。 **列**(CONTEXT.md「tick 存檔 / 成交列 / 簿列」):盤中 server… (+14 more)
 
-### Community 100 - "test_safety.py"
-Cohesion: 0.18
-Nodes (40): StockOrderRequest, _bad_price(), check_cancel(), check_correct_price(), check_decrease(), check_future_order(), check_master(), _check_qty_amount() (+32 more)
+### Community 100 - "ChainAggregator"
+Cohesion: 0.12
+Nodes (19): ChainAggregator, _PosState, 回補灌入:按 (symbol, precise_time, seq) 排序;重建 cum(Σqty)寫 _last_cum。 回傳 rebuilt…, 單一 active 序列的逐檔累積;台指期(`SPOT_PREFIX`)只更新 spot(DR-9 分流)。 其餘期貨(個股期 / 海外腿 / 費半 /…, 回傳「這筆 tick 有沒有改到 snapshot 內容」——foreign / stale / spot 同價 / spot 0 價皆 False。…, HandoverBuffer, 回補↔live 交接協定(design.md §2.3 DR-1/DR-11):訂閱先行 buffer → 回補灌入 → flush。, 交接期 live tick 暫存;獨立於穩態 queue(DR-11)。append 回 False = 溢出。 (+11 more)
 
 ### Community 101 - "test_backfill_tc4.py"
-Cohesion: 0.10
-Nodes (32): _date_to_utc_window(), _fetch_1k(), _find_missing(), _needs_refetch(), Path, TC4 歷史 1K 回補:讀 events.csv 找缺 T+1 1K 的 stock-day,逐筆向 TC4 拉取., 回傳與種子匯入同格式的 Bar1K list(parse_raw_bar 同源,含零量試撮根)., run_backfill_tc4() (+24 more)
+Cohesion: 0.07
+Nodes (45): _date_to_utc_window(), _fetch_1k(), _find_missing(), _needs_refetch(), Path, TC4 歷史 1K 回補:讀 events.csv 找缺 T+1 1K 的 stock-day,逐筆向 TC4 拉取., 回傳與種子匯入同格式的 Bar1K list(parse_raw_bar 同源,含零量試撮根)., run_backfill_tc4() (+37 more)
 
-### Community 102 - "corr_engine.py"
-Cohesion: 0.08
-Nodes (21): log_return(), mid_from_book(), 相關係數引擎的純函數層:中價與對數報酬(design §1.2 / SC-2)。 秒級取樣一律用 **Bid/Ask 中價**,不用成交價 ——…, 最佳買賣中價(毫點整數);任一側無報價 → None。 單邊缺檔不用另一側硬湊 —— 單邊價不是市場對該商品的共識定價,拿來算報酬會製造 假波動。整除的…, 對數報酬 ln(cur/prev);任一端非正 → None(取 log 前的定義域防護)。, _add(), _corr(), CorrState (+13 more)
+### Community 102 - "CorrState"
+Cohesion: 0.17
+Nodes (10): _add(), _corr(), CorrState, SessionKey, 滾動相關係數狀態機(零 IO;SC-1/3/4;design §5)。 每秒一筆取樣 → 多窗滾動 Pearson。設計要點: -…, {leg: {"w60": r|None, "n60": int, ...}};樣本不足或常數序列 → None。 逐出第二道:各窗以 `ts < now −…, `remaining` = pop 之後 deque 還剩幾筆;歸零時整份回精確零,不讓加減殘差(~1e-21)留給下一批。, 一次每秒取樣;盤別(含 UTC 日期)變更 → 先清空所有序列再寫入本筆(SC-4)。 新的一筆配對報酬在這裡算好(舊版在 `correlations()`… (+2 more)
 
-### Community 103 - "TestCorrSourceFetchDay1k"
-Cohesion: 0.08
-Nodes (30): _page(), _frozen_window(), _his(), _paging_handler(), handler(), Any, fixture, LogCaptureFixture (+22 more)
+### Community 103 - ".test_first_page_poll_backoff_starts_at_twenty_ms"
+Cohesion: 0.22
+Nodes (7): _page(), _frozen_window(), fixture, MonkeyPatch, perf/batch-b-tier0 0-1(#241):江波圖 1K 首頁輪詢與 tc4 同一把起點 0.02 s、倍增不動。 sleep /…, 收割器看到的窗一律 `_WINDOW`(牆鐘無關 → 跨午夜跑測試也不會漂)。, get_history()
 
 ### Community 104 - "TicksConfig"
-Cohesion: 0.09
-Nodes (32): _ends_without_newline(), _open_append(), datetime, Path, TextIO, 盤中個股 tick 存檔的寫入端(spec #257;列形狀與讀回在 `copycat.ticks`)。 由 stock engine 在…, `opener` 是測試注入壞 handle(OSError)的唯一入口;`now_fn` 是簿列開盤閘的牆鐘。, 既有非空檔的最後一個 byte 不是換行 = 上次當機留下半行。檔不在 / 空 → False。 (+24 more)
+Cohesion: 0.11
+Nodes (25): 啟動入口:python -m copycat.server(canonical port 8721,design §4 IR-3)。…, tick 存檔的盤後排程(spec #257 T5):交易日 `compact_time` 以子程序呼叫 `ticks-compact`。 樣板同…, load_ticks_config(), _parse_hhmm(), Path, time, 盤中個股 tick 存檔的設定(spec #257)。 慣例沿用 `breadth_config.py`:frozen dataclass…, `HH:MM` → time;非此形(含全形數字 / 越界)→ ValueError(strptime 一次做完驗證與解析)。 (+17 more)
 
 ### Community 105 - "types.ts"
 Cohesion: 0.05
 Nodes (39): AVG_SOURCES, AvgSource, BreadthBuckets, BreadthCounts, BreadthPoint, BreadthRow, BreadthRowsState, BreadthState (+31 more)
 
 ### Community 106 - "session_key"
-Cohesion: 0.09
-Nodes (25): backfill_window(), in_txo_session(), SessionKey, struct_time, time, 台股期權交易時段窗(零 IO、不碰 ZMQ;tc4 選窗與 engine 跨盤偵測共用)。 時區事實(change-spec 5.1):日盤 台北…, 當下(UTC)所屬時段:hour < 7 → 日盤,≥ 7 → 夜盤(含收盤後顯示「最近一場」)。, 時刻平移(`time` 不支援加減,故繞 datetime)。 **只取回 time,跨午夜的溢位靜默 wrap**(08:45 減 9 小時 =… (+17 more)
+Cohesion: 0.07
+Nodes (28): backfill_window(), in_txo_session(), SessionKey, struct_time, time, 台股期權交易時段窗(零 IO、不碰 ZMQ;tc4 選窗與 engine 跨盤偵測共用)。 時區事實(change-spec 5.1):日盤 台北…, 當下(UTC)所屬時段:hour < 7 → 日盤,≥ 7 → 夜盤(含收盤後顯示「最近一場」)。, 時刻平移(`time` 不支援加減,故繞 datetime)。 **只取回 time,跨午夜的溢位靜默 wrap**(08:45 減 9 小時 =… (+20 more)
 
 ### Community 107 - "ScreenEngine"
 Cohesion: 0.11
-Nodes (17): ScreenCandidate, date, datetime, Path, 此刻該跑的目標交易日;沒算過且沒放棄才回值,否則 None。, 一次排程迭代(排程迴圈與測試共用的觀測點):算目標交易日,沒算過且沒放棄就跑。 非交易日早上 expected = 上一個交易日(已算過)→ 什麼都不做。, 睡到下一個 `RUN_TIME`(+30s 緩衝,避免踩在 08:00:00.000 判定邊上)。每個日曆日都醒: 非交易日醒來由 `tick`…, 下一次嘗試的時刻(`_RETRY_SECS` 後);會落在 `_RETRY_UNTIL`(含)之後 → None(時間盒到頂,放棄)。 (+9 more)
+Nodes (16): date, datetime, Path, 此刻該跑的目標交易日;沒算過且沒放棄才回值,否則 None。, 一次排程迭代(排程迴圈與測試共用的觀測點):算目標交易日,沒算過且沒放棄就跑。 非交易日早上 expected = 上一個交易日(已算過)→ 什麼都不做。, 睡到下一個 `RUN_TIME`(+30s 緩衝,避免踩在 08:00:00.000 判定邊上)。每個日曆日都醒: 非交易日醒來由 `tick`…, 下一次嘗試的時刻(`_RETRY_SECS` 後);會落在 `_RETRY_UNTIL`(含)之後 → None(時間盒到頂,放棄)。, 資料日回聲閘(review F-07,breadth 第二道守門同款;J1 收單份):上游忽略 日期參數 / 回錯日快取時回應是別日的列 —— 日 K… (+8 more)
 
 ### Community 108 - "test_com.py"
-Cohesion: 0.07
-Nodes (26): _OrderEvents, _parse_account_row(), 群益 COM 封裝。CapitalCom 是介面;SkcomCapitalCom 是真實 comtypes 實作。…, SKOrderLib 事件 sink(帳號清單+即時庫存+損益+期貨部位);回呼例外不可炸 COM 迴圈。, 決定 SKCOM.dll 載入方式 → (要加進 DLL 搜尋路徑的資料夾 or None, 給 GetModule 的引數)。 有設 dll_dir →…, OnAccount 的 bstrAccountData 一列 → (market_prefix, full_account);畸形列回 None 略過。…, _resolve_skcom_load(), capital com 層:SKCOM.dll 載入決策 + 事件 sink 純邏輯 + Protocol 合約(SC-1)。 真實 COM… (+18 more)
+Cohesion: 0.06
+Nodes (35): _OrderEvents, _parse_account_row(), 群益 COM 封裝。CapitalCom 是介面;SkcomCapitalCom 是真實 comtypes 實作。…, SKOrderLib 事件 sink(帳號清單+即時庫存+損益+期貨部位);回呼例外不可炸 COM 迴圈。, 決定 SKCOM.dll 載入方式 → (要加進 DLL 搜尋路徑的資料夾 or None, 給 GetModule 的引數)。 有設 dll_dir →…, OnAccount 的 bstrAccountData 一列 → (market_prefix, full_account);畸形列回 None 略過。…, _resolve_skcom_load(), LogCaptureFixture (+27 more)
 
 ### Community 109 - "TickPersist"
 Cohesion: 0.08
-Nodes (22): _put_levels(), AbstractEventLoop, StockTick, 五檔 20 欄:先五層價再五層量;不存在的層 None(價 0 = 市價佇列,原樣保留)。, 計數器所屬的交易日(`open_day` 設);排程只對這一天印 `log_stats`(pr-263 F-05)。, 預開當日 handle + 武裝定時 flush;engine.start 呼叫。不 raise(預開失敗 = 當日停寫)。, 預開 `trade_date` 的 handle(換日 stage2 呼叫),其他日的 handle flush + 關; 計數器歸零(呼叫端先…, 轉檔前放掉該日 handle(flush + 關)並封住:之後該日的列一律丟(計 `sealed_dropped`、 該日首筆 WARNING… (+14 more)
+Nodes (22): _ends_without_newline(), _open_append(), AbstractEventLoop, datetime, Path, TextIO, `opener` 是測試注入壞 handle(OSError)的唯一入口;`now_fn` 是簿列開盤閘的牆鐘。, 計數器所屬的交易日(`open_day` 設);排程只對這一天印 `log_stats`(pr-263 F-05)。 (+14 more)
 
-### Community 110 - "test_clock_monitor.py"
-Cohesion: 0.11
-Nodes (23): ClockSample, level_for(), log_sample(), probe(), 時鐘偏差監測(#236):本機鐘 vs NTP,stdlib SNTP,只 log 不改任何判定。 盤中閘(`_in_session` 13:30 end-…, |offset| 對應的告警等級:< WARN_MS → INFO(只印量測行);≥ WARN_MS WARNING;≥ ERROR_MS ERROR。, 啟動立即量一次,之後每 `interval_secs`;同步 UDP 走 `to_thread` 不佔 loop。 `sink`…, 依序問,第一台成功即回;全失敗回 None(呼叫端印一行 WARNING,不重試到下一輪)。 (+15 more)
+### Community 110 - "ClockSample"
+Cohesion: 0.22
+Nodes (11): ClockSample, log_sample(), 啟動立即量一次,之後每 `interval_secs`;同步 UDP 走 `to_thread` 不佔 loop。 `sink`…, run_clock_monitor(), LogCaptureFixture, lifespan 起 task 的那半邊(#236 驗收「lifespan 起一條 task…關機 cancel;最近結果放 app.state」):…, TestAppWiring, TestLogLines (+3 more)
 
-### Community 111 - "Any"
+### Community 111 - "group_series"
 Cohesion: 0.07
-Nodes (14): _FakeCtx, hist_row(), _JsonSocket, Any, QuoteAPI.context 替身:只需要吃得下 setsockopt。, Connect 帶延遲的 QuoteAPI 替身 —— 把 check-then-act 的競賽窗放大到可觀測。, 空 symbol 不逐檔空等:等待為全局輪間 sleep(≤ 輪數上限),與空 symbol 數無關。 舊制每個空 symbol 自帶 5 次 sleep(3…, socket 替身:send 的 JSON 電文交 handler 分派,recv 回其回應(自組電文路徑)。 (+6 more)
+Nodes (15): group_series(), 期權葉子 symbol → 序列清單(expiry 近 → 遠,同 expiry 按產品代碼)。 顯示名 = "<prod>…, _FakeCtx, hist_row(), _JsonSocket, Any, QuoteAPI.context 替身:只需要吃得下 setsockopt。, 空 symbol 不逐檔空等:等待為全局輪間 sleep(≤ 輪數上限),與空 symbol 數無關。 舊制每個空 symbol 自帶 5 次 sleep(3… (+7 more)
 
-### Community 112 - "_fut_quote"
-Cohesion: 0.07
-Nodes (22): _fut_quote(), 月契約 leaf 的 REALTIME(`Security` 是產品碼,**不是** instrument key)。, D1/R2-2:推播路由以 `Symbol` → `_symbol_to_key` 決定收件人。, `Security` 不是路由鍵:個股期 leaf 的該欄值域未實證(產品碼 / 股號都可能), 拿它當鍵時「合約推播蓋掉現貨狀態」是靜默的 ——…, R2-2 先寫後訂:TC4 在 SUB 回來後毫秒級推第一則 REALTIME(§8 實證)。 後寫的話首則必漏 —— 冷門合約整天可能只有那一則(meta…, 訂閱失敗要連對映一起回滾:留著的話那個 symbol 的後續推播會落到一個 沒有 owner 的 key 上(而 `_refs` 的對帳判準看不到它)。, D2:期貨 instrument 用空試撮窗(現貨口徑不動)。, D14b:期貨 key 的 ingest 前加日盤窗 gate(夜盤 tick 不得進當日狀態)。 (+14 more)
+### Community 112 - "test_stock_engine.py"
+Cohesion: 0.06
+Nodes (25): _fut_quote(), 月契約 leaf 的 REALTIME(`Security` 是產品碼,**不是** instrument key)。, D1/R2-2:推播路由以 `Symbol` → `_symbol_to_key` 決定收件人。, `Security` 不是路由鍵:個股期 leaf 的該欄值域未實證(產品碼 / 股號都可能), 拿它當鍵時「合約推播蓋掉現貨狀態」是靜默的 ——…, R2-2 先寫後訂:TC4 在 SUB 回來後毫秒級推第一則 REALTIME(§8 實證)。 後寫的話首則必漏 —— 冷門合約整天可能只有那一則(meta…, 訂閱失敗要連對映一起回滾:留著的話那個 symbol 的後續推播會落到一個 沒有 owner 的 key 上(而 `_refs` 的對帳判準看不到它)。, D2:期貨 instrument 用空試撮窗(現貨口徑不動)。, D14b:期貨 key 的 ingest 前加日盤窗 gate(夜盤 tick 不得進當日狀態)。 (+17 more)
 
 ### Community 113 - "StkfutCatalog"
 Cohesion: 0.10
@@ -1013,73 +991,73 @@ Nodes (18): 個股期合約目錄:當日 in-memory cache + 單飛 + 白名單查
 Cohesion: 0.05
 Nodes (31): EDGE_LABEL_H, EdgePriceLabel, EnergyBar, ExtremeMark, GeometryOpts, Input, IntradayGeometry, LEVEL_FILL (+23 more)
 
-### Community 115 - "shutdown_budget.py"
-Cohesion: 0.07
-Nodes (21): close_worst_secs(), 單條 session `close()` **可計段**的最壞耗時上界(秒)—— 關機預算的產生點之一(review A1)。 = 等 `_api_lock`…, lifespan_close_worst_secs(), 關機預算 —— 三個讀者同源(review A1,mod/shutdown-budget)。 讀者: - `run.ps1`:`python -c "from…, lifespan `finally` 反序 close 的最壞耗時(秒)。, `run.ps1` 的 graceful 窗:uvicorn 先等 WS 收攤,再跑 lifespan。整數 —— PowerShell 端以 `[int]`…, run_grace_secs(), 關機預算三方同源(mod/shutdown-budget,review A1)。 `run.ps1` 的 graceful 窗、uvicorn 的 WS… (+13 more)
+### Community 115 - "test_shutdown_budget.py"
+Cohesion: 0.08
+Nodes (16): close_worst_secs(), 單條 session `close()` **可計段**的最壞耗時上界(秒)—— 關機預算的產生點之一(review A1)。 = 等 `_api_lock`…, 關機預算三方同源(mod/shutdown-budget,review A1)。 `run.ps1` 的 graceful 窗、uvicorn 的 WS…, 檔頭註解的硬要求:Windows PowerShell 5.1 讀無 BOM 的 .ps1 會當 CP950,中文 變亂碼且可能生出假引號讓整份 parse…, `tc4.close_worst_secs()`:單條 session `close()` 可計段的上界 = 等 `_api_lock`(在途…, LOGOUT 那一發有自己的 recv 上界(fix/tc4-logout);算式只算「一發 REQ 逾時」, LOGOUT 必須嚴格小於它才不用另加一項…, 建構子預設值必須就是預算吃的那個常數 —— 兩處各寫一個 12.0 就會靜默漂開。, 關機路徑上最深的 lane = corr → futures 串鏈(corr 讀 futures.state(), app.py 的既有不變式);其餘… (+8 more)
 
 ### Community 116 - "test_verify.py"
 Cohesion: 0.07
 Nodes (34): fake_breadth_fetchers(), _daily_prices(), _disposition(), _fail_if_injected(), _snapshot(), _stock_info(), neutralize_external_env(), date (+26 more)
 
 ### Community 117 - "fetch_otc_snapshot"
-Cohesion: 0.11
-Nodes (18): BytesIO, fetch_otc_snapshot(), _millipt(), Any, TPEx 櫃買指數 MIS 快照(index-board SC-4). MIS 為非契約公開端點(design Known Risk 1):失敗一律 None…, 單次快照;任何失敗(網路/格式/暫停計算)→ None(caller 保留前值)。, _boom(), _fake_fetcher() (+10 more)
+Cohesion: 0.12
+Nodes (17): BytesIO, fetch_otc_snapshot(), _millipt(), Any, 單次快照;任何失敗(網路/格式/暫停計算)→ None(caller 保留前值)。, _boom(), _fake_fetcher(), Any (+9 more)
 
 ### Community 118 - "get_capital"
 Cohesion: 0.19
 Nodes (26): get_capital(), 組裝並快取 CapitalClient;未設定 CAPITAL_USER_ID 時回 None(功能未啟用)。, _isolate(), fixture, LogCaptureFixture, MonkeyPatch, Path, get_capital() 工廠:env 分支 + 單例 + prod banner(SC-9/10)。 只建構不 start:SkcomCapitalCom… (+18 more)
 
-### Community 119 - "capital/store.py"
+### Community 119 - "Rule"
 Cohesion: 0.08
-Nodes (18): ReplyRecord, _Agg, _anchor_trade_date(), _lot_unit(), 群益委託/部位記憶體快取(執行緒安全)。COM 事件回呼更新它;REST 讀它。 邏輯照搬 treading-king…, (日曆日 YYYYMMDD, 時刻)→ 錨定交易日 YYYYMMDD(期交所口徑;pr-167 F-02)。 與前端…, 成交滿不滿由量推導;量變動(N 補量/D 成交/U/B 改量)就重算。 order_qty 未知(=0,N 還沒到)時不得斷言「全部成交」— 終態進…, 回報事件 → 委託聚合;成交(D)另樂觀套進部位。回傳「部位有沒有變」 (caller 據此推 `capital_position`;其他事件恆 False)。 (+10 more)
+Nodes (17): _copy_rule(), 規則 / detector / 開關集合是**不可分割**的一組(R2)。 拆成三個平行 dict 時,熱路徑可能讀到「新規則配舊…, 對外回傳的規則一律是副本 —— 呼叫端改到的不能是熱路徑正在讀的那份。, 三態(`load_rules`):缺檔 → 由既有全域設定 + 舊開關檔生成預設並落檔; 合法(含空陣列)→ 照用(使用者刪光規則不得復活預設);壞檔 →…, 建 detector 的**唯一**入口(R5):初始化 / 遷移 / upsert 三處同式, 漏帶 `now_fn`…, `rule_id` None = 新增(配新 id),否則 = 編輯(缺 → RULE_NOT_FOUND)。 順序(R17):鎖內驗證 → 落檔 →…, upsert 的反向軸(R17):新 detector 補上已在手的當日基準。 沒有這一步,盤中編輯規則等於把該規則的 CDP 停到隔天 —— 而畫面只會顯示…, _RuleSlot (+9 more)
 
-### Community 120 - "StockTick"
+### Community 120 - "BarsResult"
 Cohesion: 0.10
-Nodes (18): 期貨 REALTIME 對映(capital-order SC-8;design §10)。 期貨 REALTIME…, derive_side(), 個股 REALTIME / 歷史 TICKS 對映層(欄位事實:docs/research/2026-07-21-stock-spot-quote-…, 成交價對照一檔簿的內外盤判定:price ≥ ask → outer;price ≤ bid → inner;否則 neutral。 兩個用途:(a)…, 鎖漲跌停且對手側整個不可得時,補回 `derive_side` 判不出來的那一邊。 **為什麼需要這個**:歷史 TICKS row 只有單一…, relabel_locked_side(), StockBook, StockTick (+10 more)
+Nodes (20): BarsResult, _possible_data_days(), 把「不可能有資料的日子」從 missing 清單濾掉(bug/futures-bars-gap)。 為什麼需要:`put_hist_range`…, bars + 空結果的原因(`BarsStatus`)。 **刻意做成 NamedTuple 而不是裸 tuple**:與 `TaggedBars`…, K 線 bar;TC4 離線降級空(同 daily_bars 的 best-effort 慣例)。 降級**照舊回空不…, bar(), date, 歷史段 missing 接交易日曆過濾(bug/futures-bars-gap)。 現象:週一的 days=5 窗尾是週日,`put_hist_range`… (+12 more)
 
 ### Community 121 - "oi_levels.py"
 Cohesion: 0.09
 Nodes (29): _empty(), fetch_oi_levels(), _fetch_rows(), _get_lock(), _log_freshness(), _now(), OiFetchError, OiLevels (+21 more)
 
 ### Community 122 - "FakeSource"
-Cohesion: 0.08
-Nodes (16): Task, FakeSource, Bar, BarsStatus, instrument key → TC4 symbol。**一律委派 `stock_symbol`**(R1):fake 自寫 第二份對映時,engine…, S1-b:worker 出隊時整批先 SubHistory。只記批次(順序 + 成員)。, Protocol 新增方法(change-spec R2-1);既有斷言不依賴,回空即可。, 背景消費一條 `stream()`,回 (累積清單, task)。 **不可對同一個 stream 連呼兩次 `_collect`**:那個 helper 靠… (+8 more)
+Cohesion: 0.06
+Nodes (22): Event, FakeSource, _IdentSource, _PerCodeGateSource, Task, 記錄每次 `subscribe_symbol` 呼叫(含失敗)—— `subscribed` 只記成功, 測不到「重試了幾次」也測不到「已移除的檔還在被重試」。, S1-b:worker 出隊時整批先 SubHistory。只記批次(順序 + 成員)。, 背景消費一條 `stream()`,回 (累積清單, task)。 **不可對同一個 stream 連呼兩次 `_collect`**:那個 helper 靠… (+14 more)
 
-### Community 123 - "parse_stock_realtime"
-Cohesion: 0.09
-Nodes (16): _best_limit_price(), _hhmmss(), _parse_levels(), parse_stock_realtime(), 簿的最佳**限價**檔位;全是市價佇列 / 空簿 → None。 鎖漲跌停時 TC4 會在第一檔推「市價單佇列」,價格欄是 `0`。**`0` 不是價格**…, 位移命名歸一:`Bid`/`BidVolume`=L0、`Bid1`/`BidVolume1`=L1…;空價位跳過。 ⚠ 這裡的「空」只指 `price is…, 一則個股 REALTIME 拆 (tick, book, meta);無成交(qty 空/0)→ tick=None(純簿更新)。…, _to_int() (+8 more)
+### Community 123 - "StockTick"
+Cohesion: 0.03
+Nodes (70): 期貨 REALTIME 對映(capital-order SC-8;design §10)。 期貨 REALTIME…, _best_limit_price(), derive_side(), _hhmmss(), is_trial_window(), parse_hist_tick(), _parse_levels(), parse_stock_realtime() (+62 more)
 
-### Community 124 - "test_calendar_wiring.py"
-Cohesion: 0.09
-Nodes (26): dbar(), 日 K bar 治具(毫點;h/l 各 ±1000,v 固定 10)。, _app_warnings(), BaseExcHistoryIndexSource, _CrosscheckBomb, _no_backfill_env(), BaseException, FastAPI (+18 more)
+### Community 124 - "BaseExcHistoryIndexSource"
+Cohesion: 0.33
+Nodes (5): BaseExcHistoryIndexSource, _CrosscheckBomb, BaseException, 刻意不是 `Exception` 子類 —— 只有這種例外能同時穿過 `_calendar_crosscheck` 自吞的傘與關機路徑的 `except…, 日 K probe 拋 BaseException:交叉檢查 task 以例外結束 → 走關機的 await。
 
 ### Community 125 - "test_signal_state.py"
-Cohesion: 0.08
-Nodes (19): _locked_down(), _ms_clock(), _ms_time(), datetime, parametrize, SignalDetector 行為合約(design §3;SC-1/2/3/4/6)。 時鐘一律注入 `_Clock`(design §3.1…, spec #192:開關鍵集五鍵 → 六鍵(掃單簇是規則 kind,事件 kind 同名);#226 放量離開 → 七鍵。 hub 的…, MFS-2:暫存區帶基準日 —— 日別不符 = 上一輪換日留下的殘渣。 沿用它不會有任何錯誤訊號,只是整天用昨天的 CDP 基準;所以要回 False(讓… (+11 more)
+Cohesion: 0.09
+Nodes (17): _locked_down(), _ms_clock(), _ms_time(), datetime, parametrize, SignalDetector 行為合約(design §3;SC-1/2/3/4/6)。 時鐘一律注入 `_Clock`(design §3.1…, spec #192:開關鍵集五鍵 → 六鍵(掃單簇是規則 kind,事件 kind 同名);#226 放量離開 → 七鍵。 hub 的…, review F-41:即時判「多發」的上界也進 self-check —— 重錄 fixture 時定義改壞成大量多發, `research ⊆… (+9 more)
 
 ### Community 126 - "test_app.py"
 Cohesion: 0.10
 Nodes (13): FakeQuoteSource, make_client(), MonkeyPatch, TestClient, SC-3b:傳給 snapshots() 的 seed 必須就是已 send_json 出去的那一個 dict 物件 (不得二次呼叫…, SC-1(route 層):route 沒傳 `heartbeat_secs` 也要吃到模組常數。 首則仍是快照(W2:ping 不得插在 seed 之前…, SC-11(Task 16b):OrderPanel 全鏈選單來源 — active 序列全集,非 snapshot 成交子集。, TestSelectRoute (+5 more)
 
 ### Community 127 - "test_capital_api.py"
-Cohesion: 0.06
-Nodes (20): _audit_lines(), _ExplodingCom, _FailingLoginCom, _fut_evt_raw(), _fut_quote(), Any, FastAPI, capital routes/例外映射/futures 行情 REST+WS/舊 trade 路 404(SC-1..6/8/9/10/11)。… (+12 more)
+Cohesion: 0.10
+Nodes (13): _audit_lines(), _ExplodingCom, _FailingLoginCom, Any, FastAPI, capital routes/例外映射/futures 行情 REST+WS/舊 trade 路 404(SC-1..6/8/9/10/11)。…, 鎖定態(換標的 / 換梯 / 閒置都不解除武裝)送出的單,審計檔要看得出來 —— `source` 只有 panel / flash…, AuditWriteError → 500 AUDIT_WRITE_FAILED(WLR-1)。 真正的 raise 點在 CapitalClient… (+5 more)
 
 ### Community 128 - "_tick"
-Cohesion: 0.11
-Nodes (19): parametrize, 一個同毫秒群:`prices[0]` 為首筆(對照 `ask` 判外盤),其餘同時刻接續。, spec #192 T2 主 seam:合成 tick(含同毫秒群)→ raw 掃單簇列。 價位 50.0 元帶(檔距 0.1 = 100 毫元):群…, 規則通知開 → 掃單簇列照規則開關進 Discord,文案「掃單簇 +0.80%」與前端逐字對齊。, 第一個掃單落在 [s − 30, s] 之外(31 s 前)→ n30 = 1 → 不發。, 窗前無成交 → 60 s 漲幅視為 0 → 不發(研究 `j60 < 0 → 0.0` 同語意)。, 群內首次達標即發(第三筆),同群後續 tick 不再發、也不算第二個掃單。 第二群五筆:第三筆達標(層數 2)當下就發,detail 記達標當下的層數 /…, 冷卻(牆鐘,沿規則模型):60 s 內第二簇不發;過了才發,touch_count 累計。 (+11 more)
+Cohesion: 0.10
+Nodes (21): _cross_both(), 同 tick A(兩則)+ 不同 tick B(一則)混排 → 2 則、順序不變。 B 是被存進 pending 那一則:`settle()`(=…, 一個同毫秒群:`prices[0]` 為首筆(對照 `ask` 判外盤),其餘同時刻接續。, spec #192 T2 主 seam:合成 tick(含同毫秒群)→ raw 掃單簇列。 價位 50.0 元帶(檔距 0.1 = 100 毫元):群…, 規則通知開 → 掃單簇列照規則開關進 Discord,文案「掃單簇 +0.80%」與前端逐字對齊。, 第一個掃單落在 [s − 30, s] 之外(31 s 前)→ n30 = 1 → 不發。, 窗前無成交 → 60 s 漲幅視為 0 → 不發(研究 `j60 < 0 → 0.0` 同語意)。, 群內首次達標即發(第三筆),同群後續 tick 不再發、也不算第二個掃單。 第二群五筆:第三筆達標(層數 2)當下就發,detail 記達標當下的層數 /… (+13 more)
 
 ### Community 129 - "run_backfill_brokers"
 Cohesion: 0.14
 Nodes (25): aggregate_brokers(), brokers_path(), _event_targets(), _fetch_report(), _fetch_retry(), FetchFn, Path, FinMind 分點日報回補:taiwan_stock_trading_daily_report(per stock-day 專用 endpoint).… (+17 more)
 
-### Community 130 - "test_futures_engine.py"
-Cohesion: 0.12
-Nodes (15): _EngineClosing, Exception, close() 已開始(_loop 已斷)— executor worker 以此早退,不得再碰 source。, _drain(), _make(), futures-allday §1.4:`session` 必須原樣轉給 source(三層貫通的中間那層)。…, 讓 loop 消化 call_soon_threadsafe 排入的 handler。, 江波圖回補(index-river-chart SC-4):台指 1K 必須從持有 TXF 訂閱的這條 session 問。 (+7 more)
+### Community 130 - "_EngineClosing"
+Cohesion: 0.67
+Nodes (3): _EngineClosing, Exception, close() 已開始(_loop 已斷)— executor worker 以此早退,不得再碰 source。
 
-### Community 131 - "test_overlay.py"
-Cohesion: 0.11
-Nodes (16): build_overlay(), compute_cdp(), compute_ma(), OverlayCache, 江波圖疊線(CDP / MA)計算與 cache — stock-ui-upgrade SC-4. 「已完成 bar」規則(design R1):輸入先剔除…, 毫元整數 CDP 五值;cdp 為 round-half-up(impl-spec R1:(x+2)//4,無 float)。, bars(升冪)→ overlay response;剔除今日 partial 後空 → 全 null。, per (code, today) 記憶;空結果(全 null)不 cache — TC4 失敗與真無資料在上游 已不可分(design… (+8 more)
+### Community 131 - "app.py"
+Cohesion: 0.03
+Nodes (102): asyncio, _BadSparse, _parse_legs(), _ParsedLegs, NamedTuple, 相關係數引擎的腿設定(SC-8;design §4)。 商品清單一律走設定檔,引擎程式碼內不得出現任何 TC4 symbol 字面值 —— 日後 TC4 上架…, 未知欄位一律忽略(`_comment` 說明欄不得觸發降級);必要欄缺一 → None。 壞 sparse 旗標**只蒐集不 log**,由…, sparse 打成非 bool 的腿:`key` + 原值(原值不進 `Leg`,出了 parser 就拿不到)。 (+94 more)
 
 ### Community 132 - "make_state"
 Cohesion: 0.15
@@ -1093,37 +1071,37 @@ Nodes (26): _Broker, _client(), _elapsed_info(), _fill_evt_raw(), _landed_info()
 Cohesion: 0.12
 Nodes (18): FakeHttp, _http_error(), _payload(), Exception, HTTPError, max(date) 那日 + 月契約 + position 列 → per-strike 升冪;缺對邊填 0。, 單次 range 查詢 today−10..today(D15:一次往返涵蓋連假)+ Bearer header。, OI 只在 position 列(after_market 的 OI 恆 0)→ 只有 after_market 即無資料。 (+10 more)
 
-### Community 135 - "data/models.py"
+### Community 135 - "signal_rules.py"
 Cohesion: 0.11
-Nodes (27): Bar1K, fmt_min(), _num(), parse_raw_bar(), 1K bar 標準模型與時間轉換(沿 neigui 研究慣例:09:01 bar = 索引 0)., UTC HHMMSS(無前導零)→ 台北分鐘索引(09:01=0 … 13:30=269)., neigui 原始 bar dict(全字串)→ Bar1K。欄位缺漏 raise ValueError., taipei_min() (+19 more)
+Nodes (29): _append_seed(), _as_int(), _bad(), _clamp(), _migrate_v1(), _migrate_v2(), _migrate_v3(), _migrate_v4() (+21 more)
 
 ### Community 136 - "replay_books"
-Cohesion: 0.12
-Nodes (20): 一天的 tick 存檔列(任意順序、多檔交錯)→ 每檔的簿重播,鍵 = 代號。 一次只重播一個交易日:混到別天的列 →…, replay_books(), Level, _ms(), _ns(), 簿重播引擎(spec #265 / ticket #267)—— 唯一測試 seam = `copycat.book_replay` 公開介面。 餵…, 五檔 20 格的公開欄序:買價 0–4、買量 0–4、賣價 0–4、賣量 0–4;缺層 None。, 2026-09-16 實錄:1815 在 07:31:22 開機收到前一日 14:30 的盤後成交(寫進當日檔)。 讓它當時鐘 → 整段開盤簿列的標籤掛在… (+12 more)
+Cohesion: 0.04
+Nodes (76): _apply_delta(), book_at(), BookReplay, _check_header(), decode(), encode(), Frame, _frames() (+68 more)
 
-### Community 137 - "test_t1_open.py"
-Cohesion: 0.17
-Nodes (22): _auction_tell(), EventContext, Phase 3 T+1 開盤訊號:T1Tracker(路徑分類與研究 t1_day_features 對齊). 無 lookahead…, T1OpenSignals, T1Tracker, bar(), _bucket(), ctx() (+14 more)
+### Community 137 - "TestShutdownLanes"
+Cohesion: 0.08
+Nodes (13): BlockingSubscribeStockSource, _GatedCloseStockSource, _OrderedCloseCorrSource, _OrderedCloseFuturesSource, _OrderedCloseIndexSource, `close()` 卡在 gate 上 —— TC4 半死時那條 session 的 UNSUB / LOGOUT 撞 RCVTIMEO (10…, A1(review #105 §2.6 S1):TC4 session 的 close 走**並行 lane**,不再序列。 序列版的失效樣態:一條…, `shutdown_budget.TC4_LANE_DEPTH` 不能只是自證的 `== 2`(review SP4):五條 session… (+5 more)
 
 ### Community 138 - "test_limit_streaks.py"
 Cohesion: 0.11
 Nodes (28): compute_day_limitups(), compute_prev_streaks(), 連板數純函式(零 IO)—— SC-2。 輸入 = FinMind `TaiwanStockPrice` 的單日全市場 rows(無 data_id);輸出…, 數值欄 → float;缺值 / 非數值 → None(`backfill_finmind._map_row` 同語意)。 `bool` 明確排除:True…, 單日 TaiwanStockPrice 全市場 rows → 該日收盤漲停的 4 位普通股代號集合。 -…, `day_sets` = 連續交易日的漲停集合,**新 → 舊**排序(day_sets[0] = 最近可得 交易日)。回傳 {stock_id: 截至…, _to_float(), 第四支(EOD 日線)fake 的**語意**斷言:指定股兩日皆收漲停 → streak == 2。 形狀對但值沒真的落在停板價時,verify server… (+20 more)
 
-### Community 139 - "tests/conftest.py"
-Cohesion: 0.11
-Nodes (28): _isolate_watchlist_default_path(), _neutralize_capital_env(), _neutralize_discord_env(), _neutralize_finmind_env(), _no_leaked_tc4_threads(), fixture, MonkeyPatch, Path (+20 more)
+### Community 139 - "verify.py"
+Cohesion: 0.07
+Nodes (41): _dotenv_values(), _env_limit(), _getenv(), 從環境變數組裝 CapitalClient 單例(get_capital;結構對照 treading-king capital_factory)。…, repo root .env 的 CAPITAL_*/TXO_AUDIT_DIR 逐 key 解析(每次 get_capital 重讀, 量小;server…, os.environ 有此 key(含空字串)即回傳,完全不 fallback;僅未設才讀 repo root .env。 與 cli/notify(值空白也…, 上限環境變數 → 數值或 None(=不限)。未設/空/0/負值/解析失敗都是 None; 解析失敗要留 warning — user…, _now() (+33 more)
 
 ### Community 140 - "_sent"
 Cohesion: 0.13
-Nodes (16): parametrize, 背景 balance 鏈也會 append com.sent — 依類別過濾,不可用索引位置斷言。, 個股期對映表注入(隔離版控真檔;CDF=標準 2000、QFF=小型 100、NYF=ETF 10000)。, ETF 期貨(契約單位 10,000 受益權單位)本輪不開放下單 —— 行情/乘數照落, 送單層擋:名目金額是股票期貨的 5…, characterization(R13):除權息調整後契約單位變 2,157 的個股期會被一併擋下。 這是**已知的誤拒**(design Known…, 個股期的升降單位 = 現股 tick 表(期交所規格同級距)。非法檔位在期交所會被 退單,而群益端的退單訊息回到畫面上只是一句「委託失敗」。, 市價單的 price 欄無意義(bstrPrice="M")→ 不得拿它去驗檔位(R2-8)。, 台指期 23,000 點在股票 tick 表是「5 元檔」的合法值,但這道閘本來就只該 套在個股期上 —— 鎖住範圍,免得日後改 tick 表誤傷指數期。 (+8 more)
+Nodes (16): parametrize, 背景 balance 鏈也會 append com.sent — 依類別過濾,不可用索引位置斷言。, `/api/capital/position/close` 直送 close_position,只驗 price>0 —— 前端 `edgeOf`…, 白名單:指數期貨不適用現股 tick 表(TXF 是 1 點),既有平倉路徑逐字不變。, 白名單:ETF 期貨 / 除權息調整腿的現股 tick 表不適用(60.05 是它的合法檔位), 與 `_correct_price_tick_gate`…, 白名單:現股平倉不走個股期閘(整股 tick 由群益端驗),既有路徑不變。, 個股期對映表注入(隔離版控真檔;CDF=標準 2000、QFF=小型 100、NYF=ETF 10000)。, ETF 期貨(契約單位 10,000 受益權單位)本輪不開放下單 —— 行情/乘數照落, 送單層擋:名目金額是股票期貨的 5… (+8 more)
 
 ### Community 141 - "market.py"
-Cohesion: 0.12
-Nodes (28): _add(), _is_limit(), 毫元精確等值判漲停 / 跌停(取代 neigui 的 float 半 tick 容差)。, limit_down_milli(), limit_up_milli(), limit_up_price(), 台股市場規則:tick 表與漲停價(全程毫元整數運算,避免二進位殘差)., 向下貼齊該價位所在段的合法檔位(VP 直方圖的 key;change-spec AD-2)。 tick 段取**該價位自己所在段**(不是 snap… (+20 more)
+Cohesion: 0.11
+Nodes (30): _add(), _is_limit(), 毫元精確等值判漲停 / 跌停(取代 neigui 的 float 半 tick 容差)。, limit_down_milli(), limit_up_milli(), limit_up_price(), 台股市場規則:tick 表與漲停價(全程毫元整數運算,避免二進位殘差)., 毫元版 tick:`tick_size_milli(23_450) == 50`(23.45 元 → 0.05 元檔)、… (+22 more)
 
 ### Community 142 - "PositionCloseRequest"
-Cohesion: 0.20
-Nodes (28): build_close_order(), build_future_close_order(), 期權部位 → 反向平倉單(限價貼漲跌停 + IOC 固定;design amendment)。 反向:pos.qty>0(買方)→…, PositionCloseRequest, _fut_pos(), _pos(), 平倉反向映射(spec §6.2 四規則)+ close 驗量 + 期貨平倉組裝(SC-5/6)。 treading-king…, (cash, 空向)刻意**不在** _CLOSE_MAP:2026-08-28 校準後群益負現股列已在 parse 端歸… (+20 more)
+Cohesion: 0.18
+Nodes (29): build_close_order(), build_future_close_order(), 期權部位 → 反向平倉單(限價貼漲跌停 + IOC 固定;design amendment)。 反向:pos.qty>0(買方)→…, PositionCloseRequest, _fut_pos(), _pos(), 平倉反向映射(spec §6.2 四規則)+ close 驗量 + 期貨平倉組裝(SC-5/6)。 treading-king…, (cash, 空向)刻意**不在** _CLOSE_MAP:2026-08-28 校準後群益負現股列已在 parse 端歸… (+21 more)
 
 ### Community 143 - "parse_stkfut_catalog"
 Cohesion: 0.11
@@ -1131,7 +1109,7 @@ Nodes (17): parse_stkfut_catalog(), 節點 Contracts → 月份清單(升冪)。
 
 ### Community 144 - "TicksCompactor"
 Cohesion: 0.12
-Nodes (16): _DayState, make_subprocess_runner(), _run(), date, datetime, Path, tick 存檔的盤後排程(spec #257 T5):交易日 `compact_time` 以子程序呼叫 `ticks-compact`。 樣板同…, 一個交易日的轉檔狀態機(armed-day):試了幾次、下一次最早幾點、做完 / 放棄。 (+8 more)
+Nodes (17): _DayState, make_subprocess_runner(), _run(), date, datetime, Path, 一個交易日的轉檔狀態機(armed-day):試了幾次、下一次最早幾點、做完 / 放棄。, 退避中 → 睡到最早的下一次嘗試;否則睡到今天(已過則明天)的 `compact_time` + 緩衝。 每個日曆日都醒,非交易日由 `tick` 判零動作。 (+9 more)
 
 ### Community 145 - "useCapital.ts"
 Cohesion: 0.11
@@ -1141,17 +1119,17 @@ Nodes (29): CapitalEvent, CapitalListener, clearInvalidateTimers(), emitCapitalE
 Cohesion: 0.07
 Nodes (28): CHART_MODE_KEY, CHART_TOGGLES_KEY, FEE_DISCOUNT_KEY, FUT_CHART_MODE_KEY, INDEX_OVERLAY_STORE, LEGACY_MAIN_CODE_KEY, LIMIT_LIST_FILTER_KEY, MAIN_CODE_KEY (+20 more)
 
-### Community 147 - "MonkeyPatch"
-Cohesion: 0.08
-Nodes (17): fast_streaks(), mono(), fixture, LogCaptureFixture, MonkeyPatch, 武裝檢查拋例外 → poll loop 續行(review R9)。 `_maybe_arm_streaks` 放在 `try:`…, 一輪炸掉不得讓 poll task 死透(index `_mis_loop` 同款傘罩)。 注入點必須在 `_fetch_snapshot` 的…, 窗收不滿(長假 / 上市未滿 10 日)照樣成立:span < 10,封頂語意由 span 表達。 (+9 more)
+### Community 147 - "_calendar"
+Cohesion: 0.09
+Nodes (22): _calendar(), _eod_rows(), LogCaptureFixture, 回看 10 交易日:空回應日跳過(不中斷)、收滿即停、成果落檔。 1101 十日皆漲停 → 10(撞窗上限);2330 只有最近兩日 → 2;2317…, 窗收不滿(長假 / 上市未滿 10 日)照樣成立:span < 10,封頂語意由 span 表達。, 跨午夜完成的結果是「以昨日為基準」的錯值,且會被快取固化 → 丟棄(R3)。, 昨日被當假日跳過 → 盤中判式仍會 +1(KR-1 殘餘風險)。落檔前留下觀測訊號。, 空回應 = 假日的兩道防禦(R4/R16)—— 真交易日回空 / 回半份都會高估連板數。 (+14 more)
 
 ### Community 148 - "ConnectionError"
 Cohesion: 0.12
-Nodes (16): ConnectionError, _down(), LogCaptureFixture, LogRecord, D1 / D2:quote 未連線 → 該輪整輪跳過(不記帳、不逐 symbol 印),整段斷線只印一次「等連線」。, review P-1 / S-1:index 源的 `heal_active` 是 09:00–13:25 窗 —— 斷線 13:2x 印一次、…, review P-3:`close()` 清掉 api 後在飛的巡檢不得印「待重連後接手」(沒有重連會來)。, D3:同一段斷線第一發失敗印完整 traceback,之後每發一行(例外型別 + 訊息 + 退避); 重連成功後歸零,下一段斷線的第一發再印全… (+8 more)
+Nodes (11): ConnectionError, _down(), LogRecord, D3:同一段斷線第一發失敗印完整 traceback,之後每發一行(例外型別 + 訊息 + 退避); 重連成功後歸零,下一段斷線的第一發再印全…, review P-2:「之後一行」的前提是內容每發相同;同段斷線換了例外型別 / 訊息 = 新的不懂的錯, 要再印一次完整 traceback(鐵則…, TestReconnectFailureTraceback, _fail(), _ensure() (+3 more)
 
-### Community 149 - "simulate.py"
-Cohesion: 0.13
-Nodes (23): T 日進場模擬器(design §3 D6/D7/D9 + §4)— 零 IO,悲觀成交. 時序語意: - 進場 = 觸發 bar close +…, _round_trip_cost(), _pnl(), TradeOutcome, build_universe(), _classify(), Path, 樣本宇宙(design §2 universe / D7 limit 分軌)— 分組由 watchlist 輸入,不 hardcode 分點. (+15 more)
+### Community 149 - "build_universe"
+Cohesion: 0.20
+Nodes (16): build_universe(), _classify(), Path, load_watchlist(), Path, 可替換分點集合 — 只影響事件標記與報表分組,不進評分邏輯(spec §2)., Watchlist, _dates() (+8 more)
 
 ### Community 150 - "load_config"
 Cohesion: 0.13
@@ -1170,16 +1148,16 @@ Cohesion: 0.13
 Nodes (25): arrivalOrder(), bigLotsPhrase(), displayLabel(), firstness(), formatGroupToastText(), groupKindLabels(), groupPolicies(), groupPolicyTags() (+17 more)
 
 ### Community 154 - "test_tc4.py"
+Cohesion: 0.05
+Nodes (33): build_rt_request(), SUBQUOTE/UNSUBQUOTE REALTIME 請求(必帶合法 UTC 時間窗,spike 實測)。, _install_slow_quote_api(), parametrize, C-7:換窗前必須先放掉舊窗那把 key。 舊實作是「bump 之後才 UNSUB」→ UNSUBQUOTE 送的是**新窗**、舊窗 key 的 count…, C-2:watchdog 迴圈的 catch-all —— 非 IO 例外(邏輯 bug)不得殺掉自癒。 `_heal` 只吞 TC4…, C-8:五本帳的生命週期 —— 退訂即清,不得跨訂閱週期帶著舊 variant。, item 2(2026-07-20 盤中驗證):TC4 symbol 樹的台指期產品碼是 TXF,FITX 不存在。 FITX 只出現在… (+25 more)
+
+### Community 155 - "BacktestConfig"
 Cohesion: 0.08
-Nodes (20): C-7:換窗前必須先放掉舊窗那把 key。 舊實作是「bump 之後才 UNSUB」→ UNSUBQUOTE 送的是**新窗**、舊窗 key 的 count…, C-2:watchdog 迴圈的 catch-all —— 非 IO 例外(邏輯 bug)不得殺掉自癒。 `_heal` 只吞 TC4…, C-8:五本帳的生命週期 —— 退訂即清,不得跨訂閱週期帶著舊 variant。, item 2(2026-07-20 盤中驗證):TC4 symbol 樹的台指期產品碼是 TXF,FITX 不存在。 FITX 只出現在…, N092:ready-check「首頁非空即 break」被凍結 stub 騙 —— rows 非空但一筆都解不出來 時,呼叫端只看得到空…, A1(review #105 §2.6 S1):`close()` 要自己交代時間花在哪 —— 等 `_api_lock`(在途…, item 3(2026-07-20 盤中驗證):重連換 SubPort 後 listener 必須跟隨。 盤中實證:達錢 4 重啟後重連成功,但…, characterization(refactor C6 前置):listener 對壞電文的四道過濾與存活性。 `_listen_loop`… (+12 more)
+Nodes (58): BacktestConfig, load_backtest_config(), Path, 回測全參數(版本化;configs/*.json 覆寫)— 樣式同 strategy_config(spec §8/design D5-D6).…, sim_config_hash(), _load_or_simulate(), fmt_cell(), 報告格式 helper(T 日跟多回測報告用). - fmt_cell(原 report._fmt):None → —;float →… (+50 more)
 
-### Community 155 - "test_simulate.py"
-Cohesion: 0.26
-Nodes (26): enumerate_stop_combos(), 單族(S1/S2/S3/S4)+ S1×S2 疊加,× t1300 兩臂;固定順序(determinism)., simulate_sample(), StopCombo, _bar(), _combo(), T 日進場模擬器(SC-4)— design §3 D6/D7/D9 + §4 全語意.…, _sample() (+18 more)
-
-### Community 156 - "test_chain_stats.py"
-Cohesion: 0.12
-Nodes (17): ChainStats, _classify(), format_report(), _in_session(), datetime, 回報鏈統計(#234):從 server log 的「balance 鏈」行算**乾淨子集**的落地耗時。 這把尺是 Tier…, nearest-rank 百分位(第 ceil(q·n) 小);n=0 → None。, 一條鏈的排除原因;None = 乾淨。順序固定,一條鏈只記第一個命中的原因。 (+9 more)
+### Community 156 - "main"
+Cohesion: 0.05
+Nodes (42): ChainStats, _classify(), format_report(), _in_session(), datetime, 回報鏈統計(#234):從 server log 的「balance 鏈」行算**乾淨子集**的落地耗時。 這把尺是 Tier…, nearest-rank 百分位(第 ceil(q·n) 小);n=0 → None。, 一條鏈的排除原因;None = 乾淨。順序固定,一條鏈只記第一個命中的原因。 (+34 more)
 
 ### Community 157 - "ReplyLink"
 Cohesion: 0.10
@@ -1189,57 +1167,57 @@ Nodes (22): classify_probe(), 回報線重連的純狀態機(零 IO、零時鐘�
 Cohesion: 0.11
 Nodes (24): amountRank(), amountText(), buildEntries(), changeText(), changeTone(), decimalText(), DEFAULT_FILTER, Entry (+16 more)
 
-### Community 159 - "Path"
-Cohesion: 0.13
-Nodes (14): parametrize, Path, 搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。, 名稱表與 TC4 連線無關:達錢 4 沒開(stock engine 未就緒)也要能搜尋。, `?contract=` 主圖合約切換(stkfut-contracts SC-3 / D6+D7)。 **白名單是這組測試的核心**:regex…, 小型合約也在白名單內(std / mini 兩腿都要查,只查 std 會讓小型永遠 400)。, 現貨態零行為變更;`underlying` 在現貨態 = code 自身(前端單一讀法)。, 形狀合法但產品屬於別檔股票 → 400(白名單的存在理由)。 (+6 more)
+### Community 159 - "._client"
+Cohesion: 0.15
+Nodes (10): parametrize, `?contract=` 主圖合約切換(stkfut-contracts SC-3 / D6+D7)。 **白名單是這組測試的核心**:regex…, 小型合約也在白名單內(std / mini 兩腿都要查,只查 std 會讓小型永遠 400)。, 現貨態零行為變更;`underlying` 在現貨態 = code 自身(前端單一讀法)。, 形狀合法但產品屬於別檔股票 → 400(白名單的存在理由)。, 產品對、月份不在清單(已到期 / 尚未掛牌)→ 400。 放行的話會訂到不存在的 symbol,而 TC4 照回 OK → 表現為「圖是空的」。, 形檢在白名單之前:壞形不該打到 catalog(那是一次 TC4 查詢)。, catalog 查不到 → 502,**不放行**。 降級成「當作現貨處理」會讓 TC4 一斷線畫面就悄悄從期貨跳回現貨,而下拉還顯示著 合約 ——… (+2 more)
 
 ### Community 160 - "TradingCalendar"
 Cohesion: 0.11
-Nodes (17): _parse_days(), date, datetime, Path, time, 台股交易日曆(mod/trading-calendar SC-1)— 純判定 + 版控假日表。 為什麼要這支:引擎原本用「牆鐘今天」當…, 盤前冷啟動的交易日推導(L77):**交易日**在該面的換日 stage 時刻之前, 「今天在看哪一天」= 前一交易日 —— 圖表維持前一交易日資料到…, 不可變的假日集合;所有方法零 IO(load 之後就只是純函式)。 (+9 more)
+Nodes (16): _parse_days(), date, datetime, Path, time, 盤前冷啟動的交易日推導(L77):**交易日**在該面的換日 stage 時刻之前, 「今天在看哪一天」= 前一交易日 —— 圖表維持前一交易日資料到…, 不可變的假日集合;所有方法零 IO(load 之後就只是純函式)。, 補班日優先於週末規則,其餘 = 平日且不在假日表。 (+8 more)
 
 ### Community 161 - "run_backfill_daytrade"
 Cohesion: 0.17
 Nodes (21): _dates(), DayTradeIndex, _fetch_dataset(), _fetch_retry(), FetchFn, Path, FinMind 當沖資格資料回補:TaiwanStockDayTrading(按日)+ DispositionSecuritiesPeriod. 「可當沖」=…, 當沖資格判定:在當日名單且不在處置期間;該日無任何 rows → None(未覆蓋,R18). (+13 more)
 
-### Community 162 - "import_neigui.py"
-Cohesion: 0.18
-Nodes (24): _build_events(), _import_daily(), _import_k1(), _import_limitup(), _import_near_miss(), _import_tick_auction(), Path, neigui five-tigers 種子資料 → copycat 標準格式(一次性匯入). 來源唯讀;TC4 原始格式陷阱(UTC… (+16 more)
+### Community 162 - "run_import"
+Cohesion: 0.13
+Nodes (35): _build_events(), _import_daily(), _import_k1(), _import_limitup(), _import_near_miss(), _import_tick_auction(), Path, neigui five-tigers 種子資料 → copycat 標準格式(一次性匯入). 來源唯讀;TC4 原始格式陷阱(UTC… (+27 more)
 
-### Community 163 - "parse_hist_tick"
-Cohesion: 0.10
-Nodes (12): is_trial_window(), parse_hist_tick(), 台北 HH:MM:SS.fff 是否落在試撮窗(端點不含右界、含左界);空窗 → 恆 False。, 歷史/當日回補 TICKS row → StockTick;缺 price/qty/PreciseTime → None。 `trial_windows` 同…, (PreciseTime, Date/TradeDate) UTC → (台北 HH:MM:SS.fff, 台北 YYYY-MM-DD)。, _taipei_time(), round5 項 3:明細要顯示成交當下的買賣價。 `derive_side` 早就取了 bid0/ask0(`:139-140`)只是沒留存 ——…, D2:試撮窗是**參數**不是常數(個股期主圖傳空窗)。 個股期日盤 08:45 開盤即真成交、13:30 之後仍連續交易到 13:45 ——… (+4 more)
+### Community 163 - "test_river_models.py"
+Cohesion: 0.12
+Nodes (13): _hh_mm(), minute_end_from_1k(), minute_end_from_taipei(), minute_end_from_utc_hhmmss(), 江波圖的純對映層(design v2 §1/§4;零 IO、只依賴 stdlib)。 **分鐘鍵一律「終點標記」**(bar end),與 TC4 1K 的…, 台北時刻("HH:MM:SS.fff" 或 "HHMMSS")→ floor(分)+1 的 minute-of-day;壞格式 None。 23:59:xx…, UTC `HHMMSS`(TC4 `FilledTime`)→ floor(分)+1 的台北 minute-of-day;壞格式 None。 **為什麼不用…, 1K row 的 UTC `Time` → 台北 minute-of-day(**不加 1**,TC4 已是終點標記)。 (+5 more)
 
-### Community 164 - "ws.py"
-Cohesion: 0.10
-Nodes (20): ws_corr(), ws_river(), ws_txo_pnl(), _consume_ws_task(), _is_close_sent_error(), _is_disconnect(), Any, BaseException (+12 more)
+### Community 164 - "send_seed"
+Cohesion: 0.13
+Nodes (14): ws_corr(), ws_river(), ws_txo_pnl(), Any, Protocol, `relay` 用到的 WebSocket 面。 用 Protocol 不用 `fastapi.WebSocket` 具體型別:relay 的合約只是「送…, route 層在 `relay` **之前**自己送的首則 seed(txo-pnl / corr / river)。 對端在 accept 後、seed…, send_seed() (+6 more)
 
 ### Community 165 - "WatchlistSidebar.test.tsx"
 Cohesion: 0.10
 Nodes (15): CODES, dragFromWatch(), GROUPS, mockWatchlist(), NAMES, positions, ptr(), QUOTES (+7 more)
 
-### Community 166 - "test_index_routes.py"
-Cohesion: 0.11
-Nodes (15): make_client(), _mis(), MonkeyPatch, Path, TestClient, index routes 測試 — index-board SC-4 接線 + index-overlay SC-5., `GET /api/index/overlay`(index-overlay SC-5)。 形狀同…, bars 空(TC4 不可用)→ 200 全 null,不 5xx(edge case 1)。 (+7 more)
+### Community 166 - "make_client"
+Cohesion: 0.13
+Nodes (11): make_client(), MonkeyPatch, TestClient, `GET /api/index/overlay`(index-overlay SC-5)。 形狀同…, bars 空(TC4 不可用)→ 200 全 null,不 5xx(edge case 1)。, 盤中今日 partial 日 K 不得入計算(edge case 7)。, 同日第二次呼叫不再打 bars_range(決策 3:日 bar 已在 bars_cache)。, R2-P0-1 的核心決策機驗:overlay 與 `/api/market/bars/TWSE?tf=D` **真共用** `IX0001|L` 槽 ——… (+3 more)
 
-### Community 167 - "book_replay.py"
-Cohesion: 0.12
-Nodes (25): _apply_delta(), book_at(), _check_header(), decode(), Frame, _frames(), _is_clock_point(), PluginFormatError (+17 more)
+### Community 167 - "multiplier_of"
+Cohesion: 0.16
+Nodes (16): is_option_contract(), multiplier_of(), 期交所契約碼 → 是否為選擇權(送單分流 SendOptionOrder vs SendFutureOrder)。 「什麼是期貨」只能有一份定義:原本…, product → 元/點乘數;未知 raise ValueError(route 層轉 400 INVALID_ORDER)。…, MonkeyPatch, Path, 個股期乘數 = 契約單位(股數),來源是版控的 stkfut 對映表(SC-2)。 沒有這條 fallback,個股期送單在 `multiplier_of`…, 查得到但單位 ≤0 → ValueError(→400):乘數是名目金額閘的分母,猜不得。 (+8 more)
 
-### Community 168 - "_book_replay"
-Cohesion: 0.12
-Nodes (20): encode(), parse_plugin_js(), plugin_js(), 一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v1」。, payload → 外掛檔全文:一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`。 gzip…, 外掛檔全文 → payload(`plugin_js` 的反函數)。不是一行 `window.__bk(...)` → PluginFormatError。, _book_replay(), `book-replay` 薄殼:讀一天 tick 存檔 → 簿重播引擎 → 每檔編碼、解回自檢、落檔。 (+12 more)
+### Community 168 - "MonkeyPatch"
+Cohesion: 0.16
+Nodes (13): is_partial_last(), 最後一根是否仍在進行中(尚未收盤)。 **由資料判定,不是 tf 的常數**:盤中的日 K / 分 K 最後一根就是今天 / 當下那分鐘, 週末查的週 K…, MonkeyPatch, pr-165-review #5(next-time 2026-08-31 / 09-07 盤點 C17):tf=D 的末根「未收盤」判準。…, 墊背路徑(spec S-01):呼叫端明知 bars 是界前快照 → 界後仍未收盤。, TZ-2:台北剛過午夜的第一個請求會把「昨日」永久化(近全模式最痛)。 夜盤到 05:00 才收,`yesterday` 在 00:0x…, 00:03 —— 昨日不入 memo(下一輪會重抓),但這一輪的回應不因此變少。, 00:15 —— 緩衝過了就照常永久化(否則等於把歷史 memo 整個關掉)。 (+5 more)
 
-### Community 169 - "date"
-Cohesion: 0.09
-Nodes (15): _coerce_status(), _iter_days(), BarsStatus, date, SC-6:多段結果的 status = 最壞值(disconnected > timeout > ok)。 一個引數都沒有(兩段全 cache 命中、一次…, fetcher 回來的 status 的唯一收斂點(review F2 / WL-COV-3)。 `BarsStatus` 是 Literal —— **只在…, 把一次區間抓取的結果攤進 per-day memo;沒資料的日子寫空 list(負向快取)。 **負向快取只寫到「有證據掃過」的最後一天**:TC4…, 未過期的空標記 → 存入時的 status;無標記 / 已過期 → None。 回 status 而不是… (+7 more)
+### Community 169 - "BarsStatus"
+Cohesion: 0.20
+Nodes (7): _coerce_status(), _daily_stale_or_empty(), BarsStatus, fetcher 回來的 status 的唯一收斂點(review F2 / WL-COV-3)。 `BarsStatus` 是 Literal —— **只在…, 未過期的空標記 → 存入時的 status;無標記 / 已過期 → None。 回 status 而不是…, 空結果也存,但吃更短的 TTL(`EMPTY_TTL_SECS`)。 原本空結果一律不存(don't-cache-…, 定稿界作廢後 refetch 拿空手(或 15s 負向窗內)的墊背:有舊快照回舊快照, status 照實帶(標記的原因 / fetch…
 
-### Community 170 - "index_engine.py"
-Cohesion: 0.09
-Nodes (15): in_futures_session(), in_watch_window_now(), IndexSource, now_time(), date, Protocol, time, 指數引擎(index-board SC-4;design v4). 三檔:加權(TC4 IX0001 push + 1K 回補)、櫃買(MIS 5s… (+7 more)
+### Community 170 - "WsBroadcaster"
+Cohesion: 0.05
+Nodes (33): in_futures_session(), in_watch_window_now(), IndexSource, now_time(), date, Protocol, time, 指數引擎(index-board SC-4;design v4). 三檔:加權(TC4 IX0001 push + 1K 回補)、櫃買(MIS 5s… (+25 more)
 
-### Community 171 - "test_market_routes.py"
-Cohesion: 0.09
-Nodes (18): OtcSnap, TypedDict, 價格欄毫點 int;time 為 HHMMSS 字串(台北時刻)。, server 引擎 source 的共用 fake(index / futures / corr / stock)。 `fake_txo.py`…, _mis(), NoHistoryIndexSource, 大盤 K 線 route(index-board N-5 / SC-4/5/6)。 三個分派各自向**持有該 symbol REALTIME 訂閱的那條…, 日/週/月共用同一份長窗日 K —— 第二次請求不得再打一次 TC4。 fixture 取**當前 ISO 週**的週一~週三(見… (+10 more)
+### Community 171 - "TestTwse"
+Cohesion: 0.15
+Nodes (9): NoHistoryIndexSource, 日/週/月共用同一份長窗日 K —— 第二次請求不得再打一次 TC4。 fixture 取**當前 ISO 週**的週一~週三(見…, P1-4:DK 空時 fallback 成 1K 聚合,meta 必須說實話。, 引擎在但代理不到(TC4 掛了)→ 200 + source=unavailable,不是 4xx。, 當前 ISO 週的週一起算 `n` 天(必同屬一個 ISO 週,`n <= 7`)。 週 K 的 `partial_last` 比的是「最後一根的 ISO 週…, 沒有 `fetch_bars_range_tagged` 的來源(舊 source / TC4 不可用的替身)。, P0-1:加權歷史必須走 index 自己的 session,不是個股 session。, TestTwse (+1 more)
 
 ### Community 172 - "harness_lib.py"
 Cohesion: 0.17
@@ -1249,29 +1227,29 @@ Nodes (23): main(), SessionStart + UserPromptSubmit hook: inject active /feat st
 Cohesion: 0.13
 Nodes (18): RIVER_FILLS, RIVER_STROKES, RIVER_TEXTS, CardProps, fmtPrice(), Props, RiverCard, RiverCards() (+10 more)
 
-### Community 174 - "MonkeyPatch"
-Cohesion: 0.11
-Nodes (16): requires_tcpy, _free_port(), _install_slow_quote_api(), MonkeyPatch, 把 `tcoreapi_mq.QuoteAPI` 換成延遲替身。 `_ensure_connected` 是 function 內 import,先塞…, N259:`_ensure_connected` 的 check(指標為 None)與建立/發布不是原子的 —— `_check_stale` 重連與任何…, 收工後(`close()` 已 set `_stop`)在途的 executor 工作項不得重建連線 —— 重建 = 新的 KeepAlive…, review ST2:`_ensure_connected` 持 `_api_lock` 跨 `Connect()`(最壞 10 s), 而… (+8 more)
+### Community 174 - "TestConnectInterruptible"
+Cohesion: 0.33
+Nodes (5): requires_tcpy, _free_port(), 取一個當下無 listener 的 port(bind 後立即釋放)。, 條 1 核心:app 死亡時 Connect 裸 recv 必須有 timeout,重連迴圈可中斷。 兩條都會真的走 `_ensure_connected`…, TestConnectInterruptible
 
 ### Community 175 - "._src"
 Cohesion: 0.13
 Nodes (9): D8/R2-3:`_seen` 以 **symbol** 記;timer 只掛現貨與三段形合約鍵。, 同一個 `Security` 可能同時出現在現貨與合約推播上 —— 以 Security 為鍵時,…, 兩段形 HOT 腿維持現行排除(R2-3):放開會讓 `_handle_no_data` 廣播 code="F:CDF" 的…, T5(R3):訂閱後零推播不只通報 —— 還要重掛,並以退避持續到 seen 或退訂。 08-18 開盤的個股面是「boot 起就…, C-9:R3 與 watchdog 共用一組 attempts 時,個股退避會被推到 300s。 兩者盯的不是同一件事:watchdog 是「整條…, C-4:R3 的 timer 鏈生命週期(疊鏈 / close 後續跑 / `_stop` 不看)。 失效樣態全是「盤後或關機後還在對 TC4 送…, TestHealthCheckKeyedBySymbol, TestNoDataResubscribes (+1 more)
 
-### Community 176 - "test_stkfut_routes.py"
+### Community 176 - "make_client"
 Cohesion: 0.14
-Nodes (16): make_client(), MonkeyPatch, Path, TestClient, `GET /api/stock/stkfut/contracts/{code}`(stkfut-contracts SC-1)。 catalog 由 boot…, 引擎未就緒優先於代號閘(既有 `/api/stock/state` 同優先序)。, code review B2/B3:payload 逐腿帶契約單位。 前端的 ETF 前置閘原本以「股號開頭為 0」推 ——…, 對映表查無 → null。塞 0 或省略欄位都會讓前端把它讀成「非股票單位」→ 誤擋一檔本來可以下單的標的(而後端那道真閘根本沒被觸發)。 (+8 more)
+Nodes (15): make_client(), MonkeyPatch, Path, TestClient, 引擎未就緒優先於代號閘(既有 `/api/stock/state` 同優先序)。, code review B2/B3:payload 逐腿帶契約單位。 前端的 ETF 前置閘原本以「股號開頭為 0」推 ——…, 對映表查無 → null。塞 0 或省略欄位都會讓前端把它讀成「非股票單位」→ 誤擋一檔本來可以下單的標的(而後端那道真閘根本沒被觸發)。, code review A3:boot 尾段預熱一次,冷查詢移出盤中熱路徑。 冷 cache 的第一次 `QUERYALLINSTRUMENT(Fut2)`… (+7 more)
 
-### Community 177 - "lifespan"
-Cohesion: 0.11
-Nodes (24): _calendar(), 交易日曆(lazy 單例)。載入失敗 → 只擋週末 + WARNING:這條路徑跑在 COM 執行緒的…, _Booted, lifespan(), _boot_all(), _make_futures(), _make_index(), _make_stock() (+16 more)
+### Community 177 - "_boot_engines"
+Cohesion: 0.06
+Nodes (47): _BootT, _boot(), _Booted, calendar(), _calendar_crosscheck(), index_overlay(), tagged(), lifespan() (+39 more)
 
 ### Community 178 - "_ReplyEvents"
-Cohesion: 0.10
-Nodes (14): SKReplyLib 事件 sink;回呼例外不可炸掉 COM 事件迴圈。, 連線 / 斷線回呼;例外不可炸 COM 事件迴圈,但要留痕(client 的狀態機少吃一次事件)。, _ReplyEvents, LogCaptureFixture, 群益慣例:OnReplyMessage 回 -1 抑制彈窗。, OnDisconnect 要轉給 client 降級(comtypes 對未實作事件靜默忽略, 不掛 handler 就完全偵測不到斷線);回呼例外不可炸…, dispid 9 / 10 那一對(這版 SKCOM 回報線實際走的事件;2026-09-15 05:50 prod 實錄 disconnect 3033):…, 回呼例外=一筆回報/庫存/損益/部位事件被丟棄:不炸 COM 迴圈是對的, 但必須留痕(含原始字串),否則面板跟市場脫節後完全無法追查為什麼漏。 (+6 more)
+Cohesion: 0.21
+Nodes (5): SKReplyLib 事件 sink;回呼例外不可炸掉 COM 事件迴圈。, 連線 / 斷線回呼;例外不可炸 COM 事件迴圈,但要留痕(client 的狀態機少吃一次事件)。, _ReplyEvents, 群益慣例:OnReplyMessage 回 -1 抑制彈窗。, test_reply_on_reply_message_suppresses_popup()
 
-### Community 179 - "test_ticks_compactor.py"
-Cohesion: 0.09
-Nodes (15): CompactRun, 一次轉檔呼叫的結果:exit code + 子程序輸出(逾時由 compactor 用 `wait_for` 判,不在這裡)。, `python -m copycat` 以 **cwd** 決定載哪一份 copycat(venv 是 editable 安裝,`.pth` 釘主樹, 別的…, run_compact_subprocess(), date, datetime, MonkeyPatch, S3 盤後排程(spec #257 T5):fake clock + 注入 fake 轉檔呼叫端(不開子程序)。 同 `test_screen_engine`… (+7 more)
+### Community 179 - "_engine"
+Cohesion: 0.14
+Nodes (13): _engine(), LogCaptureFixture, MonkeyPatch, bug/history-timeout-propagation:逾時的腿要排重試,不是「整天只從啟動後累積」。 真實事故(08:23):TXF/TWN/SXF…, 上界從 3 輪放寬到 8 輪(discussion handoff §1-2;08-26 08:52 真事件:TSMC 腿開機三輪 逾時全落在…, 退避階梯的字面值**唯一鎖在這裡**:30 → 60 → 120 → 240 → 480 → 600 封頂。 第 1 輪是 30…, 沉睡中的逾時重試在 reconnect 整輪起跑時作廢(review round 1 Spec P2-2)。 重試 task…, 2026-08-22 review R8 P2 + round-2 P1:reconnect 觸發的**整輪**回補撞上進行中那一輪, 真正的丟棄點是… (+5 more)
 
 ### Community 180 - "QuoteAPI"
 Cohesion: 0.11
@@ -1279,15 +1257,15 @@ Nodes (17): QuoteAPI, main(), QUERYINSTRUMENTINFO 節點展開:找指數分類�
 
 ### Community 181 - "TestPolicyQuotes"
 Cohesion: 0.08
-Nodes (16): StockDayState, _make_mapped(), 顯式 stkfut 對映 + 不介入的重試迴圈:群組資料面的測試只關心 `_states` 的內容。, SC-2:同群摘要要印成員的**名稱**與漲跌幅,而名稱只有 `state.meta.name` 拿得到。, `F:` 是訂閱池的期貨偽鍵,不是股號 —— 混進摘要會印出「F:CDF」這種東西。 走 `_watchlist` 而不是 `_states`…, 盤前 / 冷啟動尚無 REALTIME:名稱回空字串、漲跌幅 None(摘要側各自降級顯示), **不得**整檔缺席 —— 缺席會讓「群組有幾檔」跟著波動。, R16:名單以 local 參照取一次(該欄位以**整份重新指派**更新),且不對 `_states` 做 dict 迭代 —— 迭代中新訂閱寫進…, spec #192:政策層行情快照 `policy_quotes()`(hub 以 `peers_fn` 注入)。 每檔自選一份 {name, price,… (+8 more)
+Nodes (14): _make_mapped(), 顯式 stkfut 對映 + 不介入的重試迴圈:群組資料面的測試只關心 `_states` 的內容。, SC-2:同群摘要要印成員的**名稱**與漲跌幅,而名稱只有 `state.meta.name` 拿得到。, `F:` 是訂閱池的期貨偽鍵,不是股號 —— 混進摘要會印出「F:CDF」這種東西。 走 `_watchlist` 而不是 `_states`…, 盤前 / 冷啟動尚無 REALTIME:名稱回空字串、漲跌幅 None(摘要側各自降級顯示), **不得**整檔缺席 —— 缺席會讓「群組有幾檔」跟著波動。, R16:名單以 local 參照取一次(該欄位以**整份重新指派**更新),且不對 `_states` 做 dict 迭代 —— 迭代中新訂閱寫進…, spec #192:政策層行情快照 `policy_quotes()`(hub 以 `peers_fn` 注入)。 每檔自選一份 {name, price,…, TC4 說查無此檔(review F-34 / F-12):值欄位 None —— 舊 `high` 不得讓 `touched_upper` 留… (+6 more)
 
-### Community 182 - "make_client"
-Cohesion: 0.12
-Nodes (11): make_client(), v3 shape `{codes, groups}`(stock-ui-round5 §🔴-5);舊 groups-only body 仍相容., 舊 client 只送 groups → 存檔結果與 v2 時代逐字元相同(codes = 聯集)., SC-18 的機械守門:不屬任何群組的 code 也要進 set_watchlist., 字面 150 與 test_put_over_limit_400 的字面 151 成對釘死邊界 = 150。…, v1 檔(codes shape)重啟 → 全部落未分組,codes 仍進訂閱池(🔴 行為改)., v2 檔(groups shape)重啟 → codes 由聯集補,畫面零差異(SC-17)., SC-4:/api/stock/overlay/{code} — 200 形狀 / BAD_CODE / TC4 down 全 null. (+3 more)
+### Community 182 - "Path"
+Cohesion: 0.06
+Nodes (28): make_client(), Path, K 線 endpoint(SC-7;change-spec 🟢-6)。, days 轉換失敗要走專案錯誤契約,不是 FastAPI 預設 422 + list 形 detail(W-D3)。, tf=D 忽略 days(對齊 docstring / D-15):壞 days 不該擋下日 K(M1)。, engine 層降級空(不是 502),但 status 要說出是斷線 —— 前端才分得出 「TC4 掛了」與「這檔真的沒資料」,兩者原本收斂成同一句「無 K…, 搜尋提示列的名稱表(round4 項 1)。表是版控檔 → 降級路徑必須靠注入點才測得到。, N-5:source 層 deadline 用滿 → `{"status": "timeout", "bars": []}`(SC-1)。 (+20 more)
 
 ### Community 183 - "CapitalCom"
-Cohesion: 0.08
-Nodes (5): Path, CapitalCom, Protocol, Protocol 全方法在 stub 與 SkcomCapitalCom 上都存在且 callable(方法面完整性)。, test_protocol_methods_complete_on_stub_and_real_impl()
+Cohesion: 0.09
+Nodes (4): CapitalCom, Protocol, Protocol 全方法在 stub 與 SkcomCapitalCom 上都存在且 callable(方法面完整性)。, test_protocol_methods_complete_on_stub_and_real_impl()
 
 ### Community 184 - "SkcomCapitalCom"
 Cohesion: 0.09
@@ -1298,12 +1276,12 @@ Cohesion: 0.15
 Nodes (22): _at(), _parse_buysell(), parse_onnewdata(), 解析群益 OnNewData(bstrData)逗號分隔回報。純函式。 邏輯照搬 treading-king…, idx6 複合欄:[0]=B/S;證券 [1:3]=資券別、期權 [1]=倉別。 側別非 B/S 時(如刪單失敗回 "0...")不解…, _to_int(), _ym_or_none(), capital reply 解碼測試(SC-5)。fixture = treading-king 2026-06-10 正式環境真實回報… (+14 more)
 
 ### Community 186 - "close_clamp_rank"
-Cohesion: 0.13
-Nodes (10): close_clamp_rank(), _expand(), 盤別 → (start_min, end_min);未知盤別回日盤窗(never-raise:引擎不因盤別字串倒)。, 跨午夜展開後的 `(m, start, end)` —— `offset_of` 與 `close_clamp_rank` 的同一把尺。…, 收盤補正的「第幾分鐘」:非 clamp 0、`end+1` → 1、…、`end+5` → 5;超出 clamp 窗 None。 `offset_of` 把…, window_bounds(), 江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。 per-leg `{offset: 收盤毫點}`,offset =…, clamp 名次(B8):`push` 靠它分辨「收盤撮合那一分鐘」與「收盤後的殘留取樣」。 每個盤別只鎖 end / end+1 / end+2 /… (+2 more)
+Cohesion: 0.24
+Nodes (4): close_clamp_rank(), 收盤補正的「第幾分鐘」:非 clamp 0、`end+1` → 1、…、`end+5` → 5;超出 clamp 窗 None。 `offset_of` 把…, clamp 名次(B8):`push` 靠它分辨「收盤撮合那一分鐘」與「收盤後的殘留取樣」。 每個盤別只鎖 end / end+1 / end+2 /…, TestCloseClampRank
 
-### Community 187 - "parse_offset"
+### Community 187 - "test_clock_monitor.py"
 Cohesion: 0.11
-Nodes (18): _ntp_to_unix(), parse_offset(), SNTP 四時戳:t0 送出、t1 伺服器收到(bytes 32–40)、t2 伺服器送出(40–48)、t3 收到。 回 (offset_s,…, 問一台;失敗拋 OSError(含 timeout)。, sntp_query(), Exchange, MonkeyPatch, pr-238 review F-07:t0 / t3 由傳輸層在送出前 / 收到後當場取,DNS 解析那段不算進去。 修前 t0 在 `sntp_query`… (+10 more)
+Nodes (19): level_for(), _ntp_to_unix(), parse_offset(), 時鐘偏差監測(#236):本機鐘 vs NTP,stdlib SNTP,只 log 不改任何判定。 盤中閘(`_in_session` 13:30 end-…, |offset| 對應的告警等級:< WARN_MS → INFO(只印量測行);≥ WARN_MS WARNING;≥ ERROR_MS ERROR。, SNTP 四時戳:t0 送出、t1 伺服器收到(bytes 32–40)、t2 伺服器送出(40–48)、t3 收到。 回 (offset_s,…, MonkeyPatch, parametrize (+11 more)
 
 ### Community 188 - "make_repo"
 Cohesion: 0.21
@@ -1313,21 +1291,17 @@ Nodes (9): commit(), git(), make_repo(), Path, 回傳 (repo, start_sha) — star
 Cohesion: 0.14
 Nodes (23): applyDrop(), avgBadge(), dropHint(), EMPTY_WL, fmtPrice(), loadCollapsed(), loadUngroupedCollapsed(), persistCollapsed() (+15 more)
 
-### Community 190 - "_balance_queries"
-Cohesion: 0.10
-Nodes (21): _balance_queries(), _FakeClock, _fill_evt_raw(), 成交回報(Type=D):觸發 balance 重查排程。, SC-7(d):零事件死查詢(collector poll 在 _last_feed is None 早退,永不 flush)— deadline…, collector 專用可注入時鐘:欠帳時間窗要驗「窗內/窗外」兩態, 真時鐘會逼測試 sleep 20s(且 Windows time.monotonic…, 真餵一輪把部位做出來(不用 store.set_positions)—— collector 因此不是處女態 (上一輪收過 rows / 已…, R7/A4:死查詢逾期解卡(SC-7(d))放棄了第一輪,但那一輪的 `##` 可能才遲到 — COM 回呼不帶任何查詢識別,終止符無法與查詢配對。遲到的零列… (+13 more)
-
 ### Community 191 - "ws_stream"
 Cohesion: 0.17
 Nodes (15): _OpenWsStream, fixture, LogCaptureFixture, Protocol, _queue_full_warnings(), `WsBroadcaster(...)` + `stream()` 一組,測後對每條開過的 stream `aclose()`(原八份…, `copycat.server.ws` 丟包 WARNING 的訊息文字(判準 = 盤後 `grep 佇列滿`)。, `maxsize` 參數必須真的傳到 per-client queue(engine 層各自傳值,B-D5)。 參數若被忽略(queue 一律吃模組常數… (+7 more)
 
-### Community 192 - "TestGroupSnapshot"
-Cohesion: 0.09
-Nodes (12): SC-4:群組檢視的唯讀 batch。**不 set_main、不改訂閱池**(`/api/stock/state/{code}` 會…, R9:`no_data` 推導式 = `code in _no_data` **或** 未訂閱。 刻意與 `snapshot()` / `engine`…, 卡片三態靠這個旗標分辨「回補中…」與「無資料」—— 沒有它,剛開的群組會有 一整排看起來像壞掉的空卡。, R1/R12 端到端:主圖是別檔時,群組成員照樣補得到當日分鐘列。, R4 的群組側:斷線期間的缺口要補得回來。reconnect 只重入列 `_main`, 成員全靠記帳清空後由下一次 group_snapshot 重新入列。, A1:batch 走 `light_snapshot()`,不得再建全量 `snapshot()`。 全量那份會把當日數千筆 tick 逐筆組成 dict…, A1 的另一半:未知 / 未訂閱 code 不得為了「拿一份空 payload」而 new 一個 狀態機(deque(maxlen=20_000)…, A6-3:「已訂閱」與 `no_data` 的判準都改讀訂閱池 `_refs`。 `_states` 是**只增不減**的(退訂只動 `_refs`)——… (+4 more)
+### Community 192 - "to_futureorder_fields"
+Cohesion: 0.14
+Nodes (23): _do(), StockOrderRequest → STOCKORDER 欄位 dict(treading-king 同款逐欄)。, FutureOrderRequest → FUTUREORDER 欄位 dict(期貨/選擇權共用,spike 定案用欄)。 contract =…, to_futureorder_fields(), to_stockorder_fields(), _fut(), BuySell, PriceType (+15 more)
 
 ### Community 193 - "App.memo.test.tsx"
 Cohesion: 0.12
-Nodes (16): appFetch(), BREADTH_ROWS, expectFuturesDelivered(), FakeWS, fetchUrls(), futProduct(), futStateCalls(), hoisted (+8 more)
+Nodes (15): appFetch(), BREADTH_ROWS, expectFuturesDelivered(), fetchUrls(), futProduct(), futStateCalls(), hoisted, INDEX_STATE (+7 more)
 
 ### Community 194 - "App.test.tsx"
 Cohesion: 0.12
@@ -1345,17 +1319,17 @@ Nodes (8): ACCUM, bandTexts(), mainSvg(), OVERLAY, overlayCalls(), overlayLineEl
 Cohesion: 0.12
 Nodes (19): accumFromGroupSnapshot(), applyTick(), extendMinutes(), foldVp(), fromSnapshot(), GroupLikeSnapshot, MinuteAgg, minuteKey() (+11 more)
 
-### Community 198 - "fake_txo.py"
-Cohesion: 0.11
-Nodes (11): server route 測試共用的 TXO QuoteSource fake — re-export。 實體已上提到…, _client(), TestClient, `/api/health` = 執行中 server 的建置身分(docs/next-time.md 2026-07-29 紅標)。 守的失效樣態:跑著的…, 在本 repo 跑 = 真的問到 git,不是恆回 None 的空殼。, build 身分必須在啟動時定格。 不比對兩次請求的 `started_at` 字串 —— 它是秒解析度,同一秒內的兩次請求就算…, git 未裝 / 非 repo / 打包部署 → 降級,不得讓 server 起不來。, 啟動 banner:不開瀏覽器也看得到版本(next-time 列的候選修法之一)。 (+3 more)
+### Community 198 - "test_health.py"
+Cohesion: 0.08
+Nodes (18): BuildInfo, capture(), _git(), datetime, 執行中 server 的建置身分(git sha + 啟動時刻)。 **存在理由**(docs/next-time.md 2026-07-29…, `git_dirty` 三態:True/False = 問到了;None = 問不到(git 不可得)。, 跑一條 git,任何取不到的情況一律 `None`。 catch 的處理邏輯就是降級本身(鐵則 E:catch 後要有具體處理)—— 呼叫端靠 `None`…, 在 lifespan 啟動時呼叫一次;之後整個行程回同一份。 刻意**不**每次請求重算:sha 是「這個行程跑的是哪一版 code」,啟動後才 commit… (+10 more)
 
 ### Community 199 - "._bo"
 Cohesion: 0.20
 Nodes (7): #226 放量離開(`vol_breakout`):價在錨 ±band_pct 帶內停留 ≥ min_dwell_secs,離帶那一分鐘的量 ≥ ratio…, 每分鐘一筆、同價、qty 張:minutes 個有成交的分鐘,均量 = qty / 分鐘。, 均量分母地板 `_BREAKOUT_MIN_MINUTES` = 4(研究 `len(vols) >= 4`;pr-228 review F-05): 恰 4…, two-axis spec S-01(Must):離帶筆之後同分鐘續跑 +0.79%(離開**新錨** 50.40 的帶)不得把離帶 分鐘的累加器丟掉 ——…, 研究 `len(vols) >= 4` 才算得出均量(薄股 10 分鐘只成交兩分鐘沒有「均量」可言)。, 狀態推進無條件(design R2):停用期間達標的那一次離帶被消耗,重開不補發。, TestVolBreakout
 
 ### Community 200 - "._armed"
-Cohesion: 0.11
-Nodes (14): date, datetime, SC-5(h) [IC-2]:`_now_taipei_time` 的**真實實作**(其餘 case 全 monkeypatch 掉它)。…, 凍結 `datetime.now` 而不是替掉 `_now_taipei_time`:要跑的正是格式化那一步。 替的是 **engine 模組的 `_dt`…, D6-1 的推導式落地值(改 `TRIAL_WINDOWS` 時這條會提醒觀測窗要跟著動)。, 凍結時鐘 + **迴圈拍數計數器**(`now_fn` 注入點)。 否定型斷言(「不 stage1」)需要一個可觀察的計數器來確定迴圈真的轉過幾拍: 在…, SC-4:checkpoint 的「候選交易日」判定改吃注入的 `is_trading_day`。 現行是 `now.weekday() < 5` ——…, 起一個 checkpoint 開著的 engine,等迴圈確實轉過 3 拍後回傳現況。 (+6 more)
+Cohesion: 0.10
+Nodes (13): date, datetime, parametrize, SC-5(h) [IC-2]:`_now_taipei_time` 的**真實實作**(其餘 case 全 monkeypatch 掉它)。…, 凍結 `datetime.now` 而不是替掉 `_now_taipei_time`:要跑的正是格式化那一步。 替的是 **engine 模組的 `_dt`…, D6-1 的推導式落地值(改 `TRIAL_WINDOWS` 時這條會提醒觀測窗要跟著動)。, 凍結時鐘 + **迴圈拍數計數器**(`now_fn` 注入點)。 否定型斷言(「不 stage1」)需要一個可觀察的計數器來確定迴圈真的轉過幾拍: 在…, 起一個 checkpoint 開著的 engine,等迴圈確實轉過 3 拍後回傳現況。 (+5 more)
 
 ### Community 201 - "._run_handover_locked"
 Cohesion: 0.11
@@ -1385,21 +1359,17 @@ Nodes (17): StringIO, _FailingSink, Any, _Tee 與 _setup_prod_log 的直接單�
 Cohesion: 0.15
 Nodes (9): _RaisingSocket, _rt_request 測試替身:真 threading.Lock + 可注入 socket 行為。, 條 1(next-time 2026-07-20):REQ 路徑錯誤收斂 ConnectionError + lock timeout。, review F1/F2:wrapper 直呼路徑收斂 _req(lock timeout + 錯誤轉換 + 失敗棄連線)。, T4:REQ 例外只退避、不得殺 watchdog 執行緒。, _ReqApi, TestHealResilience, TestReqProtection (+1 more)
 
-### Community 208 - "test_stats.py"
-Cohesion: 0.20
-Nodes (19): max_drawdown(), monthly_consistency(), _months_between(), plateau_check(), 加權統計與三道驗證(design D12、§4 月度一致性 / θ 平台檢定). - 每筆 PnL = 扣成本報酬率 ×…, θ*±step 鄰域(存在的網格點)test 期望值同號且 ≥ |θ* 值| × plateau_min_frac., (date, stock_id) 時間序逐筆累加加權 PnL 的 equity curve 峰谷差(D12)., N = 日曆月數固定;正月 = 加權月期望值 > 0(零成交月非正月); 第二條件:最差單月虧損絕對值 ≤ 正貢獻月加總 × 50%(無虧損月自動通過). (+11 more)
-
-### Community 209 - "test_corr_engine.py"
-Cohesion: 0.13
-Nodes (14): _BadSparse, CorrConfig, Leg, _parse_legs(), _ParsedLegs, NamedTuple, 相關係數引擎的腿設定(SC-8;design §4)。 商品清單一律走設定檔,引擎程式碼內不得出現任何 TC4 symbol 字面值 —— 日後 TC4 上架…, 未知欄位一律忽略(`_comment` 說明欄不得觸發降級);必要欄缺一 → None。 壞 sparse 旗標**只蒐集不 log**,由… (+6 more)
+### Community 208 - "pipeline.py"
+Cohesion: 0.08
+Nodes (51): _feature_row(), _features_path(), _outcomes_path(), Path, Trade, 管線 IO 邊界(design §1):run_features / run_search(outcome cache + 三段式搜索).…, 樣本身分 hash(stock_id/date/trig_idx 序列)— cache 錯位防護(review F1)., features row → 謂詞用特徵 dict(單一出口,train/test/跨 θ 三處共用). (+43 more)
 
 ### Community 210 - "test_label_events.py"
 Cohesion: 0.26
 Nodes (19): label_events(), Path, events.csv 分點標籤:brokers store × watchlist → broker_ids 就地補值. 標籤語意(change-spec…, top-5 淨買超中的 watchlist 命中(回傳 broker_id asc;命中順序不進語意)., top_netbuy_hits(), _brokers_ranked(), _event(), Path (+11 more)
 
 ### Community 211 - "FuturesSource"
-Cohesion: 0.10
-Nodes (7): FuturesSource, _ProductState, Protocol, 期貨行情來源抽象;TC4 實作在 copycat.live.futures_source,測試注入 fake。, pending 商品每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。 只有失敗品才會起這個 task ——…, executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。 cancel 正 await `to_thread` 的…, TC4 重連對帳:`_check_stale` 重掛失敗品靜默出集合(僅 warning)、迴圈中途 拋錯時尾段 symbol 蒸發 —— 掉訂品不進…
+Cohesion: 0.15
+Nodes (4): FuturesSource, _ProductState, Protocol, 期貨行情來源抽象;TC4 實作在 copycat.live.futures_source,測試注入 fake。
 
 ### Community 212 - "MarketPane.tsx"
 Cohesion: 0.11
@@ -1417,41 +1387,41 @@ Nodes (18): 跨語言契約(CLAUDE.md §4 證券部位 kind 的 daytrade_sell �
 Cohesion: 0.23
 Nodes (8): #227 大單敲檔筆數格:掃單簇事件 `detail["big_lots_120s"]` = 發訊時刻往前 `big_lot_window_secs`…, n 筆同價 50.00 的外盤 tick(價不升 → 永不命中),100 ms 一筆。, 回看基準(10:00:00.000)+ 兩群 → 唯一的掃單簇事件,回 `big_lots_120s`。, 研究 `len(lots) >= 30` 是 append 之後判:第 30 筆本身可算、第 29 筆不算。, 300 筆 100 張之後再 300 筆 1 張:中位取最近 300 筆 = 1 → 10 張是大單;取整天則中位 50.5 不算。, 釘 `_BIG_LOT_MEDIAN_TICKS` = 300(pr-228 review F-07;CLAUDE.md §4 契約「中位取最近 300…, 研究 `sec − 120 ≤ h ≤ sec` 含發訊時刻本身:發訊那筆(50.40 > 50.30、≥ 賣一 50.20、20 張)算一筆。, TestBigLots
 
-### Community 216 - ".test_trading_day_premarket_failure_still_waits_for_window"
-Cohesion: 0.12
-Nodes (12): _FailOnceFetch, Any, 首次呼叫拋 `BreadthFetchError`、其後正常 —— 「首圈打嗝」的最小重現。 用 `FakeFetch.error`…, today_fn = 最近交易日(週五)、now_fn = 牆鐘(週六)——app 層在假日的實況。 `Clock`…, SC-5:`_in_window` 加交易日判定;today_fn = 最近交易日時假日仍還原得出序列。 現行 `_in_window` 是純時間窗 → 週六…, 週六開站:`breadth-2026-08-14.json` 還原得出週五序列(今日 = 最近交易日)。 今日基準若是牆鐘週六,檔名鍵就是…, 窗內但非交易日 → 只有首圈那一次取數(W5:假日 poll 次數下降)。 圈數用 `_maybe_arm_streaks`…, C1:非交易日首圈取數失敗 → 沿既有退避重試,直到成功一次為止。 `_in_window` 吃了交易日 gate 之後,「首圈無條件 +… (+4 more)
+### Community 216 - "MonkeyPatch"
+Cohesion: 0.17
+Nodes (17): main(), _Capture, MonkeyPatch, perf #243:prod 與 --verify 都在啟動最前套 timer 1 ms(EcoQoS 豁免 + timeBeginPeriod),恰一次。…, main() 無參數 = 讀 sys.argv(pytest 自己的 argv 不含 --verify → prod 路)。, `VERIFY_BREADTH_FAIL=1` → **落檔目錄不變**(`VERIFY_DATA_DIR`),且不清任何檔。 專用 fail…, 未注入失效 → 照舊用 `market-verify`(隔離目錄只服務注入那條路)。, run.ps1 會在 operator 的 shell 留下 TXO_SERVER_PORT=8721;verify server 佔住 canonical… (+9 more)
 
 ### Community 217 - "._engine"
-Cohesion: 0.17
-Nodes (9): Any, LogCaptureFixture, 櫃買當日分 bar 由 5 秒 MIS 快照合成(index-board N-4 / SC-6)。 TC4 沒有櫃買指數 symbol(CLAUDE.md…, 前端 candle.ts:splitStamp 靠**有無空格**判斷日 K / 分 K —— 格式錯了 30/60/90 分完全不聚合,而畫面看起來仍是正常…, 換日必清:否則昨日的合成分 bar 會混進新交易日(review P1-9)。, 偵測到新交易日後、swap 前的快照不得進當日桶(沿用 _apply_otc 既有守衛)。, L3(2026-08-28 triage):有日曆的休市日 index 自癒整天不打(PR #139)—— 日曆把真交易日誤標成…, TestHolidayPushWarning (+1 more)
-
-### Community 218 - "test_cli.py"
 Cohesion: 0.13
-Nodes (12): CaptureFixture, MonkeyPatch, Path, `refresh-stock-names` 的 dispatch(change-spec 🟢-7)。 有這支才會發現「`args.command`…, 守門拋錯要傳到 CLI 外(保留舊檔的語意靠拋出來讓 exit code 非 0)。, 順手把同形狀的既有子命令也鎖住(兩者共用 dispatch 尾段)。, pr-211 F-07:`screen --date <非交易日>` 要在取數前擋下並講明原因 —— 否則 `data_date_of` 會…, TestRefreshStkfutMap (+4 more)
+Nodes (13): Any, LogCaptureFixture, 櫃買當日分 bar 由 5 秒 MIS 快照合成(index-board N-4 / SC-6)。 TC4 沒有櫃買指數 symbol(CLAUDE.md…, 前端 candle.ts:splitStamp 靠**有無空格**判斷日 K / 分 K —— 格式錯了 30/60/90 分完全不聚合,而畫面看起來仍是正常…, 換日必清:否則昨日的合成分 bar 會混進新交易日(review P1-9)。, 偵測到新交易日後、swap 前的快照不得進當日桶(沿用 _apply_otc 既有守衛)。, L3(2026-08-28 triage):有日曆的休市日 index 自癒整天不打(PR #139)—— 日曆把真交易日誤標成…, review A6 round-1 SP1:重連那一發沿用 variant N,但新 session 的 N 號窗也可能是凍結 stub ——… (+5 more)
 
-### Community 219 - "app.py"
-Cohesion: 0.12
-Nodes (18): BaseModel, _BootT, _boot(), market_bars(), plain_with_status(), tagged_source(), GroupBody, GroupsBody (+10 more)
+### Community 218 - ".test_screen_date_on_non_trading_day_exits_with_explicit_error"
+Cohesion: 0.14
+Nodes (11): CaptureFixture, MonkeyPatch, Path, `refresh-stock-names` 的 dispatch(change-spec 🟢-7)。 有這支才會發現「`args.command`…, 守門拋錯要傳到 CLI 外(保留舊檔的語意靠拋出來讓 exit code 非 0)。, 順手把同形狀的既有子命令也鎖住(兩者共用 dispatch 尾段)。, pr-211 F-07:`screen --date <非交易日>` 要在取數前擋下並講明原因 —— 否則 `data_date_of` 會…, TestRefreshStkfutMap (+3 more)
+
+### Community 219 - "bars.py"
+Cohesion: 0.07
+Nodes (33): market_bars(), plain_with_status(), tagged_source(), stock_bars(), _market_payload(), BarsStatus, 大盤 K 線回應(index-board N-5)。 `meta` 不是裝飾:前端固定把它渲染成一行「來源 · 涵蓋期間」,讓「壞了 vs 沒資料」…, build_period() (+25 more)
 
 ### Community 220 - "scan_limitup_events"
 Cohesion: 0.24
 Nodes (18): Path, 自產漲停事件掃描:daily prices → 收盤漲停 → append events.csv + limitup_all.csv. 取代 neigui…, 掃描 [start, end] 收盤漲停事件,冪等 append;回傳統計., _read_rows(), scan_limitup_events(), _write_rows(), _price(), Path (+10 more)
 
-### Community 221 - "WsBroadcaster"
+### Community 221 - "FakeHub"
 Cohesion: 0.13
-Nodes (12): ws_capital(), ws_futures(), 新 client 的訊息流;`seed` 逐則在**呼叫當下同步**入該 client 的佇列。 種子**不可借用 `publish`**(那會打到所有…, per-client 有界 queue fanout;`publish` 必須在 event loop 上呼叫。 丟包**可觀測**(mod/group-…, 有沒有人在聽(perf #244):供只為廣播而算的引擎(corr `state()` 每秒 9 ms 整批重算時代 的閘;增量後仍留著 ——…, 節流窗到期 → 結算「上一窗共丟幾筆」(pr-187 review #8 收修 spec F-01)。 掛在 `publish()`…, WsBroadcaster, open_stream() (+4 more)
+Nodes (7): FakeHub, SignalSink stub:只記錄呼叫序列(順序本身是被鎖的行為)。, SC-5 / SC-6:訊號掛點只長在 live 路徑上,回補重放與換日 pending 期間不得誤觸。, SC-5:`apply_backfill` 路徑零接觸 —— 回補是重放歷史,發訊號等於對著 已成過去的價位重新示警。結構隔離(掛點只在…, SC-6 後半:試撮期(13:25–13:30)`ingest` 回 False → 不評估成交路;…, stage1 已觸發、stage2 未完成時跳過簿路:否則跨日後第一則簿更新會拿今日簿 對照昨日 latch 誤發 `limit_open`(design…, TestSignalHubHooks
 
 ### Community 222 - "group_choices"
-Cohesion: 0.17
-Nodes (10): group_choices(), `group` / `name` / `old` 參數的 autocomplete 選項(SC-4)。 **三態一律回空清單**(service 未就緒 /…, _HangingService, LogCaptureFixture, `current()` 永不返回 —— 模擬寫入持鎖(TC4 往返)期間的 autocomplete。, 子字串(非前綴):中文群組名沒有前綴語意(design R8 amendment)。, 3 秒硬窗 + 與寫入共用單鎖:等不到就放手回空,不可堆積等鎖 task。, Choice name 上限 100:單一超長項會讓整份回應被 Discord 拒收(R7)。 (+2 more)
+Cohesion: 0.16
+Nodes (11): _group_ac(), group_choices(), `group` / `name` / `old` 參數的 autocomplete 選項(SC-4)。 **三態一律回空清單**(service 未就緒 /…, _HangingService, LogCaptureFixture, `current()` 永不返回 —— 模擬寫入持鎖(TC4 往返)期間的 autocomplete。, 子字串(非前綴):中文群組名沒有前綴語意(design R8 amendment)。, 3 秒硬窗 + 與寫入共用單鎖:等不到就放手回空,不可堆積等鎖 task。 (+3 more)
 
-### Community 223 - "finmind_token.py"
+### Community 223 - "TestResolveToken"
+Cohesion: 0.19
+Nodes (10): _fresh_dotenv_cache(), fixture, MonkeyPatch, Path, FinMind token 解析(`copycat/server/finmind_token.py`)。 自 `test_oi_levels.py` 隨 🔵…, `_dotenv_cache` 是**解析一次就黏住**的 module 級狀態(review TC-5):conftest 已 設…, token 解析三條語意(review TC-5)。server 不載 dotenv: `FINMIND_TOKEN in os.environ`…, `set FINMIND_TOKEN=` 是明確的「這台不要打 FinMind」,不得被檔案值復活。 (+2 more)
+
+### Community 224 - "_Tee"
 Cohesion: 0.13
-Nodes (15): _dotenv_values(), FinMind token 解析(server 不載 dotenv:env → repo root .env 逐 key fallback)。 自…, repo root .env 逐 key 解析。utf-8-sig:Windows BOM 會讓首 key 靜默失效; never-…, `FINMIND_TOKEN in os.environ` 即用(含空字串 = 未設,可壓制 .env)→ 否則 .env。 空字串當未設而**不**往下…, resolve_token(), _fresh_dotenv_cache(), fixture, MonkeyPatch (+7 more)
-
-### Community 224 - "server/__main__.py"
-Cohesion: 0.12
-Nodes (12): Any, Exception, Path, TextIO, 啟動入口:python -m copycat.server(canonical port 8721,design §4 IR-3)。…, prod 模式:sys.stdout / sys.stderr 換成 tee。 必須在 logging.basicConfig 之前呼叫 ——…, 把一路 stdout/stderr 同時寫 console 與 log 檔。 檔案每筆 write 即 flush:log 的價值在 crash…, _setup_prod_log() (+4 more)
+Nodes (11): Any, Exception, Path, TextIO, prod 模式:sys.stdout / sys.stderr 換成 tee。 必須在 logging.basicConfig 之前呼叫 ——…, 把一路 stdout/stderr 同時寫 console 與 log 檔。 檔案每筆 write 即 flush:log 的價值在 crash…, _setup_prod_log(), _Tee (+3 more)
 
 ### Community 225 - "run_hook"
 Cohesion: 0.19
@@ -1461,21 +1431,21 @@ Nodes (19): CompletedProcess, run_hook(), test_bash_bulk_git_add_blocked(), test
 Cohesion: 0.14
 Nodes (12): assignToGroup(), detachFromGroups(), Group, groupForCode(), insertAt(), moveToGroup(), reinsertIntoCodes(), reorderUngrouped() (+4 more)
 
-### Community 228 - "test_oi_levels.py"
-Cohesion: 0.13
-Nodes (12): _client(), _fresh_cache(), fixture, TestClient, FinMind TXO OI 撐壓 service + endpoint(futures-allday SC-11;PLAN 後端 §7)。 真打…, module 級快取跨測試殘留 = 下一條測試看到的是上一條的答案。 `finmind_token._dotenv_cache` 一併重置(review…, 只提供 route 用得到的那一格(resolved_contract);其餘引擎行為與本測試無關。, 契約未解析 → 200 空 shape(不是 503:前端把 OI 線當可有可無的疊圖)。 (+4 more)
+### Community 228 - "_client"
+Cohesion: 0.17
+Nodes (8): _client(), TestClient, 只提供 route 用得到的那一格(resolved_contract);其餘引擎行為與本測試無關。, 契約未解析 → 200 空 shape(不是 503:前端把 OI 線當可有可無的疊圖)。, 引擎沒起來(state.futures is None)照樣 200 空 shape。, StubFutures, TestOiRoute, boom()
 
 ### Community 229 - "test_stock_routes.py"
-Cohesion: 0.14
-Nodes (12): _GatedDailyBarsSource, _next_of_type(), LogCaptureFixture, `/ws/stock` 入站 `view` 訊息(mod/group-grid-ticks T2,#182):瀏覽器告訴後端…, `fetch_daily_bars` 記併發峰值,且**等到本批到齊 `cap` 個才放行**。 純 `sleep` +…, AD-5 amendment(review R5):`cdp` 預設開,進群組會對 ≤50 檔同時打 overlay, 而 `daily_bars` 走…, 跳過 seed(watchlist_quote)/ book 等,取第一則指定型別;超過 `limit` 則視為沒到。, 對 TestClient 背景 loop 的狀態 poll(pr-187 review #5):固定 sleep 在慢機器上沒落地 → 之後的… (+4 more)
+Cohesion: 0.06
+Nodes (28): _ClosingStockSource, _FailingStartStockSource, _GatedDailyBarsSource, _next_of_type(), LogCaptureFixture, MonkeyPatch, `/ws/stock` 入站 `view` 訊息(mod/group-grid-ticks T2,#182):瀏覽器告訴後端…, `fetch_daily_bars` 記併發峰值,且**等到本批到齊 `cap` 個才放行**。 純 `sleep` +… (+20 more)
 
-### Community 230 - "minute_end_from_utc_hhmmss"
-Cohesion: 0.19
-Nodes (13): minute_end_from_utc_hhmmss(), UTC `HHMMSS`(TC4 `FilledTime`)→ floor(分)+1 的台北 minute-of-day;壞格式 None。 **為什麼不用…, _collect_ids(), main(), rt(), _port_in_use(), probe_1k(), 相關係數加腿前置探測(一次性,收工必 Disconnect):feat/chart-ux-batch-0826 F4 第一步。 沿… (+5 more)
+### Community 230 - "corr_legs_probe.py"
+Cohesion: 0.40
+Nodes (9): _collect_ids(), main(), rt(), _port_in_use(), probe_1k(), 相關係數加腿前置探測(一次性,收工必 Disconnect):feat/chart-ux-batch-0826 F4 第一步。 沿…, 遞迴收 EXGID 節點 → {EXGID: {"CHT":..., "instrument_ids": [...]}}。, req() (+1 more)
 
-### Community 231 - "in_stock_heal_window_now"
-Cohesion: 0.13
-Nodes (12): in_stock_heal_window_now(), 個股 session 的自癒 / 健檢閘窗(08:30 試撮起,含;– 13:35 收盤補正止,不含)。 **不是**「現在是否盤中」:13:30–13:35…, parametrize, 逐腿自癒閘的**前綴分派**(N051 + 2026-08-26 F4 台積電現貨腿)。 corr 是唯一一條 session…, 台積電現貨腿吃**個股日盤**閘,不是台期交閘(兩者收盤 13:30 vs 13:45 不同尺)。, SGX / CME / CBOT / CFE / OSE 段恆 True:時段未實測,猜錯 = 該救的腿整場不救。, 台股現貨 09:00–13:30 收盤後、台期交夜盤仍開的那一段:一關一開,不得互相牽動。, 台積電腿吃的那把牆鐘 = 個股 session 既有的 `in_stock_heal_window_now`(不另立第二張表)。 **不是** index… (+4 more)
+### Community 231 - "in_index_heal_window_now"
+Cohesion: 0.09
+Nodes (19): in_index_heal_window_now(), in_stock_heal_window_now(), time, 個股 session 的自癒 / 健檢閘窗(08:30 試撮起,含;– 13:35 收盤補正止,不含)。 **不是**「現在是否盤中」:13:30–13:35…, index session(IX0001;櫃買走 MIS poll 不吃這把)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。 與…, parametrize, 逐腿自癒閘的**前綴分派**(N051 + 2026-08-26 F4 台積電現貨腿)。 corr 是唯一一條 session…, 台積電現貨腿吃**個股日盤**閘,不是台期交閘(兩者收盤 13:30 vs 13:45 不同尺)。 (+11 more)
 
 ### Community 232 - "package.json"
 Cohesion: 0.12
@@ -1494,27 +1464,27 @@ Cohesion: 0.15
 Nodes (12): connectWithRetry(), isPing(), WS_BACKOFF_CAP_MS, WS_BACKOFF_START_MS, WS_MIN_UPTIME_MS, WS_SHORT_LIVED_CAP_MS, WS_SILENCE_TIMEOUT_MS, WS_WATCHDOG_JITTER_MS (+4 more)
 
 ### Community 236 - "TestDiscordFanout"
-Cohesion: 0.11
-Nodes (9): TQ-3:關機盡力落檔 —— jsonl 是真相源要寫完,Discord 這時不再送。, TQ-4:落檔炸掉(磁碟滿 / 權限)只該丟掉那一筆,worker 死掉 = 之後整天無聲。, 等 jsonl 落到 n 筆(不碰私有佇列 —— 這裡驗的正是「哪條路徑卡不住哪條」)。, 節流上限 30/分:第 31 則不送 Discord,但 WS 與 jsonl 完整(design §4.3)。, TQ-1:bot 沒 ready 的真實樣態是 `send_signal` **回 False**,不是丟例外。 頻道未設 / on_ready 還沒跑完 =…, TQ-1:兩層皆未送出(webhook URL 未設 → notify 回 False)。 「沒送出去」是可接受的降級,不是例外 —— worker 不得記…, CC-5:jsonl 是歷史真相源,不得被 Discord 這條「可丟」的路徑卡住。 單一 worker 把 jsonl→Discord…, TestDiscordFanout (+1 more)
+Cohesion: 0.09
+Nodes (13): _drain(), MonkeyPatch, Queue, 滿載策略(design R14):丟最舊 + dropped 計數,熱路徑不反壓。, TQ-3:關機盡力落檔 —— jsonl 是真相源要寫完,Discord 這時不再送。, TQ-4:落檔炸掉(磁碟滿 / 權限)只該丟掉那一筆,worker 死掉 = 之後整天無聲。, 等 jsonl 落到 n 筆(不碰私有佇列 —— 這裡驗的正是「哪條路徑卡不住哪條」)。, 節流上限 30/分:第 31 則不送 Discord,但 WS 與 jsonl 完整(design §4.3)。 (+5 more)
 
 ### Community 237 - ".test_hub_start_failure_isolates_signals_only"
 Cohesion: 0.11
 Nodes (9): _ExplodingBot, close 會拋的假 bot(真實對應:token 失效 → discord.py 在收攤路徑上拋)。, 關機/啟動失敗路徑的隔離(CC-1 / CC-2)—— 失效樣態全是靜默的。, CC-1:bot.close 拋不得讓 hub.close 整段跳過(worker 洩漏 + 關機落檔不跑)。, CC-2:`_start_signals` 中途炸掉 → engine 不得留著已收攤的 hub 在熱路徑上。 殭屍 hub 的樣態:WS…, TQ-7:訊號整段套 `_boot` 隔離 —— hub 起不來只讓訊號停用,其他引擎照常。 沒有這條的話,`_boot` 的邊界被改窄(或搬到 try…, Edge case 3(review TC-2):to_thread 內的非預期例外要原樣傳回 await 處、 落全域 handler 收 502…, TestSignalsShutdownIsolation (+1 more)
 
-### Community 238 - "TestBarsRoute"
-Cohesion: 0.13
-Nodes (7): K 線 endpoint(SC-7;change-spec 🟢-6)。, days 轉換失敗要走專案錯誤契約,不是 FastAPI 預設 422 + list 形 detail(W-D3)。, tf=D 忽略 days(對齊 docstring / D-15):壞 days 不該擋下日 K(M1)。, engine 層降級空(不是 502),但 status 要說出是斷線 —— 前端才分得出 「TC4 掛了」與「這檔真的沒資料」,兩者原本收斂成同一句「無 K…, N-5:source 層 deadline 用滿 → `{"status": "timeout", "bars": []}`(SC-1)。, 分 K 路徑同樣要帶 status(兩段合併後的最壞值)。, TestBarsRoute
+### Community 238 - "_FakeWebSocket"
+Cohesion: 0.12
+Nodes (10): _FakeWebSocket, _idle_stream(), 只實作 relay 用到的兩個方法;`receive` 由 future 控制何時「斷線」。, 永遠不推播的流:心跳是「定時」不是「補空窗」,零流量下也必須照送。, 讓被取消的子任務跑完 finally(同步 cancel 不 await,需要 loop 再轉幾圈)。, 與真 `WsBroadcaster` 組合:斷線後該 client 的 queue 必須從 fanout 名單除名。 直接讀 `_clients`…, SC-1:零推播的流上也要定時收到 ping(前端靜默 watchdog 的唯一依據)。 **有界輪詢而非固定時間窗**:原本的「睡 0.07 s 後數…, Edge 6:`heartbeat_secs<=0` → 不建 `_beat` task,行為 = 現況。 (+2 more)
 
-### Community 239 - "main"
-Cohesion: 0.21
-Nodes (13): main(), CLI 入口:import-neigui / replay / validate / compare 逐 task 接上., 讀取順序:env → repo root .env → 明確錯誤(design round 1 R12)., _resolve_finmind_token(), Path, MonkeyPatch, Path, CLI 三子命令 smoke(monkeypatch 入口)+ FINMIND_TOKEN 讀取順序. (+5 more)
+### Community 239 - "OSError"
+Cohesion: 0.12
+Nodes (15): probe(), 依序問,第一台成功即回;全失敗回 None(呼叫端印一行 WARNING,不重試到下一輪)。, OSError, _boom(), _boom(), TestProbeFallback, query(), query() (+7 more)
 
 ### Community 240 - "devDependencies"
 Cohesion: 0.11
 Nodes (18): devDependencies, eslint, @eslint/js, eslint-plugin-react-you-might-not-need-an-effect, globals, jsdom, react-doctor, tailwindcss (+10 more)
 
 ### Community 241 - "App.tsx"
-Cohesion: 0.14
+Cohesion: 0.11
 Nodes (15): App(), CorrPage, FUT_PRODUCTS, FutProduct, FuturesPage, IndexPage, initialProduct(), initialStockCode() (+7 more)
 
 ### Community 242 - "StkfutLadder.test.tsx"
@@ -1537,13 +1507,13 @@ Nodes (16): buildLegGeometry(), buildOverlayGeometry(), hhmm(), LegGeometry, Leg
 Cohesion: 0.22
 Nodes (16): bestLimit(), buildLadder(), fmtTickPrice(), isMarketLevel(), Ladder, LadderInput, LadderRow, limitOnly() (+8 more)
 
-### Community 247 - "TestGroupStateRoute"
+### Community 247 - "FakeFuturesSource"
 Cohesion: 0.12
-Nodes (8): 群組檢視的唯讀 batch(group-grid SC-4)。 **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 50 檔各要一次…, 空群組 → 前端 hook 是 enabled=false 零請求;真的打到也必須是 200 空表。, 未訂閱 / 查無此檔對卡片是同一件事(「這格畫不出東西」)→ 無 404 路徑。, 端到端 parity(SC-5):同一份 ticks 進狀態機 → 端點吐出的 `vp` 必須逐鍵等於 手算的 `expected`,而前端…, 字面 150 相異碼 → 200(與 test_too_many_codes_400 的字面 151 成對釘死邊界)。, A6-2:重複碼是**正常輸入**(同一檔可屬多群組,前端把群組成員直接拼進 csv), 先驗數量再去重會把它判成 `BAD_CODES` ——…, 去重之後仍要驗上限:相異碼超量照樣 400(去重不是放行的後門)。, TestGroupStateRoute
+Nodes (6): FakeFuturesSource, FuturesSource fake(capital routes / market routes 共用)。 `fetch_bars_range` 不在…, _fut_quote(), T10 / D2e:`create_app` 出的 futures 引擎不覆寫 flush 週期(prod = 0.1 s)。 接線處若順手傳個…, TestFuturesState, TestWebSockets
 
-### Community 248 - "._boot"
-Cohesion: 0.15
-Nodes (10): BootedClient, FakeStockSource, date, fixture, MonkeyPatch, `create_app(ticks_config=…)` 真的到 engine:漏傳的失效樣態是整條存檔靜默不起。, pr-263 F-16:app 內建的 compactor 沒有 runner 注入口,開場 `tick()` 依牆鐘可能真的 起 `python -m…, TestClient 的同步世界:loop 在別的 thread,輪詢 `pred` 直到成立。 (+2 more)
+### Community 248 - "TestAppWiring"
+Cohesion: 0.20
+Nodes (7): date, fixture, `create_app(ticks_config=…)` 真的到 engine:漏傳的失效樣態是整條存檔靜默不起。, pr-263 F-16:app 內建的 compactor 沒有 runner 注入口,開場 `tick()` 依牆鐘可能真的 起 `python -m…, TestClient 的同步世界:loop 在別的 thread,輪詢 `pred` 直到成立。, TestAppWiring, _wait_sync()
 
 ### Community 249 - "RiverState"
 Cohesion: 0.21
@@ -1561,13 +1531,13 @@ Nodes (6): FakeResizeObserver, GROUPS, positions, quote(), renderGrid(), StateOv
 Cohesion: 0.18
 Nodes (16): build(), clusters_final(), clusters_prefix(), find_sweeps_final(), groups(), load_rows(), Any, Path (+8 more)
 
-### Community 253 - "TestApplyVariant"
-Cohesion: 0.14
-Nodes (7): parametrize, review SP2 / ST7:offset 疊在同一條 variant 階梯上(`k = variant + offset`)時, futures…, ST7:總位移最大到 `offset + 3`,窗字串仍必須 start <= end 且小時在 00–23。, 結構性判準(不靠列舉):offset 必須嚴格大於 variant 階梯的最大值。, C-1:窗變體必須恆為新鍵(舊規則對全天窗 no-op、對夜盤窗 k=1/2/3 塌成同一把)。, TestApplyVariant, TestSpotOffsetOutsideTheVariantLadder
+### Community 253 - "._src"
+Cohesion: 0.12
+Nodes (12): _push_raw_quote(), LogCaptureFixture, D1 / D2:quote 未連線 → 該輪整輪跳過(不記帳、不逐 symbol 印),整段斷線只印一次「等連線」。, review P-1 / S-1:index 源的 `heal_active` 是 09:00–13:25 窗 —— 斷線 13:2x 印一次、…, review P-3:`close()` 清掉 api 後在飛的巡檢不得印「待重連後接手」(沒有重連會來)。, 白名單:接回後的自癒從乾淨帳本起算(attempt 1、原窗、T·2^0 退避)。, REALTIME 推播電文(`Quote` 原樣帶入;snapshot 指紋測試用整組成交欄位)。, C-1:窗變體必須恆為新鍵(舊規則對全天窗 no-op、對夜盤窗 k=1/2/3 塌成同一把)。 (+4 more)
 
-### Community 254 - "ticks_compact.py"
-Cohesion: 0.17
-Nodes (15): _arrow_type(), CompactFailed, _parquet_rows(), Any, Exception, Path, 盤後把當日 tick jsonl 壓成兩個 parquet(spec #257 T4)。 入口 `compact_day`(CLI `ticks-…, 失敗收尾:兩個 parquet 與殘留 `.tmp` 都拿掉,讓狀態回到「只有 jsonl」可重入。 (+7 more)
+### Community 254 - "_Clock"
+Cohesion: 0.20
+Nodes (11): _Clock, _failing(), daily(), _install_fake_sleep(), datetime, 記錄 sleep 秒數並推進注入時鐘;`_REQ_GAP_SECS` 的 0 s 不計(compute 內的節奏 sleep)。, EOD fetcher:每呼叫記時刻;第 `succeed_on` 次(1 起算)起成功,0 = 永遠失敗。, 08:00:30 起每 600 s 再試,下一次會落在 09:00 之後就停:6 次嘗試(08:00:30 … 08:50:30)、 5 段 600… (+3 more)
 
 ### Community 255 - "run_hook"
 Cohesion: 0.23
@@ -1589,21 +1559,21 @@ Nodes (11): blankForm(), FormState, KIND_LABEL, LEVEL_LABEL, num(), Props, ruleS
 Cohesion: 0.16
 Nodes (13): aggregateBars(), Bar, buildCandleGeometry(), Candle, CandleGeometry, DeltaVolBar, shiftDate(), Size (+5 more)
 
-### Community 260 - "TestCloseLogout"
-Cohesion: 0.14
-Nodes (8): fix/tc4-logout:收工要對 TC4 送 LOGOUT,不能只退訂 + 關 socket。 2026-08-25 17:15:29 Ctrl+C…, REALTIME SUBQUOTE 對指定 symbol 回 Success != OK,其餘照 FakeApi。, P1-3(共用層的「至少」防線):重連重掛 SUBQUOTE 失敗品原本靜默丟出 `_subscribed` 且零 log ——…, _SelectiveFailApi, TestCloseLogout, _handle(), _handle(), TestReconnectResubWarning
+### Community 260 - "_SelectiveFailApi"
+Cohesion: 0.22
+Nodes (6): REALTIME SUBQUOTE 對指定 symbol 回 Success != OK,其餘照 FakeApi。, P1-3(共用層的「至少」防線):重連重掛 SUBQUOTE 失敗品原本靜默丟出 `_subscribed` 且零 log ——…, _SelectiveFailApi, _handle(), _handle(), TestReconnectResubWarning
 
-### Community 261 - "TestOneKHealthWarnings"
-Cohesion: 0.28
-Nodes (4): LogCaptureFixture, MonkeyPatch, L262(2026-08-28 triage):期貨 1K「落後」/「中段缺格」以前只在前端 gate 5 判,後端零 log, 事後分不出 H1(TC4…, TestOneKHealthWarnings
+### Community 261 - "FuturesEngine"
+Cohesion: 0.06
+Nodes (19): FuturesEngine, pending 商品每 `resub_interval_secs` 重訂一次,成功即出列;全清空即結束。 只有失敗品才會起這個 task ——…, executor thread:關機中早退,縮小「close 後 source 再被呼叫」的窗。 cancel 正 await `to_thread` 的…, 全量快照。**`seq` 是廣播游標,不是內容版本**(coalesce 後兩者不再同步): `products` 每則 quote 就即時更新,`seq`…, executor thread:抓 K 線,tf=1 且非空時順做 1K 健康 WARNING。fetch 的例外原樣往上拋 (`bars_range`…, HOT → 實際契約月份 YYYYMM;未解析/未知商品 → None(送單層拒單,不猜月份)。, 當日 1K 分鐘序列 passthrough(江波圖台指腿回補;index-river-chart SC-4)。 阻塞呼叫,呼叫端負責丟…, executor thread:訂 leaf 後把結果經 call_soon_threadsafe 回寫集合 (集合只在 loop thread… (+11 more)
 
-### Community 262 - "._gate_engine"
-Cohesion: 0.26
-Nodes (8): LogCaptureFixture, pr-211 F-05:閘本身**不自印** WARNING(其他五道 BreadthFetchError 閘都只 raise);兩數與 「刪…, pr-211 F-05 的可觀測面:相對閘擋下 → 整輪只有 `_run_attempts` 的一行 WARNING(09:00 後 補跑 =…, 同上、換 08:00:30 的重試路徑(two-axis S-04):每次 attempt 恰一行 WARNING、每行都帶刪鍵提示, 5 行「再試」+ 1…, pr-211 F-04:`compute()`(CLI 預覽路徑)**不吃** server 快取的前值 —— 同一顆引擎、同一份 1500…, 寫一份 v2 快取當相對閘的前值(`daytrade_rows`);目標日 = 前一交易日(今天還沒算過)。, TestDayTradeRelativeGate, _write_prior()
+### Community 262 - "MonkeyPatch"
+Cohesion: 0.29
+Nodes (9): LogCaptureFixture, MonkeyPatch, pr-211 F-05:閘本身**不自印** WARNING(其他五道 BreadthFetchError 閘都只 raise);兩數與 「刪…, pr-211 F-05 的可觀測面:相對閘擋下 → 整輪只有 `_run_attempts` 的一行 WARNING(09:00 後 補跑 =…, 同上、換 08:00:30 的重試路徑(two-axis S-04):每次 attempt 恰一行 WARNING、每行都帶刪鍵提示, 5 行「再試」+ 1…, pr-211 F-04:`compute()`(CLI 預覽路徑)**不吃** server 快取的前值 —— 同一顆引擎、同一份 1500…, 寫一份 v2 快取當相對閘的前值(`daytrade_rows`);目標日 = 前一交易日(今天還沒算過)。, TestDayTradeRelativeGate (+1 more)
 
-### Community 263 - "load_signals_config"
-Cohesion: 0.20
-Nodes (12): _make_signals(), load_signals_config(), Path, 讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。, Path, `policy_exclude_groups` 是 tuple 欄(JSON 陣列 → tuple,frozen dataclass 才 hashable);…, test_default_values(), test_frozen() (+4 more)
+### Community 263 - "signals_config.py"
+Cohesion: 0.21
+Nodes (12): load_signals_config(), Path, 訊號偵測門檻(stock-signals design §2)— 全部 magic number 收在此處. 慣例沿用…, 讀設定檔逐鍵覆寫;檔案不存在 → 全預設;未知鍵 → ValueError。, Path, `policy_exclude_groups` 是 tuple 欄(JSON 陣列 → tuple,frozen dataclass 才 hashable);…, test_default_values(), test_frozen() (+4 more)
 
 ### Community 264 - "breadth_fetch.py"
 Cohesion: 0.20
@@ -1625,25 +1595,21 @@ Nodes (14): BODY_CLASS, CandleChart(), ChartStatic, DIMS, EMPTY_LINE, PRICE_TAG,
 Cohesion: 0.15
 Nodes (5): ACCUM, positions, segments(), stream(), trialStream()
 
-### Community 269 - "_k1_pager"
-Cohesion: 0.19
-Nodes (9): _k1_pager(), handler(), _minutes_src(), 1K GETHISDATA 分頁替身(QryIndex → rows;其餘請求回 OK)。, SC-3′(amendment 2026-08-14;review L2-P1-1 撤除 tc4 窗過濾後由此承接可視性)。 TC4 1K 對「空窗期建立的…, 真「當日無資料」(rows 本來就空)不是 stub 態,不得誤報。, SC-4:window variant = 逃出「毒化 history 訂閱」的維度(repro 實證:換窗口字串 或換 session 才逃得掉,重送…, TestFetchDayMinutesStubSignature (+1 more)
-
 ### Community 270 - "TestPartialLast"
 Cohesion: 0.20
 Nodes (6): MonkeyPatch, `partial_last` 由資料判定,不是 tf 的常數(review P1-1)。, pr-165-review #5(09-07 盤點 C17):14:00 定稿界後今日那根已定稿,大盤頁不再印 「最後一根未收盤」。route…, two-axis review spec S-01:14:00 後 refetch 空手 → `_period_stale_or_empty` 回**界前**…, 週末查已收盤的週 K 不該恆標「未收盤」(舊實作 tf != "D" 就恆 True)。, TestPartialLast
 
-### Community 271 - "_FailingStartStockSource"
-Cohesion: 0.15
-Nodes (7): _ClosingStockSource, _FailingStartStockSource, start() 途中拋例外的 source(`set_trade_date` 是 StockEngine.start 的第一步)。, start 全程正常、只記 `close()` 有沒有被呼叫。, characterization(refactor C7 前置):引擎起停樣板的降級契約。 `_boot` 即將把五段 try/except…, 壞自選檔 = `_start_stock` 的**第二段**失敗(source 本身完全正常)。 `load_watchlist` 對壞檔不吞例外,而它留在…, TestEngineStartFailureDegrades
+### Community 271 - "stock_watchlist.py"
+Cohesion: 0.18
+Nodes (11): 訊號影子政策層的純函式(spec #192):族群判定 + 四條政策 P / B-a / B-b / S 的命中判斷。 零…, 回 (族群組名清單, 同伴清單(聯集保序去重、扣自己), 是否盤前篩選成員)。, 鎖過 = 當日成交價曾觸及漲停價(`high >= upper`);任一缺 → None(不是 False:不知道)。, resolve_groups(), touched_upper_flag(), Group, 個股自選清單持久化(design v4 §2.5;atomic JSON、無 DB — 專案慣例)。 v3(stock-ui-round5…, union() (+3 more)
 
-### Community 272 - "futures_engine.py"
-Cohesion: 0.21
-Nodes (11): _bar_minute(), _last_trade_at(), datetime, FuturesEngine:TXF/MXF/TMF HOT 五檔/成交狀態機 + HOT→實際契約解析(SC-8;design §10)。 - per-…, executor thread:抓 K 線,tf=1 且非空時順做 1K 健康 WARNING。fetch 的例外原樣往上拋 (`bars_range`…, 期貨 1K 落後 / 中段缺格 WARNING(L262,2026-08-28)。固定前綴供 grep: `期貨 1K 落後` / `期貨 1K…, 1K bar 的 `t`("YYYY-MM-DD HH:MM" 台北)→ datetime;形狀不對回 None(健康檢查跳過,不炸 route)。, `_ProductState.date`("YYYY-MM-DD")+ `t`("HH:MM:SS.fff")→ 該成交所屬 1K bar 的**終點標記**… (+3 more)
+### Community 272 - "test_corr_engine_river.py"
+Cohesion: 0.13
+Nodes (11): _Clock, _foreign_trade_quote(), _futures_state(), CorrelationEngine 的江波圖接線(SC-3/SC-4/SC-5):live 餵值、背景回補、delta 廣播。, Phase 4 自評 finding:回補任務不得把狀態機的盤別「拉回」發起時的那一場。 情境:14:59:58 起跑的回補在 15:00:01 才回來 ——…, 帶成交的 REALTIME。 `PreciseTime` 是 **12 位…, 海外腿(CME/CBOT/SGX)實測形狀:`PreciseTime` 是 **6 位 HHMMSS**,不是台期交的 12 位。 Phase 6 real-…, TestBackfillSessionOrdering (+3 more)
 
-### Community 273 - "format_signal_text"
-Cohesion: 0.23
-Nodes (8): format_signal_text(), Discord 文案(bot 與 webhook 同一段,design §4.3)。 有 `rule_name` 才在文末附規則名(R14b):同 kind…, R14b:同 kind 多規則在 Discord 要分得出是哪一條發的。, #226:「放量向上 / 向下離開 x.x 倍」與前端 `kindLabel` 逐字;方向缺值退向上(與 limit_* 同慣例)。, 升級當日的舊 jsonl row 沒有 rule_name → 不得留下空的分隔符。, SC-4(T-2):同一條規則同一 tick 觸發兩種 kind → kind 兩段、規則名只印一次。 kind 文案去重有專測(`_merge_rules`…, SC-4:單則走合併版仍**逐字**等於單則版 —— 絕大多數訊號走的正是這條路。, TestDiscordText
+### Community 273 - "mid_from_book"
+Cohesion: 0.22
+Nodes (6): mid_from_book(), Level, 相關係數引擎的純函數層:中價與對數報酬(design §1.2 / SC-2)。 秒級取樣一律用 **Bid/Ask 中價**,不用成交價 ——…, 最佳買賣中價(毫點整數);任一側無報價 → None。 單邊缺檔不用另一側硬湊 —— 單邊價不是市場對該商品的共識定價,拿來算報酬會製造 假波動。整除的…, corr_models 純函數:中價與對數報酬(SC-2)。, TestMidFromBook
 
 ### Community 274 - "MarketPane.size.test.tsx"
 Cohesion: 0.14
@@ -1689,9 +1655,9 @@ Nodes (11): areaPaths(), buildScales(), curvePath(), CurvePoint, fmt(), invertX(
 Cohesion: 0.17
 Nodes (6): isEtfUnderlying(), isOrderBlocked(), StkfutContracts, StkfutLeg, StkfutSelection, STOCK_FUTURE_UNITS
 
-### Community 285 - "_BadRetrySource"
+### Community 285 - "parse_taifex_html"
 Cohesion: 0.19
-Nodes (6): _BadRetrySource, _GatedReconnectSource, 指定腿:首輪 ConnectionError(進 pending)→ 重試第一次丟**非連線類**例外 → 成功。, 帶 `on_reconnect` 屬性的 source(對齊 TC4QuoteSource 介面;futures fake 同款)。, 重試輪的 subscribe 卡在 gate 上(製造 in-flight 窗;放行後成功)。, _ReconnectSource
+Nodes (10): _contract_unit(), _parse_rows(), parse_taifex_html(), 契約單位(股數):cells 尾段第一個純數字欄;找不到 → 0。, 期交所股票期貨清單頁 → `{股號: {prod, name, unit, mini}}`;只收「是股票期貨標的」列。 同股號含標準(2,000 股 /…, 解析主體;回傳 (對映, 壞列數)。壞列 = 掛著「是股票期貨標的」卻解不出欄位的列。, _text(), v2:同股號兩列不再互相覆蓋 —— 契約單位大者入 std 欄、小者入 mini 欄。 v1… (+2 more)
 
 ### Community 286 - "TestBarsRangeProxy"
 Cohesion: 0.21
@@ -1701,21 +1667,21 @@ Nodes (7): BarsStatus, 借不到就回空 + 固定可 grep 的 log 字串(index-
 Cohesion: 0.15
 Nodes (5): N021:預設腿必須與 `configs/correlation.json` 同一組。 缺一腿的失效樣態不是「少一條線」而已 —— 設定檔壞掉時…, SXF 費半日盤 94.4% 時間沒成交(tc4-market-facts),R2 240 s 對它是假警報;VX(VIX 期貨) 美盤夜間段(台北…, 台指腿必須走既有 futures_engine,不可自行訂閱(CLAUDE.md §8 同 symbol 衝突)。, 台積電腿走現貨 `TC.S.TWS.2330`(自癒閘 = 個股日盤窗)。 改成個股期 `TC.F.TWF.`…, TestDefaultConfig
 
-### Community 288 - "test_validate.py"
-Cohesion: 0.26
-Nodes (11): format_validate(), _within_pp(), _within_rel(), _ev(), Path, Gate 凍結在種子池(tiger_csv/control):scan 事件不得影響任何一格 actual., test_format_validate_marks_fail(), test_run_validate_ignores_scan_events() (+3 more)
+### Community 288 - "TestWindowThresholds"
+Cohesion: 0.19
+Nodes (9): _pearson(), 60s 窗只看最近 60 秒 —— 更早的樣本不得參與。, perf #244 守門(T2 §9 意外 1):最長窗的 off-by-one 只在這裡發生。 中價序列以 `ts < now − 1800` 逐出 →…, perf #244 全日對照:同一串 16,200 次 push(11 腿、SXF / VX 25% 有值;每 97 筆 ts 跳 2 s 讓…, 獨立參考實作(定義式,非 statistics.correlation)。, running sums 加減後的殘差不得把「整窗零波動」算成一個亂數 r。 先走 100 秒隨機漫步(sums 非零),再 61 秒完全不動 → 60…, _returns(), TestWindowThresholds (+1 more)
 
 ### Community 289 - "GroupGridView.geometry.test.tsx"
-Cohesion: 0.17
-Nodes (3): CODES, FakeResizeObserver, GROUPS
+Cohesion: 0.12
+Nodes (5): CODES, FakeResizeObserver, GROUPS, ACCUM, TOGGLES
 
 ### Community 290 - "PriceLadder.tsx"
 Cohesion: 0.23
 Nodes (8): markMap(), PositionRow, positionRows(), PriceLadder(), clickPrice(), marketOrder(), showHint(), Props
 
-### Community 291 - "StockChart.livebar.test.tsx"
+### Community 291 - "CorrSource"
 Cohesion: 0.17
-Nodes (4): DAILY_BARS, LIVE_MINUTES, MINUTE_BARS, NOW
+Nodes (5): CorrSource, _LegState, Protocol, SessionKey, 行情源抽象;TC4 實作在 copycat.live.corr_source,測試注入 fake。
 
 ### Community 292 - "StockIntradayChart.futures.test.tsx"
 Cohesion: 0.17
@@ -1729,29 +1695,29 @@ Nodes (10): BarsPayload, barsPollInterval(), BarsStatus, ChartMode, fetchBars(),
 Cohesion: 0.20
 Nodes (7): coerceMode(), DAILY_MODES, defaultMode(), isModeAvailable(), MARKET_MODES, MarketKey, MarketMode
 
-### Community 295 - "_FlakySource"
-Cohesion: 0.24
-Nodes (6): _FlakySource, 前 N 次 subscribe_raw raise ConnectionError,之後成功;attempts 記每次呼叫。 (仿…, 腿訂閱失敗的**零重試路徑**(mod/subscribe-retry-recovery SC-1)。 corr 的 `_on_reconnect`…, W-3:失敗窗內的江波圖分鐘只能靠回補補齊 —— 重訂成功必須補排一次回補。 沒有這條鎖,`_schedule_backfill`…, 白名單 1:base 腿(futures_engine 來源)永不 subscribe_raw。 重試佇列只收 `tc4_legs()` 的腿 —— base…, TestPendingResubscribe
+### Community 295 - ".test_non_standard_unit_not_gated"
+Cohesion: 0.25
+Nodes (6): _fut_evt_raw(), 個股期活單改到非法檔位 → 400 BAD_TICK,不得送到群益。 送單面有這道閘、改價面沒有的話,同一個 1180.5 送不出去卻改得進去,…, 非標準契約單位的個股期改價不驗檔位 —— 送單面根本走不到 tick 檢查。 送單面在 tick…, characterization:現股 tick 表只適用個股期,指數期權改價照放行(鎖 scope)。, OnNewData 期權委託事件(N;`typ="D"` 成交;市場別 TF)最小治具(欄位對照 test_client 同款)。, TestCorrectPriceStkfutTickGate
 
-### Community 296 - "TestSessionRollover"
-Cohesion: 0.35
-Nodes (5): Any, 時段切換偵測:跨盤界(日↔夜)自動 reset + 重跑交接,新時段從零累積(SC-3)。, TestSessionRollover, fetch_backfill(), fetch_backfill()
+### Community 296 - "_TalkingWebSocket"
+Cohesion: 0.18
+Nodes (4): client 會說話的 WS:`receive` 依序吐出預排的 frame,吐完設 `drained`,之後掛在 `disconnected` future…, #182(mod/group-grid-ticks):`on_message` 選配 —— 有給就把 client **文字** frame 原文回呼(解析…, 回呼炸掉 = 不懂的錯,不吞:relay 以該例外收尾(連線斷),不靜默續跑。, _TalkingWebSocket
 
 ### Community 297 - ".test_caller_that_only_catches_connection_error_still_degrades"
 Cohesion: 0.17
-Nodes (6): N-2:TC4 斷線在 engine 層被吞成空,前端只看得到「無 K 線資料」。 降級空的行為照舊(K 線可降級,不…, `HistoryTimeoutError` 的**子類契約** —— 整個修法就架在這一條上(repro §修法)。 六處 caller 的上游已經有…, `bars_range` 是**不分辨逾時**的那種 caller(只寫 `except ConnectionError`): 逾時對它必須仍是「降級回空 +…, TestBarsRangeStatus, boom(), TestHistoryTimeoutIsConnectionError
+Nodes (7): N-2:TC4 斷線在 engine 層被吞成空,前端只看得到「無 K 線資料」。 降級空的行為照舊(K 線可降級,不…, `HistoryTimeoutError` 的**子類契約** —— 整個修法就架在這一條上(repro §修法)。 六處 caller 的上游已經有…, `bars_range` 是**不分辨逾時**的那種 caller(只寫 `except ConnectionError`): 逾時對它必須仍是「降級回空 +…, TestBarsRangeStatus, boom(), TestHistoryTimeoutIsConnectionError, boom()
 
-### Community 298 - "TestStateRouteTape"
-Cohesion: 0.23
-Nodes (6): TestClient, `?tape=0` 省略逐筆明細(B15)。 群組檢視點卡片的**唯一目的**是換右欄閃電梯的標的(檢視停在群組),而群組檢視裡 沒有主圖 / 明細 ——…, 把 2330 帶到「tape 有一筆、且不會再有回補落地」的穩定點。 `apply_backfill` 是**原子重建**(seq +1001、ticks…, W-4:省 payload 不等於省 set_main —— 漏掉的話點卡片就換不了訂閱標的, 而畫面上只表現為右欄「沒有資料」,沒有任何錯誤。, `tape` 收字串不收 int(D3'):`?tape=abc` 走全量,不產生 422 —— 422 的 detail 是 list 形,不符全站…, TestStateRouteTape
+### Community 298 - "TestGroupStateRoute"
+Cohesion: 0.12
+Nodes (11): TestClient, `?tape=0` 省略逐筆明細(B15)。 群組檢視點卡片的**唯一目的**是換右欄閃電梯的標的(檢視停在群組),而群組檢視裡 沒有主圖 / 明細 ——…, 把 2330 帶到「tape 有一筆、且不會再有回補落地」的穩定點。 `apply_backfill` 是**原子重建**(seq +1001、ticks…, W-4:省 payload 不等於省 set_main —— 漏掉的話點卡片就換不了訂閱標的, 而畫面上只表現為右欄「沒有資料」,沒有任何錯誤。, `tape` 收字串不收 int(D3'):`?tape=abc` 走全量,不產生 422 —— 422 的 detail 是 list 形,不符全站…, 群組檢視的唯讀 batch(group-grid SC-4)。 **這條路存在的唯一理由就是不 set_main**:群組檢視每分鐘會對最多 50 檔各要一次…, 未訂閱 / 查無此檔對卡片是同一件事(「這格畫不出東西」)→ 無 404 路徑。, 端到端 parity(SC-5):同一份 ticks 進狀態機 → 端點吐出的 `vp` 必須逐鍵等於 手算的 `expected`,而前端… (+3 more)
 
-### Community 299 - "StockMeta"
+### Community 299 - "window_bounds"
 Cohesion: 0.24
-Nodes (6): StockMeta, 群組 batch 專用的輕量 payload(code review A1)。 `group_snapshot` 對最多 50 檔、每 60s 各建一次全量…, 同一份資料兩條路產出的 minutes / meta / vwap / high / low 必須逐鍵相同 ——…, 缺 meta 回 `None` 而不是漏鍵:前端 `raw.meta ?? null` 對兩者同解,但 route 的 response…, TestLightSnapshot, _state()
+Nodes (6): _expand(), 盤別 → (start_min, end_min);未知盤別回日盤窗(never-raise:引擎不因盤別字串倒)。, 跨午夜展開後的 `(m, start, end)` —— `offset_of` 與 `close_clamp_rank` 的同一把尺。…, window_bounds(), 江波圖的分鐘序列狀態機(零 IO;design v2 §4;SC-1)。 per-leg `{offset: 收盤毫點}`,offset =…, TestWindowBounds
 
-### Community 300 - "build_info.py"
-Cohesion: 0.24
-Nodes (8): BuildInfo, capture(), _git(), datetime, 執行中 server 的建置身分(git sha + 啟動時刻)。 **存在理由**(docs/next-time.md 2026-07-29…, `git_dirty` 三態:True/False = 問到了;None = 問不到(git 不可得)。, 跑一條 git,任何取不到的情況一律 `None`。 catch 的處理邏輯就是降級本身(鐵則 E:catch 後要有具體處理)—— 呼叫端靠 `None`…, 在 lifespan 啟動時呼叫一次;之後整個行程回同一份。 刻意**不**每次請求重算:sha 是「這個行程跑的是哪一版 code」,啟動後才 commit…
+### Community 300 - "sntp_query"
+Cohesion: 0.28
+Nodes (7): 問一台;失敗拋 OSError(含 timeout)。, sntp_query(), Exchange, pr-238 review F-07:t0 / t3 由傳輸層在送出前 / 收到後當場取,DNS 解析那段不算進去。 修前 t0 在 `sntp_query`…, TestSntpQueryWithInjectedExchange, exchange(), exchange()
 
 ### Community 301 - "check_feat_tags.py"
 Cohesion: 0.31
@@ -1801,9 +1767,9 @@ Nodes (7): holidaySet, isoLocalDate(), isTradingDay(), isTradingDayIso(), isWeek
 Cohesion: 0.25
 Nodes (7): inFuturesAllDayHours(), msUntilFuturesAllDayOpen(), msUntilFuturesTradingOpen(), msUntilNextOpen(), msUntilTradingOpen(), OpenAt, prevDay()
 
-### Community 314 - ".test_real_stage_lines_parse_into_one_clean_chain"
-Cohesion: 0.18
-Nodes (7): CaptureFixture, MonkeyPatch, Path, two-axis S-01:`_STAGE_RE` 逐字複製 `_log_chain_stage` 的 log 格式 —— 產生點改一字, `chain-…, 常數同源只擋住一半:有人在 `basicConfig` 直接寫字面 / 另加 `datefmt=` 而不經常數, parity 案仍照綠。讀…, TestCli, TestParityWithClientLogFormat
+### Community 314 - "OverlayCache"
+Cohesion: 0.31
+Nodes (3): OverlayCache, per (code, today) 記憶;空結果(全 null)不 cache — TC4 失敗與真無資料在上游 已不可分(design…, TestOverlayCache
 
 ### Community 315 - "._assert_rejected"
 Cohesion: 0.27
@@ -1814,8 +1780,8 @@ Cohesion: 0.18
 Nodes (5): FakeResp, Any, 單飛鎖:同鍵並發只讓一條真的去打 FinMind(review TC-6)。 鎖若失效,失效樣態不是紅色而是**配額被乘上並發數** ——…, TestSingleFlight, __call__()
 
 ### Community 317 - "MonkeyPatch"
-Cohesion: 0.36
-Nodes (7): LogCaptureFixture, MonkeyPatch, 成功路徑的觀測(review LF-3):截斷 / 上游停更會讓 latest 靜默退化成舊日期。, 邊界含在內(`> STALE_WARN_DAYS` 才吵):連假剛好落在門檻上不該每天報警。…, > STALE_WARN_DAYS:升 warning,但資料照樣回(舊撐壓仍有用,只是要有人知道)。, TestFreshnessLog, timedelta
+Cohesion: 0.25
+Nodes (10): _fresh_cache(), fixture, LogCaptureFixture, MonkeyPatch, module 級快取跨測試殘留 = 下一條測試看到的是上一條的答案。 `finmind_token._dotenv_cache` 一併重置(review…, 成功路徑的觀測(review LF-3):截斷 / 上游停更會讓 latest 靜默退化成舊日期。, 邊界含在內(`> STALE_WARN_DAYS` 才吵):連假剛好落在門檻上不該每天報警。…, > STALE_WARN_DAYS:升 warning,但資料照樣回(舊撐壓仍有用,只是要有人知道)。 (+2 more)
 
 ### Community 318 - "FuturesChart.tsx"
 Cohesion: 0.36
@@ -1869,13 +1835,13 @@ Nodes (9): _collect_ids(), main(), rt(), _port_in_use(), probe_1k(), 日經腿�
 Cohesion: 0.31
 Nodes (4): date, L77 TXO 自動回補日:場活著回 None(live 窗)、休市段回最近『日盤開過』的交易日。, pr-167 F-22:週六 02:00 = 週五夜盤還活著(15:00 → 翌 05:00)→ live 窗回 None。 把…, TestTxoAutoBackfillDate
 
-### Community 332 - "_TickRecorder"
+### Community 332 - "_session_mod"
 Cohesion: 0.22
-Nodes (4): StockDayState, StockTick, SignalSink 的最小實作:只記 engine `ingest` 為真的 tick(存檔母體的獨立來源)。, _TickRecorder
+Nodes (6): Any, TXO 是唯一直接用基底 `TC4QuoteSource` 的 session,基底自癒預設全關 → `_default_source` 必須顯式開…, 不變式:`hour < 6` 的門檻 ⊇ 夜盤收盤 + 各自的寬放(閘不會先於牆鐘關掉)。 clock 用真函式但**顯式傳入同一時刻** —— prod…, _session_mod(), test_default_txo_source_wires_realtime_heal(), TestHealGateThresholdCoversSessionClose
 
-### Community 333 - "_boot_engines"
-Cohesion: 0.22
-Nodes (7): _boot_engines(), _make_corr(), _make_screen(), _make_ticks_compactor(), _start_capital(), _start_signals(), _start_stock()
+### Community 333 - "log_return"
+Cohesion: 0.39
+Nodes (3): log_return(), 對數報酬 ln(cur/prev);任一端非正 → None(取 log 前的定義域防護)。, TestLogReturn
 
 ### Community 334 - "App.corr-tab.test.tsx"
 Cohesion: 0.25
@@ -1886,7 +1852,7 @@ Cohesion: 0.25
 Nodes (6): CapitalOrdersList(), FUT_MARKETS, isFutMarket(), OrderRow(), OrderRowProps, PendingAction
 
 ### Community 337 - "MarketPane.memo.test.tsx"
-Cohesion: 0.31
+Cohesion: 0.27
 Nodes (8): futures(), hoisted, LEFT_STORES, openOverlay(), OTC, series(), TOGGLES, tree()
 
 ### Community 338 - "MarketPane.storage.test.tsx"
@@ -1896,10 +1862,6 @@ Nodes (4): OTC, STORES, TOGGLES, TWSE
 ### Community 339 - "GroupGridView.tsx"
 Cohesion: 0.25
 Nodes (6): EMPTY_CODES, GRID_TOGGLES, gridShape(), GroupCard, GroupGridView(), Props
-
-### Community 340 - "GroupGridView.memo.test.tsx"
-Cohesion: 0.22
-Nodes (4): fills, GROUPS, hoisted, positions
 
 ### Community 341 - "StockChart.test.tsx"
 Cohesion: 0.28
@@ -1945,25 +1907,29 @@ Nodes (6): FUT_CHART_MODES, FutChartMode, initialFutChartMode(), isFutChartMode(
 Cohesion: 0.33
 Nodes (8): readLocal(), readLocalJson(), removeLocal(), warnedParseKeys, warnRead(), warnRemove(), warnWrite(), writeLocal()
 
-### Community 354 - ".test_mixed_sides_keep_direction_of_price_move"
-Cohesion: 0.31
-Nodes (6): LogCaptureFixture, SC-2 (c) 混向防禦(review C-2 / T-5)。 不變式:同一 tick 所有 level 由同一個價格序列推進,不可能同時上穿與下穿。這個…, nh 記在線下、ah 記在線上 —— 下一筆落在兩線之間就同時「上穿 nh」「下穿 ah」。, 價格有動 → 只保留與 `sign(price − prev)` 一致的那一邊,並留 warning。, `price == prev`(keep == 0)→ 沒有任何依據可以選邊,兩邊都不發。 任選一邊等於擲硬幣決定訊號方向:發錯方向的 CDP…, TestCdpMixedSides
+### Community 353 - "RejectingCom"
+Cohesion: 0.22
+Nodes (3): 所有寫入方法回群益拒單 code(預設 1097「查無委託」)— 拒單透傳測試用(review A2/C1/C2)。, RejectingCom, TestBrokerRejected
 
-### Community 356 - "TestPolicyText"
-Cohesion: 0.28
-Nodes (5): 一般 kind 文案表也認得政策列:「政策 P」,與前端 `kindLabel` 逐字對齊。, 最小政策列(無 `big_lots_120s`):第二行「掃單簇 2 掃・2 層・6 張・+0.80%」。, #227 缺欄(09-14 前的舊列 / 舊後端)第二行與修改前逐字相同,不印「大單 -」。, bool 守門的 Discord 半邊(round-1 std F-06 補、pr-228 review F-10 釘):`big_lots_120s:…, TestPolicyText
+### Community 354 - ".test_mixed_sides_keep_direction_of_price_move"
+Cohesion: 0.33
+Nodes (5): LogCaptureFixture, SC-2 (c) 混向防禦(review C-2 / T-5)。 不變式:同一 tick 所有 level 由同一個價格序列推進,不可能同時上穿與下穿。這個…, nh 記在線下、ah 記在線上 —— 下一筆落在兩線之間就同時「上穿 nh」「下穿 ah」。, 價格有動 → 只保留與 `sign(price − prev)` 一致的那一邊,並留 warning。, TestCdpMixedSides
+
+### Community 356 - "StockIntradayChart.indexlines.test.tsx"
+Cohesion: 0.25
+Nodes (4): ACCUM, INDEX, NO_REF, WITH_TXF
 
 ### Community 357 - ".__init__"
-Cohesion: 0.28
-Nodes (3): _Collector, BaseException, LogRecord
+Cohesion: 0.19
+Nodes (5): _Collector, _MarkingWebSocket, BaseException, LogRecord, 送出中間有一個 await 讓步點的 WS:記 `('in', data)` → `sleep(0)` → `('out', data)`。…
 
-### Community 358 - "factory.py"
-Cohesion: 0.32
-Nodes (7): _dotenv_values(), _env_limit(), _getenv(), 從環境變數組裝 CapitalClient 單例(get_capital;結構對照 treading-king capital_factory)。…, repo root .env 的 CAPITAL_*/TXO_AUDIT_DIR 逐 key 解析(每次 get_capital 重讀, 量小;server…, os.environ 有此 key(含空字串)即回傳,完全不 fallback;僅未設才讀 repo root .env。 與 cli/notify(值空白也…, 上限環境變數 → 數值或 None(=不限)。未設/空/0/負值/解析失敗都是 None; 解析失敗要留 warning — user…
+### Community 358 - "test_corr_state.py"
+Cohesion: 0.25
+Nodes (5): CorrState 純狀態機:滾動相關、三窗門檻、盤別重置、報酬不跨洞(SC-1/3/4)。 參考值一律用本檔內手寫的 Pearson 公式計算,**不呼叫…, 單腿缺值不得影響其他腿(edge case 5)。, SC-3 驗證方式逐字對照:各窗滿窗後值互不相等。, TestMultipleLegs, TestWindowsDiffer
 
-### Community 359 - ".light_snapshot"
+### Community 359 - "_RunningServer"
 Cohesion: 0.29
-Nodes (4): 分鐘序列的 wire 形。**鍵名的單一定義** —— 全量 snapshot 與群組 batch 共用。 兩邊各寫一份的漂移樣態是其中一邊的 `h`/`l`…, 靜態盤別資料的 wire 形(同上,單一定義)。 缺 meta 回 `None` **不是漏鍵**:前端 `raw.meta ?? null`…, 群組 batch 專用的輕量 payload(code review A1)。 `group_snapshot` 對最多 150 檔(上限)、每 60s…, REST 全量(design §4:snapshot 為前端累算基底)。 `tape=False` =…
+Nodes (4): 真 uvicorn(port 0)+ 背景執行緒;離開 context 時 graceful shutdown 並 join。 `thread` 在…, client **不斷線**時 server 也要收得掉(2026-08-04 relay 回歸)。 未修時 send-only 迴圈掛在…, _RunningServer, TestGracefulShutdownWithLiveClient
 
 ### Community 360 - "CapitalOrdersList.test.tsx"
 Cohesion: 0.29
@@ -2006,12 +1972,12 @@ Cohesion: 0.25
 Nodes (3): ORDER_STATUS_TEXT, SIDE_TEXT, TRADE_ERROR_TEXT
 
 ### Community 374 - "TestDailyEntryFields"
-Cohesion: 0.25
-Nodes (5): refactor/bars-cache-daily-entry characterization(next-time 09-07 盤點 J3):日 K 的…, tag 先落、bars 覆寫兩次:tag 不被 bars 的寫入帶掉。, 只有 tag 沒有 bars:三條讀 bars / 標記的 getter 都不得把它當成有快照。, bars 與界前標記先落、再寫 tag:bars 與標記原樣。, TestDailyEntryFields
+Cohesion: 0.20
+Nodes (6): refactor/bars-cache-daily-entry characterization(next-time 09-07 盤點 J3):日 K 的…, tag 先落、bars 覆寫兩次:tag 不被 bars 的寫入帶掉。, 只有 tag 沒有 bars:三條讀 bars / 標記的 getter 都不得把它當成有快照。, bars 與界前標記先落、再寫 tag:bars 與標記原樣。, don't-cache-empty 對三欄都成立:空 bars 不覆寫 bars、不動 tag、也不清界前標記 (即使此刻已過定稿界 ——…, TestDailyEntryFields
 
-### Community 375 - "TestPhase5Hardening"
-Cohesion: 0.25
-Nodes (3): 跨午夜:昨日的當日段不可在 TTL 窗內被當成今日資料回(review P2-9)。, autouse 鐘凍在 09:00(< 定稿界)→ `daily_put` 必留界前標記;prune 只清別天的。, TestPhase5Hardening
+### Community 375 - "bar"
+Cohesion: 0.07
+Nodes (24): BarsFetcher, build_minute(), 近 `days` 個日曆日的 1 分 bar(歷史 memo + 當日 TTL 拼接)。 status = 兩段的 worst(SC-6)。**未實際…, bar(), 窗內含週末 → 該日永遠無資料。少了負向快取就會每次重拉整段歷史(R2-2)。, 整段回空可能是 TC4 失敗 → 不可寫**永久**負向快取,否則被釘成空。 round3:全空結果現在會被短…, 當日段回空同樣只被短 TTL 擋,過了就重抓(W-15)。, TC4 分頁提早截斷 → 後面的日子不可寫負向快取,否則永久釘成空(review P1-2)。 (+16 more)
 
 ### Community 376 - ".test_same_date_reads_single_file_verbatim"
 Cohesion: 0.29
@@ -2041,13 +2007,13 @@ Nodes (4): ASK_SLOTS, BID_SLOTS, CellProps, Props
 Cohesion: 0.38
 Nodes (5): emitPriceClick(), lots(), OrderBook(), Props, SideProps
 
-### Community 383 - "StockIntradayChart.variant.test.tsx"
+### Community 383 - "TestWatchlistBootSentinel"
 Cohesion: 0.29
-Nodes (4): ACCUM, CARD_FILLS, OVERLAY, TOGGLES
+Nodes (4): N112:`seq=None` 的豁免分支唯一的生產 caller 是 app boot 還原,而它的安全前提 (「service 在 restore…, PUT 先到、boot 還原後到(未來若有人把 restore 挪到 service 之後)—— 舊碼的 `seq=None`…, service 取號自 1 起(`WatchlistService`)—— sentinel 必須嚴格小於它。, TestWatchlistBootSentinel
 
-### Community 384 - "WatchlistSidebar.dragrender.test.tsx"
-Cohesion: 0.29
-Nodes (4): CODES, GROUPS, QUOTES, RECTS
+### Community 384 - "register_capital"
+Cohesion: 0.33
+Nodes (4): FastAPI, 掛 capital/futures router + 顯式註冊群益例外映射。 AuditWriteError(500 AUDIT_WRITE_FAILED)與…, register_capital(), _make_handler()
 
 ### Community 386 - "useGroupSnapshots.ts"
 Cohesion: 0.43
@@ -2077,21 +2043,21 @@ Nodes (5): COOLDOWN_DEFAULT, COOLDOWN_MAX, COOLDOWN_MIN, PARAM_FIELDS, ParamFiel
 Cohesion: 0.29
 Nodes (5): Geo, VP_FILL_OPACITY, VP_MAX_W_RATIO, VP_POC_FILL_OPACITY, VpBar
 
-### Community 394 - ".test_etf_future_close_not_tick_gated"
-Cohesion: 0.29
-Nodes (4): 白名單:指數期貨不適用現股 tick 表(TXF 是 1 點),既有平倉路徑逐字不變。, 白名單:ETF 期貨 / 除權息調整腿的現股 tick 表不適用(60.05 是它的合法檔位), 與 `_correct_price_tick_gate`…, 白名單:現股平倉不走個股期閘(整股 tick 由群益端驗),既有路徑不變。, TestPositionCloseTickGate
-
-### Community 395 - ".test_slow_code_times_out_all_null_and_frees_slot"
-Cohesion: 0.29
-Nodes (5): MonkeyPatch, `fetch_daily_bars` 對 `slow` 內的股號睡 `delay` 秒(其餘照常回 bar)。 模擬 TC4…, review B2:`overlay_sem` 名額沒有時間上界 → head-of-line。 TC4 對查無此檔的股號會把 deadline…, _SlowDailyBarsSource, TestOverlayFetchTimeout
+### Community 395 - "StockChart.futconverge.test.tsx"
+Cohesion: 0.33
+Nodes (4): ACCUM, BARS, CONTRACT, { renders }
 
 ### Community 396 - "_FakeCapital"
 Cohesion: 0.29
 Nodes (3): _FakeCapital, AbstractEventLoop, `app.state.capital` 的最小替身:只需要 lifespan 的三個接點 + broadcast 掛點。 真 `CapitalClient`…
 
-### Community 397 - "TestConstants"
-Cohesion: 0.29
-Nodes (3): 跨語言 parity(N055):前端 Dialog 自 2026-08-25 起**也擋值域**(好讓使用者…, 字面鎖(review B5):鍵集與值域是**跨檔契約** —— 前端 `PARAM_FIELDS` 的鍵集 必須逐字相同(多鍵 / 缺鍵同樣是…, TestConstants
+### Community 397 - "test_signal_rules.py"
+Cohesion: 0.18
+Nodes (6): new_rule_id(), `r-<epoch>-<seq>`;seq = hub 的單調計數(R12),不是 len(rules)——刪除後不得回收 id。, 跨語言 parity(N055):前端 Dialog 自 2026-08-25 起**也擋值域**(好讓使用者…, 字面鎖(review B5):鍵集與值域是**跨檔契約** —— 前端 `PARAM_FIELDS` 的鍵集 必須逐字相同(多鍵 / 缺鍵同樣是…, TestConstants, TestNewRuleId
+
+### Community 398 - "useIndexOverlay.test.tsx"
+Cohesion: 0.33
+Nodes (3): ALL_NULL, OVERLAY, urls
 
 ### Community 399 - "test_harness_context.py"
 Cohesion: 0.47
@@ -2125,17 +2091,13 @@ Nodes (5): chgPct(), fmt(), IndexBar(), IndexCell(), Props
 Cohesion: 0.53
 Nodes (5): CenterRequest, isCancelable(), LadderView(), lotText(), Props
 
-### Community 407 - "useFuturesStream.ts"
-Cohesion: 0.47
-Nodes (5): applyFuturesMsg(), FuturesStreamState, FuturesWsMsg, mergePending(), useFuturesStream()
+### Community 407 - "useSignalFeed.ts"
+Cohesion: 0.40
+Nodes (5): fetchToday(), SignalFeed, TODAY_KEY, TodayPayload, useSignalFeed()
 
 ### Community 408 - "useMarketBars.ts"
 Cohesion: 0.40
 Nodes (5): BarsMeta, BarsStatus, fetchMarketBars(), MarketBars, useMarketBars()
-
-### Community 410 - "useSignalSound.ts"
-Cohesion: 0.53
-Nodes (5): getSoundOn(), setSoundOn(), subscribe(), subscribers, useSignalSound()
 
 ### Community 413 - "chart-crosshair.ts"
 Cohesion: 0.47
@@ -2165,13 +2127,13 @@ Nodes (5): dayMinuteOf(), hhmm(), splitStamp(), txfBarsToSeries(), TxfQuoteInput
 Cohesion: 0.53
 Nodes (5): _get(), main(), SC-1 parity oracle 產生腳本(一次性手跑,產物 `breadth_parity.json` 進版控)。 做兩件事: 1. 真打…, _read_token(), _strip()
 
-### Community 421 - ".test_latched_book_still_reads_clock_and_emits_open"
-Cohesion: 0.40
-Nodes (3): perf/batch-b-tier0 0-9(#249):簿更新沒鎖板(常態,股票 REALTIME 87% 是簿更新)時 `evaluate_book`…, TestEvaluateBookLatchShortCircuit, counting_clock()
+### Community 421 - "TestSweepClusterGates"
+Cohesion: 0.47
+Nodes (3): 2026-09-07 整體 review 收修(review F-05 / F-26):掃單簇軸同樣吃 09:00–13:30 閘與舊日 snapshot…, 舊日 tick(`tick.trade_date` ≠ ctx 日別)整段丟:不推進掃單 / 回看狀態。, TestSweepClusterGates
 
 ### Community 422 - "TestSpotWindowOffset"
-Cohesion: 0.47
-Nodes (3): N050:TXO session 與 futures session 雙持 `TXF.HOT` **同一把** refcount key —— 單…, 自癒換窗時位移必須疊在 variant 之上,四把窗(variant 0/1/2/3)兩兩互異 —— 塌回同一把的失效樣態是「自癒照跑但上游永不重掛」。, TestSpotWindowOffset
+Cohesion: 0.32
+Nodes (4): N050:TXO session 與 futures session 雙持 `TXF.HOT` **同一把** refcount key —— 單…, 自癒換窗時位移必須疊在 variant 之上,四把窗(variant 0/1/2/3)兩兩互異 —— 塌回同一把的失效樣態是「自癒照跑但上游永不重掛」。, 位移只加在 TXO 那一邊 —— futures session 的 `TXF.HOT` 窗必須逐字不變, 否則兩邊一起位移還是同一把…, TestSpotWindowOffset
 
 ### Community 423 - "_IdentIndexSource"
 Cohesion: 0.47
@@ -2185,9 +2147,9 @@ Nodes (5): Path, 接線點在 `create_app` 內:factory 收得到日曆才有意�
 Cohesion: 0.33
 Nodes (4): M3:REST snapshot 只送有消費者的欄位。, tc4 / backfilling 的畫面來源是 WS status 訊息(仍是活碼),snapshot 這三個 欄位前端零讀取;stkfut_prod…, 同名活碼護欄:WS status 訊息是畫面「回補中…」與連線徽章的唯一來源。, TestSnapshotShape
 
-### Community 426 - "in_index_heal_window_now"
-Cohesion: 0.40
-Nodes (5): in_index_heal_window_now(), time, index session(IX0001;櫃買走 MIS poll 不吃這把)的自癒 / 健檢閘窗(08:30 含 – 13:25 收盤試撮起,不含)。 與…, 跨層 parity(CLAUDE.md §4「index session 自癒閘上界 = `_WATCH_END`」):`_WATCH_END` 是推播靜默…, test_watch_end_is_the_index_heal_gate_boundary()
+### Community 426 - "TestBackfillMergesOnEventLoop"
+Cohesion: 0.33
+Nodes (3): N094:`_subscribe_and_backfill` 跑在 worker thread 卻直接 in-place 寫 `_twse.minutes`…, 被取消的 retry:orphan 的 executor 工作項照樣跑完 fetch,但它的結果**不得** 落進 `minutes` —— 舊碼在…, TestBackfillMergesOnEventLoop
 
 ### Community 427 - "_reset_year_warnings"
 Cohesion: 0.40
@@ -2205,6 +2167,10 @@ Nodes (4): barsKeyOf(), FuturesPage(), Props, todayOf()
 Cohesion: 0.40
 Nodes (3): ACCUM, RECT, TOGGLES
 
+### Community 431 - "useBreadth.ts"
+Cohesion: 0.70
+Nodes (4): mergeSnapshot(), upsert(), useBreadth(), WireMsg
+
 ### Community 432 - "useFuturesBars.ts"
 Cohesion: 0.50
 Nodes (4): fetchFuturesBars(), FUTURES_MINUTE_DAYS, FuturesBarsKey, useFuturesBars()
@@ -2221,33 +2187,17 @@ Nodes (3): barMinuteOf(), LiveDay, mergeLiveMinuteBars()
 Cohesion: 0.60
 Nodes (3): agg(), live(), M()
 
-### Community 437 - "river-chart-svg.test.ts"
+### Community 437 - ".test_default_clock_persists_yesterday"
 Cohesion: 0.40
-Nodes (3): DAY, NIGHT, SIZE
+Nodes (3): 本檔預設時刻**被凍在 09:00**(模組級 autouse `_daytime_clock`),不讀真牆鐘。 `build_minute`…, 走真路徑:預設時刻下 `build_minute` 把 yesterday 永久化(緩衝窗內會留洞,見…, TestModuleClock
 
 ### Community 438 - "time-labels.ts"
 Cohesion: 0.60
 Nodes (4): hhmm(), HOUR_TICKS, HourTick, hourTicksOf()
 
-### Community 441 - ".test_boundary"
-Cohesion: 0.40
-Nodes (4): parametrize, time, `in_index_heal_window_now` = **只有** index session(IX0001;櫃買走 MIS poll 不吃這把)吃的自癒…, TestIndexHealWindowGate
-
-### Community 443 - ".test_ticks_still_flow_without_a_daily_bars_source"
-Cohesion: 0.40
-Nodes (3): N110:`daily_bars=None` = **配置上就沒有日 K 來源**(app 層無 stock engine)。…, CDP 停用不等於訊號鏈停用:非 CDP 規則照常發(XR-3 的既有語意不得回退)。, TestNoDailyBarsSource
-
-### Community 445 - ".test_group_rename_without_code_change_reaches_the_hub"
-Cohesion: 0.40
-Nodes (3): 接線防呆(group-grid R7):`groups_fn` / `quotes_fn` 預設 None = 靜默停用摘要。 忘了在…, B3-a 端到端:只改群組名(codes 一模一樣)也要傳到 hub。 這條路的 `set_watchlist` 收到的 added / removed…, TestSignalHubGroupWiring
-
-### Community 446 - "BookReplay"
+### Community 443 - "AuditWriteError"
 Cohesion: 0.50
-Nodes (3): BookReplay, 一檔一日的簿重播:`frames` 依訊息序號遞增。, 達錢時刻異常、沒當成時鐘點的成交則數(晚於收到時刻超過容差,或早於目前時鐘)。
-
-### Community 447 - ".status_view"
-Cohesion: 0.50
-Nodes (3): _mask_account(), 帳號遮罩:只露末 4 碼(status route/log 共用語意;帳號本體不得外流)。, GET /api/capital/status 欄位(design §6);disabled 情境由 route 處理(client None)。
+Nodes (4): AuditWriteError, Exception, 審計寫入失敗;NewOrder 送出前 = 拒單(500 AUDIT_WRITE_FAILED),送出後 = 降級旗標。, flaky()
 
 ### Community 451 - "api-error.ts"
 Cohesion: 0.67
@@ -2261,9 +2211,9 @@ Nodes (3): pad2(), settlementCountdown(), thirdWednesday()
 Cohesion: 0.83
 Nodes (3): dump_methods(), dump_struct(), main()
 
-### Community 459 - ".test_split_batches_leave_room_for_tag"
-Cohesion: 0.50
-Nodes (3): T-3:每批「文本 + 摘要 + 批尾 ` (i/N)`」都要 ≤ 1900 —— 批數要切完才知道, 所以 `_split_batches` 得先扣掉…, 貼著上限的治具(T-3):配 `_TIGHT_SUFFIX` 時合併文本 2 則 = 1282 字、 3 則 = **1900 字**(= 上限)、4 則 =…, _tight_rows()
+### Community 459 - "TestDiscordMerge"
+Cohesion: 0.14
+Nodes (12): _long_rows(), SC-4:同 code、同 time 且在 Discord 佇列中**相鄰**的多 row → 一則訊息。 合併只發生在**送出端**:WS / jsonl…, edge 8:合併文本 > 1900 字元 → 依 row 分批,批尾標 `(i/N)`,**不截斷**。, T-3:每批「文本 + 摘要 + 批尾 ` (i/N)`」都要 ≤ 1900 —— 批數要切完才知道, 所以 `_split_batches` 得先扣掉…, 各批各計一次節流 → 後續批可能被擋下:缺角必須在 log 可見(帶 rows[0] 的 id)。, 單則(含超長單則)照現行路徑走:不分批、不加 `(i/N)`、文案逐字不變。, review C-5:未分批的合併訊息被節流擋下 = 一次吞掉整組 N 則。 `_allow_discord` 自己那句 log 只說「本則」——…, review C-3:單槽 pending 那一則已經 `get()` 出來、還沒 `task_done()`。 關機時 worker 被取消 →… (+4 more)
 
 ### Community 471 - "layoutEdgeLabels"
 Cohesion: 0.67
@@ -2277,33 +2227,25 @@ Nodes (3): buildVwapLabel(), labelWidth(), vwapLabelBox()
 Cohesion: 0.67
 Nodes (3): labelCenter(), yieldToObstacles(), yieldToObstaclesBaseline()
 
-### Community 478 - "_daytime_clock"
-Cohesion: 0.67
-Nodes (3): _daytime_clock(), fixture, 全檔凍在 `_DAYTIME`:午夜緩衝窗(TZ-2)只在 `TestMidnightMemoRace` 內自己覆寫。
-
-### Community 479 - "_empty_fetchers"
-Cohesion: 0.67
-Nodes (3): _empty_fetchers(), BreadthFetchers, 家數帶取數四元組:全空(本檔只驗 today_fn 佈線,不驗家數算術)。
-
 ## Knowledge Gaps
-- **809 isolated node(s):** `AvgSource`, `BreadthBuckets`, `BreadthCounts`, `BreadthPoint`, `BreadthRow` (+804 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 5295 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **76 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **809 isolated node(s):** `$schema`, `react-doctor/effect-needs-cleanup`, `react-doctor/no-fetch-in-effect`, `react-doctor/js-set-map-lookups`, `name` (+804 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 5272 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **62 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `StockEngine` connect `StockEngine` to `asyncio`, `_make`, `MonkeyPatch`, `test_stock_routes.py`, `_drain`, `test_stock_engine.py`, `._armed`, `create_app`, `TestStateRouteTape`, `TickPersist`, `lifespan`, `TestPolicyQuotes`, `FakeSource`, `app.py`, `._collect`, `stock_engine.py`?**
-  _High betweenness centrality (0.046) - this node is a cross-community bridge._
-- **Why does `TC4QuoteSource` connect `TC4QuoteSource` to `stock_source.py`, `StockQuoteSource`, `TestCloseLogout`, `TestSpotWindowOffset`, `FakeApi`, `tc4.py`, `MonkeyPatch`, `parse_stkfut_catalog`, `Any`, `lifespan`, `_ReqApi`, `shutdown_budget.py`, `ConnectionError`, `FakeApi`, `CorrQuoteSource`, `test_tc4.py`, `TestApplyVariant`, `SeriesInfo`?**
-  _High betweenness centrality (0.043) - this node is a cross-community bridge._
-- **Why does `create_app()` connect `create_app` to `test_overlay.py`, `StockEngine`, `BarsCache`, `.test_slow_code_times_out_all_null_and_frees_slot`, `FakeStockSource`, `_FailingStartStockSource`, `TicksCompactor`, `Path`, `BootedClient`, `ws.py`, `test_index_routes.py`, `test_create_app_passes_the_calendar_into_every_default_source`, `test_market_routes.py`, `relay`, `test_main_wiring.py`, `lifespan`, `FakeFuturesSource`, `test_stkfut_routes.py`, `make_client`, `test_breadth_routes.py`, `make_client`, `stock_engine.py`, `SeriesInfo`, `TestStateRoute`, `capital_api.py`, `fake_txo.py`, `test_ws_disconnect.py`, `test_signal_routes.py`, `app.py`, `WsBroadcaster`, `MonkeyPatch`, `server/__main__.py`, `FakeCorrSource`, `test_oi_levels.py`, `test_stock_routes.py`, `TicksConfig`, `.test_closes_inside_boot_window`, `TickPersist`, `test_clock_monitor.py`, `._boot`, `oi_levels.py`, `test_calendar_wiring.py`, `test_app.py`, `test_capital_api.py`?**
-  _High betweenness centrality (0.041) - this node is a cross-community bridge._
-- **Are the 37 inferred relationships involving `TC4QuoteSource` (e.g. with `SeriesInfo` and `Tick`) actually correct?**
-  _`TC4QuoteSource` has 37 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `create_app()` connect `create_app` to `register_capital`, `app.py`, `FuturesEngine`, `StockEngine`, `signal_rules.py`, `CapitalClient`, `BarsCache`, `signals_config.py`, `TestShutdownLanes`, `FakeStockSource`, `FakeService`, `stock_watchlist.py`, `EngineRuntime`, `TicksCompactor`, `_service`, `load_config`, `_TaggedFetcher`, `SignalHub`, `BreadthEngine`, `TradingCalendar`, `BootedClient`, `CorrSource`, `send_seed`, `make_client`, `MonkeyPatch`, `discord_bot.py`, `WsBroadcaster`, `test_create_app_passes_the_calendar_into_every_default_source`, `relay`, `make_client`, `_boot_engines`, `make_client`, `Watchlist`, `Path`, `OverlayCache`, `AuditWriteError`, `test_breadth_routes.py`, `make_client`, `StockSource`, `SeriesInfo`, `test_clock_monitor.py`, `test_health.py`, `._run_handover_locked`, `.test_hub_data_dir_isolated_without_explicit_path`, `test_ws_disconnect.py`, `stock_names.py`, `FuturesSource`, `test_signal_routes.py`, `BreadthConfig`, `Rule`, `CorrelationEngine`, `MonkeyPatch`, `bars.py`, `test_calendar_wiring.py`, `TestAppWiring`, `IndexEngine`, `FakeCorrSource`, `_client`, `test_stock_routes.py`, `_RunningServer`, `TicksConfig`, `.test_closes_inside_boot_window`, `session_key`, `ScreenEngine`, `TickPersist`, `ClockSample`, `StkfutCatalog`, `bar`, `BarsResult`, `oi_levels.py`, `StockTick`, `test_app.py`, `test_capital_api.py`?**
+  _High betweenness centrality (0.098) - this node is a cross-community bridge._
+- **Why does `StockTick` connect `StockTick` to `_tick`, `app.py`, `StockQuoteSource`, `_drain`, `_Clock`, `StockEngine`, `_Harness`, `SignalHub`, `TestGroupStateRoute`, `SignalDetector`, `StockDayState`, `StockSource`, `test_signal_routes.py`, `FakeHub`, `load_day`, `test_stock_routes.py`, `TickPersist`, `test_stock_engine.py`, `test_signal_state.py`?**
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
+- **Why does `StockEngine` connect `StockEngine` to `app.py`, `_drain`, `_quote`, `MonkeyPatch`, `wait_until`, `WsBroadcaster`, `create_app`, `TestGroupStateRoute`, `_boot_engines`, `TestPolicyQuotes`, `StockDayState`, `StockSource`, `._armed`, `._collect`, `test_stock_routes.py`, `TickPersist`, `test_stock_engine.py`, `BarsResult`, `FakeSource`, `StockTick`?**
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
+- **Are the 23 inferred relationships involving `create_app()` (e.g. with `BreadthConfig` and `CapitalClient`) actually correct?**
+  _`create_app()` has 23 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 38 inferred relationships involving `TC4QuoteSource` (e.g. with `SeriesInfo` and `Tick`) actually correct?**
+  _`TC4QuoteSource` has 38 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 25 inferred relationships involving `FakeIndexSource` (e.g. with `TestShutdownLanes` and `_client()`) actually correct?**
   _`FakeIndexSource` has 25 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `AvgSource`, `BreadthBuckets`, `BreadthCounts` to the rest of the system?**
+- **What connects `$schema`, `react-doctor/effect-needs-cleanup`, `react-doctor/no-fetch-in-effect` to the rest of the system?**
   _809 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `_make` be split into smaller, more focused modules?**
-  _Cohesion score 0.031438837171321246 - nodes in this community are weakly interconnected._

@@ -14897,63 +14897,96 @@
   ],
   "surprises": [
     {
-      "source": "TestSweepClusterGolden",
-      "target": "StockTick",
+      "source": "_FailOnceFetch",
+      "target": "BreadthFetchError",
       "source_files": [
-        "tests/live/test_signal_state.py",
-        "copycat/live/stock_models.py"
+        "tests/server/test_breadth_engine.py",
+        "copycat/server/breadth_fetch.py"
       ],
       "confidence": "INFERRED",
       "relation": "uses",
       "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
     },
     {
-      "source": "TestBackfillGuard",
-      "target": "StockTick",
+      "source": "_boom()",
+      "target": "BreadthFetchError",
       "source_files": [
-        "tests/server/test_stock_engine.py",
-        "copycat/live/stock_models.py"
+        "tests/server/test_breadth_routes.py",
+        "copycat/server/breadth_fetch.py"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; bridges separate communities; peripheral node `_boom()` unexpectedly reaches hub `BreadthFetchError`"
+    },
+    {
+      "source": "TestProdWiring",
+      "target": "BreadthFetchError",
+      "source_files": [
+        "tests/server/test_breadth_routes.py",
+        "copycat/server/breadth_fetch.py"
       ],
       "confidence": "INFERRED",
       "relation": "uses",
       "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
     },
     {
-      "source": "TestBackfillTimeoutRetry",
-      "target": "StockTick",
+      "source": "_f()",
+      "target": "BreadthFetchError",
       "source_files": [
-        "tests/server/test_stock_engine.py",
-        "copycat/live/stock_models.py"
+        "tests/server/test_breadth_routes.py",
+        "copycat/server/breadth_fetch.py"
       ],
-      "confidence": "INFERRED",
-      "relation": "uses",
-      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "connects across different repos/directories; bridges separate communities; peripheral node `_f()` unexpectedly reaches hub `BreadthFetchError`"
     },
     {
-      "source": "TestGroupSnapshot",
-      "target": "StockTick",
+      "source": "test_daily_date_echo_mismatch_raises()",
+      "target": "BreadthFetchError",
       "source_files": [
-        "tests/server/test_stock_engine.py",
-        "copycat/live/stock_models.py"
-      ],
-      "confidence": "INFERRED",
-      "relation": "uses",
-      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
-    },
-    {
-      "source": "TestSignalHubHooks",
-      "target": "StockTick",
-      "source_files": [
-        "tests/server/test_stock_engine.py",
-        "copycat/live/stock_models.py"
+        "tests/server/test_screen_engine.py",
+        "copycat/server/breadth_fetch.py"
       ],
       "confidence": "INFERRED",
       "relation": "uses",
       "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
     }
   ],
-  "tokens": {
-    "input": 0,
-    "output": 0
-  }
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `StockEngine` connect `StockEngine` to `asyncio`, `_make`, `MonkeyPatch`, `test_stock_routes.py`, `_drain`, `test_stock_engine.py`, `._armed`, `create_app`, `TestStateRouteTape`, `TickPersist`, `lifespan`, `TestPolicyQuotes`, `FakeSource`, `app.py`, `._collect`, `stock_engine.py`?",
+      "why": "High betweenness centrality (0.046) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `TC4QuoteSource` connect `TC4QuoteSource` to `stock_source.py`, `StockQuoteSource`, `TestCloseLogout`, `TestSpotWindowOffset`, `FakeApi`, `tc4.py`, `MonkeyPatch`, `parse_stkfut_catalog`, `Any`, `lifespan`, `_ReqApi`, `shutdown_budget.py`, `ConnectionError`, `FakeApi`, `CorrQuoteSource`, `test_tc4.py`, `TestApplyVariant`, `SeriesInfo`?",
+      "why": "High betweenness centrality (0.043) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `create_app()` connect `create_app` to `test_overlay.py`, `StockEngine`, `BarsCache`, `.test_slow_code_times_out_all_null_and_frees_slot`, `FakeStockSource`, `_FailingStartStockSource`, `TicksCompactor`, `Path`, `BootedClient`, `ws.py`, `test_index_routes.py`, `test_create_app_passes_the_calendar_into_every_default_source`, `test_market_routes.py`, `relay`, `test_main_wiring.py`, `lifespan`, `FakeFuturesSource`, `test_stkfut_routes.py`, `make_client`, `test_breadth_routes.py`, `make_client`, `stock_engine.py`, `SeriesInfo`, `TestStateRoute`, `capital_api.py`, `fake_txo.py`, `test_ws_disconnect.py`, `test_signal_routes.py`, `app.py`, `WsBroadcaster`, `MonkeyPatch`, `server/__main__.py`, `FakeCorrSource`, `test_oi_levels.py`, `test_stock_routes.py`, `TicksConfig`, `.test_closes_inside_boot_window`, `TickPersist`, `test_clock_monitor.py`, `._boot`, `oi_levels.py`, `test_calendar_wiring.py`, `test_app.py`, `test_capital_api.py`?",
+      "why": "High betweenness centrality (0.041) - this node is a cross-community bridge."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 37 inferred relationships involving `TC4QuoteSource` (e.g. with `SeriesInfo` and `Tick`) actually correct?",
+      "why": "`TC4QuoteSource` has 37 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 25 inferred relationships involving `FakeIndexSource` (e.g. with `TestShutdownLanes` and `_client()`) actually correct?",
+      "why": "`FakeIndexSource` has 25 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `AvgSource`, `BreadthBuckets`, `BreadthCounts` to the rest of the system?",
+      "why": "809 weakly-connected nodes found - possible documentation gaps or missing edges."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `_make` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.031438837171321246 - nodes in this community are weakly interconnected."
+    }
+  ]
 }
