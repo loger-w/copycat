@@ -544,7 +544,7 @@ TC4 常駐 + ZMQ 對 localhost 通;非 headless 友善,Linux Docker 不在規劃
   讀者 = `copycat/ticks.py::load_day`(parquet 優先、無則 jsonl 且壞行跳過 WARNING 計數;排序只看 `msg_seq`,
   parquet 依 `(code, msg_seq)`;**`recv_ns` 是牆鐘、校時回撥會倒退,不當排序鍵**)、`TickRow.to_stock_tick()`
   (只對成交列)、`copycat/book_replay.py` + CLI `book-replay`(簿重播外掛檔;只收成交 + 簿兩個 parquet 都在的日子;
-  外掛檔 `fields` = `TickRow` 五檔欄序,改欄序 = 改外掛檔格式,`FORMAT_VERSION` +1,舊檔在解碼端以欄序不符拒收)、
+  外掛檔 `fields` = `TickRow` 五檔欄序,改欄序 = 改外掛檔格式,`FORMAT_VERSION` +1)、
   研究目錄自讀 parquet(repo 外)。**簿列 `precise_time` = 上一筆成交殘影,不是簿變動時刻**
   (達錢不給;簿列時刻只有 `recv_ns`,#236 時鐘偏差 WARNING 出現 = 簿列時刻也偏)。
   盤後判準:`grep "tick 存檔\|tick 轉檔" logs/server-<日>.log` —— 「tick 存檔 <日>:成交 n / 簿 m / 重複簿略過 d /
