@@ -1,0 +1,58 @@
+#267 CLI book-replay 真實環境執行紀錄(2026-09-16 晚,worktree feat/book-replay-engine,venv = 主 tree .venv)
+輸出目錄在 session scratchpad(不進 repo、不動回看頁資料夾):<scratchpad>/book_replay_out_v1b/2026-09-16/
+
+== 最終版程式(f86676a1,round 2 收修後)==
+$ python run_cli_mem.py book-replay --date 20260916 --dir C:/side-project/copycat/data/ticks --out <scratchpad>/book_replay_out_v1b
+copycat from C:\side-project\copycat\.claude\worktrees\feat-book-replay-engine\copycat\__init__.py
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 21.5 MB,耗時 101.8 秒 → ...\book_replay_out_v1b\2026-09-16
+rc=0 peak WS 5698 MB / peak commit 5959 MB
+exit=0
+(101.8 秒是與全量 pytest 同時跑;單獨跑 84.5–85.9 秒,見下)
+sha256sum *.js 與 round 2 收修前的 hashes_v1b_run1.txt 逐行相同 → 收修只動命名 / 檢查 / 文件,輸出位元組不變
+verify_against_parquet.py 以最終版 decode(含 round 2 新增檔頭檢查)重跑:exit 0,(a)(b) 全 0 不符
+
+== Happy path(最終格式首跑,955aa83b;當時輸出字面為舊版「時刻異常未推進時間軸的成交」)==
+$ python run_cli_mem.py book-replay --date 20260916 --dir C:/side-project/copycat/data/ticks --out <scratchpad>/book_replay_out_v1b
+  (run_cli_mem.py = 呼叫 copycat.cli.main 並在結束時讀 K32GetProcessMemoryInfo 的包裝;確認 import 的是 worktree 的 copycat)
+copycat from C:\side-project\copycat\.claude\worktrees\feat-book-replay-engine\copycat\__init__.py
+簿重播 2026-09-16:80 檔、2841208 則(時刻異常未推進時間軸的成交 1 則),外掛檔 21.5 MB,耗時 84.5 秒 → ...\book_replay_out_v1b\2026-09-16
+rc=0 peak WS 5696 MB / peak commit 5951 MB
+exit=0
+
+參考:第一版格式(只有五檔 + 時鐘點,0b1dbff6)同一天 15.6 MB / 63.3 秒 / peak WS 5692 MB;load_day 單獨量 29.5 秒 / peak WS 5680 MB。
+最大檔:2303(137,299 則),第一版 765 KB。
+
+== 決定性(同資料重跑逐位元組相同)==
+第一次輸出後 sha256sum *.js → hashes_v1b_run1.txt(80 行)
+$ python -m copycat book-replay --date 20260916 --dir C:/side-project/copycat/data/ticks --out <scratchpad>/book_replay_out_v1b
+簿重播 2026-09-16:80 檔、2841208 則(時刻異常未推進時間軸的成交 1 則),外掛檔 21.5 MB,耗時 85.9 秒 → ...
+exit=0
+diff hashes_v1b_run1.txt hashes_v1b_run2.txt → 無差異(「新格式兩次輸出 80 檔 sha256 全同」);輸出目錄無殘留 .tmp
+(第一版格式同樣驗過:80 檔 sha256 全同,檔案 mtime 20:31:44 → 20:36:55 證明確實重寫)
+
+== Edge 1:未轉檔(只有當日 jsonl)==
+$ python -m copycat book-replay --date 20260916 --dir <scratchpad>/ticks_jsonl_only --out <scratchpad>/edge_out
+簿重播 2026-09-16:tick 存檔還沒轉檔(13:45 排程或手動 ticks-compact 之後再跑)
+exit=2;edge_out 未建立
+
+== Edge 2:只有成交 parquet(簿 parquet 過保留期的情境;複製 20260916.parquet 到空目錄)==
+$ python -m copycat book-replay --date 20260916 --dir <scratchpad>/ticks_trade_only --out <scratchpad>/edge_out
+簿重播 2026-09-16:只有成交 parquet、簿 parquet 不在(過了保留期?),拒絕產出以免蓋掉既有外掛檔
+exit=2;edge_out 未建立
+
+== Edge 3:沒有 tick 存檔的日子(09-15 快照 parquet 已刪)==
+$ python -m copycat book-replay --date 20260915 --dir C:/side-project/copycat/data/ticks --out <scratchpad>/edge_out
+簿重播 2026-09-15:C:\side-project\copycat\data\ticks 沒有這天的 tick 存檔
+exit=2
+
+== Edge 4:日期格式錯 ==
+$ python -m copycat book-replay --date 2026-09-16 --out <scratchpad>/edge_out
+簿重播:--date 須為 YYYYMMDD(收到 '2026-09-16')
+exit=2
+
+== 回歸抽查:沒改的相關功能 ==
+$ python -m copycat ticks-compact --date 20260916 --dir C:/side-project/copycat/data/ticks
+tick 轉檔 2026-09-16:jsonl 不存在:C:\side-project\copycat\data\ticks\20260916.jsonl
+exit=2;data/ticks 兩個 parquet 原封不動(照舊拒絕,零檔案變動)
+$ python -m copycat validate --run-five <主 tree>/out/five_tigers --run-four <主 tree>/out/four_tigers
+42/42 PASS,exit=0(引擎回放 golden gate 不受影響)
