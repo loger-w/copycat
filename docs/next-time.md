@@ -5,7 +5,8 @@
   current-state §5 事實 A —— 09-15 側車 SubHistory 09-14 窗 82 檔 380,854 列無例外,07-06 報告樣本亦然。走 `diagnosing-bugs`
   先做能變紅的 loop(fake source 回補列 cum=0 + live 期間 ingest 兩筆 → 重放後 VP / cum_vol 是否雙計)。修法候選 = survivors
   改以 (時刻, 價, 量) 配對鍵去重(側車 `rules_xcheck.py` 6,320 / 6,320 全對上的那把鍵),不是改 cum 判準。
-- [ ] **09-16 08:59 排程 `copycat-flag-capture-0916`(150 s 只聽不訂抓檔)結果 → 只改文件**:集合競價 09:00:00 首筆與 08:59
+- [x] **09-16 08:59 排程 `copycat-flag-capture-0916`(150 s 只聽不訂抓檔)結果 → 只改文件**(09-16 10:1x 收:兩題都答了,寫進 skill `tc4-market-facts`
+  「成交後簿 / 旗標」條與「簿更新殘影」條;排程已 Unregister;抓檔 jsonl 留 scratchpad 不進 repo):集合競價 09:00:00 首筆與 08:59
   試撮期訊息的 `FlagOfBuySell` 分佈(去重鍵 (Security, TradeVolume) 首見;分析腳本樣板 scratchpad 上層 `flag_xcheck.py` /
   `flag_zero.py`)。結果寫進 skill `tc4-market-facts` 那條「成交後簿 / 旗標」+ 本節勾銷;跑完
   `Unregister-ScheduledTask -TaskName copycat-flag-capture-0916 -Confirm:$false`。不改程式。
