@@ -108,7 +108,8 @@ _KIND_NAME: dict[str, str] = {code: name for name, code in _KIND_CODE.items()}
 
 
 class PluginFormatError(ValueError):
-    """外掛檔解不回原樣:不是外掛檔、版本不認得、檔頭與內容不符,或 delta 與 keyframe 對不上。"""
+    """外掛檔解不回原樣:不是外掛檔、版本不認得、檔頭與內容不符、逐則的值不合模組說明,或 delta 與
+    keyframe 對不上(`decode` 逐條列出它檢查什麼)。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +121,10 @@ class Trade:
     price_milli: int | None
     qty: int | None  # 張
     side: str | None  # "inner" | "outer" | "neutral"(看盤引擎當時的判定)
+
+
+#: 外掛檔 `trade` 內外盤格的值域(= `StockTick.side`)
+_SIDES: frozenset[str] = frozenset({"inner", "outer", "neutral"})
 
 
 #: 外掛檔 `trade` 每筆成交的格序 = `Trade` 欄序(encode 取值與 decode 建構同一個來源)
@@ -229,6 +234,8 @@ def _taipei_day_start_epoch_ms(trade_date: str) -> int:
 
 def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> PluginPayload:
     """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v1」。"""
+    if keyframe_every < 1:
+        raise ValueError(f"keyframe_every 須 ≥ 1(收到 {keyframe_every})")
     seq: list[int] = []
     kinds: list[str] = []
     anomalous: list[int] = []
@@ -303,27 +310,47 @@ def parse_plugin_js(text: str) -> PluginPayload:
 
 
 def book_at(payload: PluginPayload, index: int) -> tuple[int | None, ...]:
-    """第 `index` 則的五檔,走回看頁跳轉的規則:該則之前最近的 keyframe + 其後到該則的 delta。"""
-    every = payload["kf_every"]
+    """第 `index` 則的五檔,走回看頁跳轉的規則:該則之前最近的 keyframe + 其後到該則的 delta。
+
+    `index` 不在 0..n−1 → IndexError:不照 list 容許負數 —— 負數或 n 在這條規則下會默默回到別則的簿。
+    """
+    code, n, every = payload["code"], payload["n"], payload["kf_every"]
+    if not 0 <= index < n:
+        raise IndexError(f"{code} 沒有第 {index} 則(共 {n} 則)")
     base = (index // every) * every
     state = list(payload["kf"][index // every])
-    for delta in payload["d"][base + 1 : index + 1]:
-        _apply_delta(state, delta)
+    for i, delta in enumerate(payload["d"][base + 1 : index + 1], start=base + 1):
+        _apply_delta(state, delta, code, i)
     return tuple(state)
 
 
-def _apply_delta(state: list[int | None], delta: Sequence[Any]) -> None:
-    """`[欄號, 新值, 欄號, 新值, …]` 套到 20 格上(欄號與值混在同一串,所以收 Any)。"""
+def _apply_delta(state: list[int | None], delta: Sequence[Any], code: str, index: int) -> None:
+    """第 `index` 則的 `[欄號, 新值, 欄號, 新值, …]` 套到 20 格上(欄號與值混在同一串,所以收 Any)。
+
+    不成對、欄號不在 0–19 → PluginFormatError(負欄號照 list 規則會默默寫進別格)。
+    """
+    if len(delta) % 2:
+        raise PluginFormatError(f"{code} 第 {index} 則:delta 長度 {len(delta)} 不是偶數")
     for k in range(0, len(delta), 2):
-        state[delta[k]] = delta[k + 1]
+        field = delta[k]
+        if not 0 <= field < len(state):
+            raise PluginFormatError(
+                f"{code} 第 {index} 則:delta 欄號 {field!r} 不在 0–{len(state) - 1}"
+            )
+        state[field] = delta[k + 1]
 
 
 def decode(payload: PluginPayload) -> BookReplay:
     """外掛檔 payload → 簿重播(`encode` 的反函數;回看頁解碼規則的 Python 版)。
 
-    自檢:逐則套 delta 到每個 keyframe 位置都必須與 keyframe 逐格相等 —— 回看頁「播放」走 delta、
-    「跳轉」走 keyframe,兩條路對不上 = 同一刻兩份簿;收到時刻不得倒退;時鐘點成交(沒列在 `anomalous` 的成交)
-    必須有達錢時刻、且不早於目前的標籤時刻。這些或檔頭不符 → PluginFormatError。
+    自檢,不合格一律 PluginFormatError:
+    - 檔頭與內容的形狀(`_check_header`:版本、鍵、欄序、各陣列長度、kf_every ≥ 1、kind 字元、
+      anomalous 則號遞增且落在成交則)
+    - 逐則:訊息序號遞增、收到時刻不倒退、delta 成對且欄號 0–19、內外盤是三值之一;時鐘點成交(沒列在
+      `anomalous` 的成交)有達錢時刻且不早於目前的標籤時刻
+    - 每個 keyframe 位置,逐則套 delta 的結果與 keyframe 逐格相等 —— 回看頁「播放」走 delta、「跳轉」走
+      keyframe,兩條路對不上 = 同一刻兩份簿
+    值的型別(例如該是整數的地方放了字串)不在檢查範圍。
     """
     _check_header(payload)
     code, every, keyframes = payload["code"], payload["kf_every"], payload["kf"]
@@ -338,11 +365,13 @@ def decode(payload: PluginPayload) -> BookReplay:
     for i, (seq_step, kind, recv_step, delta) in enumerate(
         zip(payload["seq"], payload["kind"], payload["recv"], payload["d"], strict=True)
     ):
+        if seq_step <= 0:
+            raise PluginFormatError(f"{code} 第 {i} 則:訊息序號沒有遞增(差值 {seq_step})")
         if recv_step < 0:
             raise PluginFormatError(f"{code} 第 {i} 則:收到時刻倒退 {recv_step} ms")
         msg_seq += seq_step
         recv_ms += recv_step
-        _apply_delta(state, delta)
+        _apply_delta(state, delta, code, i)
         if i % every == 0 and state != keyframes[i // every]:
             raise PluginFormatError(
                 f"{code} 第 {i} 則:delta 累積結果與 keyframe 不符"
@@ -351,6 +380,10 @@ def decode(payload: PluginPayload) -> BookReplay:
         kind_name = _KIND_NAME[kind]
         trade = Trade(*next(trades)) if kind_name == "trade" else None
         if trade is not None:
+            if trade.side not in _SIDES:
+                raise PluginFormatError(
+                    f"{code} 第 {i} 則:內外盤 {trade.side!r} 不是 {' / '.join(sorted(_SIDES))}"
+                )
             if i == next_anomalous:
                 next_anomalous = next(anomalous, None)
             elif trade.ms is None:
@@ -368,7 +401,7 @@ def decode(payload: PluginPayload) -> BookReplay:
 
 
 def _check_header(payload: PluginPayload) -> None:
-    """檔頭與內容的形狀一致(逐則的 keyframe 自檢、收到時刻與標籤時刻不倒退在 `decode` 迴圈裡)。"""
+    """檔頭與內容的形狀一致(逐則的檢查在 `decode` 迴圈裡)。"""
     if payload.get("v") != FORMAT_VERSION:
         raise PluginFormatError(f"外掛檔版本 {payload.get('v')!r} 不認得(本版解 {FORMAT_VERSION})")
     missing = set(PluginPayload.__required_keys__) - set(payload)
@@ -380,6 +413,8 @@ def _check_header(payload: PluginPayload) -> None:
     lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d"))
     if lengths != (n, n, n, n):
         raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / recv / d 長度 {lengths} 不符")
+    if every < 1:
+        raise PluginFormatError(f"{code} kf_every={every!r} 不合法:須 ≥ 1")
     if len(payload["kf"]) != -(-n // every):
         raise PluginFormatError(
             f"{code} keyframe 個數 {len(payload['kf'])} 不符(n={n}、每 {every} 則一個)"
