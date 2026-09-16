@@ -74,6 +74,27 @@ tsc 一次紅:`live-last-bar.ts` TS2698(`let cur: Bar | null = null` 被窄成 `
 5. 抽兩個未改功能:江波圖 / 個股期合約態(K 線鈕反灰、只有分時)照舊。
 6. 效能:Performance 面板錄 60 s,主執行緒 long task(> 50 ms)= 0;與 §4 bench 對照。
 
+### 2026-09-09 實錄(觀察 session;prod 45df8dbd 08:12 起;前端 = 5173 dev(preview 未起);紀錄 `%TEMP%\copycat-observe-2026-09.log`)
+
+取證環境限制:claude-in-chrome 的四個分頁全日 `document.visibilityState = hidden`(MCP 視窗在背景),TanStack `refetchInterval`
+不跑(預設 `refetchIntervalInBackground: false`)、Chrome 對隱藏 > 5 min 分頁節流到主圖 / tape 也凍住 —— 所有靠輪詢或持續更新的
+判準今天只能 SKIP,DOM 一致性判準有效。另 Vite dev 全頁 reload 三次(09-08 19:11 / 09-09 00:37 / 12:22,均為別的 session 改 frontend/src)
+清掉分頁狀態。要驗齊本節,分頁必須 visible 且用 4173 preview。
+
+| # | 判準 | 結果 | 證據 |
+|---|---|---|---|
+| 1 | 3 分 K 末根跟成交跳 / 每 3 分鐘新根 / 正式版換上不位移 / 量同量級 | SKIP | 666(2409 3分K)09:40–09:50 取樣零變化:header 停 09:18 桶、tape 停 09:16:16、`tf=1` 零發(hidden)。附觀察:13:39 tape 已收到 13:30:00 收盤撮合但 3 分 K 末根仍 09:18 —— 隱藏分頁下分不出 rAF 不重繪或 live merge 只補正式末根後那一桶,待可見重測 |
+| 1a | 休市日不長今天 | 不適用 | 交易日 |
+| 2 | 日 K 今天那根 = 側欄高 / 低 / 現價、量 = 總量 | PASS | 671(2409 日K)09:15:29 / :35 / :40 三次逐字同值:「2026-09-09 開 30.55 高 31.95 低 30.55 收 31.6 量 164987」= 側欄 31.6 / 總量 164987 |
+| 2 | 13:30 後值停住 | PASS(未反證) | 13:34 樣本 A = 13:39 樣本 B(671 已被 reload 換成 3141:「開 95.1 高 96.7 低 93.3 收 95.4 量 2157」);hidden 下停住是必然,不算實證 |
+| 2 | 14:01 一發 `tf=D` 且 status ok → 換定稿;達錢關著 → 維持不退回 | SKIP | 671 hidden 無 14:01 那發,header 凍在 12:26 值;後端 3141 tf=D 末根 o 96.7 h 96.7 l 93.3 c 93.9 v 2813(達錢開著,墊背 0);補時戳 access log 顯示 user 自己的頁面最後請求 12:41,14:01 前後無任何 client 打 tf=D → 無樣本 |
+| 3 | 08:5x 開著日 K 末根仍昨天、09:00 首筆後才長今天 | PASS(前半) | 08:47:671(6770 日K)末根 2026-09-08 開 73.2 收 72.4;666(3055 1分K)末根 2026-09-08 13:30。後半:09:12 671 已有 2026-09-09 那根(換股後重掛取得,非 09:00 首筆自長,hidden 下不可分辨) |
+| 4 | 換股不誤貼 | PASS | 09:13:19 6770→2409 序列:6770 header → 2409「(no header)」×3(換股後圖表模式退回江波圖)→ 09:14:32 切日K 後「2409 2026-09-09 30.55 31.95 30.55 31.65」;零筆 2409 掛 6770 值。附記:換股會把圖表模式重設為 intraday(既有行為) |
+| 5 | 江波圖 / 個股期合約態照舊 | PASS | 江波圖:分時線 + VWAP 31.37 + 五檔 + 成交明細(截圖 screenshot-1788916443516-2.jpg);2409 合約 2026/09:圖表模式只剩江波圖可選、m1–m10 / day 全 disabled(截圖 screenshot-1788916527807-4.jpg) |
+| 6 | Performance 60 s long task = 0 | SKIP | 凍住的隱藏分頁 long task 恆 0 無意義 |
+
+其他當日:`grep 佇列滿` 0 / Traceback 0 / 值未前進 0。**留尾**:1 / 2(14:01)/ 6 三條要在 visible 分頁(或 user 自己開著的頁 + 補時戳 access log)重做。
+
 ## 7. 三類 commit 分離
 
 🟢 test ×5(紅先行,含 Spec-01 週六案)/ 🟢 feat ×5(含 Spec-01 交易日閘)/ 🔵 refactor ×1(two-axis Standards 收修:key factory / memo / codec import /

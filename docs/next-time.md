@@ -1037,7 +1037,7 @@ prod 8721 = 6adf20d9、dist 已重建)。
   原拍板「先量不改」已量完):09-16 全日 jsonl 2,841,208 列 ≈ 1.35 GB(spec 估 700 MB 的 2×),轉檔子程序峰值 RSS **9,013 MB**
   (每 3 s 抽樣;讀檔階段每 3 s +1.5 GB)、機器可用 15.3 GB 的一半 = 7.7 GB → 超標;轉檔本身成功 59.2 s、parquet 43.7 MB。
   tracemalloc 實測 2,747 B/列(review 2.64 KB 命中)。實錄 `.claude/feat/tick-persist/verification.md` §7-5。
-- [ ] **深夜重啟會產生一份「只含訂閱快照」的昨日 parquet**(09-16 00:39 實錄):stage2 前 engine 日別 = 昨日,TC4 訂閱時每檔一則快照
+- [x] **深夜重啟會產生一份「只含訂閱快照」的昨日 parquet**(09-16 user 拍板 (a),兩檔已刪)(09-16 00:39 實錄):stage2 前 engine 日別 = 昨日,TC4 訂閱時每檔一則快照
   經 `_handle_quote` 寫進昨日 jsonl(78 列),補跑掃到「過去日 jsonl」立刻轉檔 → `20260915.parquet` 78 列、非真資料,`load_day(09-15)`
   會被誤導;之後該日的 jsonl 也因 §4-7 不再開。只在「prod 該日沒跑存檔 + 00:00–stage2 之間重啟」時發生(上線第一天特有;日後每個
   交易日都有真 parquet 就不會再撞)。處置候選:(a) 手動刪 `data/ticks/20260915*.parquet`(user 拍板);(b) 補跑只轉「列數 > 訂閱檔數」
