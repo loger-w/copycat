@@ -210,10 +210,10 @@ def plugin_js(payload: Mapping[str, Any]) -> str:
 
 
 def parse_plugin_js(text: str) -> dict[str, Any]:
-    """外掛檔全文 → payload(`plugin_js` 的反函數)。形狀不對 → ValueError。"""
+    """外掛檔全文 → payload(`plugin_js` 的反函數)。不是一行 `window.__bk(...)` → ReplayFormatError。"""
     match = _PLUGIN_LINE.fullmatch(text.strip())
     if match is None:
-        raise ValueError("不是簿重播外掛檔(找不到 window.__bk(...) 一行)")
+        raise ReplayFormatError("不是簿重播外掛檔(找不到 window.__bk(...) 一行)")
     return json.loads(gzip.decompress(base64.b64decode(match["blob"], validate=True)))
 
 

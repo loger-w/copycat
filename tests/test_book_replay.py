@@ -374,3 +374,8 @@ class TestPluginEncoding:
 
         with pytest.raises(ReplayFormatError, match=message):
             decode(wire)
+
+    def test_parse_refuses_text_that_is_not_a_book_replay_plugin_line(self) -> None:
+        """逐筆外掛檔(`window.__tk`)跟簿重播外掛檔同形,放錯資料夾也要認得出來。"""
+        with pytest.raises(ReplayFormatError, match="window.__bk"):
+            parse_plugin_js('window.__tk("2426|2026-09-16","H4sIAAAAAAAAA4uOBQApu0wNAgAAAA==");')

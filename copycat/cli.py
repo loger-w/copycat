@@ -129,6 +129,21 @@ def main(argv: list[str] | None = None) -> int:
         "--dir", type=Path, default=None, help="tick 存檔目錄(預設 configs/ticks.json 的 dir,相對 repo root)"
     )
 
+    p_br = sub.add_parser(
+        "book-replay",
+        help="簿重播外掛檔(#267):某交易日 tick 存檔 → 每檔一個 keyframe+delta 外掛檔(回看頁重播分頁懶載入);逐檔解回原樣才落檔",
+    )
+    p_br.add_argument("--date", required=True, help="交易日 YYYYMMDD(沒有 tick 存檔 → exit 2)")
+    p_br.add_argument(
+        "--dir", type=Path, default=None, help="tick 存檔目錄(預設 configs/ticks.json 的 dir,相對 repo root)"
+    )
+    p_br.add_argument(
+        "--out",
+        type=Path,
+        default=Path("out/book_replay"),
+        help="輸出根目錄,檔案落在 <out>/<YYYY-MM-DD>/<代號>.js(實際使用指向回看頁的外掛資料夾)",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "import-neigui":
         manifest = run_import(args.src, args.events_csv, args.data_dir)
@@ -361,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         sys.stdout.write(format_compact_line(day, result) + "\n")
         return 0
+    if args.command == "book-replay":
+        return _book_replay(args.date, args.dir, args.out)
     if args.command == "refresh-stkfut-map":
         from copycat.stkfut_map import refresh
 
@@ -374,6 +391,63 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(f"股票名稱表更新完成:{len(names)} 檔\n")
         return 0
     return 1
+
+
+def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
+    """`book-replay` 薄殼:讀一天 tick 存檔 → 簿重播引擎 → 每檔編碼、解回自檢、落檔。"""
+    import datetime as _dt
+    import time
+
+    from copycat import book_replay
+    from copycat.fileio import atomic_write_text
+    from copycat.ticks import book_parquet_path, load_day, parquet_path
+    from copycat.ticks_config import load_ticks_config, resolve_ticks_dir
+
+    try:
+        day = _dt.datetime.strptime(date_arg, "%Y%m%d").date()
+    except ValueError:
+        sys.stderr.write(f"簿重播:--date 須為 YYYYMMDD(收到 {date_arg!r})\n")
+        return 2
+    date = day.isoformat()
+    data_dir = dir_arg if dir_arg is not None else resolve_ticks_dir(load_ticks_config())
+    if parquet_path(data_dir, date).exists() and not book_parquet_path(data_dir, date).exists():
+        # 簿檔保留 120 交易日、外掛檔永久:過期後重跑只剩成交列,會把完整的外掛檔蓋成殘缺版
+        sys.stderr.write(
+            f"簿重播 {date}:只有成交 parquet、簿 parquet 不在(過了保留期?),拒絕產出以免蓋掉既有外掛檔\n"
+        )
+        return 2
+    started = time.monotonic()
+    try:
+        replays = book_replay.replay(load_day(day, data_dir))
+    except FileNotFoundError:
+        sys.stderr.write(f"簿重播 {date}:{data_dir} 沒有這天的 tick 存檔\n")
+        return 2
+    out_dir = out_root / date
+    messages = held_trades = total_bytes = 0
+    codes = sorted(replays)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for code in codes:
+            code_replay = replays.pop(code)
+            text = book_replay.plugin_js(book_replay.encode(code_replay))
+            if book_replay.decode(book_replay.parse_plugin_js(text)) != code_replay:
+                sys.stderr.write(f"簿重播 {date} {code}:自檢失敗,外掛檔解不回原樣,未落檔\n")
+                return 1
+            atomic_write_text(out_dir / f"{code}.js", text)
+            messages += len(code_replay.frames)
+            held_trades += sum(1 for f in code_replay.frames if f.kind == "trade" and f.after)
+            total_bytes += len(text)
+    except book_replay.ReplayFormatError as e:
+        sys.stderr.write(f"簿重播 {date}:自檢失敗,{e}\n")
+        return 1
+    except OSError as e:
+        sys.stderr.write(f"簿重播 {date} 失敗(IO):{e}\n")
+        return 1
+    sys.stdout.write(
+        f"簿重播 {date}:{len(codes)} 檔、{messages} 則(時刻異常未推進時間軸的成交 {held_trades} 則),"
+        f"外掛檔 {total_bytes / 1_000_000:.1f} MB,耗時 {time.monotonic() - started:.1f} 秒 → {out_dir}\n"
+    )
+    return 0
 
 
 def _resolve_finmind_token() -> str:
