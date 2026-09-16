@@ -17,6 +17,7 @@ import pytest
 
 from copycat.book_replay import (
     PluginFormatError,
+    Trade,
     book_at,
     decode,
     encode,
@@ -64,6 +65,9 @@ def _row(
     bid: list[Level] | None = None,
     ask: list[Level] | None = None,
     trade_date: str = _DATE,
+    price: int = 100_000,
+    qty: int = 1,
+    side: str = "outer",
 ) -> TickRow:
     fields: dict[str, Any] = {
         "kind": kind,
@@ -81,11 +85,11 @@ def _row(
         fields |= {
             "time": time,
             "ms": _ms(time),
-            "price_milli": 100_000,
-            "qty": 1,
+            "price_milli": price,
+            "qty": qty,
             "cum_vol": msg_seq,
             "flag": "2",
-            "side": "outer",
+            "side": side,
             "seq": msg_seq,
         }
     return TickRow(**fields)
@@ -204,7 +208,8 @@ class TestClock:
             _row("book", "1815", 28_380, recv="09:00:03.890", bid=[(115_000, 206)]),
         ]
 
-        frames = replay_books(rows)["1815"].frames
+        day = replay_books(rows)["1815"]
+        frames = day.frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [
             (None, 1),
@@ -215,6 +220,7 @@ class TestClock:
         # 它仍是重播的一則(server 看到的就是它),只是不推進時間軸
         assert [f.kind for f in frames] == ["trade", "book", "trade", "book"]
         assert frames[0].book == _tuple(bid=[(114_500, 282)])
+        assert day.anomalous_trades == 1
 
     def test_late_closing_auction_trade_advances_but_an_earlier_stamp_never_rewinds(self) -> None:
         rows = [
@@ -227,15 +233,16 @@ class TestClock:
             _row("book", "2426", 5, recv="13:30:41.000", bid=[(99_100, 29)]),
         ]
 
-        frames = replay_books(rows)["2426"].frames
+        day = replay_books(rows)["2426"]
 
-        assert [(f.clock_ms, f.after) for f in frames] == [
+        assert [(f.clock_ms, f.after) for f in day.frames] == [
             (48_299_500, 0),
             (48_299_500, 1),
             (48_600_000, 0),
             (48_600_000, 1),
             (48_600_000, 2),
         ]
+        assert day.anomalous_trades == 1  # 晚到的收盤撮合不算異常,蓋章倒退的那筆算
 
     def test_a_few_seconds_of_local_clock_lag_is_not_an_anomaly(self) -> None:
         """本機鐘落後(#236 時鐘偏差)會讓達錢時刻看起來比收到時刻晚幾秒 —— 那是真成交。"""
@@ -247,6 +254,62 @@ class TestClock:
         frames = replay_books(rows)["2426"].frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [(36_003_000, 0), (36_003_000, 1)]
+
+
+class TestRecvAxis:
+    def test_every_message_sits_on_a_never_rewinding_server_receive_time_axis(self) -> None:
+        """user 2026-09-16 拍板:回看頁拖時間軸 / 十字線 / 對齊委託用 server 收到時刻 —— 達錢即時
+        成交時刻只到整秒(2426「11:02:43」一個標籤底下就有 51 則),收到時刻只晚約 0.1 秒。"""
+        rows = [
+            _row("book", "2426", 1, recv="11:02:43.227", bid=[(99_100, 24)]),
+            _row("book", "2426", 2, recv="11:02:43.910", bid=[(99_100, 187)]),
+            # 校時把本機鐘往回撥:這一則收到時刻早於前一則 —— 沿用前一則,時間軸不倒退
+            _row("book", "2426", 3, recv="11:02:43.610", bid=[(99_100, 186)]),
+            _row("trade", "2426", 4, recv="11:02:45.669", time="11:02:45.000", bid=[(99_100, 183)]),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert [f.recv_ms for f in frames] == [39_763_227, 39_763_910, 39_763_910, 39_765_669]
+
+
+class TestTrades:
+    def test_trade_messages_carry_the_print_and_book_messages_do_not(self) -> None:
+        """user 2026-09-16 拍板:成交則帶成交時刻 / 價 / 張數 / 內外盤。回看頁的「現價」直接讀它 ——
+        鎖漲停時買一是價 0 的市價佇列、賣方全空,從五檔推不出現價。"""
+        rows = [
+            _row(
+                "trade",
+                "3441",
+                1,
+                recv="09:03:32.300",
+                time="09:03:32.000",
+                price=181_000,
+                qty=1,
+                side="inner",
+                bid=[(181_000, 1)],
+            ),
+            _row("book", "3441", 2, recv="09:03:32.400", bid=[(181_000, 2)]),
+            _row(
+                "trade",
+                "3441",
+                3,
+                recv="09:09:01.200",
+                time="09:09:01.000",
+                price=186_000,
+                qty=744,
+                side="outer",
+                bid=[(0, 3_334), (186_000, 181)],
+            ),
+        ]
+
+        frames = replay_books(rows)["3441"].frames
+
+        assert [f.trade for f in frames] == [
+            Trade(ms=32_612_000, price_milli=181_000, qty=1, side="inner"),
+            None,
+            Trade(ms=32_941_000, price_milli=186_000, qty=744, side="outer"),
+        ]
 
 
 def _lock_limit_up_rows() -> list[TickRow]:
@@ -360,8 +423,19 @@ class TestPluginEncoding:
             (lambda w: w.update(n=7), "n=7"),
             (lambda w: w["fields"].reverse(), "欄序"),
             (lambda w: w["kf"].pop(), "keyframe 個數"),
+            (lambda w: w["recv"].pop(), "recv"),
+            (lambda w: w["trade"].pop(), "trade 長度"),
+            (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
         ],
-        ids=["unknown-version", "message-count", "field-order", "missing-keyframe"],
+        ids=[
+            "unknown-version",
+            "message-count",
+            "field-order",
+            "missing-keyframe",
+            "recv-length",
+            "trade-length",
+            "kind-char",
+        ],
     )
     def test_decode_refuses_a_header_the_viewer_cannot_trust(
         self, tamper: Callable[[dict[str, Any]], object], message: str

@@ -400,7 +400,7 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
 
     from copycat import book_replay
     from copycat.fileio import atomic_write_text
-    from copycat.ticks import book_parquet_path, load_day, parquet_path
+    from copycat.ticks import book_parquet_path, jsonl_path, load_day, parquet_path
     from copycat.ticks_config import load_ticks_config, resolve_ticks_dir
 
     try:
@@ -410,20 +410,23 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
         return 2
     date = day.isoformat()
     data_dir = dir_arg if dir_arg is not None else resolve_ticks_dir(load_ticks_config())
-    if parquet_path(data_dir, date).exists() and not book_parquet_path(data_dir, date).exists():
-        # 簿檔保留 120 交易日、外掛檔永久:過期後重跑只剩成交列,會把完整的外掛檔蓋成殘缺版
+    # 只重播已轉檔的日子(成交 + 簿兩個 parquet 都在),外掛檔永久保留、殘缺版會蓋掉完整版:
+    # 盤中 jsonl 還在寫、成交還沒以 (代號, 累積量) 去重;簿 parquet 只留 120 交易日,過期只剩成交列
+    if not parquet_path(data_dir, date).exists():
+        if jsonl_path(data_dir, date).exists():
+            sys.stderr.write(f"簿重播 {date}:tick 存檔還沒轉檔(13:45 排程或手動 ticks-compact 之後再跑)\n")
+        else:
+            sys.stderr.write(f"簿重播 {date}:{data_dir} 沒有這天的 tick 存檔\n")
+        return 2
+    if not book_parquet_path(data_dir, date).exists():
         sys.stderr.write(
             f"簿重播 {date}:只有成交 parquet、簿 parquet 不在(過了保留期?),拒絕產出以免蓋掉既有外掛檔\n"
         )
         return 2
     started = time.monotonic()
-    try:
-        code_days = book_replay.replay_books(load_day(day, data_dir))
-    except FileNotFoundError:
-        sys.stderr.write(f"簿重播 {date}:{data_dir} 沒有這天的 tick 存檔\n")
-        return 2
+    code_days = book_replay.replay_books(load_day(day, data_dir))
     out_dir = out_root / date
-    messages = held_trades = total_bytes = 0
+    messages = anomalous_trades = total_bytes = 0
     codes = sorted(code_days)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -435,7 +438,7 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
                 return 1
             atomic_write_text(out_dir / f"{code}.js", text)
             messages += len(code_day.frames)
-            held_trades += sum(1 for f in code_day.frames if f.kind == "trade" and f.after)
+            anomalous_trades += code_day.anomalous_trades
             total_bytes += len(text)
     except book_replay.PluginFormatError as e:
         sys.stderr.write(f"簿重播 {date}:自檢失敗,{e}\n")
@@ -444,7 +447,7 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
         sys.stderr.write(f"簿重播 {date} 失敗(IO):{e}\n")
         return 1
     sys.stdout.write(
-        f"簿重播 {date}:{len(codes)} 檔、{messages} 則(時刻異常未推進時間軸的成交 {held_trades} 則),"
+        f"簿重播 {date}:{len(codes)} 檔、{messages} 則(時刻異常未推進時間軸的成交 {anomalous_trades} 則),"
         f"外掛檔 {total_bytes / 1_000_000:.1f} MB,耗時 {time.monotonic() - started:.1f} 秒 → {out_dir}\n"
     )
     return 0
