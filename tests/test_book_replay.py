@@ -1,0 +1,376 @@
+"""簿重播引擎(spec #265 / ticket #267)—— 唯一測試 seam = `copycat.book_replay` 公開介面。
+
+餵 `TickRow` 序列,斷言吐出的每則五檔、時間軸,以及外掛檔編碼的 round-trip。
+不對內部狀態開測試孔;預期值一律寫死字面(五檔版位由本檔 `_tuple` 依公開文件的欄序獨立排出)。
+"""
+
+from __future__ import annotations
+
+import base64
+import datetime as _dt
+import gzip
+import json
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+
+from copycat.book_replay import (
+    ReplayFormatError,
+    book_at,
+    decode,
+    encode,
+    parse_plugin_js,
+    plugin_js,
+    replay,
+)
+from copycat.ticks import TickRow
+
+_DATE = "2026-09-16"
+_TPE = _dt.timezone(_dt.timedelta(hours=8))
+
+Level = tuple[int, int]  # (價 毫元, 量 張)
+
+
+def _ns(hms: str) -> int:
+    """台北 2026-09-16 `HH:MM:SS.fff` → epoch 奈秒(`recv_ns` 的尺)。"""
+    at = _dt.datetime.strptime(f"{_DATE} {hms}", "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=_TPE)
+    return round(at.timestamp() * 1000) * 1_000_000
+
+
+def _ms(hms: str) -> int:
+    """台北 `HH:MM:SS.fff` → 當日毫秒(`TickRow.ms` 的尺)。"""
+    hh, mm, rest = hms.split(":")
+    ss, _, frac = rest.partition(".")
+    return ((int(hh) * 60 + int(mm)) * 60 + int(ss)) * 1000 + int(frac)
+
+
+def _side_fields(prefix: str, levels: list[Level]) -> dict[str, int | None]:
+    out: dict[str, int | None] = {}
+    for i in range(5):
+        price, qty = levels[i] if i < len(levels) else (None, None)
+        out[f"{prefix}{i}"] = price
+        out[f"{prefix}q{i}"] = qty
+    return out
+
+
+def _row(
+    kind: str,
+    code: str,
+    msg_seq: int,
+    *,
+    recv: str,
+    time: str | None = None,
+    bid: list[Level] | None = None,
+    ask: list[Level] | None = None,
+    trade_date: str = _DATE,
+) -> TickRow:
+    fields: dict[str, Any] = {
+        "kind": kind,
+        "code": code,
+        "trade_date": trade_date,
+        "msg_seq": msg_seq,
+        "recv_ns": _ns(recv),
+        "precise_time": "10003000000",
+        "trade_status": "0",
+        **_side_fields("bid", bid or []),
+        **_side_fields("ask", ask or []),
+    }
+    if kind == "trade":
+        assert time is not None
+        fields |= {
+            "time": time,
+            "ms": _ms(time),
+            "price_milli": 100_000,
+            "qty": 1,
+            "cum_vol": msg_seq,
+            "flag": "2",
+            "side": "outer",
+            "seq": msg_seq,
+        }
+    return TickRow(**fields)
+
+
+def _tuple(
+    bid: list[Level] | None = None, ask: list[Level] | None = None
+) -> tuple[int | None, ...]:
+    """五檔 20 格的公開欄序:買價 0–4、買量 0–4、賣價 0–4、賣量 0–4;缺層 None。"""
+
+    def side(levels: list[Level]) -> tuple[list[int | None], list[int | None]]:
+        prices: list[int | None] = [p for p, _ in levels] + [None] * (5 - len(levels))
+        qtys: list[int | None] = [q for _, q in levels] + [None] * (5 - len(levels))
+        return prices, qtys
+
+    bp, bq = side(bid or [])
+    ap, aq = side(ask or [])
+    return tuple(bp + bq + ap + aq)
+
+
+class TestReplayOrdering:
+    def test_groups_by_code_and_orders_each_code_by_msg_seq(self) -> None:
+        rows = [
+            _row("book", "2426", 30, recv="09:00:01.000", bid=[(98_900, 5)], ask=[(99_000, 7)]),
+            _row(
+                "trade",
+                "3441",
+                10,
+                recv="09:00:00.600",
+                time="09:00:00.000",
+                bid=[(180_500, 2)],
+                ask=[(181_000, 9)],
+            ),
+            _row(
+                "trade",
+                "2426",
+                20,
+                recv="09:00:00.700",
+                time="09:00:00.100",
+                bid=[(98_900, 3)],
+                ask=[(99_000, 7)],
+            ),
+            _row("book", "2426", 25, recv="09:00:00.800", bid=[(98_900, 4)], ask=[(99_000, 7)]),
+        ]
+
+        result = replay(rows)
+
+        assert sorted(result) == ["2426", "3441"]
+        day = result["2426"]
+        assert (day.code, day.trade_date) == ("2426", "2026-09-16")
+        assert [f.msg_seq for f in day.frames] == [20, 25, 30]
+        assert [f.kind for f in day.frames] == ["trade", "book", "book"]
+        assert [f.book for f in day.frames] == [
+            _tuple(bid=[(98_900, 3)], ask=[(99_000, 7)]),
+            _tuple(bid=[(98_900, 4)], ask=[(99_000, 7)]),
+            _tuple(bid=[(98_900, 5)], ask=[(99_000, 7)]),
+        ]
+        assert [f.msg_seq for f in result["3441"].frames] == [10]
+        assert result["3441"].frames[0].book == _tuple(bid=[(180_500, 2)], ask=[(181_000, 9)])
+
+    def test_one_call_replays_one_trading_day(self) -> None:
+        rows = [
+            _row("book", "2426", 1, recv="09:00:00.050", bid=[(98_900, 1)]),
+            _row(
+                "book", "2426", 2, recv="09:00:00.090", bid=[(98_900, 2)], trade_date="2026-09-15"
+            ),
+        ]
+
+        with pytest.raises(ValueError, match="2026-09-15"):
+            replay(rows)
+
+
+class TestClock:
+    def test_book_rows_read_as_nth_message_after_the_latest_trade(self) -> None:
+        rows = [
+            _row("book", "2426", 1, recv="09:00:00.050", bid=[(98_900, 1)]),
+            _row("book", "2426", 2, recv="09:00:00.090", bid=[(98_900, 2)]),
+            _row("trade", "2426", 3, recv="09:00:00.614", time="09:00:00.000", bid=[(98_900, 2)]),
+            _row("book", "2426", 4, recv="09:00:00.700", bid=[(98_900, 3)]),
+            _row("book", "2426", 5, recv="09:00:00.720", bid=[(98_900, 4)]),
+            _row("trade", "2426", 6, recv="09:00:01.300", time="09:00:00.700", bid=[(98_900, 4)]),
+            # 同毫秒的第二筆成交(掃單)也是時鐘點:其後的簿列從它起算
+            _row("trade", "2426", 7, recv="09:00:01.310", time="09:00:00.700", bid=[(98_900, 3)]),
+            _row("book", "2426", 8, recv="09:00:01.400", bid=[(98_900, 5)]),
+        ]
+
+        frames = replay(rows)["2426"].frames
+
+        assert [(f.clock_ms, f.after) for f in frames] == [
+            (None, 1),  # 首筆成交前:沒有達錢時刻可掛,只數第幾則
+            (None, 2),
+            (32_400_000, 0),  # 09:00:00.000 成交
+            (32_400_000, 1),
+            (32_400_000, 2),
+            (32_400_700, 0),  # 09:00:00.700
+            (32_400_700, 0),
+            (32_400_700, 1),
+        ]
+
+    def test_a_trade_stamped_hours_after_it_was_received_never_becomes_the_clock(self) -> None:
+        """2026-09-16 實錄:1815 在 07:31:22 開機收到前一日 14:30 的盤後成交(寫進當日檔)。
+        讓它當時鐘 → 整段開盤簿列掛在 14:30 之後,09:00:03 那筆再把時間軸拉回去。"""
+        rows = [
+            _row(
+                "trade", "1815", 157, recv="07:31:22.730", time="14:30:00.000", bid=[(114_500, 282)]
+            ),
+            _row("book", "1815", 28_300, recv="09:00:00.100", bid=[(115_000, 205)]),
+            _row(
+                "trade",
+                "1815",
+                28_368,
+                recv="09:00:03.872",
+                time="09:00:03.000",
+                bid=[(115_000, 205)],
+            ),
+            _row("book", "1815", 28_380, recv="09:00:03.890", bid=[(115_000, 206)]),
+        ]
+
+        frames = replay(rows)["1815"].frames
+
+        assert [(f.clock_ms, f.after) for f in frames] == [
+            (None, 1),
+            (None, 2),
+            (32_403_000, 0),
+            (32_403_000, 1),
+        ]
+        # 它仍是重播的一則(server 看到的就是它),只是不推進時間軸
+        assert [f.kind for f in frames] == ["trade", "book", "trade", "book"]
+        assert frames[0].book == _tuple(bid=[(114_500, 282)])
+
+    def test_late_closing_auction_trade_advances_but_an_earlier_stamp_never_rewinds(self) -> None:
+        rows = [
+            _row("trade", "2426", 1, recv="13:25:00.100", time="13:24:59.500", bid=[(99_100, 3)]),
+            _row("book", "2426", 2, recv="13:27:00.000", bid=[(99_100, 900)]),
+            # 收盤撮合:達錢時刻 13:30:00.000、server 晚 39.8 秒才收到 —— 真時刻,照推進
+            _row("trade", "2426", 3, recv="13:30:39.787", time="13:30:00.000", bid=[(99_100, 31)]),
+            # 蓋章早於目前時鐘的成交:時間軸不倒退,它算「13:30:00.000 之後第 1 則」
+            _row("trade", "2426", 4, recv="13:30:40.000", time="13:29:59.000", bid=[(99_100, 30)]),
+            _row("book", "2426", 5, recv="13:30:41.000", bid=[(99_100, 29)]),
+        ]
+
+        frames = replay(rows)["2426"].frames
+
+        assert [(f.clock_ms, f.after) for f in frames] == [
+            (48_299_500, 0),
+            (48_299_500, 1),
+            (48_600_000, 0),
+            (48_600_000, 1),
+            (48_600_000, 2),
+        ]
+
+    def test_a_few_seconds_of_local_clock_lag_is_not_an_anomaly(self) -> None:
+        """本機鐘落後(#236 時鐘偏差)會讓達錢時刻看起來比收到時刻晚幾秒 —— 那是真成交。"""
+        rows = [
+            _row("trade", "2426", 1, recv="10:00:00.500", time="10:00:03.000", bid=[(99_000, 1)]),
+            _row("book", "2426", 2, recv="10:00:00.600", bid=[(99_000, 2)]),
+        ]
+
+        frames = replay(rows)["2426"].frames
+
+        assert [(f.clock_ms, f.after) for f in frames] == [(36_003_000, 0), (36_003_000, 1)]
+
+
+def _lock_limit_up_rows() -> list[TickRow]:
+    """2426 漲停前後的形狀(2026-09-16 實測當日 2,776 則賣方全空):掛單變厚 → 鎖漲停(買一 = 價 0
+    的市價佇列、賣方全空)→ 兩邊全空一則 → 打開回到正常。8 則,跨 keyframe 間隔 3 的兩個邊界。"""
+    return [
+        _row(
+            "trade",
+            "2426",
+            101,
+            recv="11:02:40.614",
+            time="11:02:40.000",
+            bid=[(99_000, 24), (98_900, 50)],
+            ask=[(99_100, 12), (99_200, 8)],
+        ),
+        _row(
+            "book",
+            "2426",
+            102,
+            recv="11:02:43.100",
+            bid=[(99_000, 187), (98_900, 50)],
+            ask=[(99_100, 12), (99_200, 8)],
+        ),
+        _row(
+            "book",
+            "2426",
+            103,
+            recv="11:02:45.000",
+            bid=[(99_000, 184), (98_900, 50)],
+            ask=[(99_100, 3), (99_200, 8)],
+        ),
+        _row(
+            "trade",
+            "2426",
+            104,
+            recv="11:02:50.614",
+            time="11:02:50.000",
+            bid=[(0, 3_300), (99_100, 5_000), (99_000, 184)],
+            ask=[],
+        ),
+        _row(
+            "book",
+            "2426",
+            105,
+            recv="11:02:51.000",
+            bid=[(0, 3_310), (99_100, 5_000), (99_000, 184)],
+            ask=[],
+        ),
+        _row("book", "2426", 106, recv="11:02:52.000", bid=[], ask=[]),
+        _row("book", "2426", 107, recv="11:02:53.000", bid=[(0, 3_310), (99_100, 5_020)], ask=[]),
+        _row(
+            "trade",
+            "2426",
+            108,
+            recv="11:05:00.614",
+            time="11:05:00.000",
+            bid=[(99_000, 40)],
+            ask=[(99_100, 2_000)],
+        ),
+    ]
+
+
+class TestPluginEncoding:
+    def test_round_trip_reproduces_every_frame_across_keyframe_boundaries(self) -> None:
+        day = replay(_lock_limit_up_rows())["2426"]
+        assert day.frames[3].book == _tuple(bid=[(0, 3_300), (99_100, 5_000), (99_000, 184)])
+        assert day.frames[5].book == (None,) * 20
+
+        payload = encode(day, keyframe_every=3)
+        wire = json.loads(json.dumps(payload))  # 外掛檔裡是 JSON:0 / null 必須分得開
+
+        assert decode(wire) == day
+
+    @pytest.mark.parametrize("keyframe_every", [1, 3, 256])
+    def test_jumping_to_any_message_from_its_keyframe_matches_the_replay(
+        self, keyframe_every: int
+    ) -> None:
+        """回看頁拖時間軸的解碼規則:取該則之前最近的 keyframe,再套到該則為止的 delta。"""
+        day = replay(_lock_limit_up_rows())["2426"]
+        wire = json.loads(json.dumps(encode(day, keyframe_every=keyframe_every)))
+
+        assert [book_at(wire, i) for i in range(len(day.frames))] == [f.book for f in day.frames]
+
+    def test_plugin_file_is_one_script_line_carrying_gzip_base64_json(self) -> None:
+        """沿用 viewer-cdp-ticks 的外掛檔形態:`<script src>` 懶載入,file:// 直接可讀。"""
+        day = replay(_lock_limit_up_rows())["2426"]
+        payload = encode(day)
+
+        text = plugin_js(payload)
+
+        head, tail = 'window.__bk("2426|2026-09-16","', '");'
+        assert text.startswith(head) and text.endswith(tail) and "\n" not in text
+        # 瀏覽器那條路:atob → DecompressionStream("gzip") → JSON.parse
+        blob = base64.b64decode(text[len(head) : -len(tail)], validate=True)
+        assert decode(json.loads(gzip.decompress(blob))) == day
+        assert parse_plugin_js(text) == payload
+
+    def test_decode_refuses_deltas_that_disagree_with_a_later_keyframe(self) -> None:
+        """回看頁「播放」走 delta、「跳轉」走 keyframe;兩條路對不上 = 同一刻看到兩份簿,不得放行。"""
+        day = replay(_lock_limit_up_rows())["2426"]
+        wire = json.loads(json.dumps(encode(day, keyframe_every=3)))
+        wire["d"][1] = wire["d"][1] + [19, 777]  # 第 1 則多蓋賣量 4 = 777,第 3 則 keyframe 仍是空
+
+        with pytest.raises(ReplayFormatError, match="keyframe"):
+            decode(wire)
+
+    @pytest.mark.parametrize(
+        ("tamper", "message"),
+        [
+            (lambda w: w.update(v=99), "版本 99"),
+            (lambda w: w.update(n=7), "n=7"),
+            (lambda w: w["fields"].reverse(), "欄序"),
+            (lambda w: w["kf"].pop(), "keyframe 個數"),
+        ],
+        ids=["unknown-version", "message-count", "field-order", "missing-keyframe"],
+    )
+    def test_decode_refuses_a_header_the_viewer_cannot_trust(
+        self, tamper: Callable[[dict[str, Any]], object], message: str
+    ) -> None:
+        """外掛檔永久保留:一年後讀它的人只能靠檔頭自述,檔頭與內容對不上一律拒絕。"""
+        wire = json.loads(
+            json.dumps(encode(replay(_lock_limit_up_rows())["2426"], keyframe_every=3))
+        )
+        tamper(wire)
+
+        with pytest.raises(ReplayFormatError, match=message):
+            decode(wire)
