@@ -1,6 +1,6 @@
 """簿重播引擎(spec #265 / ticket #267)—— 唯一測試 seam = `copycat.book_replay` 公開介面。
 
-餵 `TickRow` 序列,斷言吐出的每則五檔、時間軸,以及外掛檔編碼的 round-trip。
+餵 `TickRow` 序列,斷言吐出的每則五檔、兩把時間尺(收到時刻軸 / 文字標籤時刻)、成交欄位,以及外掛檔編碼的 round-trip。
 不對內部狀態開測試孔;預期值一律寫死字面(五檔版位由本檔 `_tuple` 依公開文件的欄序獨立排出)。
 """
 
@@ -191,7 +191,7 @@ class TestClock:
 
     def test_a_trade_stamped_hours_after_it_was_received_never_becomes_the_clock(self) -> None:
         """2026-09-16 實錄:1815 在 07:31:22 開機收到前一日 14:30 的盤後成交(寫進當日檔)。
-        讓它當時鐘 → 整段開盤簿列掛在 14:30 之後,09:00:03 那筆再把時間軸拉回去。"""
+        讓它當時鐘 → 整段開盤簿列的標籤掛在 14:30 之後,09:00:03 那筆再把標籤時刻拉回去。"""
         rows = [
             _row(
                 "trade", "1815", 157, recv="07:31:22.730", time="14:30:00.000", bid=[(114_500, 282)]
@@ -217,7 +217,7 @@ class TestClock:
             (32_403_000, 0),
             (32_403_000, 1),
         ]
-        # 它仍是重播的一則(server 看到的就是它),只是不推進時間軸
+        # 它仍是重播的一則(server 看到的就是它),只是不當時鐘點
         assert [f.kind for f in frames] == ["trade", "book", "trade", "book"]
         assert frames[0].book == _tuple(bid=[(114_500, 282)])
         assert day.anomalous_trades == 1
@@ -228,7 +228,7 @@ class TestClock:
             _row("book", "2426", 2, recv="13:27:00.000", bid=[(99_100, 900)]),
             # 收盤撮合:達錢時刻 13:30:00.000、server 晚 39.8 秒才收到 —— 真時刻,照推進
             _row("trade", "2426", 3, recv="13:30:39.787", time="13:30:00.000", bid=[(99_100, 31)]),
-            # 蓋章早於目前時鐘的成交:時間軸不倒退,它算「13:30:00.000 之後第 1 則」
+            # 蓋章早於目前時鐘的成交:標籤時刻不倒退,它算「13:30:00.000 之後第 1 則」
             _row("trade", "2426", 4, recv="13:30:40.000", time="13:29:59.000", bid=[(99_100, 30)]),
             _row("book", "2426", 5, recv="13:30:41.000", bid=[(99_100, 29)]),
         ]
@@ -384,7 +384,7 @@ class TestPluginEncoding:
         assert decode(wire) == day
 
     @pytest.mark.parametrize("keyframe_every", [1, 3, 256])
-    def test_jumping_to_any_message_from_its_keyframe_matches_the_book_replay_books(
+    def test_jumping_to_any_message_from_its_keyframe_matches_the_book_replay(
         self, keyframe_every: int
     ) -> None:
         """回看頁拖時間軸的解碼規則:取該則之前最近的 keyframe,再套到該則為止的 delta。"""
