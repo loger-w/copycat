@@ -428,12 +428,14 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
         )
         return 2
     started = time.monotonic()
-    code_days = book_replay.replay_books(load_day(day, data_dir))
     out_dir = out_root / date
     messages = anomalous_trades = total_bytes = 0
-    codes = sorted(code_days)
     try:
+        # 先建輸出目錄:--out 寫不進去,不必等讀完整天(約 30 秒)才知道(pr-275 review F-06)
         out_dir.mkdir(parents=True, exist_ok=True)
+        # 讀檔的權限 / 磁碟錯同樣印一行人話;壞 parquet 是 pyarrow 的 ValueError,這裡不接、照舊大聲失敗
+        code_days = book_replay.replay_books(load_day(day, data_dir))
+        codes = sorted(code_days)
         for code in codes:
             code_day = code_days.pop(code)
             text = book_replay.plugin_js(book_replay.encode(code_day))
