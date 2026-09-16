@@ -1,0 +1,29 @@
+baseline: rc=0 45 passed in 0.12s
+== pin
+tol-3000: KILLED (1 failed, 44 passed in 0.17s)
+tol-60001: KILLED (1 failed, 44 passed in 0.79s)
+tol-strict-lt: KILLED (1 failed, 44 passed in 0.15s)
+gzip-mtime: KILLED (1 failed, 44 passed in 0.14s)
+== format
+decode-first-clock-index: KILLED (1 failed, 44 passed in 0.15s)
+kind-code-swap: KILLED (1 failed, 44 passed in 0.16s)
+trade-cells-reversed-symmetric: KILLED (3 failed, 42 passed in 0.18s)
+anomalous-trade-inverted: KILLED (8 failed, 37 passed in 0.21s)
+anomalous-trade-drops-kind: KILLED (3 failed, 42 passed in 0.18s)
+header-anomalous-not-increasing: KILLED (1 failed, 44 passed in 0.15s)
+header-anomalous-upper-bound: KILLED (1 failed, 44 passed in 0.16s)
+header-anomalous-on-trade: KILLED (1 failed, 44 passed in 0.16s)
+decode-rewind-check: KILLED (2 failed, 43 passed in 0.17s)
+decode-ms-none-check: KILLED (1 failed, 44 passed in 0.16s)
+== values
+header-kf-every-lt1: KILLED (1 failed, 44 passed in 0.16s)
+encode-kf-every: KILLED (1 failed, 44 passed in 0.17s)
+delta-odd: KILLED (1 failed, 44 passed in 0.17s)
+delta-field-lower: KILLED (1 failed, 44 passed in 0.15s)
+delta-field-upper: KILLED (1 failed, 44 passed in 0.17s)
+seq-strict: KILLED (1 failed, 44 passed in 0.16s)
+side-domain: KILLED (1 failed, 44 passed in 0.15s)
+book-at-lower: KILLED (1 failed, 44 passed in 0.17s)
+book-at-upper: KILLED (1 failed, 44 passed in 0.15s)
+restored: rc=0 45 passed in 0.12s;survived=0
+exit=0

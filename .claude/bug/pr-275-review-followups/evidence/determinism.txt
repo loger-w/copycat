@@ -1,0 +1,12 @@
+== 比對 1:第 1 次 CLI(F-07 格式 + F-08 檢查 + F-06 CLI 都已 commit,review 收修前;book_replay_out_fix)vs 第 2 次(同碼重跑,book_replay_out_fix_rerun)
+A 80 檔、B 80 檔,檔名集合相同
+非 .js 檔: []
+位元組不同的檔:[]
+A 目錄彙總 sha256(檔名 + 各檔 sha256 依序)= 852f3c656b8abf2e8b059feedfc9ac0cb129c2a8e1fc3a6b417367e2aa8cd565
+A 總位元組 19,429,892
+== 比對 2:第 1 次 vs 最終版(two-axis review 收修後;book_replay_out_final)
+A 80 檔、B 80 檔,檔名集合相同
+非 .js 檔: []
+位元組不同的檔:[]
+A 目錄彙總 sha256(檔名 + 各檔 sha256 依序)= 852f3c656b8abf2e8b059feedfc9ac0cb129c2a8e1fc3a6b417367e2aa8cd565
+A 總位元組 19,429,892

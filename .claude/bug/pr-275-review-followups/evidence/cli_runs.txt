@@ -1,0 +1,124 @@
+﻿=== Happy:09-16 全日(新格式 + decode 新檢查)
+cmd: python -m copycat book-replay --date 20260916 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix
+exit: 0  elapsed: 91 s  peak_ws: 0 GB
+--- stdout
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 19.4 MB,耗時 90.6 秒 → C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix\2026-09-16
+--- stderr
+
+
+=== 決定性:同資料重跑到另一個目錄(兼量峰值記憶體)
+cmd: python -m copycat book-replay --date 20260916 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix_rerun
+exit: 0  elapsed: 85.9 s  peak_ws: 0 GB
+--- stdout
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 19.4 MB,耗時 85.7 秒 → C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix_rerun\2026-09-16
+--- stderr
+
+
+=== Edge F-06:--out 寫不進去(路徑中間是檔案)→ 讀整天之前就失敗
+cmd: python -m copycat book-replay --date 20260916 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_is_a_file\sub
+exit: 1  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播 2026-09-16 失敗(IO):[WinError 183] 當檔案已存在時，無法建立該檔案。: 'C:\\Users\\USER\\AppData\\Local\\Temp\\claude\\C--side-project-copycat\\0babe816-49dc-4057-bda2-866bbd612a0b\\scratchpad\\edges\\out_is_a_file'
+
+=== Edge F-06:成交 parquet 讀取權限被拒(icacls deny RD)→ 一行人話
+cmd: python -m copycat book-replay --date 20260916 --dir C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\denied --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_denied
+exit: 1  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播 2026-09-16 失敗(IO):[WinError 5] Failed to open local file 'C:/Users/USER/AppData/Local/Temp/claude/C--side-project-copycat/0babe816-49dc-4057-bda2-866bbd612a0b/scratchpad/edges/denied/20260916.parquet'. Detail: [Windows error 5] 存取被拒。
+
+=== Edge F-06:壞 parquet(ArrowInvalid = ValueError)→ 維持大聲失敗
+cmd: python -m copycat book-replay --date 20260916 --dir C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\bad_parquet --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_bad
+exit: 1  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\side-project\copycat\.claude\worktrees\fix-pr-275-review-followups\copycat\__main__.py", line 5, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "C:\side-project\copycat\.claude\worktrees\fix-pr-275-review-followups\copycat\cli.py", line 384, in main
+    return _book_replay(args.date, args.dir, args.out)
+  File "C:\side-project\copycat\.claude\worktrees\fix-pr-275-review-followups\copycat\cli.py", line 437, in _book_replay
+    code_days = book_replay.replay_books(load_day(day, data_dir))
+                                         ~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\side-project\copycat\.claude\worktrees\fix-pr-275-review-followups\copycat\ticks.py", line 166, in load_day
+    rows = _read_parquet(trade_pq)
+  File "C:\side-project\copycat\.claude\worktrees\fix-pr-275-review-followups\copycat\ticks.py", line 225, in _read_parquet
+    table = pq.read_table(path)
+  File "C:\side-project\copycat\.venv\Lib\site-packages\pyarrow\parquet\core.py", line 1896, in read_table
+    dataset = ParquetDataset(
+        source,
+    ...<16 lines>...
+        arrow_extensions_enabled=arrow_extensions_enabled,
+    )
+  File "C:\side-project\copycat\.venv\Lib\site-packages\pyarrow\parquet\core.py", line 1465, in __init__
+    [fragment], schema=schema or fragment.physical_schema,
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "pyarrow/_dataset.pyx", line 1479, in pyarrow._dataset.Fragment.physical_schema.__get__
+  File "pyarrow/error.pxi", line 155, in pyarrow.lib.pyarrow_internal_check_status
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+    raise convert_status(status)
+pyarrow.lib.ArrowInvalid: Could not open Parquet input source 'C:/Users/USER/AppData/Local/Temp/claude/C--side-project-copycat/0babe816-49dc-4057-bda2-866bbd612a0b/scratchpad/edges/bad_parquet/20260916.parquet': Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
+
+=== Edge(前置檢查未改):只有 jsonl,還沒轉檔
+cmd: python -m copycat book-replay --date 20260916 --dir C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\jsonl_only --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_jsonl
+exit: 2  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播 2026-09-16:tick 存檔還沒轉檔(13:45 排程或手動 ticks-compact 之後再跑)
+
+=== Edge(前置檢查未改):只剩成交 parquet
+cmd: python -m copycat book-replay --date 20260916 --dir C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\trade_only --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_trade_only
+exit: 2  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播 2026-09-16:只有成交 parquet、簿 parquet 不在(過了保留期?),拒絕產出以免蓋掉既有外掛檔
+
+=== Edge(前置檢查未改):這天沒有 tick 存檔
+cmd: python -m copycat book-replay --date 20260915 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\edges\out_nodata
+exit: 2  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播 2026-09-15:C:\side-project\copycat\data\ticks 沒有這天的 tick 存檔
+
+=== Edge(前置檢查未改):日期格式
+cmd: python -m copycat book-replay --date 2026-09-16
+exit: 2  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+簿重播:--date 須為 YYYYMMDD(收到 '2026-09-16')
+
+=== 回歸(未改功能):ticks-compact 對真資料目錄照舊 exit 2(當日 jsonl 已轉檔刪除),不碰 parquet
+cmd: python -m copycat ticks-compact --date 20260916 --dir C:\side-project\copycat\data\ticks
+exit: 2  elapsed: 0.3 s  peak_ws: 0 GB
+--- stdout
+
+--- stderr
+tick 轉檔 2026-09-16:jsonl 不存在:C:\side-project\copycat\data\ticks\20260916.jsonl
+
+=== 第 3 次重跑(本想量 launcher 子行程的峰值記憶體,腳本仍量到 0 = 量測方式無效,峰值沿用 #267 的 5.7 GB)
+cmd: python -m copycat book-replay --date 20260916 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix_peak
+exit: 0  elapsed: 72 s  peak_ws: 0 GB
+--- stdout
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 19.4 MB,耗時 71.6 秒 → C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_fix_peak\2026-09-16
+--- stderr
+
+
+=== 最終版(two-axis review 收修後):同資料重跑
+cmd: python -m copycat book-replay --date 20260916 --dir C:\side-project\copycat\data\ticks --out C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_final
+exit: 0  elapsed: 82.2 s  peak_ws: 0 GB
+--- stdout
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 19.4 MB,耗時 81.9 秒 → C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\0babe816-49dc-4057-bda2-866bbd612a0b\scratchpad\book_replay_out_final\2026-09-16
+--- stderr
+
+
