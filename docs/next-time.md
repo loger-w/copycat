@@ -1037,3 +1037,16 @@ prod 8721 = 6adf20d9、dist 已重建)。
   超過機器可用記憶體一半才開 `/mod` 改分批 `pa.RecordBatch`(每 N 萬列 flush、最後 `Table.from_batches().sort_by`)。
 - [ ] **F-32 `copycat.ticks` → `copycat.live.stock_models` 反向依賴**(參考用,不動):`to_stock_tick` 搬層留給「回補改讀自家存檔」那案一起決定。
 - [ ] **簿列 09:00 開盤閘的副作用觀察**:`log_stats` 的 `books_preopen` 不進 log 行;第一週若要看盤前簿更新量,臨時 `grep` 不到 —— 需要再加一行就補(目前刻意不加)。
+
+## 2026-09-16 早(回報線自動重連 #253 / #254 第一次 05:50 自然實驗 PASS 後的留尾)
+
+- [ ] **回報線退避起點在出手前,ConnectByID 阻塞時間吃掉退避格**(觀察,不急):`ReplyLink.begin_attempt(now)` 把下一格排在
+  出手**前**的 `now + delay`,但斷網下 `ConnectByID` 同步阻塞 11 s(09-16 05:50:58 → 05:51:09 rc=1108 TELNET_SERVER_FAIL)> 第 1 格
+  10 s → 回傳時已到期,第 2 次在第 1 次失敗後 52 ms 就發、log「10 s 後再試」是假陳述(第 3 / 4 / 5 次退避正常,rc 立回)。
+  修法一行:`begin_attempt` 拆成「出手前 +1 計數」與「回傳後再排 `time.monotonic() + delay`」,或 client 在 rc 回來後重排;
+  `tests/capital/test_reply_link.py` 表驗補「出手耗時 > delay 仍要等滿一格」。副作用只是多一次 ConnectByID,**連看三個交易日
+  05:50 自然實驗結案時一起收**。同一次實錄另一個事實:那 11 s 幫浦圈整段阻塞(下單命令排其後、探針也被壓後),與 two-axis S-05
+  探針耗時同族;盤中斷網才撞到、斷網時本來也送不了單,先記不動。
+- [ ] **05:50 自然實驗連看三個交易日**(09-16 第 1 天 PASS:斷到回 2 m 16 s、重連 5 次、重播 6 筆零雙計、capital traceback 0;
+  判準 `.claude/bug/capital-reply-reconnect/verification.md` §3):09-17、09-18 跨夜檔再各看一次「四行齊 + 09:00 前
+  `reply_connected 1`」,三天都過 → 「早上重啟」習慣停、寫 memory 結案;缺「恢復」行 → `/bug`。
