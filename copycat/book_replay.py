@@ -37,10 +37,10 @@ import gzip
 import json
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from operator import attrgetter
-from typing import Any
+from typing import Any, TypedDict
 
 from copycat.ticks import BOOK_FIELDS, DEPTH, TickRow
 
@@ -49,22 +49,25 @@ __all__ = [
     "CLOCK_FUTURE_TOLERANCE_MS",
     "FORMAT_VERSION",
     "KEYFRAME_EVERY",
-    "CodeReplay",
+    "BookReplay",
     "Frame",
-    "ReplayFormatError",
+    "PluginFormatError",
+    "PluginPayload",
     "book_at",
     "decode",
     "encode",
     "parse_plugin_js",
     "plugin_js",
-    "replay",
+    "replay_books",
 ]
 
 _TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
 
 #: 外掛檔呼叫的全域函式(回看頁定義;逐筆外掛檔是 `window.__tk`,兩者分開)
 _PLUGIN_CALLBACK = "window.__bk"
-_PLUGIN_LINE = re.compile(r'window\.__bk\("(?P<key>[^"\\]*)","(?P<blob>[A-Za-z0-9+/=]*)"\);')
+_PLUGIN_LINE = re.compile(
+    re.escape(_PLUGIN_CALLBACK) + r'\("(?P<key>[^"\\]*)","(?P<blob>[A-Za-z0-9+/=]*)"\);'
+)
 
 #: 外掛檔格式版本;改格式 = +1(回看頁依它選解碼規則)
 FORMAT_VERSION = 1
@@ -82,11 +85,11 @@ CLOCK_FUTURE_TOLERANCE_MS = 60_000
 BOOK_LEVEL_FIELDS: tuple[str, ...] = BOOK_FIELDS[BOOK_FIELDS.index("bid0") :]
 assert len(BOOK_LEVEL_FIELDS) == 4 * DEPTH
 
-_book_of = attrgetter(*BOOK_LEVEL_FIELDS)
+_book_of: Callable[[TickRow], tuple[int | None, ...]] = attrgetter(*BOOK_LEVEL_FIELDS)
 
 
-class ReplayFormatError(ValueError):
-    """外掛檔解不回原樣:版本不認得,或 delta 與 keyframe 對不上(編碼器壞了)。"""
+class PluginFormatError(ValueError):
+    """外掛檔解不回原樣:不是外掛檔、版本不認得、檔頭與內容不符,或 delta 與 keyframe 對不上。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,16 +104,32 @@ class Frame:
 
 
 @dataclass(frozen=True, slots=True)
-class CodeReplay:
-    """一檔一日的重播:`frames` 依訊息序號遞增。"""
+class BookReplay:
+    """一檔一日的簿重播:`frames` 依訊息序號遞增。"""
 
     code: str
     trade_date: str
     frames: tuple[Frame, ...]
 
 
-def replay(rows: Iterable[TickRow]) -> dict[str, CodeReplay]:
-    """一天的 tick 存檔列(任意順序、多檔交錯)→ 每檔的重播,鍵 = 代號。
+class PluginPayload(TypedDict):
+    """外掛檔 v1 的 JSON 物件;各鍵的意義見模組說明「外掛檔 v1」。"""
+
+    v: int
+    code: str
+    date: str
+    n: int
+    fields: list[str]
+    kf_every: int
+    seq: list[int]
+    kind: str
+    clock: list[int]
+    kf: list[list[int | None]]
+    d: list[list[int | None]]
+
+
+def replay_books(rows: Iterable[TickRow]) -> dict[str, BookReplay]:
+    """一天的 tick 存檔列(任意順序、多檔交錯)→ 每檔的簿重播,鍵 = 代號。
 
     一次只重播一個交易日:混到別天的列 → ValueError(時間軸以交易日換算,混日算不出對的時刻)。
     """
@@ -125,10 +144,10 @@ def replay(rows: Iterable[TickRow]) -> dict[str, CodeReplay]:
                 f"({row.code} msg_seq={row.msg_seq})"
             )
         by_code[row.code].append(row)
-    out: dict[str, CodeReplay] = {}
+    out: dict[str, BookReplay] = {}
     for code, code_rows in by_code.items():
         code_rows.sort(key=attrgetter("msg_seq"))
-        out[code] = CodeReplay(code, code_rows[0].trade_date, _frames(code_rows))
+        out[code] = BookReplay(code, code_rows[0].trade_date, _frames(code_rows))
     return out
 
 
@@ -159,8 +178,8 @@ def _taipei_day_start_epoch_ms(trade_date: str) -> int:
     return int(start.timestamp()) * 1000
 
 
-def encode(day: CodeReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> dict[str, Any]:
-    """一檔一日的重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v1」。"""
+def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> PluginPayload:
+    """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v1」。"""
     seq: list[int] = []
     kinds: list[str] = []
     clock: list[int] = []
@@ -168,7 +187,7 @@ def encode(day: CodeReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> dict[str
     deltas: list[list[int | None]] = []
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
     prev_seq = 0
-    for i, frame in enumerate(day.frames):
+    for i, frame in enumerate(code_day.frames):
         seq.append(frame.msg_seq - prev_seq)
         prev_seq = frame.msg_seq
         kinds.append("t" if frame.kind == "trade" else "b")
@@ -185,9 +204,9 @@ def encode(day: CodeReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> dict[str
             keyframes.append(list(frame.book))
     return {
         "v": FORMAT_VERSION,
-        "code": day.code,
-        "date": day.trade_date,
-        "n": len(day.frames),
+        "code": code_day.code,
+        "date": code_day.trade_date,
+        "n": len(code_day.frames),
         "fields": list(BOOK_LEVEL_FIELDS),
         "kf_every": keyframe_every,
         "seq": seq,
@@ -198,7 +217,7 @@ def encode(day: CodeReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> dict[str
     }
 
 
-def plugin_js(payload: Mapping[str, Any]) -> str:
+def plugin_js(payload: PluginPayload) -> str:
     """payload → 外掛檔全文:一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`。
 
     gzip `mtime=0`:同一份資料重產出逐位元組相同的檔(重跑 CLI 不製造無意義差異)。
@@ -209,41 +228,46 @@ def plugin_js(payload: Mapping[str, Any]) -> str:
     return f'{_PLUGIN_CALLBACK}({key},"{blob}");'
 
 
-def parse_plugin_js(text: str) -> dict[str, Any]:
-    """外掛檔全文 → payload(`plugin_js` 的反函數)。不是一行 `window.__bk(...)` → ReplayFormatError。"""
+def parse_plugin_js(text: str) -> PluginPayload:
+    """外掛檔全文 → payload(`plugin_js` 的反函數)。不是一行 `window.__bk(...)` → PluginFormatError。"""
     match = _PLUGIN_LINE.fullmatch(text.strip())
     if match is None:
-        raise ReplayFormatError("不是簿重播外掛檔(找不到 window.__bk(...) 一行)")
+        raise PluginFormatError(f"不是簿重播外掛檔(找不到 {_PLUGIN_CALLBACK}(...) 一行)")
     return json.loads(gzip.decompress(base64.b64decode(match["blob"], validate=True)))
 
 
-def book_at(payload: Mapping[str, Any], index: int) -> tuple[int | None, ...]:
+def book_at(payload: PluginPayload, index: int) -> tuple[int | None, ...]:
     """第 `index` 則的五檔,走回看頁跳轉的規則:該則之前最近的 keyframe + 其後到該則的 delta。"""
     every = payload["kf_every"]
     base = (index // every) * every
     state = list(payload["kf"][index // every])
     for delta in payload["d"][base + 1 : index + 1]:
-        for k in range(0, len(delta), 2):
-            state[delta[k]] = delta[k + 1]
+        _apply_delta(state, delta)
     return tuple(state)
 
 
-def decode(payload: Mapping[str, Any]) -> CodeReplay:
-    """外掛檔 payload → 重播(`encode` 的反函數;回看頁解碼規則的 Python 版)。
+def _apply_delta(state: list[int | None], delta: Sequence[Any]) -> None:
+    """`[欄號, 新值, 欄號, 新值, …]` 套到 20 格上(欄號與值混在同一串,所以收 Any)。"""
+    for k in range(0, len(delta), 2):
+        state[delta[k]] = delta[k + 1]
+
+
+def decode(payload: PluginPayload) -> BookReplay:
+    """外掛檔 payload → 簿重播(`encode` 的反函數;回看頁解碼規則的 Python 版)。
 
     自檢:逐則套 delta 到每個 keyframe 位置都必須與 keyframe 逐格相等 —— 回看頁「播放」走 delta、
-    「跳轉」走 keyframe,兩條路對不上 = 同一刻兩份簿。不相等 / 版本不認得 → ReplayFormatError。
+    「跳轉」走 keyframe,兩條路對不上 = 同一刻兩份簿。不相等 / 檔頭不符 → PluginFormatError。
     """
     if payload.get("v") != FORMAT_VERSION:
-        raise ReplayFormatError(f"外掛檔版本 {payload.get('v')!r} 不認得(本版解 {FORMAT_VERSION})")
+        raise PluginFormatError(f"外掛檔版本 {payload.get('v')!r} 不認得(本版解 {FORMAT_VERSION})")
     code, n, every, keyframes = payload["code"], payload["n"], payload["kf_every"], payload["kf"]
     if list(payload["fields"]) != list(BOOK_LEVEL_FIELDS):
-        raise ReplayFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
+        raise PluginFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
     lengths = (len(payload["seq"]), len(payload["kind"]), len(payload["d"]))
     if lengths != (n, n, n):
-        raise ReplayFormatError(f"{code} 檔頭 n={n} 與 seq / kind / d 長度 {lengths} 不符")
+        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / d 長度 {lengths} 不符")
     if len(keyframes) != -(-n // every):
-        raise ReplayFormatError(
+        raise PluginFormatError(
             f"{code} keyframe 個數 {len(keyframes)} 不符(n={n}、每 {every} 則一個)"
         )
     points = iter(zip(payload["clock"][::2], payload["clock"][1::2], strict=True))
@@ -257,10 +281,9 @@ def decode(payload: Mapping[str, Any]) -> CodeReplay:
         zip(payload["seq"], payload["kind"], payload["d"], strict=True)
     ):
         msg_seq += seq_step
-        for k in range(0, len(delta), 2):
-            state[delta[k]] = delta[k + 1]
+        _apply_delta(state, delta)
         if i % every == 0 and state != keyframes[i // every]:
-            raise ReplayFormatError(
+            raise PluginFormatError(
                 f"{code} 第 {i} 則:delta 累積結果與 keyframe 不符"
                 f"({state} ≠ {keyframes[i // every]})"
             )
@@ -270,4 +293,4 @@ def decode(payload: Mapping[str, Any]) -> CodeReplay:
         frames.append(
             Frame(msg_seq, "trade" if kind == "t" else "book", tuple(state), clock, i - clock_index)
         )
-    return CodeReplay(code, payload["date"], tuple(frames))
+    return BookReplay(code, payload["date"], tuple(frames))

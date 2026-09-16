@@ -16,13 +16,13 @@ from typing import Any
 import pytest
 
 from copycat.book_replay import (
-    ReplayFormatError,
+    PluginFormatError,
     book_at,
     decode,
     encode,
     parse_plugin_js,
     plugin_js,
-    replay,
+    replay_books,
 )
 from copycat.ticks import TickRow
 
@@ -106,7 +106,7 @@ def _tuple(
     return tuple(bp + bq + ap + aq)
 
 
-class TestReplayOrdering:
+class TestBookReplayOrdering:
     def test_groups_by_code_and_orders_each_code_by_msg_seq(self) -> None:
         rows = [
             _row("book", "2426", 30, recv="09:00:01.000", bid=[(98_900, 5)], ask=[(99_000, 7)]),
@@ -131,7 +131,7 @@ class TestReplayOrdering:
             _row("book", "2426", 25, recv="09:00:00.800", bid=[(98_900, 4)], ask=[(99_000, 7)]),
         ]
 
-        result = replay(rows)
+        result = replay_books(rows)
 
         assert sorted(result) == ["2426", "3441"]
         day = result["2426"]
@@ -146,7 +146,7 @@ class TestReplayOrdering:
         assert [f.msg_seq for f in result["3441"].frames] == [10]
         assert result["3441"].frames[0].book == _tuple(bid=[(180_500, 2)], ask=[(181_000, 9)])
 
-    def test_one_call_replays_one_trading_day(self) -> None:
+    def test_one_call_covers_one_trading_day(self) -> None:
         rows = [
             _row("book", "2426", 1, recv="09:00:00.050", bid=[(98_900, 1)]),
             _row(
@@ -155,7 +155,7 @@ class TestReplayOrdering:
         ]
 
         with pytest.raises(ValueError, match="2026-09-15"):
-            replay(rows)
+            replay_books(rows)
 
 
 class TestClock:
@@ -167,12 +167,12 @@ class TestClock:
             _row("book", "2426", 4, recv="09:00:00.700", bid=[(98_900, 3)]),
             _row("book", "2426", 5, recv="09:00:00.720", bid=[(98_900, 4)]),
             _row("trade", "2426", 6, recv="09:00:01.300", time="09:00:00.700", bid=[(98_900, 4)]),
-            # 同毫秒的第二筆成交(掃單)也是時鐘點:其後的簿列從它起算
+            # 同一達錢時刻的第二筆成交也是時鐘點:其後的簿列從它起算
             _row("trade", "2426", 7, recv="09:00:01.310", time="09:00:00.700", bid=[(98_900, 3)]),
             _row("book", "2426", 8, recv="09:00:01.400", bid=[(98_900, 5)]),
         ]
 
-        frames = replay(rows)["2426"].frames
+        frames = replay_books(rows)["2426"].frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [
             (None, 1),  # 首筆成交前:沒有達錢時刻可掛,只數第幾則
@@ -204,7 +204,7 @@ class TestClock:
             _row("book", "1815", 28_380, recv="09:00:03.890", bid=[(115_000, 206)]),
         ]
 
-        frames = replay(rows)["1815"].frames
+        frames = replay_books(rows)["1815"].frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [
             (None, 1),
@@ -227,7 +227,7 @@ class TestClock:
             _row("book", "2426", 5, recv="13:30:41.000", bid=[(99_100, 29)]),
         ]
 
-        frames = replay(rows)["2426"].frames
+        frames = replay_books(rows)["2426"].frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [
             (48_299_500, 0),
@@ -244,7 +244,7 @@ class TestClock:
             _row("book", "2426", 2, recv="10:00:00.600", bid=[(99_000, 2)]),
         ]
 
-        frames = replay(rows)["2426"].frames
+        frames = replay_books(rows)["2426"].frames
 
         assert [(f.clock_ms, f.after) for f in frames] == [(36_003_000, 0), (36_003_000, 1)]
 
@@ -311,7 +311,7 @@ def _lock_limit_up_rows() -> list[TickRow]:
 
 class TestPluginEncoding:
     def test_round_trip_reproduces_every_frame_across_keyframe_boundaries(self) -> None:
-        day = replay(_lock_limit_up_rows())["2426"]
+        day = replay_books(_lock_limit_up_rows())["2426"]
         assert day.frames[3].book == _tuple(bid=[(0, 3_300), (99_100, 5_000), (99_000, 184)])
         assert day.frames[5].book == (None,) * 20
 
@@ -321,18 +321,18 @@ class TestPluginEncoding:
         assert decode(wire) == day
 
     @pytest.mark.parametrize("keyframe_every", [1, 3, 256])
-    def test_jumping_to_any_message_from_its_keyframe_matches_the_replay(
+    def test_jumping_to_any_message_from_its_keyframe_matches_the_book_replay_books(
         self, keyframe_every: int
     ) -> None:
         """回看頁拖時間軸的解碼規則:取該則之前最近的 keyframe,再套到該則為止的 delta。"""
-        day = replay(_lock_limit_up_rows())["2426"]
+        day = replay_books(_lock_limit_up_rows())["2426"]
         wire = json.loads(json.dumps(encode(day, keyframe_every=keyframe_every)))
 
         assert [book_at(wire, i) for i in range(len(day.frames))] == [f.book for f in day.frames]
 
     def test_plugin_file_is_one_script_line_carrying_gzip_base64_json(self) -> None:
         """沿用 viewer-cdp-ticks 的外掛檔形態:`<script src>` 懶載入,file:// 直接可讀。"""
-        day = replay(_lock_limit_up_rows())["2426"]
+        day = replay_books(_lock_limit_up_rows())["2426"]
         payload = encode(day)
 
         text = plugin_js(payload)
@@ -346,11 +346,11 @@ class TestPluginEncoding:
 
     def test_decode_refuses_deltas_that_disagree_with_a_later_keyframe(self) -> None:
         """回看頁「播放」走 delta、「跳轉」走 keyframe;兩條路對不上 = 同一刻看到兩份簿,不得放行。"""
-        day = replay(_lock_limit_up_rows())["2426"]
+        day = replay_books(_lock_limit_up_rows())["2426"]
         wire = json.loads(json.dumps(encode(day, keyframe_every=3)))
         wire["d"][1] = wire["d"][1] + [19, 777]  # 第 1 則多蓋賣量 4 = 777,第 3 則 keyframe 仍是空
 
-        with pytest.raises(ReplayFormatError, match="keyframe"):
+        with pytest.raises(PluginFormatError, match="keyframe"):
             decode(wire)
 
     @pytest.mark.parametrize(
@@ -368,14 +368,14 @@ class TestPluginEncoding:
     ) -> None:
         """外掛檔永久保留:一年後讀它的人只能靠檔頭自述,檔頭與內容對不上一律拒絕。"""
         wire = json.loads(
-            json.dumps(encode(replay(_lock_limit_up_rows())["2426"], keyframe_every=3))
+            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
         )
         tamper(wire)
 
-        with pytest.raises(ReplayFormatError, match=message):
+        with pytest.raises(PluginFormatError, match=message):
             decode(wire)
 
     def test_parse_refuses_text_that_is_not_a_book_replay_plugin_line(self) -> None:
         """逐筆外掛檔(`window.__tk`)跟簿重播外掛檔同形,放錯資料夾也要認得出來。"""
-        with pytest.raises(ReplayFormatError, match="window.__bk"):
+        with pytest.raises(PluginFormatError, match="window.__bk"):
             parse_plugin_js('window.__tk("2426|2026-09-16","H4sIAAAAAAAAA4uOBQApu0wNAgAAAA==");')

@@ -418,26 +418,26 @@ def _book_replay(date_arg: str, dir_arg: Path | None, out_root: Path) -> int:
         return 2
     started = time.monotonic()
     try:
-        replays = book_replay.replay(load_day(day, data_dir))
+        code_days = book_replay.replay_books(load_day(day, data_dir))
     except FileNotFoundError:
         sys.stderr.write(f"簿重播 {date}:{data_dir} 沒有這天的 tick 存檔\n")
         return 2
     out_dir = out_root / date
     messages = held_trades = total_bytes = 0
-    codes = sorted(replays)
+    codes = sorted(code_days)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         for code in codes:
-            code_replay = replays.pop(code)
-            text = book_replay.plugin_js(book_replay.encode(code_replay))
-            if book_replay.decode(book_replay.parse_plugin_js(text)) != code_replay:
+            code_day = code_days.pop(code)
+            text = book_replay.plugin_js(book_replay.encode(code_day))
+            if book_replay.decode(book_replay.parse_plugin_js(text)) != code_day:
                 sys.stderr.write(f"簿重播 {date} {code}:自檢失敗,外掛檔解不回原樣,未落檔\n")
                 return 1
             atomic_write_text(out_dir / f"{code}.js", text)
-            messages += len(code_replay.frames)
-            held_trades += sum(1 for f in code_replay.frames if f.kind == "trade" and f.after)
+            messages += len(code_day.frames)
+            held_trades += sum(1 for f in code_day.frames if f.kind == "trade" and f.after)
             total_bytes += len(text)
-    except book_replay.ReplayFormatError as e:
+    except book_replay.PluginFormatError as e:
         sys.stderr.write(f"簿重播 {date}:自檢失敗,{e}\n")
         return 1
     except OSError as e:
