@@ -67,6 +67,9 @@ connection 事件、零 ConnectByID、status 仍 ok。
   ×2 = 60 s 定時庫存查詢在斷網下逾時放棄、終止符遲到,既有行為零副作用。F-01 專屬判準(斷線瞬間有鏈在飛)沒撞到 —— 跨夜台 05:50 前
   零成交、零 `部位落地`,以紅先行測試為證。
 - 09-16 08:59 `curl /api/capital/status`:`status ok`、`reply_connected 1`(判準「09:00 前」成立;台已是 08:11 那台)。
+- 09-16 09:03:33 當日第一筆單(3441)`Capital reply: 委託` → 0.2 s `成交` → 樂觀套用 0.2 ms → 鏈 1378 ms 落地,**即時到**;
+  到 11:00 共 8 筆委託(3 刪單)/ 5 筆成交,`/api/capital/orders` 8 列、`/api/capital/fills` 5 列與 log 逐筆對得上(判準「09:00 後
+  第一筆單」成立)。10:45:45 `rc=1019` ×3 = 2426 兩筆成交相隔 2 s、第二筆撞上第一筆在飛的鏈,既有語意(CLAUDE §1 chain-stats 尺)。
 
 **偏差(記 next-time,不是紅燈)**:`ReplyLink.begin_attempt(now)` 的下一格從出手**前**的 `now` 起算,而 `ConnectByID` 在斷網下同步阻塞
 11 s > 第 1 格 10 s → 回傳時已到期,第 2 次在第 1 次失敗後 **52 ms** 就發(log 印「10 s 後再試」是假陳述)。副作用只有多打一次
