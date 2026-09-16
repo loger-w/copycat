@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from copycat.book_replay import (
+    BookReplay,
     PluginFormatError,
     Trade,
     book_at,
@@ -436,14 +437,18 @@ def _golden_rows() -> list[TickRow]:
     ]
 
 
+def _wire(day: BookReplay, *, keyframe_every: int) -> Any:
+    """編碼後走一趟 JSON 往返 = 外掛檔裡實際存的樣子(0 / null 必須分得開);竄改案直接改它。"""
+    return json.loads(json.dumps(encode(day, keyframe_every=keyframe_every)))
+
+
 class TestPluginEncoding:
     def test_round_trip_reproduces_every_frame_across_keyframe_boundaries(self) -> None:
         day = replay_books(_lock_limit_up_rows())["2426"]
         assert day.frames[3].book == _tuple(bid=[(0, 3_300), (99_100, 5_000), (99_000, 184)])
         assert day.frames[5].book == (None,) * 20
 
-        payload = encode(day, keyframe_every=3)
-        wire = json.loads(json.dumps(payload))  # 外掛檔裡是 JSON:0 / null 必須分得開
+        wire = _wire(day, keyframe_every=3)
 
         assert decode(wire) == day
 
@@ -502,7 +507,7 @@ class TestPluginEncoding:
         ]
         assert day.anomalous_trades == 2
 
-        wire = json.loads(json.dumps(encode(day, keyframe_every=2)))
+        wire = _wire(day, keyframe_every=2)
 
         assert decode(wire) == day
 
@@ -512,7 +517,7 @@ class TestPluginEncoding:
     ) -> None:
         """回看頁拖時間軸的解碼規則:取該則之前最近的 keyframe,再套到該則為止的 delta。"""
         day = replay_books(_lock_limit_up_rows())["2426"]
-        wire = json.loads(json.dumps(encode(day, keyframe_every=keyframe_every)))
+        wire = _wire(day, keyframe_every=keyframe_every)
 
         assert [book_at(wire, i) for i in range(len(day.frames))] == [f.book for f in day.frames]
 
@@ -537,7 +542,7 @@ class TestPluginEncoding:
     def test_decode_refuses_deltas_that_disagree_with_a_later_keyframe(self) -> None:
         """回看頁「播放」走 delta、「跳轉」走 keyframe;兩條路對不上 = 同一刻看到兩份簿,不得放行。"""
         day = replay_books(_lock_limit_up_rows())["2426"]
-        wire = json.loads(json.dumps(encode(day, keyframe_every=3)))
+        wire = _wire(day, keyframe_every=3)
         wire["d"][1] = wire["d"][1] + [19, 777]  # 第 1 則多蓋賣量 4 = 777,第 3 則 keyframe 仍是空
 
         with pytest.raises(PluginFormatError, match="keyframe"):
@@ -553,7 +558,6 @@ class TestPluginEncoding:
             (lambda w: w["recv"].pop(), "recv"),
             (lambda w: w["trade"].pop(), "trade 長度"),
             (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
-            (lambda w: w["recv"].__setitem__(1, -5), "倒退"),
             (lambda w: w.pop("trade"), "缺鍵"),
             (lambda w: w.update(kf_every=0), "kf_every"),
         ],
@@ -565,7 +569,6 @@ class TestPluginEncoding:
             "recv-length",
             "trade-length",
             "kind-char",
-            "recv-rewind",
             "missing-key",
             "keyframe-interval-zero",
         ],
@@ -573,10 +576,8 @@ class TestPluginEncoding:
     def test_decode_refuses_a_header_the_viewer_cannot_trust(
         self, tamper: Callable[[dict[str, Any]], object], message: str
     ) -> None:
-        """外掛檔永久保留:一年後讀它的人只能靠檔頭自述,檔頭與內容對不上一律拒絕。"""
-        wire = json.loads(
-            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
-        )
+        """外掛檔永久保留:一年後讀它的人只能靠檔頭自述,下列檔頭與內容對不上的情形都拒絕。"""
+        wire = _wire(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3)
         tamper(wire)
 
         with pytest.raises(PluginFormatError, match=message):
@@ -585,6 +586,7 @@ class TestPluginEncoding:
     @pytest.mark.parametrize(
         ("tamper", "message"),
         [
+            (lambda w: w["recv"].__setitem__(1, -5), "倒退"),
             # 第 7 則在最後一個 keyframe(第 6 則)之後:壞 delta 沒有 keyframe 能對出來
             (lambda w: w["d"][7].append(5), "delta 長度"),
             (lambda w: w["d"][7].extend([20, 555]), "欄號"),
@@ -593,6 +595,7 @@ class TestPluginEncoding:
             (lambda w: w["trade"].__setitem__(3, "weird"), "內外盤"),  # 第 0 則成交
         ],
         ids=[
+            "recv-rewind",
             "delta-odd-length",
             "delta-field-20",
             "delta-negative-field",
@@ -603,11 +606,9 @@ class TestPluginEncoding:
     def test_decode_refuses_messages_that_break_the_documented_values(
         self, tamper: Callable[[dict[str, Any]], object], message: str
     ) -> None:
-        """逐則的值不合模組說明(delta 成對、欄號 0–19、訊息序號遞增、內外盤三值)就拒絕 —— 不讓它變成
-        IndexError,或更糟,默默解出另一份簿(pr-275 review F-08)。"""
-        wire = json.loads(
-            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
-        )
+        """逐則的值不合模組說明(收到時刻不倒退、delta 成對、欄號 0–19、訊息序號遞增、內外盤三值)就拒絕 ——
+        不讓它變成 IndexError,或更糟,默默解出另一份簿(pr-275 review F-08)。"""
+        wire = _wire(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3)
         tamper(wire)
 
         with pytest.raises(PluginFormatError, match=message):
@@ -619,12 +620,10 @@ class TestPluginEncoding:
         with pytest.raises(ValueError, match="keyframe_every"):
             encode(day, keyframe_every=0)
 
-    @pytest.mark.parametrize("index", [8, -1], ids=["n", "negative"])
+    @pytest.mark.parametrize("index", [8, -1], ids=["index-equals-n", "negative-index"])
     def test_book_at_refuses_an_index_outside_the_messages(self, index: int) -> None:
         """8 則的檔:`book_at(8)` 修前回第 7 則、`book_at(-1)` 回最後一個 keyframe —— 回看頁照抄這條規則會帶歪。"""
-        wire = json.loads(
-            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
-        )
+        wire = _wire(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3)
 
         with pytest.raises(IndexError, match="沒有第"):
             book_at(wire, index)
@@ -657,9 +656,7 @@ class TestPluginEncoding:
     ) -> None:
         """時鐘點不直接存:沒列在 `anomalous` 的成交就是時鐘點,時刻讀它自己的成交時刻。清單與成交對不上 =
         標籤時刻會倒退或掛在簿則上,拒絕(pr-275 review F-03 / F-07)。"""
-        wire = json.loads(
-            json.dumps(encode(replay_books(_golden_rows())["1815"], keyframe_every=2))
-        )
+        wire = _wire(replay_books(_golden_rows())["1815"], keyframe_every=2)
         tamper(wire)
 
         with pytest.raises(PluginFormatError, match=message):
