@@ -555,6 +555,7 @@ class TestPluginEncoding:
             (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
             (lambda w: w["recv"].__setitem__(1, -5), "倒退"),
             (lambda w: w.pop("trade"), "缺鍵"),
+            (lambda w: w.update(kf_every=0), "kf_every"),
         ],
         ids=[
             "unknown-version",
@@ -566,6 +567,7 @@ class TestPluginEncoding:
             "kind-char",
             "recv-rewind",
             "missing-key",
+            "keyframe-interval-zero",
         ],
     )
     def test_decode_refuses_a_header_the_viewer_cannot_trust(
@@ -579,6 +581,53 @@ class TestPluginEncoding:
 
         with pytest.raises(PluginFormatError, match=message):
             decode(wire)
+
+    @pytest.mark.parametrize(
+        ("tamper", "message"),
+        [
+            # 第 7 則在最後一個 keyframe(第 6 則)之後:壞 delta 沒有 keyframe 能對出來
+            (lambda w: w["d"][7].append(5), "delta 長度"),
+            (lambda w: w["d"][7].extend([20, 555]), "欄號"),
+            (lambda w: w["d"][7].extend([-1, 555]), "欄號"),  # 負欄號會默默寫進賣量 4
+            (lambda w: w["seq"].__setitem__(2, 0), "訊息序號"),
+            (lambda w: w["trade"].__setitem__(3, "weird"), "內外盤"),  # 第 0 則成交
+        ],
+        ids=[
+            "delta-odd-length",
+            "delta-field-20",
+            "delta-negative-field",
+            "seq-not-increasing",
+            "side-outside-domain",
+        ],
+    )
+    def test_decode_refuses_messages_that_break_the_documented_values(
+        self, tamper: Callable[[dict[str, Any]], object], message: str
+    ) -> None:
+        """逐則的值不合模組說明(delta 成對、欄號 0–19、訊息序號遞增、內外盤三值)就拒絕 —— 不讓它變成
+        IndexError,或更糟,默默解出另一份簿(pr-275 review F-08)。"""
+        wire = json.loads(
+            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
+        )
+        tamper(wire)
+
+        with pytest.raises(PluginFormatError, match=message):
+            decode(wire)
+
+    def test_encode_refuses_a_keyframe_interval_below_one(self) -> None:
+        day = replay_books(_lock_limit_up_rows())["2426"]
+
+        with pytest.raises(ValueError, match="keyframe_every"):
+            encode(day, keyframe_every=0)
+
+    @pytest.mark.parametrize("index", [8, -1], ids=["n", "negative"])
+    def test_book_at_refuses_an_index_outside_the_messages(self, index: int) -> None:
+        """8 則的檔:`book_at(8)` 修前回第 7 則、`book_at(-1)` 回最後一個 keyframe —— 回看頁照抄這條規則會帶歪。"""
+        wire = json.loads(
+            json.dumps(encode(replay_books(_lock_limit_up_rows())["2426"], keyframe_every=3))
+        )
+
+        with pytest.raises(IndexError, match="沒有第"):
+            book_at(wire, index)
 
     @pytest.mark.parametrize(
         ("tamper", "message"),
