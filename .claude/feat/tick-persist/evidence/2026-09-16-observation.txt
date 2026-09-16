@@ -1,0 +1,78 @@
+# 2026-09-16 00:40 重啟核(tick 存檔上線第一個交易日)
+
+$ curl -s localhost:8721/api/health
+{"git_sha":"afd77196","git_dirty":true,"started_at":"2026-09-16T00:39:43"}
+
+$ grep -nE "tick 存檔|tick 轉檔|封住" logs/server-20260916-0039.log
+80:2026-09-16 00:39:50,230 copycat.live.tick_persist INFO tick 存檔 2026-09-15:成交 78 / 簿 0 / 重複簿略過 0 / flush 0 / 寫入失敗 0
+85:2026-09-16 00:39:50,407 copycat.server.ticks_compactor INFO tick 轉檔 2026-09-15:jsonl 78 列 → 成交 78 列 + 簿 0 列(去重 0、壞行 0),耗時 0.1 秒,0.0 MB
+
+$ ls -l data/ticks
+total 28
+-rw-r--r-- 1 USER 197608  4252 Sep 16 00:39 20260915-book.parquet
+-rw-r--r-- 1 USER 197608 16823 Sep 16 00:39 20260915.parquet
+
+備註:00:39 重啟時 stock engine 日別仍 = 09-15(08:00 才換日),TC4 訂閱快照 78 則(每檔 14:30 定盤一筆)寫進 20260915.jsonl,補跑把 09-15 當過去日立刻轉檔(§4-6 / §4-7 機制正常)。此 parquet 只含訂閱快照,非 09-15 真資料(prod 09-15 未跑存檔)。
+
+# 06:04 順帶核:05:50 每日固定斷網 → 群益回報線自動重連(PR #253 首個真環境日)
+$ grep -nE "回報線|Solace" logs/server-20260916-0039.log(05:50–05:54)
+1261:2026-09-16 05:51:29,597 copycat.capital.client WARNING 群益回報線重連失敗 rc=1108: SK_EEROR_TELNET_SERVER_FAIL(第 3 次,40 s 後再試)
+1476:2026-09-16 05:52:09,637 copycat.capital.client WARNING 群益回報線重連失敗 rc=1108: SK_EEROR_TELNET_SERVER_FAIL(第 4 次,60 s 後再試)
+1492:2026-09-16 05:53:09,846 copycat.capital.client INFO 群益回報線重連 ConnectByID 已送出(第 5 次);60 s 內未恢復再試
+1493:2026-09-16 05:53:09,897 copycat.capital.com INFO Capital Solace reply connection (user=H125361413, code=0)
+1494:2026-09-16 05:53:09,897 copycat.capital.client INFO 群益回報線恢復(連線事件 code=0;重連 5 次)→ ok
+1495:2026-09-16 05:53:09,897 copycat.capital.com INFO Capital Solace reply connection (user=H125361413, code=0)
+1496:2026-09-16 05:53:09,897 copycat.capital.client WARNING 群益回報線 IsConnectedByID=2(上一值 0)
+1532:2026-09-16 05:53:19,899 copycat.capital.client INFO 群益回報線 IsConnectedByID=1(上一值 2)
+判定:斷線 05:50:53(3033)→ 退避 5/10/20/40/60 s 各失敗 rc=1108(對外網路整段掉,MIS / Discord / FinMind 同時 getaddrinfo 失敗)→ 05:53:09 第 5 次 ConnectByID 送出即恢復 ok,「已送出」與「恢復」兩行都在 = PASS。修前會死到早上重啟。
+
+# 08:03 對點:換日(stage1/2 由首筆 09-16 tick 觸發於 07:31:22,非 08:00 牆鐘)
+1757:2026-09-16 07:31:22,730 copycat.server.stock_engine INFO rollover stage1 → 2026-09-16 (gen=2)
+1758:2026-09-16 07:31:22,730 copycat.server.stock_engine INFO 個股旗標 0:4 筆 / 欄缺 0 筆 / 總 78 筆(2026-09-15)
+1759:2026-09-16 07:31:22,730 copycat.live.tick_persist INFO tick 存檔 2026-09-15:成交 78 / 簿 0 / 重複簿略過 0 / flush 823 / 寫入失敗 0
+1760:2026-09-16 07:31:22,730 copycat.live.tick_persist INFO tick 存檔 2026-09-15 盤前(09:00 前)略過簿更新 78 列
+1761:2026-09-16 07:31:22,764 copycat.server.stock_engine INFO rollover stage2 → 2026-09-16(首筆 1815)
+1843:2026-09-16 07:31:22,816 copycat.live.tick_persist WARNING tick 存檔 2026-09-15 已轉檔封住,之後到達的列丟棄
+$ ls -l data/ticks
+total 29
+-rw-r--r-- 1 USER 197608  4252 Sep 16 00:39 20260915-book.parquet
+-rw-r--r-- 1 USER 197608 16823 Sep 16 00:39 20260915.parquet
+-rw-r--r-- 1 USER 197608   593 Sep 16 07:31 20260916.jsonl
+判定:09-15 stats 行(換日 stage2 舊日那一處,§4-3)寫入失敗 0;「盤前略過簿更新 78 列」= 夜間每檔一則簿快照被 09:00 閘擋(預期);「已轉檔封住,之後到達的列丟棄」WARNING 一次 = 換日後仍有 trade_date=09-15 的成交列到達(TC4 訂閱快照殘影,§4-8 知情接受),件數併入 13:45 那行的「封住後丟棄 n 列」。20260916.jsonl 已開(1 列,code 1815,首筆 09-16 tick)。盤前篩選 09-15 FinMind day_trading HTTP 400 已重試 45 次(00:39 起每 10 分鐘),與本案無關,另記。
+
+# 09:03 對點:開盤存檔在長(user 08:11 第二次重啟,log 換 server-20260916-0811.log)
+$ ls -l data/ticks/20260916.jsonl(相隔 ~40 s 兩次)
+09:03:13  77,615,881 bytes
+09:03:5x  81,688,387 bytes   → 在長,PASS
+佇列滿(0039 log)=0、佇列滿(0811 log)=0
+$ grep -nE "tick 存檔|個股旗標" logs/server-20260916-0039.log | tail -4(08:11 關機那一處)
+1999:2026-09-16 08:11:05,558 copycat.server.stock_engine INFO 個股旗標 0:0 筆 / 欄缺 0 筆 / 總 2 筆(2026-09-16)
+2004:2026-09-16 08:11:05,558 copycat.live.tick_persist INFO tick 存檔 2026-09-16:成交 1 / 簿 0 / 重複簿略過 0 / flush 79 / 寫入失敗 0
+2005:2026-09-16 08:11:05,559 copycat.live.tick_persist INFO tick 存檔 2026-09-16 封住後丟棄 1 列(該日已轉檔;09:00 後的遲到列)
+2006:2026-09-16 08:11:05,559 copycat.live.tick_persist INFO tick 存檔 2026-09-16 盤前(09:00 前)略過簿更新 6761 列
+關機收尾 0.22s:ticks 0.00s / … / stock 0.07s / txo 0.22s(§7-6 PASS:ticks 段在、stock 段 < 3 s)
+msg_seq 接續核:jsonl 首列 msg_seq=157(07:31 開檔那列),08:11 重啟後前 400 列單調遞增至 26990、無歸零 → 同日重啟自檔尾接續 PASS
+文案留尾:08:11 關機行「2026-09-16 封住後丟棄 1 列(該日已轉檔;09:00 後的遲到列)」— 那 1 列其實是 07:31 換日後到達的 trade_date=09-15 列(§4-3 計數器跟寫入端當前日),09-16 本身沒轉檔;括號文案對這種情形是假陳述,只改文案 / 不改碼,記 next-time
+08:59 旗標抓檔排程 LastTaskResult=0,raw_20260916_085900.jsonl 22.3 MB(件 1 分析待盤後)
+
+# 10:05 盤中體積與 F-01 預估
+jsonl 10:05 = 581,412,498 bytes,1,233,050 列(09:00 起 65 分鐘;trade:book ≈ 16:84);server RSS 222 MB;機器 32 GB 總 / 16 GB 可用;佇列滿 0
+轉檔讀法(copycat/ticks_compact.py compact_day):整檔 iter_jsonl_rows → trades/books 兩 list → sort → from_pydict 逐欄 list → Arrow → write;全部同時在記憶體
+tracemalloc 實測前 100k 列:dict 階段 2,747 B/列(review F-01 推估 2.64 KB/列命中),簿 columns 階段再 +239 B/列
+預估:若全日 3.0–3.5M 列 → dict 階段 8.2–9.6 GB + columns + Arrow table ≈ 10–12 GB 峰值,> 可用 16 GB 的一半(8 GB)= F-01 門檻可能觸發;13:45 以真實 RSS 定案
+11:07 jsonl = 818,350,866 bytes,1,733,376 列(10:05→11:07 +50 萬列,速率降至開盤時段 ~40%);佇列滿 0;可用 15.7 GB
+12:08 jsonl = 1,025,439,068 bytes,2,170,202 列(11:07→12:08 +44 萬列);佇列滿 0
+13:09 jsonl = 1,267,201,806 bytes,2,677,130 列(12:08→13:09 +51 萬列);佇列滿 0
+
+# 13:48 對點:13:45 轉檔
+11210:2026-09-16 13:45:04,545 copycat.live.tick_persist INFO tick 存檔 2026-09-16:成交 375386 / 簿 2465821 / 重複簿略過 50699 / flush 667 / 寫入失敗 0
+11211:2026-09-16 13:45:04,546 copycat.live.tick_persist INFO tick 存檔 2026-09-16 盤前(09:00 前)略過簿更新 26433 列
+11232:2026-09-16 13:46:07,746 copycat.server.ticks_compactor INFO tick 轉檔 2026-09-16:jsonl 2841208 列 → 成交 375387 列 + 簿 2465821 列(去重 0、壞行 0),耗時 59.2 秒,43.7 MB
+$ ls -l data/ticks
+total 42748
+-rw-r--r-- 1 USER 197608     4252 Sep 16 00:39 20260915-book.parquet
+-rw-r--r-- 1 USER 197608    16823 Sep 16 00:39 20260915.parquet
+-rw-r--r-- 1 USER 197608 31710242 Sep 16 13:45 20260916-book.parquet
+-rw-r--r-- 1 USER 197608 12032522 Sep 16 13:46 20260916.parquet
+RSS 抽樣(每 3 s,scratchpad rss-samples.txt)子程序 pid 26744 13:45:04 起:1275 → 2859 → 4407 → 5987 → 7566 → 8368 MB(13:45:22,讀檔階段每 3 s +1.5 GB)→ 緩升 → 峰值 9,013 MB(13:45:53)→ 13:46:08 退出;機器可用 15,345 MB → 最低 6,479 MB;server 本體 351 MB 不動
+判定:§7-1 兩行都在、寫入失敗 0、壞行 0、去重 0、零失敗 / 放棄行 → PASS;§7-2 兩 parquet 在、jsonl 不在、無 .tmp → PASS;§7-3 佇列滿 0 → PASS;§7-5 F-01:峰值 9.0 GB > 可用 15.3 GB 的一半 7.7 GB → 門檻成立(轉檔成功但超標),依 09-16 拍板開 /mod 改分批 RecordBatch;jsonl 峰值 ~1.35 GB(13:45 前最後量 13:09 = 1.27 GB)、成交 parquet 12.0 MB、簿 parquet 31.7 MB(spec 估簿 60–100 MB,實際較小;jsonl 估 700 MB 實際約 2 倍)

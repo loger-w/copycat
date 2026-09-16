@@ -1033,9 +1033,18 @@ prod 8721 = 6adf20d9、dist 已重建)。
 
 ## 2026-09-16(pr-review 263 拍板留尾;收修 PR 見 fix/pr-263-review-followups)
 
-- [ ] **F-01 tick 轉檔記憶體(整日 jsonl 全入記憶體,review 推估 2.64 KB/列 → 700 MB 檔約 4 GB+)先量不改**(user 拍板):
-  上線第一個交易日 13:45–13:46 抓轉檔子程序峰值 RSS + jsonl 實際大小(判準見 `.claude/feat/tick-persist/verification.md` §7-5);
-  超過機器可用記憶體一半才開 `/mod` 改分批 `pa.RecordBatch`(每 N 萬列 flush、最後 `Table.from_batches().sort_by`)。
+- [ ] **F-01 tick 轉檔記憶體 → 09-16 量到門檻成立,開 `/mod` 改分批 `pa.RecordBatch`**(每 N 萬列 flush、最後 `Table.from_batches().sort_by`;
+  原拍板「先量不改」已量完):09-16 全日 jsonl 2,841,208 列 ≈ 1.35 GB(spec 估 700 MB 的 2×),轉檔子程序峰值 RSS **9,013 MB**
+  (每 3 s 抽樣;讀檔階段每 3 s +1.5 GB)、機器可用 15.3 GB 的一半 = 7.7 GB → 超標;轉檔本身成功 59.2 s、parquet 43.7 MB。
+  tracemalloc 實測 2,747 B/列(review 2.64 KB 命中)。實錄 `.claude/feat/tick-persist/verification.md` §7-5。
+- [ ] **深夜重啟會產生一份「只含訂閱快照」的昨日 parquet**(09-16 00:39 實錄):stage2 前 engine 日別 = 昨日,TC4 訂閱時每檔一則快照
+  經 `_handle_quote` 寫進昨日 jsonl(78 列),補跑掃到「過去日 jsonl」立刻轉檔 → `20260915.parquet` 78 列、非真資料,`load_day(09-15)`
+  會被誤導;之後該日的 jsonl 也因 §4-7 不再開。只在「prod 該日沒跑存檔 + 00:00–stage2 之間重啟」時發生(上線第一天特有;日後每個
+  交易日都有真 parquet 就不會再撞)。處置候選:(a) 手動刪 `data/ticks/20260915*.parquet`(user 拍板);(b) 補跑只轉「列數 > 訂閱檔數」
+  或「含 09:00 後列」的過去日 —— 不急,先 (a)。
+- [ ] **`_SEALED_FMT` 括號文案「(該日已轉檔;09:00 後的遲到列)」對換日殘影是假陳述**(09-16 08:11 關機行實錄):07:31 換日後到達的
+  trade_date=09-15 列被計進 09-16 的 `sealed_dropped`(§4-3 計數器跟寫入端當前日),印成「2026-09-16 封住後丟棄 1 列(該日已轉檔…)」
+  而 09-16 根本沒轉檔。只改文案(拿掉括號或改成「含換日後到達的舊日列」),不動計數;順手併進 F-01 那批 `/mod`。
 - [ ] **F-32 `copycat.ticks` → `copycat.live.stock_models` 反向依賴**(參考用,不動):`to_stock_tick` 搬層留給「回補改讀自家存檔」那案一起決定。
 - [ ] **簿列 09:00 開盤閘的副作用觀察**:`log_stats` 的 `books_preopen` 不進 log 行;第一週若要看盤前簿更新量,臨時 `grep` 不到 —— 需要再加一行就補(目前刻意不加)。
 
