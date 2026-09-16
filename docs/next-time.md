@@ -1,3 +1,9 @@
+## 2026-09-16(feat/book-replay-engine 簿重播引擎 #267 留尾;spec #265)
+
+- [ ] **`book-replay` 與 `ticks-compact` 兩個 CLI 的 `--date YYYYMMDD` 解析與 `--dir`(help 一字不差)各抄一份**(#267 two-axis
+  Standards S-07):抽共用要動既有的 `ticks-compact` 分支,本批不動。純 🔵,併下一個碰 `cli.py` 的批次;抽完兩邊錯誤訊息字面
+  (「--date 須為 YYYYMMDD(收到 …)」)要逐字保留 —— `tests/test_ticks_compact.py::TestCli` 只驗 exit code,字面沒人釘。
+
 ## 2026-09-15(mod/stock-side-flag 個股內外盤改讀達錢旗標 留尾;spec `.claude/mod/stock-side-flag/change-spec.md`)
 
 - [ ] **`/bug` 候選:歷史 TICKS row 的 `TradeVolume` 恆 "0" → `apply_backfill` 的 survivors 判準 `cum > 回補最大 cum(=0)`
