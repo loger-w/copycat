@@ -426,6 +426,10 @@ class TestPluginEncoding:
             (lambda w: w["recv"].pop(), "recv"),
             (lambda w: w["trade"].pop(), "trade 長度"),
             (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
+            (lambda w: w["recv"].__setitem__(1, -5), "倒退"),
+            (lambda w: w["clock"].pop(), "clock 長度"),
+            (lambda w: w["clock"].__setitem__(0, 1), "時鐘點"),  # 第 1 則是簿則
+            (lambda w: w.pop("trade"), "缺鍵"),
         ],
         ids=[
             "unknown-version",
@@ -435,6 +439,10 @@ class TestPluginEncoding:
             "recv-length",
             "trade-length",
             "kind-char",
+            "recv-rewind",
+            "clock-odd-length",
+            "clock-on-book",
+            "missing-key",
         ],
     )
     def test_decode_refuses_a_header_the_viewer_cannot_trust(
@@ -453,3 +461,10 @@ class TestPluginEncoding:
         """逐筆外掛檔(`window.__tk`)跟簿重播外掛檔同形,放錯資料夾也要認得出來。"""
         with pytest.raises(PluginFormatError, match="window.__bk"):
             parse_plugin_js('window.__tk("2426|2026-09-16","H4sIAAAAAAAAA4uOBQApu0wNAgAAAA==");')
+
+    def test_parse_refuses_a_call_key_that_disagrees_with_the_content(self) -> None:
+        """回看頁以呼叫鍵「代號|日期」配對懶載入的請求;鍵與內容不符 = 畫面掛到別檔別日的簿。"""
+        text = plugin_js(encode(replay_books(_lock_limit_up_rows())["2426"]))
+
+        with pytest.raises(PluginFormatError, match="呼叫鍵"):
+            parse_plugin_js(text.replace('"2426|2026-09-16"', '"2427|2026-09-16"', 1))
