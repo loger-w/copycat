@@ -1,3 +1,15 @@
+## 2026-09-17(chore #266 回看頁資料補到 9/16 留尾;主體在 repo 外 `Documents\copycat-trading-review`)
+
+- [ ] **回看頁 9/11–9/15「你的成交」等券商交易明細 CSV 再補**(user 09-17 拍板「9/16 先上、其餘等 CSV」):9/16 七筆已用
+  prod server 委託快照(`data/raw/copycat_orders_20260916.json`)+ log 毫秒回報時刻建成 `data/fills_copycat_20260916.json`;
+  9/11–9/15 server 重啟過、記憶體已清,log + 審計缺 9/11 3016 兩筆 APP 單、9/14 2305 兩筆市價單成交價、9/14 / 9/15 3008 零股。
+  做法:APP 匯出 9/11–9/16 交易明細 CSV 放 Downloads → 照 `scripts/week0909/recon.py` 解析成 `data/fills_0911_0916.json`,
+  `build_viewer_cdp.py` 改讀它並拿掉 `fills_copycat_20260916.json`(同日兩份會重複標)→ 重建回看頁。**9/10 也沒有成交**(9/10 版建頁時
+  就缺,#266 驗收「舊日一格未變」刻意沒補),CSV 若含 9/10 要先問是否一起補。**判準**:9/14 2305 回看頁有 4 筆成交標記、價格對得上 CSV。
+- [ ] **FinMind token 目前是 register 等級,處置股資料集(`TaiwanStockDispositionSecuritiesPeriod`)全市場與單檔都 400**:研究
+  腳本 `fetch_eligibility.py --keep-disposition` 沿用 9/9 以前公告的列,9/10 後的缺口由 `supplement_disposition.py` 從證交所 /
+  櫃買 open data「目前公告」補(只給當下仍在公告的,要在處置期間內跑)。copycat 本體 `breadth_fetch` 的處置查詢同樣受影響(非本案)。
+
 ## 2026-09-16(feat/book-replay-engine 簿重播引擎 #267 留尾;spec #265)
 
 - [ ] **`book-replay` 與 `ticks-compact` 兩個 CLI 的 `--date YYYYMMDD` 解析與 `--dir`(help 一字不差)各抄一份**(#267 two-axis
