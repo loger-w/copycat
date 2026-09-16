@@ -28,8 +28,9 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 - `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
 - `clock`:時鐘點攤平成 `[則號, 當日毫秒, 則號, 當日毫秒, …]`(則號遞增、毫秒不減);第 i 則的標籤時刻 =
   則號 ≤ i 的最後一個點,`after` = i − 該則號;沒有這樣的點 = 首筆成交前,`after` = i + 1
-- `trade`:每個成交則依序 4 格攤平 `[達錢成交時刻當日毫秒, 價, 張, 內外盤]`,內外盤為
-  `"inner"` / `"outer"` / `"neutral"`;長度 = 4 × `kind` 裡 `t` 的個數,簿則不佔位
+- `trade`:每個成交則依序 4 格攤平 `[達錢成交時刻毫秒, 價, 張, 內外盤]`(時刻 = 存檔 `ms` 原值),內外盤為
+  `"inner"` / `"outer"` / `"neutral"`;長度 = 4 × `kind` 裡 `t` 的個數,簿則不佔位。**成交則的則號不在
+  `clock` 裡 = 達錢時刻異常**(`BookReplay.anomalous_trades`),它的時刻照原值保留、不一定是當日(1815 那則是前一日 14:30)
 - `kf`:第 0、K、2K… 則的完整 20 格(K = `kf_every`,個數 = ceil(n / K))
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
 
@@ -112,7 +113,8 @@ class PluginFormatError(ValueError):
 class Trade:
     """成交則上的那一筆成交(tick 存檔成交列原值)。"""
 
-    ms: int | None  # 達錢成交時刻(台北當日毫秒;即時個股只到整秒)
+    # 達錢成交時刻(台北 HH:MM:SS.fff 換毫秒,存檔原值;即時個股只到整秒;異常成交可能不是當日)
+    ms: int | None
     price_milli: int | None
     qty: int | None  # 張
     side: str | None  # "inner" | "outer" | "neutral"(看盤引擎當時的判定)
@@ -289,7 +291,14 @@ def parse_plugin_js(text: str) -> PluginPayload:
     match = _PLUGIN_LINE.fullmatch(text.strip())
     if match is None:
         raise PluginFormatError(f"不是簿重播外掛檔(找不到 {_PLUGIN_CALLBACK}(...) 一行)")
-    return json.loads(gzip.decompress(base64.b64decode(match["blob"], validate=True)))
+    payload: PluginPayload = json.loads(
+        gzip.decompress(base64.b64decode(match["blob"], validate=True))
+    )
+    expected_key = f"{payload.get('code')}|{payload.get('date')}"
+    if match["key"] != expected_key:
+        # 回看頁以呼叫鍵配對懶載入的請求:鍵與內容不符 = 畫面掛到別檔別日的簿
+        raise PluginFormatError(f"外掛檔呼叫鍵 {match['key']!r} 與內容 {expected_key!r} 不符")
+    return payload
 
 
 def book_at(payload: PluginPayload, index: int) -> tuple[int | None, ...]:
@@ -312,31 +321,11 @@ def decode(payload: PluginPayload) -> BookReplay:
     """外掛檔 payload → 簿重播(`encode` 的反函數;回看頁解碼規則的 Python 版)。
 
     自檢:逐則套 delta 到每個 keyframe 位置都必須與 keyframe 逐格相等 —— 回看頁「播放」走 delta、
-    「跳轉」走 keyframe,兩條路對不上 = 同一刻兩份簿。不相等 / 檔頭不符 → PluginFormatError。
+    「跳轉」走 keyframe,兩條路對不上 = 同一刻兩份簿;收到時刻不得倒退。這些或檔頭不符 → PluginFormatError。
     """
-    if payload.get("v") != FORMAT_VERSION:
-        raise PluginFormatError(f"外掛檔版本 {payload.get('v')!r} 不認得(本版解 {FORMAT_VERSION})")
-    code, n, every, keyframes = payload["code"], payload["n"], payload["kf_every"], payload["kf"]
-    if list(payload["fields"]) != list(BOOK_LEVEL_FIELDS):
-        raise PluginFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
-    lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d"))
-    if lengths != (n, n, n, n):
-        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / recv / d 長度 {lengths} 不符")
-    if len(keyframes) != -(-n // every):
-        raise PluginFormatError(
-            f"{code} keyframe 個數 {len(keyframes)} 不符(n={n}、每 {every} 則一個)"
-        )
-    if not set(payload["kind"]) <= _KIND_NAME.keys():
-        raise PluginFormatError(
-            f"{code} kind 有不認得的字元:{set(payload['kind']) - _KIND_NAME.keys()}"
-        )
-    trade_values, width = payload["trade"], len(_TRADE_CELLS)
-    trade_count = payload["kind"].count(_KIND_CODE["trade"])
-    if len(trade_values) != width * trade_count:
-        raise PluginFormatError(
-            f"{code} trade 長度 {len(trade_values)} 不是成交則數 × {width}({trade_count} 則)"
-        )
-    trades = iter(zip(*[iter(trade_values)] * width, strict=True))
+    _check_header(payload)
+    code, every, keyframes = payload["code"], payload["kf_every"], payload["kf"]
+    trades = iter(zip(*[iter(payload["trade"])] * len(_TRADE_CELLS), strict=True))
     points = iter(zip(payload["clock"][::2], payload["clock"][1::2], strict=True))
     next_point = next(points, None)
     clock: int | None = None
@@ -347,6 +336,8 @@ def decode(payload: PluginPayload) -> BookReplay:
     for i, (seq_step, kind, recv_step, delta) in enumerate(
         zip(payload["seq"], payload["kind"], payload["recv"], payload["d"], strict=True)
     ):
+        if recv_step < 0:
+            raise PluginFormatError(f"{code} 第 {i} 則:收到時刻倒退 {recv_step} ms")
         msg_seq += seq_step
         recv_ms += recv_step
         _apply_delta(state, delta)
@@ -364,3 +355,40 @@ def decode(payload: PluginPayload) -> BookReplay:
             Frame(msg_seq, kind_name, tuple(state), clock, i - clock_index, recv_ms, trade)
         )
     return BookReplay(code, payload["date"], tuple(frames))
+
+
+def _check_header(payload: PluginPayload) -> None:
+    """檔頭與內容的形狀一致(逐則的 keyframe 自檢與收到時刻不倒退在 `decode` 迴圈裡)。"""
+    if payload.get("v") != FORMAT_VERSION:
+        raise PluginFormatError(f"外掛檔版本 {payload.get('v')!r} 不認得(本版解 {FORMAT_VERSION})")
+    missing = set(PluginPayload.__required_keys__) - set(payload)
+    if missing:
+        raise PluginFormatError(f"外掛檔缺鍵:{sorted(missing)}")
+    code, n, every, kinds = payload["code"], payload["n"], payload["kf_every"], payload["kind"]
+    if list(payload["fields"]) != list(BOOK_LEVEL_FIELDS):
+        raise PluginFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
+    lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d"))
+    if lengths != (n, n, n, n):
+        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / recv / d 長度 {lengths} 不符")
+    if len(payload["kf"]) != -(-n // every):
+        raise PluginFormatError(
+            f"{code} keyframe 個數 {len(payload['kf'])} 不符(n={n}、每 {every} 則一個)"
+        )
+    if not set(kinds) <= _KIND_NAME.keys():
+        raise PluginFormatError(f"{code} kind 有不認得的字元:{set(kinds) - _KIND_NAME.keys()}")
+    width, trade_count = len(_TRADE_CELLS), kinds.count(_KIND_CODE["trade"])
+    if len(payload["trade"]) != width * trade_count:
+        raise PluginFormatError(
+            f"{code} trade 長度 {len(payload['trade'])} 不是成交則數 × {width}({trade_count} 則)"
+        )
+    clock_values = payload["clock"]
+    if len(clock_values) % 2:
+        raise PluginFormatError(f"{code} clock 長度 {len(clock_values)} 不是偶數")
+    prev_index, prev_ms = -1, None
+    for index, ms in zip(clock_values[::2], clock_values[1::2], strict=True):
+        on_trade = prev_index < index < n and kinds[index] == _KIND_CODE["trade"]
+        if not on_trade or (prev_ms is not None and ms < prev_ms):
+            raise PluginFormatError(
+                f"{code} 時鐘點 [{index}, {ms}] 不合法:則號須遞增且落在成交則、毫秒不減"
+            )
+        prev_index, prev_ms = index, ms
