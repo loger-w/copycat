@@ -168,10 +168,10 @@
     "semantic_hash": "0bf33a073b1edb6edca5d4b9197c8f4e"
   },
   "copycat/cli.py": {
-    "mtime": 1789490020.7096784,
-    "seen": 1789490040.0322223,
-    "ast_hash": "be747c7ba5ad5e3d8e3e38a20ac5e274",
-    "semantic_hash": "be747c7ba5ad5e3d8e3e38a20ac5e274"
+    "mtime": 1789565960.778831,
+    "seen": 1789566001.9550116,
+    "ast_hash": "66de719234042b68fbd74af1df4e850f",
+    "semantic_hash": "66de719234042b68fbd74af1df4e850f"
   },
   "copycat/configio.py": {
     "mtime": 1789376988.23918,
@@ -3826,5 +3826,17 @@
     "seen": 1789490040.121308,
     "ast_hash": "5db6d3c53ee653704261c0885b475548",
     "semantic_hash": "5db6d3c53ee653704261c0885b475548"
+  },
+  "copycat/book_replay.py": {
+    "mtime": 1789565960.777829,
+    "seen": 1789566001.952445,
+    "ast_hash": "e442f925abc8c8dc20d1a65e4f919248",
+    "semantic_hash": "e442f925abc8c8dc20d1a65e4f919248"
+  },
+  "tests/test_book_replay.py": {
+    "mtime": 1789565960.7798297,
+    "seen": 1789566002.0682445,
+    "ast_hash": "e40ae79864bd0faff4783777d306e2ae",
+    "semantic_hash": "e40ae79864bd0faff4783777d306e2ae"
   }
 }
