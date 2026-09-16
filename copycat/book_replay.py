@@ -145,6 +145,11 @@ class Frame:
     recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
     trade: Trade | None  # 成交則的那筆成交;簿則 None
 
+    @property
+    def anomalous_trade(self) -> bool:
+        """成交則、卻沒當成時鐘點 = 達錢時刻異常(時鐘點本身 `after` = 0)。"""
+        return self.kind == "trade" and self.after != 0
+
 
 @dataclass(frozen=True, slots=True)
 class BookReplay:
@@ -157,7 +162,7 @@ class BookReplay:
     @property
     def anomalous_trades(self) -> int:
         """達錢時刻異常、沒當成時鐘點的成交則數(晚於收到時刻超過容差,或早於目前時鐘)。"""
-        return sum(1 for frame in self.frames if frame.kind == "trade" and frame.after)
+        return sum(frame.anomalous_trade for frame in self.frames)
 
 
 class PluginPayload(TypedDict):
@@ -257,7 +262,7 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
                 f"{code_day.code} msg_seq={frame.msg_seq} 成交則沒帶成交"
             )
             trades += _trade_cells(frame.trade)
-            if frame.after:  # 成交則不是時鐘點 = 時刻異常(時鐘點本身 after = 0)
+            if frame.anomalous_trade:
                 anomalous.append(i)
         delta: list[int | None] = []
         for field, value in enumerate(frame.book):
