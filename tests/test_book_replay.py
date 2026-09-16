@@ -255,6 +255,25 @@ class TestClock:
 
         assert [(f.clock_ms, f.after) for f in frames] == [(36_003_000, 0), (36_003_000, 1)]
 
+    @pytest.mark.parametrize(
+        ("stamp", "label", "anomalous"),
+        [
+            ("10:01:00.500", (36_060_500, 0), 0),  # 晚恰 60.000 秒:還算真成交
+            ("10:01:00.501", (None, 1), 1),  # 晚 60.001 秒:收不到的未來
+        ],
+        ids=["60.000s-late-is-a-clock-point", "60.001s-late-is-not"],
+    )
+    def test_the_future_tolerance_is_sixty_seconds_inclusive(
+        self, stamp: str, label: tuple[int | None, int], anomalous: int
+    ) -> None:
+        """容差是閉區間的 60 秒。被收窄到秒級時,本機鐘偏(#236)那天整天的標籤會退回「首筆成交前第 N 則」。"""
+        rows = [_row("trade", "2426", 1, recv="10:00:00.500", time=stamp, bid=[(99_000, 1)])]
+
+        day = replay_books(rows)["2426"]
+
+        assert [(f.clock_ms, f.after) for f in day.frames] == [label]
+        assert day.anomalous_trades == anomalous
+
 
 class TestRecvAxis:
     def test_every_message_sits_on_a_never_rewinding_server_receive_time_axis(self) -> None:
@@ -401,9 +420,13 @@ class TestPluginEncoding:
         text = plugin_js(payload)
 
         head, tail = 'window.__bk("2426|2026-09-16","', '");'
-        assert text.startswith(head) and text.endswith(tail) and "\n" not in text
+        assert text.startswith(head)
+        assert text.endswith(tail)
+        assert "\n" not in text
         # 瀏覽器那條路:atob → DecompressionStream("gzip") → JSON.parse
         blob = base64.b64decode(text[len(head) : -len(tail)], validate=True)
+        # gzip 檔頭第 4–7 byte = MTIME,釘 0 才會「同資料重產逐位元組相同」(不比整段:zlib 版本不同壓出來會變)
+        assert blob[4:8] == b"\x00\x00\x00\x00"
         assert decode(json.loads(gzip.decompress(blob))) == day
         assert parse_plugin_js(text) == payload
 
