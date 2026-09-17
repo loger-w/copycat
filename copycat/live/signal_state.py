@@ -1035,7 +1035,10 @@ class SignalDetector:
 
     def _locked_up(self, price: int, ctx: TickContext) -> bool:
         """複合簽名(design §3.5):第三項排除「首攻吃光賣盤」—— 那一筆 ask 側同樣空,
-        但買方市價佇列未形成、最佳限價買仍在漲停價下。"""
+        但買方市價佇列未形成、最佳限價買仍在漲停價下。
+
+        回看頁重播分頁「跳到首次鎖漲停」(repo 外 `viewer_cdp_template.html` 的 `rpFirstLock`)照抄這個判式,
+        改這裡要同步改那邊(#270;對照腳本 `.claude/feat/book-replay-playback/evidence/rp_step_expected.py`)。"""
         if ctx.upper_milli is None or price != ctx.upper_milli or ctx.ask_limit_available:
             return False
         return ctx.bids0_is_market or ctx.best_bid_limit_milli == ctx.upper_milli

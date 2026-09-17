@@ -1,10 +1,10 @@
 ## 2026-09-17(feat #270 重播分頁播放控制留尾;主體在 repo 外 `Documents\copycat-trading-review`)
 
-- [ ] **回看頁「跳到首次鎖漲停」的判式是 `signal_state.SignalDetector._locked_up` 的 JS 抄本**(模板 `rpFirstLock`;#270 two-axis
+- [x] **回看頁「跳到首次鎖漲停」的判式是 `signal_state.SignalDetector._locked_up` 的 JS 抄本**(模板 `rpFirstLock`;#270 two-axis
   Standards S-01):線上判式改了回看頁會靜默漂移(按鈕跳到的則與線上 limit_lock 訊號對不上,零錯誤訊號)。repo 測試讀不到 repo 外模板,
-  常駐 parity 測試做不了;最小防線 = 在 `_locked_up` docstring 加一行「回看頁重播分頁照抄這個判式」。要碰產品碼,#270 照「repo 內只放
-  artifacts」沒做,待 user 決定。驗證手法(改判式時重跑):`.claude/feat/book-replay-playback/evidence/rp_step_expected.py` 直接呼叫
-  `_locked_up` 產期望則號 → `verify_steps.mjs` 比頁面。
+  常駐 parity 測試做不了;最小防線 = 在 `_locked_up` docstring 加一行「回看頁重播分頁照抄這個判式」。驗證手法(改判式時重跑):
+  `.claude/feat/book-replay-playback/evidence/rp_step_expected.py` 直接呼叫 `_locked_up` 產期望則號 → `verify_steps.mjs` 比頁面。
+  **09-17 user 拍板做 → 已在 `_locked_up` docstring 補反向註記(指向模板 `rpFirstLock` 與對照腳本),零行為改動。**
 
 ## 2026-09-17(feat #268 回看頁「重播」分頁留尾;主體在 repo 外 `Documents\copycat-trading-review`)
 
