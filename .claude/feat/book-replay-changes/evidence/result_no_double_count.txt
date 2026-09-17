@@ -1,0 +1,6 @@
+成交則 375,387;有檔位的吃檔 1,279,200 張 vs 價位變動算成交 1,279,200 張 → 相等
+五檔外吃檔 969 張 ≥ 重新可見期間成交 808 張 → True;吃檔超過成交張數的成交 0
+3374 #2280 成交 (418000, 1) 變動 [Reappeared(side='ask', price_milli=418000, left_qty=5, now_qty=11, traded_away=1, left_index=2230, away_ms=5070)] 吃檔 (Eaten(side='ask', level=None, qty=1),)
+3374 #2288 成交 None 變動 [LevelChange(side='ask', price_milli=418000, before=11, after=9, traded=0)] 吃檔 ()
+6209 #754 成交 (78800, 61) 變動 [Reappeared(side='bid', price_milli=78800, left_qty=5, now_qty=6, traded_away=61, left_index=737, away_ms=84886)] 吃檔 (Eaten(side='bid', level=None, qty=61),)
+6209 #756 成交 (78800, 6) 變動 [LevelChange(side='bid', price_milli=78800, before=6, after=0, traded=6)] 吃檔 (Eaten(side='bid', level=1, qty=6),)

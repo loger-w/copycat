@@ -1,0 +1,39 @@
+{
+  "fixed_point": "158bd4358d7343db6b0b7ab3155be91f8d91ee02 (merge-base master, feat/book-replay-changes)",
+  "scope": "repo diff evidence/review_round1_repo.diff (commits aa85879b..1c37276f) + repo 外模板 evidence/viewer_cdp_template.diff",
+  "standards": [
+    "S-01 (hard) tests/test_book_replay.py:58 `_plus_ms` return 行 109 字元,違反 backend-conventions line-length 100(lint 無 E501、formatter 不拆 f-string,工具攔不到;base 兩檔 >100 字元行數 0)。修法:divmod 拆行。",
+    "S-02 (hard) v2 字面測試只寫死種類碼 0/1,違反同段 docstring 原則(pr-275 F-01)。實證:scratch 把 encode 與 decode 的「被擠出 2」「首次進入 6」同步對調,83 條全綠、回看頁印反。docstring 寫「加 chg」漏 eat。修法:補含碼 2–7 的字面。",
+    "S-03 (hard) PluginFormatError docstring 說 decode 逐條列出檢查,但 decode docstring 沒補 chg / eat 檢查;Frame.changes 註解「第一則恆空」漏清空則。修法:兩處同步。",
+    "S-04 (hard) 模板:(1) RP_SPEEDS 原註解被搬到新增行行尾;(2) 區段頭仍寫「外掛檔 v1」;(3) RP.i 讀者清單沒列新面板、註解「變動面板得自己記上次畫到哪一則」與無狀態 12 則窗矛盾(10x 一幀可跨 12 則以上,交 Spec 軸)。修法:還原註解、改 v2、改寫說明。",
+    "S-05 (judgement, Repeated Switches) side == 0 分支散在七處;unabsorbed 的 `price > bound if side else price < bound` 等於 not _covers。修法:共用側別 helper。",
+    "S-06 (judgement, Primitive Obsession) 側別三種表示(bid/ask、0/1、inner/outer)靠 _BOOK_SIDES.index() 與行內 dict 互轉;模組慣例是 #: 雙向表。修法:照慣例立表。",
+    "S-07 (judgement, Shotgun Surgery) 種類碼散在 2/4/6 + side 字面、_CHANGE_WIDTHS、match kind // 2(case _ 暗指 EnteredView)與 JS q += 5/3/8/3。修法:單一 (類別, 寬) 表驅動 encode / decode。",
+    "S-08 (judgement, Data Clumps) parts 7-tuple 按位置對 Frame 欄序、step tuple 與方法 .step 同名 splat。修法:replace(frame, eaten=…)、參數不打包。",
+    "S-09 (judgement, Mysterious Name) absorbed / unabsorbed 像述詞實為記帳;_leaving / _returning 像查詢卻改 list、dict pop 在 step。修法:record_* 與 _pop_*。",
+    "S-10 (judgement, viewer 只渲染不計算) rpBuild 在 JS 重算 cleared;:654 用 j === 0 判當日第一則,引擎定義是第一份非清空五檔;淨掛 net 上 wire 而 added / cancelled 由 JS 重算。修法:口徑二選一、第一份五檔判法改正。",
+    "S-11 (judgement, Duplicated Code 模板) rpSideCell 與既有 :793 行內寫法相同;==null?\"—\":fmtP(/1000) 三次;rpBuild 對 chg / eat 只驗長度。修法:另開 🔵 收斂重複、內容驗證移進 rpBuild。"
+  ],
+  "spec": [
+    "P-01 (medium, c) 同一筆成交被扣兩次:count_trade 把成交量加進 _Away.traded,但同一筆 _UnmatchedTrade 仍留在 unmatched,價位回來後 8 則 / 1 秒內減量又被 _absorb 扣一次。09-16 實例:3374 #2280 賣 418.0 重新可見期間成交 1、#2288 11→9 又算「−1 成交」;6209 #754 61 張全數算進期間成交,#756 減量又吃掉其中 6 張,#754 吃檔「吃 買1 −6、買五檔外 −55」、#756 自己 6 張「—」。43 個帶期間成交的重新可見中 10 個中招;測試無「回來之後又減量」案例。Spec 引:#265「期間淨掛值(= 現在量 − 離開時量 + 期間成交量)」、#269「量減少時先扣掉該價位…成交量,剩下的才算撤單」。",
+    "P-02 (medium, a) 播放跨過的則仍會漏:拍板 3「最近 12 則的變動清單…(播放跨則不漏)」、頁面說明「播放時跨過的則也看得到」。模擬(照 rpTick、60 fps、09-16 全日):1x 1.66%(46,886 則有變動的則)從沒出現、單幀最多跨 47 則;10x 6.7%;2426 11:02:00 → 鎖板段 1x 漏 13、10x 漏 52。verify_playback_sync 只比落點往前 12 則,驗不到漏則;#270 交接已提醒要記上次畫到哪一則。",
+    "P-03 (low, b) 沒人要求的「首次進入五檔」:#265「只在兩份簿都涵蓋的價格帶內比對」,四條拍板也沒有這類;實作新增 EnteredView(碼 6/7),09-16 2,488 項以一般亮度顯示。建議 #269 補拍板留言或拿掉。",
+    "P-04 (low) 頁面與 master CLI 版本錯開:新頁只認 v2、master book-replay 仍輸出 v1;switch_live_269.py 與 verification.md 待辦沒把 merge 與切換綁同一步 —— 先切換後 merge 期間主 tree 補日會產出新頁拒讀的 v1;先 merge 後切換則主 tree 產 v2、舊頁拒讀。",
+    "P-05 (low, a) 紅先行沒有證據:六個 commit 測試與實作同 commit、無 test commit,verification.md 無紅燈紀錄。"
+  ],
+  "disposition": "處置(2026-09-17,/handoff 前的狀態)。已完成並 commit:S-05–S-09 → cf1f8135 refactor(09-16 七檔外掛檔重構前後逐位元組相同);P-01 → 76daf452 fix(紅先行測試 test_a_trade_counted_while_its_price_was_out_of_view_is_not_taken_again;09-16 全 80 檔 有檔位吃檔 1,279,200 張 = 價位變動算成交 1,279,200 張、吃檔超過成交張數 0 筆,evidence/no_double_count_check.py);S-01 / S-02 / S-03 / S-10(引擎側:價位變動 wire 7 格 [碼,價,前,後,掛入,成交,撤單]、decode 核對算式;檔案 +5.7–8.9%)→ 6af88b22。P-02 → user 拍板改「最近 60 則」(evidence/playback_window_coverage.py:12 則 1x 漏 1.659% / 10x 6.729%;60 則 1x 0 / 2x 0.005% / 10x 0.260%;60 則量測 逐則步進 p95 6.5 ms、播放每幀回呼 p95 ≤ 4.0 ms、10x 展開一幀 33 ms、長框 0)。P-03 → 不改:「首次進入五檔」寫在 user 核可的範圍確認(第一輪 AskUserQuestion 範圍段「從沒出現過的價位帶量進來,標『首次進入五檔』…不算掛單」),待 #269 補一句追溯。P-04 → 接受:順序定為 user 確認另一 session 收工 → switch_live_269.py → 正式頁驗證 → artifacts commit → push / PR → 立即 merge → 主 tree git pull(主 tree CLI 才是 v2)。P-05 → 接受:verification.md 補各切片紅燈紀錄(本 session 實測:LevelChange ImportError / traded 0≠4 / 掃單 3 紅 / 市價佇列 1 紅 / 視野 ImportError / 吃檔 ImportError / decode 竄改 12 紅 / 清空 2 紅 / P-01 1 紅 / S-02·S-10 11 紅)。待做(模板側,尚未完成):S-04 三處註解、P-02 RP_CHG_KEEP 60 與定義文字、S-10 JS 讀 7 格與 firstBook(= cleared.indexOf(0))判當日第一份五檔、S-11 rpBuild 驗 chg / eat 結構(用 RP_CHG_WIDTH = [7,3,8,3]);S-11 既有 rpKind 行內內外盤寫法不動(碰既有舊碼)。改完須重跑 rp269_expected(CHG_KEEP 60、第一份五檔文字)、verify_changes / dom_regression / verify_playback_sync / screens,並對 review 後增量 diff 補一輪快篩。 【2026-09-17 接手 session 追記】模板側已收修(evidence/patch_template_269.py 重寫,套在現用模板複本 → evidence/viewer_cdp_template.269.html;對 review 當時版本的增量 = evidence/viewer_cdp_template.review1.diff,+33 / −27):P-02 RP_CHG_KEEP 60、定義與規則改「高速播放遇到密集時段一次可能跨過 60 則以上,要看每一則請暫停後逐則步進」;S-10 價位變動讀 7 格 [碼,價,前,後,掛入,成交,撤單] 不做加減、空變動說明用 firstBook = cleared.indexOf(0)(「當日第一份五檔(沒有前一份可比)」,與 decode 同一把尺;兩天 160 檔第一則都不是全空);S-11 rpBuild 驗 chg 種類碼 0–7 與每項格數(RP_CHG_WIDTH = [7,3,8,3],rpChangeLines 也用它推進,拿掉不會走到的 default)與 eat 三格一組 / 側別 0–1 / 檔位 null 或 0–5 / 張 > 0,新碼「價 null → —」收成 rpPrice,既有 rpKind 那行不動(入 next-time);S-04 常數插在 RP_SPEEDS 整行(含行尾註解)之後、區段頭 v1 → v2、RP.i 註解列入中間欄 / 成交明細並刪「得自己記上次畫到哪一則」。重驗全過(數字見 verification.md)。另:CLAUDE.md §1 實測數字仍是 5 格版 → 549c070c 改成 7 格版重產實測。",
+  "rebased_onto": "2026-09-17 收尾前 rebase 到 origin/master 71c9f077(另一個 session 的 next-time 文件 commit,零衝突);fixed point 由 158bd435 變 71c9f077。本檔與 verification.md 引用的舊 SHA 對照:aa85879b→8fef187b、878fdfd5→d64df816、61149af0→a3b46754、483893ed→b0334897、a0d37312→0d365a30、1c37276f→a5afc782、cf1f8135→ea193356、76daf452→ace31593、6af88b22→11a5b225",
+  "incremental_screen": {
+    "範圍": [
+      "repo:ea193356(S-05–S-09)、ace31593(P-01)、11a5b225(S-01–S-03 / S-10)、549c070c(CLAUDE.md 數字)、43a10553(next-time)、a8060d58(tc4-market-facts 鎖漲停旗標,兩天全數核對後才寫)",
+      "repo 外:evidence/viewer_cdp_template.review1.diff(review 當時的工作模板 → 收修後)"
+    ],
+    "方法": "main agent 機械快篩,不 dispatch(branch-lifecycle 收尾節步驟 3):逐 hunk 對到 finding、查有無 finding 以外的改動、backend-conventions 可機械查的項(型別註記、無 print、行長以字元計 ≤ 100)、測試是否釘住收修點;模板以 decode 標準答案 / 播放同步 / DOM 回歸 / 截圖重驗代替逐行審。",
+    "結果": [
+      "repo 增量每個 hunk 都對得到 S-01–S-03 / S-05–S-10 / P-01,沒有 finding 以外的改動;book_replay.py / test_book_replay.py 相對 fixed point 新增超過 100 字元的行 0(以字元計);P-01 有紅先行測試 test_a_trade_counted_while_its_price_was_out_of_view_is_not_taken_again,S-02 有八種種類碼與吃檔各檔位的字面測試,S-10 有掛入 / 撤單算式竄改測試",
+      "模板增量只動 P-02 / S-04 / S-10 / S-11 的點;重驗:標準答案 594 則 0 不符(竄改 3/3 抓到)、播放同一刻 1x 420 / 10x 216 次 0 不符、既有分頁 1,340 區塊 0 差異、console 0 錯誤",
+      "順帶以真資料查一個 review 沒提的點:扣成交只比價格不比側別(_absorb;count_trade 買方那一側先走),吃檔側別會不會跟內外盤相反(evidence/eaten_side_check.py、eaten_side_breakdown.py)。相反的張數 09-16 33,515(市價排隊 33,306、同筆兩側都吃 86、開收盤集合競價 30、暫緩撮合後 57、其他 36)、09-17 25,237(24,389 / 121 / 104 / 486 / 137);「其他」逐筆看是鎖板打開時賣方沿買方排隊掃下去(2489、6226、7795,前一簿賣方全空)與 6147 一筆 1 張(前後兩則隔 56 秒)。= 鎖漲停時達錢旗標恆外盤(規則是成交價 vs 前一簿),吃檔照實際減量那一側記,引擎不改;畫面同一列「外 | 吃 市價買」要不要註明入 next-time 待 user 決定"
+    ],
+    "需要改的": []
+  }
+}

@@ -1,0 +1,2 @@
+簿重播 2026-09-16:80 檔、2841208 則(達錢時刻異常、不當標籤時刻的成交 1 則),外掛檔 36.4 MB,耗時 157.9 秒 → C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book-269\2026-09-16
+[run_with_peak_memory] exit=0 elapsed=158.2s peak_ws_self=0.00GB peak_ws_children=7496:5.68GB

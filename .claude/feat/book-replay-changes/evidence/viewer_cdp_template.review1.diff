@@ -1,0 +1,142 @@
+--- viewer_cdp_template.269.html (review round 1 前)
++++ viewer_cdp_template.269.html (review round 1 收修後)
+@@ -111,9 +111,9 @@
+ .rp-msg.cur{background:var(--sel)}
+ .rp-msg-h{display:flex;flex-wrap:wrap;gap:0 10px;color:var(--muted);font-size:11px}
+ .rp-msg.cur .rp-msg-h{color:var(--ink-2)}
+-.rp-line{padding:1px 0 1px 10px}
++.rp-line{padding:1px 0 1px 22px;text-indent:-12px}
+ .rp-line.dim{color:var(--muted)}
+-.rp-line .sub{display:block;padding-left:1.4em;color:var(--ink-2)}
++.rp-line .sub{display:block;padding-left:calc(1.4em - 12px);text-indent:0;color:var(--ink-2)}
+ .rp-tape{max-height:500px;overflow:auto}
+ .rp-tape th,.rp-tape td{padding:2px 8px;font-size:12px}
+ .rp-tape tr.cur td{background:var(--sel)}
+@@ -188,7 +188,7 @@
+         <li><b>播放</b>:速度 1x / 2x / 5x / 10x 以收到時刻計(1x = 真實時間,11:02:00 播到 11:02:50 要 50 秒)。播到最後一則自動停;播放中拖曳時間軸會從新位置接著播;換檔、換日、切到別的分頁會暫停。</li>
+         <li><b>逐則步進</b>:「前一則 / 後一則」或鍵盤 <span class="kbd">←</span> <span class="kbd">→</span>(重播分頁開著時 ← → 是逐則步進、不換日,換日用上方 ◀ ▶),會先暫停播放。步進照則號走,同一毫秒收到的幾則也能一則一則看;拖曳時間軸仍取收到時刻 ≤ 該時刻的最後一則。</li>
+         <li><b>跳到首次鎖漲停</b>:當日第一筆「成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價」的成交(與線上鎖漲停訊號同條件;只碰到漲停、賣方還有掛單不算),會先暫停播放。當日沒鎖漲停時按鈕停用。</li>
+-        <li><b>這一則變了什麼</b>(中間欄):列到目前這一則為止最近 12 則,最新在上、目前這則標亮,播放時跨過的則也看得到。每則以<b>價格</b>跟前一則比,只比兩則都<b>看得到</b>的價位(買方 = 第五檔買價以上、賣方 = 第五檔賣價以下;某側不滿五檔 = 整側看得到):量增加 = 掛單;量減少先扣這個價位的成交,剩下的算撤單。成交則附的五檔常晚幾則才更新(一口氣連吃好幾檔時),所以之後 8 則、1 秒內同價位減少的量仍先算成交;鎖漲跌停時市價排隊減少也先算成交。</li>
++        <li><b>這一則變了什麼</b>(中間欄):列到目前這一則為止最近 60 則,最新在上、目前這則標亮,往下捲看較早的則。播放時一次重畫常跨過好幾則,跨過的通常也在清單裡;高速播放遇到密集時段,一次可能跨過 60 則以上,要看每一則請暫停後逐則步進。每則以<b>價格</b>跟前一則比,只比兩則都<b>看得到</b>的價位(買方 = 第五檔買價以上、賣方 = 第五檔賣價以下;某側不滿五檔 = 整側看得到):量增加 = 掛單;量減少先扣這個價位的成交,剩下的算撤單。成交則附的五檔常晚幾則才更新(一口氣連吃好幾檔時),所以之後 8 則、1 秒內同價位減少的量仍先算成交;鎖漲跌停時市價排隊減少也先算成交。</li>
+         <li><b>被擠出五檔 / 回到五檔</b>:價位掉到第五檔之外(掛單通常還在,只是看不到)列「被擠出五檔」;回到看得到的範圍列「⟳ 回到五檔」,給離開時量、現在量、離開期間這個價位的成交、淨掛(= 現在 − 離開時 + 期間成交)與離開多久 —— <b>不算掛單</b>,看不到的那段無法分辨是一次掛進或分次堆積;量沒變、期間也沒成交時淡色一行。從沒看過的價位帶量進來列「首次進入五檔」,也不算掛單。價格穿過某個價位(賣方價位變成買方價位)一直看得到,不算被擠出。</li>
+         <li><b>五檔全空</b>:達錢在暫緩撮合開始那一刻會送一則買賣兩側全空的五檔(之後改每 5 秒更新),這一則不算撤單,下一則跟全空之前那一份比。</li>
+         <li><b>成交明細</b>(右欄):到目前這一則為止最近 20 筆成交,跟階梯永遠是同一刻;目前這則是成交時標亮。時間 = 達錢成交時刻(即時只到整秒)。<b>吃檔</b> = 這筆成交扣到成交前那一則五檔的第幾檔,例「吃 賣1 −12」;一口氣連吃好幾檔會依序出現 賣1、賣2…;鎖漲停時吃的是市價排隊(「吃 市價買」);價位在第五檔之外列「五檔外」;看不出吃了哪一檔(開收盤集合競價、同一則又掛進來)列「—」。</li>
+@@ -556,12 +556,13 @@
+     $("tab-idx").innerHTML = `<p style="color:var(--ink-2);margin:0 0 4px">共 ${total} 個活潑股票日。</p>` + h;
+     $("tab-idx").querySelectorAll(".idx-row").forEach(tr => tr.addEventListener("click", ()=>{ state.code = tr.dataset.c; state.date = tr.dataset.d; state.sel = null; kview = null; render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+   }
+-  // ---- 重播(簿重播外掛檔 v1;格式唯一來源 = copycat repo copycat/book_replay.py 模組說明「外掛檔 v1」)
++  // ---- 重播(簿重播外掛檔 v2;格式唯一來源 = copycat repo copycat/book_replay.py 模組說明「外掛檔 v2」)
+   const BOOKDIR = DATA.bookdir || "viewer-cdp-book";
+   const RP_KEEP = 3, RP_HALF = 10, RP_RECENTER = 5;
+   const RP_QMAX_END = (13*3600 + 25*60) * 1000; // 橫條基準只看收到時刻 13:25 前(收盤集合競價 / 漲停排隊量會把盤中橫條壓扁;user 2026-09-17 拍板)
+-  const RP_SPEEDS = [1, 2, 5, 10], RP_MAX_DT = 250;
+-  const RP_CHG_KEEP = 12, RP_TAPE_KEEP = 20; // 中間欄列幾則變動、成交明細列幾筆(都到目前這一則為止,新的在上) // 播放倍速(以收到時刻計,1x = 真實時間);一幀最多推進的真實毫秒(切到別的瀏覽器分頁再回來不整段跳過)
++  const RP_SPEEDS = [1, 2, 5, 10], RP_MAX_DT = 250; // 播放倍速(以收到時刻計,1x = 真實時間);一幀最多推進的真實毫秒(切到別的瀏覽器分頁再回來不整段跳過)
++  const RP_CHG_KEEP = 60, RP_TAPE_KEEP = 20; // 中間欄列幾則變動、成交明細列幾筆(都到目前這一則為止,新的在上;user 2026-09-17 拍板 60 則)
++  const RP_CHG_WIDTH = [7, 3, 8, 3]; // 外掛檔 v2 chg 每項佔幾格(含種類碼),依基本碼 ÷ 2:價位變動 / 被擠出五檔 / 重新可見 / 首次進入五檔(= copycat book_replay 的 _CHANGE_KINDS)
+   const rpCache = new Map(), rpWait = new Map(), rpSeen = new Set();
+   const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+   const rpActive = () => !$("tab-replay").hidden;
+@@ -623,9 +624,14 @@
+       for(let t=0;t<10;t++){ if(!touched[t]) continue; const s = t >= 5, l = t % 5; const px = book[s ? AP[l] : BP[l]], q = book[s ? AQ[l] : BQ[l]]; if(px > 0){ prices.add(px); if(q > qmaxDay) qmaxDay = q; if(q > qmax && recv[i] < RP_QMAX_END) qmax = q; } }
+       if(i % K === 0){ const kf = p.kf[i/K]; for(let f=0;f<20;f++) if(kf[f] !== book[f]) bad(`第 ${i} 則 keyframe 與 delta 對不上(欄 ${F[f]})`); }
+     }
++    // chg / eat 的結構(種類碼、每項格數、吃檔三格一組與值域);數值與前後兩則五檔的一致由 copycat decode 落檔前核對
++    for(let i=0;i<n;i++){ const c = p.chg[i]; if(!Array.isArray(c)) bad(`第 ${i} 則 chg 不是陣列`);
++      for(let q=0;q<c.length;){ const code = c[q]; if(!Number.isInteger(code) || code < 0 || code >= 2*RP_CHG_WIDTH.length) bad(`第 ${i} 則變動種類碼 ${code}`); const w = RP_CHG_WIDTH[code >> 1]; if(q + w > c.length) bad(`第 ${i} 則變動項目格數不足(種類碼 ${code})`); q += w; } }
++    for(let t=0;t<=k;t++){ const e = p.eat[t]; if(!Array.isArray(e) || e.length % 3) bad(`第 ${tradeIdx[t]} 則吃檔不是三格一組`);
++      for(let q=0;q<e.length;q+=3){ const lv = e[q+1]; if((e[q] !== 0 && e[q] !== 1) || !(lv === null || (Number.isInteger(lv) && lv >= 0 && lv <= 5)) || !Number.isInteger(e[q+2]) || e[q+2] <= 0) bad(`第 ${tradeIdx[t]} 則吃檔 [${e[q]}, ${lv}, ${e[q+2]}]`); } }
+     for(let t=0;t<=k;t++){ const px = p.trade[t*4+1]; if(px > 0) prices.add(px); }
+     if(qmax === 0) qmax = qmaxDay; // 13:25 前沒有任何掛單(極冷門)才退回全天
+-    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ, chg:p.chg, eat:p.eat, tradeIdx:Int32Array.from(tradeIdx), cleared};
++    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ, chg:p.chg, eat:p.eat, tradeIdx:Int32Array.from(tradeIdx), cleared, firstBook:cleared.indexOf(0)};
+   }
+   function rpLastPx(R, i){ for(let k=R.tradeAt[i];k>=0;k--){ const v = R.trade[k*4+1]; if(v > 0) return v; } return null; } // 則號 ≤ i 最近一筆成交價(毫元)
+   function rpBookAt(R, i){ const base = Math.floor(i/R.K); const b = R.kf[base].slice(); for(let j=base*R.K+1;j<=i;j++){ const d = R.d[j]; for(let q=0;q<d.length;q+=2) b[d[q]] = d[q+1]; } return b; }
+@@ -643,52 +649,52 @@
+     }
+     return -1;
+   }
+-  // ---- 這一則變了什麼 / 成交明細(外掛檔 v2 `chg` / `eat`,copycat 算好;這裡只排版)
++  // ---- 這一則變了什麼 / 成交明細(外掛檔 v2 `chg` / `eat`,copycat 算好寫進檔;這裡只排版,不做加減)
+   const rpSideTxt = s => s ? "賣" : "買";
+   const rpAt = (s, p) => p === 0 ? `市價${rpSideTxt(s)}` : `${rpSideTxt(s)} ${rpPx(p)}`;
+   const rpQty = q => q.toLocaleString();
++  const rpPrice = m => m == null ? "—" : fmtP(m/1000);
+   const rpDur = ms => { if(ms < 9950) return `${(ms/1000).toFixed(1)} 秒`; const s = Math.round(ms/1000); if(s < 60) return `${s} 秒`; if(s < 3600) return `${Math.floor(s/60)} 分 ${s%60} 秒`; return `${Math.floor(s/3600)} 時 ${Math.floor(s%3600/60)} 分`; };
+   const rpSideCell = side => side === "outer" ? '<span class="pos">外</span>' : side === "inner" ? '<span class="neg">內</span>' : "中";
+-  function rpChangeLines(R, j){ // 第 j 則的變動(格式見 copycat book_replay 模組說明「外掛檔 v2」的 chg)
++  function rpChangeLines(R, j){ // 第 j 則的變動(格式見 copycat book_replay 模組說明「外掛檔 v2」的 chg;rpBuild 已驗種類碼與格數)
+     const c = R.chg[j];
+-    if(!c.length) return `<div class="rp-line dim">${j === 0 ? "當日第一則(沒有前一則可比)" : R.cleared[j] ? "五檔全空(達錢清空五檔,常見於暫緩撮合開始;不算撤單)" : "五檔沒有變動"}</div>`;
++    if(!c.length) return `<div class="rp-line dim">${j === R.firstBook ? "當日第一份五檔(沒有前一份可比)" : R.cleared[j] ? "五檔全空(達錢清空五檔,常見於暫緩撮合開始;不算撤單)" : "五檔沒有變動"}</div>`;
+     let h = "";
+-    for(let q=0; q<c.length;){
+-      const code = c[q], s = code % 2, at = rpAt(s, c[q+1]);
+-      switch(code >> 1){
+-        case 0: { const before = c[q+2], after = c[q+3], traded = c[q+4];
+-          const parts = after > before ? [`+${rpQty(after - before)} 掛單`] : [];
+-          if(traded) parts.push(`−${rpQty(traded)} 成交`);
+-          if(after < before && before - after - traded) parts.push(`−${rpQty(before - after - traded)} 撤單`);
+-          h += `<div class="rp-line">${at} <span class="mono">${rpQty(before)} → ${rpQty(after)}</span> ${parts.join("、")}</div>`; q += 5; break; }
+-        case 1: h += `<div class="rp-line dim">${at} ${rpQty(c[q+2])} 張被擠出五檔</div>`; q += 3; break;
+-        case 2: { const left = c[q+2], now = c[q+3], traded = c[q+4], net = c[q+5], away = rpDur(c[q+7]);
++    for(let q=0; q<c.length; q += RP_CHG_WIDTH[c[q] >> 1]){
++      const at = rpAt(c[q] % 2, c[q+1]);
++      switch(c[q] >> 1){
++        case 0: { const parts = []; // [碼, 價, 前量, 後量, 掛入, 成交, 撤單]
++          if(c[q+4]) parts.push(`+${rpQty(c[q+4])} 掛單`);
++          if(c[q+5]) parts.push(`−${rpQty(c[q+5])} 成交`);
++          if(c[q+6]) parts.push(`−${rpQty(c[q+6])} 撤單`);
++          h += `<div class="rp-line">${at} <span class="mono">${rpQty(c[q+2])} → ${rpQty(c[q+3])}</span> ${parts.join("、")}</div>`; break; }
++        case 1: h += `<div class="rp-line dim">${at} ${rpQty(c[q+2])} 張被擠出五檔</div>`; break; // [碼, 價, 離開前的量]
++        case 2: { const left = c[q+2], now = c[q+3], traded = c[q+4], net = c[q+5], away = rpDur(c[q+7]); // [碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
+           h += left === now && !traded
+             ? `<div class="rp-line dim">⟳ ${at} 回到五檔,量沒變(${rpQty(now)} 張,離開 ${away})</div>`
+             : `<div class="rp-line">⟳ ${at} 回到五檔<span class="sub">離開時 ${rpQty(left)} → 現在 ${rpQty(now)}</span><span class="sub">離開期間成交 ${rpQty(traded)} → 淨掛 ${net > 0 ? "+" : net < 0 ? "−" : ""}${rpQty(Math.abs(net))}</span><span class="sub">離開 ${away}</span><span class="sub">(一次掛進或分次堆積無法分辨)</span></div>`;
+-          q += 8; break; }
+-        case 3: h += `<div class="rp-line">${at} 首次進入五檔 ${rpQty(c[q+2])} 張(之前沒看過,不算掛單)</div>`; q += 3; break;
+-        default: return h + `<div class="rp-line dim">看不懂的變動碼 ${esc(code)}</div>`;
++          break; }
++        case 3: h += `<div class="rp-line">${at} 首次進入五檔 ${rpQty(c[q+2])} 張(之前沒看過,不算掛單)</div>`; break; // [碼, 價, 量]
+       }
+     }
+     return h;
+   }
+-  function rpChanges(R, i){
++  function rpChanges(R, i){ // 中間欄:第 i 則往前最近 RP_CHG_KEEP 則,新的在上(只看則號,不記上次畫到哪一則)
+     let h = "";
+     for(let j=i; j>=0 && j>i-RP_CHG_KEEP; j--){
+       const t = R.kind[j] === "t" ? R.tradeAt[j]*4 : -1;
+-      const tr = t < 0 ? "" : `<span>成交 ${R.trade[t+1]==null?"—":fmtP(R.trade[t+1]/1000)} × ${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])} ${rpSideCell(R.trade[t+3])}</span>`;
++      const tr = t < 0 ? "" : `<span>成交 ${rpPrice(R.trade[t+1])} × ${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])} ${rpSideCell(R.trade[t+3])}</span>`;
+       h += `<div class="rp-msg${j === i ? " cur" : ""}"><div class="rp-msg-h"><span class="mono">第 ${(j+1).toLocaleString()} 則</span><span class="mono">${fmtMs(R.recv[j])} 收到</span>${tr}</div>${rpChangeLines(R, j)}</div>`;
+     }
+     $("rpChg").innerHTML = h;
+   }
+   const rpEatText = e => { if(!e.length) return "—"; const out = []; for(let q=0;q<e.length;q+=3){ const s = rpSideTxt(e[q]), lv = e[q+1]; out.push(`吃 ${lv === null ? s + "五檔外" : lv === 0 ? "市價" + s : s + lv} −${rpQty(e[q+2])}`); } return out.join("、"); };
+-  function rpTape(R, i){
++  function rpTape(R, i){ // 成交明細:則號 ≤ i 的最後 RP_TAPE_KEEP 筆成交,新的在上
+     const last = R.tradeAt[i]; let h = "";
+     if(last < 0) h = '<tr><td colspan="5" class="dim">這一則之前還沒有成交</td></tr>';
+     for(let k=last; k>=0 && k>last-RP_TAPE_KEEP; k--){
+       const j = R.tradeIdx[k], t = k*4, ms = R.trade[t], anom = R.anom.has(j);
+-      h += `<tr class="${j === i ? "cur" : ""}"><td class="mono${anom ? " dim" : ""}"${anom ? ' title="達錢時刻異常,不當標籤時刻"' : ""}>${ms == null ? "—" : fmtT(Math.floor(ms/1000))}</td><td class="num mono">${R.trade[t+1]==null?"—":fmtP(R.trade[t+1]/1000)}</td><td class="num mono">${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])}</td><td>${rpSideCell(R.trade[t+3])}</td><td class="mono">${rpEatText(R.eat[k])}</td></tr>`;
++      h += `<tr class="${j === i ? "cur" : ""}"><td class="mono${anom ? " dim" : ""}"${anom ? ' title="達錢時刻異常,不當標籤時刻"' : ""}>${ms == null ? "—" : fmtT(Math.floor(ms/1000))}</td><td class="num mono">${rpPrice(R.trade[t+1])}</td><td class="num mono">${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])}</td><td>${rpSideCell(R.trade[t+3])}</td><td class="mono">${rpEatText(R.eat[k])}</td></tr>`;
+     }
+     $("rpTape").innerHTML = h;
+   }
+@@ -704,10 +710,10 @@
+     return {grid:[...set].sort((a,b)=>b-a), limUp, limDn, pc: D ? D.pc : null};
+   }
+   let RP = null; // 目前掛載的重播 {R, G, i, t, center, full, raf, play, speed, firstLock, el}
+-  // RP.i = 目前這一則的則號,是重播畫面的唯一依據:階梯、標籤、現價、十字線都讀它,重繪不從時刻回推。
++  // RP.i = 目前這一則的則號,是重播畫面的唯一依據:階梯、標籤、現價、十字線、中間欄(這一則變了什麼)與成交明細都讀它,重繪不從時刻回推。
+   // RP.t = 時間軸位置(收到時刻毫秒)= 拖曳值與播放時鐘。位置只走兩條路改:rpSetT(拖曳 / 播放:改 t,取「收到時刻 ≤ t 的
+   // 最後一則」當 i)、rpGo(步進 / 跳鎖板:改 i,t 跟到該則收到時刻)。同一毫秒收到的幾則只有 rpGo 停得到;播放與拖曳一次
+-  // 可能跨過好幾則,要逐則交代變動的面板得自己記上次畫到哪一則。
++  // 可能跨過好幾則;中間欄不另記狀態,列到 RP.i 為止最近 RP_CHG_KEEP 則,一次跨過更多則時較早的那幾則要逐則步進才看得到。
+   let rpKeepT = null, rpKeepFull = false, rpKeepSpeed = 1; // 換檔 / 換日沿用的重播時刻、展開狀態與播放速度
+   const rpKeepI = new Map(); // 代號|日期 → 最後停的則號:切走再回來、時刻沒動就回到同一則(同一毫秒的第 2 則不會變第 3 則)
+   function renderReplay(){
