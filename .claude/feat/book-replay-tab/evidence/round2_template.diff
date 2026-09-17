@@ -1,0 +1,28 @@
+--- viewer_cdp_template.html.pre-extras-20260917	2026-09-17 08:49:21.476119200 +0800
++++ viewer_cdp_template.html	2026-09-17 09:01:24.212002700 +0800
+@@ -160,6 +160,7 @@
+         <li><b>價格階梯</b>:買量 | 價格 | 賣量,高價在上。預設現價上下各 10 檔,現價離開中心超過 5 檔才重新置中;「展開漲停–跌停」列出當日全範圍。現價 = 最近一筆成交價(鎖漲停時買一是價 0 的市價佇列、賣方全空,從五檔推不出現價)。價 0 的市價佇列不畫在階梯上,另列文字。</li>
+         <li><b>橫條</b>:按這檔當天 13:25 以前(收到時刻)所有價位裡最大的單格量歸一;13:25 後的收盤集合競價與漲停排隊量常大好幾倍,算進來會把盤中的橫條壓扁,所以不算,超過基準的格子畫滿。</li>
+         <li><b>十字線</b>:拖曳時上方兩張圖的十字線跟著重播時刻與現價走。</li>
++        <li><b>非群組(簿重播)</b>:當天有簿重播、但不在產業群組母體的個股另列一組(左欄最下)。分時 / K 線 / 逐筆來自 copycat tick 存檔(與達錢歷史逐筆比:盤中 1 分 K 逐根相同、少 14:30 盤後定價那一筆、內外盤用成交前真實五檔判);日線 FinMind。不進回測、碰觸、迴盪統計,也沒有 CDP 突破事件。</li>
+         <li><b>限制</b>:五檔是聚合量,看不到單一委託;五檔以外完全看不到;檔案記的是 server 收到的,開盤峰值掉包會留缺口。</li>
+       </ul>
+     </div>
+@@ -407,7 +408,7 @@
+     const buys = D.f.filter(f=>f[3]>0), sells = D.f.filter(f=>f[3]<0);
+     const grpName = cinfo.g;
+     const peers = DATA.groups[grpName].filter(c => c!==state.code).map(c => { const ds = DATA.daysum[c] && DATA.daysum[c][state.date]; return ds ? `<span class="pill ${cls(ds[0])}">${DATA.names[c]||c} <b class="mono">${ds[0]>0?"+":""}${ds[0]}%</b>${ds[1]?" 鎖":""}</span>` : `<span class="pill">${DATA.names[c]||c} —</span>`; }).join("");
+-    $("groupInfo").innerHTML = `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span>${peers}<span class="pill">族群前 3 日 <b class="mono">${D.g3==null?"—":(D.g3>0?"+":"")+D.g3+"%"}</b> · 前 5 日 <b class="mono">${D.g5==null?"—":(D.g5>0?"+":"")+D.g5+"%"}</b></span>`;
++    $("groupInfo").innerHTML = grpName === DATA.extra_group ? `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span><span class="pill">不在產業群組母體:只有簿重播的日子,逐筆來自 copycat tick 存檔;沒有 CDP 事件、回測、碰觸與迴盪標記</span>` : `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span>${peers}<span class="pill">族群前 3 日 <b class="mono">${D.g3==null?"—":(D.g3>0?"+":"")+D.g3+"%"}</b> · 前 5 日 <b class="mono">${D.g5==null?"—":(D.g5>0?"+":"")+D.g5+"%"}</b></span>`;
+     const brokeAH = D.e.some(e=>e[2]==="過 AH"), held = brokeAH && !D.e.some(e=>e[2]==="跌破 NH");
+     $("dayInfo").innerHTML = `<span class="pill">前收 <b class="mono">${fmtP(pc)}</b></span><span class="pill">漲停 <b class="mono">${fmtP(lim)}</b></span><span class="pill ${cls(chg)}">收 <b class="mono">${fmtP(D.c)}</b> ${chg>0?"+":""}${chg.toFixed(2)}%</span><span class="pill ${cls(D.hi/pc-1)}">高 <b class="mono">${fmtP(D.hi)}</b> ${pct(D.hi,pc)}</span><span class="pill">振 <b class="mono">${D.rg.toFixed(1)}%</b></span><span class="pill">開在 ${D.op}</span>${brokeAH?`<span class="pill">${D.onepush?"一次拉到 AH":"分段過 AH"} · ${held?"NH 守住":"跌破 NH"}</span>`:""}${locked?'<span class="pill lock">收盤鎖死</span>':""}${buys.length?`<span class="pill up">買 ${buys.length} 筆</span>`:""}${sells.length?`<span class="pill down">賣 ${sells.length} 筆</span>`:""}`;
+     let lo = Math.min(pc, ...D.b.map(b=>b[3])), hi = Math.max(pc, ...D.b.map(b=>b[2]));
+@@ -496,7 +497,7 @@
+   }
+   function renderBt(){
+     const S = DATA.summary, E = DATA.evsum; const f0 = v => v.toLocaleString(undefined,{maximumFractionDigits:0});
+-    let h = `<p style="color:var(--ink-2);margin:0 0 8px">母體 = 12 個產業群組 ${codes.length} 檔 × ${dates.length} 個交易日(${dates[0].slice(5)}–${dates[dates.length-1].slice(5)});可當沖且非處置;每筆 50 萬名目。</p>`;
++    let h = `<p style="color:var(--ink-2);margin:0 0 8px">母體 = 12 個產業群組 ${DATA.population ?? codes.length} 檔 × ${dates.length} 個交易日(${dates[0].slice(5)}–${dates[dates.length-1].slice(5)});可當沖且非處置;每筆 50 萬名目。</p>`;
+     h += `<p style="color:var(--ink-2);margin:0 0 8px">盤中突破 AH 的股票日 ${E.n} 個:之後 NH 守住 ${E.held} 個(鎖死 ${E.held_lock},收盤 vs AH 均 ${E.held_ret>0?"+":""}${E.held_ret.toFixed(2)}%);跌破 NH ${E.broke} 個(鎖死 ${E.broke_lock},均 ${E.broke_ret.toFixed(2)}%)。</p>`;
+     h += `<div class="tblwrap"><table><thead><tr><th>策略</th><th class="num">筆</th><th class="num">勝率</th><th class="num">均報酬</th><th class="num">每筆均(元)</th><th class="num">鎖死留倉</th><th class="num">破失效價</th></tr></thead><tbody>`;
+     S.forEach(r => { h += `<tr><td>${STRATS[r.strat]}</td><td class="num mono">${r.n}</td><td class="num mono">${r.win.toFixed(0)}%</td><td class="num mono ${cls(r.avg)}">${r.avg>0?"+":""}${r.avg.toFixed(2)}%</td><td class="num mono ${cls(r.per)}">${r.per>0?"+":""}${f0(r.per)}</td><td class="num mono">${r.lock.toFixed(0)}%</td><td class="num mono">${r.fail.toFixed(0)}%</td></tr>`; });

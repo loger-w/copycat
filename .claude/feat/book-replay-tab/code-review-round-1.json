@@ -1,0 +1,28 @@
+{
+  "scope": "repo 外 C:\\Users\\USER\\Documents\\copycat-trading-review\\scripts\\week0909\\viewer_cdp_template.html(對 .bak-20260917;diff = evidence/viewer_cdp_template.diff)+ 產物 viewer-cdp.html;spec = #268 + 兩則留言、#265 追記、copycat/book_replay.py 外掛檔 v1",
+  "standards": [
+    "S-01 重複程式碼(判斷):「往回找最近一筆價格 > 0 的成交」在 rpDraw 與 rpCross 各寫一次 → 建議收成 rpLastPx(R, i)",
+    "S-02 重複的領域知識(判斷):rpGrid 以 ×11/10 + tickMilli 重算漲停,資料已有 D.lim(頁頭與左欄「鎖」讀它)→ 兩把尺可能不一致,建議 limUp 讀 D.lim,只自算跌停",
+    "S-03 重複程式碼(判斷):loadReplay 抽了 fail helper,window.__bk 的 then/catch 仍重寫兩次結算 → 建議同一個 helper",
+    "S-04 字串當錯誤種類(判斷):e.message === \"no file\" 沿用 loadTicks 前例,但新碼也把 e.message 顯示給使用者 → 可加 e.missing 旗標,前例如此可不改",
+    "S-05 名稱不好懂(判斷,輕):RP / rpT / rpFullOn 兩層狀態只靠註解區分 → 建議 rpT 改 rpKeepT 之類",
+    "S-06 無問題:CSS 全用 :root token、窄版無橫捲、catch 都有具體處理",
+    "O-01 軸外:rpCross → hoverAll → followTick,拖曳時每 120 ms 重繪隱藏的逐筆表(白做工)",
+    "O-02 軸外:同一次 render 十字線算兩次(renderK 內一次、renderReplay → rpDraw 一次),無害",
+    "O-03 軸外:__bk 失敗且無等待者時錯誤消失;前例 __tk 相同,影響低"
+  ],
+  "spec": [
+    "P-01 缺漏(資料層):頁面選單只有 55 檔,80 個外掛檔裡 27 檔(含 #265 鎖漲停驗收樣本 2305/2338/2489/6715)點不到",
+    "P-02 scope / 解讀:RP_RECENTER=5 遲滯置中,最偏時一側 15 檔、一側 5 檔;票寫「預設顯示現價上下各 10 檔」,為兼顧「每個價位的位置固定」的取捨,需 user 拍板",
+    "P-03 scope(知悉):頁首成交則價×張×內外、市價佇列文字、JS keyframe 自檢、快取 3 檔、換檔換日沿用時刻 —— 都小,自檢有留言背書",
+    "P-04 scope:hoverAll 連帶 followTick,拖曳時隱藏逐筆表跟著捲;票只要求兩張圖十字線",
+    "P-05 實作可疑:橫條字面照「按該檔當日最大單格量歸一」,但 80 檔中 18 檔最大單格在 13:25 後(收盤集合競價 / 漲停排隊);2426 最大 12,785 張(13:29:50),187 張只剩 1.5% 寬(13:25 前最大 4,087)→ 背離 #265 story 5「厚薄一眼可比」,建議問 user 是否排除 13:25 後",
+    "P-06 實作可疑:現價往回找沒跳過 anomalous 成交;1815 首筆真成交前現價 / 置中 / 十字線水平線用前一日 14:30 成交價,且該價進了 R.prices 格位範圍",
+    "P-07 Nice:標籤規則與 docstring 一致;時鐘點本身不印「之後第 0 則」,定義頁寫「成交本身是第 0 則」,文字不衝突",
+    "P-08 Nice:seq 只檢查 i≥1 > 0,docstring 寫每一項都 > 0,首項沒檢查",
+    "P-09 確認:recv 二分取「≤ t 的最後一則」與留言一致;11:02:44.5 → 187 無誤",
+    "P-10 確認:漲跌停 ×1.1 / ×0.9 取整在 10/50/100/500/1000 邊界手算成立",
+    "P-11 確認:展開後一價一列固定高度;預設模式受 P-02 影響"
+  ],
+  "disposition": "S-01 修(rpLastPx);S-02 修(limUp = D.lim);S-03 修(rpSettle 共用);S-04 不改(沿用 loadTicks 前例,訊息字串只在 no file 分支比對);S-05 修(rpT → rpKeepT、rpFullOn → rpKeepFull);O-01 / P-04 修(hoverAll 加 follow 參數預設 true,重播十字線傳 false;實測拖曳 181 點逐筆表重繪 0 次);O-02 不改(renderK 單獨被縮放 / 平移呼叫時需要那一發,render 路徑多算一次無害);O-03 不改(__bk 只由本頁載入的 script 呼叫,必有等待者;檔頭不符由 onload 補判);P-08 修(seq 每項含首項 > 0);P-07 / P-09 / P-10 / P-11 無需改;P-03 揭露;P-06 不改 —— 照留言字面「最近一筆成交則的價」,只影響 1815 開盤首筆前(那筆價 = 前收,在漲跌停範圍內,不撐寬格位),列給 user;P-01 / P-02 / P-05 屬決策,交 user 拍板:P-05 → 排除 13:25 後(已改,基準 = 收到時刻 13:25 前最大單格量,13:25 前無掛單才退回全天;6 檔對 Python 相符、2426 187 張 4.6%);P-02 → 保留遲滯置中;P-01 → 待 user 答覆。修後重跑:Python 對照 181/181、舊新頁 72 區塊 DOM 雜湊一致、驗收 11:02:44.5 → 187、console 零 error。"
+}
