@@ -8,11 +8,22 @@
 
 ## 2026-09-17(feat #268 回看頁「重播」分頁留尾;主體在 repo 外 `Documents\copycat-trading-review`)
 
-- [ ] **每個交易日盤後補重播要手動跑四步**(尚未排程):`python -m copycat book-replay --date <YYYYMMDD> --out <回看頁>\viewer-cdp-book`
-  (13:45 轉檔後)→ `.venv\Scripts\python -X utf8 scripts\week0909\extras_from_archive.py --date <YYYY-MM-DD>`(非群組逐筆 + FinMind 日線)
-  → `python scripts\week0909\build_ticks_js.py` → `python scripts\week0909\build_viewer_cdp.py`。母體 55 檔的分時 / 逐筆仍走達錢歷史
-  (`pull_ticks_groups.py` + `fetch_groups_daily.py --keep-groups`),沒補的日子重播分頁可用、上方圖是「沒有資料」。
-- [ ] **09-16 tick 存檔沒有 3630 新鉅科 / 4977 眾達-KY 的列**(產業群組成員,重播分頁顯示找不到檔),原因未查(訂閱池?當日無推播?)。
+- [ ] **每個交易日盤後補回看頁要手動跑**(尚未排程;**09-17 第一次實跑更正:原寫的「四步」不夠** —— 少了日線那步新日根本進不了
+  日期選單(連重播分頁都選不到),少了三支分析群組股當日上方圖與逐筆明細都是「沒有資料」)。研究目錄 `scripts\week0909\` 一律用
+  copycat venv `python -X utf8`,依序:
+  1. `python -m copycat book-replay --date <YYYYMMDD> --out <回看頁>\viewer-cdp-book`(repo root;13:45 轉檔後;09-17 80 檔 387 萬則 97 s、25.7 MB)
+  2. `fetch_groups_daily.py --keep-groups --end <日>` —— **回看頁日期選單 = `daily_groups.json` 的 TAIEX 日**;跑完核 55 檔都有當日列
+  3. `pull_ticks_groups.py --from <日>`(達錢開著、盤後跑;55 檔 4 s)→ `fetch_eligibility.py --end <日> --keep-disposition` → `supplement_disposition.py`
+  4. `cdp_bt.py` / `cdp_levels_test.py` / `cdp_oscillation.py`(互不相依可並行;stdout 存 `data\cdp_bt|cdp_levels_test|cdp_osc-<YYYYMMDD>.out`;
+     osc 最慢約 7 分)—— `build_viewer_cdp.py` 以 `cdp_events.csv` 有當日列為群組股進頁條件
+  5. `extras_from_archive.py --date <日>`(非群組逐筆 + 日線;核非群組都有當日列)→ `build_ticks_js.py` → `build_viewer_cdp.py`(約 1 分)
+  **時點**:FinMind 上市日線 15:00 左右已有,**上櫃 09-17 到 15:22–15:27 才陸續出**(register token);上櫃沒到就跑 4,群組上櫃股當日被
+  略過(09-17 當時 22 / 55 檔)。**預期變動**:前一交易日「鎖死留倉」的回測交易由「13:20 出」改「鎖死留倉→T+1開」(09-17 = 9/16 13 筆,
+  同 #266 3016 前例);其餘舊日 CSV 列與舊日頁面欄位應逐欄相同。09-17 驗法:覆寫前留 `.bak-thru0916`、CSV 舊日列逐列比、解頁面內嵌
+  payload 比舊日、headless 實頁核日期選單 / 逐筆筆數 = 資料檔 / 重播分頁掛得上(腳本在該 session scratchpad,要排程時再收進研究目錄)。
+- [x] **09-16 tick 存檔沒有 3630 新鉅科 / 4977 眾達-KY 的列**(產業群組成員,重播分頁顯示找不到檔),原因未查(訂閱池?當日無推播?)。
+  **09-17 查明 = 不在自選**:兩檔 9/16 自選改版時移出(研究 review §20),tick 存檔只記訂閱池;09-17 自選 79 檔全有簿檔、多的 7772 不在
+  自選(推測是點過主圖)。回看頁母體凍結在 9/10 版所以仍列著它們 —— 要重播就加回自選,非存檔 bug。
 - [ ] **2243 宏旭-KY 09-16 存檔量 83 張 vs FinMind 699 張**(開高低收全等、首筆 09:08:40),回看頁已標「逐筆不完整」;是存檔漏收還是
   FinMind 量含鉅額 / 盤後,未查。6147 頎邦自 11:35:25 才有逐筆(盤中才進訂閱池的推測未證)。
 - [ ] **7772 耀穎 09-16 只有 2 筆成交 → 不進回看頁清單**(< 50 筆門檻),但 `viewer-cdp-ticks` 與 `viewer-cdp-book` 都有它的檔。無害。
@@ -27,6 +38,9 @@
   做法:APP 匯出 9/11–9/16 交易明細 CSV 放 Downloads → 照 `scripts/week0909/recon.py` 解析成 `data/fills_0911_0916.json`,
   `build_viewer_cdp.py` 改讀它並拿掉 `fills_copycat_20260916.json`(同日兩份會重複標)→ 重建回看頁。**9/10 也沒有成交**(9/10 版建頁時
   就缺,#266 驗收「舊日一格未變」刻意沒補),CSV 若含 9/10 要先問是否一起補。**判準**:9/14 2305 回看頁有 4 筆成交標記、價格對得上 CSV。
+  **9/17 同樣等 CSV**(user 09-17 拍板,18 筆:2243 / 6179 / 4908 / 3532 / 2426 / 3026;APP 匯出範圍要含 9/17):快照已存
+  `data/raw/copycat_{orders,fills,positions}_20260917.json`,18 筆對 log 回報時刻全符合「一張一筆」;但 server 09-17 00:57 開機,快照夾著
+  9/16 那 7 筆(與 9/16 快照相同),`fills_from_copycat.py` 看到非當日單會直接停 —— 若改走快照要先把這道檢查改成跳過非當日單。
 - [ ] **FinMind token 目前是 register 等級,處置股資料集(`TaiwanStockDispositionSecuritiesPeriod`)全市場與單檔都 400**:研究
   腳本 `fetch_eligibility.py --keep-disposition` 沿用 9/9 以前公告的列,9/10 後的缺口由 `supplement_disposition.py` 從證交所 /
   櫃買 open data「目前公告」補(只給當下仍在公告的,要在處置期間內跑)。copycat 本體 `breadth_fetch` 的處置查詢同樣受影響(非本案)。
