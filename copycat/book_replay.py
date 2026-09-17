@@ -64,7 +64,8 @@ grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際�
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
 - `chg`:長 n,第 i 則的變動分解(= `Frame.changes`,順序照變動分解那段)攤平成一列,每項以種類碼開頭
   (種類碼 = 基本碼 + 側別碼,側別碼 買 0 / 賣 1;價 0 = 市價佇列)。當日第一份五檔與五檔全空那一則恆空:
-  - 基本碼 0 價位變動 `[碼, 價, 前量, 後量, 成交]`:掛入 = 後量 − 前量(增加時),撤單 = 前量 − 後量 − 成交(減少時)
+  - 基本碼 0 價位變動 `[碼, 價, 前量, 後量, 掛入, 成交, 撤單]`(三個量都寫明,回看頁不做減法;掛入 = 後量 − 前量
+    (增加時)、撤單 = 前量 − 後量 − 成交(減少時),`decode` 核對)
   - 基本碼 2 被擠出五檔 `[碼, 價, 離開前的量]`
   - 基本碼 4 重新可見 `[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]`
   - 基本碼 6 首次進入五檔 `[碼, 價, 量]`
@@ -281,7 +282,8 @@ class Frame:
     after: int  # 距該時鐘點第幾則(時鐘點本身 0;首筆成交前自第 1 則數起)
     recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
     trade: Trade | None  # 成交則的那筆成交;簿則 None
-    changes: tuple[BookChange, ...]  # 相對同一檔上一則變了什麼(見模組說明「變動分解」);第一則恆空
+    # 相對同一檔上一份五檔變了什麼(見模組說明「變動分解」);當日第一份五檔與五檔全空(清空)那一則恆空
+    changes: tuple[BookChange, ...]
     eaten: tuple[Eaten, ...]  # 成交則吃到的掛單(見模組說明「吃檔」);簿則與看不出吃哪一檔時恆空
 
     @property
@@ -771,7 +773,7 @@ def _decode_eaten(cells: Sequence[Any], code: str, index: int) -> tuple[Eaten, .
 
 #: 外掛檔 `chg` 項目的種類(唯一一張表):序號 × 2 = 基本碼(加側別碼成種類碼)、每項佔幾格(含種類碼)
 _CHANGE_KINDS: tuple[tuple[type, int], ...] = (
-    (LevelChange, 5),  # 0 / 1:[碼, 價, 前量, 後量, 成交]
+    (LevelChange, 7),  # 0 / 1:[碼, 價, 前量, 後量, 掛入, 成交, 撤單]
     (LeftView, 3),  # 2 / 3:[碼, 價, 離開前的量]
     (Reappeared, 8),  # 4 / 5:[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
     (EnteredView, 3),  # 6 / 7:[碼, 價, 量]
@@ -786,7 +788,14 @@ def _encode_changes(changes: tuple[BookChange, ...]) -> list[int]:
         out.append(_CHANGE_BASE[type(change)] + _SIDE_CODE[change.side])
         match change:
             case LevelChange():
-                out += [change.price_milli, change.before, change.after, change.traded]
+                out += [
+                    change.price_milli,
+                    change.before,
+                    change.after,
+                    change.added,
+                    change.traded,
+                    change.cancelled,
+                ]
             case LeftView() | EnteredView():
                 out += [change.price_milli, change.qty]
             case Reappeared():
@@ -818,7 +827,17 @@ def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[BookCh
         if len(item) != width - 1:
             raise PluginFormatError(f"{code} 第 {index} 則:變動項目格數不足(種類碼 {kind})")
         side = _BOOK_SIDES[kind % 2]
-        if change_type is Reappeared:
+        if change_type is LevelChange:
+            price, before, after, added, traded, cancelled = item
+            change = LevelChange(side, price, before, after, traded)
+            if (added, cancelled) != (change.added, change.cancelled):
+                raise PluginFormatError(
+                    f"{code} 第 {index} 則 {side} {price}:掛入 {added} / 撤單 {cancelled} 不合算式"
+                    f"(前量 {before}、後量 {after}、成交 {traded}"
+                    f" → 掛入 {change.added} / 撤單 {change.cancelled})"
+                )
+            out.append(change)
+        elif change_type is Reappeared:
             price, left_qty, now_qty, traded_away, net, left_index, away_ms = item
             if net != now_qty - left_qty + traded_away:
                 raise PluginFormatError(
@@ -903,7 +922,14 @@ def decode(payload: PluginPayload) -> BookReplay:
       `anomalous` 的成交)有達錢時刻且不早於目前的標籤時刻
     - 每個 keyframe 位置,逐則套 delta 的結果與 keyframe 逐格相等 —— 回看頁「播放」走 delta、「跳轉」走
       keyframe,兩條路對不上 = 同一刻兩份簿
-    值的型別(例如該是整數的地方放了字串)不在檢查範圍。
+    - `chg`(`_decode_changes` / `_check_changes`):種類碼認得、格數夠;當日第一份五檔與五檔全空那一則沒有變動;
+      價位變動 —— 前量 / 後量 = 前一份 / 這一份五檔該價位的量(清空則跳過,比清空前那份)、前後量不同、成交在
+      0 到減少量之間、掛入 / 撤單合算式;被擠出五檔的量 = 前一份五檔(> 0);首次進入五檔 / 重新可見的現在量 =
+      這一份五檔;重新可見 —— 淨掛 = 現在 − 離開 + 期間成交、離開則號在這一則之前、離開時長 = 兩則收到時刻差、
+      三個量不全 0
+    - `eat`(`_decode_eaten`):長度 = 成交則數;每項 [側別碼 0 / 1, 檔位 0–5 或 null, 張 > 0];一筆成交的吃檔
+      合計不超過成交張數
+    回看頁把變動清單與階梯並排顯示,兩份對不上 = 同一刻講兩件事。值的型別(例如該是整數的地方放了字串)不在檢查範圍。
     """
     _check_header(payload)
     code, every, keyframes = payload["code"], payload["kf_every"], payload["kf"]
