@@ -1,0 +1,93 @@
+# -*- coding: utf-8 -*-
+"""回看頁「非群組(簿重播)」資料層(2026-09-17 #268 追加):有簿重播檔、但不在產業群組母體的個股,
+從 copycat tick 存檔補回看頁要的逐筆與日線。研究母體(daily_groups.json / data/ticks/)一格不動。
+
+- 逐筆 → data/ticks_archive/<date>/<code>.json,格式同 data/ticks/:[達錢時刻毫秒, 價, 張, 買一, 賣一]。
+  **刻意不放 data/ticks/**:combo_panel.py / bigtick_bt.py 等研究腳本會掃整個 data/ticks/,來源不同(即時存檔 vs 達錢歷史)不可混。
+  價 / 張 = 存檔成交列原值;買一 / 賣一 = 同檔**上一則**(成交或簿)的簿 = 成交當下的簿(成交列自帶的是成交後簿);
+  只收達錢時刻 09:00:00–13:30:59 的成交(開機收到的前一日盤後成交時刻在 14:30,不收)。
+  與達錢歷史逐筆的差別(09-16 六檔實測):盤中 1 分 K 逐根相同;少 14:30 盤後定價交易那一筆(存檔當天沒收到);
+  內外盤「中」較少(買一 / 賣一是成交前真實五檔,達錢歷史的買一 / 賣一較常判不出)。
+- 日線 → data/daily_extras.json({代號: FinMind TaiwanStockPrice 列}),6/1 起到 --date。
+
+代號 = viewer-cdp-book/<date>/ 的外掛檔 − 母體;--codes 可指定(驗證用,例如拿母體代號對照達錢歷史)。
+需 pyarrow → 用 copycat 的 venv:
+  C:\\side-project\\copycat\\.venv\\Scripts\\python -X utf8 extras_from_archive.py --date 2026-09-16 [--codes 2426,3441 --out-dir X] [--no-daily]"""
+import json
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+sys.stdout.reconfigure(encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[2]
+R = ROOT / "data"
+ARCHIVE = Path(r"C:\side-project\copycat\data\ticks")
+_ENV = Path(r"C:\side-project\copycat") / ".env"
+T_OPEN, T_LAST = 9 * 3600_000, 13 * 3600_000 + 31 * 60_000  # [09:00:00, 13:31:00)
+
+
+def arg(name, default=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+DATE = arg("--date")
+if not DATE:
+    sys.exit("用法見模組說明:--date YYYY-MM-DD 必填")
+OUT = Path(arg("--out-dir", str(R / "ticks_archive")))
+population = {c for v in json.load(open(R / "daily_groups.json", encoding="utf-8"))["_groups"].values() for c in v}
+codes_arg = arg("--codes")
+if codes_arg:
+    codes = sorted(codes_arg.split(","))
+else:
+    codes = sorted({p.stem for p in (ROOT / "viewer-cdp-book" / DATE).glob("*.js")} - population)
+print("日期", DATE, "檔數", len(codes))
+
+stem = DATE.replace("-", "")
+flt = pc.field("code").isin(codes)
+cols = ["code", "msg_seq", "bid0", "ask0"]
+trades = pq.read_table(ARCHIVE / f"{stem}.parquet", columns=[*cols, "ms", "price_milli", "qty"], filters=flt).to_pylist()
+books = pq.read_table(ARCHIVE / f"{stem}-book.parquet", columns=cols, filters=flt).to_pylist()
+rows = sorted(trades + books, key=lambda r: (r["code"], r["msg_seq"]))
+
+out, prev_book, skipped = {c: [] for c in codes}, {}, {"時刻在盤外": 0, "0 價 / 0 量": 0}
+for r in rows:
+    c = r["code"]
+    before = prev_book.get(c, (None, None))
+    prev_book[c] = (r["bid0"], r["ask0"])
+    if "ms" not in r:  # 簿列只更新「上一則的簿」
+        continue
+    if not r["price_milli"] or not r["qty"]:
+        skipped["0 價 / 0 量"] += 1
+        continue
+    if r["ms"] is None or not T_OPEN <= r["ms"] < T_LAST:
+        skipped["時刻在盤外"] += 1
+        continue
+    b, a = before
+    out[c].append([r["ms"], r["price_milli"] / 1000, r["qty"], (None if b is None else b / 1000), (None if a is None else a / 1000)])
+
+(OUT / DATE).mkdir(parents=True, exist_ok=True)
+for c, ts in out.items():
+    if ts:
+        (OUT / DATE / f"{c}.json").write_text(json.dumps(ts, separators=(",", ":")), encoding="utf-8")
+print("逐筆:", {c: len(v) for c, v in out.items()}, "略過", skipped, "→", OUT / DATE)
+
+if "--no-daily" in sys.argv:
+    sys.exit(0)
+token = next(line.split("=", 1)[1].strip() for line in _ENV.read_text(encoding="utf-8-sig").splitlines() if line.startswith("FINMIND_TOKEN="))
+path = R / "daily_extras.json"
+daily = json.load(open(path, encoding="utf-8")) if path.exists() else {}
+for c in codes:
+    url = "https://api.finmindtrade.com/api/v4/data?" + urllib.parse.urlencode({"dataset": "TaiwanStockPrice", "data_id": c, "start_date": "2026-06-01", "end_date": DATE})
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"}), timeout=60) as resp:
+        body = json.loads(resp.read())
+    if body.get("status") != 200:
+        sys.exit(f"FinMind {c} 失敗:{body.get('status')} {body.get('msg')}")
+    daily[c] = body.get("data", [])
+    time.sleep(0.12)
+json.dump(daily, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+print("日線:", {c: (len(daily[c]), daily[c][-1]["date"] if daily[c] else None) for c in codes}, "→", path)

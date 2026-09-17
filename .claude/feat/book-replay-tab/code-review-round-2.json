@@ -1,0 +1,20 @@
+{
+  "scope": "增量:user 09-17 追加決策 —— 橫條基準 13:25 前(RP_QMAX_END)+ 非群組(簿重播)27 檔(extras_from_archive.py 新檔、build_viewer_cdp.py / build_ticks_js.py / 模板 diff = evidence/round2_*.diff)",
+  "standards": [
+    "S2-01 Duplicated Code(判斷,中):非群組迴圈逐字重抄群組迴圈的 1 分 K 聚合 / daysum / day dict;CDP 五軸與開盤位置抄自 cdp_bt → 建議 bars_of(T),註解互指",
+    "S2-02 Mysterious Name(判斷,低):extras_from_archive.py `import pyarrow.compute as pc` 與同資料夾「pc = 前收」撞名;ED / p0 名稱",
+    "S2-03 Primitive Obsession(判斷,低):`if \"ms\" not in r` 靠兩張 parquet 欄位不同分成交 / 簿,改 cols 會靜默全當簿列 → 明確標 kind",
+    "S2-04 Shotgun Surgery 風險(判斷,低):非群組特例散在 payload 與模板兩處、文案重複 —— 量小可接受",
+    "S2-05(判斷,無需改):RP_QMAX_END 命名與註解清楚;48300000 魔數可寫成算式",
+    "S2-06(判斷,低):build_ticks_js sources 第三欄 allowed=None 一個 None 背兩個意思 → 改來源標籤",
+    "O-1 軸外:活潑日索引 Object.keys(DATA.groups) 含非群組,碰觸欄印 0/0,與定義段「不進碰觸 / 迴盪統計」矛盾",
+    "O-2 軸外:成交(fills)與線上訊號會掛到非群組個股,文案沒提"
+  ],
+  "spec": [
+    "P2-01 Nice:7772 當日 2 筆 < 50 筆門檻不進清單,但 build_ticks_js 仍產出 7772.js 沒人讀;要跟 user 講「簿重播有、回看頁選不到」",
+    "P2-02 Should:6147 存檔自 11:35:25 才有成交(量 22,236 vs FinMind 64,857),頁頭開 204 / 低 203.5 vs FinMind 201.5 / 197.5、振幅與開在哪段跟著錯,頁面零提示 = 假陳述;2243 量 83 vs 699 也要查 → 建議排除或標示「存檔不完整」",
+    "P2-03 參考用:簿列 09:00 後才存,開盤第一筆的買一 / 賣一可能空(2303 / 2305),那一筆內外盤判不出",
+    "(核過無誤)研究統計 summary / evsum / touchsum / oscsum 未含非群組;13:25 用收到時刻與重播軸同尺;遲滯置中未動;逐筆格式與時刻單調;前收 / 漲停 / CDP 與 cdp_bt 同式、無成交價超漲停;其他日期走沒有資料分支;ticks_archive 未混入 data/ticks"
+  ],
+  "disposition": "S2-01 修(bars_of 群組與非群組共用;payload 扣非群組新增後仍與舊版逐位元組相同 = 重構零行為);S2-02 修(pac、prev_day);S2-03 修(合併前標 is_trade;重跑轉檔輸出與前版 diff -rq 相同);S2-04 不改(量小);S2-05 修(RP_QMAX_END 改算式);S2-06 修(來源標籤);O-1 修(索引非群組碰觸 / 迴盪欄印「—」,頁面實測 2305「— —」);O-2 修文案(定義段補「你的成交與線上訊號照常標」);P2-02 修:非群組頁頭開高低收與振幅改取 FinMind 當日日線,存檔量 < 全日 × 0.9 標「逐筆不完整:存檔第一筆 … 量 … / 全日 … 張(…%)」(evidence/extras_completeness.py:24 檔 94–100% 且開高低收全等,只 6147 34% / 2243 12% 被標;6147 頁頭改為開 201.5 低 197.5 振 5.0%);P2-01 不改(7772.js 無害,回報 user);P2-03 知情(與達錢歷史同樣會有判不出的列)。修後:DOM 回歸 72 區塊 0 不符、驗收 187 張(橫條 4.6%)、console 零 error。"
+}

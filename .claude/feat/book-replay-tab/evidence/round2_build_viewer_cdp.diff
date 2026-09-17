@@ -1,0 +1,71 @@
+--- build_viewer_cdp.py.bak-20260917	2026-09-17 01:05:51.274818300 +0800
++++ build_viewer_cdp.py	2026-09-17 09:00:52.540930500 +0800
+@@ -79,6 +79,53 @@
+                 evs.append([round(s, 1), px, lab])
+         day[c][d] = dict(pc=pc, lim=lim, o=T[0][1], c=close, hi=hi, lo=min(t[1] for t in T), rg=round((hi - min(t[1] for t in T)) / pc * 100, 2), b=blist, cdp=cdp, e=evs, f=[], s=[], t=defaultdict(list), op=e["open_pos"], onepush=int(e["one_push"]), g3=(round(float(e["g3"]), 1) if e["g3"] else None), g5=(round(float(e["g5"]), 1) if e["g5"] else None))
+ 
++# 非群組(簿重播)(#268 追加):有簿重播檔、不在產業群組母體的個股,逐筆讀 data/ticks_archive/(tick 存檔轉出,
++# extras_from_archive.py)、日線讀 data/daily_extras.json。只進回看頁;回測 / 碰觸 / 迴盪統計與 CDP 事件都不含它們。
++EXTRA_GROUP = "非群組(簿重播)"
++extra_daily = json.load(open(R / "daily_extras.json", encoding="utf-8")) if (R / "daily_extras.json").exists() else {}
++ED = {c: {r["date"]: r for r in v} for c, v in extra_daily.items()}
++EXTRAS = sorted({f.stem for f in (R / "ticks_archive").glob("*/*.json")} - set(CODES)) if (R / "ticks_archive").exists() else []
++for d in DATES:
++    for c in EXTRAS:
++        f = R / "ticks_archive" / d / f"{c}.json"
++        prev = [ED.get(c, {})[x] for x in sorted(x for x in ED.get(c, {}) if x < d)[-1:]]
++        if not f.exists() or not prev or not prev[0]["close"] or not prev[0]["max"] or not prev[0]["min"]:
++            continue
++        T = [(ms / 1000.0, p, q, b, a) for ms, p, q, b, a in json.load(open(f, encoding="utf-8")) if p and p > 0 and q and q > 0]
++        if len(T) < 50:
++            continue
++        p0 = prev[0]
++        pc = float(p0["close"])
++        lim = limit_up(pc)
++        close = T[-1][1]
++        hi = max(t[1] for t in T)
++        lo = min(t[1] for t in T)
++        daysum[c][d] = [round((close / pc - 1) * 100, 1), int(close >= lim - 1e-9), round((hi / pc - 1) * 100, 1)]
++        bars = {}
++        for sec, px, q, b, a in T:
++            i = min(NBAR - 1, max(0, int((sec - 32400) // BAR)))
++            bb = bars.get(i)
++            if bb is None:
++                bars[i] = bb = [i, px, px, px, px, 0.0, 0.0]
++            bb[2] = max(bb[2], px)
++            bb[3] = min(bb[3], px)
++            bb[4] = px
++            bb[5] += q
++            if a and px >= a:
++                bb[6] += q
++        blist = [[i, b[1], b[2], b[3], b[4], int(b[5]), int(b[6])] for i, b in sorted(bars.items())]
++        v = (p0["max"] + p0["min"] + 2 * p0["close"]) / 4  # CDP 五軸 = cdp_bt.cdp_levels
++        sp = p0["max"] - p0["min"]
++        cdp = {k: round(x, 2) for k, x in dict(AH=v + sp, NH=2 * v - p0["min"], CDP=v, NL=2 * v - p0["max"], AL=v - sp).items()}
++        opn = T[0][1]
++        op = "AH上" if opn >= cdp["AH"] else "NH-AH" if opn >= cdp["NH"] else "CDP-NH" if opn >= cdp["CDP"] else "NL-CDP" if opn >= cdp["NL"] else "NL下"
++        day[c][d] = dict(pc=pc, lim=lim, o=opn, c=close, hi=hi, lo=lo, rg=round((hi - lo) / pc * 100, 2), b=blist, cdp=cdp, e=[], f=[], s=[], t=defaultdict(list), op=op, onepush=0, g3=None, g5=None)
++extras_in = [c for c in EXTRAS if c in day]
++if extras_in:
++    GROUPS = dict(GROUPS, **{EXTRA_GROUP: extras_in})
++    for c in extras_in:
++        code_group[c] = EXTRA_GROUP
++
+ # fills(兩份)
+ fills = []
+ for r in json.load(open(R / "fills.json", encoding="utf-8")):
+@@ -157,7 +204,7 @@
+ evsum = dict(n=len(brk), held=len(held), held_lock=sum(int(e["locked"]) for e in held), broke=len(broke), broke_lock=sum(int(e["locked"]) for e in broke),
+              held_ret=sum((float(e["close"]) / float(e["AH"]) - 1) * 100 for e in held) / max(1, len(held)), broke_ret=sum((float(e["close"]) / float(e["AH"]) - 1) * 100 for e in broke) / max(1, len(broke)))
+ 
+-payload = dict(codes=[dict(c=c, n=names.get(c, c), g=code_group[c]) for c in CODES if c in day], dates=DATES, names={c: names.get(c, c) for c in CODES}, groups=GROUPS, daysum=daysum,
++payload = dict(codes=[dict(c=c, n=names.get(c, c), g=code_group[c]) for c in CODES + extras_in if c in day], dates=DATES, names={c: names.get(c, c) for c in CODES + extras_in}, groups=GROUPS, extra_group=(EXTRA_GROUP if extras_in else None), population=len([c for c in CODES if c in day]), daysum=daysum,
+                d={c: {d: dict(day[c][d], t=dict(day[c][d]["t"]), tt=day[c][d].get("tt", []), ob=day[c][d].get("ob", [])) for d in day[c]} for c in day}, summary=summary, evsum=evsum, touchsum=touchsum, oscsum=oscsum, bar=BAR, nbar=NBAR, tickdir="viewer-cdp-ticks")
+ raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+ gz = gzip.compress(raw, 9)
+@@ -165,4 +212,4 @@
+ tpl = (HERE / "viewer_cdp_template.html").read_text(encoding="utf-8")
+ out = ROOT / "viewer-cdp.html"
+ out.write_text(tpl.replace("__DATA_B64__", b64), encoding="utf-8")
+-print("codes", len(payload["codes"]), "code-days", sum(len(v) for v in day.values()), "raw MB", round(len(raw) / 1e6, 2), "gz MB", round(len(gz) / 1e6, 2), "html MB", round(out.stat().st_size / 1e6, 2))
++print("codes", len(payload["codes"]), "extras", len(extras_in), "code-days", sum(len(v) for v in day.values()), "raw MB", round(len(raw) / 1e6, 2), "gz MB", round(len(gz) / 1e6, 2), "html MB", round(out.stat().st_size / 1e6, 2))

@@ -1,0 +1,34 @@
+--- build_ticks_js.py.bak-20260917	2026-09-10 19:05:53.929738900 +0800
++++ build_ticks_js.py	2026-09-17 09:01:05.054941000 +0800
+@@ -1,7 +1,9 @@
+ # -*- coding: utf-8 -*-
+ """逐筆資料外掛檔:data/ticks/<date>/<code>.json → ../../viewer-cdp-ticks/<date>/<code>.js
+ 每檔一行 window.__tk("<code>|<date>","<base64(gzip(json))>");回看頁以 <script src> 懶載入(file:// 也可讀)。
+-只做產業群組成員(daily_groups.json)、7/1 起;已存在且較新的略過。"""
++只做產業群組成員(daily_groups.json)、7/1 起;已存在且較新的略過。
++另收 data/ticks_archive/<date>/<code>.json 的非群組個股(tick 存檔轉出,extras_from_archive.py;#268 追加),
++同一個輸出資料夾(回看頁只有一個逐筆外掛檔目錄)。"""
+ 
+ import json, gzip, base64, sys
+ from pathlib import Path
+@@ -16,15 +18,17 @@
+ dates = sorted(r["date"] for r in daily["TAIEX"] if r["date"] >= "2026-07-01")
+ n = skipped = 0
+ total = 0
+-for d in dates:
+-    src_dir = R / "ticks" / d
++sources = [(d, R / "ticks" / d, codes) for d in dates] + [(d, R / "ticks_archive" / d, None) for d in dates]
++for d, src_dir, allowed in sources:
+     if not src_dir.exists():
+         continue
+     (OUT / d).mkdir(parents=True, exist_ok=True)
+     for f in src_dir.glob("*.json"):
+         c = f.stem
+-        if c not in codes:
++        if allowed is not None and c not in allowed:
+             continue
++        if allowed is None and c in codes:
++            continue  # 群組成員一律用達錢歷史逐筆
+         dst = OUT / d / f"{c}.js"
+         if dst.exists() and dst.stat().st_mtime >= f.stat().st_mtime:
+             skipped += 1

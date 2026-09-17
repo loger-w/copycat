@@ -1,0 +1,267 @@
+--- viewer_cdp_template.html.bak-20260917	2026-09-10 22:04:16.318427800 +0800
++++ viewer_cdp_template.html	2026-09-17 09:01:24.212002700 +0800
+@@ -75,6 +75,26 @@
+ .def{max-width:76ch;color:var(--ink-2)} .def h3{color:var(--ink);font-size:14px;margin:14px 0 4px} .def p,.def li{margin:4px 0}
+ .empty{padding:30px;text-align:center;color:var(--muted)}
+ .kbd{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
++/* 重播(簿重播外掛檔) */
++.rp-head{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-bottom:6px;color:var(--ink-2);font-size:12px}
++.rp-clock{font-size:15px;color:var(--ink);font-weight:500}
++.rp-scrub{display:flex;align-items:center;gap:10px;margin-bottom:8px}
++.rp-scrub input{flex:1;min-width:0;accent-color:var(--accent)}
++.rp-note{color:var(--muted);font-size:12px;margin:6px 0 0}
++.rp-ladder{max-width:560px;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
++.rp-ladder.full{max-height:560px;overflow-y:auto}
++.rp-row{display:grid;grid-template-columns:1fr 84px 1fr;border-bottom:1px solid var(--grid);height:22px;align-items:stretch;font-size:12px}
++.rp-row.hd{height:auto;color:var(--muted);font-size:11px;letter-spacing:.04em;position:sticky;top:0;background:var(--surface);z-index:1}
++.rp-row.hd>div{padding:3px 8px}
++.rp-q{position:relative;display:flex;align-items:center;padding:0 8px}
++.rp-q.buy{justify-content:flex-end} .rp-q.sell{justify-content:flex-start}
++.rp-bar{position:absolute;top:3px;bottom:3px;opacity:.28;border-radius:2px}
++.rp-q.buy .rp-bar{right:0;background:var(--up)} .rp-q.sell .rp-bar{left:0;background:var(--down)}
++.rp-n{position:relative}
++.rp-p{display:flex;align-items:center;justify-content:center;border-left:1px solid var(--grid);border-right:1px solid var(--grid)}
++.rp-p.up{color:var(--up)} .rp-p.down{color:var(--down)}
++.rp-row.cur .rp-p{background:var(--ink);color:var(--surface);font-weight:700}
++.rp-row.lim .rp-p{text-decoration:underline dotted}
+ @media (max-width:820px){
+   .app{grid-template-columns:1fr;grid-template-areas:"top" "rail" "main" "bottom"}
+   .rail{position:static;max-height:160px;border-right:0;border-bottom:1px solid var(--line)}
+@@ -102,8 +122,9 @@
+     </div>
+   </main>
+   <section class="bottom">
+-    <div class="tabs"><button data-tab="ticks" class="active">逐筆</button><button data-tab="events">當日事件</button><button data-tab="bt">回測 / 支撐壓力總表</button><button data-tab="idx">活潑日索引</button><button data-tab="def">定義與規則</button></div>
++    <div class="tabs"><button data-tab="ticks" class="active">逐筆</button><button data-tab="events">當日事件</button><button data-tab="bt">回測 / 支撐壓力總表</button><button data-tab="idx">活潑日索引</button><button data-tab="def">定義與規則</button><button data-tab="replay">重播</button></div>
+     <div id="tab-ticks" class="ticks"></div>
++    <div id="tab-replay" hidden></div>
+     <div id="tab-events" hidden></div>
+     <div id="tab-bt" hidden></div>
+     <div id="tab-idx" hidden></div>
+@@ -131,6 +152,17 @@
+       <h3>K 線</h3>
+       <p>從 1 分 K 現場合併成 1 到 10 分 K。MA5 / MA20 / 布林通道(20 根、2 倍標準差)都用<b>當前週期的 K 棒</b>算,開盤前幾根不足 20 根時不畫。滾輪縮放(以滑鼠位置為中心)、按住拖曳平移、雙擊還原全天;縮放後價格軸依可視 K 棒自動調整,分時圖維持全天。</p>
+       <p>操作:<span class="kbd">←</span> <span class="kbd">→</span> 逐日換(不跳過);左欄依群組列股票;滑鼠在任一張圖上移動,兩張圖同時出十字線、下方逐筆表跟著捲到那個時間;<b>點圖一下</b>開啟十字線同步與逐筆追蹤(同時固定一條藍色直線在點的時間),<b>再點一下</b>關閉,關閉時拖曳與滾輪縮放 K 線不會被十字線干擾;點逐筆表的一列固定直線。</p>
++      <h3>重播(2026-09-16 起)</h3>
++      <p>資料 = copycat tick 存檔(server 盤中收到的每一則成交與五檔變動),以 <code>book-replay</code> 指令產生、放在同資料夾 <code>viewer-cdp-book/</code>(每檔每日一檔,切到重播分頁才載入)。7/1–9/15 沒有簿,重播分頁會說明找不到檔。</p>
++      <ul>
++        <li><b>時間軸</b>:拖曳的是 <b>server 收到時刻</b>(不倒退,比交易所晚約 0.1 秒;前提是本機鐘準)。達錢即時個股成交時刻只到整秒,拿它當軸一秒底下會壓幾十則。</li>
++        <li><b>時刻標籤</b>:「成交 hh:mm:ss 之後第 N 則」= 最近一筆成交的達錢時刻(交易所的尺)之後第幾則訊息;成交本身是第 0 則。達錢時刻比收到時刻晚超過 60 秒(例如開機收到前一日盤後成交)或比目前標籤早的成交,不拿來當標籤時刻。</li>
++        <li><b>價格階梯</b>:買量 | 價格 | 賣量,高價在上。預設現價上下各 10 檔,現價離開中心超過 5 檔才重新置中;「展開漲停–跌停」列出當日全範圍。現價 = 最近一筆成交價(鎖漲停時買一是價 0 的市價佇列、賣方全空,從五檔推不出現價)。價 0 的市價佇列不畫在階梯上,另列文字。</li>
++        <li><b>橫條</b>:按這檔當天 13:25 以前(收到時刻)所有價位裡最大的單格量歸一;13:25 後的收盤集合競價與漲停排隊量常大好幾倍,算進來會把盤中的橫條壓扁,所以不算,超過基準的格子畫滿。</li>
++        <li><b>十字線</b>:拖曳時上方兩張圖的十字線跟著重播時刻與現價走。</li>
++        <li><b>非群組(簿重播)</b>:當天有簿重播、但不在產業群組母體的個股另列一組(左欄最下)。分時 / K 線 / 逐筆來自 copycat tick 存檔(與達錢歷史逐筆比:盤中 1 分 K 逐根相同、少 14:30 盤後定價那一筆、內外盤用成交前真實五檔判);日線 FinMind。不進回測、碰觸、迴盪統計,也沒有 CDP 突破事件。</li>
++        <li><b>限制</b>:五檔是聚合量,看不到單一委託;五檔以外完全看不到;檔案記的是 server 收到的,開盤峰值掉包會留缺口。</li>
++      </ul>
+     </div>
+   </section>
+ </div>
+@@ -287,7 +319,7 @@
+     const sel = el("line",{y1:F.mt,y2:F.mt+F.Hp+F.gap+F.Hv,stroke:"var(--accent)","stroke-width":1.2,"stroke-dasharray":"5 3",style:"display:none"},svg);
+     return {g, vl, hl, dot, plab, plabBg, tlab, sel};
+   }
+-  function hoverAll(sec, price, srcKey, ev){
++  function hoverAll(sec, price, srcKey, ev, follow = true){
+     ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; const {F, cross, bars, bw} = c;
+       if(!F.inView(sec)){ cross.g.style.display="none"; return; }
+       const xx = F.x(sec); cross.g.style.display=""; cross.vl.setAttribute("x1",xx); cross.vl.setAttribute("x2",xx);
+@@ -299,7 +331,7 @@
+       if(k===srcKey && b && ev){ const v = c.vw ? c.vw.get(b[0]) : null; showTip(c.tip, c.svg, `${fmtT(T0+b[0]*bw)}${bw>60?"–"+fmtT(T0+(b[0]+1)*bw):""}  收 ${fmtP(b[4])}(${pct(b[4],CUR.pc)})\n開 ${fmtP(b[1])} 高 ${fmtP(b[2])} 低 ${fmtP(b[3])} 量 ${b[5]} 張 外盤 ${b[5]?Math.round(b[6]/b[5]*100):0}%${v!=null?"\n均價 "+fmtP(v):""}`, ev); }
+       else if(k!==srcKey) c.tip.hidden = true;
+     });
+-    followTick(sec);
++    if(follow) followTick(sec);
+   }
+   function leaveAll(){ ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; c.cross.g.style.display="none"; c.tip.hidden=true; }); }
+   function placeSel(sec){ ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; if(sec==null || !c.F.inView(sec)){ c.cross.sel.style.display="none"; return; } const xx = c.F.x(sec); c.cross.sel.setAttribute("x1",xx); c.cross.sel.setAttribute("x2",xx); c.cross.sel.style.display=""; }); }
+@@ -361,6 +393,7 @@
+     const cross = makeCross(svgR, F);
+     CH.R = {svg:svgR, tip:tipR, F, bars, bw, byIdx:new Map(bars.map(b=>[b[0],b])), vw:null, cross};
+     hookMouse("R"); placeSel(state.sel);
++    if(RP && rpActive() && RP.R.key === state.code+"|"+state.date) rpCross();
+     $("kInfo").textContent = kview ? `${fmtT(ta).slice(0,5)}–${fmtT(tb).slice(0,5)}(雙擊還原)` : "滾輪縮放、拖曳平移、雙擊還原";
+   }
+ 
+@@ -370,12 +403,12 @@
+     const D = DATA.d[state.code] && DATA.d[state.code][state.date];
+     const cinfo = codes.find(c=>c.c===state.code); const name = cinfo.n;
+     svgL.innerHTML = ""; svgR.innerHTML = ""; tipL.hidden = tipR.hidden = true; CH.L = CH.R = null; CUR = null;
+-    if(!D){ $("dayInfo").innerHTML = `<span class="pill">${name} ${state.date} 沒有資料</span>`; $("groupInfo").innerHTML = ""; $("tab-events").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; $("tab-ticks").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; [svgL,svgR].forEach(s => { el("text",{x:20,y:40,fill:"var(--muted)","font-size":14},s).textContent="這天沒有資料"; s.setAttribute("viewBox","0 0 800 80"); s.style.height="80px"; }); return; }
++    if(!D){ $("dayInfo").innerHTML = `<span class="pill">${name} ${state.date} 沒有資料</span>`; $("groupInfo").innerHTML = ""; $("tab-events").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; $("tab-ticks").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; [svgL,svgR].forEach(s => { el("text",{x:20,y:40,fill:"var(--muted)","font-size":14},s).textContent="這天沒有資料"; s.setAttribute("viewBox","0 0 800 80"); s.style.height="80px"; }); if(rpActive()) renderReplay(); return; }
+     const pc = D.pc, lim = D.lim, chg = (D.c/pc-1)*100, locked = D.c >= lim-1e-9;
+     const buys = D.f.filter(f=>f[3]>0), sells = D.f.filter(f=>f[3]<0);
+     const grpName = cinfo.g;
+     const peers = DATA.groups[grpName].filter(c => c!==state.code).map(c => { const ds = DATA.daysum[c] && DATA.daysum[c][state.date]; return ds ? `<span class="pill ${cls(ds[0])}">${DATA.names[c]||c} <b class="mono">${ds[0]>0?"+":""}${ds[0]}%</b>${ds[1]?" 鎖":""}</span>` : `<span class="pill">${DATA.names[c]||c} —</span>`; }).join("");
+-    $("groupInfo").innerHTML = `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span>${peers}<span class="pill">族群前 3 日 <b class="mono">${D.g3==null?"—":(D.g3>0?"+":"")+D.g3+"%"}</b> · 前 5 日 <b class="mono">${D.g5==null?"—":(D.g5>0?"+":"")+D.g5+"%"}</b></span>`;
++    $("groupInfo").innerHTML = grpName === DATA.extra_group ? `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span><span class="pill">不在產業群組母體:只有簿重播的日子,逐筆來自 copycat tick 存檔;沒有 CDP 事件、回測、碰觸與迴盪標記</span>` : `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span>${peers}<span class="pill">族群前 3 日 <b class="mono">${D.g3==null?"—":(D.g3>0?"+":"")+D.g3+"%"}</b> · 前 5 日 <b class="mono">${D.g5==null?"—":(D.g5>0?"+":"")+D.g5+"%"}</b></span>`;
+     const brokeAH = D.e.some(e=>e[2]==="過 AH"), held = brokeAH && !D.e.some(e=>e[2]==="跌破 NH");
+     $("dayInfo").innerHTML = `<span class="pill">前收 <b class="mono">${fmtP(pc)}</b></span><span class="pill">漲停 <b class="mono">${fmtP(lim)}</b></span><span class="pill ${cls(chg)}">收 <b class="mono">${fmtP(D.c)}</b> ${chg>0?"+":""}${chg.toFixed(2)}%</span><span class="pill ${cls(D.hi/pc-1)}">高 <b class="mono">${fmtP(D.hi)}</b> ${pct(D.hi,pc)}</span><span class="pill">振 <b class="mono">${D.rg.toFixed(1)}%</b></span><span class="pill">開在 ${D.op}</span>${brokeAH?`<span class="pill">${D.onepush?"一次拉到 AH":"分段過 AH"} · ${held?"NH 守住":"跌破 NH"}</span>`:""}${locked?'<span class="pill lock">收盤鎖死</span>':""}${buys.length?`<span class="pill up">買 ${buys.length} 筆</span>`:""}${sells.length?`<span class="pill down">賣 ${sells.length} 筆</span>`:""}`;
+     let lo = Math.min(pc, ...D.b.map(b=>b[3])), hi = Math.max(pc, ...D.b.map(b=>b[2]));
+@@ -398,6 +431,7 @@
+     placeSel(state.sel);
+     renderEvents(D, pc);
+     renderTicks(D, pc, state.sel, false);
++    if(rpActive()) renderReplay();
+   }
+   function setSyncUI(){ const on = state.sync; document.querySelectorAll(".card svg").forEach(s => s.style.cursor = on ? "crosshair" : "grab"); const b = $("syncInfo"); if(b){ b.textContent = on ? "十字線 開(點圖關閉)" : "點圖 → 開十字線 + 逐筆追蹤"; b.classList.toggle("on", on); } }
+   function selectTime(sec, fromChart){ state.sel = sec; placeSel(sec); const D = DATA.d[state.code][state.date]; renderTicks(D, D.pc, sec, true); if(fromChart){ document.querySelector('.tabs button[data-tab="ticks"]').click(); } }
+@@ -463,7 +497,7 @@
+   }
+   function renderBt(){
+     const S = DATA.summary, E = DATA.evsum; const f0 = v => v.toLocaleString(undefined,{maximumFractionDigits:0});
+-    let h = `<p style="color:var(--ink-2);margin:0 0 8px">母體 = 12 個產業群組 ${codes.length} 檔 × ${dates.length} 個交易日(${dates[0].slice(5)}–${dates[dates.length-1].slice(5)});可當沖且非處置;每筆 50 萬名目。</p>`;
++    let h = `<p style="color:var(--ink-2);margin:0 0 8px">母體 = 12 個產業群組 ${DATA.population ?? codes.length} 檔 × ${dates.length} 個交易日(${dates[0].slice(5)}–${dates[dates.length-1].slice(5)});可當沖且非處置;每筆 50 萬名目。</p>`;
+     h += `<p style="color:var(--ink-2);margin:0 0 8px">盤中突破 AH 的股票日 ${E.n} 個:之後 NH 守住 ${E.held} 個(鎖死 ${E.held_lock},收盤 vs AH 均 ${E.held_ret>0?"+":""}${E.held_ret.toFixed(2)}%);跌破 NH ${E.broke} 個(鎖死 ${E.broke_lock},均 ${E.broke_ret.toFixed(2)}%)。</p>`;
+     h += `<div class="tblwrap"><table><thead><tr><th>策略</th><th class="num">筆</th><th class="num">勝率</th><th class="num">均報酬</th><th class="num">每筆均(元)</th><th class="num">鎖死留倉</th><th class="num">破失效價</th></tr></thead><tbody>`;
+     S.forEach(r => { h += `<tr><td>${STRATS[r.strat]}</td><td class="num mono">${r.n}</td><td class="num mono">${r.win.toFixed(0)}%</td><td class="num mono ${cls(r.avg)}">${r.avg>0?"+":""}${r.avg.toFixed(2)}%</td><td class="num mono ${cls(r.per)}">${r.per>0?"+":""}${f0(r.per)}</td><td class="num mono">${r.lock.toFixed(0)}%</td><td class="num mono">${r.fail.toFixed(0)}%</td></tr>`; });
+@@ -490,7 +524,149 @@
+     $("tab-idx").innerHTML = `<p style="color:var(--ink-2);margin:0 0 4px">共 ${total} 個活潑股票日。</p>` + h;
+     $("tab-idx").querySelectorAll(".idx-row").forEach(tr => tr.addEventListener("click", ()=>{ state.code = tr.dataset.c; state.date = tr.dataset.d; state.sel = null; kview = null; render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+   }
+-  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", ()=>{ document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("active", x===b)); ["ticks","events","bt","idx","def"].forEach(t => { $("tab-"+t).hidden = (b.dataset.tab!==t); }); }));
++  // ---- 重播(簿重播外掛檔 v1;格式唯一來源 = copycat repo copycat/book_replay.py 模組說明「外掛檔 v1」)
++  const BOOKDIR = DATA.bookdir || "viewer-cdp-book";
++  const RP_KEEP = 3, RP_HALF = 10, RP_RECENTER = 5;
++  const RP_QMAX_END = 48300000; // 橫條基準只看收到時刻 13:25 前(收盤集合競價 / 漲停排隊量會把盤中橫條壓扁;user 2026-09-17 拍板)
++  const rpCache = new Map(), rpWait = new Map(), rpSeen = new Set();
++  const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
++  const rpActive = () => !$("tab-replay").hidden;
++  const rpSettle = (key, ok, v) => { const w = rpWait.get(key); rpWait.delete(key); if(w) (ok ? w.resolve : w.reject)(v); };
++  window.__bk = (key, b64) => { rpSeen.add(key); gunzipB64(b64).then(p => { const R = rpBuild(key, p); rpCache.set(key, R); while(rpCache.size > RP_KEEP) rpCache.delete(rpCache.keys().next().value); rpSettle(key, true, R); }).catch(e => rpSettle(key, false, e)); };
++  function loadReplay(code, date){
++    const key = code+"|"+date;
++    if(rpCache.has(key)) return Promise.resolve(rpCache.get(key));
++    if(rpWait.has(key)) return rpWait.get(key).promise;
++    let resolve, reject; const promise = new Promise((a,b)=>{resolve=a; reject=b;}); rpWait.set(key, {promise, resolve, reject});
++    rpSeen.delete(key);
++    const s = document.createElement("script"); s.src = `${BOOKDIR}/${date}/${code}.js`; s.async = true;
++    s.onerror = () => { s.remove(); rpSettle(key, false, new Error("no file")); };
++    // 檔案執行完才觸發 onload:沒有以這個 key 呼叫 __bk = 檔頭與檔名不符(或不是外掛檔)
++    s.onload = () => { s.remove(); if(!rpSeen.has(key)) rpSettle(key, false, new Error(`檔案沒有以「${key}」呼叫 window.__bk`)); };
++    document.head.appendChild(s);
++    return promise;
++  }
++  // 解碼 + 自檢(一次順播全部 delta:每個 keyframe 逐格比對、順便算最大單格量與出現過的價位)
++  function rpBuild(key, p){
++    const bad = m => { throw new Error("外掛檔格式不符:" + m); };
++    if(p.v !== 1) bad(`版本 ${p.v}(本頁只認 1)`);
++    if(`${p.code}|${p.date}` !== key) bad(`檔頭 ${p.code}|${p.date} 與檔名 ${key} 不符`);
++    const n = p.n, K = p.kf_every, F = p.fields;
++    if(!Number.isInteger(n) || n < 1) bad(`則數 ${n}`);
++    if(!Number.isInteger(K) || K < 1) bad(`kf_every ${K}`);
++    if(!Array.isArray(F) || F.length !== 20) bad("fields 不是 20 格");
++    const fi = name => { const i = F.indexOf(name); if(i < 0) bad(`fields 缺 ${name}`); return i; };
++    const BP = [0,1,2,3,4].map(l => fi("bid"+l)), BQ = [0,1,2,3,4].map(l => fi("bidq"+l)), AP = [0,1,2,3,4].map(l => fi("ask"+l)), AQ = [0,1,2,3,4].map(l => fi("askq"+l));
++    const levelOf = new Int8Array(20).fill(-1), sideOf = new Int8Array(20); // 格 → 層、買(0)/賣(1)
++    for(let l=0;l<5;l++){ levelOf[BP[l]] = levelOf[BQ[l]] = l; sideOf[BP[l]] = sideOf[BQ[l]] = 0; levelOf[AP[l]] = levelOf[AQ[l]] = l; sideOf[AP[l]] = sideOf[AQ[l]] = 1; }
++    if(typeof p.kind !== "string" || p.kind.length !== n || p.recv.length !== n || p.seq.length !== n || p.d.length !== n) bad("逐則陣列長度與 n 不符");
++    if(p.kf.length !== Math.ceil(n/K)) bad("keyframe 個數與 n 不符");
++    const recv = new Float64Array(n);
++    for(let i=0;i<n;i++){ const v = p.recv[i]; if(!Number.isInteger(v) || (i > 0 && v < 0)) bad(`第 ${i} 則收到時刻倒退或非整數`); recv[i] = i ? recv[i-1] + v : v; }
++    for(let i=0;i<n;i++) if(!Number.isInteger(p.seq[i]) || p.seq[i] <= 0) bad(`第 ${i} 則訊息序號沒有遞增`);
++    const anom = new Set(p.anomalous);
++    const clockAt = new Int32Array(n), tradeAt = new Int32Array(n); // 則號 ≤ i 的最後一個時鐘點 / 最後一個成交(在 trade 的序號);-1 = 還沒有
++    let k = -1, ci = -1, clock = -Infinity;
++    for(let i=0;i<n;i++){
++      const ch = p.kind[i];
++      if(ch === "t"){ k++; if(!anom.has(i)){ const ms = p.trade[k*4]; if(!Number.isInteger(ms) || ms < clock) bad(`第 ${i} 則時鐘點時刻缺或倒退`); ci = i; clock = ms; } }
++      else if(ch !== "b") bad(`第 ${i} 則種類 ${ch}`);
++      else if(anom.has(i)) bad(`anomalous 列了簿則 ${i}`);
++      clockAt[i] = ci; tradeAt[i] = k;
++    }
++    if(p.trade.length !== (k+1)*4) bad("trade 長度與成交則數不符");
++    const book = new Array(20).fill(null); let qmax = 0, qmaxDay = 0; const prices = new Set();
++    const touched = new Int8Array(10);
++    for(let i=0;i<n;i++){
++      const d = p.d[i]; if(!Array.isArray(d) || d.length % 2) bad(`第 ${i} 則 delta 不成對`);
++      touched.fill(0);
++      for(let j=0;j<d.length;j+=2){ const f = d[j]; if(!Number.isInteger(f) || f < 0 || f > 19) bad(`第 ${i} 則欄號 ${f}`); book[f] = d[j+1]; touched[sideOf[f]*5 + levelOf[f]] = 1; }
++      for(let t=0;t<10;t++){ if(!touched[t]) continue; const s = t >= 5, l = t % 5; const px = book[s ? AP[l] : BP[l]], q = book[s ? AQ[l] : BQ[l]]; if(px > 0){ prices.add(px); if(q > qmaxDay) qmaxDay = q; if(q > qmax && recv[i] < RP_QMAX_END) qmax = q; } }
++      if(i % K === 0){ const kf = p.kf[i/K]; for(let f=0;f<20;f++) if(kf[f] !== book[f]) bad(`第 ${i} 則 keyframe 與 delta 對不上(欄 ${F[f]})`); }
++    }
++    for(let t=0;t<=k;t++){ const px = p.trade[t*4+1]; if(px > 0) prices.add(px); }
++    if(qmax === 0) qmax = qmaxDay; // 13:25 前沒有任何掛單(極冷門)才退回全天
++    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ};
++  }
++  function rpLastPx(R, i){ for(let k=R.tradeAt[i];k>=0;k--){ const v = R.trade[k*4+1]; if(v > 0) return v; } return null; } // 則號 ≤ i 最近一筆成交價(毫元)
++  function rpBookAt(R, i){ const base = Math.floor(i/R.K); const b = R.kf[base].slice(); for(let j=base*R.K+1;j<=i;j++){ const d = R.d[j]; for(let q=0;q<d.length;q+=2) b[d[q]] = d[q+1]; } return b; }
++  function rpIndexAt(R, t){ let lo = 0, hi = R.n-1; if(t < R.recv[0]) return 0; while(lo < hi){ const m = (lo+hi+1) >> 1; if(R.recv[m] <= t) lo = m; else hi = m-1; } return lo; } // 收到時刻 ≤ t 的最後一則
++  const rpPx = p => { const tk = tickMilli(p); return (p/1000).toFixed(tk >= 1000 ? 0 : tk >= 100 ? 1 : 2); }; // 階梯價格固定小數位(同一 tick 段對齊)
++  const tickMilli = p => p < 10000 ? 10 : p < 50000 ? 50 : p < 100000 ? 100 : p < 500000 ? 500 : p < 1000000 ? 1000 : 5000;
++  function rpGrid(R){ // 當日漲停到跌停的每個價位(毫元,高到低);沒有前收時退回出現過的價位範圍
++    const D = DATA.d[R.code] && DATA.d[R.code][R.date];
++    let lo, hi, limUp = null, limDn = null;
++    if(D){ const pcm = Math.round(D.pc*1000); limUp = Math.round(D.lim*1000); const c = Math.floor(pcm*9/10), tk = tickMilli(c); limDn = Math.ceil(c/tk)*tk; lo = limDn; hi = limUp; }
++    const seen = [...R.prices]; if(seen.length){ const mn = Math.min(...seen), mx = Math.max(...seen); lo = lo == null ? mn : Math.min(lo, mn); hi = hi == null ? mx : Math.max(hi, mx); }
++    if(lo == null) return {grid:[], limUp, limDn, pc: D ? D.pc : null};
++    const set = new Set(R.prices); let x = lo - lo % tickMilli(lo); while(x <= hi){ if(x >= lo) set.add(x); x += tickMilli(x); }
++    return {grid:[...set].sort((a,b)=>b-a), limUp, limDn, pc: D ? D.pc : null};
++  }
++  let RP = null; // 目前掛載的重播 {R, G, t, center, full, raf}
++  let rpKeepT = null, rpKeepFull = false; // 換檔 / 換日沿用的重播時刻與展開狀態
++  function renderReplay(){
++    const box = $("tab-replay"); const key = state.code+"|"+state.date;
++    if(RP && RP.R.key === key && box.dataset.key === key){ rpDraw(); return; }
++    const mount = R => { if(state.code+"|"+state.date === key && rpActive()) rpMount(R); };
++    if(rpCache.has(key)){ mount(rpCache.get(key)); return; }
++    box.dataset.key = ""; RP = null;
++    box.innerHTML = '<div class="empty">載入簿重播中…</div>';
++    loadReplay(state.code, state.date).then(mount).catch(e => { if(state.code+"|"+state.date !== key) return;
++      box.innerHTML = e.message === "no file" ? `<div class="empty">這天沒有這檔的簿重播檔 ${esc(BOOKDIR)}/${esc(state.date)}/${esc(state.code)}.js<br>簿重播自 2026-09-16 起才有(copycat <code>book-replay</code> 指令產生,本頁要和 ${esc(BOOKDIR)} 資料夾放在同一層)</div>` : `<div class="empty">簿重播檔解不開:${esc(e.message)}</div>`; });
++  }
++  function rpMount(R){
++    const box = $("tab-replay");
++    const G = rpGrid(R);
++    const t0 = R.recv[0], t1 = R.recv[R.n-1];
++    let t = rpKeepT != null ? rpKeepT : state.sel != null ? state.sel*1000 : t0; t = Math.max(t0, Math.min(t1, Math.round(t)));
++    RP = {R, G, t, center:null, full: rpKeepFull, raf:0}; rpKeepT = t;
++    box.dataset.key = R.key;
++    box.innerHTML = `<div class="rp-head"><span>共 <b class="mono">${R.n.toLocaleString()}</b> 則(成交 ${(R.trade.length/4).toLocaleString()})</span><span class="rp-clock mono" id="rpClock"></span><span id="rpKind"></span><span>收到 <b class="mono" id="rpRecv"></b></span><span id="rpPx"></span><span id="rpMkt"></span><button type="button" id="rpFull"></button></div>
++      <div class="rp-scrub"><span class="mono kbd">${fmtMs(t0).slice(0,8)}</span><input type="range" id="rpRange" min="${t0}" max="${t1}" step="1" value="${t}" aria-label="重播時刻(server 收到時刻)"><span class="mono kbd">${fmtMs(t1).slice(0,8)}</span></div>
++      <div class="rp-ladder" id="rpLadder" role="table" aria-label="價格階梯"></div>
++      <p class="rp-note">拖曳 = server 收到時刻;標籤 = 最近一筆成交的達錢時刻之後第幾則。橫條按這檔當天 13:25 前最大單格量 ${R.qmax.toLocaleString()} 張歸一(之後的收盤集合競價 / 排隊量超過就畫滿)。</p>`;
++    $("rpRange").addEventListener("input", ev => { RP.t = rpKeepT = Number(ev.target.value); if(!RP.raf) RP.raf = requestAnimationFrame(()=>{ RP.raf = 0; rpDraw(); }); });
++    $("rpFull").addEventListener("click", ()=>{ RP.full = rpKeepFull = !RP.full; rpDraw(true); });
++    rpDraw(true);
++  }
++  function rpDraw(scroll){
++    if(!RP || !rpActive()) return; const {R, G} = RP;
++    const i = rpIndexAt(R, RP.t); const b = rpBookAt(R, i);
++    const ci = R.clockAt[i], ti = R.tradeAt[i], isTrade = R.kind[i] === "t";
++    const clockTxt = ci < 0 ? `首筆成交前第 ${i+1} 則` : `成交 ${fmtT(Math.floor(R.trade[R.tradeAt[ci]*4]/1000))}` + (i === ci ? "" : ` 之後第 ${i-ci} 則`);
++    $("rpClock").textContent = clockTxt;
++    const tr = isTrade ? R.trade.slice(ti*4, ti*4+4) : null;
++    $("rpKind").innerHTML = isTrade ? `成交則 <b class="mono">${tr[1]==null?"—":fmtP(tr[1]/1000)}</b> × <b class="mono">${tr[2]==null?"—":tr[2]}</b> 張 ${tr[3]==="outer"?'<span class="pos">外</span>':tr[3]==="inner"?'<span class="neg">內</span>':"中"}${R.anom.has(i)?'(達錢時刻異常 '+esc(tr[0]==null?"—":fmtMs(tr[0]))+',不當標籤時刻)':""}` : "簿則";
++    $("rpRecv").textContent = fmtMs(R.recv[i]);
++    const px = rpLastPx(R, i);
++    const pc = G.pc;
++    $("rpPx").innerHTML = px == null ? "現價 —(還沒有成交)" : `現價 <b class="mono ${pc?cls(px/1000-pc):""}">${fmtP(px/1000)}</b>${pc?` ${pct(px/1000,pc)}`:""}`;
++    const buy = new Map(), sell = new Map(), mkt = [];
++    for(let l=0;l<5;l++){ const bp = b[R.BP[l]], bq = b[R.BQ[l]], ap = b[R.AP[l]], aq = b[R.AQ[l]];
++      if(bp === 0) mkt.push(`市價買 ${bq ?? "—"} 張`); else if(bp != null) buy.set(bp, bq);
++      if(ap === 0) mkt.push(`市價賣 ${aq ?? "—"} 張`); else if(ap != null) sell.set(ap, aq); }
++    $("rpMkt").textContent = mkt.join("、");
++    $("rpFull").textContent = RP.full ? "收回現價上下 10 檔" : "展開漲停–跌停";
++    const grid = G.grid; if(!grid.length){ $("rpLadder").innerHTML = '<div class="empty">這天這檔沒有任何價位</div>'; return; }
++    // 置中價:現價;沒有成交時用買一 / 賣一
++    let anchor = px ?? (buy.size ? Math.max(...buy.keys()) : sell.size ? Math.min(...sell.keys()) : grid[Math.floor(grid.length/2)]);
++    let ai = grid.findIndex(g => g <= anchor); if(ai < 0) ai = grid.length-1;
++    if(RP.center == null || Math.abs(ai - RP.center) > RP_RECENTER) RP.center = ai;
++    let from = 0, to = grid.length;
++    if(!RP.full){ from = Math.max(0, Math.min(grid.length - (2*RP_HALF+1), RP.center - RP_HALF)); to = Math.min(grid.length, from + 2*RP_HALF + 1); }
++    const qmax = Math.max(1, R.qmax);
++    const cell = (q, side) => q == null ? `<div class="rp-q ${side}" role="cell"></div>` : `<div class="rp-q ${side}" role="cell"><span class="rp-bar" style="width:${Math.min(100, q/qmax*100).toFixed(1)}%"></span><span class="rp-n mono">${q.toLocaleString()}</span></div>`;
++    let h = `<div class="rp-row hd" role="row"><div style="text-align:right" role="columnheader">買量</div><div style="text-align:center" role="columnheader">價格</div><div role="columnheader">賣量</div></div>`;
++    for(let g=from; g<to; g++){ const p = grid[g];
++      const pcls = pc ? cls(p/1000 - pc) : "";
++      h += `<div class="rp-row${p===px?" cur":""}${p===G.limUp||p===G.limDn?" lim":""}" role="row" data-p="${p}">${cell(buy.get(p), "buy")}<div class="rp-p mono ${pcls}" role="cell"${p===G.limUp?' title="漲停"':p===G.limDn?' title="跌停"':""}>${rpPx(p)}</div>${cell(sell.get(p), "sell")}</div>`; }
++    const lad = $("rpLadder"); lad.classList.toggle("full", RP.full); lad.innerHTML = h;
++    if(RP.full && scroll){ const row = lad.querySelector(`[data-p="${grid[RP.center]}"]`); if(row) lad.scrollTop = Math.max(0, row.offsetTop - lad.clientHeight/2); }
++    rpCross(i, px);
++  }
++  function rpCross(i, px){ if(!RP) return; if(i == null){ i = rpIndexAt(RP.R, RP.t); px = rpLastPx(RP.R, i); } hoverAll(RP.R.recv[i]/1000, px == null ? null : px/1000, null, null, false); }
++
++  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", ()=>{ document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("active", x===b)); ["ticks","events","bt","idx","def","replay"].forEach(t => { $("tab-"+t).hidden = (b.dataset.tab!==t); }); if(b.dataset.tab === "replay") renderReplay(); }));
+   renderBt(); renderIdx();
+   render(); setSyncUI();
+   let rt; window.addEventListener("resize", ()=>{ clearTimeout(rt); rt = setTimeout(render, 150); });
