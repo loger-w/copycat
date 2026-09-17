@@ -1,0 +1,21 @@
+{
+  "scope": "repo 外 C:\\Users\\USER\\Documents\\copycat-trading-review\\scripts\\week0909\\viewer_cdp_template.html(對 .bak-20260917-pre270;diff = evidence/viewer_cdp_template.diff)+ 產物 viewer-cdp.html;fixed point ad2236e5(repo 內只有 artifacts)。spec = #270 + #265 story 6/7/9 與時間軸追記 + #268 留言 + user 本 session 拍板(首次鎖漲停 = 線上 limit_lock 簽名;重播分頁 ← → 逐則步進不換日;播放中拖曳續播、步進 / 跳鎖板 / 換檔換日 / 切分頁暫停;速度沿用;則號 RP.i 為唯一依據、#269 讀同一則號;#269 與 #268 P-06 不做;既有分頁不可變)",
+  "standards": [
+    "(總評)硬違規 0,以下 S 全是判斷題;◀▶❚❚ 在截圖裡是單色字形,不算 emoji。",
+    "S-01 中 §4:rpFirstLock 照抄 _locked_up,Py 端沒有反向註記也沒有常駐 parity 測試,判式改了回看頁會靜默漂移;limUp 另取 blob 的 lim。",
+    "S-02 低 Data Clumps:RP.t / rpKeepT / RP.i / range.value 在四個寫入點手寫同步。",
+    "S-03 低 重複:鎖漲停條件抄了三份(註解 / title / 定義頁);定義頁的倍速與 RP_SPEEDS 各寫一份;lockTxt 重抄 rpLabel 的時刻式。",
+    "S-04 低 命名:RP.lock(則號)與按鈕 RP.el.lock 同名;RP_MAX_DT 註解的「分頁」與定義頁的「分頁」意思不同。",
+    "S-05 低:rpLabel 只有一個 caller,屬順手抽出;#rpPlay 是樣式表唯一的 ID selector。",
+    "O-01 低 軸外:重播分頁開著但 RP=null(載入中或沒檔)時,← → 被吞成死鍵。"
+  ],
+  "spec": [
+    "(總評)#270 驗收與 user 拍板全數做到,無高嚴重度。首次鎖板我用 09-16 全 80 檔重算,與線上 limit_lock jsonl 10/10 同秒。",
+    "P-01 中/確認(拍板「#269 讀同一個則號」):RP 只存目前則號,沒存上次畫到的。播放、拖曳取「≤ t 最後一則」,與下一則同毫秒的則(全日 14.1%)只有步進到得了;2426 11:02:00→鎖板 729 則,1x 只畫 426 次。#269 範例「買 99.1 24→187」正是這種則(第 61,599 則),中間欄只讀 RP.i 就播不出來,需補「上次到這次」的區間。",
+    "P-02 低/確認(「則號為唯一依據」):換日或換檔再回同檔,RP.i 由 rpKeepT 回推,第 61,599 則變 61,600;重繪時正確。",
+    "P-03 低/可疑(「播放中拖曳接著播」):播放中按住拉把,rpTick 每幀改 range.value,拉把可能抖;harness 沒實際拖。",
+    "P-04 低/確認(#265「鎖漲停七檔」):所列時刻是首次碰到漲停,2489 與按鈕差 16 分;照此尺當天有 10 檔鎖板。",
+    "P-05 低/確認(未要求):鎖板鈕帶時刻、「沒有漲停價」狀態、「第 i / N 則」、單幀推進上限 250 ms,皆無害。"
+  ],
+  "disposition": "S-01 不改產品碼:user 本次指示「repo 內只放 artifacts」;常駐 parity 測試不可行(模板在 repo 外,repo 測試不能依賴 Documents 路徑,條件式略過又違反禁 .skip)。本輪以 evidence/rp_step_expected.py 直接呼叫 SignalDetector._locked_up 當標準答案,10 檔(7 檔有鎖)鎖板鈕文字與跳轉則號逐則相同;在 _locked_up docstring 加反向註記交 user 決定。limUp 取 blob lim = 頁頭漲停同一份(頁面沒有達錢 meta),不改。S-02 修:位置只走兩條路 rpSetT(拖曳 / 播放)與 rpGo(步進 / 跳鎖板),各自同步 t、rpKeepT、i 與記住的則號。S-03 部分修:lockTxt 與標籤共用 rpTradeTime;鎖漲停條件三份(程式註解 / 按鈕 title / 定義頁)讀者不同且同檔,不收;定義頁倍速是說明文字,不從 RP_SPEEDS 產生。S-04 修:RP.lock → RP.firstLock;RP_MAX_DT 註解改「切到別的瀏覽器分頁」。S-05 修:rpLabel 移除(標籤回 rpDraw 內聯,時刻式抽成兩處共用的 rpTradeTime);樣式改 .rp-ctrl button[aria-pressed=\"true\"],無 ID selector。O-01 不改:user 拍板「重播分頁開著時 ← → 是逐則步進、不換日」,沒有重播(載入中 / 無檔)時不動作,避免載入瞬間誤換日;定義頁已寫換日用上方 ◀ ▶。P-01 部分收:設計註解補「播放與拖曳一次可能跨過好幾則,同一毫秒的則只有 rpGo 停得到,要逐則交代變動的面板得自己記上次畫到哪一則」;不預先加沒有讀者的狀態(屬 #269 設計選擇),收尾在 #269 留言交接。P-02 修:rpKeepI(代號|日期 → 最後停的則號),掛載時時刻沒動(recv[kept] === t)就回到同一則;實測換檔、換到無簿檔日、連換 4 檔擠掉解碼快取(只留 3 份)後切回,皆仍第 61,599 則。P-03 不改:evidence/drag_while_playing.mjs 播放中真滑鼠拖曳實測,移動中相鄰幀拉把位移 ≤ 3 px(= 滑鼠每步 3 px)、按住 1.5 秒 1x 前進 0.09 px / 10x 0.89 px、倒退 0 次、放開後續播,無可見抖動。P-04 知情不改:user 選定義時已看過首觸 vs 鎖住對照表。P-05 無需改。修後重跑:Python 對照 365 則 0 不符(竄改測試 3/3 抓到)、播放功能 16/16、新舊頁回歸 1,057 區塊 0 不符、流暢度量測與截圖重拍。【review 後增量快篩(main agent)】增量 = S-02/S-03/S-04/S-05/P-01/P-02 收修(CSS 選擇器、RP_MAX_DT 註解、rpLabel → rpTradeTime、RP 設計註解、rpKeepI Map、rpSetT 抽出並由拖曳與播放共用、rpGo 記則號、RP.lock → RP.firstLock、rpDraw 標籤內聯);grep 舊名 rpLabel / RP.lock / #rpPlay[ 零殘留;node --check 語法 OK;重產回看頁 payload 逐位元組相同;全部驗證重跑:逐則 365 / 0 不符 + P-02 三情境(換檔、無簿檔日、擠掉快取)皆回到第 61,599 則、播放功能 17/17(verification-before-completion 核對時補「播放中換日暫停」一項)、DOM 回歸 1,057 / 0、播放中拖曳量測、截圖 SC 7/7(sub-agent 對照)。無新 finding。"
+}

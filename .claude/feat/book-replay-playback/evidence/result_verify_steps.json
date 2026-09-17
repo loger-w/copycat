@@ -1,0 +1,228 @@
+{
+ "stats": {
+  "samples": 365,
+  "keyboard": 97,
+  "drags": 100,
+  "locks": 7,
+  "rowsCompared": 57598
+ },
+ "fails": 0,
+ "failList": [],
+ "consoleErrors": [
+  "requestfailed: viewer-cdp-book/2026-09-15/2426.js net::ERR_FILE_NOT_FOUND",
+  "error: Failed to load resource: net::ERR_FILE_NOT_FOUND"
+ ],
+ "acceptance": {
+  "drag_110244025": {
+   "idx": "61,600",
+   "lab": "成交 11:02:43 之後第 3 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "left1": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "left1_991": "187",
+  "after_resize": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "after_legend": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "after_code_switch": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "after_nofile_day": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "after_cache_evict": {
+   "idx": "61,599",
+   "lab": "成交 11:02:43 之後第 2 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "left2": {
+   "idx": "61,598",
+   "lab": "成交 11:02:43 之後第 1 則",
+   "kind": "簿則",
+   "recv": "11:02:43.978",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39763978,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "left2_991": "24",
+  "back": {
+   "idx": "61,600",
+   "lab": "成交 11:02:43 之後第 3 則",
+   "kind": "簿則",
+   "recv": "11:02:44.025",
+   "px": "99.6",
+   "mkt": "",
+   "range": 39764025,
+   "play": "false",
+   "playText": "▶ 播放",
+   "playDis": false,
+   "prevDis": false,
+   "nextDis": false,
+   "lockText": "跳到首次鎖漲停 11:02:50",
+   "lockDis": false,
+   "speed": [
+    "1"
+   ],
+   "date": "2026-09-16",
+   "code": "2426",
+   "key": "2426|2026-09-16",
+   "rows": null
+  },
+  "back_991": "187"
+ },
+ "seconds": 24
+}
