@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-import pyarrow.compute as pc
+import pyarrow.compute as pac
 import pyarrow.parquet as pq
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -48,10 +48,10 @@ else:
 print("日期", DATE, "檔數", len(codes))
 
 stem = DATE.replace("-", "")
-flt = pc.field("code").isin(codes)
+flt = pac.field("code").isin(codes)
 cols = ["code", "msg_seq", "bid0", "ask0"]
-trades = pq.read_table(ARCHIVE / f"{stem}.parquet", columns=[*cols, "ms", "price_milli", "qty"], filters=flt).to_pylist()
-books = pq.read_table(ARCHIVE / f"{stem}-book.parquet", columns=cols, filters=flt).to_pylist()
+trades = [dict(r, is_trade=True) for r in pq.read_table(ARCHIVE / f"{stem}.parquet", columns=[*cols, "ms", "price_milli", "qty"], filters=flt).to_pylist()]
+books = [dict(r, is_trade=False) for r in pq.read_table(ARCHIVE / f"{stem}-book.parquet", columns=cols, filters=flt).to_pylist()]
 rows = sorted(trades + books, key=lambda r: (r["code"], r["msg_seq"]))
 
 out, prev_book, skipped = {c: [] for c in codes}, {}, {"時刻在盤外": 0, "0 價 / 0 量": 0}
@@ -59,7 +59,7 @@ for r in rows:
     c = r["code"]
     before = prev_book.get(c, (None, None))
     prev_book[c] = (r["bid0"], r["ask0"])
-    if "ms" not in r:  # 簿列只更新「上一則的簿」
+    if not r["is_trade"]:  # 簿列只更新「上一則的簿」
         continue
     if not r["price_milli"] or not r["qty"]:
         skipped["0 價 / 0 量"] += 1

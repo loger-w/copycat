@@ -1,5 +1,5 @@
---- build_ticks_js.py.bak-20260917	2026-09-10 19:05:53.929738900 +0800
-+++ build_ticks_js.py	2026-09-17 09:01:05.054941000 +0800
+--- /c/Users/USER/Documents/copycat-trading-review/scripts/week0909/build_ticks_js.py.bak-20260917	2026-09-10 19:05:53.929738900 +0800
++++ /c/Users/USER/Documents/copycat-trading-review/scripts/week0909/build_ticks_js.py	2026-09-17 09:07:21.568820900 +0800
 @@ -1,7 +1,9 @@
  # -*- coding: utf-8 -*-
  """逐筆資料外掛檔:data/ticks/<date>/<code>.json → ../../viewer-cdp-ticks/<date>/<code>.js
@@ -17,17 +17,17 @@
  total = 0
 -for d in dates:
 -    src_dir = R / "ticks" / d
-+sources = [(d, R / "ticks" / d, codes) for d in dates] + [(d, R / "ticks_archive" / d, None) for d in dates]
-+for d, src_dir, allowed in sources:
++sources = [(d, R / "ticks" / d, "達錢歷史") for d in dates] + [(d, R / "ticks_archive" / d, "tick 存檔") for d in dates]
++for d, src_dir, source in sources:
      if not src_dir.exists():
          continue
      (OUT / d).mkdir(parents=True, exist_ok=True)
      for f in src_dir.glob("*.json"):
          c = f.stem
 -        if c not in codes:
-+        if allowed is not None and c not in allowed:
++        if source == "達錢歷史" and c not in codes:
              continue
-+        if allowed is None and c in codes:
++        if source == "tick 存檔" and c in codes:
 +            continue  # 群組成員一律用達錢歷史逐筆
          dst = OUT / d / f"{c}.js"
          if dst.exists() and dst.stat().st_mtime >= f.stat().st_mtime:
