@@ -86,7 +86,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import fields as dataclass_fields  # `fields` 會跟 payload 的 fields 鍵混淆
 from operator import attrgetter
 from typing import Any, TypedDict
@@ -182,8 +182,18 @@ _SIDES: frozenset[str] = frozenset({"inner", "outer", "neutral"})
 _TRADE_CELLS: tuple[str, ...] = tuple(f.name for f in dataclass_fields(Trade))
 _trade_cells: Callable[[Trade], tuple[int | str | None, ...]] = attrgetter(*_TRADE_CELLS)
 
-#: 五檔兩側,序號 = 外掛檔變動項目的側別碼(買 0 / 賣 1)
+#: 五檔兩側:側別碼(= 外掛檔 `chg` / `eat` 的側別碼,買 0 / 賣 1)↔ 名稱(兩個方向同一張表)
 _BOOK_SIDES: tuple[str, str] = ("bid", "ask")
+_SIDE_CODE: dict[str, int] = {name: code for code, name in enumerate(_BOOK_SIDES)}
+#: 成交的內外盤 → 它吃的是哪一側的掛單(外盤吃賣方、內盤吃買方;中性看不出來,不在表裡)
+_EATEN_SIDE_OF: dict[str, int] = {"inner": _SIDE_CODE["bid"], "outer": _SIDE_CODE["ask"]}
+
+
+def _covers(side: int, bound: int | None, price: int) -> bool:
+    """看得到:買方價 ≥ 第五檔限價、賣方價 ≤ 第五檔限價;bound None(不滿五層)= 整側看得到。"""
+    if bound is None:
+        return True
+    return price >= bound if side == _SIDE_CODE["bid"] else price <= bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,8 +348,7 @@ def replay_books(rows: Iterable[TickRow]) -> dict[str, BookReplay]:
 
 
 def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
-    parts: list[tuple[int, str, tuple[int | None, ...], int | None, int, int, Trade | None]] = []
-    all_changes: list[tuple[BookChange, ...]] = []
+    frames: list[Frame] = []
     ledger = _EatLedger()
     clock: int | None = None
     clock_index = -1
@@ -369,7 +378,7 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
             ):
                 live.append(pending)
             else:
-                ledger.unabsorbed(pending)
+                ledger.record_unabsorbed(pending)
         unmatched = live
         changes: tuple[BookChange, ...] = ()
         if _cleared(book):
@@ -379,15 +388,22 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
         elif views is None:
             views = (_SideView(0, book), _SideView(1, book))
         else:
-            step = (i, recv_ms, traded_price, traded_qty, unmatched, ledger)
-            changes = (*views[0].step(book, *step), *views[1].step(book, *step))
-        parts.append((row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade))
-        all_changes.append(changes)
+            changes = tuple(
+                change
+                for view in views
+                for change in view.step(
+                    book, i, recv_ms, traded_price, traded_qty, unmatched, ledger
+                )
+            )
+        frames.append(
+            Frame(row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade, changes, ())
+        )
     for pending in unmatched:
-        ledger.unabsorbed(pending)
+        ledger.record_unabsorbed(pending)
+    # 吃檔要等扣到或到期才知道(可能晚幾則),最後才補進成交則
     return tuple(
-        Frame(*part, changes, ledger.eaten(i))
-        for i, (part, changes) in enumerate(zip(parts, all_changes, strict=True))
+        replace(frame, eaten=eaten) if (eaten := ledger.eaten(i)) else frame
+        for i, frame in enumerate(frames)
     )
 
 
@@ -434,7 +450,7 @@ class _EatLedger:
         """記下這一則的參考五檔;五檔全空(清空)沿用前一份,檔位才不會因清空一律變五檔外。"""
         self._books.append(self._books[-1] if self._books and _cleared(book) else book)
 
-    def absorbed(
+    def record_absorbed(
         self, trade: _UnmatchedTrade, side: int, price: int | None, qty: int, index: int
     ) -> None:
         """第 `index` 則某側 `price`(None = 市價佇列)的減量扣了這筆成交 `qty` 張。
@@ -448,14 +464,13 @@ class _EatLedger:
             level = before if before is not None else _level_of(self._books[index - 1], side, price)
         self._add(trade.index, Eaten(_BOOK_SIDES[side], level, qty))
 
-    def unabsorbed(self, trade: _UnmatchedTrade) -> None:
+    def record_unabsorbed(self, trade: _UnmatchedTrade) -> None:
         """到期都沒扣到的量:成交價在成交前那一則該側第五檔之外 = 五檔外;其餘看不出吃了哪一檔,不記。"""
-        side = {"inner": 0, "outer": 1}.get(trade.side or "")
+        side = _EATEN_SIDE_OF.get(trade.side or "")
         if not trade.qty or side is None or trade.index == 0:
             return
         _listed, _queue, bound = _side_levels(self._books[trade.index - 1], side)
-        price = trade.price_milli
-        if bound is not None and (price > bound if side else price < bound):
+        if not _covers(side, bound, trade.price_milli):
             self._add(trade.index, Eaten(_BOOK_SIDES[side], None, trade.qty))
 
     def eaten(self, index: int) -> tuple[Eaten, ...]:
@@ -477,7 +492,10 @@ def _cleared(book: Sequence[int | None]) -> bool:
 def _level_of(book: tuple[int | None, ...], side: int, price: int) -> int | None:
     """`price` 是這份簿該側限價的第幾檔(最優 = 1,市價佇列不佔號);沒列出 → None。"""
     base = 2 * DEPTH * side
-    limits = sorted((p for level in range(DEPTH) if (p := book[base + level])), reverse=side == 0)
+    limits = sorted(
+        (p for level in range(DEPTH) if (p := book[base + level])),
+        reverse=side == _SIDE_CODE["bid"],
+    )
     return limits.index(price) + 1 if price in limits else None
 
 
@@ -506,12 +524,6 @@ class _SideView:
         self._away: dict[int, _Away] = {}
         self._away_prices: list[int] = []
 
-    def _covers(self, bound: int | None, price: int) -> bool:
-        """看得到:買方價 ≥ 第五檔限價、賣方價 ≤ 第五檔限價;bound None(不滿五層)= 整側看得到。"""
-        if bound is None:
-            return True
-        return price >= bound if self._side == 0 else price <= bound
-
     def _track(self, price: int, qty: int) -> None:
         if price not in self._tracked:
             bisect.insort(self._tracked_prices, price)
@@ -536,7 +548,7 @@ class _SideView:
             traded = self._traded(unmatched, None, prev_queue - queue, index, ledger)
             out.append(LevelChange(self._name, 0, prev_queue, queue, traded))
         for price in prev_listed.keys() | listed.keys():
-            if not (self._covers(prev_bound, price) and self._covers(bound, price)):
+            if not (_covers(self._side, prev_bound, price) and _covers(self._side, bound, price)):
                 continue  # 只在一則看得到:離開 / 回來 / 首次進入,下面處理
             before, after = prev_listed.get(price, 0), listed.get(price, 0)
             if after or price in self._tracked:
@@ -544,15 +556,13 @@ class _SideView:
             if before != after:
                 traded = self._traded(unmatched, price, before - after, index, ledger)
                 out.append(LevelChange(self._name, price, before, after, traded))
-        for price in self._leaving(prev_bound, bound):
-            qty = self._tracked.pop(price)
+        for price, qty in self._pop_leaving(prev_bound, bound):
             self._away[price] = _Away(qty, index, recv_ms)
             bisect.insort(self._away_prices, price)
             if qty:
                 out.append(LeftView(self._name, price, qty))
         self.count_trade(traded_price, traded_qty)
-        for price in self._returning(prev_bound, bound):
-            away = self._away.pop(price)
+        for price, away in self._pop_returning(prev_bound, bound):
             now = listed.get(price, 0)
             self._track(price, now)
             if away.qty or now or away.traded:
@@ -568,11 +578,11 @@ class _SideView:
                     )
                 )
         for price, qty in listed.items():
-            if not self._covers(prev_bound, price) and price not in self._tracked:
+            if not _covers(self._side, prev_bound, price) and price not in self._tracked:
                 self._track(price, qty)
                 if qty:
                     out.append(EnteredView(self._name, price, qty))
-        direction = -1 if self._side == 0 else 1
+        direction = -1 if self._side == _SIDE_CODE["bid"] else 1
         out.sort(key=lambda change: (change.price_milli != 0, direction * change.price_milli))
         return out
 
@@ -592,16 +602,16 @@ class _SideView:
         """減量先扣成交並記到吃檔帳上,回傳算成交的張數。"""
         traded = 0
         for trade, take in _absorb(unmatched, price, decrease):
-            ledger.absorbed(trade, self._side, price, take, index)
+            ledger.record_absorbed(trade, self._side, price, take, index)
             traded += take
         return traded
 
-    def _leaving(self, prev_bound: int | None, bound: int | None) -> list[int]:
-        """邊界收窄時被擠出去的追蹤中價位(從追蹤清單移除,回傳由小到大)。"""
+    def _pop_leaving(self, prev_bound: int | None, bound: int | None) -> list[tuple[int, int]]:
+        """邊界收窄時被擠出去的追蹤中價位:從追蹤中移除,回傳 [(價, 最後已知量)](價由小到大)。"""
         prices = self._tracked_prices
         if bound is None or (prev_bound is not None and bound == prev_bound):
             return []
-        if self._side == 0:
+        if self._side == _SIDE_CODE["bid"]:
             if prev_bound is not None and bound < prev_bound:
                 return []
             cut = bisect.bisect_left(prices, bound)
@@ -611,14 +621,14 @@ class _SideView:
                 return []
             cut = bisect.bisect_right(prices, bound)
             leaving, self._tracked_prices = prices[cut:], prices[:cut]
-        return leaving
+        return [(price, self._tracked.pop(price)) for price in leaving]
 
-    def _returning(self, prev_bound: int | None, bound: int | None) -> list[int]:
-        """邊界放寬時回到看得到範圍的被擠出價位(從被擠出清單移除,回傳由小到大)。"""
+    def _pop_returning(self, prev_bound: int | None, bound: int | None) -> list[tuple[int, _Away]]:
+        """邊界放寬時回到看得到範圍的被擠出價位:從被擠出中移除,回傳 [(價, 離開紀錄)](價由小到大)。"""
         prices = self._away_prices
         if prev_bound is None or (bound is not None and bound == prev_bound):
             return []
-        if self._side == 0:
+        if self._side == _SIDE_CODE["bid"]:
             if bound is not None and bound > prev_bound:
                 return []
             cut = 0 if bound is None else bisect.bisect_left(prices, bound)
@@ -628,7 +638,7 @@ class _SideView:
                 return []
             cut = len(prices) if bound is None else bisect.bisect_right(prices, bound)
             returning, self._away_prices = prices[:cut], prices[cut:]
-        return returning
+        return [(price, self._away.pop(price)) for price in returning]
 
 
 def _side_levels(book: Sequence[int | None], side: int) -> tuple[dict[int, int], int, int | None]:
@@ -653,7 +663,7 @@ def _side_levels(book: Sequence[int | None], side: int) -> tuple[dict[int, int],
             listed[price] = qty
     if levels < DEPTH or not listed:
         return listed, queue, None
-    return listed, queue, (min(listed) if side == 0 else max(listed))
+    return listed, queue, (min(listed) if side == _SIDE_CODE["bid"] else max(listed))
 
 
 def _is_clock_point(row: TickRow, clock: int | None, day_start_ms: int) -> bool:
@@ -731,7 +741,7 @@ def _encode_eaten(eaten: tuple[Eaten, ...]) -> list[int | None]:
     """一筆成交的吃檔 → `eat` 的一列 `[側別碼, 檔位, 張, …]`(檔位 null = 五檔外)。"""
     out: list[int | None] = []
     for eat in eaten:
-        out += [_BOOK_SIDES.index(eat.side), eat.level, eat.qty]
+        out += [_SIDE_CODE[eat.side], eat.level, eat.qty]
     return out
 
 
@@ -751,28 +761,28 @@ def _decode_eaten(cells: Sequence[Any], code: str, index: int) -> tuple[Eaten, .
     return tuple(out)
 
 
-#: 外掛檔 `chg` 每項佔幾格(含開頭的種類碼);種類碼 = 2 × 這張表的序號 + 側別碼(買 0 / 賣 1)
-_CHANGE_WIDTHS: tuple[int, ...] = (
-    5,  # 0 / 1 價位變動:[碼, 價, 前量, 後量, 成交]
-    3,  # 2 / 3 被擠出五檔:[碼, 價, 離開前的量]
-    8,  # 4 / 5 重新可見:[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
-    3,  # 6 / 7 首次進入五檔:[碼, 價, 量]
+#: 外掛檔 `chg` 項目的種類(唯一一張表):序號 × 2 = 基本碼(加側別碼成種類碼)、每項佔幾格(含種類碼)
+_CHANGE_KINDS: tuple[tuple[type, int], ...] = (
+    (LevelChange, 5),  # 0 / 1:[碼, 價, 前量, 後量, 成交]
+    (LeftView, 3),  # 2 / 3:[碼, 價, 離開前的量]
+    (Reappeared, 8),  # 4 / 5:[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
+    (EnteredView, 3),  # 6 / 7:[碼, 價, 量]
 )
+_CHANGE_BASE: dict[type, int] = {kind: 2 * n for n, (kind, _width) in enumerate(_CHANGE_KINDS)}
 
 
 def _encode_changes(changes: tuple[BookChange, ...]) -> list[int]:
     """一則的變動 → `chg` 的一列(格式見模組說明「外掛檔 v2」)。"""
     out: list[int] = []
     for change in changes:
-        side = _BOOK_SIDES.index(change.side)
+        out.append(_CHANGE_BASE[type(change)] + _SIDE_CODE[change.side])
         match change:
             case LevelChange():
-                out += [side, change.price_milli, change.before, change.after, change.traded]
-            case LeftView():
-                out += [2 + side, change.price_milli, change.qty]
+                out += [change.price_milli, change.before, change.after, change.traded]
+            case LeftView() | EnteredView():
+                out += [change.price_milli, change.qty]
             case Reappeared():
                 out += [
-                    4 + side,
                     change.price_milli,
                     change.left_qty,
                     change.now_qty,
@@ -781,8 +791,6 @@ def _encode_changes(changes: tuple[BookChange, ...]) -> list[int]:
                     change.left_index,
                     change.away_ms,
                 ]
-            case EnteredView():
-                out += [6 + side, change.price_milli, change.qty]
     return out
 
 
@@ -795,30 +803,23 @@ def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[BookCh
     k = 0
     while k < len(cells):
         kind = cells[k]
-        if not isinstance(kind, int) or not 0 <= kind < 2 * len(_CHANGE_WIDTHS):
+        if not isinstance(kind, int) or not 0 <= kind < 2 * len(_CHANGE_KINDS):
             raise PluginFormatError(f"{code} 第 {index} 則:變動種類碼 {kind!r} 不認得")
-        width = _CHANGE_WIDTHS[kind // 2]
+        change_type, width = _CHANGE_KINDS[kind // 2]
         item = cells[k + 1 : k + width]
         if len(item) != width - 1:
             raise PluginFormatError(f"{code} 第 {index} 則:變動項目格數不足(種類碼 {kind})")
         side = _BOOK_SIDES[kind % 2]
-        match kind // 2:
-            case 0:
-                out.append(LevelChange(side, *item))
-            case 1:
-                out.append(LeftView(side, *item))
-            case 2:
-                price, left_qty, now_qty, traded_away, net, left_index, away_ms = item
-                if net != now_qty - left_qty + traded_away:
-                    raise PluginFormatError(
-                        f"{code} 第 {index} 則 {side} {price}:淨掛 {net} 不等於"
-                        f" 現在 {now_qty} − 離開時 {left_qty} + 期間成交 {traded_away}"
-                    )
-                out.append(
-                    Reappeared(side, price, left_qty, now_qty, traded_away, left_index, away_ms)
+        if change_type is Reappeared:
+            price, left_qty, now_qty, traded_away, net, left_index, away_ms = item
+            if net != now_qty - left_qty + traded_away:
+                raise PluginFormatError(
+                    f"{code} 第 {index} 則 {side} {price}:淨掛 {net} 不等於"
+                    f" 現在 {now_qty} − 離開時 {left_qty} + 期間成交 {traded_away}"
                 )
-            case _:
-                out.append(EnteredView(side, *item))
+            out.append(Reappeared(side, price, left_qty, now_qty, traded_away, left_index, away_ms))
+        else:
+            out.append(change_type(side, *item))
         k += width
     return tuple(out)
 
@@ -990,7 +991,7 @@ def _check_changes(
 ) -> None:
     """第 `index` 則的變動與前後兩則五檔一致(回看頁把變動清單與階梯並排顯示,對不上 = 同一刻講兩件事)。"""
     for change in changes:
-        side = _BOOK_SIDES.index(change.side)
+        side = _SIDE_CODE[change.side]
         price = change.price_milli
         where = f"{code} 第 {index} 則 {change.side} {price}"
         before_book, after_book = _qty_at(prev_book, side, price), _qty_at(book, side, price)
