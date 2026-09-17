@@ -1,0 +1,9 @@
+1. 現用模板未變(28ef9fb7dac0)
+2. 備份 viewer_cdp_template.html → viewer_cdp_template.html.bak-20260917-pre269
+2. 備份 viewer-cdp.html → viewer-cdp.html.bak-20260917-pre269
+3. 模板換成 #269 版(96292 bytes,CRLF)
+4. 2026-09-16:80 檔 v2 外掛檔蓋進 viewer-cdp-book/2026-09-16
+4. 2026-09-17:80 檔 v2 外掛檔蓋進 viewer-cdp-book/2026-09-17
+5. 重建 viewer-cdp.html
+codes 81 extras 26 code-days 3028 raw MB 29.1 gz MB 6.04 html MB 8.15 
+   新頁 == 新模板 + blob:True

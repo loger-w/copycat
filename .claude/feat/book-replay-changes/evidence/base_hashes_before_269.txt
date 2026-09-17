@@ -1,0 +1,3 @@
+28ef9fb7dac017888ab47dde56755b95333f7151143b968c0eb006ee9163a627 */c/Users/USER/Documents/copycat-trading-review/scripts/week0909/viewer_cdp_template.html
+26db57123ea170f6acbd3526f3fdd869a5cdb277205f4634ad9811e6d4ed0d34 */c/Users/USER/Documents/copycat-trading-review/scripts/week0909/build_viewer_cdp.py
+9da1203d454f649d0832cf55bc746e4162d15a08d3ef8f8d1221fa36b1c01ee5 */c/Users/USER/Documents/copycat-trading-review/viewer-cdp.html
