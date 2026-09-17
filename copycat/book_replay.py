@@ -34,6 +34,9 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
   (= 現在 − 離開時 + 期間成交)、離開時長;**不算掛單**,看不到的那段無法分辨一次掛進或分次堆積。三個量都是 0 不列
 - `EnteredView`:從沒追蹤過的價位帶量進到看得到的範圍(首次進入五檔),不算掛單
 追蹤中 = 看得到時列出過的限價,之後在看得到的範圍內歸 0 仍追蹤(離開時量就是 0)。
+買賣兩側全空的一則 = 達錢清空五檔(2026-09-16 10 檔 15 則,都在之後改每 5 秒才更新的那一刻 —— 暫緩撮合開始),
+不是所有人同時撤單:那一則沒有變動,下一則跟全空之前最後一份五檔比;吃檔的「成交前那一則」也跳過它
+(user 2026-09-17 拍板)。
 價位從賣方換到買方(價格穿過它)一直看得到,是賣方減量 + 買方增量,不是離開視野(user 2026-09-17 拍板;
 grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際賣方只新掛 16 張)。
 
@@ -60,7 +63,7 @@ grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際�
 - `kf`:第 0、K、2K… 則的完整 20 格(K = `kf_every`,個數 = ceil(n / K))
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
 - `chg`:長 n,第 i 則的變動分解(= `Frame.changes`,順序照變動分解那段)攤平成一列,每項以種類碼開頭
-  (種類碼 = 基本碼 + 側別碼,側別碼 買 0 / 賣 1;價 0 = 市價佇列)。第 0 則恆空:
+  (種類碼 = 基本碼 + 側別碼,側別碼 買 0 / 賣 1;價 0 = 市價佇列)。當日第一份五檔與五檔全空那一則恆空:
   - 基本碼 0 價位變動 `[碼, 價, 前量, 後量, 成交]`:掛入 = 後量 − 前量(增加時),撤單 = 前量 − 後量 − 成交(減少時)
   - 基本碼 2 被擠出五檔 `[碼, 價, 離開前的量]`
   - 基本碼 4 重新可見 `[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]`
@@ -368,9 +371,13 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
             else:
                 ledger.unabsorbed(pending)
         unmatched = live
-        if views is None:
+        changes: tuple[BookChange, ...] = ()
+        if _cleared(book):
+            if views is not None:  # 清空那一則不比簿,但成交照樣算進被擠出價位的期間成交
+                for view in views:
+                    view.count_trade(traded_price, traded_qty)
+        elif views is None:
             views = (_SideView(0, book), _SideView(1, book))
-            changes: tuple[BookChange, ...] = ()
         else:
             step = (i, recv_ms, traded_price, traded_qty, unmatched, ledger)
             changes = (*views[0].step(book, *step), *views[1].step(book, *step))
@@ -424,7 +431,8 @@ class _EatLedger:
         self._eaten: dict[int, list[Eaten]] = {}
 
     def add_book(self, book: tuple[int | None, ...]) -> None:
-        self._books.append(book)
+        """記下這一則的參考五檔;五檔全空(清空)沿用前一份,檔位才不會因清空一律變五檔外。"""
+        self._books.append(self._books[-1] if self._books and _cleared(book) else book)
 
     def absorbed(
         self, trade: _UnmatchedTrade, side: int, price: int | None, qty: int, index: int
@@ -459,6 +467,11 @@ class _EatLedger:
             eats[-1] = Eaten(eat.side, eat.level, eats[-1].qty + eat.qty)
         else:
             eats.append(eat)
+
+
+def _cleared(book: Sequence[int | None]) -> bool:
+    """買賣兩側全空 = 達錢清空五檔(暫緩撮合開始那一刻,見模組說明「變動分解」),不是所有人同時撤單。"""
+    return all(cell is None for cell in book)
 
 
 def _level_of(book: tuple[int | None, ...], side: int, price: int) -> int | None:
@@ -537,8 +550,7 @@ class _SideView:
             bisect.insort(self._away_prices, price)
             if qty:
                 out.append(LeftView(self._name, price, qty))
-        if traded_qty and traded_price in self._away:
-            self._away[traded_price].traded += traded_qty
+        self.count_trade(traded_price, traded_qty)
         for price in self._returning(prev_bound, bound):
             away = self._away.pop(price)
             now = listed.get(price, 0)
@@ -563,6 +575,11 @@ class _SideView:
         direction = -1 if self._side == 0 else 1
         out.sort(key=lambda change: (change.price_milli != 0, direction * change.price_milli))
         return out
+
+    def count_trade(self, price: int | None, qty: int | None) -> None:
+        """這一則的成交若落在被擠出去的價位,算進它的期間成交。"""
+        if qty and price in self._away:
+            self._away[price].traded += qty
 
     def _traded(
         self,
@@ -933,12 +950,15 @@ def decode(payload: PluginPayload) -> BookReplay:
             else:
                 clock, clock_index = trade.ms, i
         changes = _decode_changes(change_cells, code, i)
-        if prev_state is None:
+        if prev_state is None or _cleared(state):
             if changes:
-                raise PluginFormatError(f"{code} 第 0 則:當日第一則沒有前一則可比,不該有變動")
+                raise PluginFormatError(
+                    f"{code} 第 {i} 則:當日第一份五檔或五檔全空(清空)沒有可比的前一份,不該有變動"
+                )
         else:
             _check_changes(changes, prev_state, state, recv_at, code, i)
-        prev_state = list(state)
+        if not _cleared(state):
+            prev_state = list(state)
         eaten = _decode_eaten(next(eat_rows), code, i) if trade is not None else ()
         if trade is not None and sum(eat.qty for eat in eaten) > (trade.qty or 0):
             raise PluginFormatError(

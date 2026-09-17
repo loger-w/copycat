@@ -876,6 +876,113 @@ class TestView:
         ]
 
 
+def _cleared_2305_rows() -> list[TickRow]:
+    """2305 於 2026-09-16 09:04:56:成交 46.05 × 81 → 09:04:56.102 五檔全空(清空)→ 09:05:01.174 下一份五檔。"""
+    bid = [(46_000, 88), (45_950, 40), (45_900, 11), (45_850, 42), (45_800, 21)]
+    ask_before = [(46_050, 81), (46_100, 14), (46_150, 17), (46_200, 77), (46_250, 17)]
+    ask_traded = [(46_100, 14), (46_150, 17), (46_200, 77), (46_250, 17), (46_300, 49)]
+    return [
+        _row("book", "2305", 1, recv="09:04:56.096", bid=bid, ask=ask_before),
+        _row(
+            "trade",
+            "2305",
+            2,
+            recv="09:04:56.097",
+            time="09:04:55.000",
+            price=46_050,
+            qty=81,
+            side="outer",
+            bid=bid,
+            ask=ask_traded,
+        ),
+        _row("book", "2305", 3, recv="09:04:56.102", bid=[], ask=[]),
+        _row(
+            "book",
+            "2305",
+            4,
+            recv="09:05:01.174",
+            bid=[(46_000, 12), (45_950, 38), (45_900, 29), (45_850, 36), (45_800, 22)],
+            ask=[(46_050, 10), (46_100, 12), (46_150, 27), (46_200, 66), (46_250, 17)],
+        ),
+    ]
+
+
+class TestClearedBook:
+    """達錢在暫緩撮合開始那一刻送一則買賣兩側全空的五檔,之後改每 5 秒才更新(2026-09-16 10 檔 15 則)。
+    那一則是清空,不是所有人同時撤單:不拆變動,下一則跟全空之前最後一份五檔比(user 2026-09-17 拍板)。"""
+
+    def test_a_fully_empty_book_is_skipped_and_the_next_book_compares_with_the_last_real_one(
+        self,
+    ) -> None:
+        """2305 於 2026-09-16 09:04:56.102 五檔全空,下一則 09:05:01.174。"""
+        frames = replay_books(_cleared_2305_rows())["2305"].frames
+
+        assert frames[2].book == (None,) * 20
+        assert frames[2].changes == ()
+        assert frames[3].changes == (
+            LevelChange("bid", 46_000, before=88, after=12, traded=0),
+            LevelChange("bid", 45_950, before=40, after=38, traded=0),
+            LevelChange("bid", 45_900, before=11, after=29, traded=0),
+            LevelChange("bid", 45_850, before=42, after=36, traded=0),
+            LevelChange("bid", 45_800, before=21, after=22, traded=0),
+            LevelChange("ask", 46_050, before=0, after=10, traded=0),
+            LevelChange("ask", 46_100, before=14, after=12, traded=0),
+            LevelChange("ask", 46_150, before=17, after=27, traded=0),
+            LevelChange("ask", 46_200, before=77, after=66, traded=0),
+            LeftView("ask", 46_300, qty=49),
+        )
+
+    def test_a_trade_right_after_the_empty_book_reads_its_level_from_the_last_real_book(
+        self,
+    ) -> None:
+        """全空之後第一筆成交:檔位看全空之前最後一份五檔(否則一律變成五檔外)。"""
+        ask = [(46_050, 10)]
+        rows = [
+            _row(
+                "book",
+                "2305",
+                1,
+                recv="09:04:56.096",
+                bid=[(46_000, 88), (45_950, 40), (45_900, 11), (45_850, 42), (45_800, 21)],
+                ask=ask,
+            ),
+            _row("book", "2305", 2, recv="09:04:56.102", bid=[], ask=[]),
+            _row(
+                "trade",
+                "2305",
+                3,
+                recv="09:05:01.174",
+                time="09:05:01.000",
+                price=46_000,
+                qty=12,
+                side="inner",
+                bid=[(45_950, 40), (45_900, 11), (45_850, 42), (45_800, 21), (45_750, 5)],
+                ask=ask,
+            ),
+        ]
+
+        frames = replay_books(rows)["2305"].frames
+
+        assert frames[2].eaten == (Eaten("bid", level=1, qty=12),)
+        assert frames[2].changes == (
+            LevelChange("bid", 46_000, before=88, after=0, traded=12),
+            EnteredView("bid", 45_750, qty=5),
+        )
+
+    def test_the_plugin_file_keeps_the_cleared_book_and_refuses_changes_written_on_it(
+        self,
+    ) -> None:
+        """回看頁跟 decode 同一套規則:清空那一則沒有變動,下一則的前量是清空之前那一份。"""
+        day = replay_books(_cleared_2305_rows())["2305"]
+        wire = _wire(day, keyframe_every=2)
+
+        assert decode(wire) == day
+
+        wire["chg"][2] = [7, 46_300, 49]  # 清空那一則寫一項「賣 46.3 首次進入五檔 49 張」
+        with pytest.raises(PluginFormatError, match="五檔全空"):
+            decode(wire)
+
+
 class TestEaten:
     """#269 成交明細的吃檔欄:這筆成交吃到成交前那一則五檔的第幾檔、幾張(例「吃 賣1 −12」)。"""
 
