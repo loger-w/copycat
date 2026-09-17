@@ -17,6 +17,7 @@ import pytest
 
 from copycat.book_replay import (
     BookReplay,
+    LevelChange,
     PluginFormatError,
     Trade,
     book_at,
@@ -45,6 +46,12 @@ def _ms(hms: str) -> int:
     hh, mm, rest = hms.split(":")
     ss, _, frac = rest.partition(".")
     return ((int(hh) * 60 + int(mm)) * 60 + int(ss)) * 1000 + int(frac)
+
+
+def _plus_ms(hms: str, ms: int) -> str:
+    """台北 `HH:MM:SS.fff` 往後 `ms` 毫秒(同一天)。"""
+    total = _ms(hms) + ms
+    return f"{total // 3_600_000:02d}:{total // 60_000 % 60:02d}:{total // 1000 % 60:02d}.{total % 1000:03d}"
 
 
 def _side_fields(prefix: str, levels: list[Level]) -> dict[str, int | None]:
@@ -332,6 +339,199 @@ class TestTrades:
         ]
 
 
+class TestChanges:
+    """#269 變動分解:每一則相對同一檔上一則,以價格為鍵、只比兩則都看得到的價位,拆成掛入 / 撤單 / 成交。"""
+
+    def test_more_lots_at_a_price_both_books_show_read_as_placed(self) -> None:
+        """#269 驗收「買 99.1 由 24 → 187,+163 掛單」(2426 2026-09-16 11:02:44.025 那一則的形狀)。"""
+        ask = [(99_600, 2), (99_700, 422), (99_800, 4_059)]
+        rows = [
+            _row(
+                "book",
+                "2426",
+                1,
+                recv="11:02:43.978",
+                bid=[(99_500, 1), (99_400, 10), (99_300, 9), (99_200, 41), (99_100, 24)],
+                ask=ask,
+            ),
+            _row(
+                "book",
+                "2426",
+                2,
+                recv="11:02:44.025",
+                bid=[(99_500, 1), (99_400, 10), (99_300, 9), (99_200, 41), (99_100, 187)],
+                ask=ask,
+            ),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert frames[0].changes == ()  # 當日第一則沒有前一份簿可比
+        assert frames[1].changes == (
+            LevelChange(side="bid", price_milli=99_100, before=24, after=187, traded=0),
+        )
+        change = frames[1].changes[0]
+        assert (change.added, change.cancelled) == (163, 0)
+
+    def test_fewer_lots_count_the_trade_at_that_price_first_and_the_rest_as_cancelled(
+        self,
+    ) -> None:
+        """#269 驗收:量減少時先扣掉該價位在該則的成交量,剩下的才算撤單(2426 11:02:43.936 賣 99.6 的形狀)。"""
+        bid = [(99_500, 1)]
+        ask_tail = [(99_700, 422), (99_800, 4_059)]
+        rows = [
+            _row("book", "2426", 1, recv="11:02:43.935", bid=bid, ask=[(99_600, 22), *ask_tail]),
+            _row(
+                "trade",
+                "2426",
+                2,
+                recv="11:02:43.936",
+                time="11:02:43.000",
+                price=99_600,
+                qty=4,
+                side="outer",
+                bid=bid,
+                ask=[(99_600, 12), *ask_tail],
+            ),
+            _row("book", "2426", 3, recv="11:02:43.978", bid=bid, ask=[(99_600, 2), *ask_tail]),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert frames[1].changes == (LevelChange("ask", 99_600, before=22, after=12, traded=4),)
+        assert frames[1].changes[0].cancelled == 6
+        # 那 4 張已在上一則扣過,這一則的 10 張全是撤單
+        assert frames[2].changes == (LevelChange("ask", 99_600, before=12, after=2, traded=0),)
+        assert frames[2].changes[0].cancelled == 10
+
+    def test_a_sweep_whose_book_catches_up_messages_later_still_reads_as_traded(self) -> None:
+        """2026-09-16 實錄 2489 10:04:31 連吃 8 個價位:前幾則成交附的五檔都還是舊的,最後一則才一次歸 0。
+        只扣同一則的成交會把被買走的量寫成撤單(09-16 全日 2.4% 成交量;user 09-17 拍板算成交)。"""
+        bid = [(38_900, 23)]
+        before = [(38_950, 7), (39_000, 44), (39_050, 45), (39_100, 53)]
+        rows = [
+            _row("book", "2489", 1, recv="10:04:30.208", bid=bid, ask=before),
+            *(
+                _row(
+                    "trade",
+                    "2489",
+                    2 + k,
+                    recv=f"10:04:31.{208 + k:03d}",
+                    time="10:04:31.000",
+                    price=price,
+                    qty=qty,
+                    side="outer",
+                    bid=bid,
+                    ask=before,  # 五檔還沒反映這筆成交
+                )
+                for k, (price, qty) in enumerate(before[:3])
+            ),
+            _row("book", "2489", 5, recv="10:04:31.212", bid=bid, ask=[(39_100, 53)]),
+        ]
+
+        frames = replay_books(rows)["2489"].frames
+
+        assert [f.changes for f in frames[1:4]] == [(), (), ()]
+        assert frames[4].changes == (
+            LevelChange("ask", 38_950, before=7, after=0, traded=7),
+            LevelChange("ask", 39_000, before=44, after=0, traded=44),
+            LevelChange("ask", 39_050, before=45, after=0, traded=45),
+        )
+
+    @pytest.mark.parametrize(
+        ("later", "late_ms", "traded"),
+        [(8, 800, 10), (9, 800, 0), (2, 1_000, 10), (2, 1_001, 0)],
+        ids=["8-messages-later", "9-messages-later", "1000ms-later", "1001ms-later"],
+    )
+    def test_a_trade_waits_for_its_book_at_most_eight_messages_and_one_second(
+        self, later: int, late_ms: int, traded: int
+    ) -> None:
+        """成交則後面第 `later` 則、`late_ms` 毫秒才減量:8 則與 1 秒內(含)算成交,超過就算撤單。"""
+        rows = [
+            _row("book", "2489", 1, recv="10:04:30.000", bid=[(38_900, 1)], ask=[(39_000, 10)]),
+            _row(
+                "trade",
+                "2489",
+                2,
+                recv="10:04:31.000",
+                time="10:04:31.000",
+                price=39_000,
+                qty=10,
+                side="outer",
+                bid=[(38_900, 1)],
+                ask=[(39_000, 10)],
+            ),
+            # 中間的簿則只動買方,賣方 39.0 還掛著 10 張
+            *(
+                _row(
+                    "book",
+                    "2489",
+                    2 + k,
+                    recv=f"10:04:31.{k:03d}",
+                    bid=[(38_900, 1 + k)],
+                    ask=[(39_000, 10)],
+                )
+                for k in range(1, later)
+            ),
+            _row(
+                "book",
+                "2489",
+                2 + later,
+                recv=_plus_ms("10:04:31.000", late_ms),
+                bid=[(38_900, later)],
+                ask=[],
+            ),
+        ]
+
+        frames = replay_books(rows)["2489"].frames
+
+        assert frames[-1].changes == (
+            LevelChange("ask", 39_000, before=10, after=0, traded=traded),
+        )
+
+    def test_a_locked_limit_up_queue_that_shrinks_on_a_trade_reads_as_traded(self) -> None:
+        """2026-09-16 實錄 2426 鎖漲停後(11:02:50.868 起):有人賣 5 張、4 張,成交價 99.8,減少的是買方市價排隊
+        那一排;成交價與「市價」價位(價 0)對不上也先算成交(09-16 全日 3.0% 成交量;user 09-17 拍板)。"""
+        rows = [
+            _row(
+                "book", "2426", 1, recv="11:02:50.868", bid=[(0, 6_763), (99_800, 480), (99_500, 7)]
+            ),
+            _row(
+                "trade",
+                "2426",
+                2,
+                recv="11:02:50.869",
+                time="11:02:50.000",
+                price=99_800,
+                qty=5,
+                side="outer",
+                bid=[(0, 6_758), (99_800, 480), (99_500, 7)],
+            ),
+            _row(
+                "trade",
+                "2426",
+                3,
+                recv="11:02:50.869",
+                time="11:02:50.000",
+                price=99_800,
+                qty=4,
+                side="outer",
+                bid=[(0, 6_754), (99_800, 480), (99_500, 7)],
+            ),
+            _row(
+                "book", "2426", 4, recv="11:02:50.869", bid=[(0, 6_754), (99_800, 478), (99_500, 7)]
+            ),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert [f.changes for f in frames[1:]] == [
+            (LevelChange("bid", 0, before=6_763, after=6_758, traded=5),),
+            (LevelChange("bid", 0, before=6_758, after=6_754, traded=4),),
+            (LevelChange("bid", 99_800, before=480, after=478, traded=0),),  # 成交都已扣完
+        ]
+
+
 def _lock_limit_up_rows() -> list[TickRow]:
     """2426 漲停前後的形狀(2026-09-16 實測當日 2,776 則賣方全空):掛單變厚 → 鎖漲停(買一 = 價 0
     的市價佇列、賣方全空)→ 兩邊全空一則 → 打開回到正常。8 則,跨 keyframe 間隔 3 的兩個邊界。"""
@@ -452,15 +652,15 @@ class TestPluginEncoding:
 
         assert decode(wire) == day
 
-    def test_payload_layout_matches_the_documented_v1_literal(self) -> None:
-        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v1」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
-        只有寫死的字面抓得到(pr-275 review F-01)。"""
+    def test_payload_layout_matches_the_documented_v2_literal(self) -> None:
+        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v2」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
+        只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg`。"""
         day = replay_books(_golden_rows())["1815"]
 
         payload = encode(day, keyframe_every=2)
 
         assert payload == {
-            "v": 1,
+            "v": 2,
             "code": "1815",
             "date": "2026-09-16",
             "n": 4,
@@ -491,6 +691,19 @@ class TestPluginEncoding:
                 [0, 115_000, 5, 205, 10, 115_500, 15, 12],
                 [0, 0, 1, 115_500, 5, 1_300, 6, 800, 10, None, 15, None],
                 [5, 1_299],
+            ],
+            # 每則的變動,每項 [側別碼(買 0 / 賣 1), 價, 前量, 後量, 成交];同側市價佇列在前、再由最優價往外
+            "chg": [
+                [],
+                [0, 115_000, 0, 205, 0]
+                + [0, 114_500, 282, 0, 0]
+                + [1, 115_000, 40, 0, 0]
+                + [1, 115_500, 0, 12, 0],
+                [0, 0, 0, 1_300, 0]
+                + [0, 115_500, 0, 800, 0]
+                + [0, 115_000, 205, 0, 0]
+                + [1, 115_500, 12, 0, 7],  # 同則 115.5 × 7 成交先扣,其餘 5 張撤單
+                [0, 0, 1_300, 1_299, 1],  # 市價佇列減少不看成交價:同則 115.5 × 1 先扣
             ],
         }
 
