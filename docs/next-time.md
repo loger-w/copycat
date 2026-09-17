@@ -1,3 +1,16 @@
+## 2026-09-17(feat #268 回看頁「重播」分頁留尾;主體在 repo 外 `Documents\copycat-trading-review`)
+
+- [ ] **每個交易日盤後補重播要手動跑四步**(尚未排程):`python -m copycat book-replay --date <YYYYMMDD> --out <回看頁>\viewer-cdp-book`
+  (13:45 轉檔後)→ `.venv\Scripts\python -X utf8 scripts\week0909\extras_from_archive.py --date <YYYY-MM-DD>`(非群組逐筆 + FinMind 日線)
+  → `python scripts\week0909\build_ticks_js.py` → `python scripts\week0909\build_viewer_cdp.py`。母體 55 檔的分時 / 逐筆仍走達錢歷史
+  (`pull_ticks_groups.py` + `fetch_groups_daily.py --keep-groups`),沒補的日子重播分頁可用、上方圖是「沒有資料」。
+- [ ] **09-16 tick 存檔沒有 3630 新鉅科 / 4977 眾達-KY 的列**(產業群組成員,重播分頁顯示找不到檔),原因未查(訂閱池?當日無推播?)。
+- [ ] **2243 宏旭-KY 09-16 存檔量 83 張 vs FinMind 699 張**(開高低收全等、首筆 09:08:40),回看頁已標「逐筆不完整」;是存檔漏收還是
+  FinMind 量含鉅額 / 盤後,未查。6147 頎邦自 11:35:25 才有逐筆(盤中才進訂閱池的推測未證)。
+- [ ] **7772 耀穎 09-16 只有 2 筆成交 → 不進回看頁清單**(< 50 筆門檻),但 `viewer-cdp-ticks` 與 `viewer-cdp-book` 都有它的檔。無害。
+- [ ] **重播現價照字面取「最近一筆成交則的價」,沒跳過 `anomalous` 成交**(#268 two-axis Spec P-06):只影響開機收到前一日盤後成交的檔
+  (09-16 = 1815)在當日首筆成交前的現價 / 置中 / 十字線水平線(那筆價 = 前收)。要改就在模板 `rpLastPx` 跳過 `R.anom`。
+
 ## 2026-09-17(chore #266 回看頁資料補到 9/16 留尾;主體在 repo 外 `Documents\copycat-trading-review`)
 
 - [ ] **回看頁 9/11–9/15「你的成交」等券商交易明細 CSV 再補**(user 09-17 拍板「9/16 先上、其餘等 CSV」):9/16 七筆已用
