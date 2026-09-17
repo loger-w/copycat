@@ -54,8 +54,9 @@ def _ms(hms: str) -> int:
 
 def _plus_ms(hms: str, ms: int) -> str:
     """台北 `HH:MM:SS.fff` 往後 `ms` 毫秒(同一天)。"""
-    total = _ms(hms) + ms
-    return f"{total // 3_600_000:02d}:{total // 60_000 % 60:02d}:{total // 1000 % 60:02d}.{total % 1000:03d}"
+    seconds, milli = divmod(_ms(hms) + ms, 1000)
+    minutes, sec = divmod(seconds, 60)
+    return f"{minutes // 60:02d}:{minutes % 60:02d}:{sec:02d}.{milli:03d}"
 
 
 def _side_fields(prefix: str, levels: list[Level]) -> dict[str, int | None]:
@@ -1332,7 +1333,7 @@ class TestPluginEncoding:
 
     def test_payload_layout_matches_the_documented_v2_literal(self) -> None:
         """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v2」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
-        只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg`。"""
+        只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg` 與 `eat`。"""
         day = replay_books(_golden_rows())["1815"]
 
         payload = encode(day, keyframe_every=2)
@@ -1370,18 +1371,19 @@ class TestPluginEncoding:
                 [0, 0, 1, 115_500, 5, 1_300, 6, 800, 10, None, 15, None],
                 [5, 1_299],
             ],
-            # 每則的變動,每項 [側別碼(買 0 / 賣 1), 價, 前量, 後量, 成交];同側市價佇列在前、再由最優價往外
+            # 每則的變動;價位變動 [種類碼(買 0 / 賣 1), 價, 前量, 後量, 掛入, 成交, 撤單];
+            # 同側市價佇列在前、再由最優價往外
             "chg": [
                 [],
-                [0, 115_000, 0, 205, 0]
-                + [0, 114_500, 282, 0, 0]
-                + [1, 115_000, 40, 0, 0]
-                + [1, 115_500, 0, 12, 0],
-                [0, 0, 0, 1_300, 0]
-                + [0, 115_500, 0, 800, 0]
-                + [0, 115_000, 205, 0, 0]
-                + [1, 115_500, 12, 0, 7],  # 同則 115.5 × 7 成交先扣,其餘 5 張撤單
-                [0, 0, 1_300, 1_299, 1],  # 市價佇列減少不看成交價:同則 115.5 × 1 先扣
+                [0, 115_000, 0, 205, 205, 0, 0]
+                + [0, 114_500, 282, 0, 0, 0, 282]
+                + [1, 115_000, 40, 0, 0, 0, 40]
+                + [1, 115_500, 0, 12, 12, 0, 0],
+                [0, 0, 0, 1_300, 1_300, 0, 0]
+                + [0, 115_500, 0, 800, 800, 0, 0]
+                + [0, 115_000, 205, 0, 0, 0, 205]
+                + [1, 115_500, 12, 0, 0, 7, 5],  # 同則 115.5 × 7 成交先扣,其餘 5 張撤單
+                [0, 0, 1_300, 1_299, 0, 1, 0],  # 市價佇列減少不看成交價:同則 115.5 × 1 先扣
             ],
             # 每筆成交一列 [側別碼, 檔位(限價 1–5、市價佇列 0、五檔外 null), 張, …]
             "eat": [
@@ -1390,6 +1392,80 @@ class TestPluginEncoding:
                 [0, 0, 1],  # 吃 市價買 −1
             ],
         }
+
+    def test_every_change_kind_and_eaten_level_matches_the_documented_v2_literal(self) -> None:
+        """`chg` 八種種類碼、`eat` 各種檔位的字面(review round 1 S-02):encode / decode 一起把兩種碼對調時
+        round-trip 照綠,回看頁卻會印反。2489 掃單樣本出賣方 1 / 3 / 5 / 7 與吃檔 1–5、五檔外;另一段合成的
+        買方序列出 0 / 2 / 4 / 6 與吃市價排隊(0)。"""
+        sweep = encode(replay_books(_sweep_2489_rows())["2489"], keyframe_every=4)
+
+        assert sweep["chg"][1] == [1, 38_950, 0, 4, 4, 0, 0] + [3, 39_200, 80]
+        assert sweep["chg"][10] == (
+            [0, 39_300, 0, 60, 60, 0, 0]
+            + [2, 38_700, 28]
+            + [1, 38_950, 7, 0, 0, 7, 0]
+            + [1, 39_000, 44, 0, 0, 44, 0]
+            + [1, 39_050, 45, 0, 0, 45, 0]
+            + [1, 39_100, 53, 0, 0, 53, 0]
+            + [1, 39_150, 21, 0, 0, 21, 0]
+            + [5, 39_200, 80, 0, 80, 0, 1, 11_056]
+            + [7, 39_350, 28]
+            + [7, 39_400, 45]
+            + [7, 39_450, 22]
+            + [7, 39_500, 118]
+            + [7, 39_550, 98]
+        )
+        assert sweep["eat"] == [
+            [1, 1, 7],
+            [1, 2, 44],
+            [1, 3, 45],
+            [1, 4, 53],
+            [1, 5, 21],
+            [1, None, 80],
+            [1, None, 34],
+            [1, None, 56],
+        ]
+
+        five = [(50_500, 5), (50_400, 5), (50_300, 5), (50_200, 5)]
+        rows = [
+            _row("book", "3450", 1, recv="10:00:00.000", bid=[*five, (50_100, 5)]),
+            _row("book", "3450", 2, recv="10:00:01.000", bid=[(50_600, 1), *five]),
+            _row(
+                "trade",
+                "3450",
+                3,
+                recv="10:00:02.000",
+                time="10:00:02.000",
+                price=50_600,
+                qty=1,
+                side="inner",
+                bid=[*five, (50_100, 5)],
+            ),
+            _row("book", "3450", 4, recv="10:00:03.000", bid=[*five, (50_000, 9)]),
+            _row("book", "3450", 5, recv="10:00:04.000", bid=[(0, 100), *five]),
+            _row(
+                "trade",
+                "3450",
+                6,
+                recv="10:00:05.000",
+                time="10:00:05.000",
+                price=50_500,
+                qty=3,
+                side="inner",
+                bid=[(0, 97), *five],
+            ),
+        ]
+        bids = encode(replay_books(rows)["3450"])
+
+        assert bids["chg"] == [
+            [],
+            [0, 50_600, 0, 1, 1, 0, 0] + [2, 50_100, 5],
+            [0, 50_600, 1, 0, 0, 1, 0] + [4, 50_100, 5, 5, 0, 0, 1, 1_000],
+            [0, 50_100, 5, 0, 0, 0, 5] + [6, 50_000, 9],
+            [0, 0, 0, 100, 100, 0, 0] + [2, 50_000, 9],
+            [0, 0, 100, 97, 0, 3, 0],
+        ]
+        assert bids["eat"] == [[0, 1, 1], [0, 0, 3]]
 
     def test_round_trip_keeps_labels_before_the_first_clock_point_and_on_anomalous_trades(
         self,
@@ -1572,23 +1648,27 @@ class TestPluginEncoding:
         [
             (lambda w: w["chg"][1].__setitem__(0, 8), "種類碼"),
             (lambda w: w["chg"][1].pop(), "格數不足"),
-            # 第 1 則「賣 38.95 由 0 → 4」:前量 / 後量改掉就跟前後兩則的五檔對不上
-            (lambda w: w["chg"][1].__setitem__(2, 1), "前量"),
-            (lambda w: w["chg"][1].__setitem__(3, 5), "後量"),
+            # 第 1 則「賣 38.95 由 0 → 4,+4 掛單」[碼, 價, 前 0, 後 4, 掛入 4, 成交 0, 撤單 0]:
+            # 前量 / 後量連同掛入改成算式自洽的值 → 仍跟前後兩則的五檔對不上;掛入單獨改 → 算式不符
+            (lambda w: w["chg"][1].__setitem__(slice(2, 5), [1, 4, 3]), "前量"),
+            (lambda w: w["chg"][1].__setitem__(slice(2, 5), [0, 5, 5]), "後量"),
+            (lambda w: w["chg"][1].__setitem__(4, 3), "掛入"),
             # 第 1 則多一項「買 38.9 由 13 → 13」:兩則五檔都是 13,但沒有變的價位不該列
-            (lambda w: w["chg"][1].extend([0, 38_900, 13, 13, 0]), "沒有變"),
-            # 第 10 則「賣 38.95 由 7 → 0,成交 7」改成成交 8:比減少的量還多
-            (lambda w: w["chg"][10].__setitem__(12, 8), "成交"),
+            (lambda w: w["chg"][1].extend([0, 38_900, 13, 13, 0, 0, 0]), "沒有變"),
+            # 第 10 則「賣 38.95 由 7 → 0,−7 成交」[碼 10, 價 11, 前 12, 後 13, 掛入 14, 成交 15, 撤單 16]:
+            # 成交改 8(撤單照算式仍 0)→ 比減少的量還多;撤單單獨改 → 算式不符
+            (lambda w: w["chg"][10].__setitem__(15, 8), "成交"),
+            (lambda w: w["chg"][10].__setitem__(16, 1), "撤單"),
             # 第 1 則「賣 39.2 被擠出五檔 80 張」改 81:與前一則五檔不符
-            (lambda w: w["chg"][1].__setitem__(7, 81), "離開前"),
-            # 第 10 則「賣 39.2 重新可見」[碼, 價, 離開 80, 現在 0, 期間成交 80, 淨掛 0, 離開則號 1, 11056 ms]:
+            (lambda w: w["chg"][1].__setitem__(9, 81), "離開前"),
+            # 第 10 則「賣 39.2 重新可見」[碼 45, 價 46, 離開 80, 現在 0, 期間成交 80, 淨掛 0, 離開則號 1, 11056 ms]:
             # 現在量改 3 連同淨掛改 3(算式自洽)→ 仍與這一則五檔 0 張不符;其餘各改一格
-            (lambda w: w["chg"][10].__setitem__(slice(36, 39), [3, 80, 3]), "現在量"),
-            (lambda w: w["chg"][10].__setitem__(38, 5), "淨掛"),
-            (lambda w: w["chg"][10].__setitem__(39, 10), "離開則號"),
-            (lambda w: w["chg"][10].__setitem__(40, 11_000), "離開時長"),
+            (lambda w: w["chg"][10].__setitem__(slice(48, 51), [3, 80, 3]), "現在量"),
+            (lambda w: w["chg"][10].__setitem__(50, 5), "淨掛"),
+            (lambda w: w["chg"][10].__setitem__(51, 10), "離開則號"),
+            (lambda w: w["chg"][10].__setitem__(52, 11_000), "離開時長"),
             # 第 10 則「賣 39.35 首次進入五檔 28 張」改 29
-            (lambda w: w["chg"][10].__setitem__(43, 29), "首次進入"),
+            (lambda w: w["chg"][10].__setitem__(55, 29), "首次進入"),
             (lambda w: w["chg"][0].extend([6, 38_900, 13]), "第 0 則"),
             (lambda w: w["eat"].pop(), "eat 長度"),
             (lambda w: w["eat"][0].__setitem__(1, 7), "吃檔"),
@@ -1601,8 +1681,10 @@ class TestPluginEncoding:
             "truncated-change",
             "level-before",
             "level-after",
+            "level-added-arithmetic",
             "level-unchanged",
             "traded-over-decrease",
+            "level-cancelled-arithmetic",
             "left-qty",
             "reappeared-now",
             "reappeared-net",
