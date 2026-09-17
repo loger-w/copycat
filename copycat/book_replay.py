@@ -364,10 +364,10 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
         trade = Trade(row.ms, row.price_milli, row.qty, row.side) if row.kind == "trade" else None
         book = _book_of(row)
         ledger.add_book(book)
-        traded_price = traded_qty = None
+        current: _UnmatchedTrade | None = None  # 這一則的成交(還沒扣到的部分)
         if trade is not None and trade.price_milli is not None and trade.qty:
-            traded_price, traded_qty = trade.price_milli, trade.qty
-            unmatched.append(_UnmatchedTrade(traded_price, traded_qty, i, recv_ms, trade.side))
+            current = _UnmatchedTrade(trade.price_milli, trade.qty, i, recv_ms, trade.side)
+            unmatched.append(current)
         live: list[_UnmatchedTrade] = []
         for pending in unmatched:
             if not pending.qty:
@@ -384,16 +384,14 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
         if _cleared(book):
             if views is not None:  # 清空那一則不比簿,但成交照樣算進被擠出價位的期間成交
                 for view in views:
-                    view.count_trade(traded_price, traded_qty)
+                    view.count_trade(current, ledger)
         elif views is None:
             views = (_SideView(0, book), _SideView(1, book))
         else:
             changes = tuple(
                 change
                 for view in views
-                for change in view.step(
-                    book, i, recv_ms, traded_price, traded_qty, unmatched, ledger
-                )
+                for change in view.step(book, i, recv_ms, current, unmatched, ledger)
             )
         frames.append(
             Frame(row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade, changes, ())
@@ -463,6 +461,10 @@ class _EatLedger:
             before = _level_of(self._books[trade.index - 1], side, price) if trade.index else None
             level = before if before is not None else _level_of(self._books[index - 1], side, price)
         self._add(trade.index, Eaten(_BOOK_SIDES[side], level, qty))
+
+    def record_beyond_view(self, trade: _UnmatchedTrade, side: int, qty: int) -> None:
+        """這筆成交有 `qty` 張吃在那一側被擠出五檔的價位上(成交當下看不到)。"""
+        self._add(trade.index, Eaten(_BOOK_SIDES[side], None, qty))
 
     def record_unabsorbed(self, trade: _UnmatchedTrade) -> None:
         """到期都沒扣到的量:成交價在成交前那一則該側第五檔之外 = 五檔外;其餘看不出吃了哪一檔,不記。"""
@@ -534,8 +536,7 @@ class _SideView:
         book: tuple[int | None, ...],
         index: int,
         recv_ms: int,
-        traded_price: int | None,
-        traded_qty: int | None,
+        current: _UnmatchedTrade | None,
         unmatched: list[_UnmatchedTrade],
         ledger: _EatLedger,
     ) -> list[BookChange]:
@@ -561,7 +562,7 @@ class _SideView:
             bisect.insort(self._away_prices, price)
             if qty:
                 out.append(LeftView(self._name, price, qty))
-        self.count_trade(traded_price, traded_qty)
+        self.count_trade(current, ledger)
         for price, away in self._pop_returning(prev_bound, bound):
             now = listed.get(price, 0)
             self._track(price, now)
@@ -586,10 +587,17 @@ class _SideView:
         out.sort(key=lambda change: (change.price_milli != 0, direction * change.price_milli))
         return out
 
-    def count_trade(self, price: int | None, qty: int | None) -> None:
-        """這一則的成交若落在被擠出去的價位,算進它的期間成交。"""
-        if qty and price in self._away:
-            self._away[price].traded += qty
+    def count_trade(self, trade: _UnmatchedTrade | None, ledger: _EatLedger) -> None:
+        """這一則的成交若落在被擠出去的價位:還沒扣到的量算進它的期間成交、吃檔記五檔外,並從待扣中扣掉 ——
+        價位回來後同價位再減量就不會再扣它一次(review round 1 P-01,6209 2026-09-16 09:04:10 實例)。"""
+        if trade is None or not trade.qty:
+            return
+        away = self._away.get(trade.price_milli)
+        if away is None:
+            return
+        away.traded += trade.qty
+        ledger.record_beyond_view(trade, self._side, trade.qty)
+        trade.qty = 0
 
     def _traded(
         self,
