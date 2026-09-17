@@ -21,10 +21,16 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 1.4–39.8 秒(真時刻,當時鐘點);7772 緩撮成交晚到 118.6 秒(真時刻,當時鐘點);1815 開機 07:31 收到前一日
 14:30 的盤後成交(未來,不當時鐘點)。不當時鐘點的成交仍是一則,`after` 照數,計入 `BookReplay.anomalous_trades`。
 
-**外掛檔 v1**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入):
+**變動分解**(`Frame.changes`,#269):第 i 則相對同一檔第 i−1 則,以**價格**為鍵(不是檔位)逐價位比量,
+買方在前、賣方在後,同側市價佇列(價 0)在前、其後由最優價往外。量增加 = 掛入;量減少先扣該價位還沒扣到的
+成交(`LevelChange.traded`),剩下的算撤單。「還沒扣到」= 成交則附的五檔常常還沒反映這筆成交(掃單時前幾筆
+成交則的五檔是舊的),所以往後 `TRADE_CARRY_MESSAGES` 則且 `TRADE_CARRY_MS` 毫秒內的同價位減量都先扣它;
+市價佇列的減少不看成交價(鎖停時成交價是漲跌停價,吃掉的是市價那一排)。
+
+**外掛檔 v2**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg`):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
 
-- `v`:1;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
+- `v`:2;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
 - `seq`:訊息序號,首項絕對值、其後逐則差值(每一項都 > 0)
 - `kind`:長 n 的字串,`t` 成交 / `b` 簿
 - `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
@@ -36,6 +42,9 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
   時刻照原值保留、不一定是當日(1815 那則是前一日 14:30)
 - `kf`:第 0、K、2K… 則的完整 20 格(K = `kf_every`,個數 = ceil(n / K))
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
+- `chg`:長 n,第 i 則的變動分解(= `Frame.changes`,順序照變動分解那段),每項 5 格攤平
+  `[側別碼, 價, 前量, 後量, 成交]`:側別碼 買 0 / 賣 1;價 0 = 市價佇列;掛入 = 後量 − 前量(增加時),
+  撤單 = 前量 − 後量 − 成交(減少時)。第 0 則恆空
 
 值:價毫元、量張的整數;null = 該層不存在;價 0 = 鎖停的市價單佇列(0 與 null 不可混)。
 解碼:逐則播放 = 從前一則套 `d[i]`;跳到第 i 則 = 取 `kf[i // K]` 再套 `d[i//K*K + 1 .. i]`(`book_at`)。
@@ -63,8 +72,11 @@ __all__ = [
     "CLOCK_FUTURE_TOLERANCE_MS",
     "FORMAT_VERSION",
     "KEYFRAME_EVERY",
+    "TRADE_CARRY_MESSAGES",
+    "TRADE_CARRY_MS",
     "BookReplay",
     "Frame",
+    "LevelChange",
     "PluginFormatError",
     "PluginPayload",
     "Trade",
@@ -85,7 +97,7 @@ _PLUGIN_LINE = re.compile(
 )
 
 #: 外掛檔格式版本;改格式 = +1(回看頁依它選解碼規則)
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 #: 每幾則放一個完整五檔(keyframe);回看頁跳到任一則最多套這麼多則 delta
 KEYFRAME_EVERY = 256
@@ -94,6 +106,13 @@ KEYFRAME_EVERY = 256
 #: (#236 時鐘偏差,實務秒級)會讓它看起來晚幾秒。超過 = 不可能收得到的未來時刻,例如開機時
 #: 收到前一日的盤後成交(2026-09-16 1815:07:31 收到、蓋 14:30),不讓它當時鐘點(文字標籤的時刻)。
 CLOCK_FUTURE_TOLERANCE_MS = 60_000
+
+#: 成交則附的五檔還沒反映這筆成交時,後面幾則內的同價位減量仍先算成交:往後至多這麼多則、且收到時刻
+#: 至多晚這麼多毫秒(兩條都要成立)。2026-09-16 全日 80 檔:成交量 88.1% 在同一則就看得到減量,2.4% 是掃單
+#: (前幾筆成交則的五檔還是舊的)晚 1–8 則才減、晚的毫秒 p50 1 / p99 46 / 最大 599;只扣同一則會把這些
+#: 被買走 / 賣掉的量寫成撤單(user 2026-09-17 拍板算成交)。
+TRADE_CARRY_MESSAGES = 8
+TRADE_CARRY_MS = 1_000
 
 #: 一則五檔的 20 格欄序(= tick 存檔欄名):買價 0–4、買量 0–4、賣價 0–4、賣量 0–4。
 #: 價為毫元、量為張;None = 該層不存在;價 0 = 鎖停時的市價單佇列(真資料,原樣保留)。
@@ -132,6 +151,31 @@ _SIDES: frozenset[str] = frozenset({"inner", "outer", "neutral"})
 _TRADE_CELLS: tuple[str, ...] = tuple(f.name for f in dataclass_fields(Trade))
 _trade_cells: Callable[[Trade], tuple[int | str | None, ...]] = attrgetter(*_TRADE_CELLS)
 
+#: 五檔兩側,序號 = 外掛檔變動項目的側別碼(買 0 / 賣 1)
+_BOOK_SIDES: tuple[str, str] = ("bid", "ask")
+
+
+@dataclass(frozen=True, slots=True)
+class LevelChange:
+    """兩則都看得到的同一價位,量從 `before` 變 `after`(張;價 0 = 市價佇列)。
+
+    量增加 = 掛入;量減少先算成交 `traded`,剩下的算撤單。
+    """
+
+    side: str  # "bid" | "ask"
+    price_milli: int
+    before: int
+    after: int
+    traded: int  # 這次減少裡算成交的張數(量增加時恆 0)
+
+    @property
+    def added(self) -> int:
+        return max(0, self.after - self.before)
+
+    @property
+    def cancelled(self) -> int:
+        return max(0, self.before - self.after - self.traded)
+
 
 @dataclass(frozen=True, slots=True)
 class Frame:
@@ -144,6 +188,7 @@ class Frame:
     after: int  # 距該時鐘點第幾則(時鐘點本身 0;首筆成交前自第 1 則數起)
     recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
     trade: Trade | None  # 成交則的那筆成交;簿則 None
+    changes: tuple[LevelChange, ...]  # 相對同一檔上一則變了什麼;當日第一則恆空
 
     @property
     def anomalous_trade(self) -> bool:
@@ -166,7 +211,7 @@ class BookReplay:
 
 
 class PluginPayload(TypedDict):
-    """外掛檔 v1 的 JSON 物件;各鍵的意義見模組說明「外掛檔 v1」。"""
+    """外掛檔 v2 的 JSON 物件;各鍵的意義見模組說明「外掛檔 v2」。"""
 
     v: int
     code: str
@@ -181,6 +226,7 @@ class PluginPayload(TypedDict):
     trade: list[int | str | None]
     kf: list[list[int | None]]
     d: list[list[int | None]]
+    chg: list[list[int]]
 
 
 def replay_books(rows: Iterable[TickRow]) -> dict[str, BookReplay]:
@@ -212,16 +258,82 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
     clock_index = -1
     day_start_ms = _taipei_day_start_epoch_ms(rows[0].trade_date)
     recv_ms = rows[0].recv_ns // 1_000_000 - day_start_ms
+    prev_book: tuple[int | None, ...] | None = None
+    unmatched: list[_UnmatchedTrade] = []
     for i, row in enumerate(rows):
         if _is_clock_point(row, clock, day_start_ms):
             assert row.ms is not None
             clock, clock_index = row.ms, i
         recv_ms = max(recv_ms, row.recv_ns // 1_000_000 - day_start_ms)
         trade = Trade(row.ms, row.price_milli, row.qty, row.side) if row.kind == "trade" else None
+        book = _book_of(row)
+        if trade is not None and trade.price_milli is not None and trade.qty:
+            unmatched.append(_UnmatchedTrade(trade.price_milli, trade.qty, i, recv_ms))
+        unmatched = [
+            u
+            for u in unmatched
+            if u.qty
+            and i - u.index <= TRADE_CARRY_MESSAGES
+            and recv_ms - u.recv_ms <= TRADE_CARRY_MS
+        ]
+        changes = () if prev_book is None else _level_changes(prev_book, book, unmatched)
         frames.append(
-            Frame(row.msg_seq, row.kind, _book_of(row), clock, i - clock_index, recv_ms, trade)
+            Frame(row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade, changes)
         )
+        prev_book = book
     return tuple(frames)
+
+
+@dataclass(slots=True)
+class _UnmatchedTrade:
+    """還沒在五檔看到對應減量的成交(剩 `qty` 張);`TRADE_CARRY_MESSAGES` 則且 `TRADE_CARRY_MS` 內有效。"""
+
+    price_milli: int
+    qty: int
+    index: int  # 成交則則號
+    recv_ms: int
+
+
+def _side_quantities(book: tuple[int | None, ...], side: int) -> dict[int, int]:
+    """一側五檔 → {價: 量}(價 0 = 市價佇列;有價沒量當 0)。"""
+    base = 2 * DEPTH * side
+    return {
+        price: book[base + DEPTH + level] or 0
+        for level in range(DEPTH)
+        if (price := book[base + level]) is not None
+    }
+
+
+def _level_changes(
+    prev_book: tuple[int | None, ...],
+    book: tuple[int | None, ...],
+    unmatched: list[_UnmatchedTrade],
+) -> tuple[LevelChange, ...]:
+    """兩則之間逐價位的量變化:買方在前、賣方在後;同側市價佇列在前,其後由最優價往外。
+
+    量減少先扣同價位還沒扣到的成交(`unmatched` 由舊到新、就地扣減),剩下的算撤單。市價佇列(價 0)的
+    減少不看成交價:鎖停時成交價是漲跌停價,吃掉的卻是市價那一排(2026-09-16 2426 11:02:50 實錄)。
+    """
+    out: list[LevelChange] = []
+    for side, name in enumerate(_BOOK_SIDES):
+        before_side, after_side = _side_quantities(prev_book, side), _side_quantities(book, side)
+        direction = -1 if name == "bid" else 1
+        for price in sorted(
+            before_side.keys() | after_side.keys(), key=lambda p: (p != 0, direction * p)
+        ):
+            before, after = before_side.get(price, 0), after_side.get(price, 0)
+            if before == after:
+                continue
+            traded = 0
+            for trade in unmatched:
+                if before - after - traded <= 0:
+                    break
+                if trade.qty and (price == 0 or trade.price_milli == price):
+                    take = min(before - after - traded, trade.qty)
+                    trade.qty -= take
+                    traded += take
+            out.append(LevelChange(name, price, before, after, traded))
+    return tuple(out)
 
 
 def _is_clock_point(row: TickRow, clock: int | None, day_start_ms: int) -> bool:
@@ -239,7 +351,7 @@ def _taipei_day_start_epoch_ms(trade_date: str) -> int:
 
 
 def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> PluginPayload:
-    """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v1」。"""
+    """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v2」。"""
     if keyframe_every < 1:
         raise ValueError(f"keyframe_every 須 ≥ 1(收到 {keyframe_every})")
     seq: list[int] = []
@@ -249,6 +361,7 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
     trades: list[int | str | None] = []
     keyframes: list[list[int | None]] = []
     deltas: list[list[int | None]] = []
+    changes: list[list[int]] = []
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
     prev_seq = prev_recv = 0
     for i, frame in enumerate(code_day.frames):
@@ -269,6 +382,7 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
             if value != state[field]:
                 delta += [field, value]
         deltas.append(delta)
+        changes.append(_encode_changes(frame.changes))
         state = list(frame.book)
         if i % keyframe_every == 0:
             keyframes.append(list(frame.book))
@@ -286,7 +400,41 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         "trade": trades,
         "kf": keyframes,
         "d": deltas,
+        "chg": changes,
     }
+
+
+def _encode_changes(changes: tuple[LevelChange, ...]) -> list[int]:
+    """一則的變動 → 攤平的 `[側別碼, 價, 前量, 後量, 成交, …]`(側別碼:買 0 / 賣 1)。"""
+    out: list[int] = []
+    for change in changes:
+        out += [
+            _BOOK_SIDES.index(change.side),
+            change.price_milli,
+            change.before,
+            change.after,
+            change.traded,
+        ]
+    return out
+
+
+#: 外掛檔 `chg` 裡一個價位變動佔幾格
+_LEVEL_CHANGE_CELLS = 5
+
+
+def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[LevelChange, ...]:
+    """`_encode_changes` 的反函數;長度不是整數倍、側別碼不認得 → PluginFormatError。"""
+    if len(cells) % _LEVEL_CHANGE_CELLS:
+        raise PluginFormatError(
+            f"{code} 第 {index} 則:變動長度 {len(cells)} 不是 {_LEVEL_CHANGE_CELLS} 的倍數"
+        )
+    out: list[LevelChange] = []
+    for k in range(0, len(cells), _LEVEL_CHANGE_CELLS):
+        side, price, before, after, traded = cells[k : k + _LEVEL_CHANGE_CELLS]
+        if side not in (0, 1):
+            raise PluginFormatError(f"{code} 第 {index} 則:變動側別碼 {side!r} 不是 0 / 1")
+        out.append(LevelChange(_BOOK_SIDES[side], price, before, after, traded))
+    return tuple(out)
 
 
 def plugin_js(payload: PluginPayload) -> str:
@@ -372,8 +520,15 @@ def decode(payload: PluginPayload) -> BookReplay:
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
     frames: list[Frame] = []
     msg_seq = recv_ms = 0
-    for i, (seq_step, kind, recv_step, delta) in enumerate(
-        zip(payload["seq"], payload["kind"], payload["recv"], payload["d"], strict=True)
+    for i, (seq_step, kind, recv_step, delta, change_cells) in enumerate(
+        zip(
+            payload["seq"],
+            payload["kind"],
+            payload["recv"],
+            payload["d"],
+            payload["chg"],
+            strict=True,
+        )
     ):
         if seq_step <= 0:
             raise PluginFormatError(f"{code} 第 {i} 則:訊息序號沒有遞增(差值 {seq_step})")
@@ -404,8 +559,9 @@ def decode(payload: PluginPayload) -> BookReplay:
                 )
             else:
                 clock, clock_index = trade.ms, i
+        changes = _decode_changes(change_cells, code, i)
         frames.append(
-            Frame(msg_seq, kind_name, tuple(state), clock, i - clock_index, recv_ms, trade)
+            Frame(msg_seq, kind_name, tuple(state), clock, i - clock_index, recv_ms, trade, changes)
         )
     return BookReplay(code, payload["date"], tuple(frames))
 
@@ -420,9 +576,11 @@ def _check_header(payload: PluginPayload) -> None:
     code, n, every, kinds = payload["code"], payload["n"], payload["kf_every"], payload["kind"]
     if list(payload["fields"]) != list(BOOK_LEVEL_FIELDS):
         raise PluginFormatError(f"{code} 五檔欄序與本版不同:{payload['fields']}")
-    lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d"))
-    if lengths != (n, n, n, n):
-        raise PluginFormatError(f"{code} 檔頭 n={n} 與 seq / kind / recv / d 長度 {lengths} 不符")
+    lengths = tuple(len(payload[key]) for key in ("seq", "kind", "recv", "d", "chg"))
+    if lengths != (n, n, n, n, n):
+        raise PluginFormatError(
+            f"{code} 檔頭 n={n} 與 seq / kind / recv / d / chg 長度 {lengths} 不符"
+        )
     if every < 1:
         raise PluginFormatError(f"{code} kf_every={every!r} 不合法:須 ≥ 1")
     if len(payload["kf"]) != -(-n // every):
