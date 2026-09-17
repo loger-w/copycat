@@ -1371,6 +1371,73 @@ class TestPluginEncoding:
         with pytest.raises(PluginFormatError, match=message):
             decode(wire)
 
+    def test_round_trip_keeps_changes_and_eaten_levels(self) -> None:
+        """變動分解四種項目與吃檔(含五檔外)都解得回來(2489 掃單樣本:掛入 / 成交 / 被擠出 / 重新可見 / 首次進入)。"""
+        day = replay_books(_sweep_2489_rows())["2489"]
+
+        wire = _wire(day, keyframe_every=4)
+
+        assert decode(wire) == day
+
+    @pytest.mark.parametrize(
+        ("tamper", "message"),
+        [
+            (lambda w: w["chg"][1].__setitem__(0, 8), "種類碼"),
+            (lambda w: w["chg"][1].pop(), "格數不足"),
+            # 第 1 則「賣 38.95 由 0 → 4」:前量 / 後量改掉就跟前後兩則的五檔對不上
+            (lambda w: w["chg"][1].__setitem__(2, 1), "前量"),
+            (lambda w: w["chg"][1].__setitem__(3, 5), "後量"),
+            # 第 1 則多一項「買 38.9 由 13 → 13」:兩則五檔都是 13,但沒有變的價位不該列
+            (lambda w: w["chg"][1].extend([0, 38_900, 13, 13, 0]), "沒有變"),
+            # 第 10 則「賣 38.95 由 7 → 0,成交 7」改成成交 8:比減少的量還多
+            (lambda w: w["chg"][10].__setitem__(12, 8), "成交"),
+            # 第 1 則「賣 39.2 被擠出五檔 80 張」改 81:與前一則五檔不符
+            (lambda w: w["chg"][1].__setitem__(7, 81), "離開前"),
+            # 第 10 則「賣 39.2 重新可見」[碼, 價, 離開 80, 現在 0, 期間成交 80, 淨掛 0, 離開則號 1, 11056 ms]:
+            # 現在量改 3 連同淨掛改 3(算式自洽)→ 仍與這一則五檔 0 張不符;其餘各改一格
+            (lambda w: w["chg"][10].__setitem__(slice(36, 39), [3, 80, 3]), "現在量"),
+            (lambda w: w["chg"][10].__setitem__(38, 5), "淨掛"),
+            (lambda w: w["chg"][10].__setitem__(39, 10), "離開則號"),
+            (lambda w: w["chg"][10].__setitem__(40, 11_000), "離開時長"),
+            # 第 10 則「賣 39.35 首次進入五檔 28 張」改 29
+            (lambda w: w["chg"][10].__setitem__(43, 29), "首次進入"),
+            (lambda w: w["chg"][0].extend([6, 38_900, 13]), "第 0 則"),
+            (lambda w: w["eat"].pop(), "eat 長度"),
+            (lambda w: w["eat"][0].__setitem__(1, 7), "吃檔"),
+            (lambda w: w["eat"][0].append(1), "吃檔"),
+            # 第 3 則成交 38.95 × 7,吃檔寫成 8 張
+            (lambda w: w["eat"][0].__setitem__(2, 8), "超過成交"),
+        ],
+        ids=[
+            "unknown-change-kind",
+            "truncated-change",
+            "level-before",
+            "level-after",
+            "level-unchanged",
+            "traded-over-decrease",
+            "left-qty",
+            "reappeared-now",
+            "reappeared-net",
+            "reappeared-left-index",
+            "reappeared-away-ms",
+            "entered-qty",
+            "changes-on-first-message",
+            "eat-length",
+            "eat-level-out-of-range",
+            "eat-cells-not-triples",
+            "eat-over-trade-qty",
+        ],
+    )
+    def test_decode_refuses_changes_or_eaten_levels_that_contradict_the_books(
+        self, tamper: Callable[[dict[str, Any]], object], message: str
+    ) -> None:
+        """回看頁把變動清單與階梯並排顯示:清單與前後兩則五檔對不上 = 同一刻講兩件事,不得放行。"""
+        wire = _wire(replay_books(_sweep_2489_rows())["2489"], keyframe_every=4)
+        tamper(wire)
+
+        with pytest.raises(PluginFormatError, match=message):
+            decode(wire)
+
     def test_parse_refuses_text_that_is_not_a_book_replay_plugin_line(self) -> None:
         """逐筆外掛檔(`window.__tk`)跟簿重播外掛檔同形,放錯資料夾也要認得出來。"""
         with pytest.raises(PluginFormatError, match="window.__bk"):

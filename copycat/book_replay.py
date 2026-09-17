@@ -614,7 +614,7 @@ class _SideView:
         return returning
 
 
-def _side_levels(book: tuple[int | None, ...], side: int) -> tuple[dict[int, int], int, int | None]:
+def _side_levels(book: Sequence[int | None], side: int) -> tuple[dict[int, int], int, int | None]:
     """一側五檔 → (限價 {價: 量}、市價佇列量(沒有 = 0)、看得到的邊界)。
 
     邊界:五層都有價時 = 最遠那一檔限價(買方最低 / 賣方最高),之外看不到;不滿五層 = None(整側看得到)。
@@ -791,7 +791,12 @@ def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[BookCh
             case 1:
                 out.append(LeftView(side, *item))
             case 2:
-                price, left_qty, now_qty, traded_away, _net, left_index, away_ms = item
+                price, left_qty, now_qty, traded_away, net, left_index, away_ms = item
+                if net != now_qty - left_qty + traded_away:
+                    raise PluginFormatError(
+                        f"{code} 第 {index} 則 {side} {price}:淨掛 {net} 不等於"
+                        f" 現在 {now_qty} − 離開時 {left_qty} + 期間成交 {traded_away}"
+                    )
                 out.append(
                     Reappeared(side, price, left_qty, now_qty, traded_away, left_index, away_ms)
                 )
@@ -883,6 +888,8 @@ def decode(payload: PluginPayload) -> BookReplay:
     clock: int | None = None
     clock_index = -1
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
+    prev_state: list[int | None] | None = None
+    recv_at: list[int] = []
     frames: list[Frame] = []
     msg_seq = recv_ms = 0
     for i, (seq_step, kind, recv_step, delta, change_cells) in enumerate(
@@ -901,6 +908,7 @@ def decode(payload: PluginPayload) -> BookReplay:
             raise PluginFormatError(f"{code} 第 {i} 則:收到時刻倒退 {recv_step} ms")
         msg_seq += seq_step
         recv_ms += recv_step
+        recv_at.append(recv_ms)
         _apply_delta(state, delta, code, i)
         if i % every == 0 and state != keyframes[i // every]:
             raise PluginFormatError(
@@ -925,7 +933,17 @@ def decode(payload: PluginPayload) -> BookReplay:
             else:
                 clock, clock_index = trade.ms, i
         changes = _decode_changes(change_cells, code, i)
+        if prev_state is None:
+            if changes:
+                raise PluginFormatError(f"{code} 第 0 則:當日第一則沒有前一則可比,不該有變動")
+        else:
+            _check_changes(changes, prev_state, state, recv_at, code, i)
+        prev_state = list(state)
         eaten = _decode_eaten(next(eat_rows), code, i) if trade is not None else ()
+        if trade is not None and sum(eat.qty for eat in eaten) > (trade.qty or 0):
+            raise PluginFormatError(
+                f"{code} 第 {i} 則:吃檔共 {sum(eat.qty for eat in eaten)} 張,超過成交 {trade.qty} 張"
+            )
         frames.append(
             Frame(
                 msg_seq,
@@ -940,6 +958,68 @@ def decode(payload: PluginPayload) -> BookReplay:
             )
         )
     return BookReplay(code, payload["date"], tuple(frames))
+
+
+def _check_changes(
+    changes: tuple[BookChange, ...],
+    prev_book: Sequence[int | None],
+    book: Sequence[int | None],
+    recv_at: list[int],
+    code: str,
+    index: int,
+) -> None:
+    """第 `index` 則的變動與前後兩則五檔一致(回看頁把變動清單與階梯並排顯示,對不上 = 同一刻講兩件事)。"""
+    for change in changes:
+        side = _BOOK_SIDES.index(change.side)
+        price = change.price_milli
+        where = f"{code} 第 {index} 則 {change.side} {price}"
+        before_book, after_book = _qty_at(prev_book, side, price), _qty_at(book, side, price)
+        match change:
+            case LevelChange():
+                if change.before == change.after:
+                    raise PluginFormatError(
+                        f"{where}:價位變動前後都是 {change.before} 張,沒有變不該列"
+                    )
+                if change.before != before_book:
+                    raise PluginFormatError(
+                        f"{where}:前量 {change.before} 與前一則五檔 {before_book} 不符"
+                    )
+                if change.after != after_book:
+                    raise PluginFormatError(
+                        f"{where}:後量 {change.after} 與這一則五檔 {after_book} 不符"
+                    )
+                if not 0 <= change.traded <= max(0, change.before - change.after):
+                    raise PluginFormatError(f"{where}:成交 {change.traded} 張不在 0 到減少的量之間")
+            case LeftView():
+                if change.qty <= 0 or change.qty != before_book:
+                    raise PluginFormatError(
+                        f"{where}:離開前的量 {change.qty} 與前一則五檔 {before_book} 不符(須 > 0)"
+                    )
+            case Reappeared():
+                if change.now_qty != after_book:
+                    raise PluginFormatError(
+                        f"{where}:現在量 {change.now_qty} 與這一則五檔 {after_book} 不符"
+                    )
+                if not 0 <= change.left_index < index:
+                    raise PluginFormatError(f"{where}:離開則號 {change.left_index} 不在這一則之前")
+                away_ms = recv_at[index] - recv_at[change.left_index]
+                if change.away_ms != away_ms:
+                    raise PluginFormatError(
+                        f"{where}:離開時長 {change.away_ms} ms 與收到時刻差 {away_ms} ms 不符"
+                    )
+                if not (change.left_qty or change.now_qty or change.traded_away):
+                    raise PluginFormatError(f"{where}:重新可見三個量都是 0,不該列")
+            case EnteredView():
+                if change.qty <= 0 or change.qty != after_book:
+                    raise PluginFormatError(
+                        f"{where}:首次進入五檔的量 {change.qty} 與這一則五檔 {after_book} 不符(須 > 0)"
+                    )
+
+
+def _qty_at(book: Sequence[int | None], side: int, price: int) -> int:
+    """這份簿該側 `price` 的量(價 0 = 市價佇列);沒列出 = 0。"""
+    listed, queue, _bound = _side_levels(book, side)
+    return queue if price == 0 else listed.get(price, 0)
 
 
 def _check_header(payload: PluginPayload) -> None:
