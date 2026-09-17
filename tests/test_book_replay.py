@@ -17,8 +17,11 @@ import pytest
 
 from copycat.book_replay import (
     BookReplay,
+    EnteredView,
+    LeftView,
     LevelChange,
     PluginFormatError,
+    Reappeared,
     Trade,
     book_at,
     decode,
@@ -371,6 +374,7 @@ class TestChanges:
             LevelChange(side="bid", price_milli=99_100, before=24, after=187, traded=0),
         )
         change = frames[1].changes[0]
+        assert isinstance(change, LevelChange)
         assert (change.added, change.cancelled) == (163, 0)
 
     def test_fewer_lots_count_the_trade_at_that_price_first_and_the_rest_as_cancelled(
@@ -399,10 +403,12 @@ class TestChanges:
         frames = replay_books(rows)["2426"].frames
 
         assert frames[1].changes == (LevelChange("ask", 99_600, before=22, after=12, traded=4),)
-        assert frames[1].changes[0].cancelled == 6
         # 那 4 張已在上一則扣過,這一則的 10 張全是撤單
         assert frames[2].changes == (LevelChange("ask", 99_600, before=12, after=2, traded=0),)
-        assert frames[2].changes[0].cancelled == 10
+        assert [c.cancelled for f in frames for c in f.changes if isinstance(c, LevelChange)] == [
+            6,
+            10,
+        ]
 
     def test_a_sweep_whose_book_catches_up_messages_later_still_reads_as_traded(self) -> None:
         """2026-09-16 實錄 2489 10:04:31 連吃 8 個價位:前幾則成交附的五檔都還是舊的,最後一則才一次歸 0。
@@ -529,6 +535,400 @@ class TestChanges:
             (LevelChange("bid", 0, before=6_763, after=6_758, traded=5),),
             (LevelChange("bid", 0, before=6_758, after=6_754, traded=4),),
             (LevelChange("bid", 99_800, before=480, after=478, traded=0),),  # 成交都已扣完
+        ]
+
+
+def _at(frame_changes: tuple[object, ...], price: int) -> list[object]:
+    """一則變動裡某價位的項目(測試只斷言它關心的價位,其餘價位的變動另有測試)。"""
+    return [c for c in frame_changes if getattr(c, "price_milli", None) == price]
+
+
+class TestView:
+    """#269 視野:買方看得到 = 第五檔限價以上、賣方 = 第五檔限價以下,某側不滿五檔 = 整側看得到。
+    價位被擠到第五檔之外 = 離開;回到看得到的範圍 = 重新可見,**不**產生掛單(user 2026-09-17 拍板)。"""
+
+    def test_a_fifth_level_pushed_out_and_back_is_never_counted_as_placed(self) -> None:
+        """spec 實測回歸:2305 於 2026-09-16 09:07:46–47,46.95 一張單掛了又被賣掉,第五檔 46.7(113 張)
+        被擠出去又回來;逐價位直接比會出現「買 46.7 由 0 → 112 張」好幾次(同一筆墊單被數好幾次,零錯誤訊號)。"""
+        ask = [(47_000, 139), (47_050, 9), (47_100, 22), (47_150, 11), (47_200, 50)]
+        rest = [(46_900, 149), (46_850, 63), (46_800, 97), (46_750, 22)]
+        rows = [
+            _row("book", "2305", 1, recv="09:07:46.376", bid=[*rest, (46_700, 113)], ask=ask),
+            _row("book", "2305", 2, recv="09:07:46.423", bid=[(46_950, 11), *rest], ask=ask),
+            _row(
+                "trade",
+                "2305",
+                3,
+                recv="09:07:47.365",
+                time="09:07:47.000",
+                price=46_950,
+                qty=11,
+                side="inner",
+                bid=[*rest, (46_700, 112)],
+                ask=ask,
+            ),
+            _row("book", "2305", 4, recv="09:07:47.410", bid=[(46_950, 1), *rest], ask=ask),
+            _row(
+                "trade",
+                "2305",
+                5,
+                recv="09:07:47.454",
+                time="09:07:47.000",
+                price=46_950,
+                qty=1,
+                side="inner",
+                bid=[*rest, (46_700, 112)],
+                ask=ask,
+            ),
+        ]
+
+        frames = replay_books(rows)["2305"].frames
+
+        assert [f.changes for f in frames] == [
+            (),
+            (
+                LevelChange("bid", 46_950, before=0, after=11, traded=0),
+                LeftView("bid", 46_700, qty=113),
+            ),
+            (
+                LevelChange("bid", 46_950, before=11, after=0, traded=11),
+                Reappeared(
+                    "bid",
+                    46_700,
+                    left_qty=113,
+                    now_qty=112,
+                    traded_away=0,
+                    left_index=1,
+                    away_ms=942,
+                ),
+            ),
+            (
+                LevelChange("bid", 46_950, before=0, after=1, traded=0),
+                LeftView("bid", 46_700, qty=112),
+            ),
+            (
+                LevelChange("bid", 46_950, before=1, after=0, traded=1),
+                Reappeared(
+                    "bid",
+                    46_700,
+                    left_qty=112,
+                    now_qty=112,
+                    traded_away=0,
+                    left_index=3,
+                    away_ms=44,
+                ),
+            ),
+        ]
+        assert [c.net_placed for f in frames for c in f.changes if isinstance(c, Reappeared)] == [
+            -1,
+            0,
+        ]
+
+    def test_a_price_that_changes_sides_stays_in_view_and_reads_as_traded_then_placed(self) -> None:
+        """2426 於 2026-09-16 09:00:32–09:03:43 的 92.0:賣方 11 張被一筆 11 張外盤吃光 → 價格漲上去,92.0 當了
+        3 分鐘買方價位(期間 149 張成交全是內盤)→ 價格跌回來,賣方新掛 16 張。grilling 當時把「換到買方」當成
+        賣方看不到,算出「賣 92.0 離開 11 → 回來 16、期間成交 149、淨掛 +154」—— 賣方真正新掛的只有 16 張
+        (user 2026-09-17 拍板照實際經過算,驗收樣本改用 2426 買 98.0)。"""
+        bid_low = [(91_700, 1), (91_600, 18), (91_500, 15), (91_400, 12), (91_300, 17)]
+        ask_start = [(92_000, 11), (92_100, 30), (92_200, 2), (92_300, 5), (92_400, 5)]
+        ask_after = [(92_100, 11), (92_200, 2), (92_300, 5), (92_400, 5), (92_500, 4)]
+        rows = [
+            _row("book", "2426", 1, recv="09:00:32.987", bid=bid_low, ask=ask_start),
+            _row(
+                "trade",
+                "2426",
+                2,
+                recv="09:00:33.058",
+                time="09:00:32.000",
+                price=92_000,
+                qty=11,
+                side="outer",
+                bid=bid_low,
+                ask=ask_start,  # 五檔還沒反映這筆成交
+            ),
+            _row(
+                "trade",
+                "2426",
+                3,
+                recv="09:00:33.058",
+                time="09:00:32.000",
+                price=92_100,
+                qty=19,
+                side="outer",
+                bid=bid_low,
+                ask=ask_after,
+            ),
+            _row(
+                "book",
+                "2426",
+                4,
+                recv="09:00:34.783",
+                bid=[(92_000, 1), (91_900, 6), (91_800, 6), (91_700, 24), (91_600, 29)],
+                ask=ask_after,
+            ),
+            _row(
+                "trade",
+                "2426",
+                5,
+                recv="09:00:34.789",
+                time="09:00:34.000",
+                price=92_000,
+                qty=1,
+                side="inner",
+                bid=[(91_900, 6), (91_800, 4), (91_700, 24), (91_600, 29), (91_500, 34)],
+                ask=ask_after,
+            ),
+            _row(
+                "book",
+                "2426",
+                6,
+                recv="09:03:43.761",
+                bid=[(91_900, 26), (91_800, 35), (91_700, 32), (91_600, 20), (91_500, 58)],
+                ask=[(92_000, 16), (92_100, 8), (92_200, 16), (92_300, 44), (92_400, 53)],
+            ),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert [_at(f.changes, 92_000) for f in frames] == [
+            [],
+            [],
+            [LevelChange("ask", 92_000, before=11, after=0, traded=11)],
+            [LevelChange("bid", 92_000, before=0, after=1, traded=0)],
+            [LevelChange("bid", 92_000, before=1, after=0, traded=1)],
+            [LevelChange("ask", 92_000, before=0, after=16, traded=0)],
+        ]
+
+    def test_back_in_view_reports_left_and_now_lots_and_the_net_placed_while_away(self) -> None:
+        """#269 驗收樣本(user 2026-09-17 改定):2426 於 2026-09-16 09:46:00 有人在 98.5 掛 2 張買單,原本
+        第五檔的買 98.0(39 張)被擠出去;09:48:35 那 2 張被賣掉,98.0 回到第五檔已是 120 張 ——
+        離開時 39 → 現在 120、期間成交 0、淨掛 +81、離開 2 分 35 秒。"""
+        ask_a = [(98_700, 78), (98_800, 199), (98_900, 125), (99_000, 639), (99_100, 66)]
+        ask_b = [(98_600, 25), (98_700, 84), (98_800, 17), (98_900, 12), (99_000, 69)]
+        rows = [
+            _row(
+                "book",
+                "2426",
+                1,
+                recv="09:46:00.356",
+                bid=[(98_400, 22), (98_300, 40), (98_200, 65), (98_100, 81), (98_000, 39)],
+                ask=ask_a,
+            ),
+            _row(
+                "book",
+                "2426",
+                2,
+                recv="09:46:00.358",
+                bid=[(98_500, 2), (98_400, 22), (98_300, 40), (98_200, 65), (98_100, 81)],
+                ask=ask_a,
+            ),
+            _row(
+                "book",
+                "2426",
+                3,
+                recv="09:48:34.890",
+                bid=[(98_500, 52), (98_400, 11), (98_300, 28), (98_200, 31), (98_100, 30)],
+                ask=ask_b,
+            ),
+            _row(
+                "trade",
+                "2426",
+                4,
+                recv="09:48:35.264",
+                time="09:48:35.000",
+                price=98_500,
+                qty=50,
+                side="inner",
+                bid=[(98_500, 2), (98_400, 11), (98_300, 28), (98_200, 31), (98_100, 30)],
+                ask=ask_b,
+            ),
+            _row(
+                "trade",
+                "2426",
+                5,
+                recv="09:48:35.269",
+                time="09:48:35.000",
+                price=98_500,
+                qty=2,
+                side="inner",
+                bid=[(98_400, 11), (98_300, 28), (98_200, 31), (98_100, 30), (98_000, 120)],
+                ask=ask_b,
+            ),
+        ]
+
+        frames = replay_books(rows)["2426"].frames
+
+        assert [_at(f.changes, 98_000) for f in frames] == [
+            [],
+            [LeftView("bid", 98_000, qty=39)],
+            [],
+            [],
+            [
+                Reappeared(
+                    "bid",
+                    98_000,
+                    left_qty=39,
+                    now_qty=120,
+                    traded_away=0,
+                    left_index=1,
+                    away_ms=154_911,  # 2 分 35 秒
+                )
+            ],
+        ]
+        (back,) = _at(frames[4].changes, 98_000)
+        assert isinstance(back, Reappeared)
+        assert back.net_placed == 81
+
+    def test_lots_traded_while_out_of_view_are_added_back_into_the_net_placed(self) -> None:
+        """2489 於 2026-09-16:10:04:20 賣 39.2(80 張)被擠出五檔;10:04:31 一筆掃單連吃 8 個價位把它吃光,
+        最後一則五檔才更新 —— 回到看得到的範圍時 0 張、離開期間成交 80 → 淨掛 0(被吃掉,不是撤掉)。"""
+        bid_a = [(38_900, 13), (38_850, 11), (38_800, 18), (38_750, 41), (38_700, 24)]
+        bid_b = [(38_900, 23), (38_850, 12), (38_800, 18), (38_750, 36), (38_700, 28)]
+        ask_b = [(38_950, 7), (39_000, 44), (39_050, 45), (39_100, 53), (39_150, 21)]
+        sweep = [
+            (38_950, 7, ".208"),
+            (39_000, 44, ".208"),
+            (39_050, 45, ".209"),
+            (39_100, 53, ".210"),
+            (39_150, 21, ".211"),
+            (39_200, 80, ".211"),
+            (39_250, 34, ".211"),
+        ]
+        rows = [
+            _row(
+                "book",
+                "2489",
+                1,
+                recv="10:04:20.107",
+                bid=bid_a,
+                ask=[(39_000, 38), (39_050, 44), (39_100, 53), (39_150, 20), (39_200, 80)],
+            ),
+            _row(
+                "book",
+                "2489",
+                2,
+                recv="10:04:20.156",
+                bid=bid_a,
+                ask=[(38_950, 4), (39_000, 38), (39_050, 44), (39_100, 53), (39_150, 20)],
+            ),
+            _row("book", "2489", 3, recv="10:04:30.208", bid=bid_b, ask=ask_b),
+            *(
+                _row(
+                    "trade",
+                    "2489",
+                    4 + k,
+                    recv=f"10:04:31{ms}",
+                    time="10:04:31.000",
+                    price=price,
+                    qty=qty,
+                    side="outer",
+                    bid=bid_b,
+                    ask=ask_b,  # 掃單途中五檔都還是舊的
+                )
+                for k, (price, qty, ms) in enumerate(sweep)
+            ),
+            _row(
+                "trade",
+                "2489",
+                11,
+                recv="10:04:31.212",
+                time="10:04:31.000",
+                price=39_300,
+                qty=56,
+                side="outer",
+                bid=[(39_300, 60), (38_900, 23), (38_850, 12), (38_800, 18), (38_750, 36)],
+                ask=[(39_350, 28), (39_400, 45), (39_450, 22), (39_500, 118), (39_550, 98)],
+            ),
+        ]
+
+        frames = replay_books(rows)["2489"].frames
+
+        assert [_at(f.changes, 39_200) for f in frames] == [
+            [],
+            [LeftView("ask", 39_200, qty=80)],
+            *([[]] * 8),
+            [
+                Reappeared(
+                    "ask",
+                    39_200,
+                    left_qty=80,
+                    now_qty=0,
+                    traded_away=80,
+                    left_index=1,
+                    away_ms=11_056,
+                )
+            ],
+        ]
+        (back,) = _at(frames[10].changes, 39_200)
+        assert isinstance(back, Reappeared)
+        assert back.net_placed == 0
+
+    def test_a_price_seen_for_the_first_time_enters_view_without_counting_as_placed(self) -> None:
+        """之前從沒看過的價位帶量進到看得到的範圍(賣方第五檔外的單露出來)= 首次進入五檔,不算掛單。"""
+        bid = [(99_900, 3)]
+        rows = [
+            _row(
+                "book",
+                "3441",
+                1,
+                recv="10:00:00.000",
+                bid=bid,
+                ask=[(100_000, 5), (100_500, 5), (101_000, 5), (101_500, 5), (102_000, 5)],
+            ),
+            _row(
+                "trade",
+                "3441",
+                2,
+                recv="10:00:00.500",
+                time="10:00:00.000",
+                price=100_000,
+                qty=5,
+                side="outer",
+                bid=bid,
+                ask=[(100_500, 5), (101_000, 5), (101_500, 5), (102_000, 5), (102_500, 30)],
+            ),
+        ]
+
+        frames = replay_books(rows)["3441"].frames
+
+        assert frames[1].changes == (
+            LevelChange("ask", 100_000, before=5, after=0, traded=5),
+            EnteredView("ask", 102_500, qty=30),
+        )
+
+    def test_a_price_that_emptied_before_it_left_comes_back_from_zero(self) -> None:
+        """追蹤中的價位在看得到時變 0、再被擠出去:離開不列(0 張沒東西可列);回來仍 0 張且期間沒成交也不列;
+        回來時有量 = 重新可見「離開時 0 → 現在 n」,淨掛 = n。"""
+        full = [(50_500, 5), (50_400, 5), (50_300, 5)]
+        pushed = [(50_700, 1), (50_600, 1), *full]
+        rows = [
+            _row("book", "2344", 1, recv="10:00:00.000", bid=[*full, (50_200, 5), (50_100, 5)]),
+            _row("book", "2344", 2, recv="10:00:01.000", bid=[*full, (50_100, 5), (50_000, 5)]),
+            _row("book", "2344", 3, recv="10:00:02.000", bid=pushed),
+            _row("book", "2344", 4, recv="10:00:03.000", bid=[*full, (50_100, 5), (50_000, 5)]),
+            _row("book", "2344", 5, recv="10:00:04.000", bid=pushed),
+            _row("book", "2344", 6, recv="10:00:05.000", bid=[*full, (50_200, 20), (50_100, 5)]),
+        ]
+
+        frames = replay_books(rows)["2344"].frames
+
+        assert [_at(f.changes, 50_200) for f in frames] == [
+            [],
+            [LevelChange("bid", 50_200, before=5, after=0, traded=0)],
+            [],  # 0 張被擠出去:不列
+            [],  # 回來仍 0 張、期間沒成交:不列
+            [],
+            [
+                Reappeared(
+                    "bid",
+                    50_200,
+                    left_qty=0,
+                    now_qty=20,
+                    traded_away=0,
+                    left_index=4,
+                    away_ms=1_000,
+                )
+            ],
         ]
 
 

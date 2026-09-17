@@ -21,11 +21,21 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 1.4–39.8 秒(真時刻,當時鐘點);7772 緩撮成交晚到 118.6 秒(真時刻,當時鐘點);1815 開機 07:31 收到前一日
 14:30 的盤後成交(未來,不當時鐘點)。不當時鐘點的成交仍是一則,`after` 照數,計入 `BookReplay.anomalous_trades`。
 
-**變動分解**(`Frame.changes`,#269):第 i 則相對同一檔第 i−1 則,以**價格**為鍵(不是檔位)逐價位比量,
-買方在前、賣方在後,同側市價佇列(價 0)在前、其後由最優價往外。量增加 = 掛入;量減少先扣該價位還沒扣到的
-成交(`LevelChange.traded`),剩下的算撤單。「還沒扣到」= 成交則附的五檔常常還沒反映這筆成交(掃單時前幾筆
-成交則的五檔是舊的),所以往後 `TRADE_CARRY_MESSAGES` 則且 `TRADE_CARRY_MS` 毫秒內的同價位減量都先扣它;
-市價佇列的減少不看成交價(鎖停時成交價是漲跌停價,吃掉的是市價那一排)。
+**變動分解**(`Frame.changes`,#269):第 i 則相對同一檔第 i−1 則,以**價格**為鍵(不是檔位),只比兩則都
+**看得到**的價位。看得到 = 買方價 ≥ 第五檔限價、賣方價 ≤ 第五檔限價(比買一高的價位本來就沒有買單、比賣一低的
+沒有賣單);某側不滿五層 = 整側看得到;市價佇列(價 0)恆看得到。一則的項目買方在前、賣方在後,同側市價佇列在前、
+其後由最優價往外;每個價位一則至多一項:
+- `LevelChange`:兩則都看得到。量增加 = 掛入;量減少先扣該價位還沒扣到的成交(`traded`),剩下的算撤單。
+  「還沒扣到」= 成交則附的五檔常常還沒反映這筆成交(掃單時前幾筆成交則的五檔是舊的),所以往後
+  `TRADE_CARRY_MESSAGES` 則且 `TRADE_CARRY_MS` 毫秒內的同價位減量都先扣它;市價佇列的減少不看成交價
+  (鎖停時成交價是漲跌停價,吃掉的是市價那一排)
+- `LeftView`:追蹤中的價位被擠到第五檔之外(離開視野),離開前最後看到的量 > 0 才列
+- `Reappeared`:被擠出去的價位回到看得到的範圍(重新可見),給離開時量、現在量、離開期間該價位成交量、淨掛
+  (= 現在 − 離開時 + 期間成交)、離開時長;**不算掛單**,看不到的那段無法分辨一次掛進或分次堆積。三個量都是 0 不列
+- `EnteredView`:從沒追蹤過的價位帶量進到看得到的範圍(首次進入五檔),不算掛單
+追蹤中 = 看得到時列出過的限價,之後在看得到的範圍內歸 0 仍追蹤(離開時量就是 0)。
+價位從賣方換到買方(價格穿過它)一直看得到,是賣方減量 + 買方增量,不是離開視野(user 2026-09-17 拍板;
+grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際賣方只新掛 16 張)。
 
 **外掛檔 v2**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg`):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
@@ -42,9 +52,12 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
   時刻照原值保留、不一定是當日(1815 那則是前一日 14:30)
 - `kf`:第 0、K、2K… 則的完整 20 格(K = `kf_every`,個數 = ceil(n / K))
 - `d`:長 n,第 i 則相對第 i−1 則變了的格,攤平成 `[欄號, 新值, 欄號, 新值, …]`(第 −1 則視為 20 格全 null)
-- `chg`:長 n,第 i 則的變動分解(= `Frame.changes`,順序照變動分解那段),每項 5 格攤平
-  `[側別碼, 價, 前量, 後量, 成交]`:側別碼 買 0 / 賣 1;價 0 = 市價佇列;掛入 = 後量 − 前量(增加時),
-  撤單 = 前量 − 後量 − 成交(減少時)。第 0 則恆空
+- `chg`:長 n,第 i 則的變動分解(= `Frame.changes`,順序照變動分解那段)攤平成一列,每項以種類碼開頭
+  (種類碼 = 基本碼 + 側別碼,側別碼 買 0 / 賣 1;價 0 = 市價佇列)。第 0 則恆空:
+  - 基本碼 0 價位變動 `[碼, 價, 前量, 後量, 成交]`:掛入 = 後量 − 前量(增加時),撤單 = 前量 − 後量 − 成交(減少時)
+  - 基本碼 2 被擠出五檔 `[碼, 價, 離開前的量]`
+  - 基本碼 4 重新可見 `[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]`
+  - 基本碼 6 首次進入五檔 `[碼, 價, 量]`
 
 值:價毫元、量張的整數;null = 該層不存在;價 0 = 鎖停的市價單佇列(0 與 null 不可混)。
 解碼:逐則播放 = 從前一則套 `d[i]`;跳到第 i 則 = 取 `kf[i // K]` 再套 `d[i//K*K + 1 .. i]`(`book_at`)。
@@ -54,6 +67,7 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 from __future__ import annotations
 
 import base64
+import bisect
 import datetime as _dt
 import gzip
 import json
@@ -74,11 +88,15 @@ __all__ = [
     "KEYFRAME_EVERY",
     "TRADE_CARRY_MESSAGES",
     "TRADE_CARRY_MS",
+    "BookChange",
     "BookReplay",
+    "EnteredView",
     "Frame",
+    "LeftView",
     "LevelChange",
     "PluginFormatError",
     "PluginPayload",
+    "Reappeared",
     "Trade",
     "book_at",
     "decode",
@@ -178,6 +196,49 @@ class LevelChange:
 
 
 @dataclass(frozen=True, slots=True)
+class LeftView:
+    """價位被擠到第五檔之外(離開視野),離開前最後看到 `qty` 張(> 0;0 張離開不列)。"""
+
+    side: str  # "bid" | "ask"
+    price_milli: int
+    qty: int
+
+
+@dataclass(frozen=True, slots=True)
+class Reappeared:
+    """被擠出五檔的價位回到看得到的範圍(重新可見),不產生掛單。
+
+    看不到的那段**無法分辨是一次掛進或分次堆積**,只給離開時量、現在量、期間該價位成交量與淨掛。
+    """
+
+    side: str  # "bid" | "ask"
+    price_milli: int
+    left_qty: int  # 離開前最後看到的量(看得到時已先變 0 就是 0)
+    now_qty: int  # 回來這一則的量(沒掛 = 0)
+    traded_away: int  # 離開期間(含離開與回來那兩則)在這個價位的成交量
+    left_index: int  # 離開那一則的則號
+    away_ms: int  # 離開時長(收到時刻)
+
+    @property
+    def net_placed(self) -> int:
+        """期間淨掛值 = 現在量 − 離開時量 + 期間成交量。"""
+        return self.now_qty - self.left_qty + self.traded_away
+
+
+@dataclass(frozen=True, slots=True)
+class EnteredView:
+    """從沒追蹤過的價位帶量進到看得到的範圍(首次進入五檔),不算掛單。"""
+
+    side: str  # "bid" | "ask"
+    price_milli: int
+    qty: int
+
+
+#: 一則裡的一項變動(`Frame.changes`)
+BookChange = LevelChange | LeftView | Reappeared | EnteredView
+
+
+@dataclass(frozen=True, slots=True)
 class Frame:
     """重播的一則 = 一列 tick 存檔當下的五檔 + 它在兩把時間尺上的位置(見模組說明)。"""
 
@@ -188,7 +249,7 @@ class Frame:
     after: int  # 距該時鐘點第幾則(時鐘點本身 0;首筆成交前自第 1 則數起)
     recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
     trade: Trade | None  # 成交則的那筆成交;簿則 None
-    changes: tuple[LevelChange, ...]  # 相對同一檔上一則變了什麼;當日第一則恆空
+    changes: tuple[BookChange, ...]  # 相對同一檔上一則變了什麼(見模組說明「變動分解」);第一則恆空
 
     @property
     def anomalous_trade(self) -> bool:
@@ -258,7 +319,7 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
     clock_index = -1
     day_start_ms = _taipei_day_start_epoch_ms(rows[0].trade_date)
     recv_ms = rows[0].recv_ns // 1_000_000 - day_start_ms
-    prev_book: tuple[int | None, ...] | None = None
+    views: tuple[_SideView, _SideView] | None = None
     unmatched: list[_UnmatchedTrade] = []
     for i, row in enumerate(rows):
         if _is_clock_point(row, clock, day_start_ms):
@@ -267,8 +328,10 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
         recv_ms = max(recv_ms, row.recv_ns // 1_000_000 - day_start_ms)
         trade = Trade(row.ms, row.price_milli, row.qty, row.side) if row.kind == "trade" else None
         book = _book_of(row)
+        traded_price = traded_qty = None
         if trade is not None and trade.price_milli is not None and trade.qty:
-            unmatched.append(_UnmatchedTrade(trade.price_milli, trade.qty, i, recv_ms))
+            traded_price, traded_qty = trade.price_milli, trade.qty
+            unmatched.append(_UnmatchedTrade(traded_price, traded_qty, i, recv_ms))
         unmatched = [
             u
             for u in unmatched
@@ -276,11 +339,15 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
             and i - u.index <= TRADE_CARRY_MESSAGES
             and recv_ms - u.recv_ms <= TRADE_CARRY_MS
         ]
-        changes = () if prev_book is None else _level_changes(prev_book, book, unmatched)
+        if views is None:
+            views = (_SideView(0, book), _SideView(1, book))
+            changes: tuple[BookChange, ...] = ()
+        else:
+            step = (i, recv_ms, traded_price, traded_qty, unmatched)
+            changes = (*views[0].step(book, *step), *views[1].step(book, *step))
         frames.append(
             Frame(row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade, changes)
         )
-        prev_book = book
     return tuple(frames)
 
 
@@ -294,46 +361,176 @@ class _UnmatchedTrade:
     recv_ms: int
 
 
-def _side_quantities(book: tuple[int | None, ...], side: int) -> dict[int, int]:
-    """一側五檔 → {價: 量}(價 0 = 市價佇列;有價沒量當 0)。"""
-    base = 2 * DEPTH * side
-    return {
-        price: book[base + DEPTH + level] or 0
-        for level in range(DEPTH)
-        if (price := book[base + level]) is not None
-    }
+def _absorb(unmatched: list[_UnmatchedTrade], price: int | None, decrease: int) -> int:
+    """量減少 `decrease` 張先扣還沒扣到的成交(由舊到新、就地扣減),回傳算成交的張數。
 
-
-def _level_changes(
-    prev_book: tuple[int | None, ...],
-    book: tuple[int | None, ...],
-    unmatched: list[_UnmatchedTrade],
-) -> tuple[LevelChange, ...]:
-    """兩則之間逐價位的量變化:買方在前、賣方在後;同側市價佇列在前,其後由最優價往外。
-
-    量減少先扣同價位還沒扣到的成交(`unmatched` 由舊到新、就地扣減),剩下的算撤單。市價佇列(價 0)的
-    減少不看成交價:鎖停時成交價是漲跌停價,吃掉的卻是市價那一排(2026-09-16 2426 11:02:50 實錄)。
+    `price` None = 市價佇列:不看成交價(鎖停時成交價是漲跌停價,吃掉的卻是市價那一排,
+    2026-09-16 2426 11:02:50 實錄)。
     """
-    out: list[LevelChange] = []
-    for side, name in enumerate(_BOOK_SIDES):
-        before_side, after_side = _side_quantities(prev_book, side), _side_quantities(book, side)
-        direction = -1 if name == "bid" else 1
-        for price in sorted(
-            before_side.keys() | after_side.keys(), key=lambda p: (p != 0, direction * p)
-        ):
-            before, after = before_side.get(price, 0), after_side.get(price, 0)
-            if before == after:
-                continue
-            traded = 0
-            for trade in unmatched:
-                if before - after - traded <= 0:
-                    break
-                if trade.qty and (price == 0 or trade.price_milli == price):
-                    take = min(before - after - traded, trade.qty)
-                    trade.qty -= take
-                    traded += take
-            out.append(LevelChange(name, price, before, after, traded))
-    return tuple(out)
+    traded = 0
+    for trade in unmatched:
+        if traded >= decrease:
+            break
+        if trade.qty and (price is None or trade.price_milli == price):
+            take = min(decrease - traded, trade.qty)
+            trade.qty -= take
+            traded += take
+    return traded
+
+
+@dataclass(slots=True)
+class _Away:
+    """被擠出五檔的價位:離開前最後看到的量、離開那一則、之後在這個價位的成交累計。"""
+
+    qty: int
+    index: int
+    recv_ms: int
+    traded: int = 0
+
+
+class _SideView:
+    """一側的視野(見模組說明「變動分解」):邊界、追蹤中的價位、被擠出去的價位。
+
+    追蹤中 = 看得到時列出過的限價,記最後已知量(之後在看得到的範圍內歸 0 仍追蹤);市價佇列恆看得到、另記。
+    """
+
+    def __init__(self, side: int, book: tuple[int | None, ...]) -> None:
+        self._side = side
+        self._name = _BOOK_SIDES[side]
+        self._listed, self._queue, self._bound = _side_levels(book, side)
+        self._tracked: dict[int, int] = dict(self._listed)
+        self._tracked_prices: list[int] = sorted(self._tracked)
+        self._away: dict[int, _Away] = {}
+        self._away_prices: list[int] = []
+
+    def _covers(self, bound: int | None, price: int) -> bool:
+        """看得到:買方價 ≥ 第五檔限價、賣方價 ≤ 第五檔限價;bound None(不滿五層)= 整側看得到。"""
+        if bound is None:
+            return True
+        return price >= bound if self._side == 0 else price <= bound
+
+    def _track(self, price: int, qty: int) -> None:
+        if price not in self._tracked:
+            bisect.insort(self._tracked_prices, price)
+        self._tracked[price] = qty
+
+    def step(
+        self,
+        book: tuple[int | None, ...],
+        index: int,
+        recv_ms: int,
+        traded_price: int | None,
+        traded_qty: int | None,
+        unmatched: list[_UnmatchedTrade],
+    ) -> list[BookChange]:
+        """這一則相對上一則,這一側變了什麼(同側市價佇列在前,其後由最優價往外)。"""
+        listed, queue, bound = _side_levels(book, self._side)
+        prev_listed, prev_queue, prev_bound = self._listed, self._queue, self._bound
+        self._listed, self._queue, self._bound = listed, queue, bound
+        out: list[BookChange] = []
+        if queue != prev_queue:
+            traded = _absorb(unmatched, None, prev_queue - queue)
+            out.append(LevelChange(self._name, 0, prev_queue, queue, traded))
+        for price in prev_listed.keys() | listed.keys():
+            if not (self._covers(prev_bound, price) and self._covers(bound, price)):
+                continue  # 只在一則看得到:離開 / 回來 / 首次進入,下面處理
+            before, after = prev_listed.get(price, 0), listed.get(price, 0)
+            if after or price in self._tracked:
+                self._track(price, after)
+            if before != after:
+                traded = _absorb(unmatched, price, before - after)
+                out.append(LevelChange(self._name, price, before, after, traded))
+        for price in self._leaving(prev_bound, bound):
+            qty = self._tracked.pop(price)
+            self._away[price] = _Away(qty, index, recv_ms)
+            bisect.insort(self._away_prices, price)
+            if qty:
+                out.append(LeftView(self._name, price, qty))
+        if traded_qty and traded_price in self._away:
+            self._away[traded_price].traded += traded_qty
+        for price in self._returning(prev_bound, bound):
+            away = self._away.pop(price)
+            now = listed.get(price, 0)
+            self._track(price, now)
+            if away.qty or now or away.traded:
+                out.append(
+                    Reappeared(
+                        self._name,
+                        price,
+                        away.qty,
+                        now,
+                        away.traded,
+                        away.index,
+                        recv_ms - away.recv_ms,
+                    )
+                )
+        for price, qty in listed.items():
+            if not self._covers(prev_bound, price) and price not in self._tracked:
+                self._track(price, qty)
+                if qty:
+                    out.append(EnteredView(self._name, price, qty))
+        direction = -1 if self._side == 0 else 1
+        out.sort(key=lambda change: (change.price_milli != 0, direction * change.price_milli))
+        return out
+
+    def _leaving(self, prev_bound: int | None, bound: int | None) -> list[int]:
+        """邊界收窄時被擠出去的追蹤中價位(從追蹤清單移除,回傳由小到大)。"""
+        prices = self._tracked_prices
+        if bound is None or (prev_bound is not None and bound == prev_bound):
+            return []
+        if self._side == 0:
+            if prev_bound is not None and bound < prev_bound:
+                return []
+            cut = bisect.bisect_left(prices, bound)
+            leaving, self._tracked_prices = prices[:cut], prices[cut:]
+        else:
+            if prev_bound is not None and bound > prev_bound:
+                return []
+            cut = bisect.bisect_right(prices, bound)
+            leaving, self._tracked_prices = prices[cut:], prices[:cut]
+        return leaving
+
+    def _returning(self, prev_bound: int | None, bound: int | None) -> list[int]:
+        """邊界放寬時回到看得到範圍的被擠出價位(從被擠出清單移除,回傳由小到大)。"""
+        prices = self._away_prices
+        if prev_bound is None or (bound is not None and bound == prev_bound):
+            return []
+        if self._side == 0:
+            if bound is not None and bound > prev_bound:
+                return []
+            cut = 0 if bound is None else bisect.bisect_left(prices, bound)
+            returning, self._away_prices = prices[cut:], prices[:cut]
+        else:
+            if bound is not None and bound < prev_bound:
+                return []
+            cut = len(prices) if bound is None else bisect.bisect_right(prices, bound)
+            returning, self._away_prices = prices[:cut], prices[cut:]
+        return returning
+
+
+def _side_levels(book: tuple[int | None, ...], side: int) -> tuple[dict[int, int], int, int | None]:
+    """一側五檔 → (限價 {價: 量}、市價佇列量(沒有 = 0)、看得到的邊界)。
+
+    邊界:五層都有價時 = 最遠那一檔限價(買方最低 / 賣方最高),之外看不到;不滿五層 = None(整側看得到)。
+    有價沒量當 0。
+    """
+    base = 2 * DEPTH * side
+    listed: dict[int, int] = {}
+    queue = 0
+    levels = 0
+    for level in range(DEPTH):
+        price = book[base + level]
+        if price is None:
+            continue
+        levels += 1
+        qty = book[base + DEPTH + level] or 0
+        if price == 0:
+            queue = qty
+        else:
+            listed[price] = qty
+    if levels < DEPTH or not listed:
+        return listed, queue, None
+    return listed, queue, (min(listed) if side == 0 else max(listed))
 
 
 def _is_clock_point(row: TickRow, clock: int | None, day_start_ms: int) -> bool:
@@ -404,36 +601,70 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
     }
 
 
-def _encode_changes(changes: tuple[LevelChange, ...]) -> list[int]:
-    """一則的變動 → 攤平的 `[側別碼, 價, 前量, 後量, 成交, …]`(側別碼:買 0 / 賣 1)。"""
+#: 外掛檔 `chg` 每項佔幾格(含開頭的種類碼);種類碼 = 2 × 這張表的序號 + 側別碼(買 0 / 賣 1)
+_CHANGE_WIDTHS: tuple[int, ...] = (
+    5,  # 0 / 1 價位變動:[碼, 價, 前量, 後量, 成交]
+    3,  # 2 / 3 被擠出五檔:[碼, 價, 離開前的量]
+    8,  # 4 / 5 重新可見:[碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
+    3,  # 6 / 7 首次進入五檔:[碼, 價, 量]
+)
+
+
+def _encode_changes(changes: tuple[BookChange, ...]) -> list[int]:
+    """一則的變動 → `chg` 的一列(格式見模組說明「外掛檔 v2」)。"""
     out: list[int] = []
     for change in changes:
-        out += [
-            _BOOK_SIDES.index(change.side),
-            change.price_milli,
-            change.before,
-            change.after,
-            change.traded,
-        ]
+        side = _BOOK_SIDES.index(change.side)
+        match change:
+            case LevelChange():
+                out += [side, change.price_milli, change.before, change.after, change.traded]
+            case LeftView():
+                out += [2 + side, change.price_milli, change.qty]
+            case Reappeared():
+                out += [
+                    4 + side,
+                    change.price_milli,
+                    change.left_qty,
+                    change.now_qty,
+                    change.traded_away,
+                    change.net_placed,
+                    change.left_index,
+                    change.away_ms,
+                ]
+            case EnteredView():
+                out += [6 + side, change.price_milli, change.qty]
     return out
 
 
-#: 外掛檔 `chg` 裡一個價位變動佔幾格
-_LEVEL_CHANGE_CELLS = 5
+def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[BookChange, ...]:
+    """`chg` 的一列 → 這一則的變動(`_encode_changes` 的反函數)。
 
-
-def _decode_changes(cells: Sequence[Any], code: str, index: int) -> tuple[LevelChange, ...]:
-    """`_encode_changes` 的反函數;長度不是整數倍、側別碼不認得 → PluginFormatError。"""
-    if len(cells) % _LEVEL_CHANGE_CELLS:
-        raise PluginFormatError(
-            f"{code} 第 {index} 則:變動長度 {len(cells)} 不是 {_LEVEL_CHANGE_CELLS} 的倍數"
-        )
-    out: list[LevelChange] = []
-    for k in range(0, len(cells), _LEVEL_CHANGE_CELLS):
-        side, price, before, after, traded = cells[k : k + _LEVEL_CHANGE_CELLS]
-        if side not in (0, 1):
-            raise PluginFormatError(f"{code} 第 {index} 則:變動側別碼 {side!r} 不是 0 / 1")
-        out.append(LevelChange(_BOOK_SIDES[side], price, before, after, traded))
+    種類碼不認得、最後一項格數不足 → PluginFormatError。
+    """
+    out: list[BookChange] = []
+    k = 0
+    while k < len(cells):
+        kind = cells[k]
+        if not isinstance(kind, int) or not 0 <= kind < 2 * len(_CHANGE_WIDTHS):
+            raise PluginFormatError(f"{code} 第 {index} 則:變動種類碼 {kind!r} 不認得")
+        width = _CHANGE_WIDTHS[kind // 2]
+        item = cells[k + 1 : k + width]
+        if len(item) != width - 1:
+            raise PluginFormatError(f"{code} 第 {index} 則:變動項目格數不足(種類碼 {kind})")
+        side = _BOOK_SIDES[kind % 2]
+        match kind // 2:
+            case 0:
+                out.append(LevelChange(side, *item))
+            case 1:
+                out.append(LeftView(side, *item))
+            case 2:
+                price, left_qty, now_qty, traded_away, _net, left_index, away_ms = item
+                out.append(
+                    Reappeared(side, price, left_qty, now_qty, traded_away, left_index, away_ms)
+                )
+            case _:
+                out.append(EnteredView(side, *item))
+        k += width
     return tuple(out)
 
 
