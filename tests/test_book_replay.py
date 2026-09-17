@@ -1065,6 +1065,87 @@ class TestEaten:
 
         assert [f.eaten for f in frames] == [(), (Eaten("bid", level=2, qty=8),), ()]
 
+    def test_a_trade_counted_while_its_price_was_out_of_view_is_not_taken_again(self) -> None:
+        """review round 1 P-01(6209 於 2026-09-16 09:04:10 的形狀):買 78.8 被擠出五檔後,一筆 61 張成交落在
+        它身上、同一則 78.8 回到五檔 → 這 61 張算進期間成交,就不能在兩則後 78.8 減 6 張時再扣一次;那 6 張
+        是它自己那筆 6 張成交吃的(修前:61 張那筆吃檔變「買1 −6、買五檔外 −55」,6 張那筆變「—」)。"""
+        ask = [(79_400, 5)]
+        ask_after = [(78_900, 2), (79_000, 27)]
+        rows = [
+            _row(
+                "book",
+                "6209",
+                1,
+                recv="09:02:45.300",
+                bid=[(79_200, 3), (79_100, 3), (79_000, 3), (78_900, 3), (78_800, 5)],
+                ask=ask,
+            ),
+            _row(
+                "book",
+                "6209",
+                2,
+                recv="09:02:45.318",
+                bid=[(79_300, 1), (79_200, 3), (79_100, 3), (79_000, 3), (78_900, 3)],
+                ask=ask,
+            ),
+            _row(
+                "trade",
+                "6209",
+                3,
+                recv="09:04:10.204",
+                time="09:04:10.000",
+                price=78_800,
+                qty=61,
+                side="inner",
+                bid=[(78_800, 6), (78_700, 2), (78_600, 4), (78_500, 6), (78_400, 5)],
+                ask=ask_after,
+            ),
+            _row(
+                "book",
+                "6209",
+                4,
+                recv="09:04:10.247",
+                bid=[(78_800, 6), (78_700, 2), (78_600, 4), (78_500, 5), (78_400, 5)],
+                ask=ask_after,
+            ),
+            _row(
+                "trade",
+                "6209",
+                5,
+                recv="09:04:10.250",
+                time="09:04:10.000",
+                price=78_800,
+                qty=6,
+                side="inner",
+                bid=[(78_700, 2), (78_600, 4), (78_500, 5), (78_400, 5), (78_300, 6)],
+                ask=ask_after,
+            ),
+        ]
+
+        frames = replay_books(rows)["6209"].frames
+
+        assert _at(frames[2].changes, 78_800) == [
+            Reappeared(
+                "bid",
+                78_800,
+                left_qty=5,
+                now_qty=6,
+                traded_away=61,
+                left_index=1,
+                away_ms=84_886,
+            )
+        ]
+        assert _at(frames[4].changes, 78_800) == [
+            LevelChange("bid", 78_800, before=6, after=0, traded=6)
+        ]
+        assert [f.eaten for f in frames] == [
+            (),
+            (),
+            (Eaten("bid", level=None, qty=61),),  # 成交當下 78.8 在五檔外
+            (),
+            (Eaten("bid", level=1, qty=6),),
+        ]
+
 
 def _sweep_2489_rows() -> list[TickRow]:
     """2489 於 2026-09-16 10:04:20–10:04:31(11 則):賣 39.2(80 張)被擠出五檔 → 10:04:31 一筆掃單連吃
