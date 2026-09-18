@@ -37,6 +37,16 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 買賣兩側全空的一則 = 達錢清空五檔(2026-09-16 10 檔 15 則,都在之後改每 5 秒才更新的那一刻 —— 暫緩撮合開始),
 不是所有人同時撤單:那一則沒有變動,下一則跟全空之前最後一份五檔比;吃檔的「成交前那一則」也跳過它
 (user 2026-09-17 拍板)。
+
+**集合競價**(`Frame.auction`,#279 審查收修,user 2026-09-18 拍板):開盤、暫緩撮合結束、收盤、處置股分盤撮合
+撮出來的那一筆成交 —— 判準見 `_auction_match`(前一則是達錢 `TradeStatus` = 1 的試撮簿)。試撮期間揭示的五檔是
+**撮完剩下的**掛單,要撮掉的單子從沒顯示過,所以撮合那一下五檔不會少:
+- 這一則**不拆變動**(跟試撮五檔比不出意義:兩邊同時被結清、被撮掉的價位看不到),但撮後的五檔是之後比較的基準
+- 這一筆**不進待扣**、吃檔留空(集合競價沒有主動方,「吃第幾檔」沒有答案) —— 否則它比不到自己的減量,會把之後
+  1 秒內的撤單寫成成交、還搶走下一筆成交自己的減量(2026-09-16 兩天實測:開盤 76 / 73 筆、盤中 276 / 145 筆、
+  收盤 79 / 78 筆都是這種成交)
+同理,達錢時刻在未來的異常成交(開機補送前一日盤後成交)附的是舊簿(`Frame.stale_book`,見
+`_stamped_in_the_future`):不比、不當基準、不進待扣。
 價位從賣方換到買方(價格穿過它)一直看得到,是賣方減量 + 買方增量,不是離開視野(user 2026-09-17 拍板;
 grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際賣方只新掛 16 張)。
 
@@ -46,17 +56,21 @@ grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際�
 第五檔之外(外盤看賣方、內盤看買方)= 五檔外(`level` None);其餘看不出吃了哪一檔(開收盤集合競價、同一則
 又掛進來蓋過減量)不列。同一格分幾則扣到合成一項。
 
-**外掛檔 v2**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg` 與
-`eat`):
+**外掛檔 v3**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg` 與
+`eat`;v2 → v3 = #279 審查收修加 `auction` 與 `stale`):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
 
-- `v`:2;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
+- `v`:3;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
 - `seq`:訊息序號,首項絕對值、其後逐則差值(每一項都 > 0)
 - `kind`:長 n 的字串,`t` 成交 / `b` 簿
 - `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
 - `anomalous`:達錢時刻異常、不當時鐘點的成交則號(遞增;個數 = `BookReplay.anomalous_trades`,2026-09-16
   全 80 檔共 1 個)。**其餘成交則都是時鐘點**,時刻讀它在 `trade` 的第一格(必有值、不減)。
   第 i 則的標籤時刻 = 則號 ≤ i 的最後一個時鐘點,`after` = i − 該則號;沒有這樣的點 = 首筆成交前,`after` = i + 1
+- `auction`:集合競價撮出來的成交則號(遞增;見上面「集合競價」)。這些則 `chg` 與 `eat` 恆空,回看頁印
+  「集合競價撮合」而不是「五檔沒有變動」
+- `stale`:附舊簿的成交則號(遞增;⊆ `anomalous`,時刻在未來的異常成交)。這些則 `chg` 恆空、也不當下一則的
+  比較基準 —— 下一份非空五檔才是「當日第一份」
 - `trade`:每個成交則依序 4 格攤平 `[達錢成交時刻毫秒, 價, 張, 內外盤]`(時刻 = 存檔 `ms` 原值),內外盤為
   `"inner"` / `"outer"` / `"neutral"`;長度 = 4 × `kind` 裡 `t` 的個數,簿則不佔位。列在 `anomalous` 的成交
   時刻照原值保留、不一定是當日(1815 那則是前一日 14:30)
@@ -128,8 +142,13 @@ _PLUGIN_LINE = re.compile(
     re.escape(_PLUGIN_CALLBACK) + r'\("(?P<key>[^"\\]*)","(?P<blob>[A-Za-z0-9+/=]*)"\);'
 )
 
-#: 外掛檔格式版本;改格式 = +1(回看頁依它選解碼規則)
-FORMAT_VERSION = 2
+#: 外掛檔格式版本;改格式 = +1(回看頁依它選解碼規則)。v2 → v3 = #279 審查收修加 `auction` / `stale`
+#: 兩個則號清單(純加欄位);回看頁對**只加欄位**的升版往下相容(舊檔照讀、新欄位當沒有,user 2026-09-18
+#: 拍板),欄位語意真的改掉時才擋版本 —— 外掛檔永久保留,但簿 parquet 只留 120 交易日、過期重產不出來。
+FORMAT_VERSION = 3
+
+#: 達錢 `TradeStatus` 的試撮值(集合競價 / 盤中延緩撮合進行中的簿更新;正常盤 "0",見 skill tc4-market-facts)
+_TRIAL_STATUS = "1"
 
 #: 每幾則放一個完整五檔(keyframe);回看頁跳到任一則最多套這麼多則 delta
 KEYFRAME_EVERY = 256
@@ -282,9 +301,14 @@ class Frame:
     after: int  # 距該時鐘點第幾則(時鐘點本身 0;首筆成交前自第 1 則數起)
     recv_ms: int  # 時間軸位置 = server 收到時刻(交易日台北零點起毫秒);本機鐘回撥時沿用前一則
     trade: Trade | None  # 成交則的那筆成交;簿則 None
-    # 相對同一檔上一份五檔變了什麼(見模組說明「變動分解」);當日第一份五檔與五檔全空(清空)那一則恆空
+    # 相對同一檔上一份五檔變了什麼(見模組說明「變動分解」);當日第一份五檔、五檔全空(清空)、
+    # 集合競價撮合、附舊簿的時刻異常成交那幾則恆空
     changes: tuple[BookChange, ...]
     eaten: tuple[Eaten, ...]  # 成交則吃到的掛單(見模組說明「吃檔」);簿則與看不出吃哪一檔時恆空
+    # 集合競價撮出來的那一筆(見模組說明「集合競價」):不拆變動、吃檔空;撮後的五檔仍是之後比較的基準
+    auction: bool = False
+    # 附的五檔不是當下的簿(達錢時刻在未來的異常成交,開機補送前一日盤後成交):不拆、也不當基準
+    stale_book: bool = False
 
     @property
     def anomalous_trade(self) -> bool:
@@ -318,6 +342,8 @@ class PluginPayload(TypedDict):
     seq: list[int]
     kind: str
     anomalous: list[int]
+    auction: list[int]
+    stale: list[int]
     recv: list[int]
     trade: list[int | str | None]
     kf: list[list[int | None]]
@@ -365,9 +391,19 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
         recv_ms = max(recv_ms, row.recv_ns // 1_000_000 - day_start_ms)
         trade = Trade(row.ms, row.price_milli, row.qty, row.side) if row.kind == "trade" else None
         book = _book_of(row)
-        ledger.add_book(book)
+        stale_book = _stamped_in_the_future(row, day_start_ms)
+        auction = _auction_match(row, rows[i - 1] if i else None)
+        ledger.add_book(book, reuse_previous=stale_book)
         current: _UnmatchedTrade | None = None  # 這一則的成交(還沒扣到的部分)
-        if trade is not None and trade.price_milli is not None and trade.qty:
+        if (
+            trade is not None
+            and trade.price_milli is not None
+            and trade.qty
+            # 比不到自己減量的成交不進待扣(否則它會扣掉之後的撤單與別筆成交的量,user 2026-09-18 拍板):
+            # 當日第一份五檔那一則(自己的減量已在這份簿裡)、集合競價撮合、附舊簿的時刻異常成交
+            and views is not None
+            and not (auction or stale_book)
+        ):
             current = _UnmatchedTrade(trade.price_milli, trade.qty, i, recv_ms, trade.side)
             unmatched.append(current)
         live: list[_UnmatchedTrade] = []
@@ -383,12 +419,19 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
                 ledger.record_unabsorbed(pending)
         unmatched = live
         changes: tuple[BookChange, ...] = ()
-        if _cleared(book):
+        if stale_book:
+            pass  # 附的是舊簿(開機補送的前一日成交):不比,也不當之後比較的基準
+        elif _cleared(book):
             if views is not None:  # 清空那一則不比簿,但成交照樣算進被擠出價位的期間成交
                 for view in views:
                     view.count_trade(current, ledger)
         elif views is None:
             views = (_SideView(0, book), _SideView(1, book))
+        elif auction:
+            # 集合競價撮合:跟試撮五檔比不出意義(揭示的是撮完剩下的掛單),整則不拆;撮後的五檔
+            # 仍要當之後比較的基準,所以照樣走 step —— 只是不給待扣、也不給這一則的成交
+            for view in views:
+                view.step(book, i, recv_ms, None, [], ledger)
         else:
             changes = tuple(
                 change
@@ -396,7 +439,19 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
                 for change in view.step(book, i, recv_ms, current, unmatched, ledger)
             )
         frames.append(
-            Frame(row.msg_seq, row.kind, book, clock, i - clock_index, recv_ms, trade, changes, ())
+            Frame(
+                row.msg_seq,
+                row.kind,
+                book,
+                clock,
+                i - clock_index,
+                recv_ms,
+                trade,
+                changes,
+                (),
+                auction=auction,
+                stale_book=stale_book,
+            )
         )
     for pending in unmatched:
         ledger.record_unabsorbed(pending)
@@ -446,9 +501,11 @@ class _EatLedger:
         self._books: list[tuple[int | None, ...]] = []
         self._eaten: dict[int, list[Eaten]] = {}
 
-    def add_book(self, book: tuple[int | None, ...]) -> None:
-        """記下這一則的參考五檔;五檔全空(清空)沿用前一份,檔位才不會因清空一律變五檔外。"""
-        self._books.append(self._books[-1] if self._books and _cleared(book) else book)
+    def add_book(self, book: tuple[int | None, ...], *, reuse_previous: bool = False) -> None:
+        """記下這一則的參考五檔;五檔全空(清空)與附舊簿的時刻異常成交沿用前一份,檔位才不會錯
+        (清空會讓檔位一律變五檔外,舊簿會拿前一日的檔位去標今天的成交)。"""
+        stale = reuse_previous or _cleared(book)
+        self._books.append(self._books[-1] if self._books and stale else book)
 
     def record_absorbed(
         self, trade: _UnmatchedTrade, side: int, price: int | None, qty: int, index: int
@@ -481,11 +538,13 @@ class _EatLedger:
         return tuple(self._eaten.get(index, ()))
 
     def _add(self, index: int, eat: Eaten) -> None:
+        """同一格(側別、檔位)分幾則扣到合成一項 —— 中間夾著別格也合(市價佇列 → 限價 → 市價佇列)。"""
         eats = self._eaten.setdefault(index, [])
-        if eats and (eats[-1].side, eats[-1].level) == (eat.side, eat.level):
-            eats[-1] = Eaten(eat.side, eat.level, eats[-1].qty + eat.qty)
-        else:
-            eats.append(eat)
+        for k, seen in enumerate(eats):
+            if (seen.side, seen.level) == (eat.side, eat.level):
+                eats[k] = Eaten(eat.side, eat.level, seen.qty + eat.qty)
+                return
+        eats.append(eat)
 
 
 def _cleared(book: Sequence[int | None]) -> bool:
@@ -682,7 +741,38 @@ def _is_clock_point(row: TickRow, clock: int | None, day_start_ms: int) -> bool:
         return False
     if clock is not None and row.ms < clock:
         return False  # 標籤時刻不倒退
-    return day_start_ms + row.ms <= row.recv_ns // 1_000_000 + CLOCK_FUTURE_TOLERANCE_MS
+    return not _stamped_in_the_future(row, day_start_ms)
+
+
+def _stamped_in_the_future(row: TickRow, day_start_ms: int) -> bool:
+    """成交的達錢時刻晚於收到時刻超過 `CLOCK_FUTURE_TOLERANCE_MS` = 不可能收得到的未來。
+
+    實例:開機時達錢補送前一日的盤後成交(2026-09-16 1815:07:31 收到、蓋 14:30)。它附的五檔是
+    **那筆成交當時**的簿(前一交易日收盤),不是今天的 —— 不拿來當當日第一份五檔、也不當檔位參考,
+    它的成交更不進待扣(user 2026-09-18 拍板;否則 09:00 開盤那一則跟前一日的簿比,拆出幾千張假撤單)。
+    """
+    return (
+        row.kind == "trade"
+        and row.ms is not None
+        and day_start_ms + row.ms > row.recv_ns // 1_000_000 + CLOCK_FUTURE_TOLERANCE_MS
+    )
+
+
+def _auction_match(row: TickRow, previous: TickRow | None) -> bool:
+    """這一則是集合競價撮出來的成交(開盤 / 暫緩撮合結束 / 收盤 / 處置股分盤撮合)。
+
+    判準 = 成交則,且**前一則是試撮期間的簿**(達錢 `TradeStatus` = `_TRIAL_STATUS`,非清空)。
+    試撮期間揭示的五檔是「撮完剩下的」,要撮掉的單子從沒顯示過 → 撮合那一下五檔不會少,這筆成交
+    永遠比不到自己的減量(2026-09-16 2305 09:12 暫緩撮合結束:撮 772 張,買方看得到的只有 33 張)。
+    當日第一則就是成交(沒有前一份可比)另由 `views is None` 擋下,不算在這裡。
+    """
+    return (
+        row.kind == "trade"
+        and previous is not None
+        and previous.kind == "book"
+        and previous.trade_status == _TRIAL_STATUS
+        and not _cleared(_book_of(previous))
+    )
 
 
 def _taipei_day_start_epoch_ms(trade_date: str) -> int:
@@ -697,6 +787,8 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
     seq: list[int] = []
     kinds: list[str] = []
     anomalous: list[int] = []
+    auction: list[int] = []
+    stale: list[int] = []
     recv: list[int] = []
     trades: list[int | str | None] = []
     keyframes: list[list[int | None]] = []
@@ -719,6 +811,10 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
             eaten.append(_encode_eaten(frame.eaten))
             if frame.anomalous_trade:
                 anomalous.append(i)
+            if frame.auction:
+                auction.append(i)
+            if frame.stale_book:
+                stale.append(i)
         delta: list[int | None] = []
         for field, value in enumerate(frame.book):
             if value != state[field]:
@@ -738,6 +834,8 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         "seq": seq,
         "kind": "".join(kinds),
         "anomalous": anomalous,
+        "auction": auction,
+        "stale": stale,
         "recv": recv,
         "trade": trades,
         "kf": keyframes,
@@ -937,6 +1035,10 @@ def decode(payload: PluginPayload) -> BookReplay:
     eat_rows = iter(payload["eat"])
     anomalous = iter(payload["anomalous"])
     next_anomalous = next(anomalous, None)
+    auction_rows = iter(payload["auction"])
+    next_auction = next(auction_rows, None)
+    stale_rows = iter(payload["stale"])
+    next_stale = next(stale_rows, None)
     clock: int | None = None
     clock_index = -1
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
@@ -984,17 +1086,28 @@ def decode(payload: PluginPayload) -> BookReplay:
                 )
             else:
                 clock, clock_index = trade.ms, i
+        auction = i == next_auction
+        if auction:
+            next_auction = next(auction_rows, None)
+        stale_book = i == next_stale
+        if stale_book:
+            next_stale = next(stale_rows, None)
         changes = _decode_changes(change_cells, code, i)
-        if prev_state is None or _cleared(state):
+        if prev_state is None or _cleared(state) or auction or stale_book:
             if changes:
                 raise PluginFormatError(
-                    f"{code} 第 {i} 則:當日第一份五檔或五檔全空(清空)沒有可比的前一份,不該有變動"
+                    f"{code} 第 {i} 則:當日第一份五檔、五檔全空(清空)、集合競價撮合、"
+                    f"附舊簿的時刻異常成交都不比前一份,不該有變動"
                 )
         else:
             _check_changes(changes, prev_state, state, recv_at, code, i)
-        if not _cleared(state):
-            prev_state = list(state)
+        if not (_cleared(state) or stale_book):
+            prev_state = list(state)  # 集合競價撮合那一則不拆,但撮後的五檔是之後比較的基準
         eaten = _decode_eaten(next(eat_rows), code, i) if trade is not None else ()
+        if auction and eaten:
+            raise PluginFormatError(
+                f"{code} 第 {i} 則:集合競價撮合看不出吃了哪一檔,不該有吃檔"
+            )
         if trade is not None and sum(eat.qty for eat in eaten) > (trade.qty or 0):
             raise PluginFormatError(
                 f"{code} 第 {i} 則:吃檔共 {sum(eat.qty for eat in eaten)} 張,超過成交 {trade.qty} 張"
@@ -1010,6 +1123,8 @@ def decode(payload: PluginPayload) -> BookReplay:
                 trade,
                 changes,
                 eaten,
+                auction=auction,
+                stale_book=stale_book,
             )
         )
     return BookReplay(code, payload["date"], tuple(frames))
@@ -1069,6 +1184,73 @@ def _check_changes(
                     raise PluginFormatError(
                         f"{where}:首次進入五檔的量 {change.qty} 與這一則五檔 {after_book} 不符(須 > 0)"
                     )
+    _check_kinds_and_order(changes, prev_book, book, code, index)
+
+
+def _change_sort_key(change: BookChange) -> tuple[int, bool, int]:
+    """變動的排序鍵(= 模組說明「變動分解」的順序):買方在前、賣方在後,同側市價佇列在前、其後由最優價往外。"""
+    side = _SIDE_CODE[change.side]
+    direction = -1 if side == _SIDE_CODE["bid"] else 1
+    return (side, change.price_milli != 0, direction * change.price_milli)
+
+
+def _check_kinds_and_order(
+    changes: tuple[BookChange, ...],
+    prev_book: Sequence[int | None],
+    book: Sequence[int | None],
+    code: str,
+    index: int,
+) -> None:
+    """種類與看得到的範圍相符、該列的沒漏、排序照模組說明(#279 審查 F-03)。
+
+    `decode` 手上只有前後兩份五檔,判得出來的就這些:價位變動要兩則都看得到、被擠出要只有前一則看得到、
+    重新可見 / 首次進入要只有這一則看得到(兩者的差別要追蹤史,分不出來);兩則都看得到而量不同的價位一定
+    要列出來;同一個價位一則至多一項。逐項的量另由 `_check_changes` 對五檔核。
+    """
+    keys = [_change_sort_key(change) for change in changes]
+    if keys != sorted(keys):
+        raise PluginFormatError(
+            f"{code} 第 {index} 則:變動排序不合(買方在前、同側市價佇列在前、其後由最優價往外)"
+        )
+    for side_name, side in _SIDE_CODE.items():
+        prev_listed, prev_queue, prev_bound = _side_levels(prev_book, side)
+        listed, queue, bound = _side_levels(book, side)
+        seen: set[int] = set()
+        for change in (c for c in changes if c.side == side_name):
+            price = change.price_milli
+            if price in seen:
+                raise PluginFormatError(
+                    f"{code} 第 {index} 則 {side_name} {price}:同一個價位列了兩項"
+                )
+            seen.add(price)
+            # 市價佇列(價 0)恆看得到
+            before_seen = price == 0 or _covers(side, prev_bound, price)
+            now_seen = price == 0 or _covers(side, bound, price)
+            match change:
+                case LevelChange():
+                    wanted, kind_text = (True, True), "價位變動要兩則都看得到"
+                case LeftView():
+                    wanted, kind_text = (True, False), "被擠出五檔要只有前一則看得到"
+                case _:
+                    wanted, kind_text = (False, True), "重新可見 / 首次進入要只有這一則看得到"
+            if (before_seen, now_seen) != wanted:
+                raise PluginFormatError(
+                    f"{code} 第 {index} 則 {side_name} {price}:{kind_text}"
+                    f"(前一則{'看得到' if before_seen else '看不到'}、"
+                    f"這一則{'看得到' if now_seen else '看不到'})"
+                )
+        for price in {0} | prev_listed.keys() | listed.keys():
+            if price == 0:
+                before, after = prev_queue, queue
+            elif _covers(side, prev_bound, price) and _covers(side, bound, price):
+                before, after = prev_listed.get(price, 0), listed.get(price, 0)
+            else:
+                continue  # 只在一則看得到:被擠出 / 重新可見 / 首次進入,種類由上面那圈核
+            if before != after and price not in seen:
+                raise PluginFormatError(
+                    f"{code} 第 {index} 則 {side_name} {price}:兩則都看得到、量從 {before} 變 {after},"
+                    f"卻沒列出價位變動"
+                )
 
 
 def _qty_at(book: Sequence[int | None], side: int, price: int) -> int:
@@ -1109,10 +1291,20 @@ def _check_header(payload: PluginPayload) -> None:
         raise PluginFormatError(
             f"{code} eat 長度 {len(payload['eat'])} 不是成交則數({trade_count} 則)"
         )
-    prev_index = -1
-    for index in payload["anomalous"]:
-        if not (prev_index < index < n and kinds[index] == _KIND_CODE["trade"]):
-            raise PluginFormatError(
-                f"{code} 時刻異常成交則號 {index} 不合法:則號須遞增且落在成交則"
-            )
-        prev_index = index
+    for key, label in (
+        ("anomalous", "時刻異常成交"),
+        ("auction", "集合競價撮合"),
+        ("stale", "附舊簿的時刻異常成交"),
+    ):
+        prev_index = -1
+        for index in payload[key]:
+            if not (prev_index < index < n and kinds[index] == _KIND_CODE["trade"]):
+                raise PluginFormatError(
+                    f"{code} {label}則號 {index} 不合法:則號須遞增且落在成交則"
+                )
+            prev_index = index
+    outside = sorted(set(payload["stale"]) - set(payload["anomalous"]))
+    if outside:
+        raise PluginFormatError(
+            f"{code} 附舊簿的成交則號 {outside} 不在時刻異常清單裡(時刻在未來 = 不當時鐘點)"
+        )
