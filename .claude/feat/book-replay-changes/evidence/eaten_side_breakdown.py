@@ -4,8 +4,10 @@
 - market_queue:吃的是市價佇列(檔位 0)—— 鎖停時市價排隊被成交,內外盤旗標看的是成交價對應哪一側
 - both_sides:同一筆成交的吃檔兩側都有 —— 集合競價 / 暫緩撮合的撮合一次吃兩側
 - auction_time:成交時刻 < 09:00:30 或 ≥ 13:25:00(開收盤集合競價)
-- after_cleared:同檔當日出現過五檔全空(暫緩撮合)之後的成交
-- other:以上皆非(連續交易中單側相反)—— 印例子與前後幾則五檔
+- after_cleared:離「同檔當日上一次五檔全空(暫緩撮合)」AFTER_CLEARED_WINDOW_MS 之內的成交
+  (pr-279 review F-22:原本 seen_cleared 一次設上整天不清,把恢復連續交易很久之後的成交也歸這桶;
+  9/17 486 張裡有 281 張其實在清空 ≥ 10 分鐘後、9/16 57 張裡 26 張,改以距離分桶才分得出來)
+- other:以上皆非(連續交易中單側相反,含暫緩撮合恢復夠久之後的)—— 印例子與前後幾則五檔
 用法:python eaten_side_breakdown.py [外掛檔資料夾]
 """
 
@@ -15,14 +17,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-WORKTREE = r"C:\side-project\copycat\.claude\worktrees\feat-book-replay-changes"
+WORKTREE = str(Path(__file__).resolve().parents[4])
 sys.path.insert(0, WORKTREE)
 
 from copycat import book_replay as br  # noqa: E402
 
-root = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book-269")
+root = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book")
 EXPECTED = {"outer": "ask", "inner": "bid"}
 OPEN_END, CLOSE_START = 9 * 3600_000 + 30_000, 13 * 3600_000 + 25 * 60_000
+AFTER_CLEARED_WINDOW_MS = 10 * 60_000  # 距上一次清空 10 分鐘內才歸「暫緩撮合後」,超出算「其他」
 
 
 def hms(ms: int | None) -> str:
@@ -39,10 +42,10 @@ for date_dir in sorted(p for p in root.iterdir() if p.is_dir()):
     shown = 0
     for f in sorted(date_dir.glob("*.js")):
         day = br.decode(br.parse_plugin_js(f.read_text(encoding="utf-8")))
-        seen_cleared = False
+        cleared_at_ms: int | None = None
         for i, frame in enumerate(day.frames):
             if all(v is None for v in frame.book):
-                seen_cleared = True
+                cleared_at_ms = frame.recv_ms
             trade = frame.trade
             if trade is None or not frame.eaten:
                 continue
@@ -59,7 +62,7 @@ for date_dir in sorted(p for p in root.iterdir() if p.is_dir()):
                     key = "both_sides"
                 elif trade.ms is not None and (trade.ms < OPEN_END or trade.ms >= CLOSE_START):
                     key = "auction_time"
-                elif seen_cleared:
+                elif cleared_at_ms is not None and frame.recv_ms - cleared_at_ms <= AFTER_CLEARED_WINDOW_MS:
                     key = "after_cleared"
                 else:
                     key = "other"

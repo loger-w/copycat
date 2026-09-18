@@ -15,6 +15,12 @@ scripts = [
     if 'type="text/plain"' not in (m.group(1) or "")
 ]
 print("script blocks", len(scripts))
+if not scripts:
+    # pr-279 review F-33:regex 抽不到任何 script(頁面結構或屬性寫法改了)時迴圈不會跑,
+    # 原本會直接照印 SYNTAX-OK、exit 0 —— 這其實是「什麼都沒檢查到」,不是「檢查過都對」。
+    sys.exit(
+        "找不到程式 script 區塊(頁面結構或 <script> 屬性寫法可能改了,檢查上面的 regex 是否要跟著調)"
+    )
 with tempfile.TemporaryDirectory() as tmp:
     for n, body in enumerate(scripts):
         js = Path(tmp) / f"s{n}.js"

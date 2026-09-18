@@ -46,8 +46,14 @@ try {
       checked++;
       if (!same(c.msgs, e.msgs) || !same(c.tape, e.tape)) { bad++; if (firstBad.length < 3) firstBad.push(c.idx); }
     }
-    out.sync[`${speed}x`] = { draws: caps.length, checked, mismatches: bad, firstBad, distinctFrames: new Set(caps.map(c => c.idx)).size, lastIdx: caps.at(-1)?.idx };
-    console.log(`同一刻 ${speed}x:重畫 ${caps.length} 次、比對 ${checked}、不符 ${bad}`);
+    // pr-279 review F-27:重畫落在標準答案段外只 continue 跳過,原本沒檢查 checked > 0 或
+    // checked === draws —— 播放沒啟動(90 秒逾時 caps 為空)或 T110200 / LOCK_IDX 給錯段時,
+    // 一樣會得到「比對 0、不符 0」照過。draws / checked 對不上就標記 ok:false 並非 0 結束。
+    const draws = caps.length;
+    const ok = draws > 0 && checked === draws;
+    if (!ok) out.syncFailed = [...(out.syncFailed || []), `${speed}x`];
+    out.sync[`${speed}x`] = { draws, checked, mismatches: bad, firstBad, distinctFrames: new Set(caps.map(c => c.idx)).size, lastIdx: caps.at(-1)?.idx, t0: T110200, lockIdx: LOCK_IDX, ok };
+    console.log(`同一刻 ${speed}x:重畫 ${draws} 次、比對 ${checked}、不符 ${bad}${ok ? '' : '(警告:draws/checked 不吻合,可能播放沒啟動或段落給錯)'}`);
   }
 
   // ---------- (B) 流暢度 ----------
@@ -91,3 +97,7 @@ try {
 }
 writeFileSync(OUT, JSON.stringify(out, null, 1));
 console.log(JSON.stringify(out, null, 1));
+if (out.syncFailed?.length) {
+  console.error(`同一刻檢查沒有覆蓋全部重畫(${out.syncFailed.join(', ')}),見 out.sync[...].draws/checked/t0/lockIdx`);
+  process.exitCode = 1;
+}

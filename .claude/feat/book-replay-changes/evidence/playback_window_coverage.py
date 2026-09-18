@@ -6,7 +6,7 @@
 - 跨則補齊 cap C:列「上次畫到的下一則 → 這一則」全部(至少 12 則,至多 C 則;要記上次畫到哪一則)
 v2 暫存外掛檔的 recv 就是頁面用的時間軸。
 
-用法:python playback_window_coverage.py <日期> [代號,…]
+用法:python playback_window_coverage.py <日期> [代號,…] [外掛檔資料夾]
 """
 
 from __future__ import annotations
@@ -15,18 +15,26 @@ import bisect
 import sys
 from pathlib import Path
 
-WORKTREE = r"C:\side-project\copycat\.claude\worktrees\feat-book-replay-changes"
+WORKTREE = str(Path(__file__).resolve().parents[4])
 sys.path.insert(0, WORKTREE)
 
 from copycat import book_replay as br  # noqa: E402
 
-BOOKDIR = Path(r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book-269")
 date = sys.argv[1]
+BOOKDIR = Path(
+    sys.argv[3]
+    if len(sys.argv) > 3
+    else r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book"
+)
 codes = (
     sys.argv[2].split(",")
     if len(sys.argv) > 2
     else sorted(p.stem for p in (BOOKDIR / date).glob("*.js"))
 )
+if not codes:
+    # pr-279 review F-24:資料夾/日期給錯時 codes 是空的,totals 全部停在初值,
+    # 最後 missed / n 會除以零 —— 先在這裡擋下來,講清楚是哪個資料夾找不到檔。
+    sys.exit(f"停:{BOOKDIR / date} 底下沒有 .js 外掛檔,檢查資料夾與日期(用法見檔頭 docstring)")
 FRAME_MS = 1000 / 60
 SPEEDS = (1, 2, 5, 10)
 VARIANTS = [("固定窗", 12), ("固定窗", 30), ("固定窗", 60), ("跨則補齊", 60), ("跨則補齊", 200)]
