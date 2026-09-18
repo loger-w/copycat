@@ -15,13 +15,13 @@
 | F-04 吃檔同一格合併 | `_EatLedger._add` 改整列找 (側別, 檔位) |
 | Q5(F-20)外掛檔往下相容 | `FORMAT_VERSION = 3`(純加欄位);回看頁 `p.v !== 2 && p.v !== 3` 才擋,`p.auction \|\| []` / `p.stale \|\| []` |
 | Q6(F-15)/ Q7(F-16)/ Q9(user 新增) | 回看頁模板:價格一律 `rpPx`(依 tick 的固定小數)、張數千分位、標亮組淡色行提亮到 `--ink-2`、變動行三欄對齊 + 對齊的分隔線(86 / 130 / 1fr,截字時 `title` 顯全文)、吃檔 `吃 賣1 · −12、賣2 · −5` |
-| F-07 / F-08 / F-10 / F-11 / F-12 / F-14 | 測試強度六條(107 條,每條附突變證據) |
+| F-07 / F-08 / F-10 / F-11 / F-12 / F-14 | 測試強度六條(107 條,每條附突變證據;two-axis 收修後 108) |
 | F-17 ~ F-19、F-21 ~ F-33 | 文件訂正三條 + 一次性證據腳本十三條 |
 | F-05 / F-13 / F-34 | no-op(user 確認不動) |
 
 ## 2. 自動化 gate(worktree 實跑,主樹 venv)
 
-- `pytest -q`:3,668 passed / 3 skipped(`tests/test_book_replay.py` 93 → 107)
+- `pytest -q`:3,669 passed / 3 skipped(`tests/test_book_replay.py` 93 → 108;含 two-axis 收修補的一條)
 - `ruff check copycat tests`:All checks passed
 - `pyright`:0 errors, 0 warnings
 - `copycat validate`(先跑 four / five 兩份 replay):**42/42 PASS**
@@ -91,6 +91,11 @@ v2 檔照樣解得開、沒有版本錯誤、console 乾淨,且舊檔不會出�
 資格 / 處置(新增 3441、8358 自 9/18 起處置)、三支分析(`cdp_events.csv` 9/18 有 55 列)、
 `extras_from_archive` 33 檔 + 建頁(91 檔 / 3,113 股票日 / 8.37 MB)。
 
+抽驗兩個沒改到的功能(`untouched.mjs`,1303 / 2026-09-18):上方主圖畫得出來(svg path 15)、
+逐筆明細分頁 16,981 筆、console 乾淨 → PASS。**順帶發現(非本批造成)**:2305 在 9/18 的 tick 存檔
+只有 2 則簿、0 成交,回看頁該檔顯示「這天沒有這檔的 tick 資料」—— 當天訂閱池沒有它(9/17 尚有 3,188 則),
+要回看得先加回自選;已記 `docs/next-time.md`。
+
 ## 5. 換上與備份
 
 - 外掛檔:`viewer-cdp-book` → `viewer-cdp-book.bak-20260918-pre279`(v2,備份);新的三天(v3)換上
@@ -105,3 +110,15 @@ v2 檔照樣解得開、沒有版本錯誤、console 乾淨,且舊檔不會出�
 - 新舊比對:`compare_v2_v3.py`(只讀 payload 的 `chg` / `eat`,不經 decode —— 新舊版本閘不同)
 - 畫面:`RP_NEW_PAGE=viewer-cdp.html node verify_279.mjs`、`node verify_279b.mjs`、`node dimcheck.mjs`
   (v2 相容那支要先複製一份頁面、把 `BOOKDIR` 指到備份資料夾;腳本裡有註解)
+
+## 7. two-axis review(收尾鏈第一步)與其處置
+
+固定點 `3024887a`;結果與逐條處置見同目錄 `code-review-round-1.json`。
+Standards 5 條(硬違規 1 / 判斷題 4)、Spec 4 條(含 1 條「無 scope creep」)。接受並修的:
+模組說明三處殘留「外掛檔 v2」(H-1)、排序規則兩份收成一份(S-2)、`add_book` 區域變數與新術語撞名(S-4)、
+`auction` 口徑與文件數字不一致(Spec-1,改文件不改行為)、F-24 結果檔補上(Spec-2)、
+`decode` 對 `stale` 沒核吃檔空(Spec-3,補檢查 + 兩案測試)。
+判斷題 S-1 / S-3(「不比前一份」的理由散在六處、檢查層的成組傳參)不在本批動,已記 `docs/next-time.md`。
+
+S-2 是引擎內的重構,以實資料證明零行為改動:把重構前(`2f7b445f`)與重構後兩版引擎餵同一批輸入,
+逐則比對 8 檔 **625,972 則**的變動項(種類 / 側別 / 價)與吃檔 —— **完全相同**,故三天已重產的外掛檔不需再產。

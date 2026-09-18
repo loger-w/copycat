@@ -1255,8 +1255,20 @@ class TestAuctionMatch:
         assert decode(wire) == day
 
         wire["auction"] = [0]  # 第 0 則是簿則,不可能是集合競價撮合
-        with pytest.raises(PluginFormatError, match="集合競價"):
+        with pytest.raises(PluginFormatError, match="集合競價撮合則號 0 不合法"):
             decode(wire)
+
+    def test_the_plugin_file_refuses_eaten_levels_on_messages_that_never_waited(self) -> None:
+        """集合競價撮合與附舊簿的成交都不進待扣 → 永遠扣不到任何一格,`eat` 那一列必須是空的。"""
+        auction_wire = _wire(replay_books(_halt_auction_rows())["9101"], keyframe_every=2)
+        auction_wire["eat"][0] = [1, 1, 5]  # 第 1 則(撮合那筆)寫「吃 賣1 −5」
+        with pytest.raises(PluginFormatError, match="集合競價撮合不進待扣,不該有吃檔"):
+            decode(auction_wire)
+
+        stale_wire = _wire(replay_books(_golden_rows())["1815"], keyframe_every=2)
+        stale_wire["eat"][0] = [1, 1, 1]  # 第 0 則(開機收到的前一日成交)寫「吃 賣1 −1」
+        with pytest.raises(PluginFormatError, match="附舊簿的成交不進待扣,不該有吃檔"):
+            decode(stale_wire)
 
 
 class TestEaten:

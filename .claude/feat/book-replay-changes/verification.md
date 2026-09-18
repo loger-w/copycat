@@ -102,11 +102,12 @@
   恆外盤,吃檔照實際減量那一側記;引擎不改,畫面註明與否入 next-time
 - **鎖停時內外盤旗標**(`a8060d58`;`evidence/lock_flag_check.py`;pr-279 review F-24):前一份五檔(跳過全空則)判鎖漲停 /
   鎖跌停,數該狀態下每筆成交的內外盤旗標分布;`tc4-market-facts` skill 引用的 10,300 / 5,866 / 3,174 / 7,814(全 outer)
-  即出自本腳本。**結果檔待補(重產後)**:腳本先前把外掛檔資料夾寫死在已刪的 worktree 與暫存資料夾(review F-24),
-  已改用 `Path(__file__).resolve().parents[4]` 推 repo root、外掛檔資料夾預設正式 `viewer-cdp-book`;重跑指令
-  `C:/side-project/copycat/.venv/Scripts/python.exe evidence/lock_flag_check.py C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book`,
-  輸出待存為 `evidence/result_lock_flag_check.txt` 後回填本節數字(reviewer 補證已用同一份改法重跑過,四個數字與
-  SKILL.md 完全一致)。
+  即出自本腳本。腳本先前把外掛檔資料夾寫死在已刪的 worktree 與暫存資料夾(review F-24),已改用
+  `Path(__file__).resolve().parents[4]` 推 repo root、外掛檔資料夾預設正式 `viewer-cdp-book`。
+  **2026-09-18 收修後以 v3 外掛檔重跑,結果檔 `evidence/result_lock_flag_check.txt`**(三天、鎖停狀態下每筆成交的
+  內外盤旗標分布):09-16 鎖漲停 10,300 筆 / 33,392 張、鎖跌停 3,174 / 8,023;09-17 5,866 / 25,012、7,814 / 22,803;
+  09-18 鎖漲停 12,093 / 53,110、鎖跌停 1,271 / 6,588 —— **三天六種狀態全部只有 `outer` 一個值**(零 inner / neutral),
+  SKILL.md 引用的 10,300 / 5,866 / 3,174 / 7,814 逐字相符。
 - 上一個 session 在 P-01 修之前量的全 80 檔分布(未重跑,僅供參考):成交扣減同一則 88.08% + 晚 1–8 則 2.38% + 市價排隊 3.02%;
   重新可見 71,845(量有變 26,616)、離開期間有成交 43、首次進入 2,488
 
