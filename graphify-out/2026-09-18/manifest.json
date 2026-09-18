@@ -169,9 +169,9 @@
   },
   "copycat/cli.py": {
     "mtime": 1789572961.7933807,
-    "seen": 1789729222.094759,
+    "seen": 1789573046.5017648,
     "ast_hash": "2daefe39851b7e3cc5a5ad0c67267863",
-    "semantic_hash": "2daefe39851b7e3cc5a5ad0c67267863"
+    "semantic_hash": ""
   },
   "copycat/configio.py": {
     "mtime": 1789376988.23918,
@@ -367,9 +367,9 @@
   },
   "copycat/live/signal_state.py": {
     "mtime": 1789616871.6619205,
-    "seen": 1789729222.1005118,
+    "seen": 1789635795.740373,
     "ast_hash": "4f95a1bee8ac0ffcffd70c03e1da9c2f",
-    "semantic_hash": "4f95a1bee8ac0ffcffd70c03e1da9c2f"
+    "semantic_hash": ""
   },
   "copycat/live/stock_models.py": {
     "mtime": 1789463769.8320563,
@@ -3793,9 +3793,9 @@
   },
   "copycat/ticks_compact.py": {
     "mtime": 1789572961.7933807,
-    "seen": 1789729222.1102948,
+    "seen": 1789573046.5074267,
     "ast_hash": "4814728c35496b93ad9f33b173acaedb",
-    "semantic_hash": "4814728c35496b93ad9f33b173acaedb"
+    "semantic_hash": ""
   },
   "copycat/ticks_config.py": {
     "mtime": 1789490020.7121873,
@@ -3828,15 +3828,15 @@
     "semantic_hash": "5db6d3c53ee653704261c0885b475548"
   },
   "copycat/book_replay.py": {
-    "mtime": 1789729176.45645,
-    "seen": 1789729222.091972,
-    "ast_hash": "9ff58a205a5a9cf55fd7093592a67194",
-    "semantic_hash": "9ff58a205a5a9cf55fd7093592a67194"
+    "mtime": 1789635743.4897456,
+    "seen": 1789635795.7374284,
+    "ast_hash": "39dffb55b8bbafeca8dcb2a162d8e1ca",
+    "semantic_hash": ""
   },
   "tests/test_book_replay.py": {
-    "mtime": 1789729176.4585233,
-    "seen": 1789729222.1922996,
-    "ast_hash": "8a5f488e337db9d81ce59b9859cbfe8e",
-    "semantic_hash": "8a5f488e337db9d81ce59b9859cbfe8e"
+    "mtime": 1789635743.4917538,
+    "seen": 1789635795.7750988,
+    "ast_hash": "5b1eaa5052f10f6342f712f30a1eede6",
+    "semantic_hash": ""
   }
 }
