@@ -3828,15 +3828,15 @@
     "semantic_hash": "5db6d3c53ee653704261c0885b475548"
   },
   "copycat/book_replay.py": {
-    "mtime": 1789755388.5937438,
-    "seen": 1789755419.0353734,
-    "ast_hash": "8a928702a8e7a40ae4aaac40b4dc1865",
-    "semantic_hash": "8a928702a8e7a40ae4aaac40b4dc1865"
+    "mtime": 1789741158.447773,
+    "seen": 1789741211.8856292,
+    "ast_hash": "d4211de2f86886f0c146cdb8d5be692b",
+    "semantic_hash": "d4211de2f86886f0c146cdb8d5be692b"
   },
   "tests/test_book_replay.py": {
-    "mtime": 1789755388.5967433,
-    "seen": 1789755419.1119995,
-    "ast_hash": "b16b41fc0fb2dd8df0bd9673b5c87e24",
-    "semantic_hash": "b16b41fc0fb2dd8df0bd9673b5c87e24"
+    "mtime": 1789741158.449277,
+    "seen": 1789741211.9734561,
+    "ast_hash": "5a4fc61f0a09f38523de23d64c0f7410",
+    "semantic_hash": "5a4fc61f0a09f38523de23d64c0f7410"
   }
 }
