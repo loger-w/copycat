@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from copycat.book_replay import (
+    BookChange,
     BookReplay,
     Eaten,
     EnteredView,
@@ -541,9 +542,13 @@ class TestChanges:
         ]
 
 
-def _at(frame_changes: tuple[object, ...], price: int) -> list[object]:
-    """一則變動裡某價位的項目(測試只斷言它關心的價位,其餘價位的變動另有測試)。"""
-    return [c for c in frame_changes if getattr(c, "price_milli", None) == price]
+def _at(frame_changes: tuple[BookChange, ...], price: int) -> list[BookChange]:
+    """一則變動裡某價位的項目(測試只斷言它關心的價位,其餘價位的變動另有測試)。
+
+    型別寫 `BookChange`(公開型別)而不是 `object` + `getattr`:四種變動都有 `price_milli`,
+    欄位改名時 pyright 當場紅(#279 審查 F-14)。
+    """
+    return [c for c in frame_changes if c.price_milli == price]
 
 
 class TestView:
@@ -971,6 +976,48 @@ class TestClearedBook:
             EnteredView("bid", 45_750, qty=5),
         )
 
+    def test_a_trade_on_the_cleared_message_still_counts_into_an_away_price(self) -> None:
+        """清空那一則本身是成交則(合成樣本):不比簿,但成交照樣算進被擠出價位的期間成交。
+
+        買 46.7 被擠出五檔 → 清空那一則成交 46.7 × 3 → 46.7 回到五檔:那 3 張要進「期間成交」,
+        淨掛才不會少算(清空分支漏了這一步 = 重新可見寫成「期間成交 0、淨掛 0」,零錯誤訊號;#279 審查 F-10)。
+        """
+        five = [(46_900, 10), (46_850, 10), (46_800, 10), (46_750, 10)]
+        rows = [
+            _row("book", "2305", 1, recv="09:04:56.000", bid=[*five, (46_700, 5)]),
+            _row("book", "2305", 2, recv="09:04:56.100", bid=[(46_950, 3), *five]),
+            _row(
+                "trade",
+                "2305",
+                3,
+                recv="09:04:56.200",
+                time="09:04:56.000",
+                price=46_700,
+                qty=3,
+                side="inner",
+                bid=[],
+                ask=[],
+            ),
+            _row("book", "2305", 4, recv="09:04:56.300", bid=[*five, (46_700, 5)]),
+        ]
+
+        frames = replay_books(rows)["2305"].frames
+
+        assert frames[2].book == (None,) * 20
+        assert frames[2].changes == ()
+        assert frames[2].eaten == (Eaten("bid", level=None, qty=3),)  # 成交當下 46.7 在五檔外
+        assert _at(frames[3].changes, 46_700) == [
+            Reappeared(
+                "bid",
+                46_700,
+                left_qty=5,
+                now_qty=5,
+                traded_away=3,
+                left_index=1,
+                away_ms=200,
+            )
+        ]
+
     def test_the_plugin_file_keeps_the_cleared_book_and_refuses_changes_written_on_it(
         self,
     ) -> None:
@@ -1236,6 +1283,37 @@ class TestEaten:
             (Eaten("ask", level=None, qty=56),),
         ]
 
+    def test_a_price_first_listed_on_the_trade_message_reads_its_level_from_that_message(
+        self,
+    ) -> None:
+        """吃檔退路(模組說明「吃檔」):成交前那一則沒列出這個價位,就看扣到那一則的前一則。
+
+        成交價 100.5 在成交前那一則(只有賣 100.0)看不到,是成交自己附的五檔才第一次列出來、下一則才減量。
+        沒有這條退路,看得到的賣 2 會被標成「五檔外」(#279 審查 F-08:正式檔每天約四十列走這條)。
+        """
+        rows = [
+            _row("book", "2489", 1, recv="10:10:00.000", ask=[(100_000, 5)]),
+            _row(
+                "trade",
+                "2489",
+                2,
+                recv="10:10:00.100",
+                time="10:10:00.000",
+                price=100_500,
+                qty=3,
+                side="outer",
+                ask=[(100_000, 5), (100_500, 10)],
+            ),
+            _row("book", "2489", 3, recv="10:10:00.200", ask=[(100_000, 5), (100_500, 7)]),
+        ]
+
+        frames = replay_books(rows)["2489"].frames
+
+        assert frames[1].changes == (LevelChange("ask", 100_500, before=0, after=10, traded=0),)
+        assert frames[2].changes == (LevelChange("ask", 100_500, before=10, after=7, traded=3),)
+        # 賣 2 = 扣到那一則(第 2 則)的前一則(第 1 則,成交自己附的五檔)裡 100.5 的檔位
+        assert [f.eaten for f in frames] == [(), (Eaten("ask", level=2, qty=3),), ()]
+
     def test_a_trade_into_a_locked_limit_up_eats_the_market_queue(self) -> None:
         """2426 11:02:50 鎖漲停後有人賣 5 張:成交價 99.8,吃的是買方市價排隊(level 0),不是限價 99.8 那一檔。"""
         bid = [(0, 6_763), (99_800, 480), (99_500, 7)]
@@ -1257,6 +1335,53 @@ class TestEaten:
         frames = replay_books(rows)["2426"].frames
 
         assert frames[1].eaten == (Eaten("bid", level=0, qty=5),)
+
+    def test_a_locked_limit_down_counts_ask_levels_without_the_market_queue(self) -> None:
+        """鎖跌停 = 賣方市價佇列(價 0)+ 跌停價,是上一條鎖漲停的鏡像(合成樣本)。
+
+        檔位只數限價,所以吃跌停價那一檔是「賣 1」不是「賣 2」—— 這條規則原本只有買方樣本,而買方
+        由高到低排、價 0 恆在最後,把 0 算進去檔位也不會變;要賣方(0 排最前)才分得出來(#279 審查 F-07)。
+        同一則的變動,賣方市價佇列那項也排在賣方最前。
+        """
+        ask = [(0, 500), (90_100, 20)]
+        rows = [
+            _row("book", "5314", 1, recv="09:30:00.000", ask=ask),
+            _row(
+                "trade",
+                "5314",
+                2,
+                recv="09:30:00.100",
+                time="09:30:00.000",
+                price=90_100,
+                qty=4,
+                side="outer",
+                ask=[(0, 500), (90_100, 16)],
+            ),
+            _row(
+                "trade",
+                "5314",
+                3,
+                recv="09:30:00.200",
+                time="09:30:00.000",
+                price=90_100,
+                qty=6,
+                side="outer",
+                ask=[(0, 494), (90_100, 14)],
+            ),
+        ]
+
+        frames = replay_books(rows)["5314"].frames
+
+        assert frames[1].changes == (LevelChange("ask", 90_100, before=20, after=16, traded=4),)
+        assert frames[2].changes == (
+            LevelChange("ask", 0, before=500, after=494, traded=6),  # 市價佇列排在賣方最前
+            LevelChange("ask", 90_100, before=16, after=14, traded=0),
+        )
+        assert [f.eaten for f in frames] == [
+            (),
+            (Eaten("ask", level=1, qty=4),),  # 跌停價是賣 1:市價佇列不佔號
+            (Eaten("ask", level=0, qty=6),),  # 減的是市價那一排,不看成交價
+        ]
 
     def test_levels_count_limit_prices_only_and_a_trade_hidden_by_new_orders_eats_nothing(
         self,
@@ -1293,6 +1418,49 @@ class TestEaten:
         frames = replay_books(rows)["3441"].frames
 
         assert [f.eaten for f in frames] == [(), (Eaten("bid", level=2, qty=8),), ()]
+
+    def test_a_first_message_trade_never_borrows_a_later_book_to_claim_five_levels_away(
+        self,
+    ) -> None:
+        """當日第一份五檔那一則的成交:自己的減量已經在這份簿裡,不進待扣,吃檔恆空。
+
+        前後兩道閘:成交不進待扣(第 0 則還沒有視野可比),以及到期時 `record_unabsorbed` 不碰第 0 則 ——
+        後面那道沒了,「成交前那一則」會取到 `_books[-1]`(**最後**一份簿),在這個樣本裡把成交價 105.0
+        標成「賣五檔外 −2」。兩道各自拿掉都看不出差別(前一道另有 TestAuctionMatch 兩條釘著),
+        兩道都拿掉這一條才紅(#279 審查 F-10)。
+        """
+        rows = [
+            _row(
+                "trade",
+                "3450",
+                1,
+                recv="09:30:00.000",
+                time="09:30:00.000",
+                price=105_000,
+                qty=2,
+                side="outer",
+                ask=[(100_000, 4)],
+            ),
+            # 1.1 秒後(超過 TRADE_CARRY_MS)那筆成交到期;這一則賣五檔到 101.0,看不到 105.0
+            _row(
+                "book",
+                "3450",
+                2,
+                recv="09:30:01.100",
+                ask=[(100_000, 2), (100_250, 1), (100_500, 1), (100_750, 1), (101_000, 1)],
+            ),
+        ]
+
+        frames = replay_books(rows)["3450"].frames
+
+        assert frames[1].changes == (
+            LevelChange("ask", 100_000, before=4, after=2, traded=0),  # 首則那筆不在待扣 → 撤單
+            LevelChange("ask", 100_250, before=0, after=1, traded=0),
+            LevelChange("ask", 100_500, before=0, after=1, traded=0),
+            LevelChange("ask", 100_750, before=0, after=1, traded=0),
+            LevelChange("ask", 101_000, before=0, after=1, traded=0),
+        )
+        assert [f.eaten for f in frames] == [(), ()]
 
     def test_a_trade_counted_while_its_price_was_out_of_view_is_not_taken_again(self) -> None:
         """review round 1 P-01(6209 於 2026-09-16 09:04:10 的形狀):買 78.8 被擠出五檔後,一筆 61 張成交落在
@@ -1759,6 +1927,10 @@ class TestPluginEncoding:
             (lambda w: w["fields"].reverse(), "欄序"),
             (lambda w: w["kf"].pop(), "keyframe 個數"),
             (lambda w: w["recv"].pop(), "recv"),
+            # `chg` 也在檔頭那條長度檢查裡:少了它,壞檔會變成 decode 迴圈 `zip(strict=True)` 的
+            # 裸 ValueError,而 CLI 只接 PluginFormatError → 吐 traceback(#279 審查 F-11)。
+            # 這一案就是釘住它必須是 PluginFormatError:pytest.raises 不收 ValueError 的父類別命中
+            (lambda w: w["chg"].pop(), "chg 長度"),
             (lambda w: w["trade"].pop(), "trade 長度"),
             (lambda w: w.update(kind=w["kind"].replace("b", "x", 1)), "kind"),
             (lambda w: w.pop("trade"), "缺鍵"),
@@ -1770,6 +1942,7 @@ class TestPluginEncoding:
             "field-order",
             "missing-keyframe",
             "recv-length",
+            "chg-length",
             "trade-length",
             "kind-char",
             "missing-key",
@@ -1876,35 +2049,69 @@ class TestPluginEncoding:
     @pytest.mark.parametrize(
         ("tamper", "message"),
         [
-            (lambda w: w["chg"][1].__setitem__(0, 8), "種類碼"),
-            (lambda w: w["chg"][1].pop(), "格數不足"),
-            # 第 1 則「賣 38.95 由 0 → 4,+4 掛單」[碼, 價, 前 0, 後 4, 掛入 4, 成交 0, 撤單 0]:
+            (lambda w: w["chg"][1].__setitem__(0, 8), "變動種類碼 8 不認得"),
+            (lambda w: w["chg"][1].pop(), "變動項目格數不足"),
+            # 竄改的格位一律寫「格位:值」。第 1 則「賣 38.95 由 0 → 4,+4 掛單」
+            # [0 碼 1, 1 價 38950, 2 前量 0, 3 後量 4, 4 掛入 4, 5 成交 0, 6 撤單 0]:
             # 前量 / 後量連同掛入改成算式自洽的值 → 仍跟前後兩則的五檔對不上;掛入單獨改 → 算式不符
-            (lambda w: w["chg"][1].__setitem__(slice(2, 5), [1, 4, 3]), "前量"),
-            (lambda w: w["chg"][1].__setitem__(slice(2, 5), [0, 5, 5]), "後量"),
-            (lambda w: w["chg"][1].__setitem__(4, 3), "掛入"),
+            (
+                lambda w: w["chg"][1].__setitem__(slice(2, 5), [1, 4, 3]),
+                "前量 1 與前一則五檔 0 不符",
+            ),
+            (
+                lambda w: w["chg"][1].__setitem__(slice(2, 5), [0, 5, 5]),
+                "後量 5 與這一則五檔 4 不符",
+            ),
+            (lambda w: w["chg"][1].__setitem__(4, 3), "掛入 3 / 撤單 0 不合算式"),
             # 第 1 則多一項「買 38.9 由 13 → 13」:兩則五檔都是 13,但沒有變的價位不該列
-            (lambda w: w["chg"][1].extend([0, 38_900, 13, 13, 0, 0, 0]), "沒有變"),
-            # 第 10 則「賣 38.95 由 7 → 0,−7 成交」[碼 10, 價 11, 前 12, 後 13, 掛入 14, 成交 15, 撤單 16]:
+            (lambda w: w["chg"][1].extend([0, 38_900, 13, 13, 0, 0, 0]), "沒有變不該列"),
+            # 第 10 則「賣 38.95 由 7 → 0,−7 成交」
+            # [10 碼 1, 11 價 38950, 12 前量 7, 13 後量 0, 14 掛入 0, 15 成交 7, 16 撤單 0]:
             # 成交改 8(撤單照算式仍 0)→ 比減少的量還多;撤單單獨改 → 算式不符
-            (lambda w: w["chg"][10].__setitem__(15, 8), "成交"),
-            (lambda w: w["chg"][10].__setitem__(16, 1), "撤單"),
-            # 第 1 則「賣 39.2 被擠出五檔 80 張」改 81:與前一則五檔不符
-            (lambda w: w["chg"][1].__setitem__(9, 81), "離開前"),
-            # 第 10 則「賣 39.2 重新可見」[碼 45, 價 46, 離開 80, 現在 0, 期間成交 80, 淨掛 0, 離開則號 1, 11056 ms]:
-            # 現在量改 3 連同淨掛改 3(算式自洽)→ 仍與這一則五檔 0 張不符;其餘各改一格
-            (lambda w: w["chg"][10].__setitem__(slice(48, 51), [3, 80, 3]), "現在量"),
-            (lambda w: w["chg"][10].__setitem__(50, 5), "淨掛"),
-            (lambda w: w["chg"][10].__setitem__(51, 10), "離開則號"),
-            (lambda w: w["chg"][10].__setitem__(52, 11_000), "離開時長"),
-            # 第 10 則「賣 39.35 首次進入五檔 28 張」改 29
-            (lambda w: w["chg"][10].__setitem__(55, 29), "首次進入"),
-            (lambda w: w["chg"][0].extend([6, 38_900, 13]), "第 0 則"),
+            (lambda w: w["chg"][10].__setitem__(15, 8), "成交 8 張不在 0 到減少的量之間"),
+            (lambda w: w["chg"][10].__setitem__(16, 1), "掛入 0 / 撤單 1 不合算式"),
+            # 第 1 則「賣 39.2 被擠出五檔」[7 碼 3, 8 價 39200, 9 離開前的量 80]:改 81 與前一則五檔不符。
+            # 整項改成「賣 39.16 被擠出五檔 0 張」(39.16 同樣是前一則看得到、這一則看不到,但前一則沒有量)
+            # 才單獨試得到「0 張離開不列」那半個條件(#279 審查 F-11)
+            (lambda w: w["chg"][1].__setitem__(9, 81), "離開前的量 81 與前一則五檔 80 不符"),
+            (
+                lambda w: w["chg"][1].__setitem__(slice(7, 10), [3, 39_160, 0]),
+                "離開前的量 0 與前一則五檔 0 不符",
+            ),
+            # 第 10 則「賣 39.2 重新可見」[45 碼 5, 46 價 39200, 47 離開時量 80, 48 現在量 0,
+            # 49 期間成交 80, 50 淨掛 0, 51 離開則號 1, 52 離開毫秒 11056]:現在量改 3 連同淨掛改 3
+            # (算式自洽)→ 仍與這一則五檔 0 張不符;三個量一起歸 0(算式也自洽)→ 不該列;其餘各改一格
+            (
+                lambda w: w["chg"][10].__setitem__(slice(48, 51), [3, 80, 3]),
+                "現在量 3 與這一則五檔 0 不符",
+            ),
+            (
+                lambda w: w["chg"][10].__setitem__(slice(47, 51), [0, 0, 0, 0]),
+                "重新可見三個量都是 0",
+            ),
+            (lambda w: w["chg"][10].__setitem__(50, 5), "淨掛 5 不等於"),
+            (lambda w: w["chg"][10].__setitem__(51, 10), "離開則號 10 不在這一則之前"),
+            (lambda w: w["chg"][10].__setitem__(52, 11_000), "離開時長 11000 ms"),
+            # 第 10 則「賣 39.35 首次進入五檔」[53 碼 7, 54 價 39350, 55 量 28]:改 29 與這一則五檔不符。
+            # 同上,整項改成「賣 39.36 首次進入五檔 0 張」才單獨試得到「0 張進入不列」(#279 審查 F-11)
+            (
+                lambda w: w["chg"][10].__setitem__(55, 29),
+                "首次進入五檔的量 29 與這一則五檔 28 不符",
+            ),
+            (
+                lambda w: w["chg"][10].__setitem__(slice(53, 56), [7, 39_360, 0]),
+                "首次進入五檔的量 0 與這一則五檔 0 不符",
+            ),
+            (lambda w: w["chg"][0].extend([6, 38_900, 13]), "不該有變動"),
             (lambda w: w["eat"].pop(), "eat 長度"),
-            (lambda w: w["eat"][0].__setitem__(1, 7), "吃檔"),
-            (lambda w: w["eat"][0].append(1), "吃檔"),
+            # 第 3 則「吃 賣1 −7」[0 側別碼 1, 1 檔位 1, 2 張 7]:檔位、側別碼、張數三格各自出界,
+            # 同一道檢查擋下(側別碼與張數兩案 = #279 審查 F-11)
+            (lambda w: w["eat"][0].__setitem__(1, 7), "側別碼 0 / 1、檔位 0–5 或 null、張數 > 0"),
+            (lambda w: w["eat"][0].__setitem__(0, 2), "側別碼 0 / 1、檔位 0–5 或 null、張數 > 0"),
+            (lambda w: w["eat"][0].__setitem__(2, 0), "側別碼 0 / 1、檔位 0–5 或 null、張數 > 0"),
+            (lambda w: w["eat"][0].append(1), "吃檔格數 4 不是 3 的倍數"),
             # 第 3 則成交 38.95 × 7,吃檔寫成 8 張
-            (lambda w: w["eat"][0].__setitem__(2, 8), "超過成交"),
+            (lambda w: w["eat"][0].__setitem__(2, 8), "吃檔共 8 張,超過成交 7 張"),
         ],
         ids=[
             "unknown-change-kind",
@@ -1916,14 +2123,19 @@ class TestPluginEncoding:
             "traded-over-decrease",
             "level-cancelled-arithmetic",
             "left-qty",
+            "left-qty-zero",
             "reappeared-now",
+            "reappeared-all-zero",
             "reappeared-net",
             "reappeared-left-index",
             "reappeared-away-ms",
             "entered-qty",
+            "entered-qty-zero",
             "changes-on-first-message",
             "eat-length",
             "eat-level-out-of-range",
+            "eat-side-code-out-of-range",
+            "eat-qty-not-positive",
             "eat-cells-not-triples",
             "eat-over-trade-qty",
         ],
