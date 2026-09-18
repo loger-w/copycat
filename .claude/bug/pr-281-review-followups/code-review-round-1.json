@@ -1,0 +1,103 @@
+{
+  "fixed_point": "85ddb1502c3ec2e3c2c9a465d4c95b8f26f0daa8",
+  "branch": "fix/pr-281-review-followups",
+  "date": "2026-09-19",
+  "skill": "code-review-two-axis",
+  "dispatch": "兩個 sub-agent 平行,model=opus(CLAUDE.md §G)",
+  "spec_source": [
+    "docs/superpowers/specs/pr-281-review.md(+ .audit.md):PR #281 審查報告 25 條 finding 與其 Action 欄(auto-fix 10 / ask-user 4 / no-op 11)",
+    "user 2026-09-19 凌晨對四條 ask-user 的逐條拍板(D1 分來源寫清楚+提醒 #271、不加守門;D2 保留 fixture 形狀+補 auction 斷言;D3 第三種文案界=min(bookdays);D4 無簿日 ←→ 換日),外加「報告入 docs 不重建」與「#13 改文字不動版面」"
+  ],
+  "standards": [
+    {
+      "id": "Std-H1",
+      "severity": "硬違規",
+      "finding": "CLAUDE.md §6 提交慣例 — `cdbc7248 docs(pr-281): …` 的 type `docs` 不在允許集合 `feat/fix/chore/refactor/perf/test`。前 400 筆 commit 只有這一筆用 `docs(`(即它自己),同類純文件改動歷史一律 `chore`(126 筆)。順帶:`7408ae55 fix(book-replay)` 是純 docstring 改動掛 `fix`,同樣與 repo 慣例不合。",
+      "verdict": "CONFIRMED",
+      "verification": "自查 250 筆歷史:只改文件(無 .py/.ts/.js/.json/.css/.html)的 commit 共 55 筆,type 全部是 chore,零 fix、零 docs;CLAUDE.md:585 的允許集合逐字確認不含 docs。",
+      "disposition": "收 —— 改寫 commit 訊息:`docs(pr-281)` → `chore(docs)`,`fix(book-replay)`(純 docstring)→ `chore(book-replay)`。`fix(viewer)` / `fix(evidence)` / `test(book-replay)` 維持(前兩者有真實行為改動,後者是純測試 commit)。"
+    },
+    {
+      "id": "Std-1",
+      "severity": "判斷題(Data Clumps + Primitive Obsession)",
+      "finding": "`close_pile.py::scan`:`best = before_close = (0, None, None, None, None)`,五個語意欄位靠位置編碼,`print` 直接吐 tuple repr;歸檔的 `close_pile.txt` 寫成 `(47033, '5314', 'askq0', '13:29:43', '簿')`,讀者得自己數位置。NamedTuple 即自述。",
+      "verdict": "CONFIRMED",
+      "disposition": "收 —— 改成 `class Peak(NamedTuple)`(qty / code / cell / at / row_kind)。#8 的用意就是「簿 parquet 過期後這些數字要還讀得懂」,歸檔輸出自述比註解可靠。重跑後數字不變。"
+    },
+    {
+      "id": "Std-2",
+      "severity": "判斷題(Mysterious Name + Repeated Switches)",
+      "finding": "同檔 `for kind in (\"\", \"-book\")` 用空字串當「成交 parquet」哨兵,再 `\"成交\" if kind == \"\" else \"簿\"` 解第二次。",
+      "verdict": "CONFIRMED",
+      "disposition": "收 —— 改成 `SOURCES = ((\"\", \"成交\"), (\"-book\", \"簿\"))` 一張表,迴圈直接解包,不再二次判斷。"
+    },
+    {
+      "id": "Std-3",
+      "severity": "判斷題(宣稱與 gate 不同尺)",
+      "finding": "`payload_diff.py`:docstring 說「**舊交易日**逐鍵相同」,但新 gate 的 `changed` 是**頂層鍵**,`d` 只要有任一股票日(含 `>= BOOK_FROM` 的新日)不同就紅。註解自承拿 `d` 當 catch-all;這批同日資料剛好綠,下次比「多一個交易日」的兩份 dump 會紅在 AC4 不在乎的理由上。",
+      "verdict": "CONFIRMED",
+      "disposition": "部分收 —— gate 那一行維持報告 #4 逐字建議的 `(diff or removed or changed)`(超出建議自己發明 new_only 判斷,正是本輪 Spec-b 抓到的那種越界)。改註解把過度觸發講明:`d` 是 catch-all,拿兩份天數不同的 dump 來比會紅,而那是 AC4 不在乎的理由;這支的用法是「同一批資料、改版前後」不是跨期比對。"
+    },
+    {
+      "id": "Std-4",
+      "severity": "判斷題(Duplicated Code)",
+      "finding": "回看頁 `rpShouldHaveBook()` 的 `[...BOOKDAYS].sort()[0]` 與 `renderReplay` 的 `days[0]` 是同一個「最早有簿日」,算兩次(且每次呼叫重建陣列 + 排序)。",
+      "verdict": "CONFIRMED",
+      "disposition": "收 —— `BOOKDAYS` 旁邊 hoist `BOOK_SORTED` / `BOOK_FROM` 兩個 const(載入時算一次),兩處都吃同一份。"
+    },
+    {
+      "id": "Std-5",
+      "severity": "判斷題(誤導文案)",
+      "finding": "`if(!Array.isArray(trialFlat) || trialFlat.length % 2) bad(`…格數 ${trialFlat.length} 不是偶數`)`:`trial` 是物件時印「格數 undefined 不是偶數」(verification §6 逐字收了這句),把型別錯講成格數錯;`!Array.isArray` 分支該有自己的句子。",
+      "verdict": "CONFIRMED",
+      "disposition": "收 —— 拆成兩條:`不是陣列(${typeof trialFlat})` 與原本的格數句。已重跑瀏覽器驗證,實際文案變成「trial(集合競價段)不是陣列(object)」,verification §6 同步更新。"
+    },
+    {
+      "id": "Std-0",
+      "severity": "無發現",
+      "finding": "`copycat/book_replay.py`、`CONTEXT.md`、`docs/next-time.md`、`tests/test_book_replay.py` 無違規;刪 `assert wire[\"v\"] == 4` 確為重複(golden `test_payload_layout_matches_the_documented_v4_literal` 仍釘 `\"v\": 4`)。`.claude/**` evidence 腳本不在 backend-conventions(scope = `copycat/`)與 `ruff check copycat tests` 涵蓋內,`print` / 無 `from __future__` 與同目錄既有腳本一致,不報。兩份審查報告與 1,002 行 HTML 副本掃過無異常;artifact 放 `.claude/bug/<分支 slug>/` 合 ops-discipline。",
+      "verdict": "N/A",
+      "disposition": "無需處置"
+    }
+  ],
+  "spec": [
+    {
+      "id": "Spec-pass",
+      "severity": "通過",
+      "finding": "10 條 auto-fix + 4 條 ask-user 拍板逐條落實,數字與報告逐字相符(47,033 / 27,806 / 29,675 未改;37,845 / 8,140 / 29,300 已入 `close_pile.txt`;+3,300 / +3,044 / +4,176 位元組表)。`copycat/book_replay.py` 以 `ast` 驗證 module docstring 佔 1–119 行、兩個 hunk 在 53 與 64–65 行內 → **runtime 零改動屬實**,D1「不加守門、程式不動」遵守。D3 用 `min(bookdays)`(user 拍板)而非報告建議的 `max`,依拍板優先,正確。",
+      "verdict": "N/A",
+      "disposition": "無需處置"
+    },
+    {
+      "id": "Spec-b",
+      "severity": "scope creep",
+      "finding": "報告 #17 Action = `no-op`,原文:「這條複查下來**不建議改**…同款站點 repo 內另有 6 處…**要收就整批收,不該只挑本 PR 這三支**」。但 diff 把 `check_trial.py` / `no_close.py` / `merged_run.py` 三支 `sys.path` 全改了,另 6 處未動 —— 正是報告反對的挑食法。而 `.claude/bug/pr-281-review-followups/verification.md` §7 仍寫「11 條 `no-op` 未收」,記帳與 diff 不符(實為 10 條未收)。",
+      "verdict": "CONFIRMED",
+      "verification": "自查報告 pr-281-review.md:52 的 #17 列:Action = `no-op`,理由「baseline:repo 內另有 6 處同款長年未爆;fallback 落到同一份 v4 code」。user 的拍板只涵蓋 D1–D4 + 報告歸檔 + #13,未授權收 #17。",
+      "disposition": "收 —— 三支 `sys.path` 全部還原成原樣(`git diff` 對 no_close.py / merged_run.py 歸零),`check_trial.py` 的 docstring 改成明寫「這條是 review #17、處置 no-op、要收要整批收」。CLAUDE.md §B:順手想改的寫進「下次處理」清單,已加 `docs/next-time.md` 一條(9 處一次收)。還原後 `11 條 no-op 未收` 的記帳重新成立。"
+    },
+    {
+      "id": "Spec-c",
+      "severity": "辯護理由為假",
+      "finding": "verification.md §2 第 6 列寫「不改就跑不起來,#8 的重跑歸檔無從做起」。實查:主 venv 有 `__editable__.copycat-0.1.0.pth`(editable install 指向主 tree),`sys.path.insert` 指到不存在目錄 Python 靜默略過,import 照常成功 —— 即報告 #17 原文「fallback 會 import 到主 tree 的同一份 v4 code,重跑結果不變」。改動本身無害、`parents[4]` 換算正確,但理由與 §7 數字要更正。",
+      "verdict": "CONFIRMED",
+      "verification": "自查 `.venv/Lib/site-packages/__editable__.copycat-0.1.0.pth` 存在且用 finder 安裝;還原 `sys.path` 後實跑 `check_trial.py 2026-09-16`,exit 0 且輸出與歸檔的 `trial-2026-09-16.txt` **逐位元組相同**。我寫的理由確為假。",
+      "disposition": "收 —— 連同 Spec-b 一起還原,verification.md §2 那一列改寫、§7 數字回到 11。"
+    },
+    {
+      "id": "Spec-a",
+      "severity": "同類殘留",
+      "finding": "user 拍板「改文字,不動版面」→ 版面確實沒動,但 `.claude/feat/book-replay-auction-segment/verification.md:48` 仍寫「中間欄每則**右上**『集合競價』」,仍是同一句假陳述。該檔本批已因 #16 改過 §3,非凍結紀錄。",
+      "verdict": "CONFIRMED",
+      "disposition": "收 —— 該行改成「中間欄每則標頭末端」並註明是 review #13 的校正與原因。"
+    },
+    {
+      "id": "Spec-note",
+      "severity": "已揭露,不列為問題",
+      "finding": "回看頁 tooltip 一併三態化雖超出報告 #9 範圍,§1 D3 已揭露,屬同一 finding 的自然補齊。",
+      "verdict": "N/A",
+      "disposition": "維持 —— tooltip 與面板是同一句假陳述的兩個出口,只修一半等於留一半。已在 verification §1 與 commit 訊息寫明。"
+    }
+  ],
+  "disposition": "Standards 6 條(1 硬違規 + 5 判斷題)+ Spec 3 條實錯 + 2 條通過/備註。全部 CONFIRMED 的 9 條逐條收:Std-H1 改寫 commit type(docs→chore、純 docstring 的 fix→chore);Std-1/2 close_pile 改 NamedTuple + 來源表;Std-3 只改註解不改 gate(避免重蹈 Spec-b 的越界);Std-4/5 回看頁 hoist BOOK_FROM 與拆錯誤文案;Spec-b/c 把越界收的 #17 三處 sys.path 全部還原並更正假理由,改記 docs/next-time.md 待整批收;Spec-a 補掉 feat verification 裡殘留的「右上」。零條反駁。收修後重跑:pytest / ruff / pyright / validate 全綠,回看頁 node --check rc=0,#10 與 D3/D4 瀏覽器驗證重做一次全 PASS。"
+}
