@@ -1,0 +1,64 @@
+{
+  "fixed_point": "3024887ad0402fb8e974df94462453528b86b14d",
+  "ran_at": "2026-09-18T19:0x+08:00",
+  "note": "two-axis review(closeout §1);兩個 sub-agent 平行、互不見對方輸出。Spec 軸的規格 = docs/superpowers/specs/pr-279-review.md 34 條 + user 2026-09-18 逐題拍板(對照表在本目錄 verification.md §1)。",
+  "standards": [
+    {
+      "id": "H-1",
+      "severity": "hard",
+      "finding": "模組說明改名 v3,檔內三處交叉引用仍寫「外掛檔 v2」:copycat/book_replay.py:334 PluginPayload(新增的 auction / stale 兩鍵就宣告在這個 TypedDict)、:784 encode()、:883 _encode_changes()。指向的節名已不存在。",
+      "disposition": "接受,已修(三處改成 v3)。"
+    },
+    {
+      "id": "S-1",
+      "severity": "judgement",
+      "finding": "Repeated Switches + Shotgun Surgery:「這一則不比前一份」的理由散在六處(_frames 的 if-elif 鏈、待扣條件、decode 的或鏈與基準鏈、錯誤訊息、Frame.changes 註解)。本批把理由由 2 種加到 4 種就同動這六處;缺的是兩個具名述詞(「不拆變動」與「不當基準」語意不同)。",
+      "disposition": "不在本批動,記 docs/next-time.md。理由:三天永久外掛檔已用現行引擎重產並逐例驗過,純結構重整的收益不抵重驗成本(鐵則 B:順手想改的寫進下次處理)。述詞化要連 decode 一起設計,屬獨立重構。"
+    },
+    {
+      "id": "S-2",
+      "severity": "judgement",
+      "finding": "Duplicated Code:排序規則兩份 —— _SideView.step 的 out.sort(key=lambda …) 與新增的 _change_sort_key 是同一條規則,檢查器變成 producer 的手抄本。",
+      "disposition": "接受,已修:step 改成 out.sort(key=_change_sort_key),刪掉隨之無用的 direction 區域變數。零行為改動以實資料證明 —— 重構前後兩版引擎對同一批輸入逐則比對 8 檔 625,972 則,變動項(種類 / 側別 / 價)與吃檔完全相同;pytest 108 passed。"
+    },
+    {
+      "id": "S-3",
+      "severity": "judgement",
+      "finding": "Data Clumps:(prev_book, book, code, index) 成組傳進 _check_changes 再轉給 _check_kinds_and_order;新 hunk 內 f\"{code} 第 {index} 則…\" 手寫四次;兩份簿總是成對餵 _side_levels。",
+      "disposition": "不在本批動,記 next-time。理由:成組傳參與訊息前綴是 _check_changes 既有的簽名慣例,本批只是沿用;要改是連同 S-1 的一次檢查層重構。"
+    },
+    {
+      "id": "S-4",
+      "severity": "judgement",
+      "finding": "Mysterious Name / 術語衝突:_EatLedger.add_book 的區域變數 stale = reuse_previous or _cleared(book),與本批新定義的術語「舊簿(stale)」(達錢時刻在未來的成交附的前一日簿)撞名,呼叫端傳的正好是 stale_book=。",
+      "disposition": "接受,已修(區域變數改名 reuse)。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "Spec-1",
+      "severity": "partial",
+      "finding": "Q3「標集合競價撮合」對開盤只做到一半,且文件數字與實產外掛檔對不上:_auction_match 明寫「當日第一則就是成交另由 views is None 擋下」,而那正是開盤撮合的最大宗。正式外掛檔實數 auction 09-16 388(開盤 35 / 盤中 274 / 收盤 79)、09-17 254(32 / 144 / 78);模組說明與 tc4-market-facts skill 卻寫「開盤 76 / 73 筆」「09-16 432 筆(…盤前 1)」,開盤差 41 筆/天,且 skill 的「盤前 1」不在 auction 清單裡。",
+      "disposition": "行為維持不改、文件接受並已修。理由:當日第一則是不是集合競價撮合,資料上判不出來(盤中才開始記錄的檔第一則也可能是普通成交,09-16 的 6147 11:35 / 7772 11:42 即是),硬標成撮合是我們給不出證據的宣稱;那一則本來就沒有前一份可比,回看頁印「當日第一份五檔」是誠實的。已把模組說明與 skill 的數字改成 auction 口徑(388 / 254 + 逐段拆解),並寫明「當日第一則就是開盤撮合」那 41 / 41 檔走另一條路、處置相同但不列入 auction;掃描口徑(432 / 297)與 auction 口徑的差額在 skill 裡直接寫明,避免兩個 SoT 互相矛盾。數字由 main session 自行解正式外掛檔重數確認。"
+    },
+    {
+      "id": "Spec-2",
+      "severity": "partial",
+      "finding": "F-24 的「結果檔」沒補:verification.md 自承「結果檔待補(重產後)」,evidence/result_lock_flag_check.txt 不在 diff,且這條 TODO 只留在 artifact 檔、沒進 docs/next-time.md。",
+      "disposition": "接受,已補:重產完成後跑 evidence/lock_flag_check.py,輸出落 evidence/result_lock_flag_check.txt 並回填 verification.md 該節(不再是 TODO)。"
+    },
+    {
+      "id": "Spec-3",
+      "severity": "inconsistency",
+      "finding": "decode 對兩個新欄位的自檢強度不一:auction 核 chg 空 + eat 空;stale 只核 chg 空與 ⊆ anomalous,不核 eat 空,但 Frame docstring 說 stale「不比、不當基準、不進待扣」。",
+      "disposition": "接受,已修:條件改成 (auction or stale_book) and eaten → PluginFormatError,訊息分別點名;另補測試 test_the_plugin_file_refuses_eaten_levels_on_messages_that_never_waited 兩案(108 passed)。"
+    },
+    {
+      "id": "Spec-4",
+      "severity": "none",
+      "finding": "scope creep:沒發現。F-05 / F-13 / F-34 三條 no-op 都沒被動(模組未拆、測試檔未重排、淡色行未加註)。查核通過:Q1 收盤與處置股實證有涵蓋;Q3「撮後五檔仍當基準」引擎與 decode 兩邊都做到;Q5 Python decode 仍嚴格是刻意(往下相容只給回看頁);Q2 順序未改且有測試釘住;F-03 / F-04 / F-07~F-14 / F-21~F-33 逐條都能在 diff 找到對應實作。",
+      "disposition": "無需處置。"
+    }
+  ],
+  "disposition": "Standards 5 條(硬違規 1 / 判斷題 4):H-1、S-2、S-4 接受並修;S-1、S-3 判斷題不在本批動、記 next-time(理由見各條)。Spec 4 條:Spec-1 行為維持、文件口徑修正;Spec-2 補結果檔;Spec-3 補 decode 對稱檢查 + 測試;Spec-4 無 scope creep。收修後 pytest 108(全量 3,668+)、ruff / pyright 乾淨;S-2 的重構另以兩版引擎逐則比對 8 檔 625,972 則證明零行為改動,故三天已重產的外掛檔不需再產。"
+}

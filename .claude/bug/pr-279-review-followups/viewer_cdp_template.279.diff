@@ -1,0 +1,90 @@
+--- viewer_cdp_template.html.bak-20260918-pre279fix	2026-09-18 18:06:18.326269200 +0800
++++ viewer_cdp_template.html	2026-09-18 18:32:20.953284100 +0800
+@@ -113,6 +113,12 @@
+ .rp-msg.cur .rp-msg-h{color:var(--ink-2)}
+ .rp-line{padding:1px 0 1px 22px;text-indent:-12px}
+ .rp-line.dim{color:var(--muted)}
++.rp-msg.cur .rp-line.dim{color:var(--ink-2)}
++.rp-line.rp-cols{display:grid;grid-template-columns:86px 130px 1fr;padding-left:0;text-indent:0;align-items:baseline}
++.rp-cols>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
++.rp-cols .rp-c1{padding-right:8px;border-right:1px solid var(--grid)}
++.rp-cols .rp-c2{text-align:right;padding:0 8px;border-right:1px solid var(--grid)}
++.rp-cols .rp-c3{padding-left:8px;white-space:normal}
+ .rp-line .sub{display:block;padding-left:calc(1.4em - 12px);text-indent:0;color:var(--ink-2)}
+ .rp-tape{max-height:500px;overflow:auto}
+ .rp-tape th,.rp-tape td{padding:2px 8px;font-size:12px}
+@@ -584,7 +590,8 @@
+   // 解碼 + 自檢(一次順播全部 delta:每個 keyframe 逐格比對、順便算最大單格量與出現過的價位)
+   function rpBuild(key, p){
+     const bad = m => { throw new Error("外掛檔格式不符:" + m); };
+-    if(p.v !== 2) bad(`版本 ${p.v}(本頁只認 2;舊檔請用新版 copycat book-replay 重產)`);
++    if(p.v !== 2 && p.v !== 3) bad(`版本 ${p.v}(本頁認 2 / 3;更舊的檔請用新版 copycat book-replay 重產)`);
++    // 只加欄位的升版往下相容:v2 沒有 auction / stale,當空集合(舊檔照樣看得到,只是不標集合競價)
+     if(`${p.code}|${p.date}` !== key) bad(`檔頭 ${p.code}|${p.date} 與檔名 ${key} 不符`);
+     const n = p.n, K = p.kf_every, F = p.fields;
+     if(!Number.isInteger(n) || n < 1) bad(`則數 ${n}`);
+@@ -600,7 +607,7 @@
+     const recv = new Float64Array(n);
+     for(let i=0;i<n;i++){ const v = p.recv[i]; if(!Number.isInteger(v) || (i > 0 && v < 0)) bad(`第 ${i} 則收到時刻倒退或非整數`); recv[i] = i ? recv[i-1] + v : v; }
+     for(let i=0;i<n;i++) if(!Number.isInteger(p.seq[i]) || p.seq[i] <= 0) bad(`第 ${i} 則訊息序號沒有遞增`);
+-    const anom = new Set(p.anomalous);
++    const anom = new Set(p.anomalous), auction = new Set(p.auction || []), stale = new Set(p.stale || []);
+     const clockAt = new Int32Array(n), tradeAt = new Int32Array(n); // 則號 ≤ i 的最後一個時鐘點 / 最後一個成交(在 trade 的序號);-1 = 還沒有
+     const tradeIdx = []; // 第 k 筆成交在第幾則
+     let k = -1, ci = -1, clock = -Infinity;
+@@ -631,7 +638,7 @@
+       for(let q=0;q<e.length;q+=3){ const lv = e[q+1]; if((e[q] !== 0 && e[q] !== 1) || !(lv === null || (Number.isInteger(lv) && lv >= 0 && lv <= 5)) || !Number.isInteger(e[q+2]) || e[q+2] <= 0) bad(`第 ${tradeIdx[t]} 則吃檔 [${e[q]}, ${lv}, ${e[q+2]}]`); } }
+     for(let t=0;t<=k;t++){ const px = p.trade[t*4+1]; if(px > 0) prices.add(px); }
+     if(qmax === 0) qmax = qmaxDay; // 13:25 前沒有任何掛單(極冷門)才退回全天
+-    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ, chg:p.chg, eat:p.eat, tradeIdx:Int32Array.from(tradeIdx), cleared, firstBook:cleared.indexOf(0)};
++    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ, chg:p.chg, eat:p.eat, tradeIdx:Int32Array.from(tradeIdx), cleared, auction, stale, firstBook:(() => { for(let i=0;i<n;i++) if(!cleared[i] && !stale.has(i)) return i; return -1; })()};
+   }
+   function rpLastPx(R, i){ for(let k=R.tradeAt[i];k>=0;k--){ const v = R.trade[k*4+1]; if(v > 0) return v; } return null; } // 則號 ≤ i 最近一筆成交價(毫元)
+   function rpBookAt(R, i){ const base = Math.floor(i/R.K); const b = R.kf[base].slice(); for(let j=base*R.K+1;j<=i;j++){ const d = R.d[j]; for(let q=0;q<d.length;q+=2) b[d[q]] = d[q+1]; } return b; }
+@@ -653,12 +660,12 @@
+   const rpSideTxt = s => s ? "賣" : "買";
+   const rpAt = (s, p) => p === 0 ? `市價${rpSideTxt(s)}` : `${rpSideTxt(s)} ${rpPx(p)}`;
+   const rpQty = q => q.toLocaleString();
+-  const rpPrice = m => m == null ? "—" : fmtP(m/1000);
++  const rpPrice = m => m == null ? "—" : rpPx(m); // 與階梯同一種寫法(依 tick 的固定小數位)
+   const rpDur = ms => { if(ms < 9950) return `${(ms/1000).toFixed(1)} 秒`; const s = Math.round(ms/1000); if(s < 60) return `${s} 秒`; if(s < 3600) return `${Math.floor(s/60)} 分 ${s%60} 秒`; return `${Math.floor(s/3600)} 時 ${Math.floor(s%3600/60)} 分`; };
+   const rpSideCell = side => side === "outer" ? '<span class="pos">外</span>' : side === "inner" ? '<span class="neg">內</span>' : "中";
+   function rpChangeLines(R, j){ // 第 j 則的變動(格式見 copycat book_replay 模組說明「外掛檔 v2」的 chg;rpBuild 已驗種類碼與格數)
+     const c = R.chg[j];
+-    if(!c.length) return `<div class="rp-line dim">${j === R.firstBook ? "當日第一份五檔(沒有前一份可比)" : R.cleared[j] ? "五檔全空(達錢清空五檔,常見於暫緩撮合開始;不算撤單)" : "五檔沒有變動"}</div>`;
++    if(!c.length) return `<div class="rp-line dim">${R.auction.has(j) ? "集合競價撮合(這一則不拆:試撮揭示的五檔是撮完剩下的,撮掉的單子沒顯示過)" : R.stale.has(j) ? "達錢時刻異常的成交,附的是舊五檔(不當基準)" : j === R.firstBook ? "當日第一份五檔(沒有前一份可比)" : R.cleared[j] ? "五檔全空(達錢清空五檔,常見於暫緩撮合開始;不算撤單)" : "五檔沒有變動"}</div>`;
+     let h = "";
+     for(let q=0; q<c.length; q += RP_CHG_WIDTH[c[q] >> 1]){
+       const at = rpAt(c[q] % 2, c[q+1]);
+@@ -667,7 +674,7 @@
+           if(c[q+4]) parts.push(`+${rpQty(c[q+4])} 掛單`);
+           if(c[q+5]) parts.push(`−${rpQty(c[q+5])} 成交`);
+           if(c[q+6]) parts.push(`−${rpQty(c[q+6])} 撤單`);
+-          h += `<div class="rp-line">${at} <span class="mono">${rpQty(c[q+2])} → ${rpQty(c[q+3])}</span> ${parts.join("、")}</div>`; break; }
++          h += `<div class="rp-line rp-cols" title="${at} ${rpQty(c[q+2])} → ${rpQty(c[q+3])} ${parts.join("、")}"><span class="rp-c1">${at}</span><span class="rp-c2 mono">${rpQty(c[q+2])} → ${rpQty(c[q+3])}</span><span class="rp-c3">${parts.join("、")}</span></div>`; break; }
+         case 1: h += `<div class="rp-line dim">${at} ${rpQty(c[q+2])} 張被擠出五檔</div>`; break; // [碼, 價, 離開前的量]
+         case 2: { const left = c[q+2], now = c[q+3], traded = c[q+4], net = c[q+5], away = rpDur(c[q+7]); // [碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
+           h += left === now && !traded
+@@ -688,7 +695,7 @@
+     }
+     $("rpChg").innerHTML = h;
+   }
+-  const rpEatText = e => { if(!e.length) return "—"; const out = []; for(let q=0;q<e.length;q+=3){ const s = rpSideTxt(e[q]), lv = e[q+1]; out.push(`吃 ${lv === null ? s + "五檔外" : lv === 0 ? "市價" + s : s + lv} −${rpQty(e[q+2])}`); } return out.join("、"); };
++  const rpEatText = e => { if(!e.length) return "—"; const out = []; for(let q=0;q<e.length;q+=3){ const s = rpSideTxt(e[q]), lv = e[q+1]; out.push(`${lv === null ? s + "五檔外" : lv === 0 ? "市價" + s : s + lv} · −${rpQty(e[q+2])}`); } return "吃 " + out.join("、"); };
+   function rpTape(R, i){ // 成交明細:則號 ≤ i 的最後 RP_TAPE_KEEP 筆成交,新的在上
+     const last = R.tradeAt[i]; let h = "";
+     if(last < 0) h = '<tr><td colspan="5" class="dim">這一則之前還沒有成交</td></tr>';
+@@ -796,11 +803,11 @@
+     rpCtrl();
+     rpChanges(R, i); rpTape(R, i);
+     const tr = isTrade ? R.trade.slice(ti*4, ti*4+4) : null;
+-    $("rpKind").innerHTML = isTrade ? `成交則 <b class="mono">${tr[1]==null?"—":fmtP(tr[1]/1000)}</b> × <b class="mono">${tr[2]==null?"—":tr[2]}</b> 張 ${tr[3]==="outer"?'<span class="pos">外</span>':tr[3]==="inner"?'<span class="neg">內</span>':"中"}${R.anom.has(i)?'(達錢時刻異常 '+esc(tr[0]==null?"—":fmtMs(tr[0]))+',不當標籤時刻)':""}` : "簿則";
++    $("rpKind").innerHTML = isTrade ? `成交則 <b class="mono">${rpPrice(tr[1])}</b> × <b class="mono">${tr[2]==null?"—":rpQty(tr[2])}</b> 張 ${tr[3]==="outer"?'<span class="pos">外</span>':tr[3]==="inner"?'<span class="neg">內</span>':"中"}${R.anom.has(i)?'(達錢時刻異常 '+esc(tr[0]==null?"—":fmtMs(tr[0]))+',不當標籤時刻)':""}` : "簿則";
+     $("rpRecv").textContent = fmtMs(R.recv[i]);
+     const px = rpLastPx(R, i);
+     const pc = G.pc;
+-    $("rpPx").innerHTML = px == null ? "現價 —(還沒有成交)" : `現價 <b class="mono ${pc?cls(px/1000-pc):""}">${fmtP(px/1000)}</b>${pc?` ${pct(px/1000,pc)}`:""}`;
++    $("rpPx").innerHTML = px == null ? "現價 —(還沒有成交)" : `現價 <b class="mono ${pc?cls(px/1000-pc):""}">${rpPrice(px)}</b>${pc?` ${pct(px/1000,pc)}`:""}`;
+     const buy = new Map(), sell = new Map(), mkt = [];
+     for(let l=0;l<5;l++){ const bp = b[R.BP[l]], bq = b[R.BQ[l]], ap = b[R.AP[l]], aq = b[R.AQ[l]];
+       if(bp === 0) mkt.push(`市價買 ${bq ?? "—"} 張`); else if(bp != null) buy.set(bp, bq);

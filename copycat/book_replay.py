@@ -43,8 +43,10 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 **撮完剩下的**掛單,要撮掉的單子從沒顯示過,所以撮合那一下五檔不會少:
 - 這一則**不拆變動**(跟試撮五檔比不出意義:兩邊同時被結清、被撮掉的價位看不到),但撮後的五檔是之後比較的基準
 - 這一筆**不進待扣**、吃檔留空(集合競價沒有主動方,「吃第幾檔」沒有答案) —— 否則它比不到自己的減量,會把之後
-  1 秒內的撤單寫成成交、還搶走下一筆成交自己的減量(2026-09-16 兩天實測:開盤 76 / 73 筆、盤中 276 / 145 筆、
-  收盤 79 / 78 筆都是這種成交)
+  1 秒內的撤單寫成成交、還搶走下一筆成交自己的減量。2026-09-16 / 09-17 正式外掛檔的 `auction` 筆數 388 / 254:
+  開盤 35 / 32、盤中(暫緩撮合結束與處置股分盤撮合)274 / 144、收盤 79 / 78
+**另一條路**:當日第一則就是開盤撮合的檔(09-16 / 09-17 各 41 檔)`views is None`,處置相同(不進待扣、吃檔空)
+但**不列入 `auction`** —— 那一則本來就沒有前一份可比,回看頁印「當日第一份五檔」而不是「集合競價撮合」。
 同理,達錢時刻在未來的異常成交(開機補送前一日盤後成交)附的是舊簿(`Frame.stale_book`,見
 `_stamped_in_the_future`):不比、不當基準、不進待扣。
 價位從賣方換到買方(價格穿過它)一直看得到,是賣方減量 + 買方增量,不是離開視野(user 2026-09-17 拍板;
@@ -331,7 +333,7 @@ class BookReplay:
 
 
 class PluginPayload(TypedDict):
-    """外掛檔 v2 的 JSON 物件;各鍵的意義見模組說明「外掛檔 v2」。"""
+    """外掛檔 v3 的 JSON 物件;各鍵的意義見模組說明「外掛檔 v3」。"""
 
     v: int
     code: str
@@ -504,8 +506,8 @@ class _EatLedger:
     def add_book(self, book: tuple[int | None, ...], *, reuse_previous: bool = False) -> None:
         """記下這一則的參考五檔;五檔全空(清空)與附舊簿的時刻異常成交沿用前一份,檔位才不會錯
         (清空會讓檔位一律變五檔外,舊簿會拿前一日的檔位去標今天的成交)。"""
-        stale = reuse_previous or _cleared(book)
-        self._books.append(self._books[-1] if self._books and stale else book)
+        reuse = reuse_previous or _cleared(book)
+        self._books.append(self._books[-1] if self._books and reuse else book)
 
     def record_absorbed(
         self, trade: _UnmatchedTrade, side: int, price: int | None, qty: int, index: int
@@ -644,8 +646,7 @@ class _SideView:
                 self._track(price, qty)
                 if qty:
                     out.append(EnteredView(self._name, price, qty))
-        direction = -1 if self._side == _SIDE_CODE["bid"] else 1
-        out.sort(key=lambda change: (change.price_milli != 0, direction * change.price_milli))
+        out.sort(key=_change_sort_key)  # 與 decode 的排序檢查共用同一條規則
         return out
 
     def count_trade(self, trade: _UnmatchedTrade | None, ledger: _EatLedger) -> None:
@@ -781,7 +782,7 @@ def _taipei_day_start_epoch_ms(trade_date: str) -> int:
 
 
 def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> PluginPayload:
-    """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v2」。"""
+    """一檔一日的簿重播 → 外掛檔 payload(可直接 JSON 化)。格式見模組說明「外掛檔 v3」。"""
     if keyframe_every < 1:
         raise ValueError(f"keyframe_every 須 ≥ 1(收到 {keyframe_every})")
     seq: list[int] = []
@@ -880,7 +881,7 @@ _CHANGE_BASE: dict[type, int] = {kind: 2 * n for n, (kind, _width) in enumerate(
 
 
 def _encode_changes(changes: tuple[BookChange, ...]) -> list[int]:
-    """一則的變動 → `chg` 的一列(格式見模組說明「外掛檔 v2」)。"""
+    """一則的變動 → `chg` 的一列(格式見模組說明「外掛檔 v3」)。"""
     out: list[int] = []
     for change in changes:
         out.append(_CHANGE_BASE[type(change)] + _SIDE_CODE[change.side])
@@ -1104,9 +1105,10 @@ def decode(payload: PluginPayload) -> BookReplay:
         if not (_cleared(state) or stale_book):
             prev_state = list(state)  # 集合競價撮合那一則不拆,但撮後的五檔是之後比較的基準
         eaten = _decode_eaten(next(eat_rows), code, i) if trade is not None else ()
-        if auction and eaten:
+        if (auction or stale_book) and eaten:
+            # 兩者都不進待扣 → 永遠扣不到任何一格(集合競價沒有主動方;舊簿那筆的減量在前一交易日)
             raise PluginFormatError(
-                f"{code} 第 {i} 則:集合競價撮合看不出吃了哪一檔,不該有吃檔"
+                f"{code} 第 {i} 則:{'集合競價撮合' if auction else '附舊簿的成交'}不進待扣,不該有吃檔"
             )
         if trade is not None and sum(eat.qty for eat in eaten) > (trade.qty or 0):
             raise PluginFormatError(
