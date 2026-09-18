@@ -1,0 +1,75 @@
+{
+  "fixed_point": "fdb65455",
+  "commits": ["5506ddf1 feat(book-replay): 簿重播標出集合競價段,回看頁分隔標註 + 無簿日降級 + 五條限制(#273)"],
+  "standards": [
+    {
+      "id": "A-1",
+      "severity": "hard",
+      "title": "版本交叉引用漂掉 —— 本次改動引入的回歸",
+      "body": "模組說明段已改名「外掛檔 v4」(:69),FORMAT_VERSION = 4,CLAUDE.md 也改成「格式 = 模組說明『外掛檔 v4』」,但三處 docstring 仍指向已不存在的「外掛檔 v3」段::349 PluginPayload、:800 encode、:913 _encode_changes。依據:本檔自身是最強 local convention,git show fdb65455 顯示 v2→v3 那次三處皆同步改到、當時正確;這次只改了段標題與常數。CLAUDE.md §4 的「改契約要同時改各邊」同理。修法 = 三處字面改 v4。"
+    },
+    {
+      "id": "B-1",
+      "severity": "judgement",
+      "title": "Duplicated Code(輕)",
+      "body": "_check_trial_ranges 重寫了 _check_header 三鍵迴圈既有的「遞增 + 落在則號範圍」判準,錯誤文案另立一套。因 trial 是區間且多了「起迄顛倒 / 每段極大化」,分開仍屬合理;僅列出供比對,不建議硬收。"
+    },
+    {
+      "id": "B-2",
+      "severity": "judgement",
+      "title": "型別誠實度(輕)",
+      "body": "_check_trial_ranges(ranges: Sequence[int], ...) 收的是 wire 上未信任的 JSON;同檔姊妹 _decode_eaten / _decode_changes 刻意寫 Sequence[Any],decode docstring 也自陳「值的型別不在檢查範圍」。建議對齊 Sequence[Any]。"
+    },
+    {
+      "id": "B-3",
+      "severity": "judgement",
+      "title": "encode 多掃一趟(可接受)",
+      "body": "anomalous / auction / stale 在主迴圈就地 append,trial 另開 _trial_ranges 再掃一次 frames。run-length 需相鄰資訊,可接受。"
+    },
+    {
+      "id": "B-4",
+      "severity": "judgement",
+      "title": "測試檔格式與既有檔不對齊",
+      "body": "tests/test_book_replay.py:1323-1324 是全檔唯一一處 visual-indent 續行;_closing_auction_rows 亦用「多參數一行 + magic trailing comma」混排,與該檔既有兩種寫法(全單行 / 逐參數一行)都不同。依據 backend-conventions「Ruff … Format 跟既有檔對齊」;gate 只跑 ruff check 不擋 format,故屬人工判準。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "F-1",
+      "severity": "MED",
+      "title": "AC2 的閘語意雙軌,#271 照任一種做都說得過去",
+      "body": "ticket:「集合競價段不產生厚檔事件」。模組說明寫「厚檔事件也要整段排除」,verification §5 卻寫「候選產生迴圈跳過 frame.trial 為真的則即可」。兩者對「段開始前已存在、跨進段內的事件」給不同答案 —— spec #265 要求結局追蹤到「量掉回門檻以下 / 不再屬五檔 / 收盤」,若只擋「產生」,跨進段的事件其結局會被競價灌量污染(09-16 5314 賣一 47,033 張、2305 買 49.40 1,264 張都在段內)。建議在 book_replay.py 模組說明把「產生」與「結局追蹤」兩件分別寫死。"
+    },
+    {
+      "id": "F-2",
+      "severity": "LOW",
+      "title": "AC1 的邊界:收盤撮合那一筆不在段內",
+      "body": "ticket:「13:25–13:30 在時間軸與畫面上有視覺分隔與標註」。色帶止於最後一則試撮;13:30:00 撮出來那一則 TradeStatus 已回 0 → 不在 trial、不畫色帶,只靠 auction 印「集合競價撮合」。ticket 的舉例(13:30:00 那格 3,300 張)正落在此邊界。畫面上仍有標註,判部分滿足,但值得確認是刻意。"
+    },
+    {
+      "id": "F-3",
+      "severity": "MED",
+      "title": "rpHasBook() 的 BOOKDAYS.size === 0 → 不灰",
+      "body": "viewer-cdp-book/ 改名或 build 時不在,bookdays = [],AC3 整條靜默失效(全部日子退回「載入失敗報錯」= ticket 明文要避免的「呈現為故障」),零錯誤訊號,且產生器在 repo 外、無測試釘得住。"
+    },
+    {
+      "id": "F-4",
+      "severity": "LOW",
+      "title": "rpTrialName 以段尾 recv ≥ 13:25 命名",
+      "body": "處置股最後一段自 13:24:39 連到收盤(verification §3 自承),會被標成「收盤集合競價」,而它其實是分盤撮合 —— 標籤小幅誤述。"
+    },
+    {
+      "id": "F-5",
+      "severity": "LOW",
+      "title": "CLAUDE.md「v4 檔案大小與則數同樣不變」措辭強於證據",
+      "body": "trial 陣列非零長,只是在 0.1 MB 解析度下看不出來。"
+    },
+    {
+      "id": "F-scope",
+      "severity": "info",
+      "title": "未被要求的行為(reviewer 自評:不建議退回)",
+      "body": "灰掉範圍由 ticket 的「2026-07-01 至 09-10」擴成「所有不在 bookdays 的日子」(含 09-11~09-15);「有簿但沒有這一檔」錯誤文案改寫;RP_QMAX_END → RP_CLOSE_FROM 重命名;_check_trial_ranges 強制「段極大化」。皆小且有理由。"
+    }
+  ],
+  "disposition": "兩軸合計 11 條,零 Must。收修 8 條,反駁 1 條,不動 2 條。【收修】A-1(三處 docstring 字面改 v4,已 grep 確認全庫零殘留)。B-4(_closing_auction_rows 三則試撮列與 7772 那則改成逐參數一行,並把重複的 [(50_050, 40)] 提成 trial_ask;全檔不再有 visual-indent 續行)。F-1(模組說明「集合競價段」把 #271 的義務拆成兩條寫死:『不產生』= 段內不得產生新候選,與暖機期同一位置;『不污染結局』= 段前已存在、跨進段內的事件,其結局不得把段內競價灌量算進去。#271 的 issue 留言同步)。F-2(刻意,不改行為;在引擎模組說明加「段的界」一句,並在回看頁「定義與規則」寫明色帶只蓋試撮那些則、13:30 撮出來那一筆改印『集合競價撮合』)。F-3(改成三態:bookdays 鍵不存在 = 舊版產生器 → 照舊不灰;鍵在但空 = 設定壞了 → 分頁灰掉並印可行動的診斷『一個簿重播外掛檔都沒掃到…檢查資料夾再重跑 build_viewer_cdp.py』,不再與『本來就沒有』同一句)。F-4(段名改看跨度:整段在 13:25 後 = 收盤集合競價;13:25 前開始、連到收盤 = 『收盤集合競價(自分盤撮合連過來)』;實測 09-16 4979 / 3055 兩檔命中)。F-5(CLAUDE.md 改成『則數不變、檔案大小在 0.1 MB 解析度下看不出差別』並註明 trial 陣列非零長)。F-scope(reviewer 自評不退回,同意:灰掉範圍以事實為準優於票面字面;其餘三項為單一真相源與 fail-loud 的必要配套)。【反駁】B-2:_check_trial_ranges 是 _check_header 的 helper,而 _check_header 既有的 anomalous / auction / stale 迴圈同樣直接吃 TypedDict 宣告的 list[int];Sequence[Any] 是 _decode_* 家族(真的要處理任意 wire 值)的慣例,兩個家族刻意不同。維持 Sequence[int] 與所屬家族一致。【不動】B-1 / B-3:reviewer 自己標明不建議硬收,理由成立(區間判準與單點判準的錯誤文案本就該分開;run-length 需要相鄰資訊)。收修後真環境重驗:F-3 以『把 payload 的 bookdays 改成 [] 另存一份暫用頁』實測(不動真的資料夾),分頁灰掉 + 印出新的診斷句;F-4 以 09-16 4979(處置股,全日 132 段)實測末段標成『收盤集合競價(自分盤撮合連過來)』;AC1 / AC3 / AC5 重建頁後重驗照舊 PASS,四組日期 / 代號掃過 console 零訊息。"
+}
