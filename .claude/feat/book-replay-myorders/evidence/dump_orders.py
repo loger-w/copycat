@@ -33,4 +33,4 @@ for r in rows:
 print(f"合計 {len(rows)} 筆委託(全部日期);日期數 {len({r[0] for r in rows})}")
 for date in sorted({r[0] for r in rows}):
     ds = [r for r in rows if r[0] == date]
-    print(f"  {date}: {len(ds)} 筆 — " + "、".join(f"{k} {sum(1 for x in ds if x[7] == k)}" for k in ("成交", "刪單", "到收盤", "未知") if any(x[7] == k for x in ds)))
+    print(f"  {date}: {len(ds)} 筆 — " + "、".join(f"{k} {sum(1 for x in ds if x[7] == k)}" for k in ("成交", "刪單", "未配到", "未知") if any(x[7] == k for x in ds)))

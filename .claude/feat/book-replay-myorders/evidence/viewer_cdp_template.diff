@@ -1,5 +1,5 @@
 --- viewer_cdp_template.html.bak-20260918-pre272	2026-09-18 20:10:19.029194600 +0800
-+++ viewer_cdp_template.html	2026-09-18 20:20:06.773522100 +0800
++++ viewer_cdp_template.html	2026-09-18 20:44:32.557399900 +0800
 @@ -95,6 +95,11 @@
  .rp-p.up{color:var(--up)} .rp-p.down{color:var(--down)}
  .rp-row.cur .rp-p{background:var(--ink);color:var(--surface);font-weight:700}
@@ -16,7 +16,7 @@
          <li><b>五檔全空</b>:達錢在暫緩撮合開始那一刻會送一則買賣兩側全空的五檔(之後改每 5 秒更新),這一則不算撤單,下一則跟全空之前那一份比。</li>
          <li><b>成交明細</b>(右欄):到目前這一則為止最近 20 筆成交,跟階梯永遠是同一刻;目前這則是成交時標亮。時間 = 達錢成交時刻(即時只到整秒)。<b>吃檔</b> = 這筆成交扣到成交前那一則五檔的第幾檔,例「吃 賣1 −12」;一口氣連吃好幾檔會依序出現 賣1、賣2…;鎖漲停時吃的是市價排隊(「吃 市價買」);價位在第五檔之外列「五檔外」;看不出吃了哪一檔(開收盤集合競價、同一則又掛進來)列「—」。</li>
          <li><b>非群組(簿重播)</b>:當天有簿重播、但不在產業群組母體的個股另列一組(左欄最下)。分時 / K 線 / 逐筆來自 copycat tick 存檔(與達錢歷史逐筆比:盤中 1 分 K 逐根相同、少 14:30 盤後定價那一筆、內外盤用成交前真實五檔判);日線 FinMind。不進回測、碰觸、迴盪統計,也沒有 CDP 突破事件(活潑日索引那兩欄印「—」);你的成交與線上訊號照常標。頁頭開高低收與振幅取 FinMind 日線;存檔量不到全日九成時頁頭標「逐筆不完整」(例:6147 09-16 自 11:35 才有逐筆)。</li>
-+        <li><b>我的委託 / 成交</b>:格子上的「委 n」= 你自己當時掛在那一格的委託張數,「成 n」= 到目前這一則為止你在那一格成交的張數(有標記的整列外框變色),滑鼠移上去看時刻明細;上方圖例的「你的委託 / 成交」一個開關同時關掉上方圖的成交標記與階梯上這兩種標記。「◀ 上一筆我的成交 / 下一筆我的成交 ▶」跳到自己的成交那一則(會先暫停播放)。委託來源 = 群益審計記錄的下單 / 刪單(<b>送出時刻只到秒</b>,且只知道送出去了,不知道交易所何時收到 / 刪成功);委託自送出畫到「成交」(配對到你的成交那一筆)或「刪單」(刪單送出時刻),兩者都沒有就畫到收盤。當天的成交資料還沒補時畫成虛線的「委?」並註明不知道何時消失,<b>不假裝它掛到收盤</b>。市價單不畫在格子上(它不停在任何價位),說明列會寫當天有幾筆;成交時刻是<b>回報收到時刻</b>(比交易所成交晚一點)。<b>不顯示委託的佇列順位</b> —— 五檔只有總量,排第幾推不出來,硬推是編數字。預設視野只有現價上下 10 檔,離現價較遠的委託要按「展開漲停–跌停」才看得到。</li>
++        <li><b>我的委託 / 成交</b>:格子上的「委 n」= 你自己當時掛在那一格的委託張數,「成 n」= 到目前這一則為止你在那一格成交的張數(有標記的整列外框變色),滑鼠移上去看時刻明細;上方圖例的「你的委託 / 成交」一個開關同時關掉上方圖的成交標記與階梯上這兩種標記。「◀ 上一筆我的成交 / 下一筆我的成交 ▶」跳到自己的成交那一則(會先暫停播放)。委託來源 = 群益審計記錄的下單 / 刪單(<b>送出時刻只到秒</b>,且只知道送出去了,不知道交易所何時收到 / 刪成功);委託自送出畫到「成交」(配對到你的成交那一筆)或「刪單」(刪單送出時刻)。審計的送出時刻是<b>送單呼叫回來之後才蓋的章</b>,系統性地比真正送出去晚一點(全部資料裡有 9 筆的成交回報比它還早,差 0.08–0.95 秒;這種單子的送出時刻會收斂成不晚於成交,因此在畫面上沒有可見的停留時間)。兩者都沒配到時寫「沒配到成交也沒刪單」——<b>可能真的掛到收盤,也可能當日成交清單漏了這筆</b>,分不出來。同一格同一秒掛好幾筆時,滑鼠移上去的每一行都帶<b>委託序號</b>可以分辨。當天的成交資料還沒補時畫成虛線的「委?」並註明不知道何時消失,<b>不假裝它掛到收盤</b>。市價單不畫在格子上(它不停在任何價位),說明列會寫當天有幾筆;成交時刻是<b>回報收到時刻</b>(比交易所成交晚一點)。<b>不顯示委託的佇列順位</b> —— 五檔只有總量,排第幾推不出來,硬推是編數字。預設視野只有現價上下 10 檔,離現價較遠的委託要按「展開漲停–跌停」才看得到。</li>
          <li><b>限制</b>:五檔是聚合量,看不到單一委託;五檔以外完全看不到;檔案記的是 server 收到的,開盤峰值掉包會留缺口。</li>
        </ul>
      </div>
@@ -29,7 +29,7 @@
      const b = document.createElement("button"); b.className = "chip"+(state.show[k]?" on":""); b.type="button"; b.setAttribute("aria-pressed", String(!!state.show[k]));
      b.innerHTML = `<span class="sw" style="background:${color}"></span>${label}`;
      b.addEventListener("click", ()=>{ state.show[k]=!state.show[k]; b.classList.toggle("on", state.show[k]); b.setAttribute("aria-pressed", String(state.show[k])); persist(); render(); });
-@@ -716,6 +722,14 @@
+@@ -716,6 +722,15 @@
      const set = new Set(R.prices); let x = lo - lo % tickMilli(lo); while(x <= hi){ if(x >= lo) set.add(x); x += tickMilli(x); }
      return {grid:[...set].sort((a,b)=>b-a), limUp, limDn, pc: D ? D.pc : null};
    }
@@ -37,14 +37,15 @@
 +  // 這裡只把秒換成毫秒、價換成毫元,對齊重播時間軸(審計與 tick 存檔的收到時刻同一台機器的鐘)。市價單不畫在格子上。
 +  function rpMy(R){
 +    const D = DATA.d[R.code] && DATA.d[R.code][R.date], mo = (D && D.mo) || [], fl = (D && D.f) || [];
-+    const ord = mo.filter(o => o[6] === "limit").map(o => ({t0: Math.round(o[0]*1000), t1: o[1] == null ? null : Math.round(o[1]*1000), px: Math.round(o[2]*1000), qty: o[3], side: o[4], kind: o[5]}));
++    // 只有限價單停得在某一格;非限價 = 市價(群益 PriceType 只有 limit / market),另外計數由說明列交代,不畫。
++    const ord = mo.filter(o => o[6] === "limit").map(o => ({t0: Math.round(o[0]*1000), t1: o[1] == null ? null : Math.round(o[1]*1000), px: Math.round(o[2]*1000), qty: o[3], side: o[4], kind: o[5], seq: o[7]}));
 +    const fill = fl.map(f => ({t: Math.round(f[0]*1000), px: Math.round(f[1]*1000), qty: f[2], side: f[3], label: f[4]}));
 +    return {ord, fill, mkt: mo.length - ord.length, idx: [...new Set(fill.map(f => rpIndexAt(R, f.t)))].sort((a,b)=>a-b)};
 +  }
    let RP = null; // 目前掛載的重播 {R, G, i, t, center, full, raf, play, speed, firstLock, el}
    // RP.i = 目前這一則的則號,是重播畫面的唯一依據:階梯、標籤、現價、十字線、中間欄(這一則變了什麼)與成交明細都讀它,重繪不從時刻回推。
    // RP.t = 時間軸位置(收到時刻毫秒)= 拖曳值與播放時鐘。位置只走兩條路改:rpSetT(拖曳 / 播放:改 t,取「收到時刻 ≤ t 的
-@@ -735,27 +749,29 @@
+@@ -735,27 +750,29 @@
    }
    function rpMount(R){
      const box = $("tab-replay");
@@ -61,7 +62,7 @@
      const lockTxt = firstLock >= 0 ? `跳到首次鎖漲停 ${R.anom.has(firstLock) ? fmtMs(R.recv[firstLock]).slice(0,8) : rpTradeTime(R, firstLock)}` : G.limUp == null ? "沒有漲停價,判斷不了鎖漲停" : "當日未鎖漲停";
      box.innerHTML = `<div class="rp-head"><span>第 <b class="mono" id="rpIdx"></b> / <b class="mono">${R.n.toLocaleString()}</b> 則(成交 ${(R.trade.length/4).toLocaleString()})</span><span class="rp-clock mono" id="rpClock"></span><span id="rpKind"></span><span>收到 <b class="mono" id="rpRecv"></b></span><span id="rpPx"></span><span id="rpMkt"></span><button type="button" id="rpFull"></button></div>
 -      <div class="rp-ctrl" role="toolbar" aria-label="播放控制"><button type="button" id="rpPlay"></button><span class="rp-speed" role="group" aria-label="播放速度">${RP_SPEEDS.map(s => `<button type="button" data-speed="${s}">${s}x</button>`).join("")}</span><button type="button" id="rpPrev" title="前一則(←)">◀ 前一則</button><button type="button" id="rpNext" title="後一則(→)">後一則 ▶</button><button type="button" id="rpLock" title="成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價(與線上鎖漲停訊號同條件)">${lockTxt}</button></div>
-+      <div class="rp-ctrl" role="toolbar" aria-label="播放控制"><button type="button" id="rpPlay"></button><span class="rp-speed" role="group" aria-label="播放速度">${RP_SPEEDS.map(s => `<button type="button" data-speed="${s}">${s}x</button>`).join("")}</span><button type="button" id="rpPrev" title="前一則(←)">◀ 前一則</button><button type="button" id="rpNext" title="後一則(→)">後一則 ▶</button><button type="button" id="rpLock" title="成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價(與線上鎖漲停訊號同條件)">${lockTxt}</button><button type="button" id="rpFPrev" title="上一筆你自己的成交(回報收到時刻)">◀ 上一筆我的成交</button><button type="button" id="rpFNext" title="下一筆你自己的成交(回報收到時刻)">下一筆我的成交 ▶</button></div>
++      <div class="rp-ctrl" role="toolbar" aria-label="播放控制"><button type="button" id="rpPlay"></button><span class="rp-speed" role="group" aria-label="播放速度">${RP_SPEEDS.map(s => `<button type="button" data-speed="${s}">${s}x</button>`).join("")}</span><button type="button" id="rpPrev" title="前一則(←)">◀ 前一則</button><button type="button" id="rpNext" title="後一則(→)">後一則 ▶</button><button type="button" id="rpLock" title="成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價(與線上鎖漲停訊號同條件)">${lockTxt}</button><button type="button" id="rpFPrev" title="上一筆你自己的成交(回報收到時刻;關掉「你的委託 / 成交」時停用)">◀ 上一筆我的成交</button><button type="button" id="rpFNext" title="下一筆你自己的成交(回報收到時刻;關掉「你的委託 / 成交」時停用)">下一筆我的成交 ▶</button></div>
        <div class="rp-scrub"><span class="mono kbd">${fmtMs(t0).slice(0,8)}</span><input type="range" id="rpRange" min="${t0}" max="${t1}" step="1" value="${t}" aria-label="重播時刻(server 收到時刻)"><span class="mono kbd">${fmtMs(t1).slice(0,8)}</span></div>
        <div class="rp-body"><div class="rp-ladder" id="rpLadder" role="table" aria-label="價格階梯"></div><section class="rp-col rp-col-chg" aria-label="這一則變了什麼"><h3 class="rp-col-h">這一則變了什麼<span class="kbd">最近 ${RP_CHG_KEEP} 則,新的在上</span></h3><div class="rp-chg" id="rpChg"></div></section><section class="rp-col rp-col-tape" aria-label="成交明細"><h3 class="rp-col-h">成交明細<span class="kbd">到這一則為止最近 ${RP_TAPE_KEEP} 筆,新的在上</span></h3><div class="rp-tape"><table><thead><tr><th>時間</th><th class="num">價</th><th class="num">張</th><th>內外</th><th>吃檔</th></tr></thead><tbody id="rpTape"></tbody></table></div></section></div>
 -      <p class="rp-note">拖曳 = server 收到時刻;播放速度也以收到時刻計(1x = 真實時間);前一則 / 後一則(← →)照則號一則一則走,同一毫秒收到的幾則也分得開。標籤 = 最近一筆成交的達錢時刻之後第幾則。橫條按這檔當天 13:25 前最大單格量 ${R.qmax.toLocaleString()} 張歸一(之後的收盤集合競價 / 排隊量超過就畫滿)。</p>`;
@@ -79,28 +80,31 @@
      $("rpFull").addEventListener("click", ()=>{ RP.full = rpKeepFull = !RP.full; rpDraw(true); });
      rpDraw(true);
    }
-@@ -765,6 +781,12 @@
+@@ -765,6 +782,15 @@
      const R = RP.R; RP.i = Math.max(0, Math.min(R.n-1, i)); RP.t = rpKeepT = R.recv[RP.i]; rpKeepI.set(R.key, RP.i); RP.el.range.value = RP.t;
      rpDraw();
    }
-+  function rpGoFill(dir){ // 跳到上一筆 / 下一筆我自己的成交(則號 = 收到時刻 ≤ 該成交回報時刻的最後一則)
-+    if(!RP) return; const xs = RP.my.idx, i = RP.i;
-+    let to = null;
-+    if(dir < 0){ for(const k of xs){ if(k >= i) break; to = k; } } else to = xs.find(k => k > i);
-+    if(to != null) rpGo(to);
++  // 上一筆 / 下一筆我自己的成交(則號 = 收到時刻 ≤ 該成交回報時刻的最後一則);null = 這個方向沒有了。
++  // 按鈕停用與跳轉讀同一個答案,不會出現「按得下去卻跳不動」。關掉「你的委託 / 成交」= 隱藏,連導航一起停。
++  function rpFillNear(dir){
++    if(!RP || !state.show.fills) return null;
++    const xs = RP.my.idx, i = RP.i;
++    if(dir > 0) return xs.find(k => k > i) ?? null;
++    let to = null; for(const k of xs){ if(k >= i) break; to = k; } return to;
 +  }
++  function rpGoFill(dir){ const to = rpFillNear(dir); if(to != null) rpGo(to); }
    function rpStop(){ if(RP && RP.play){ cancelAnimationFrame(RP.play.raf); RP.play = null; } } // 只停,不碰畫面(卸載前用)
    function rpPlay(on){
      if(!RP || on === !!RP.play) return;
-@@ -787,6 +809,7 @@
+@@ -787,6 +813,7 @@
      const txt = RP.play ? "❚❚ 暫停" : "▶ 播放"; if(el.play.textContent !== txt) el.play.textContent = txt;
      el.play.setAttribute("aria-pressed", String(!!RP.play)); el.play.disabled = !RP.play && last;
      el.prev.disabled = i <= 0; el.next.disabled = last; el.lock.disabled = RP.firstLock < 0;
-+    el.fprev.disabled = !RP.my.idx.some(k => k < i); el.fnext.disabled = !RP.my.idx.some(k => k > i);
++    el.fprev.disabled = rpFillNear(-1) == null; el.fnext.disabled = rpFillNear(1) == null;
      el.speed.forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === RP.speed)));
    }
    function rpKey(e){ // 重播分頁開著時 ← → = 逐則步進(不換日;換日用上方 ◀ ▶)
-@@ -822,11 +845,31 @@
+@@ -822,11 +849,34 @@
      let from = 0, to = grid.length;
      if(!RP.full){ from = Math.max(0, Math.min(grid.length - (2*RP_HALF+1), RP.center - RP_HALF)); to = Math.min(grid.length, from + 2*RP_HALF + 1); }
      const qmax = Math.max(1, R.qmax);
@@ -110,18 +114,21 @@
 +    const meBuy = new Map(), meSell = new Map();
 +    if(state.show.fills){
 +      const now = R.recv[i];
-+      const at = (side, px) => { const m = side > 0 ? meBuy : meSell; let v = m.get(px); if(!v){ v = {oq:0, on:0, unk:0, fq:0, fn:0, tip:[]}; m.set(px, v); } return v; };
++      const bucket = (side, px) => { const m = side > 0 ? meBuy : meSell; let v = m.get(px); if(!v){ v = {oq:0, on:0, unk:0, fq:0, fn:0, tip:[]}; m.set(px, v); } return v; };
++      const endTxt = o => o.t1 != null ? o.kind + " " + fmtT(o.t1/1000)
++        : o.kind === "未知" ? "當日成交資料還沒補,不知道它何時消失"
++        : "沒配到成交也沒刪單(可能掛到收盤,也可能當日成交清單漏了這筆)";
 +      RP.my.ord.forEach(o => { if(o.t0 > now || (o.t1 != null && o.t1 <= now)) return;
-+        const v = at(o.side, o.px); v.oq += o.qty; v.on++; if(o.kind === "未知") v.unk++;
-+        v.tip.push(`委託 ${fmtT(o.t0/1000)} ${o.side > 0 ? "買" : "賣"} ${rpPx(o.px)} × ${o.qty} 張 → ${o.t1 == null ? (o.kind === "未知" ? "當日成交資料還沒補,不知道它何時消失" : "到收盤沒成交也沒刪單") : o.kind + " " + fmtT(o.t1/1000)}`); });
++        const v = bucket(o.side, o.px); v.oq += o.qty; v.on++; if(o.kind === "未知") v.unk++;
++        v.tip.push(`委託 ${fmtT(o.t0/1000)} ${o.side > 0 ? "買" : "賣"} ${rpPx(o.px)} × ${o.qty} 張(委託序號 ${o.seq}) → ${endTxt(o)}`); });
 +      RP.my.fill.forEach(f => { if(f.t > now) return;
-+        const v = at(f.side, f.px); v.fq += f.qty; v.fn++;
++        const v = bucket(f.side, f.px); v.fq += f.qty; v.fn++;
 +        v.tip.push(`成交 ${fmtT(f.t/1000)} ${f.label} ${rpPx(f.px)} × ${f.qty} 張(回報收到時刻)`); });
 +    }
 +    const meTag = (p, side) => { const v = (side === "buy" ? meBuy : meSell).get(p); if(!v) return "";
 +      const tip = ` title="${esc(v.tip.join("\n"))}"`;
 +      return (v.on ? `<span class="rp-me ord${v.unk ? " unk" : ""}"${tip}>委${v.unk ? "?" : ""} ${v.oq}</span>` : "") + (v.fn ? `<span class="rp-me fill ${side}"${tip}>成 ${v.fq}</span>` : ""); };
-+    const cell = (q, side, p) => { const tag = meTag(p, side);
++    const cell = (q, side, tag) => {
 +      if(q == null) return `<div class="rp-q ${side}" role="cell">${tag}</div>`;
 +      const bar = `<span class="rp-bar" style="width:${Math.min(100, q/qmax*100).toFixed(1)}%"></span>`, num = `<span class="rp-n mono">${q.toLocaleString()}</span>`;
 +      return `<div class="rp-q ${side}" role="cell">${bar}${side === "buy" ? tag + num : num + tag}</div>`; };
@@ -129,8 +136,8 @@
      for(let g=from; g<to; g++){ const p = grid[g];
        const pcls = pc ? cls(p/1000 - pc) : "";
 -      h += `<div class="rp-row${p===px?" cur":""}${p===G.limUp||p===G.limDn?" lim":""}" role="row" data-p="${p}">${cell(buy.get(p), "buy")}<div class="rp-p mono ${pcls}" role="cell"${p===G.limUp?' title="漲停"':p===G.limDn?' title="跌停"':""}>${rpPx(p)}</div>${cell(sell.get(p), "sell")}</div>`; }
-+      const me = meBuy.has(p) || meSell.has(p);
-+      h += `<div class="rp-row${p===px?" cur":""}${p===G.limUp||p===G.limDn?" lim":""}${me?" me":""}" role="row" data-p="${p}">${cell(buy.get(p), "buy", p)}<div class="rp-p mono ${pcls}" role="cell"${p===G.limUp?' title="漲停"':p===G.limDn?' title="跌停"':""}>${rpPx(p)}</div>${cell(sell.get(p), "sell", p)}</div>`; }
++      const tb = meTag(p, "buy"), ts = meTag(p, "sell");
++      h += `<div class="rp-row${p===px?" cur":""}${p===G.limUp||p===G.limDn?" lim":""}${tb||ts?" me":""}" role="row" data-p="${p}">${cell(buy.get(p), "buy", tb)}<div class="rp-p mono ${pcls}" role="cell"${p===G.limUp?' title="漲停"':p===G.limDn?' title="跌停"':""}>${rpPx(p)}</div>${cell(sell.get(p), "sell", ts)}</div>`; }
      const lad = $("rpLadder"); lad.classList.toggle("full", RP.full); lad.innerHTML = h;
      if(RP.full && scroll){ const row = lad.querySelector(`[data-p="${grid[RP.center]}"]`); if(row) lad.scrollTop = Math.max(0, row.offsetTop - lad.clientHeight/2); }
      rpCross(i, px);

@@ -73,14 +73,15 @@ for code, date, at, why in CASES:
         if t0 > now or (t1 is not None and t1 <= now):
             continue
         k = f"{'buy' if o[4] > 0 else 'sell'}@{round(o[2] * 1000)}"
-        v = me.setdefault(k, {"ord": 0, "unk": 0, "fill": 0})
+        v = me.setdefault(k, {"ord": 0, "unk": 0, "fill": 0, "seq": []})
         v["ord"] += o[3]
         v["unk"] += 1 if o[5] == "未知" else 0
+        v["seq"].append(o[7])
     for f in D["f"]:
         if round(f[0] * 1000) > now:
             continue
         k = f"{'buy' if f[3] > 0 else 'sell'}@{round(f[1] * 1000)}"
-        me.setdefault(k, {"ord": 0, "unk": 0, "fill": 0})["fill"] += f[2]
+        me.setdefault(k, {"ord": 0, "unk": 0, "fill": 0, "seq": []})["fill"] += f[2]
     fill_idx = sorted({(0 if round(f[0] * 1000) < recv[0] else max(k for k in range(len(recv)) if recv[k] <= round(f[0] * 1000))) for f in D["f"]})
     out.append(dict(code=code, date=date, at=at, why=why, i=i, recv=now, fill_idx=fill_idx, fill_recv=[recv[k] for k in fill_idx],
                     buy={fmt_px(p): q for p, q in buy.items()}, sell={fmt_px(p): q for p, q in sell.items()},

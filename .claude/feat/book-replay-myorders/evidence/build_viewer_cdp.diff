@@ -1,5 +1,5 @@
 --- build_viewer_cdp.py.bak-20260918-pre272	2026-09-18 20:10:19.009074700 +0800
-+++ build_viewer_cdp.py	2026-09-18 20:11:16.339957200 +0800
++++ build_viewer_cdp.py	2026-09-18 20:44:32.556399700 +0800
 @@ -1,6 +1,6 @@
  # -*- coding: utf-8 -*-
  """CDP 回看頁產生器:自選產業群組 64 檔 × 7/1–9/9,1 分 K + CDP 五軸 + 事件 + 你的成交 + 線上訊號(含政策)+ 回測交易。
@@ -26,22 +26,24 @@
  extras_in = [c for c in EXTRAS if c in day]
  if extras_in:
      GROUPS = dict(GROUPS, **{EXTRA_GROUP: extras_in})
-@@ -143,6 +143,52 @@
+@@ -143,6 +143,59 @@
  for fl in fills:
      if fl["code"] in day and fl["d"] in day[fl["code"]]:
          day[fl["code"]][fl["d"]]["f"].append([round(tsec(fl["t"]), 1), fl["px"], int(fl["qty"] / 1000) if fl["qty"] >= 1000 else fl["qty"], 1 if "買進" in fl["kind"] else -1, fl["kind"]])
 +# 我的委託(#272):群益審計 jsonl 的 order / cancel。送出時刻只到秒;result 為 null(送出前那一列)、被安全閘擋下
 +# (blocked)、送單失敗(ok=false)都不算掛出去的單。結束時刻:成交 = 上面那份成交清單配對到的那一筆(同日同檔同買賣
 +# 同價、時刻在送單之後、在刪單送出之前,每筆成交只配一次);沒配到成交而有刪單 = 刪單送出時刻;兩者都沒有且當日成交
-+# 已補 = 到收盤沒成交也沒刪單;當日成交還沒補 = 未知(頁面標「?」,不假裝它掛到收盤)。頁面只渲染,不做任何配對。
++# 已補 = 沒配到(頁面寫明可能掛到收盤、也可能成交清單漏了);當日成交還沒補 = 未知(頁面標「?」)。頁面只渲染不配對。
 +AUDIT_DIR = Path(r"C:\side-project\copycat\data\audit")
-+fill_pool = defaultdict(list)  # (日, 代號, 買賣, 價) -> 成交秒(由早到晚);配過的移除,同價多筆各配各的
++# 價用毫元整數當鍵(同 market.py 的理由:兩個來源的小數表示不同時,浮點等值比較會靜默配不到);
++# 成交秒與頁面上「你的成交」同樣先 round(.,1),兩邊才是同一把尺 —— 否則會出現最多 50 ms「委已消失、成還沒出現」的空窗。
++fill_pool = defaultdict(list)  # (日, 代號, 買賣, 毫元價) -> 成交秒(由早到晚);配過的移除,同價多筆各配各的
 +for fl in fills:
-+    fill_pool[(fl["d"], fl["code"], 1 if "買進" in fl["kind"] else -1, round(fl["px"], 4))].append(tsec(fl["t"]))
++    fill_pool[(fl["d"], fl["code"], 1 if "買進" in fl["kind"] else -1, round(fl["px"] * 1000))].append(round(tsec(fl["t"]), 1))
 +for v in fill_pool.values():
 +    v.sort()
 +fill_days = {fl["d"] for fl in fills}
-+orders_n = 0
++orders_n = clamped_n = 0
 +for p in sorted(AUDIT_DIR.glob("capital-*.jsonl")):
 +    d = f"{p.stem[-8:-4]}-{p.stem[-4:-2]}-{p.stem[-2:]}"
 +    if d not in DATES:
@@ -65,23 +67,28 @@
 +            continue
 +        side = 1 if req["buy_sell"] == "buy" else -1
 +        cancel = cancel_at.get(seq)
-+        pool = fill_pool[(d, code, side, round(req["price"], 4))]
++        pool = fill_pool[(d, code, side, round(req["price"] * 1000))]
++        # 審計 ts 是「送單回來之後」才蓋的、又只到秒,所以它系統性地比真正送出去的時刻晚一點;
++        # 配對窗因此自 sec − 1 起算。配到之後把送出時刻收斂成「不晚於成交」(單子不可能晚於它自己的成交才送出) ——
++        # 不收斂就會出現結束早於送出的列(全集 9 筆,差 0.08–0.95 秒),那種列頁面條件恆不成立 = 整天不顯示、零訊號。
 +        hit = next((x for x in pool if x >= sec - 1 and (cancel is None or x < cancel)), None)
 +        if hit is not None:
 +            pool.remove(hit)
 +            end, kind = hit, "成交"
++            if hit < sec:
++                sec, clamped_n = hit, clamped_n + 1
 +        elif cancel is not None:
 +            end, kind = cancel, "刪單"
 +        else:
-+            end, kind = None, ("到收盤" if d in fill_days else "未知")
-+        day[code][d]["mo"].append([sec, end, req["price"], req["qty"], side, kind, req["price_type"]])
++            end, kind = None, ("未配到" if d in fill_days else "未知")
++        day[code][d]["mo"].append([sec, end, req["price"], req["qty"], side, kind, req["price_type"], seq])
 +        orders_n += 1
  # prod signals + 政策
  for p in glob.glob(r"C:\side-project\copycat\data\signals\*.jsonl"):
      for line in open(p, encoding="utf-8"):
-@@ -216,4 +262,4 @@
+@@ -216,4 +269,4 @@
  tpl = (HERE / "viewer_cdp_template.html").read_text(encoding="utf-8")
  out = ROOT / "viewer-cdp.html"
  out.write_text(tpl.replace("__DATA_B64__", b64), encoding="utf-8")
 -print("codes", len(payload["codes"]), "extras", len(extras_in), "code-days", sum(len(v) for v in day.values()), "raw MB", round(len(raw) / 1e6, 2), "gz MB", round(len(gz) / 1e6, 2), "html MB", round(out.stat().st_size / 1e6, 2))
-+print("codes", len(payload["codes"]), "extras", len(extras_in), "code-days", sum(len(v) for v in day.values()), "orders", orders_n, "raw MB", round(len(raw) / 1e6, 2), "gz MB", round(len(gz) / 1e6, 2), "html MB", round(out.stat().st_size / 1e6, 2))
++print("codes", len(payload["codes"]), "extras", len(extras_in), "code-days", sum(len(v) for v in day.values()), "orders", orders_n, "orders-clamped", clamped_n, "raw MB", round(len(raw) / 1e6, 2), "gz MB", round(len(gz) / 1e6, 2), "html MB", round(out.stat().st_size / 1e6, 2))

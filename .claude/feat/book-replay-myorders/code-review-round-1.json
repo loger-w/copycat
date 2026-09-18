@@ -1,0 +1,153 @@
+{
+  "ticket": "#272",
+  "spec": "#265",
+  "fixed_point": "108c6551",
+  "reviewed_commit": "354e8f92",
+  "runner": "code-review-two-axis(兩個 opus sub-agent 平行)",
+  "date": "2026-09-18",
+  "axes": {
+    "standards": {
+      "hard": 1,
+      "judgement": 9,
+      "findings": [
+        {
+          "id": "S-01",
+          "severity": "hard",
+          "title": "新的跨檔契約沒進 CLAUDE.md §4",
+          "detail": "copycat/capital/client.py::_record 的審計 jsonl 多了一個離線讀者,docstring 自承「改鍵名只會少畫不會報錯」= 零錯誤訊號,正是 §4 的成立條件;既有做法見 59a8f9dd(tick 存檔契約補簿重播讀者,同樣是 repo 外讀者)。",
+          "disposition": "接受並修",
+          "fix": "CLAUDE.md §4 末新增一條(產生點 / 離線讀者 / 三個判準 / ts 蓋章時機 / 漂掉的症狀 / 證據腳本);docstring 保留為短版。"
+        },
+        {
+          "id": "S-02",
+          "severity": "judgement",
+          "title": "同一段裡買賣方向有兩種編碼(Primitive Obsession + Repeated Switches)",
+          "detail": "o.side 是 ±1、meTag / cell 是 \"buy\"/\"sell\"。",
+          "disposition": "不修(有理由)",
+          "fix": "兩種編碼都是既有契約:payload 的 ±1 與 D.f / D.s 同源,字串側是既有 cell(q, side) 與 CSS 類名。統一任一邊都要動既有碼與既有 payload 讀者,換來的只是風格一致。記在此,下次若 payload 有別的理由改版再一起收。"
+        },
+        {
+          "id": "S-03",
+          "severity": "judgement",
+          "title": "「有沒有我的標記」算兩次(Duplicated Code)",
+          "detail": "const me = meBuy.has(p) || meSell.has(p) 與 meTag() 內的 .get(p) 是同一件事查兩次。",
+          "disposition": "接受並修",
+          "fix": "改成先算 tb / ts 兩個 tag 字串,整列 class 與兩個格子都用它;cell 的第三參數由價位改成算好的 tag。"
+        },
+        {
+          "id": "S-04",
+          "severity": "judgement",
+          "title": "「有沒有上 / 下一筆成交」兩份實作",
+          "detail": "rpGoFill 用 for...of / find,rpCtrl 用 .some();兩處要永遠同義才不會「按得下去卻跳不動」。",
+          "disposition": "接受並修",
+          "fix": "抽 rpFillNear(dir) 回則號或 null;rpGoFill 與 rpCtrl 的 disabled 都讀它。"
+        },
+        {
+          "id": "S-05",
+          "severity": "judgement",
+          "title": "mkt 名實不符 / price_type 值域沒釘住",
+          "detail": "mkt = mo.length - ord.length,實際是「price_type !== 'limit'」的筆數。",
+          "disposition": "接受(只補值域說明)",
+          "fix": "值域確認 = copycat/capital/models.py::PriceType = Literal[\"limit\", \"market\"],非限價就是市價,名實其實相符。在 rpMy 現場寫上值域來源;維持「限價才畫、其餘計數」的窮盡分法(改成判 === \"market\" 反而會讓未知第三值靜默不見)。"
+        },
+        {
+          "id": "S-06",
+          "severity": "judgement",
+          "title": "at 是 Mysterious Name",
+          "disposition": "接受並修",
+          "fix": "改名 bucket(拿該價位該側的累計桶)。"
+        },
+        {
+          "id": "S-07",
+          "severity": "judgement",
+          "title": "build 腳本用浮點價當配對鍵",
+          "detail": "round(px, 4) 當 dict 鍵;兩個來源小數表示不同就靜默配不到 → 委託畫成「到收盤」,零訊號。",
+          "disposition": "接受並修",
+          "fix": "改 round(px * 1000) 毫元整數鍵(同 market.py 的理由),現場寫上 why。"
+        },
+        {
+          "id": "S-08",
+          "severity": "judgement",
+          "title": "sec - 1 的魔數沒在現場說明 why",
+          "disposition": "接受並修",
+          "fix": "補三行註解:審計 ts 是送單呼叫回來之後才蓋的章、系統性偏晚,所以配對窗自 sec − 1 起算(與 C1 的收斂同一段)。"
+        },
+        {
+          "id": "S-09",
+          "severity": "judgement",
+          "title": "JS 做 Python 做得掉的單位換算",
+          "detail": "rpMy 把秒 → 毫秒、元 → 毫元。",
+          "disposition": "不修(有理由)",
+          "fix": "mo 刻意與同層的 f / s / e 同單位(秒 + 元);讓 mo 單獨用毫秒毫元只是把一種不一致換成另一種,而換算是兩個 Math.round、沒有判斷。註解已聲明。"
+        },
+        {
+          "id": "S-10",
+          "severity": "judgement",
+          "title": "day[c][d] = dict(...) 兩處長字面重複",
+          "disposition": "不修(既有債,本批沒惡化)",
+          "fix": "記在此。"
+        }
+      ]
+    },
+    "spec": {
+      "missing": 2,
+      "scope_creep": 2,
+      "wrong": 4,
+      "findings": [
+        {
+          "id": "A1",
+          "title": "驗收素材本身對不起來(spec 前提為假)",
+          "detail": "#265 Further Notes 的「09:03:32 掛買 181.0 一張 … 09:04:42 該價位有 100 張 … 四件事在同一畫面上對得起來」:該單 09:03:33.238 就成交,「委 1」只活 1.2 秒 / 79 則;09:04:42 該格已是「成 1」。委託與「100 張」永遠不同框。",
+          "disposition": "不是實作漏 —— 交 user 判斷",
+          "fix": "四件事在同一個重播畫面上「走得到」(拖曳 / 步進),但不同框。已寫進 verification 與 #272 留言,判準是否改寫由 user 決定。"
+        },
+        {
+          "id": "A2",
+          "title": "mo 不帶委託序號,同價多筆聚合成一顆「委 n」分不開",
+          "detail": "#265「帶價格 / 張數 / 買賣別 / 委託序號」;9/18 6179 11:58:51 同一秒同一價兩筆,tooltip 兩行一模一樣。",
+          "disposition": "接受並修",
+          "fix": "mo 第 8 欄加 seq_no,tooltip 每行印「(委託序號 …)」。"
+        },
+        {
+          "id": "B1",
+          "title": "7/1–9/15 共 278 筆 mo 進了 payload(舊日子沒有重播)",
+          "disposition": "不修(有理由)",
+          "fix": "rpMy 只在 rpMount 呼叫、舊日沒有外掛檔 → 不會顯示,回歸測試 8 組(含 3008 07-15、2455 08-13)DOM 逐字相同。要過濾就得讓 build 腳本去猜 viewer-cdp-book/ 的資料夾佈局,耦合更差;287 列 payload 增量在四捨五入以下(8.37 → 8.38 MB)。"
+        },
+        {
+          "id": "B2",
+          "title": "市價單不畫 + 說明列印筆數是新增決策",
+          "disposition": "不修(有理由)",
+          "fix": "市價單不停在任何價位,畫在某一格就是編數字(US34 的同一條理由)。不畫又不說會變成靜默少畫,所以說明列印筆數。已寫進「定義與規則」。"
+        },
+        {
+          "id": "C1",
+          "title": "成交回報早於審計 ts 的列,委託整天不顯示",
+          "detail": "審計 ts 在「收到 result 之後」蓋章且只到秒,全集 9 筆 end < start(差 0.08–0.95 秒);o.t1 <= now 恆先成立 → 該委託永不顯示,tooltip 還會印「委託 09:19:28 → 成交 09:19:27」。9/16–18 沒命中,但每天沿用同一條鏈。",
+          "disposition": "接受並修(本輪最實的一條)",
+          "fix": "配到成交後把送出時刻收斂成 min(ts, 成交)(單子不可能晚於自己的成交才送出),並計數印出 orders-clamped;不變式腳本釘住「結束不得早於送出」。實跑 clamped = 9,與 review 指出的 9 筆一致。"
+        },
+        {
+          "id": "C2",
+          "title": "委託結束與成交顯示用兩把時間尺",
+          "detail": "f 是 round(tsec, 1)、mo 的 end 是未捨入秒 → 最多 ±50 ms 的「委已消失、成還沒出現」空窗或兩者並存。",
+          "disposition": "接受並修",
+          "fix": "fill_pool 存 round(tsec, 1),與 f 逐字同值;不變式腳本釘住「成交列的結束時刻 = 成交清單裡同價同買賣的某一筆」。"
+        },
+        {
+          "id": "C3",
+          "title": "「到收盤」是沒根據的斷言",
+          "detail": "fill_days 只看「當天任一檔有成交」;來源不完整的日子會產生有把握的假陳述(全集 79 筆)。",
+          "disposition": "接受並修",
+          "fix": "種類改名 未配到,頁面寫「沒配到成交也沒刪單(可能掛到收盤,也可能當日成交清單漏了這筆)」,不再斷言。"
+        },
+        {
+          "id": "C4",
+          "title": "開關關掉後兩顆跳成交按鈕仍可導航,與 US33「隱藏」不一致",
+          "disposition": "接受並修",
+          "fix": "rpFillNear 在 state.show.fills 為 false 時回 null → 兩顆按鈕停用,title 說明要先打開。"
+        }
+      ]
+    }
+  }
+}

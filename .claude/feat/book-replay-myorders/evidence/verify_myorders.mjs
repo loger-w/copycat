@@ -53,7 +53,8 @@ try {
       const wantFill = want.fill ? `成 ${want.fill}` : null;
       eq(`${c.code} ${c.at} ${key} 委託標記`, ord ? ord.text : null, wantOrd);
       eq(`${c.code} ${c.at} ${key} 成交標記`, fl ? fl.text : null, wantFill);
-      if (wantOrd && ord && !ord.title.includes('委託 ')) fail(`${c.code} ${c.at} ${key} 委託 tooltip`, ord.title, '含「委託 」');
+      if (wantOrd && ord) { eq(`${c.code} ${c.at} ${key} 委託 tooltip 行數`, ord.title.split(String.fromCharCode(10)).length, want.seq.length);
+        for (const sq of want.seq) eq(`${c.code} ${c.at} ${key} 委託 tooltip 帶委託序號 ${sq}`, ord.title.includes(`(委託序號 ${sq})`), true); }
       if (wantFill && fl && !fl.title.includes('成交 ')) fail(`${c.code} ${c.at} ${key} 成交 tooltip`, fl.title, '含「成交 」');
       if (wantOrd && ord) eq(`${c.code} ${c.at} ${key} 虛線(未知)`, ord.unk, want.unk > 0);
       eq(`${c.code} ${c.at} ${key} 整列外框`, r.me, true);
@@ -143,6 +144,18 @@ try {
   const after = await page.evaluate(() => document.getElementById('rpPlay').getAttribute('aria-pressed'));
   if (playing !== 'true' || after !== 'false') fail('播放中跳成交要先暫停', { playing, after }, { playing: 'true', after: 'false' });
   else pass('播放中按「下一筆我的成交」會先暫停');
+
+  // 8. 關掉「你的委託 / 成交」→ 兩顆跳成交按鈕也停用(隱藏 = 連導航一起停)
+  await openReplay(page, '3441', '2026-09-16');
+  await drag(page, 0);
+  const onState = await page.evaluate(() => ({ p: document.getElementById('rpFPrev').disabled, n: document.getElementById('rpFNext').disabled }));
+  await page.evaluate(() => [...document.querySelectorAll('#legend .chip')].find(b => b.textContent.includes('你的委託 / 成交')).click());
+  const offState = await page.evaluate(() => ({ p: document.getElementById('rpFPrev').disabled, n: document.getElementById('rpFNext').disabled }));
+  await page.evaluate(() => [...document.querySelectorAll('#legend .chip')].find(b => b.textContent.includes('你的委託 / 成交')).click());
+  const backState = await page.evaluate(() => ({ p: document.getElementById('rpFPrev').disabled, n: document.getElementById('rpFNext').disabled }));
+  eq('開關開著時「下一筆我的成交」可按', onState, { p: true, n: false });
+  eq('開關關掉時兩顆跳成交按鈕停用', offState, { p: true, n: true });
+  eq('開關開回來後恢復', backState, { p: true, n: false });
 } finally {
   await browser.close();
 }
