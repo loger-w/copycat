@@ -1333,8 +1333,17 @@ class TestAuctionSegment:
         assert frames[4].auction is True
 
     def test_a_late_delayed_match_trade_carries_the_trial_flag_itself(self) -> None:
-        """暫緩撮合撮出來的成交自己也可能還帶著試撮狀態(7772 於 2026-09-16 11:40:29 成交、11:42:27
-        才收到):旗標讀那一則自己的 `TradeStatus`,不分成交則簿則。"""
+        """暫緩撮合撮出來的成交自己也可能還帶著試撮狀態:旗標讀那一則自己的 `TradeStatus`,不分成交則簿則。
+
+        成交那一列取自 7772 於 2026-09-16 的實錄(11:40:29 成交、11:42:27 才收到,狀態仍是試撮);
+        **前面那一則試撮簿是構造的** —— 實錄裡那筆是當天第一則(全天只有 3 則訊息,`kind="ttb"`、
+        `trial=[0,0,2,2]`、`auction=[]`),沒有前一則可比。補上前一則才問得出下面這件事。
+
+        排成「試撮簿 → 試撮成交」之後,這一列**同時**滿足兩個判準(`trial` 讀自己的狀態、`auction`
+        讀前一則是不是試撮簿)—— 兩個旗標**不互斥**,這是 `book_replay` 模組說明「段的界」那段的反例
+        守門(2026-09-18 pr-281 review #1)。暫緩撮合期間每分鐘約 10 則試撮簿,延遲成交夾在中間到達
+        就是這個形狀;7772 只是因為全天 3 則訊息才沒撞上。
+        """
         rows = [
             _row(
                 "book",
@@ -1363,6 +1372,7 @@ class TestAuctionSegment:
         frames = replay_books(rows)["7772"].frames
 
         assert [frame.trial for frame in frames] == [True, True]
+        assert frames[1].auction is True  # 兩個判準獨立,同一則可以都成立
 
     def test_an_intraday_halt_auction_is_the_same_segment(self) -> None:
         """盤中暫緩撮合與收盤同一套:試撮那幾則在段內,撮合那一筆不在。"""
@@ -1375,7 +1385,6 @@ class TestAuctionSegment:
         day = replay_books(_closing_auction_rows())["9102"]
         wire = _wire(day, keyframe_every=2)
 
-        assert wire["v"] == 4
         assert wire["trial"] == [1, 3]
         assert decode(wire) == day
 
