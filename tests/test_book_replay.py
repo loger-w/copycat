@@ -81,6 +81,7 @@ def _row(
     price: int = 100_000,
     qty: int = 1,
     side: str = "outer",
+    status: str | None = "0",
 ) -> TickRow:
     fields: dict[str, Any] = {
         "kind": kind,
@@ -89,7 +90,7 @@ def _row(
         "msg_seq": msg_seq,
         "recv_ns": _ns(recv),
         "precise_time": "10003000000",
-        "trade_status": "0",
+        "trade_status": status,
         **_side_fields("bid", bid or []),
         **_side_fields("ask", ask or []),
     }
@@ -984,6 +985,233 @@ class TestClearedBook:
             decode(wire)
 
 
+def _halt_auction_rows() -> list[TickRow]:
+    """暫緩撮合形狀(2305 於 2026-09-16 09:12 實錄縮寫):試撮五檔(達錢 `TradeStatus=1`,每 5 秒一份)
+    → 撮合那一筆 772 張(五檔上只看得到 23 張)→ 撮後的下一筆成交與簿則。"""
+    trial_bid = [(49_200, 7), (49_150, 3), (49_100, 23)]
+    trial_ask = [(49_250, 161), (49_300, 481)]
+    after_bid = [(49_050, 40), (49_000, 12)]
+    return [
+        _row("book", "9101", 1, recv="09:12:16.920", bid=trial_bid, ask=trial_ask, status="1"),
+        _row(
+            "trade",
+            "9101",
+            2,
+            recv="09:12:21.572",
+            time="09:12:21.000",
+            price=49_100,
+            qty=772,
+            side="inner",
+            bid=after_bid,
+            ask=[(49_100, 72), (49_150, 37), (49_250, 228)],
+        ),
+        _row(
+            "trade",
+            "9101",
+            3,
+            recv="09:12:21.587",
+            time="09:12:21.000",
+            price=49_100,
+            qty=16,
+            side="outer",
+            bid=after_bid,
+            ask=[(49_100, 56), (49_150, 37), (49_250, 228)],
+        ),
+        _row(
+            "book",
+            "9101",
+            4,
+            recv="09:12:21.600",
+            bid=after_bid,
+            ask=[(49_100, 50), (49_150, 37), (49_250, 228)],
+        ),
+    ]
+
+
+class TestAuctionMatch:
+    """集合競價撮出來的那一筆(開盤 / 暫緩撮合結束 / 收盤 / 處置股分盤撮合):試撮期間達錢揭示的五檔
+    是「撮完剩下的」,撮掉的單子從來沒顯示過 —— 這一筆的減量永遠比不到,不留著扣後面的量,吃檔留空
+    (user 2026-09-18 拍板)。撮合那一則也不拆變動(跟試撮五檔比不出意義),撮後的五檔當新基準。"""
+
+    def test_the_auction_message_is_not_broken_down_and_claims_no_later_decrease(self) -> None:
+        """撮合那一則:不拆、吃檔空;之後同價位的減量各自歸位,沒成交的算撤單。"""
+        frames = replay_books(_halt_auction_rows())["9101"].frames
+
+        assert frames[1].auction is True
+        assert frames[1].changes == ()
+        assert frames[1].eaten == ()
+        assert frames[2].eaten == (Eaten("ask", level=1, qty=16),)
+        assert frames[2].changes == (
+            LevelChange("ask", 49_100, before=72, after=56, traded=16),
+        )
+        assert frames[3].changes == (
+            LevelChange("ask", 49_100, before=56, after=50, traded=0),
+        )
+        assert [frame.auction for frame in frames] == [False, True, False, False]
+
+    def test_the_first_message_of_the_day_being_a_trade_claims_no_later_decrease(self) -> None:
+        """開盤集合競價那筆常常是當天第一則(五檔已是成交後,沒有前一份可比):5314 於 2026-09-17
+        09:00:12 鎖跌停開盤 11,090 張,之後兩則同價位減量其實是撤單(下一筆成交在第 20 則)。"""
+        rows = [
+            _row(
+                "trade",
+                "5314",
+                1,
+                recv="09:00:12.632",
+                time="09:00:12.000",
+                price=27_750,
+                qty=11_090,
+                side="outer",
+                bid=[],
+                ask=[(27_750, 22_536), (27_800, 350)],
+            ),
+            _row(
+                "book", "5314", 2, recv="09:00:12.659", bid=[], ask=[(27_750, 22_426), (27_800, 350)]
+            ),
+            _row(
+                "book", "5314", 3, recv="09:00:12.664", bid=[], ask=[(27_750, 22_406), (27_800, 350)]
+            ),
+        ]
+
+        frames = replay_books(rows)["5314"].frames
+
+        assert frames[0].eaten == ()
+        assert frames[0].auction is False  # 當日第一份五檔(沒有前一份可比),不是集合競價標記
+        assert frames[1].changes == (
+            LevelChange("ask", 27_750, before=22_536, after=22_426, traded=0),
+        )
+        assert frames[2].changes == (
+            LevelChange("ask", 27_750, before=22_426, after=22_406, traded=0),
+        )
+
+    def test_a_future_stamped_trade_brings_a_stale_book_that_is_not_the_first_of_the_day(
+        self,
+    ) -> None:
+        """1815 每天開機(07:31)收到前一日 14:30 的盤後成交,附的是前一天的五檔:不當當日第一份
+        (否則 09:00 開盤那則跟它比,拆出幾千張假撤單),它自己的成交也不留著扣。"""
+        yesterday = [(114_000, 1_967), (113_500, 500)]
+        opening = [(114_000, 172), (113_500, 480)]
+        rows = [
+            _row(
+                "trade",
+                "1815",
+                1,
+                recv="07:31:22.730",
+                time="14:30:00.000",
+                price=114_500,
+                qty=67,
+                side="inner",
+                bid=yesterday,
+                ask=[(115_500, 68)],
+            ),
+            _row(
+                "trade",
+                "1815",
+                2,
+                recv="09:00:03.872",
+                time="09:00:03.000",
+                price=115_500,
+                qty=426,
+                side="outer",
+                bid=opening,
+                ask=[(115_500, 68), (117_500, 27)],
+            ),
+            _row(
+                "book",
+                "1815",
+                3,
+                recv="09:00:03.904",
+                bid=opening,
+                ask=[(115_500, 60), (117_500, 27)],
+            ),
+        ]
+
+        frames = replay_books(rows)["1815"].frames
+
+        assert (frames[0].changes, frames[0].eaten) == ((), ())
+        assert (frames[1].changes, frames[1].eaten) == ((), ())  # 當日第一份五檔在這一則才成立
+        assert frames[2].changes == (
+            LevelChange("ask", 115_500, before=68, after=60, traded=0),
+        )
+
+    def test_two_trades_waiting_at_one_price_credit_the_older_one_first(self) -> None:
+        """同價位兩筆待扣、減量不夠分時扣舊的那筆(#279 審查 F-09:這個順序原本沒有測試;
+        user 2026-09-18 拍板維持由舊到新)。"""
+        rows = [
+            _row("book", "9201", 1, recv="10:00:00.000", bid=[(99_000, 1)], ask=[(100_000, 25)]),
+            _row(
+                "trade",
+                "9201",
+                2,
+                recv="10:00:00.100",
+                time="10:00:00.000",
+                price=100_000,
+                qty=5,
+                side="outer",
+                bid=[(99_000, 1)],
+                ask=[(100_000, 25)],
+            ),
+            _row(
+                "trade",
+                "9201",
+                3,
+                recv="10:00:00.200",
+                time="10:00:00.000",
+                price=100_000,
+                qty=3,
+                side="outer",
+                bid=[(99_000, 1)],
+                ask=[(100_000, 22)],
+            ),
+        ]
+
+        frames = replay_books(rows)["9201"].frames
+
+        assert frames[1].eaten == (Eaten("ask", level=1, qty=3),)
+        assert frames[2].eaten == ()
+
+    def test_one_trade_eating_the_same_level_in_two_goes_reports_one_item(self) -> None:
+        """同一格分幾則扣到合成一項 —— 中間夾著別格也要合(#279 審查 F-04)。"""
+        bid = [(90_000, 3)]
+        rows = [
+            _row("book", "9202", 1, recv="10:00:00.000", bid=bid, ask=[(0, 500), (90_100, 20)]),
+            _row(
+                "trade",
+                "9202",
+                2,
+                recv="10:00:00.100",
+                time="10:00:00.000",
+                price=90_100,
+                qty=10,
+                side="outer",
+                bid=bid,
+                ask=[(0, 500), (90_100, 20)],
+            ),
+            _row("book", "9202", 3, recv="10:00:00.200", bid=bid, ask=[(0, 500), (90_100, 16)]),
+            _row("book", "9202", 4, recv="10:00:00.300", bid=bid, ask=[(0, 497), (90_100, 16)]),
+            _row("book", "9202", 5, recv="10:00:00.400", bid=bid, ask=[(0, 497), (90_100, 13)]),
+        ]
+
+        frames = replay_books(rows)["9202"].frames
+
+        assert frames[1].eaten == (Eaten("ask", level=1, qty=7), Eaten("ask", level=0, qty=3))
+
+    def test_the_plugin_file_marks_the_auction_message_and_refuses_a_list_that_disagrees(
+        self,
+    ) -> None:
+        """外掛檔 v3:`auction` 只列集合競價撮合那些成交則(遞增);回看頁靠它印「集合競價撮合」。"""
+        day = replay_books(_halt_auction_rows())["9101"]
+        wire = _wire(day, keyframe_every=2)
+
+        assert wire["v"] == 3
+        assert wire["auction"] == [1]
+        assert decode(wire) == day
+
+        wire["auction"] = [0]  # 第 0 則是簿則,不可能是集合競價撮合
+        with pytest.raises(PluginFormatError, match="集合競價"):
+            decode(wire)
+
+
 class TestEaten:
     """#269 成交明細的吃檔欄:這筆成交吃到成交前那一則五檔的第幾檔、幾張(例「吃 賣1 −12」)。"""
 
@@ -1331,15 +1559,17 @@ class TestPluginEncoding:
 
         assert decode(wire) == day
 
-    def test_payload_layout_matches_the_documented_v2_literal(self) -> None:
-        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v2」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
-        只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg` 與 `eat`。"""
+    def test_payload_layout_matches_the_documented_v3_literal(self) -> None:
+        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v3」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
+        只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg` 與 `eat`;
+        v2 → v3(#279 審查收修)加 `auction` 與 `stale`。第 0 則(開機收到的前一日成交)附的是前一日的簿 →
+        列在 `stale`、不當當日第一份五檔,所以第 1 則才是第一份(變動為空)。"""
         day = replay_books(_golden_rows())["1815"]
 
         payload = encode(day, keyframe_every=2)
 
         assert payload == {
-            "v": 2,
+            "v": 3,
             "code": "1815",
             "date": "2026-09-16",
             "n": 4,
@@ -1354,6 +1584,9 @@ class TestPluginEncoding:
             "kind": "tbtt",
             # 時刻異常、不當時鐘點的成交則號;其餘成交則都是時鐘點,標籤時刻讀 trade 裡那筆的第一格
             "anomalous": [0, 3],
+            "auction": [],  # 集合競價撮合(前一則是試撮五檔)的成交則號;這四則都不是
+            "stale": [0],  # 附舊簿(時刻在未來的異常成交)的成交則號 ⊆ anomalous:不比、也不當基準
+
             "recv": [27_082_730, 5_317_370, 3_772, 128],
             "trade": [
                 *(52_200_000, 114_500, 2, "inner"),  # 前一日 14:30 的盤後成交,07:31 開機收到
@@ -1374,11 +1607,8 @@ class TestPluginEncoding:
             # 每則的變動;價位變動 [種類碼(買 0 / 賣 1), 價, 前量, 後量, 掛入, 成交, 撤單];
             # 同側市價佇列在前、再由最優價往外
             "chg": [
-                [],
-                [0, 115_000, 0, 205, 205, 0, 0]
-                + [0, 114_500, 282, 0, 0, 0, 282]
-                + [1, 115_000, 40, 0, 0, 0, 40]
-                + [1, 115_500, 0, 12, 12, 0, 0],
+                [],  # 開機收到的前一日成交:附的是舊簿,不比
+                [],  # 當日第一份五檔(前一則附舊簿,不當基準)
                 [0, 0, 0, 1_300, 1_300, 0, 0]
                 + [0, 115_500, 0, 800, 800, 0, 0]
                 + [0, 115_000, 205, 0, 0, 0, 205]
@@ -1610,8 +1840,8 @@ class TestPluginEncoding:
             (lambda w: w.update(anomalous=[0, 1, 3]), "時刻異常成交則號"),  # 第 1 則是簿則
             # 漏列第 3 則:09:00:02 變時鐘點,標籤時刻從 09:00:03 倒退
             (lambda w: w.update(anomalous=[0]), "早於標籤時刻"),
-            # 漏列第 0 則:前一日 14:30 變時鐘點,第 2 則的 09:00:03 倒退
-            (lambda w: w.update(anomalous=[3]), "早於標籤時刻"),
+            # 漏列第 0 則:前一日 14:30 變時鐘點 —— v3 起「附舊簿的則號 ⊆ 時刻異常」在檔頭就擋下
+            (lambda w: w.update(anomalous=[3]), "不在時刻異常清單裡"),
             (lambda w: w["trade"].__setitem__(4, None), "沒有達錢時刻"),  # 第 2 則的時刻
         ],
         ids=[
@@ -1702,6 +1932,47 @@ class TestPluginEncoding:
         self, tamper: Callable[[dict[str, Any]], object], message: str
     ) -> None:
         """回看頁把變動清單與階梯並排顯示:清單與前後兩則五檔對不上 = 同一刻講兩件事,不得放行。"""
+        wire = _wire(replay_books(_sweep_2489_rows())["2489"], keyframe_every=4)
+        tamper(wire)
+
+        with pytest.raises(PluginFormatError, match=message):
+            decode(wire)
+
+    @pytest.mark.parametrize(
+        ("tamper", "message"),
+        [
+            # 第 1 則「賣 39.20 被擠出五檔 80 張」改寫成「賣 39.20 撤單 80 張」:量都對得上五檔,
+            # 只有「這一則已經看不到 39.20」看得出來
+            (
+                lambda w: w["chg"].__setitem__(
+                    1, [1, 38_950, 0, 4, 4, 0, 0] + [1, 39_200, 80, 0, 0, 0, 80]
+                ),
+                "價位變動要兩則都看得到",
+            ),
+            # 刪掉「賣 38.95 0 → 4」:兩則都看得到、量變了卻沒列
+            (lambda w: w["chg"].__setitem__(1, [3, 39_200, 80]), "卻沒列出價位變動"),
+            # 兩項對調:回看頁照收,整組順序與階梯對不起來
+            (
+                lambda w: w["chg"].__setitem__(
+                    1, [3, 39_200, 80] + [1, 38_950, 0, 4, 4, 0, 0]
+                ),
+                "變動排序不合",
+            ),
+            # 同一個價位列兩項(把被擠出改成同價位的重新可見)
+            (
+                lambda w: w["chg"].__setitem__(
+                    1, [1, 38_950, 0, 4, 4, 0, 0] + [1, 38_950, 0, 4, 4, 0, 0]
+                ),
+                "同一個價位列了兩項",
+            ),
+        ],
+        ids=["kind-vs-view", "missing-level-change", "out-of-order", "duplicate-price"],
+    )
+    def test_decode_refuses_changes_whose_kind_completeness_or_order_disagrees(
+        self, tamper: Callable[[dict[str, Any]], object], message: str
+    ) -> None:
+        """逐項的量對得上五檔還不夠:種類要與看得到的範圍相符、該列的不能漏、順序要跟階梯一致 ——
+        修前這四種竄改 decode 都照收(#279 審查 F-03)。"""
         wire = _wire(replay_books(_sweep_2489_rows())["2489"], keyframe_every=4)
         tamper(wire)
 
