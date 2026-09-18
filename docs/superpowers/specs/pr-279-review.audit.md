@@ -1,0 +1,870 @@
+# PR #279 Code Review 比較報告 · SHA a6b10002
+**Report projection schema**: 1
+
+**PR**: [loger-w/copycat#279](https://github.com/loger-w/copycat/pull/279)
+**標題**: feat(book-replay): 簿重播變動分解 + 重新可見 + 成交明細吃檔欄(#269)
+**作者**: loger-w
+**分支**: `feat/book-replay-changes` → `master`
+**變更**: 54 檔案, +7520 / -22(其中 49 檔為 `.claude/feat/book-replay-changes/**` 流程 artifact,含 repo 外回看頁模板副本與驗證腳本;實質 code 1 檔 +688 / -15、測試 1 檔 +1050 / -4、文件 3 檔 + skill 1 檔)
+**審查日期**: 2026-09-17
+**PR 狀態**: MERGED(post-merge 審查,closeout §4.5 自動觸發;findings 以收修 PR 處置,不阻擋出貨;master 上 rebase 後最後一筆為 `24d3a97e`)
+**Review input basis**: source repo id `R_kgDOTsITBg` + PR headRefOid `a6b100020d328de7bc1948f1aa96c1ba043e4111`;destination repo id `R_kgDOTsITBg` + baseRefOid `71c9f077737de42c86eb784d9a95cca3f2875529`;`input_binding: verified`(`git fetch origin refs/pull/279/head` 後 `git rev-parse FETCH_HEAD` = headRefOid;review worktree detached 於該 SHA、`git rev-parse HEAD` 相同;baseRefOid commit 存在,所有 diff 以兩個 full SHA 直接指定、不經移動中的 branch ref)
+**Review continuity**: `source_continuity=HISTORY_REWRITE`(rebase merge 改寫 13 筆 SHA;分支已刪,`refs/pull/279/head` 仍指 `a6b10002`,產報告前重抓 headRefOid / baseRefOid 不變);`base_changed=true`(origin/master 前進到 `3024887a` = rebase merge 結果 `24d3a97e` + 一筆只動 `graphify-out/**` 的 graphify commit);`review_context_changed=false`(`git diff --stat a6b10002 24d3a97e` 為空、`git diff --stat 24d3a97e origin/master -- . ':!graphify-out'` 為空)
+**審查工具**: CC (Opus 5)(context-aware reviewer agents;實際 reviewer 模型以下一行與 dispatch receipt 為準)+ Codex 中性 **N-A**(user 已停用,沿 #190 起前例單軸;本機 `command -v codex agy sem` 亦三者皆無)+ Codex 對抗式 **N-A** + Cross-axis verification(4.1 N-A 無非 CC finding;4.2 以同軸 `code-reviewer` subagent 獨立複查代替,**非跨軸證據**;main session 另以合成樣本與正式外掛檔獨立重現 F-01)+ Gemini 軸 **N-A**(user 已停用)
+**Reviewer model 記錄規則**: 上一行只描述工具組合;固定模型 reviewer 不套用「繼承 main session 模型」,實際身分以下一行與 dispatch receipt 為準。
+**Reviewer models**: orchestrator=claude-opus-5;primary reviewer=python-reviewer ×5 chunk(requested=opus / observed=UNAVAILABLE,harness 不回報 runtime model;主語言 .py 佔 source diff 71%(2,983 / 4,212 行);dispatch A 49 tool uses / 716 s、B 43 / 785 s、C 38 / 725 s、D 50 / 1,747 s、E 22 / 622 s);同軸複查=code-reviewer(requested=opus / observed=UNAVAILABLE;64 tool uses / 1,881 s);spec-compliance-reviewer requested=opus / observed=UNAVAILABLE / effort=xhigh / tools=N-A(未派,gate SKIPPED);Codex=N-A;Gemini=N-A
+**覆蓋 (ENH-A)**: |F|=54 → covered 20 / no-issues 24 / skipped 10 / **missed 0**(chunked: 是 —— source 24 檔 > 15 且 diff 7,542 行 > 800;路徑排序後依 source 行數約 800 依序填塊:A 15 檔(source 11 檔 775 行)、B 29 檔(source 9 檔 846 行,單塊略超)、C 7 檔(模板副本 834 行 + 文件)、D 2 檔(book_replay.py 703 行 + next-time)、E 1 檔(test_book_replay.py 1,054 行);聯集 = F,零 repair 輪)
+**定位 (ENH-B)**: anchored exact 32 / ambiguous 1 / **FAILED 0**(去重後 34 條、37 個 pin:33 個逐字 anchor 對 PR head 重定位,32 個唯一比中、F-03 的 `for change in changes:` 兩處(787 / 1027)取自報行 1027;另 4 個 pin(F-04b、F-08、F-09、F-11)reviewer 標 `<none>`,以最近符號行定位;行號自 reviewer 自報校正 2 處:F-19 32→34、F-22 58→62)
+**React-doctor (2.97)**: N-A(非 React PR;F 無 .jsx / .tsx)
+**Formal spec traceability (2.65)**: SKIPPED (C4_NO_REPO_SPEC_PATH)
+**Blast radius (2.9)**: 空輸出跳過(`sem-pr-blast-radius.sh` 於 review worktree 對 baseRefOid 執行、exit 0、零輸出;sem 未安裝)
+**Quota (Gemini 軸)**: N-A(Gemini 軸未啟用)
+**審查軸狀態**: primary(python-reviewer ×5 chunk)PASS(37 raw findings → 去重 34;54/54 accounting;reviewer 附實跑證據:A 在切換備份模板重套 patch 驗逐位元組相同、修前 commit 重跑不變式、分桶探針;B 以 seed 重現 594 則抽樣、node / Python 逐值比 toFixed;C 重跑 lock_flag_check、WCAG 實算;D 以正式外掛檔還原 TickRow 重跑引擎、量測修法前後差異;E 22 個突變體(scratch 副本、worktree 未動)+ 合成樣本證明非等價)/ Codex 中性 N-A / Codex 對抗 N-A / Gemini Flash N-A / Gemini Pro N-A / cross-axis verification:4.1 N-A、4.2 以同軸 code-reviewer 獨立複查代替 PASS(34/34 verdict、ID 集合完整;CONFIRMED 25 / PARTIAL 8 / OUT_OF_SCOPE 1 / REFUTED 0)/ 4.3a N-A(單軸無 consensus)/ 4.3b 逐條見複查欄與備註
+**worktree**: `C:/side-project/copycat/.worktrees/review-pr-279`
+**worktree HEAD**: `a6b100020d328de7bc1948f1aa96c1ba043e4111`
+
+**Report generation**: sha256:b9f710af15f32c0518bb3b3a5a781296be3531eec639aa66a5dd2404438db62e
+
+---
+
+## Spec 依據
+
+- 正式 spec = GitHub issue #265(簿重播時光機)與本 PR 的 ticket #269(九條 acceptance criteria);**不在 repo 檔案內**。實作期間 user 拍板六項並以兩則留言追記在 #269(2026-09-17 07:23Z 第一則:看得到的範圍 / 驗收樣本換 2426 買 98.0 與 2489 賣 39.2、成交扣減往後 8 則且 1 秒內、中間欄最近 N 則、五檔全空 = 清空;09:01Z 第二則:更正「播放跨則不漏」並改 60 則、首次進入五檔維持、價位變動 7 格)。repo 內另有 `.claude/feat/book-replay-changes/verification.md`(gate、紅先行紀錄、測試頁與正式頁驗證、切換紀錄)與 merge 前 two-axis 紀錄 `code-review-round-1.json`(含增量快篩);本輪 reviewer 讀過,不重提已處置條。F-19 是那份紀錄本身數字過時,F-21 是 P-01 收修的全日證據說法過頭,都不是重提。
+- **⚠️ spec 作者 = PR 作者**(issue #265 / #269 與六項拍板皆由 loger-w 提出,實作也由同一帳號提交;out-of-scope 判定以此 spec 為據時注意利益重疊 —— 本輪唯一 OUT_OF_SCOPE 的 F-34 引用的是 user 拍板的顯示格式)。
+- `SPEC_COMPLIANCE` receipt:`gate=SKIPPED`、`dispatch=NOT_APPLICABLE`、`dispatch_count=0`、`reason_code=C4_NO_REPO_SPEC_PATH`(spec 是 GitHub issue,無 repo 內 path:line 可綁;模組說明「外掛檔 v2」是實作者自寫的格式描述,非 MUST / SHALL 型 normative clause;0 clauses / 0 findings / 0 observations / 0 invalidated)、`requested_model=opus`、`observed_model=UNAVAILABLE`、`effort=xhigh`、runtime tool calls N-A。報告的 C4 輸入規則 = 只取自最後一次 reducer `human_projection`:本輪 gate SKIPPED、未派 `spec-compliance-reviewer`、未跑 reducer,`human_projection` 為空集合,`invalidated_ids ∩ report_finding_ids = ∅`(兩者皆空),整份報告零 C4 候選或 invalidated 語意內容。
+- Author calibration(Step 2.2):無作者校準檔(display name 「XU MIN YU」→ `xu-min-yu.md` 不存在;`docs/pr-review-calibration/` 目錄不存在)、本輪無套用。
+
+## 變更概要
+
+provenance: N-A(base = master)。13 筆 commit(PR head 序;master 上 rebase 後 SHA 已改寫):feat `8fef187b`(變動分解)→ feat `d64df816`(視野)→ feat `a3b46754`(吃檔)→ feat `b0334897`(decode 自檢)→ feat `0d365a30`(五檔全空)→ docs `a5afc782` → round-1 收修 refactor `ea193356` / fix `ace31593`(P-01)/ feat `11a5b225`(7 格、字面測試)→ docs `549c070c`(CLAUDE.md 數字)/ docs `43a10553`(next-time)/ skills `a8060d58` → artifacts `a6b10002`。
+
+| 檔案 | 變更類型 | 說明 |
+|---|---|---|
+| `copycat/book_replay.py` | M | 變動分解(`LevelChange` 掛入 / 撤單 / 成交,`_absorb` 往後 8 則且 1 秒內扣成交、市價佇列不看價)、視野(`_SideView`:`LeftView` / `Reappeared` / `EnteredView`,`_covers` 邊界)、五檔全空 = 清空(`_cleared`)、吃檔帳(`_EatLedger` / `Eaten`)、外掛檔 v2(`chg` 7/3/8/3 格、`eat` 三格一組,`_CHANGE_KINDS` 單一張表)、decode 自檢(`_check_changes` / `_decode_eaten`);445 → 1,118 行 |
+| `tests/test_book_replay.py` | M | TestChanges / TestView / TestClearedBook / TestEaten 新類別,v2 字面測試(八種種類碼、各吃檔檔位)、decode 竄改案擴充、P-01 紅先行案;675 → 1,721 行、87 案 |
+| `CONTEXT.md` | M | 新增「看得到的範圍」「變動分解」「吃檔」三條術語 |
+| `CLAUDE.md` | M | §1 簿重播外掛檔列改 v2(回看頁只讀 v2、實測 36.4 MB / 158 s / 峰值 5.68 GB 與 49.2 MB / 215 s / 7.77 GB) |
+| `.claude/skills/tc4-market-facts/SKILL.md` | M | 鎖漲停時內外盤旗標也恆 outer(兩天全數核對) |
+| `docs/next-time.md` | M | #269 留尾三條;盤後補資料第 1 步改 v2 CLI |
+| `.claude/feat/book-replay-changes/{verification.md, code-review-round-1.json}` | A | 驗證紀錄與 merge 前 review 原文 / 處置 / 增量快篩 |
+| `.claude/feat/book-replay-changes/evidence/*.py, *.mjs`(21 檔) | A | 一次性驗證與部署腳本:標準答案(decode oracle)、頁面比對 / 播放同步 / 回歸 / 截圖(puppeteer)、模板 patch 與切換、峰值記憶體量測、側別分桶、不重複扣、覆蓋率、鎖停旗標 |
+| `.claude/feat/book-replay-changes/evidence/{result_*, cli_run_*, base_hashes_*}`(13 檔) | A | 上述腳本輸出 |
+| `.claude/feat/book-replay-changes/evidence/*.png`(8 檔) | A | 截圖(淺 / 深、兩欄 / 單欄) |
+| `.claude/feat/book-replay-changes/evidence/{viewer_cdp_template.269.html, viewer_cdp_template.diff, viewer_cdp_template.review1.diff, review_round1_repo.diff}` | A | repo 外回看頁模板 #269 版副本、對現用模板與 review 當時版本的 diff、round-1 review 輸入 diff |
+
+## 發現總覽
+
+| # | 問題 | CC 主軸 | 內部複查(同軸) | 最終建議 | Action | Action 理由 |
+|---|---|---|---|---|---|---|
+| F-01 | `copycat/book_replay.py:370` 當日第一份五檔那一則(`views is None`,不做差分)的成交照樣放進待扣;它附的是成交後簿,自己的減量永遠比不到,於是之後 8 則 / 1 秒內同價位的減量(含沒有成交的簿則撤單)都被扣成「成交」;加上 `_absorb` 由舊到新扣,新成交自己那則的減量被開盤那筆搶走、新成交吃檔空白。例:5314 9/17 09:00:12.659 / .664 兩則簿則寫成「賣 27.75 −110 / −20 成交」(下一筆成交在第 20 則),開盤那列「吃 賣1 −130」;3481 / 1303 / 1326 吃檔記錯列。兩天正式外掛檔:撤單變成交 10 項 30 張 / 12 項 171 張,吃檔不同的列 57 / 72 | MEDIUM | CONFIRMED(MED→MED:同軸以 decode 還原 TickRow 重跑引擎、抽 12 檔重編逐位元組相同後量測,數字與 reviewer 一致;main session 另以合成三則樣本與 5314 正式檔獨立重現;修法要注意:「先扣當則自己的成交」也會改到盤中每天 20–28 列、未必都變好,當日第一則若是盤中才加入的掃單附舊簿,直接跳過會把之後減量誤記撤單;4.3b lone:他軸 N-A,不降級) | Should Fix | `ask-user` | 修法有兩個取捨(第一份五檔那則的成交怎麼處理、待扣扣法順序),改完要重產 9/16、9/17 永久外掛檔並換上正式資料夾 |
+| F-02 | `copycat/book_replay.py:390` 1815 開機收到的前一日 14:30 成交(時刻晚於收到超過容差的時刻異常成交)附前一日的簿,被當成當日第一份五檔;09:00 開盤那則跟它比,拆出 12 項、撤單合計 4,591 張(例「買 114.0 1,967 → 172」),吃檔也用舊簿算並搶走下一筆成交自己的 68 張;9/17 同形(撤單 2,141 張) | LOW | CONFIRMED(LOW→LOW:1815 兩天正式檔解回屬實;只影響這一檔開盤那一刻的顯示) | Nice to Have | `ask-user` | 要決定時刻在未來的異常成交附的簿怎麼處理(比照清空則跳過),與 F-01 同一批重產 |
+| F-03 | `copycat/book_replay.py:1027` `_check_changes` 只逐項核對列出的量與前後五檔一致,不核對種類與視野相符、該列的有沒有漏、排序;竄改 wire 把被擠出改成撤單、刪掉一項、吃檔檔位改 5、兩項對調,decode 都照收 | LOW | CONFIRMED(LOW→LOW:同軸竄改實跑 4 種皆被接受;CLI 落檔前另有 `decode(...) != code_day` 整體比對,編碼端寫錯擋得住,缺口只在讀回磁碟檔;reviewer 以 9/16 全日跑建議檢查零違反) | Nice to Have | `auto-fix` | 只加 decode 檢查、不改格式,對現行產出零誤擋 |
+| F-04 | `copycat/book_replay.py:485` 模組說明寫「同一格分幾則扣到合成一項」,`_EatLedger._add` 只跟最後一項比,非相鄰(市價佇列 → 限價 → 市價佇列)會出兩項;合併分支也沒有任何測試(改成 `if False:` 87 passed) | LOW | CONFIRMED(LOW→LOW:同軸突變 87 passed 屬實;兩天正式檔多項吃檔 18 / 29 筆、非相鄰重複 0 例,目前零影響) | Nice to Have | `auto-fix` | 依(側別、檔位)找既有項合併,補分兩則扣到同一格的測試並斷言 eat 字面 |
+| F-05 | `copycat/book_replay.py:693` 模組 445 → 1,118 行,同檔裝時間尺 / 簿重播、變動分解狀態機、外掛檔 v2 編解碼、decode 自檢 | LOW | PARTIAL(LOW→LOW:行數屬實;專案內 signal_state 1,081、live/tc4 1,320、capital/client 1,388、signal_hub 1,826、stock_engine 1,944、server/app 2,210 行,超過千行是常態) | Nice to Have | `no-op` | 專案常態;下次要動它(例如 F-03)再決定要不要拆 package |
+| F-06 | `docs/next-time.md:5`「外盤卻吃市價買」那條把吃檔側別與內外盤相反的非市價排隊 209 張歸因於集合競價 / 暫緩撮合 / 鎖板掃單並寫「引擎不改」;套 F-01 修法後 9/16 同筆兩側 86 → 8、集合競價 30 → 0,合計 209 → 89 張 | LOW | CONFIRMED(LOW→LOW:同軸兩個引擎版本分類重算;9/16 主張成立(57% 是記帳產物),9/17 較弱 —— 同筆兩側 121 → 3、集合競價 104 → 0,但暫緩撮合後 486 不變,合計只少 26%;市價排隊那一大塊與「鎖漲停旗標恆外盤」結論不受影響) | Nice to Have | `ask-user` | 數字要等 F-01 決定後連同 F-22 分桶修正重算,再請 user 決定要不要在畫面註明 |
+| F-07 | `tests/test_book_replay.py:1033` 測試名宣稱「檔位只數限價」,但買方樣本分不出(買方由高到低排、價 0 恆在最後);全檔沒有賣方市價佇列(鎖跌停)樣本。`_level_of` 的真值判斷改成 `is not None` 87 passed,合成鎖跌停樣本吃檔「賣1」變「賣2」 | MEDIUM | CONFIRMED(MED→LOW:突變屬實;現行程式正確、屬回歸防線缺口,同突變在正式檔只改到 9/17 10 列) | Nice to Have | `auto-fix` | 補鎖跌停樣本,斷言賣方吃檔檔位與賣方市價佇列項排在賣方最前 |
+| F-08 | `tests/test_book_replay.py:987` 模組說明「成交前那一則沒列出這個價位,就看扣到那一則的前一則」這條退路沒有測試;改成 `level = before` 87 passed,合成樣本檔位 2 變「五檔外」 | MEDIUM | CONFIRMED(MED→LOW:突變屬實;退路在正式檔每天約 40 列會走到(突變後 9/16 44 列、9/17 42 列吃檔改變),但現行程式正確、屬測試缺口) | Nice to Have | `auto-fix` | TestEaten 補一案:成交則自帶五檔才第一次出現價位、下一則才減量 |
+| F-09 | `tests/test_book_replay.py:454` 同價位多筆待扣成交「由舊到新」扣的順序沒有測試(改成 `reversed(unmatched)` 87 passed);這個順序正是 F-01 修法要動的地方 | LOW | CONFIRMED(LOW→LOW:突變 87 passed 屬實) | Nice to Have | `ask-user` | 要釘哪個順序取決於 F-01 的決定,和 F-01 一起補 |
+| F-10 | `tests/test_book_replay.py:1390` golden 字面的空吃檔(註解「開機收到的前一日成交:之前沒有簿」)不依賴 `record_unabsorbed` 的 `trade.index == 0` 守門,拿掉照樣 87 passed;`_frames` 清空分支的 `count_trade`(清空那則是成交則時)也沒測到,改成 pass 仍 87 passed | LOW | CONFIRMED(LOW→LOW:兩個突變各自 87 passed 屬實) | Nice to Have | `auto-fix` | 補首則成交、到期時最後一份簿看不到它的樣本,與清空成交則的期間成交一案 |
+| F-11 | `tests/test_book_replay.py:1701` decode 有六個檢查沒有竄改案(檔頭 chg 長度、被擠出 / 首次進入量 > 0、重新可見三量不全 0、吃檔側別碼、吃檔張數 > 0),各自拿掉 87 passed;缺 chg 長度檢查時壞檔變 `zip(strict=True)` 的 ValueError,`cli.py` 只接 PluginFormatError | LOW | CONFIRMED(LOW→LOW:六個突變各自 87 passed;traceback 只在檢查被拿掉時出現,CLI 解的是自己剛編好的檔,正常流程碰不到) | Nice to Have | `auto-fix` | 兩組 parametrize 補對應竄改案 |
+| F-12 | `tests/test_book_replay.py:1660` 竄改案的 match 字串(「成交」「撤單」「掛入」「前量」「後量」「吃檔」「第 0 則」)是其他錯誤訊息的子字串,分不出是哪道檢查擋下 | LOW | PARTIAL(LOW→LOW:太寬屬實;reviewer 舉的組合突變(拿掉成交範圍檢查 + cancelled 不 clamp)該案單獨跑 1 passed,但整檔另有 3 條會紅,不會悄悄過) | Nice to Have | `auto-fix` | match 改成各檢查獨有的片語 |
+| F-13 | `tests/test_book_replay.py:505` 測試檔 675 → 1,721 行;2426 鎖漲停佇列前兩則在 TestChanges(:500)與 TestEaten(:1011)各寫一份,helper 散在類別之間,檔頭 docstring 沒提 #269 | LOW | PARTIAL(LOW→LOW:事實屬實;專案內 test_stock_engine 4,475、test_signal_hub 3,249、test_client 2,306 行,屬風格小債) | Nice to Have | `no-op` | 專案常態;要拆另開純重構 |
+| F-14 | `tests/test_book_replay.py:543` `_at` 型別寫 `tuple[object, ...]` 並用 `getattr(c, "price_milli", None)`(`BookChange` 已公開),欄位改名時 pyright 不會提醒;竄改案註解同一個 parametrize 裡混用格位與值(:1651 寫值、:1658 寫格位、:1664 混用) | LOW | CONFIRMED(LOW→LOW) | Nice to Have | `auto-fix` | 型別改 `BookChange`、註解統一成「格位:值」 |
+| F-15 | `evidence/viewer_cdp_template.269.html:654` 同一刻價量兩種寫法:中間欄組標頭用 `rpPrice`(去尾零「39.3」)、變動行用 `rpAt` → `rpPx`(固定小數「39.30」),同一組同時出現;頁頭 `rpKind` 張數印原值「2141」、中間欄與成交明細用千分位「2,141」 | LOW | PARTIAL(LOW→LOW:價的不一致是 #269 新造成;頁頭張數原值是既有碼(diff 為 context 行),next-time 已記「rpKind 那行沒動」) | Nice to Have | `ask-user` | 價要統一成階梯的固定小數還是全頁的去尾零,是顯示取捨 |
+| F-16 | `evidence/viewer_cdp_template.269.html:113` 目前這一則(標亮組)的標頭有提亮成 `--ink-2`,同組淡色行沒有:`--muted` 疊在 `--sel` 上淺色 2.69:1、深色 3.58:1,都低於 12 px 字 AA 4.5:1;淡色行帶資訊(被擠出、量沒變的回到五檔、五檔全空) | LOW | PARTIAL(LOW→LOW:對比實算屬實;沿用全頁既有 `--muted`;verification.md §4 記成「其他觀察(不改)」是實作端判斷、非 user 拍板;新資訊只有深色標亮組 3.58 這一格) | Nice to Have | `ask-user` | 視覺取捨(加一條標亮組淡色行的提亮色) |
+| F-17 | `.claude/feat/book-replay-changes/verification.md:52` 寫「第 3 條的『播放跨則不漏』更正、第 6 條待收尾時補留言」,但 artifacts commit(08:59:58Z)後約 100 秒(留言 `created_at` 09:01:42Z)已在 #269 貼了追記留言,兩條都在 | LOW | CONFIRMED(LOW→LOW) | Nice to Have | `auto-fix` | 改成已留言並附留言時刻 |
+| F-18 | `.claude/feat/book-replay-changes/verification.md:112`「13 檔 × 兩天」實為 13 組(代號、日期),不同代號 11 檔(2426、3441 兩天都有),字面會被讀成 26 組 | LOW | PARTIAL(LOW→LOW:措辭不精確屬實,括號已寫明組成;reviewer 寫的「12 檔」也不對,不同代號是 11) | Nice to Have | `auto-fix` | 改成 13 組(11 檔) |
+| F-19 | `.claude/feat/book-replay-changes/code-review-round-1.json:34` 追記的增量快篩數字過時:模板增量寫「+33 / −27」實為 +35 / −29、「1x 420」實為 423;「模板增量只動 P-02 / S-04 / S-10 / S-11 的點」但含懸掛縮排 CSS(AI 截圖對照後另加、非 finding) | LOW | CONFIRMED(LOW→LOW:review1.diff 計數、result_playback_sync.json draws 423 屬實;verification.md 是正確數字) | Nice to Have | `auto-fix` | 更新數字並註明懸掛縮排不屬 finding |
+| F-20 | `CLAUDE.md:128` 同一列寫「外掛檔永久保留」、CLI 只收簿 parquet 還在(120 交易日)的日子、「回看頁只讀 v2,v1 檔要重產」;下次升格式版本時,超過保留期的外掛檔既重產不了、回看頁也讀不了(模板只認 `p.v !== 2`、decode 只認 FORMAT_VERSION、外掛檔沒有 v(n) → v(n+1) 遷移) | LOW | CONFIRMED(LOW→LOW:前瞻性設計風險、目前沒有壞;這次兩天都在保留期內,最早約 2027-03 升版才會撞到) | Nice to Have | `ask-user` | 下次升版的政策(外掛檔轉換器或回看頁保留舊版讀取)要先定 |
+| F-21 | `evidence/no_double_count_check.py:5` 腳本聲稱證明「每筆成交最多被扣一次」,但「有檔位吃檔 = 價位變動算成交」「吃檔 ≤ 成交張數」靠程式結構恆成立(修前也成立),「五檔外 ≥ 期間成交」只比全日加總(餘量 161 張);verification.md / fix commit / review JSON 拿它當全日證據 | MEDIUM | CONFIRMED(MED→LOW:同軸以修前 `ea193356` 引擎重跑 9/16 還原輸入:3374 12,228 = 12,228、超量 0,但五檔外 58 < 期間成交 59;6209 55 < 61,逐檔才看得出、全日加總被蓋掉;P-01 本身有紅先行單元測試,引擎正確性不受影響) | Nice to Have | `auto-fix` | 加逐檔能判別的檢查並在修前 commit 留紅燈,或把說法改成只證明結構不變式 |
+| F-22 | `evidence/eaten_side_breakdown.py:62` `seen_cleared` 一旦設上整天不重置,暫緩撮合結束很久之後的成交也歸「暫緩撮合後」桶(9/17 486 張裡 281 張在最近一次清空後 ≥ 10 分鐘、9/16 57 張裡 26 張);「說不通的只有一筆」只人工看了「其他」桶 | LOW | CONFIRMED(LOW→LOW:同軸重算數字一致) | Nice to Have | `auto-fix` | 改以距上一次清空的時間分桶,重跑後更新 verification / JSON / next-time |
+| F-23 | `evidence/build_stage_page.py:32`「現用頁 == 現用模板 + blob」只 print,False 照樣寫出測試頁;docstring 與 verification.md 說「每次都先驗」 | LOW | CONFIRMED(LOW→LOW:測試頁切換後已刪;同類的切換腳本對雜湊不符是直接 return 1) | Nice to Have | `auto-fix` | 不相等就非 0 結束,每次輸出存檔 |
+| F-24 | `evidence/playback_window_coverage.py:18` 等六支 evidence 腳本寫死已刪的 worktree(`feat-book-replay-changes`)與暫存資料夾 `viewer-cdp-book-269`:照 commit 重跑,有 assert 的三支 AssertionError;沒 assert 的三支不帶參數時 FileNotFoundError(playback_window_coverage 的外掛檔資料夾寫死、glob 為空時 `missed / n` 除以零),帶資料夾參數時靜默 import 主 tree 的 copycat;tc4-market-facts 引用的 `lock_flag_check.py` 數字沒有結果檔、verification.md 沒有對應小節 | LOW | CONFIRMED(LOW→LOW:同軸 ls 兩路徑皆不存在、逐支判定行為;改路徑重跑 lock_flag_check 四個數字與 SKILL.md 完全一致 —— 事實沒錯、只是追不回) | Nice to Have | `auto-fix` | repo root 由 `__file__` 推、外掛檔資料夾改參數(預設正式資料夾)、補 lock_flag 結果檔與小節 |
+| F-25 | `evidence/rp269_expected.py:77` 標準答案的「離開 x.x 秒」用 Python `:.1f`(逢半取偶),頁面 `toFixed(1)` 在 250 / 1250 … 9250 ms 進位不同(2250 ms 頁面「2.3 秒」、標準答案「2.2 秒」);13 組抽樣裡有 5 則重新可見踩到,本次 594 則的窗沒涵蓋 | LOW | CONFIRMED(LOW→LOW:node 與 Python 逐值實跑屬實;未重跑抽樣確認窗) | Nice to Have | `auto-fix` | 改用 ROUND_HALF_UP 的 Decimal |
+| F-26 | `evidence/verify_changes.mjs:46` 被竄改的 3 則只拿竄改版比、有任何不符就記「抓到竄改」,從沒對原始標準答案比過;「594 則 0 不符」嚴格是 591 則 | LOW | CONFIRMED(LOW→LOW) | Nice to Have | `auto-fix` | 同一次讀到的頁面先比原始、再比竄改版 |
+| F-27 | `evidence/verify_playback_sync.mjs:45` 重畫落在標準答案段外時 `continue` 靜默跳過,沒檢查 `checked > 0` 或 `checked === draws`;播放沒啟動或段參數給錯時「比對 0、不符 0」照過 | LOW | CONFIRMED(LOW→LOW:本次結果 1x 423 / 423、10x 216 / 216,不是空跑) | Nice to Have | `auto-fix` | 加 `draws > 0 && checked === draws` 判定 |
+| F-28 | `evidence/pp_common.mjs:20` 自己 mkdtemp 的 Chrome profile 不會被 puppeteer 在 close 時刪掉,呼叫端也不清:`%TEMP%` 下 rp269- 開頭已累積 47 個、687 MB | LOW | PARTIAL(LOW→LOW:洩漏屬實;同寫法已在 #270 證據沿用(rp270-)) | Nice to Have | `auto-fix` | 拿掉 userDataDir 或 close 後刪除,順手清掉現有暫存 |
+| F-29 | `evidence/rp269_expected.py:243` 驗收樣本只是加進抽樣,期望值仍取自 decode:2426 買 98.0(39 → 120、淨掛 +81、2 分 35 秒)與 2489 賣 39.2(80 → 0、期間成交 80、淨掛 0)在正式外掛檔上的產出沒有字面斷言;tests `:760-812` 以合成列重建同形樣本並字面斷言這些數字,釘的是引擎規則、不是正式檔產出 | LOW | PARTIAL(LOW→LOW:沒有機械字面斷言屬實;驗收數字有截圖逐字核對(SC-1 / SC-4),同軸直查正式檔值也正確(2426 left 39 / now 120 / traded 0 / away 154,911 ms)) | Nice to Have | `auto-fix` | 產出前對兩個驗收樣本加字面斷言 |
+| F-30 | `evidence/switch_live_269.py:82` 最後「新頁 == 新模板 + blob」只放進 step() 印出、固定 `return 0`;`:59` / `:81` 的 assert 在 `python -O` 下會被拿掉;verification.md 把 exit 0 當切換證據之一 | LOW | CONFIRMED(LOW→LOW:這次輸出 True) | Nice to Have | `auto-fix` | 比對 False 時 return 1、assert 改明確 if |
+| F-31 | `evidence/switch_live_269.py:67` 覆蓋 160 個正式外掛檔前不檢查外掛檔備份資料夾存在、也不比對與正式 v1 同檔;先換模板(:62)才蓋外掛檔,中途失敗會留下三態混雜;不檢查正式資料夾多餘檔 | LOW | CONFIRMED(LOW→LOW:已成功執行,verification 另有人工逐檔比雜湊;v1 可用舊 CLI 從 parquet 重產,可復原) | Nice to Have | `auto-fix` | 開頭斷言備份、改成先蓋外掛檔驗完再換模板、比對檔名集合 |
+| F-32 | `evidence/run_with_peak_memory.py:84` docstring 寫掃「子孫程序」,`children_of` 只比 parent pid(直屬子程序);讀 PeakWorkingSetSize 不是 commit,記憶體吃緊、工作集被修剪時會低估 | LOW | CONFIRMED(LOW→LOW:這次 CLI 無 subprocess / multiprocessing,直屬子程序就是幹活的程序,5.68 / 7.77 GB 是有效工作集峰值) | Nice to Have | `auto-fix` | docstring 改直屬子程序並多印 PeakPagefileUsage |
+| F-33 | `evidence/syntax_check.py:26` 抽到 0 段 script 時迴圈不執行,照樣印 SYNTAX-OK、exit 0 | LOW | CONFIRMED(LOW→LOW:這次模板確實 1 段主程式;主要保險仍是 DOM 檢查 console 0) | Nice to Have | `auto-fix` | 0 段直接非 0 結束 |
+| F-34 | `evidence/viewer_cdp_template.269.html:674` ticket 驗收條件「重新可見的期間變化明確標示『無法分辨是一次掛進或分次堆積』」,量沒變的淡色那一支沒有這句 | LOW | OUT_OF_SCOPE(LOW→LOW:淡色一行是 user 拍板的格式,這一支只在離開時量 = 現在量且期間成交 0 時出現,本來就沒有期間變化可標;定義與規則已對所有回到五檔統一註明) | 參考用 | `no-op` | 不是本 PR 缺陷;淡色行加短註屬新的顯示需求 |
+
+auto-fix 只是處置建議；沒有使用者另行下令，不修改 code、commit、push 或 PR。
+
+F-01 finding_uid: 8acd905c7a7a2fc60282 action=ask-user
+F-02 finding_uid: 25e141d6cfec15932949 action=ask-user
+F-03 finding_uid: c898c8d6896acb90a5c7 action=auto-fix
+F-04 finding_uid: 3b9d14179fd4b010110a action=auto-fix
+F-05 finding_uid: 00e6e0bacb9485372de2 action=no-op
+F-06 finding_uid: 179d5eb8b7a2c0777d45 action=ask-user
+F-07 finding_uid: 549f032774ec0813f786 action=auto-fix
+F-08 finding_uid: b219f6c190fb48b2a70f action=auto-fix
+F-09 finding_uid: 3edf65f1ab2c0e700792 action=ask-user
+F-10 finding_uid: 4ad438347a3b2f520f58 action=auto-fix
+F-11 finding_uid: d42ffda958d759e27189 action=auto-fix
+F-12 finding_uid: 69dc79f4ece6e9187b8e action=auto-fix
+F-13 finding_uid: 909fea75525e3af2710f action=no-op
+F-14 finding_uid: 469507938e87b419b3a1 action=auto-fix
+F-15 finding_uid: 4b91ac8cb96129f02885 action=ask-user
+F-16 finding_uid: ac72fdc1c142cc2ad7d2 action=ask-user
+F-17 finding_uid: 4f97f85258a2f3bb993e action=auto-fix
+F-18 finding_uid: 31533f261d96901b80a5 action=auto-fix
+F-19 finding_uid: 1b94d683ed849b1d0e0b action=auto-fix
+F-20 finding_uid: 285d76158740937d9f73 action=ask-user
+F-21 finding_uid: a007bed1c382b1597471 action=auto-fix
+F-22 finding_uid: 1c82284c59f7d0e5d486 action=auto-fix
+F-23 finding_uid: 38e99f7e6f3a1971a413 action=auto-fix
+F-24 finding_uid: 37d82b53e03e49987869 action=auto-fix
+F-25 finding_uid: 2ff05643ad9d02ac2f13 action=auto-fix
+F-26 finding_uid: e75ba5f99afb1c2d98d4 action=auto-fix
+F-27 finding_uid: 0daf5afeb3bce5eea9d2 action=auto-fix
+F-28 finding_uid: f5d0d25fb430138f10de action=auto-fix
+F-29 finding_uid: 03fa1cb750478cff9ebd action=auto-fix
+F-30 finding_uid: ea7675920bb96ffffbce action=auto-fix
+F-31 finding_uid: c4c090f720d61352514f action=auto-fix
+F-32 finding_uid: f20ed528b9eeac2f145f action=auto-fix
+F-33 finding_uid: e38839e3604515159ea6 action=auto-fix
+F-34 finding_uid: cfc10bef5c6bf4c71f74 action=no-op
+
+### Inline Comments per Finding（直接複製貼到 PR review）
+
+#### #1 開盤那筆成交搶走之後的減量,沒成交的撤單被寫成「成交」
+
+**File**: `copycat/book_replay.py`
+**Line**: 370
+
+**Comment**:
+```
+開盤那筆(當日第一份五檔那一則)不做差分,但它的成交照樣進待扣。
+它附的是成交後的簿,自己的減量永遠比不到 → 之後 8 則 / 1 秒內同價位只要減量,
+連沒有成交的撤單都會被算成「成交」,吃檔也記到開盤那列。
+_absorb 又是由舊到新扣,後面那筆成交自己那則的減量會被開盤那筆搶走,吃檔欄變空白。
+
+實例:5314 9/17 09:00:12.659、.664 兩則是簿則(下一筆成交在第 20 則),
+中間欄卻寫「賣 27.75 −110 成交」「−20 成交」;開盤那列寫「吃 賣1 −130」。
+兩天量起來:撤單變成交 10 項 30 張 / 12 項 171 張,吃檔記錯的列 57 / 72 列。
+
+方向:views is None 那一則的成交不進待扣;要不要把扣法改成先扣當則自己的成交再扣舊的,
+要一起想清楚(改扣法也會動到盤中每天二十幾列;當日第一則若是盤中才加入的掃單、附的是舊簿,
+直接跳過會把之後的減量誤記成撤單)。改完補紅先行測試,重產兩天外掛檔。
+```
+
+#### #2 1815 開機收到的前一日成交,舊簿被當成今天第一份五檔
+
+**File**: `copycat/book_replay.py`
+**Line**: 390
+
+**Comment**:
+```
+1815 每天開機會收到前一日 14:30 的成交(時刻比收到晚七小時的那種異常成交),
+它附的是前一天收盤的簿,卻被當成當日第一份五檔。
+09:00 開盤那則拿它來比 → 拆出 12 項,撤單合計 4,591 張(例如「買 114.0 1,967 → 172」),
+吃檔也拿舊簿算、還搶走下一筆成交自己那 68 張。9/17 同樣形狀。
+
+建議:時刻在未來的異常成交,附的簿不拿來建視野跟吃檔參考簿,比照清空則處理
+(只排除「晚於收到時刻超過容差」那種;早於目前時鐘的異常成交附的是當下的簿)。
+補一條 1815 形狀的測試,跟 F-01 同一批重產。
+```
+
+#### #3 decode 沒核對種類跟視野相不相符,被擠出改成撤單也照收
+
+**File**: `copycat/book_replay.py`
+**Line**: 1027
+
+**Comment**:
+```
+_check_changes 只核對「列出來的每一項」量跟前後五檔對得上,
+沒核對種類跟視野是不是相符,也沒核對該列的有沒有漏。
+實測竄改:被擠出改寫成撤單、整項刪掉、吃檔檔位 1 改 5、兩項對調 → decode 全部照收。
+CLI 落檔前有整體比對所以自己產的檔擋得住,但讀回磁碟檔時這層自檢承諾不完整。
+
+照前後兩份五檔的邊界補三組:
+1. 種類 vs 視野:價位變動兩份都看得到、被擠出 = 前看得到後看不到、重新可見 / 首次進入 = 前看不到後看得到
+2. 完整性:兩份都看得到且量不同的價位恰一項、落到新邊界外且前有量的必有被擠出、市價佇列量變必有一項
+3. 排序:買方在前、同側市價佇列在前再由最優價往外
+9/16 全日正式檔跑過零違反,decode docstring 同步列出。
+```
+
+#### #4a 「同一格合成一項」只合併相鄰的
+
+**File**: `copycat/book_replay.py`
+**Line**: 485
+
+**Comment**:
+```
+模組說明寫「同一格分幾則扣到合成一項」,這邊只跟最後一項比。
+同一筆先扣市價佇列、再扣限價、下一則又扣市價佇列 → 會出「吃 市價買 −4、買1 −3、市價買 −3」兩項市價買。
+兩天正式檔目前 0 例,只是承諾跟實作不一致。
+
+改成用 (side, level) 找既有項合併(一筆成交最多幾項,線性找就好),
+或把說明改成「連續扣到同一格才合成一項」。
+```
+
+#### #4b 合併分支沒有測試,拿掉合併照樣全綠
+
+**File**: `tests/test_book_replay.py`
+**Line**: 987
+
+**Comment**:
+```
+合併分支沒有任何測試:把 _add 的合併條件改成 if False,87 條照樣全綠。
+合併拿掉的話外掛檔 eat 會從 [1, 1, 10] 變 [1, 1, 4, 1, 1, 6],round-trip 照綠、回看頁印兩項。
+
+補一案:成交 P×10(五檔還是舊的)→ 下一則 P 減 4 → 再下一則減 6,
+斷言 eaten == (Eaten("ask", level=1, qty=10),),順便斷言 encode 的 eat 字面。
+```
+
+#### #5 參考:book_replay.py 長到 1,118 行
+
+**File**: `copycat/book_replay.py`
+**Line**: 693
+
+**Comment**:
+```
+參考用:book_replay.py 從 445 長到 1,118 行,一個檔裝了四件事
+(時間尺 / 簿重播、變動分解狀態機、外掛檔 v2 編解碼、decode 自檢)。
+專案裡超過千行的模組不少,這次不用動;下次要再加東西(例如 decode 補檢查)時,
+可以考慮拆成 package(__init__ 保留模組說明與 re-export、changes.py、plugin.py),公開 import 路徑不變。
+```
+
+#### #6 「外盤卻吃市價買」那條的數字被 F-01 放大了
+
+**File**: `docs/next-time.md`
+**Line**: 5
+
+**Comment**:
+```
+這條拿來請 user 決定的數字被 F-01 放大了:
+非市價排隊那 209 張裡,「同筆兩側都吃」「集合競價」兩桶大部分是開盤那筆搶減量造成的。
+套 F-01 的修法重算,9/16 兩桶 86 / 30 張 → 8 / 0 張,合計 209 → 89 張;9/17 只少 26%(暫緩撮合那桶不受影響)。
+「鎖漲停旗標恆外盤」那個主結論不受影響。
+
+F-01 決定後重跑分桶(順便修 F-22 的分桶),再改這條的數字跟歸因。
+```
+
+#### #7 「檔位只數限價」用買方樣本分不出來,鎖跌停沒測
+
+**File**: `tests/test_book_replay.py`
+**Line**: 1033
+
+**Comment**:
+```
+這條名稱講「檔位只數限價」,但用的是買方樣本:買方由高到低排,價 0 本來就排最後,
+就算把 0 算進去 169.5 還是第 2 檔,分不出來。會被 0 影響檔位的是賣方(0 排第一),全檔沒有 ask=[(0, …)] 的樣本。
+實測把 _level_of 的 if (p := book[...]) 改成 is not None,87 條全綠,鎖跌停時「吃 賣1」會變「吃 賣2」。
+
+補一個鎖跌停樣本:ask=[(0, 500), (90_100, 20)] → 外盤成交 90.1×4 → 賣 90.1 剩 16,
+斷言 Eaten("ask", level=1, qty=4),同一個樣本再斷言賣方市價佇列那項排在賣方最前。
+```
+
+#### #8 吃檔「看扣到那一則的前一則」這條退路沒測
+
+**File**: `tests/test_book_replay.py`
+**Line**: 987
+
+**Comment**:
+```
+模組說明寫:「成交前那一則沒列出這個價位,就看扣到那一則的前一則」。
+TestEaten 四案跟字面測試裡,成交價都已經列在成交前那一則,這條退路從沒被走到。
+實測把 level = before if before is not None else _level_of(...) 改成 level = before,87 條全綠,
+看得到的一檔會被標成「五檔外」。正式檔每天約四十列會走這條。
+
+補一案:簿 ask 100.0 → 成交 100.5×3(成交則自帶的 ask 多出 100.5×10)→ 下一則 100.5 剩 7,
+斷言 Eaten("ask", level=2, qty=3)。
+```
+
+#### #9 同價位多筆待扣先扣哪筆沒測,而 F-01 正要改它
+
+**File**: `tests/test_book_replay.py`
+**Line**: 454
+
+**Comment**:
+```
+兩筆同價位成交都還沒扣完時,先扣哪一筆沒有測試:把 _absorb 的 for trade in unmatched 改成 reversed,87 條全綠。
+先扣哪筆會決定較舊那筆會不會到期(成交變撤單)、吃檔掛到哪一列。
+
+這個順序剛好是 F-01 要不要改的地方 → 先決定 F-01,再照決定補一案:
+兩筆 P×5 成交(五檔還是舊的)→ 下一則減 5 → 距較舊那筆第 9 則時再減 5,斷言最後一項 traded 與兩筆各自的吃檔。
+```
+
+#### #10 開機成交的空吃檔不靠守門、清空的成交則沒測
+
+**File**: `tests/test_book_replay.py`
+**Line**: 1390
+
+**Comment**:
+```
+這個 [] 的註解說「之前沒有簿,看不出吃哪一檔」,但它其實不靠 trade.index == 0 那道守門:
+拿掉守門,這個樣本最後一份簿買方只有一層(整側看得到),結果恰好還是 [],87 條全綠。
+另外清空分支裡的 view.count_trade(清空的那一則是成交則時)也沒測到,改成 pass 一樣全綠。
+
+補兩案:
+1. 首則成交 105.0×2、1 秒後一份五層賣方到 102.0 → 斷言吃檔 ()(拿掉守門會變「賣五檔外 −2」)
+2. 被擠出價位上的成交、成交則五檔全空 → 斷言重新可見的 traded_away(實錄不可能出現的話就刪分支)
+```
+
+#### #11 decode 有六個檢查沒有竄改案
+
+**File**: `tests/test_book_replay.py`
+**Line**: 1701
+
+**Comment**:
+```
+decode docstring 列的檢查裡有六條沒有竄改案,各自拿掉 87 條全綠:
+檔頭 chg 長度、被擠出量 > 0、首次進入量 > 0、重新可見三量不全 0、吃檔側別碼 0 / 1、吃檔張數 > 0。
+其中 chg 長度那條拿掉的話,壞檔會變成 zip(strict=True) 的 ValueError,CLI 只接 PluginFormatError → 吐 traceback。
+
+兩組 parametrize 補:w["chg"].pop() → "chg"、被擠出 / 首次進入量寫 0、重新可見三量改 0、
+w["eat"][0].__setitem__(0, 2)、w["eat"][0].__setitem__(2, 0)。
+```
+
+#### #12 竄改案的 match 字串太寬
+
+**File**: `tests/test_book_replay.py`
+**Line**: 1660
+
+**Comment**:
+```
+match="成交" 這類字串太寬:算式錯誤的訊息「掛入 … / 撤單 … 不合算式(前量 …、後量 …、成交 …)」裡也有「成交」「撤單」「掛入」「前量」「後量」,
+分不出到底是哪道檢查擋下的。目前每案都剛好命中宣稱的檢查,但檢查被換掉時這一案不一定紅(整檔其他測試還會紅)。
+
+改用各檢查獨有的片語,例如「不在 0 到減少的量之間」「不合算式」「與前一則五檔」「當日第一份五檔」。
+```
+
+#### #13 參考:測試檔長到 1,721 行、樣本重複
+
+**File**: `tests/test_book_replay.py`
+**Line**: 505
+
+**Comment**:
+```
+參考:測試檔從 675 長到 1,721 行。2426 鎖漲停那兩則在 TestChanges 跟 TestEaten 各寫一份,
+_at / _cleared_2305_rows / _sweep_2489_rows 散在類別中間,檔頭 docstring 也還只寫 #265 / #267。
+專案裡比這大的測試檔很多,這次不用動;之後要整理的話,可以把變動分解相關類別拆到 test_book_replay_changes.py、
+抽 _lock_queue_2426_rows()、更新檔頭說明。
+```
+
+#### #14 _at 用 object 加 getattr,竄改案註解寫法不一
+
+**File**: `tests/test_book_replay.py`
+**Line**: 543
+
+**Comment**:
+```
+_at 用 tuple[object, ...] 加 getattr 取 price_milli,BookChange 已經在 __all__,
+欄位改名的時候 pyright 抓不到。改成 _at(changes: tuple[BookChange, ...], price: int) -> list[BookChange],直接讀 c.price_milli。
+
+另外竄改案的註解三種寫法混在一起(有的寫值、有的寫格位、1664 行前兩個是格位後面是值),
+讀的人要自己推 slice(48, 51) 對到哪幾格。統一寫成「格位:值」,例如 [45 碼 5, 46 價, 47 離開 80, 48 現在 0, …]。
+```
+
+#### #15 同一組裡同一個價寫成 39.3 跟 39.30
+
+**File**: `.claude/feat/book-replay-changes/evidence/viewer_cdp_template.269.html`
+**Line**: 654
+
+**Comment**:
+```
+同一組中間欄裡,組標頭寫「成交 39.3 × 56 外」(rpPrice 會去尾零),變動行寫「買 39.30 0 → 60」(rpPx 固定小數),
+同一個價兩種寫法。頁頭的張數也印原值「× 2141 張」,中間欄跟成交明細是「2,141」。
+
+價要統一成哪一種(跟階梯一樣固定小數,或跟全頁一樣去尾零)要決定一下;
+頁頭張數改走 rpQty,可以跟 next-time 記的「rpKind 收斂」那條一起做。
+```
+
+#### #16 目前這一則的淡色行對比只有 2.7:1
+
+**File**: `.claude/feat/book-replay-changes/evidence/viewer_cdp_template.269.html`
+**Line**: 113
+
+**Comment**:
+```
+目前這一則那組的標頭有提亮(--ink-2),但同一組的淡色行沒有,
+淡色字疊在標亮底上:淺色 2.7:1、深色 3.6:1,12 px 字都低於 4.5:1。
+淡色行帶的是「被擠出五檔 N 張」「量沒變的回到五檔」「五檔全空」這些資訊,最該看的那一組反而最難讀。
+
+可以加一條 .rp-msg.cur .rp-line.dim,用介於 muted 跟 ink-2 之間的顏色,讓標亮底上到 4.5:1。要不要調是視覺取捨。
+```
+
+#### #17 verification 還寫「待收尾時補留言」,其實已經貼了
+
+**File**: `.claude/feat/book-replay-changes/verification.md`
+**Line**: 52
+
+**Comment**:
+```
+這句還寫「待收尾時補留言」,但 artifacts commit 之後大約 100 秒就已經在 #269 貼了追記
+(第 1 點是「播放跨則不漏」的更正、第 2 點是首次進入五檔),之後看紀錄的人會以為還沒貼。
+改成「兩條都已留言(09-17 17:01,#269 最後一則)」就好。
+```
+
+#### #18 「13 檔 × 兩天」其實是 13 組
+
+**File**: `.claude/feat/book-replay-changes/verification.md`
+**Line**: 112
+
+**Comment**:
+```
+「13 檔 × 兩天」會被讀成 26 組,實際是 9/16 10 檔 + 9/17 3 檔 = 13 組 代號|日期,
+其中 2426、3441 兩天都有,不同代號是 11 檔。改成「13 組 代號|日期(11 檔)」。
+```
+
+#### #19 review 紀錄 JSON 的增量數字停在改懸掛縮排之前
+
+**File**: `.claude/feat/book-replay-changes/code-review-round-1.json`
+**Line**: 34
+
+**Comment**:
+```
+這份 JSON 是 review 處置的正式紀錄,但追記的數字停在懸掛縮排改完之前:
+模板增量寫 +33 / −27,review1.diff 實際是 +35 / −29;播放同一刻寫 1x 420,結果檔是 423;
+還寫「模板增量只動 P-02 / S-04 / S-10 / S-11 的點」,但增量第一段是懸掛縮排 CSS(截圖對照後另加,不屬 finding)。
+更新成 +35 / −29、1x 423,並註明懸掛縮排的來源。
+```
+
+#### #20 外掛檔「永久保留」跟「只讀最新版、舊檔重產」下次升版會衝突
+
+**File**: `CLAUDE.md`
+**Line**: 128
+
+**Comment**:
+```
+同一列寫了三件事:外掛檔永久保留、CLI 只收簿 parquet 還在的日子(簿只留 120 交易日)、回看頁只讀 v2 所以 v1 要重產。
+這次只有 9/16、9/17 兩天還在保留期內沒事;但下次再升格式版本時,超過 120 交易日的外掛檔(那時唯一留下的簿資料)
+既重產不了、回看頁也讀不了,「永久保留」就落空。
+
+這列補一句「重產只在簿 parquet 保留期內可行;之後升版要附外掛檔 v(n) → v(n+1) 轉換,或回看頁保留舊版讀取」,
+外掛檔本身有完整的 kf / d / trade,理論上可以自己轉。
+```
+
+#### #21 「不重複扣」的檢查在修前也會過
+
+**File**: `.claude/feat/book-replay-changes/evidence/no_double_count_check.py`
+**Line**: 5
+
+**Comment**:
+```
+這支說它證明「每筆成交最多被扣一次」,但前兩條是程式結構保證的:
+_traded 每扣一次就記一格吃檔(所以兩邊恆相等)、_absorb 每次最多扣剩量(所以恆 ≤ 成交張數),修前也一樣成立。
+第三條「五檔外 ≥ 期間成交」只比全日加總,有 161 張餘量:修前 commit 重跑 3374 是 58 < 59、6209 是 55 < 61,
+逐檔才看得出差,加總就被蓋掉了。
+
+要當 P-01 的全日證據,補一條逐檔(或逐價位被擠出期間)能判別的檢查,並在修前 commit 跑一次留紅燈;
+不然 verification.md 跟 commit 訊息的說法改成「結構不變式成立」就好,P-01 的保護靠紅先行單元測試。
+```
+
+#### #22 「暫緩撮合後」旗標設上就整天不清
+
+**File**: `.claude/feat/book-replay-changes/evidence/eaten_side_breakdown.py`
+**Line**: 62
+
+**Comment**:
+```
+seen_cleared 同一檔第一次清空之後整天都是 True,恢復連續交易幾十分鐘後的成交還是歸「暫緩撮合後」。
+重算:9/17 那桶 486 張裡有 281 張是在清空 10 分鐘以後(例如 2455 09:53、6715 10:03),9/16 57 張裡 26 張。
+「說不通的只有 6147 一筆」只看了「其他」桶,這一桶沒看。
+
+改成跟上一次清空的距離掛鉤(例如清空後 N 分鐘內,或清空後第一份非空五檔之前),超出的歸「其他」一起看;
+跟 F-01 / F-06 一起重跑。
+```
+
+#### #23 測試頁的前置檢查只印不擋
+
+**File**: `.claude/feat/book-replay-changes/evidence/build_stage_page.py`
+**Line**: 32
+
+**Comment**:
+```
+前置檢查只 print,是 False 也照樣寫出測試頁;docstring 跟 verification.md 都寫「先驗再照做」。
+切換腳本遇到雜湊不符是直接 return 1,這支做法不一致。
+改成 if rebuilt_live != live: sys.exit("現用頁不是現用模板 + blob,先確認另一個 session 的狀態"),每次輸出存進 evidence。
+```
+
+#### #24a evidence 腳本寫死已刪的 worktree 跟暫存資料夾
+
+**File**: `.claude/feat/book-replay-changes/evidence/playback_window_coverage.py`
+**Line**: 18
+
+**Comment**:
+```
+這支跟 eaten_side_breakdown / eaten_side_check / lock_flag_check / no_double_count_check 一樣,
+WORKTREE 寫死成已經刪掉的 feat-book-replay-changes worktree,BOOKDIR 預設是切換後刪掉的 viewer-cdp-book-269。
+照 commit 重跑(實跑過):有 assert 的三支 AssertionError;eaten_side_breakdown / lock_flag_check 不帶參數時找不到預設資料夾,
+帶資料夾參數就悄悄用主 tree 的 copycat(venv 直接 import 解到主 tree);這支的外掛檔資料夾寫死,找不到檔時 missed / n 除以零。
+
+WORKTREE 改由 Path(__file__).resolve().parents[4] 推 repo root,外掛檔資料夾一律從參數讀、預設正式 viewer-cdp-book。
+```
+
+#### #24b 標準答案腳本同樣產不出來
+
+**File**: `.claude/feat/book-replay-changes/evidence/rp269_expected.py`
+**Line**: 26
+
+**Comment**:
+```
+標準答案腳本同樣寫死已刪的 worktree 跟暫存資料夾,rp269_segment_expected 也 import 它,
+verification.md 說「之後重跑用 RP_NEW_PAGE / RP_OLD_PAGE 指到正式頁」,但標準答案這一段根本產不出來。
+一樣改成由 __file__ 推 repo root、BOOKDIR 用參數或環境變數(正式 viewer-cdp-book 跟暫存那份已驗逐位元組相同)。
+```
+
+#### #24c 鎖漲停旗標那筆 commit 沒有驗證小節跟結果檔
+
+**File**: `.claude/feat/book-replay-changes/verification.md`
+**Line**: 25
+
+**Comment**:
+```
+這列 commit(tc4-market-facts 鎖漲停旗標)在 verification.md 沒有對應小節,evidence 裡也沒有 lock_flag_check 的結果檔,
+SKILL.md 卻把這支腳本當 10,300 / 5,866 / 3,174 / 7,814 筆全 outer 的出處。
+補一小節跟 result_lock_flag_check.txt(重跑過數字完全對得上),附重跑指令
+(PYTHONPATH=<repo> python evidence/lock_flag_check.py <回看頁>\viewer-cdp-book)。
+```
+
+#### #25 標準答案的秒數四捨五入跟頁面不一樣
+
+**File**: `.claude/feat/book-replay-changes/evidence/rp269_expected.py`
+**Line**: 77
+
+**Comment**:
+```
+標準答案的「離開 x.x 秒」用 Python :.1f,逢半取偶;頁面 rpDur 用 toFixed(1)。
+250、1250、2250 … 9250 ms 這十個值兩邊不一樣(2250 ms 頁面是「2.3 秒」、標準答案是「2.2 秒」)。
+這 13 組裡有 5 則重新可見剛好踩到(例如 2426 9/16 第 52,683 則、2305 第 9,513 則),這次抽樣的窗沒涵蓋所以 0 不符,
+換抽樣或用播放段腳本播到那幾則會誤報成頁面 bug。
+
+改成 str(Decimal(ms / 1000).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)),0–9949 ms 逐值比過 toFixed(1) 零差異。
+```
+
+#### #26 被竄改的 3 則沒對原始答案比過
+
+**File**: `.claude/feat/book-replay-changes/evidence/verify_changes.mjs`
+**Line**: 46
+
+**Comment**:
+```
+被竄改的 3 則只拿竄改後的版本比,只要有不符就算「抓到竄改」,從來沒對原始標準答案比過;
+它們如果同時有真的不符,會被吃進「竄改抓到」而不會出現在 mismatches。所以「594 則 0 不符」嚴格說是 591 則。
+改成同一次讀到的頁面狀態先比原始 cases[k](不符進 mismatches),再比竄改版確認抓得到。
+```
+
+#### #27 播放同步檢查可能比對 0 次照過
+
+**File**: `.claude/feat/book-replay-changes/evidence/verify_playback_sync.mjs`
+**Line**: 45
+
+**Comment**:
+```
+重畫落在標準答案段外就 continue 跳過,最後沒檢查 checked > 0 或 checked === draws。
+播放沒啟動(90 秒逾時 caps 為空)或段的 t0 / t1 給錯時,一樣會得到「比對 0、不符 0」。
+這次結果是 423 / 423、216 / 216 沒問題;最後補一個 draws > 0 && checked === draws 的判定,不成立寫進 out 並非 0 結束,
+t0 / t1 也寫進結果檔。
+```
+
+#### #28 無頭 Chrome 的暫存 profile 沒清,已經 687 MB
+
+**File**: `.claude/feat/book-replay-changes/evidence/pp_common.mjs`
+**Line**: 20
+
+**Comment**:
+```
+自己 mkdtemp 建的 profile,puppeteer 在 browser.close() 時不會幫你刪,呼叫端也都沒清。
+本機 %TEMP% 下 rp269- 開頭的已經 47 個、687 MB,每跑一次繼續長(#270 的 rp270- 也是同一個寫法)。
+二擇一:拿掉 userDataDir(同一份 puppeteer 實測過:不給時自建 %TEMP%\puppeteer_dev_chrome_profile-*,close() 後自動刪;
+自己給的關掉還在),或 close 後 rmSync(dir, {recursive: true, force: true});
+現有的 rp269- / rp270- 暫存資料夾可以順手清掉。
+```
+
+#### #29 驗收樣本的數字沒有字面斷言
+
+**File**: `.claude/feat/book-replay-changes/evidence/rp269_expected.py`
+**Line**: 243
+
+**Comment**:
+```
+驗收樣本只是加進抽樣,期望值還是取自 decode:引擎要是在真資料上把驗收值算壞(例如淨掛變 +80),
+verify_changes 照樣 594 / 594 過。這次的數字有截圖逐字核對所以沒事,風險在之後重產外掛檔時拿這支當回歸。
+(tests 760–812 行已用合成列字面斷言同形樣本,缺的是「正式檔產出 = 字面」這一道。)
+產出前加字面斷言:2426 第 41,957 則的重新可見 (left, now, traded, net) == (39, 120, 0, 81) 且 round(away_ms / 1000) == 155;
+2489 賣 39.2 同樣處理。
+```
+
+#### #30 切換腳本最後的比對不影響結束碼
+
+**File**: `.claude/feat/book-replay-changes/evidence/switch_live_269.py`
+**Line**: 82
+
+**Comment**:
+```
+最後這個比對只印出 True / False,之後一律 return 0;前面的 assert 在 python -O 下也會被拿掉。
+verification.md 把 exit 0 列成切換證據,但結束碼其實不代表新頁正確(這次印的是 True,沒事)。
+比對 False 時印出並 return 1,assert 改成明確的 if / return。
+```
+
+#### #31 切換腳本沒先確認外掛檔備份,而且先換模板才蓋外掛檔
+
+**File**: `.claude/feat/book-replay-changes/evidence/switch_live_269.py`
+**Line**: 67
+
+**Comment**:
+```
+蓋掉 160 個正式外掛檔之前,沒檢查 viewer-cdp-book.bak-20260917-pre269 在不在、跟正式 v1 是不是同一份,只靠 docstring 說備份過。
+順序也是先換模板(第 3 步)才蓋外掛檔(第 4 步),第 4 步中途失敗會留下「模板 v2、資料夾一半 v2、頁面還是舊版」三種狀態混在一起。
+這次順利、備份也人工比過雜湊;下次重用的話:開頭斷言備份存在且逐檔雜湊等於正式檔 → 先複製並驗完外掛檔 → 再換模板 → 再重建,
+複製後比對正式資料夾與暫存區的檔名集合相等。
+```
+
+#### #32 峰值記憶體只掃直屬子程序,也不是 commit 峰值
+
+**File**: `.claude/feat/book-replay-changes/evidence/run_with_peak_memory.py`
+**Line**: 84
+
+**Comment**:
+```
+docstring 說掃「子孫程序」,children_of 只比 th32ParentProcessID == proc.pid,只有直屬子程序。
+讀的也是 PeakWorkingSetSize(實體駐留)不是 commit,記憶體吃緊、工作集被修剪時會低估實際需求。
+這次 book-replay 沒有孫程序,數字有效;docstring 改成「直屬子程序」(或改遞迴),同時多印 PeakPagefileUsage。
+```
+
+#### #33 語法檢查抽到 0 段也印 SYNTAX-OK
+
+**File**: `.claude/feat/book-replay-changes/evidence/syntax_check.py`
+**Line**: 26
+
+**Comment**:
+```
+regex 抽不到任何 script(頁面結構或屬性寫法改了)時迴圈不跑,直接印 SYNTAX-OK、exit 0。
+這次確實是 blob + 1 段主程式,沒事;補一行 if not scripts: sys.exit("找不到程式 script 區塊")。
+```
+
+#### #34 量沒變的淡色行沒掛「無法分辨」—— 不是本 PR 缺陷
+
+**File**: `.claude/feat/book-replay-changes/evidence/viewer_cdp_template.269.html`
+**Line**: 674
+
+**Comment**:
+```
+不是本 PR 缺陷。量沒變、期間也沒成交的「回到五檔」依 user 拍板照列成淡色一行,這一支本來就沒有期間變化可以標;
+「定義與規則」也已經對所有回到五檔寫明「看不到的那段無法分辨是一次掛進或分次堆積」。
+如果希望淡色行尾也掛一個短註(例如「期間掛撤無法分辨」),算新的顯示需求另外提。
+```
+
+## CC 主軸原始 findings(first-pass, context-aware)
+
+python-reviewer ×5 chunk 原文摘要(完整原文依 chunk 保存於本 session;合併規則:B-5 與 C-5 併入 A-4 → F-24(同根因:evidence 腳本寫死已刪路徑 / lock_flag 無結果檔);E-3 併入 D-4 → F-04(同一段 `_EatLedger._add`:實作只合併相鄰 + 合併無測試))。
+
+#### A-1 [MEDIUM] evidence/no_double_count_check.py:3-56 — 兩條主要不變式靠結構恆成立、加總那條有餘量,證明不了 P-01 → F-21
+#### A-2 [LOW] evidence/eaten_side_breakdown.py:42-65 — seen_cleared 整天不清、暫緩撮合後桶歸錯、只看了其他桶 → F-22
+#### A-3 [LOW] evidence/build_stage_page.py:32-36 — 前置檢查只 print 不擋 → F-23
+#### A-4 [LOW] evidence/playback_window_coverage.py:18-23(及 eaten_side_breakdown / eaten_side_check / lock_flag_check / no_double_count_check)— 寫死已刪路徑、lock_flag 無結果檔 → F-24
+#### A-5 [LOW] code-review-round-1.json:24-34 — 增量快篩數字過時(+33 / −27、1x 420、只動 finding 的點)→ F-19
+#### B-1 [LOW] evidence/rp269_expected.py:77-79 — dur 逢半取偶與 toFixed 不同 → F-25
+#### B-2 [LOW] evidence/verify_changes.mjs:46-47 — 竄改 3 則沒對原始答案比,實為 591 則 → F-26
+#### B-3 [LOW] evidence/verify_playback_sync.mjs:44-45 — 可能比對 0 次照過 → F-27
+#### B-4 [LOW] evidence/pp_common.mjs:20 — 暫存 profile 累積 47 個 / 687 MB → F-28
+#### B-5 [LOW] evidence/rp269_expected.py:26-33 — 寫死已刪 worktree 與暫存資料夾 → F-24(併)
+#### B-6 [LOW,參考用] evidence/rp269_expected.py:243-244 — 驗收樣本數字沒有字面斷言 → F-29
+#### B-7 [LOW] evidence/switch_live_269.py:82-83 — 最後比對不影響結束碼 → F-30
+#### B-8 [LOW] evidence/switch_live_269.py:61-69 — 沒先確認外掛檔備份、先換模板 → F-31
+#### B-9 [LOW] evidence/run_with_peak_memory.py:84 — 只掃直屬子程序、非 commit 峰值 → F-32
+#### B-10 [LOW] evidence/syntax_check.py:17-26 — 0 段照印 SYNTAX-OK → F-33
+#### C-1 [LOW] evidence/viewer_cdp_template.269.html:654-686 — 同一刻價量兩種寫法 → F-15
+#### C-2 [LOW] evidence/viewer_cdp_template.269.html:113-115 — 標亮組淡色行對比 2.7:1 / 3.6:1 → F-16
+#### C-3 [LOW] evidence/viewer_cdp_template.269.html:673-674 — 量沒變淡色行缺「無法分辨」標示 → F-34
+#### C-4 [LOW] verification.md:52 — 寫待補留言但已貼 → F-17
+#### C-5 [LOW] verification.md:25 — tc4-market-facts commit 無驗證小節與結果檔、腳本預設路徑已不存在 → F-24(併)
+#### C-6 [LOW] verification.md:112 — 「13 檔 × 兩天」 → F-18
+#### C-7 [LOW,參考用] CLAUDE.md:128 — 只讀最新版 + 永久保留 + 120 交易日保留期,下次升版衝突 → F-20
+#### D-1 [MEDIUM] copycat/book_replay.py:370-439 — 第一份五檔那則的成交進待扣 + 由舊到新扣,撤單變成交、吃檔記錯列 → F-01
+#### D-2 [LOW] copycat/book_replay.py:386-397 — 1815 前一日成交的舊簿當第一份五檔 → F-02
+#### D-3 [LOW] copycat/book_replay.py:1018-1071 — decode 不核對種類 / 視野 / 完整性 / 排序 → F-03
+#### D-4 [LOW] copycat/book_replay.py:483-488 — 同一格合成一項只合併相鄰 → F-04
+#### D-5 [LOW] docs/next-time.md:3-7 — 側別矛盾歸因被 D-1 放大 → F-06
+#### D-6 [LOW,參考用] copycat/book_replay.py:1-1118 — 模組 445 → 1,118 行 → F-05
+#### E-1 [MEDIUM] tests/test_book_replay.py:1033-1067 — 檔位只數限價分不出、鎖跌停零測試 → F-07
+#### E-2 [MEDIUM] tests/test_book_replay.py:987-1148 — 吃檔退路(扣到那一則的前一則)無測試 → F-08
+#### E-3 [LOW] tests/test_book_replay.py:987-1148 — 同一格合成一項無測試 → F-04(併)
+#### E-4 [LOW] tests/test_book_replay.py:449-498 — 由舊到新扣的順序無測試 → F-09
+#### E-5 [LOW] tests/test_book_replay.py:1390 — index == 0 守門與清空成交則未測 → F-10
+#### E-6 [LOW] tests/test_book_replay.py:1646-1709 — decode 六個檢查無竄改案 → F-11
+#### E-7 [LOW] tests/test_book_replay.py:1660-1661 — match 字串是其他訊息子字串 → F-12
+#### E-8 [LOW] tests/test_book_replay.py:500-1031 — 測試檔膨脹與近重複 fixture → F-13
+#### E-9 [LOW] tests/test_book_replay.py:543-1664 — `_at` 型別與註解寫法 → F-14
+
+逐檔 accounting(五塊聯集 = F):A — code-review-round-1.json(F-19)、`REVIEWED_NO_ISSUES: evidence/base_hashes_before_269.txt`(第一行 = 切換時備份模板雜湊 28ef…)、evidence/build_stage_page.py(F-23)、`REVIEWED_NO_ISSUES: evidence/cli_run_20260916.txt`、`REVIEWED_NO_ISSUES: evidence/cli_run_20260917.txt`(與 verification / CLAUDE.md §1 一致)、`REVIEWED_NO_ISSUES: evidence/diff_text.py`、`REVIEWED_NO_ISSUES: evidence/dom_regression.mjs`(1,340 = 10 份畫面 × 14 鍵 + 120 重播取樣 × 10 鍵,已核)、evidence/eaten_side_breakdown.py(F-22、F-24)、evidence/eaten_side_check.py(F-24)、evidence/lock_flag_check.py(F-24)、`REVIEWED_NO_ISSUES: evidence/make_old_page_after_switch.py`、evidence/no_double_count_check.py(F-21、F-24)、`REVIEWED_NO_ISSUES: evidence/patch_template_269.py`(對備份模板重套、產出雜湊與 commit 的模板相同)、`REVIEWED_NO_ISSUES: evidence/peek.mjs`、evidence/playback_window_coverage.py(F-24);B — evidence/pp_common.mjs(F-28)、`INTENTIONALLY_SKIPPED: evidence/replay269-2305-0905-cleared-dark.png — 二進位截圖,DOM 文字已核`、`INTENTIONALLY_SKIPPED: evidence/replay269-2305-0905-cleared-light.png — 同上`、`INTENTIONALLY_SKIPPED: evidence/replay269-2305-0907-pushed-out-light.png — 同上`、`INTENTIONALLY_SKIPPED: evidence/replay269-2426-0948-reappear-dark.png — 同上`、`REVIEWED_NO_ISSUES: evidence/replay269-2426-0948-reappear-light.png`(目視與 SC-1 一致)、`INTENTIONALLY_SKIPPED: evidence/replay269-2426-medium-1100.png — 同上`、`INTENTIONALLY_SKIPPED: evidence/replay269-2426-narrow-390.png — 同上`、`INTENTIONALLY_SKIPPED: evidence/replay269-2489-1004-sweep-eats-light.png — 同上`、`REVIEWED_NO_ISSUES: evidence/result_dom_regression.json`、`REVIEWED_NO_ISSUES: evidence/result_dom_regression_live.json`、`REVIEWED_NO_ISSUES: evidence/result_no_double_count.txt`、`REVIEWED_NO_ISSUES: evidence/result_playback_sync.json`、`REVIEWED_NO_ISSUES: evidence/result_playback_window_coverage_20260916.txt`、`REVIEWED_NO_ISSUES: evidence/result_playback_window_coverage_20260917.txt`、`REVIEWED_NO_ISSUES: evidence/result_screens.json`、`REVIEWED_NO_ISSUES: evidence/result_switch_live.txt`、`REVIEWED_NO_ISSUES: evidence/result_verify_changes.json`(嚴格口徑見 F-26)、`REVIEWED_NO_ISSUES: evidence/result_verify_changes_live.json`(以上結果檔數字皆與 verification.md 逐項一致)、`INTENTIONALLY_SKIPPED: evidence/review_round1_repo.diff — round-1 review 自動產生的輸入 diff`、evidence/rp269_expected.py(F-24、F-25、F-29)、`REVIEWED_NO_ISSUES: evidence/rp269_segment_expected.py`(路徑問題繼承自 rp269_expected,併 F-24)、`REVIEWED_NO_ISSUES: evidence/rp_load.py`、evidence/run_with_peak_memory.py(F-32)、`REVIEWED_NO_ISSUES: evidence/screens.mjs`、evidence/switch_live_269.py(F-30、F-31)、evidence/syntax_check.py(F-33)、evidence/verify_changes.mjs(F-26)、evidence/verify_playback_sync.mjs(F-27);C — evidence/viewer_cdp_template.269.html(F-15、F-16、F-34)、`INTENTIONALLY_SKIPPED: evidence/viewer_cdp_template.diff — 自動產生的 diff,只用來定位改動`、`INTENTIONALLY_SKIPPED: evidence/viewer_cdp_template.review1.diff — 同上`、verification.md(F-17、F-18、F-24)、`REVIEWED_NO_ISSUES: .claude/skills/tc4-market-facts/SKILL.md`(新增四個數字重跑相符)、CLAUDE.md(F-20)、`REVIEWED_NO_ISSUES: CONTEXT.md`(三個術語與引擎一致);D — copycat/book_replay.py(F-01–F-05)、docs/next-time.md(F-06);E — tests/test_book_replay.py(F-04、F-07–F-14)。合計 covered 20 / REVIEWED_NO_ISSUES 24 / INTENTIONALLY_SKIPPED 10 / MISSED 0。
+
+### Search-proof 與機制鏈(Self-Verify R6 / R8 補證)
+
+補證者 = main session(接手本輪 review 的 session,2026-09-18 00:00 前後台北時間)第一手實跑;reviewer / 同軸複查員留下的腳本一律重跑、不引用其自陳輸出。路徑簡寫:`$WT` = review worktree `C:/side-project/copycat/.worktrees/review-pr-279`(HEAD `a6b100020d32…`,`git status --porcelain` 空);`$BOOK` = 正式外掛檔 `C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book\2026-09-16|17\*.js`(各 80 檔);`$OLD` = reviewer / 複查員腳本所在 `C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat--claude-worktrees-feat-book-replay-changes\68331ef2-8912-4bd0-8a42-41626cb8e29b\scratchpad`(其 `harness.py` 以 `sys.path.insert(0, $WT)` 載入引擎並 assert `br.__file__` 前綴、`load()` = `parse_plugin_js` + `decode`、`rows_of()` = 把每則還原成 `TickRow`;`variants.py::FIX1` = `:370` 條件加 `and views is not None`,`FIX2` = `_absorb` 先扣當則自己的成交);`$SP` = 補證腳本與輸出 `C:\Users\USER\AppData\Local\Temp\claude\C--side-project-copycat\88bedf60-0c62-4a56-9409-c0172419b535\scratchpad`(`r6_tests_evidence.py` / `r6_files_evidence.py` / `r6_misc_evidence.py` / `r8_profile_probe.mjs` 與同名 `.out.txt`、`rerun\*.txt`)。python = `C:\side-project\copycat\.venv\Scripts\python.exe`(3.13,`PYTHONUTF8=1`、`PYTHONDONTWRITEBYTECODE=1`),node 24.13。
+
+**仍成立理由(全條共用)**:產報告前重抓 `gh pr view 279` → headRefOid `a6b10002…` / baseRefOid `71c9f077…` / MERGED;`git rev-parse origin/master` = `3024887a`;`git diff --stat a6b10002 origin/master -- . ':!graphify-out'` 空 → master 上的引擎、測試、證據腳本、文件與受審版本逐字相同;`$BOOK` 160 檔最後寫入 2026-09-17 16:56:58–59(切換當下,review 開工後未再改寫);兩天 tick parquet(`data/ticks/2026091{6,7}.parquet`、`-book.parquet`)仍在。測試強度類的突變與插樁全在 `$SP\r6_mut`(複製 `$WT/copycat` 與 `tests/test_book_replay.py`,`PYTHONPATH` 指複本,import 來源印出確認)上做,review worktree 未動;基準 87 passed、對照突變 `TRADE_CARRY_MESSAGES = 7` → 1 failed(證明突變機制有效)。
+
+- **F-01**。機制鏈:`book_replay.py:370-372` 成交進 `unmatched` 的條件只有 `trade is not None and price_milli is not None and qty`、不看 `views`;`:390-391` `elif views is None:` 只建視野、不呼叫 `step` → 第一份五檔那則(成交後簿)自己的減量永遠比不到;`:431` `_absorb` 以 `for trade in unmatched` 由舊到新扣;`:463-465` 吃檔記到 `trade.index`。重現:`$OLD\verify_c4f1.py` —— 合成三則(`tests` 的 `_row`)第 1 則簿則 `LevelChange(ask, 100000, 20→17, traded=3)`(純撤單被算成交)、第 2 則成交自己的減量 `traded=5` 但吃檔 `()`、第 0 則吃檔 `ask 1 × 8`;正式 `2026-09-17\5314.js` #0 09:00:12.632 成交 27.75 × 11,090 吃檔 `ask 1 × 130`,#4 / #5(.659 / .664)簿則 `LevelChange(ask, 27750, 22536→22426, traded=110)` / `22426→22406, traded=20`;`$OLD\e1_5314b.py` #0 之後下一筆成交是 #19(09:00:12.733,吃市價佇列 20 張)= 第 20 則。兩天量化:`$OLD\e1_measure.py fix1`(每檔以還原輸入跑 FIX1 變體,逐則比 `LevelChange.traded`(鍵 = 側, 價)與成交則 `eaten`)→ 09-16 traded 不同 10 項、原本多算成交 30 張、少算 0,吃檔不同 57 列;09-17 12 項、171 張、0,72 列(117 s / 151 s)。吃檔記錯列:`$OLD\s2_s5.py`(FIX1 + FIX2)09-16 3481 #0 `[ask 1 −296]` → `[]`、#7 `[]` → `[ask 1 −296]`;1303 #1 → #3 65 張;1326 #1 → #6 22 張。範圍:`$OLD\e1_scope.py`(FIX1 + FIX2)吃檔不同 09-16 123 列 = 各檔前 50 則且 09:01 前 95 + 其後 28;09-17 134 = 114 + 20;其後那段含改扣法本身的變動(例 2489 09-16 #31735 / #31737 10:47:41、非集合競價)。
+- **F-02**。機制:`book_replay.py:390-391` 以第一份非空五檔建視野,不看它是何時收到的簿。第一手:`$OLD\e2_1815.py`(decode 正式 `1815.js`)09-16 `payload["anomalous"] == [0]`,#0 收到 07:31:22.730、`Trade(ms=52,200,000)` = 14:30:00;#1 09:00:03.872 成交 115.5 × 426 外 → `changes` 12 項、`cancelled` 合計 4,591 張(含 `LevelChange(bid, 114000, 1967→172)`、`LeftView(bid, 112500, 120)`、`EnteredView(ask, 117500, 27)`),吃檔 `Eaten(ask, 2, 68)`;#2 09:00:03.904 成交 68 張、自己那則 `LevelChange(ask, 115500, 68→0, traded=68)` 但吃檔 `()`(68 張記到 #1);09-17 #1 09:00:03.614 簿則 12 項、撤單 2,141 張。
+- **F-03**。機制:`book_replay.py:1027-1071` `_check_changes` 逐項只核量 —— LevelChange 前後量對前 / 本則五檔(:1035-1045)、`0 ≤ traded ≤ max(0, before − after)`(:1046);LeftView `qty > 0 且 = 前簿`(:1049);Reappeared `now = 本簿`、`left_index < index`、`away_ms` = 收到時刻差、三量不全 0(:1054-1066);EnteredView `qty > 0 且 = 本簿`(:1068)。沒有依 `_covers` 核種類與視野、沒有比「兩份都看得到且量不同的價位」集合、沒有排序檢查。第一手竄改:`$OLD\e3_tamper.py`(`_sweep_2489_rows`、`keyframe_every=4` 的 wire)被擠出改寫成價位變動撤單 / 刪 `chg[1]` 第一項 / `eat[0]` 檔位 1 → 5 / `chg[10]` 前兩項對調 → `decode` 全部接受(腳本第 5 種「重新可見改掛單」因樣本無 now > 0 未套,不計)。緩解:`cli.py:442` `if book_replay.decode(book_replay.parse_plugin_js(text)) != code_day` 整體比對。建議檢查不誤擋:`$OLD\visibility_check.py 2026-09-16`(依前後兩份 `_side_levels` / `_covers` 核種類 vs 視野、量不同價位必有價位變動、擠出 / 回來必有項、同側價不重複、排序)跑正式 09-16 全 80 檔 → `frames_checked 2,841,113`、失敗 0(63 s)。
+- **F-04**。機制:`book_replay.py:483-488` `_add` 只比 `eats[-1]`。第一手:突變 `:485` 條件 → `if False` 87 passed;插樁「合併分支執行」整份 87 案 **0 次**;合成(reviewer E `$OLD\mut\demo.py` M7:成交 100.0 × 10 → 下一則剩 6 → 再下一則清空)原碼 `(Eaten(ask, 1, 10),)`、突變 `(Eaten(ask, 1, 4), Eaten(ask, 1, 6))`。真資料:`$OLD\e4_scan.py`(只 parse 外掛檔 `eat`,每筆成交三格一組取(側, 檔位))09-16 成交 375,387 筆、多項吃檔 18、同(側, 檔位)非相鄰重複 0;09-17 477,256 / 29 / 0。
+- **F-05**。逐行計數(`r6_files_evidence.py`):`book_replay.py` head 1,118 / `git show 71c9f077:copycat/book_replay.py` 445;`live/signal_state.py` 1,081、`live/tc4.py` 1,320、`capital/client.py` 1,388、`server/signal_hub.py` 1,826、`server/stock_engine.py` 1,944、`server/app.py` 2,210。
+- **F-06**。`docs/next-time.md:3-7` 原文(09-16 33,515 張裡 33,306 市價排隊、其餘歸集合競價 / 暫緩撮合 / 鎖板打開後掃單、「引擎不改」)。第一手:`$OLD\n1_breakdown.py`(分類同 `evidence/eaten_side_breakdown.py`:吃檔側別 ≠ 內外盤期望側時 → 檔位 0 = market_queue、同筆兩側 = both_sides、`ms < 09:00:30` 或 `≥ 13:25` = auction_time、當日見過清空 = after_cleared、其餘 other)09-16 現行 {both 86, auction 30, after_cleared 57, other 36} = 209 → FIX1 + FIX2 {8, 0, 51, 30} = 89;09-17 {121, 104, 486, 137} = 848 → {3, 0, 486, 137} = 626(−26%;528 s)。
+- **F-07**。機制:`book_replay.py:499-501` `sorted((p for level in range(DEPTH) if (p := book[base + level])), reverse=side == bid)` 以真值排除價 0;買方由高到低、價 0 恆在最後,檔位不受影響。缺樣本:AST 掃 `tests/test_book_replay.py` 所有 list 字面中第一元素為 `(0, …)` 的 tuple、依所屬 keyword / 賦值名分組 → `kw bid=` 17、`assign bid =` 1,ask 0、無歸屬 0;`grep -cE "ask[a-z_]*\s*=\s*\[\(0,"` 0、bid 同式 18。插樁:整份 87 案 `_level_of` 遇到市價佇列 bid 側 1 次、**ask 側 0 次**。突變 `:500` → `is not None` 87 passed;合成鎖跌停(demo M22:`ask=[(0, 500), (90_100, 20)]` → 外盤 90.1 × 4)原碼 `Eaten(ask, 1, 4)`、突變 `Eaten(ask, 2, 4)`。真資料:`$OLD\t12_reach.py`(同突變重跑兩天全檔、比成交則吃檔)09-16 0 列、09-17 10 列 / 800 張。
+- **F-08**。機制:`book_replay.py:463-464` `before` 為 `None` 時才求值 `_level_of(self._books[index - 1], …)`。從沒走到:插樁「退路被求值」整份 87 案 **0 次**;突變 `:464` → `level = before` 87 passed;合成(demo M6:簿 ask 100.0 → 成交 100.5 × 3 自帶 ask 100.5 × 10 → 下一則 100.5 剩 7)原碼 `Eaten(ask, 2, 3)`、突變 `Eaten(ask, None, 3)`。真資料:`t12_reach.py` 09-16 44 列 / 751 張、09-17 42 列 / 2,767 張(383 s)。
+- **F-09**。機制:`book_replay.py:431` 由舊到新。插樁「同價位 ≥ 2 筆待扣同時可扣」整份 87 案 **0 次**(順序從未影響任何案);突變 `reversed(unmatched)` 87 passed;合成(demo M29)原碼最後一則 `traded=5`、兩筆各吃 5;突變 `traded=0`、第一筆吃檔 `()`。
+- **F-10**。(a)`book_replay.py:474` `if not trade.qty or side is None or trade.index == 0: return`;插樁:`trade.index == 0` 成為擋下條件 42 次,其中「拿掉就會記五檔外」(以 `self._books[-1]` 算 `_covers`)**0 次** → golden `:1390` 的 `[]` 不依賴守門;突變拿掉 87 passed;合成(demo M8:首則成交 105.0 × 2、1 秒後五層賣方到 102.0)原碼 `()`、突變 `Eaten(ask, None, 2)`。(b)`:386-389` 清空分支 `view.count_trade(current, ledger)`:插樁「帶著成交呼叫」**0 次**、「真的記到期間成交」0 次;突變 → `pass` 87 passed;合成(demo M9)原碼 `traded_away=3`、突變 0。
+- **F-11**。六個突變各自 87 passed:`:1090-1091` 長度 tuple 拿掉 `chg`、`:1049` LeftView `qty <= 0`、`:1068` EnteredView `qty <= 0`、`:1065` Reappeared 三量全 0、`:766` 吃檔側別碼、`:766` 吃檔張數 `<= 0`。例外型別(`$SP\r6_mut\f11.py`,`_sweep_2489_rows` wire `chg.pop()`):原碼 `PluginFormatError`「檔頭 n=11 與 seq / kind / recv / d / chg 長度 (11, 11, 11, 11, 10) 不符」;拿掉長度檢查後 `ValueError: zip() argument 5 is shorter than arguments 1-4`(`book_replay.py:947-955` `zip(…, strict=True)`);`cli.py:449` 只 `except book_replay.PluginFormatError` → traceback。正常流程碰不到:CLI 解的是自己剛編好的 payload(`cli.py:442`)。
+- **F-12**。字面:`book_replay.py:835-837` 算式錯誤訊息同時含「掛入」「撤單」「前量」「後量」「成交」;含「吃檔」的 raise 訊息 3 則(:762 / :767 / :1000);`第 {index|i} 則` 格式 18 則。測試 `:1649-1677` match 用「前量」「後量」「掛入」「成交」「撤單」「吃檔」「第 0 則」。突變:單拿掉 `:1046` 成交範圍檢查 → 1 failed(抓得到);再加 `cancelled` 不 clamp → `-k traded-over-decrease` 單跑 1 passed、全檔 3 failed;只改不 clamp 全檔也是 3 failed(整檔的紅來自 clamp 改動,不會悄悄過)。
+- **F-13**。行數 1,721 / base 675;`tests/server/test_stock_engine.py` 4,475、`tests/server/test_signal_hub.py` 3,249、`tests/capital/test_client.py` 2,306;2426 鎖漲停第一則 `(0, 6_763)` 在 `:505` 與 `:1013` 各一份;檔頭 docstring `:1` 只寫 spec #265 / ticket #267。
+- **F-14**。`tests/test_book_replay.py:543` `def _at(frame_changes: tuple[object, ...], price: int) -> list[object]`、`:545` `getattr(c, "price_milli", None)`;`book_replay.py:97` / `:104` `__all__` 含 `"BookChange"`;測試檔全文無 `BookChange` 字樣(未 import);`:1651` 全寫值、`:1658` 全寫格位、`:1664` 前兩個格位其餘是值。
+- **F-15**。模板 `:225` `fmtP` 以 `replace(/\.?0+$/, "")` 去尾零、`:656` `rpPrice = m => fmtP(m/1000)`;`:701` `rpPx` 依 tick 固定小數、`:654` `rpAt` 用 `rpPx`;呼叫點 `:664` 變動行用 `rpAt`、`:686` 組標頭「成交 ${rpPrice(…)}」;`viewer_cdp_template.diff:203` 的 `rpKind`「× … 張」行前綴為空白(context)= 既有碼。
+- **F-16**。CSS `:111` `.rp-msg.cur{background:var(--sel)}`、`:113` 標頭提亮 `--ink-2`、`:115` `.rp-line.dim{color:var(--muted)}`(標亮組沒有對應提亮);色票 `:7` / `:9` 淺色 `--muted #8A92A3`、`--sel #E8EEFF`,`:13` / `:15` 深色 `#7E8697`、`#26304A`;WCAG 2.x 相對亮度公式實算 2.69:1 / 3.58:1(< 4.5:1)。
+- **F-17**。`verification.md:52` 原文「第 3 條的『播放跨則不漏』更正、第 6 條待收尾時補留言」;`git log -1 --format=%cI a6b10002` = 2026-09-17T16:59:58+08:00(08:59:58Z);`gh api repos/loger-w/copycat/issues/269/comments` 最後一則 `created_at` 2026-09-17T09:01:42Z,第 1 點「更正上一則第 3 點「(播放跨則不漏)」」、第 2 點「首次進入五檔」→ 兩條都已貼。表格原寫的 09:01:38Z 是本機送出指令時刻,已校正。
+- **F-18**。`evidence/rp269_expected.py:34-37` `PLAN`:09-16 10 檔、09-17 3 檔 = 13 組,2426 / 3441 兩日重複 → 不同代號 11;`verification.md:112` 原文「13 檔 × 兩天」。
+- **F-19**。`code-review-round-1.json:24`「+33 / −27」、`:34`「模板增量只動 P-02 / S-04 / S-10 / S-11 的點」與「1x 420」;`viewer_cdp_template.review1.diff` 逐行計 `+` 35 / `-` 29(不含 `+++` / `---`),第一個 hunk(`:7-11`)是懸掛縮排 CSS;`result_playback_sync.json` 1x `draws 423 / checked 423`、10x 216 / 216。
+- **F-20**。`CLAUDE.md:128`(PR head)同列:只收已轉檔日、簿 parquet 120 交易日、外掛檔永久保留、回看頁只讀 v2 / v1 要重產;模板 `:587` `if(p.v !== 2) bad(…)`;`book_replay.py:132` `FORMAT_VERSION = 2`、`:1082` `payload.get("v") != FORMAT_VERSION` → raise;`git grep -c -E "migrat|遷移|轉換器|升版" -- copycat` 命中只在 `server/signal_hub.py` 6、`signal_rules.py` 33、`stock_watchlist.py` 2(訊號規則 / 自選 schema 遷移),`book_replay.py` 與 `cli.py` 0。前瞻風險,列未驗證前提。
+- **F-21**。`evidence/no_double_count_check.py:27-56` 以 `iter_all()` 累加全 80 檔全日總和後比 `level_eaten == traded` 與 `beyond >= away_traded`(非逐檔);前兩條由結構保證:`book_replay.py:613-617` `_traded` 每扣一次同時 `record_absorbed` 與累加 `traded`,`:435` `take = min(remaining, trade.qty)` 不超扣。`result_no_double_count.txt`:1,279,200 = 1,279,200、969 ≥ 808(餘量 161)。第一手:`$OLD\s1_prefix.py`(`git show` 取修前 `ea193356` 與修後 `ace31593` 引擎,重跑 09-16 還原輸入)修前 3374 有檔位吃檔 12,228 = 價位變動成交 12,228、五檔外 58 < 期間成交 59;6209 10,545 = 10,545、55 < 61;修後 59 ≥ 59、61 ≥ 61;超量 0。
+- **F-22**。`evidence/eaten_side_breakdown.py:42` 每檔一次 `seen_cleared = False`、`:45` 遇清空設 True、`:62` `elif seen_cleared:` 歸桶,之後無重置。第一手 `$OLD\s2_s5.py` 以「距最近一次清空 ≥ 10 分鐘」重算「暫緩撮合後」桶:09-16 57 張中 26、09-17 486 張中 281。
+- **F-23**。`evidence/build_stage_page.py:32` `print("現用頁 == 現用模板 + blob:", rebuilt_live == live)` 後,`:33-36` 只 assert 兩個標記計數就無條件寫 `STAGE_PAGE`。
+- **F-24**。兩路徑 `os.path.exists`(worktree `…\.claude\worktrees\feat-book-replay-changes`、`…\viewer-cdp-book-269`)皆 False;寫死行:playback_window_coverage `:18` / `:23`、eaten_side_breakdown `:18` / `:23`、eaten_side_check `:16` / `:23`、lock_flag_check `:15` / `:21`、no_double_count_check `:18`、rp269_expected `:26` / `:33`。照 commit 實跑(`r6_misc_evidence.py`,cwd = `$SP`、不設 PYTHONPATH;venv 直接 `import copycat` 解到 `C:\side-project\copycat\copycat\__init__.py`):eaten_side_check / no_double_count_check / rp269_expected → AssertionError(`:21` / `:25` / `:31` 的 `br.__file__` 前綴 assert);eaten_side_breakdown / lock_flag_check → FileNotFoundError(預設資料夾);playback_window_coverage `2026-09-16` → ZeroDivisionError(glob 空、`:78` `missed / n`)。`evidence/result_lock_flag*` 0 檔、`verification.md` grep `lock_flag` 0 行、`tc4-market-facts/SKILL.md:97-99` 引用該腳本與四個數字;第一手 `$OLD\lock_flag_copy.py`(只把 `WORKTREE` 改指 `$WT`)對 `viewer-cdp-book` 重跑:鎖漲停 outer 10,300 / 5,866、鎖跌停 outer 3,174 / 7,814、inner 0(79 s)。表格與 comment 原寫「沒 assert 的靜默改用主 tree 引擎」只在帶資料夾參數時成立,已校正。
+- **F-25**。`evidence/rp269_expected.py:77-79` `dur` 在 `ms < 9950` 用 `f"{ms / 1000:.1f} 秒"`;模板 `:657` `rpDur` 用 `(ms/1000).toFixed(1)`。逐值比 0–9,999 ms(node `toFixed(1)` vs Python):`:.1f` 不同 10 值 = 250、1250 … 9250;`Decimal(ms / 1000).quantize(Decimal("0.1"), ROUND_HALF_UP)` 不同 0 值。`$OLD\s2_s5.py` 掃 13 組 PLAN 的 Reappeared `away_ms ∈ {250, 1250, …, 9250}` = 5 則(0 起算:2426 #52682 2250 淡色、2305 #9512 250 淡色、2489 #21411 2250、3406 #2577 5250、6770 #18564 2250)。窗:載入當時標準答案 `$OLD\rp269_expected.json`(594 案,與 `result_verify_changes.json` total 594 相符),中間欄 = 目前則往前 60 則,5 則的 `[k, k + 59]` 內都沒有抽樣則(2305 有一案 `land = 9512` 但 `i = 9511`,頁面停在第 9,512 則、看不到第 9,513 則)。比對是逐字(`verify_changes.mjs:38` `same(st.msgs, c.msgs)`),窗一涵蓋就會出現 0.2 / 0.3 的文字不符。
+- **F-26**。`evidence/verify_changes.mjs:46-47` `if (tampered.has(id)) { if (problems.length) result.tampered_caught.push(id); } else if (problems.length) result.mismatches.push(…)`;`result_verify_changes.json` total 594、`tampered_caught` 3(`2026-09-16|2426|0`、`2026-09-16|1815|81555`、`2026-09-17|2303|258806`)、mismatches 0 → 對原始答案實比 591 則。
+- **F-27**。`evidence/verify_playback_sync.mjs:43-49` `if (!e) continue;` 後只累加 `checked`,輸出 `draws` / `checked` 但沒有 `checked > 0` 或 `checked === draws` 判定;`:38` 播放迴圈 90 s 逾時後照常回傳。`result_playback_sync.json` 1x 423 / 423、10x 216 / 216(非空跑)。
+- **F-28**(R8)。`evidence/pp_common.mjs:7` import `chrome-devtools-mcp/build/src/third_party/index.js` 內嵌 puppeteer、`:20` `userDataDir: mkdtempSync(join(tmpdir(), 'rp269-'))`、全檔無清理。原始碼(同一份 bundle):`index.js:72374-72382` Chrome 參數沒有 `--user-data-dir` 才 `isTempUserDataDir = true` 並 `mkdtemp(getProfilePath())`(`:72229-72231` 前綴 `puppeteer_dev_chrome_profile-`);`:72483-72484` 呼叫端給 `userDataDir` 就推 `--user-data-dir`(→ 非暫存);`:72054-72058` 程序結束 `onProcessExit` → `cleanUserDataDir(dir, {isTemp})`,`:72399-72408` 只在 `isTemp` 時 `rm`。實跑 `$SP\r8_profile_probe.mjs`(同一份 puppeteer、Chrome headless):不給 `userDataDir` → `%TEMP%\puppeteer_dev_chrome_profile-bYImsS` 開著時存在、`close()` 後 8 秒內消失;給 `mkdtemp('r8probe-')` → `close()` 後仍在(探針自行刪除)。現況(PowerShell 加總檔案大小):`%TEMP%\rp269-*` 47 個 678 MB、`rp270-*` 2 個 27 MB、`puppeteer_dev_chrome_profile-*` 0 個(reviewer 當時 `du` 687 MB,差在配置區塊 vs 檔案大小)。comment 的修法句已改寫成實測敘述。
+- **F-29**。`evidence/rp269_expected.py:243-244` 只把 41954–41959 加進 `picks`,期望值由 `:237-238` `br.decode(payload)` 算;腳本內沒有 39 / 120 / 81 / 154,911 的字面斷言。tests `:760-782` 以合成列字面斷言 2426 `Reappeared("bid", 98_000, left_qty=39, now_qty=120, traded_away=0, left_index=1, away_ms=154_911)` 與 `net_placed == 81`,`:791-809` 斷言 2489 `Reappeared("ask", 39_200, 80, 0, 80, 1, 11_056)` 與 `net_placed == 0`。第一手 decode 正式檔:2426 09-16 index 41956(第 41,957 則)`Reappeared(bid, 98000, 39, 120, 0, left_index=39391, away_ms=154911)`、2489 index 11608(第 11,609 則)`Reappeared(ask, 39200, 80, 0, 80, left_index=11584, away_ms=11056)` → 值正確。表格原寫「沒有字面斷言,tests 也只有合成資料」易讀成 tests 沒斷言,已校正。
+- **F-30**。`evidence/switch_live_269.py:59` `assert b"\r\n" in work and …`、`:81` `assert blob`(`python -O` 會移除)、`:82` 比對結果只進 `step()` 字串、`:83` `return 0`;`verification.md:187`「正式跑輸出 `evidence/result_switch_live.txt`,exit 0」列為證據。
+- **F-31**。`evidence/switch_live_269.py:49-53` 只對模板 / 現用頁兩個備份檔 `dst.exists()`;外掛檔資料夾備份 `viewer-cdp-book.bak-20260917-pre269` 只出現在 docstring `:6`;`:62` 先寫模板、`:63-73` 才逐檔複製外掛檔並比雜湊;沒有檔名集合比對;`verification.md:37-38` 記 16:1x 人工逐檔比雜湊。
+- **F-32**。docstring `:4-5`「子孫程序」;`:65-76` `children_of` 以 `th32ParentProcessID == pid` 篩(直屬);`:62` 回傳 `PeakWorkingSetSize`(`:34` 結構有 `PeakPagefileUsage` 但未輸出)。本次量測對象無孫程序:`book_replay.py` / `ticks.py` grep `subprocess|multiprocessing|ProcessPool|Popen` 0 行、`cli.py:400-460` 0 行。
+- **F-33**。`evidence/syntax_check.py:12-26` 抽 script(排除 `type="text/plain"`)後直接迴圈,無 `len(scripts) == 0` 判定 → 0 段時印 `script blocks 0` 與 `SYNTAX-OK`;模板實際 script 2 段、會被抽的 1 段。
+- **F-34**。模板 `:673-674` 淡色支條件 `left === now && !traded`、`:675` 其餘走完整三行;`:192`「定義與規則」原文含「看不到的那段無法分辨是一次掛進或分次堆積;量沒變、期間也沒成交時…」。
+
+**審查工具比較段的兩句執行型說法**:「價位離開當下仍有同價位待扣成交」—— `$OLD\stranded.py 2026-09-16`(在 `_pop_leaving` 回傳處插樁,掃 `unmatched` 裡 `qty > 0 且 price == 離開價`)全 80 檔 0 次;「2344 09-17 187,741 則」—— `$OLD\prof.py 2026-09-17 2344` decode 後 187,741 則、`replay_books` 3.23 s(reviewer 當時 2.71 s)、`_covers` 5,633,754 次。
+
+**報告開頭流程關卡的 absence 說法**:`command -v codex` / `agy` / `sem` 三者皆 not found;作者校準檔路徑依 Step 2.2 = `<repo-root>/docs/pr-review-calibration/<author-slug>.md`,`ls docs/pr-review-calibration` → No such file or directory;`git diff --name-only 71c9f077 a6b10002` 54 檔、`grep -cE '\.(jsx|tsx)$'` 0(React-doctor N-A 的依據);`git diff --shortstat` 同區間 = 54 files, +7520 / −22;`~/.claude/scripts/sem-pr-blast-radius.sh` 存在(Blast radius 關卡有跑、因 sem 未安裝而空輸出)。
+
+## Codex 原始 findings(first-pass, diff-only)
+
+N-A —— Codex 軸未啟用(user 已停用;沿 #190 起前例;本機亦無 codex CLI)。零 Codex finding。
+
+## Opus 對 Codex 的複查結果
+
+N-A —— 無非 CC 軸 finding 可複查(Codex 中性 / 對抗 / Gemini 皆未啟用)。
+
+## Codex 對 Opus 的複查結果(對稱化 4.2)
+
+Codex 軸未啟用 → 本段以**同軸 `code-reviewer` subagent 獨立複查**代替(未參與 first-pass、唯讀、禁外查、strict JSON 34/34 ID 集合完整無重複;**非跨軸證據**,REFUTED 率不可解讀為 first-pass 命中率)。34 條全 non-strict-liability;C4 未派,無 C4 finding。F-01 另由 main session 以合成三則樣本與 5314 9/17 正式外掛檔獨立重現(第 4、5 則簿則 traded 110 / 20、開盤列吃檔「賣1 −130」)。
+
+| Opus # | Opus reviewer | Opus title | Verdict(同軸) | 原始 → 校正 severity | 同軸 evidence | 備註 |
+|---|---|---|---|---|---|---|
+| D-1 → F-01 | python-reviewer(D) | 開盤成交搶減量 | CONFIRMED | MED→MED | 還原 TickRow 重跑、12 檔重編逐位元組相同;兩天 10 項 30 張 / 12 項 171 張;吃檔不同列 57 / 72 | 4.3b lone:他軸 N-A;修法需權衡(見表格)→ Should |
+| D-2 → F-02 | python-reviewer(D) | 1815 舊簿當第一份 | CONFIRMED | LOW→LOW | 1815 兩天正式檔:12 項、撤單 4,591 / 2,141 張 | Nice |
+| D-3 → F-03 | python-reviewer(D) | decode 不核種類視野 | CONFIRMED | LOW→LOW | 4 種竄改皆被接受;CLI 整體比對緩解 | Nice |
+| D-4 + E-3 → F-04 | python-reviewer(D + E) | 合成一項只合併相鄰 | CONFIRMED | LOW→LOW | `if False` 87 passed;兩天非相鄰重複 0 | Nice |
+| D-6 → F-05 | python-reviewer(D) | 模組 1,118 行 | PARTIAL | LOW→LOW | 行數屬實;專案 6 個模組 > 1,000 行 | Nice / no-op |
+| D-5 → F-06 | python-reviewer(D) | next-time 歸因被放大 | CONFIRMED | LOW→LOW | 9/16 209 → 89 張;9/17 848 → 626 | Nice;9/17 較弱 |
+| E-1 → F-07 | python-reviewer(E) | 鎖跌停檔位零測試 | CONFIRMED | MED→LOW | `is not None` 87 passed;真資料 9/17 10 列 | Nice;現行正確 |
+| E-2 → F-08 | python-reviewer(E) | 吃檔退路無測試 | CONFIRMED | MED→LOW | `level = before` 87 passed;真資料 44 / 42 列 | Nice;現行正確 |
+| E-4 → F-09 | python-reviewer(E) | 扣法順序無測試 | CONFIRMED | LOW→LOW | `reversed` 87 passed | Nice;隨 F-01 |
+| E-5 → F-10 | python-reviewer(E) | 守門與清空成交則 | CONFIRMED | LOW→LOW | 兩突變各 87 passed | Nice |
+| E-6 → F-11 | python-reviewer(E) | decode 六檢查無竄改案 | CONFIRMED | LOW→LOW | 六突變各 87 passed | Nice |
+| E-7 → F-12 | python-reviewer(E) | match 字串太寬 | PARTIAL | LOW→LOW | 組合突變整檔仍 3 failed | Nice |
+| E-8 → F-13 | python-reviewer(E) | 測試檔膨脹 | PARTIAL | LOW→LOW | 事實屬實;專案有更大的測試檔 | Nice / no-op |
+| E-9 → F-14 | python-reviewer(E) | `_at` 型別與註解 | CONFIRMED | LOW→LOW | 逐行讀 :543 / :1651 / :1658 / :1664 | Nice |
+| C-1 → F-15 | python-reviewer(C) | 價量兩種寫法 | PARTIAL | LOW→LOW | 價是新造成;頁頭張數為既有碼 | Nice |
+| C-2 → F-16 | python-reviewer(C) | 淡色行對比 | PARTIAL | LOW→LOW | 2.69:1 / 3.58:1 實算屬實;沿用既有色 | Nice |
+| C-4 → F-17 | python-reviewer(C) | 待補留言已貼 | CONFIRMED | LOW→LOW | commit 08:59:58Z、留言 09:01:38Z(本機送出指令時刻;GitHub `created_at` 為 09:01:42Z,Self-Verify 補證校正) | Nice |
+| C-6 → F-18 | python-reviewer(C) | 13 檔 × 兩天 | PARTIAL | LOW→LOW | 13 組、不同代號 11 檔 | Nice;reviewer 的 12 檔也不對 |
+| A-5 → F-19 | python-reviewer(A) | review JSON 數字過時 | CONFIRMED | LOW→LOW | review1.diff +35 / −29、draws 423 | Nice |
+| C-7 → F-20 | python-reviewer(C) | 升版與保留期衝突 | CONFIRMED | LOW→LOW | 模板 `p.v !== 2`、decode 只認 FORMAT_VERSION | Nice;前瞻 |
+| A-1 → F-21 | python-reviewer(A) | 不重複扣證明不了 | CONFIRMED | MED→LOW | 修前 commit 重跑:3374 58 < 59、6209 55 < 61 | Nice;單元測試仍在 |
+| A-2 → F-22 | python-reviewer(A) | 分桶旗標不清 | CONFIRMED | LOW→LOW | 9/17 281 / 486、9/16 26 / 57 張 | Nice |
+| A-3 → F-23 | python-reviewer(A) | 前置檢查只印 | CONFIRMED | LOW→LOW | :32 只 print | Nice |
+| A-4 + B-5 + C-5 → F-24 | python-reviewer(A + B + C) | 寫死已刪路徑 | CONFIRMED | LOW→LOW | 兩路徑不存在;改路徑重跑 lock_flag 四數字相符 | Nice |
+| B-1 → F-25 | python-reviewer(B) | 秒數進位不同 | CONFIRMED | LOW→LOW | node / Python 逐值;5 則踩到 | Nice |
+| B-2 → F-26 | python-reviewer(B) | 竄改 3 則沒比原始 | CONFIRMED | LOW→LOW | :46-47 邏輯 | Nice |
+| B-3 → F-27 | python-reviewer(B) | 比對 0 次照過 | CONFIRMED | LOW→LOW | :44-45 無下限;本次 423 / 216 非空跑 | Nice |
+| B-4 → F-28 | python-reviewer(B) | 暫存 profile 洩漏 | PARTIAL | LOW→LOW | 47 個 / 687 MB;#270 同寫法 | Nice |
+| B-6 → F-29 | python-reviewer(B) | 驗收值無字面斷言 | PARTIAL | LOW→LOW | 截圖已逐字核;正式檔值正確 | Nice |
+| B-7 → F-30 | python-reviewer(B) | 切換比對不影響結束碼 | CONFIRMED | LOW→LOW | :82 固定 return 0 | Nice |
+| B-8 → F-31 | python-reviewer(B) | 切換缺備份檢查 / 順序 | CONFIRMED | LOW→LOW | :62 先寫模板、:63-73 才蓋外掛檔 | Nice |
+| B-9 → F-32 | python-reviewer(B) | 只掃直屬子程序 | CONFIRMED | LOW→LOW | children_of :65-76;讀 PeakWorkingSetSize | Nice |
+| B-10 → F-33 | python-reviewer(B) | 0 段照過 | CONFIRMED | LOW→LOW | :12-26 無 len 檢查 | Nice |
+| C-3 → F-34 | python-reviewer(C) | 淡色行缺無法分辨 | OUT_OF_SCOPE | LOW→LOW | 淡色支只在量同且期間成交 0;定義區已統一註明 | 參考用 |
+
+## Action Items
+
+**校準套用**:無作者校準檔(`xu-min-yu.md` 不存在)、本輪無套用。6c Refactor Intent Gate:本 PR 無「移除 / 削弱既有防護」類 finding,免。6d-1:F-20(下次升版才會撞到)、F-06 的 9/17 部分(歸因比例依修法版本而定)為假設性或條件性情境,皆在 Nice 以下。6d-3:無 Must Fix —— F-01 寫得出 user-visible 重現路徑(5314 9/17 重播到 09:00:12.659,中間欄「賣 27.75 −110 成交」但那一刻沒有成交)且影響永久外掛檔的資料正確性,兩半條件都在;但 severity 經同軸複查維持 MEDIUM(範圍以開盤那一刻為主:只套「第一份五檔那則不進待扣」時兩天撤單變成交 10 項 30 張 / 12 項 171 張、吃檔不同 57 / 72 列;兩個修法都套時吃檔不同 123 / 134 列,其中 95 / 114 列在各檔前 50 則且 09:01 前,其餘散在盤中、含改扣法本身的變動;兩天簿 parquet 仍在 `data/ticks/`、保留期內可重產 —— 數字見下方「Search-proof 與機制鏈」F-01。原句「範圍限開盤與集合競價時刻」經補證只支持「以開盤為主」,已改寫),且缺跨軸證據,落 Should Fix。Provenance cap:N-A(base = master)。未驗證前提已拿掉重估:F-01 拿掉「改成先扣當則自己的成交一定比較好」這個 reviewer 推論(同軸複查指出會改到盤中每天 20–28 列、未必都變好)後,缺陷本身仍由兩組第一手重現支撐 → Should 不變;F-06 拿掉「修法版本」前提後只剩「歸因未經修法版驗證」→ Nice 不變;F-16 的「拍板不改」經查是實作端在 verification 的註記、非 user 決定,已改寫。同軸複查把 F-07 / F-08 / F-21 由 MEDIUM 校正為 LOW(現行程式正確、屬回歸防線或證據說法),採校正值。
+
+### Must Fix（合併前必修）
+
+無。
+
+### Should Fix（強烈建議）
+
+- **F-01** 開盤那筆成交進待扣、由舊到新扣,撤單被寫成成交、吃檔記錯列(MEDIUM,CONFIRMED;**ask-user**:修法取捨 + 重產兩天永久外掛檔)。
+
+### Nice to Have（可選優化）
+
+- **F-02** 1815 前一日成交的舊簿不拿來當第一份五檔(**ask-user**,與 F-01 同一批重產)。
+- **F-03** decode 補種類 / 視野 / 完整性 / 排序檢查。
+- **F-04** 吃檔依(側別、檔位)合併 + 合併測試。
+- **F-05** 模組拆 package(no-op,下次動它再議)。
+- **F-06** next-time 側別矛盾的數字與歸因(**ask-user**,等 F-01)。
+- **F-07** 鎖跌停賣方佇列檔位測試。
+- **F-08** 吃檔退路測試。
+- **F-09** 待扣扣法順序測試(**ask-user**,隨 F-01)。
+- **F-10** 開機成交守門與清空成交則測試。
+- **F-11** decode 六個檢查的竄改案。
+- **F-12** 竄改案 match 改獨有片語。
+- **F-13** 測試檔整理(no-op,另開純重構)。
+- **F-14** `_at` 型別與竄改案註解。
+- **F-15** 價格顯示統一(**ask-user**)。
+- **F-16** 標亮組淡色行提亮(**ask-user**)。
+- **F-17** verification 留言狀態。
+- **F-18** verification「13 組(11 檔)」。
+- **F-19** review JSON 增量數字。
+- **F-20** 外掛檔升版政策(**ask-user**)。
+- **F-21** 不重複扣的逐檔檢查或改說法。
+- **F-22** 側別分桶改以距清空時間。
+- **F-23** build_stage_page 前置檢查擋下。
+- **F-24** evidence 腳本路徑可重跑 + lock_flag 結果檔與小節。
+- **F-25** 標準答案秒數改 ROUND_HALF_UP。
+- **F-26** 竄改 3 則也比原始答案。
+- **F-27** 播放同步判定 checked === draws。
+- **F-28** 暫存 profile 清理。
+- **F-29** 驗收樣本字面斷言。
+- **F-30** 切換比對影響結束碼。
+- **F-31** 切換腳本備份檢查與順序。
+- **F-32** 峰值記憶體 docstring 與 commit 峰值。
+- **F-33** 語法檢查 0 段失敗。
+
+### 參考用
+
+- **F-34** 量沒變的淡色行缺「無法分辨」標示:淡色一行是 user 拍板的格式、該支沒有期間變化可標(OUT_OF_SCOPE);要加短註屬新需求。
+
+## 審查工具比較 (qualitative)
+
+- CC 主軸(python-reviewer × 5 chunk,context-aware):34 條中 1 條 Should、32 條 Nice、1 條參考用,零 Must。分佈:引擎行為 2 條(F-01 / F-02,皆以正式外掛檔還原輸入重跑量化)、引擎自檢與一致性 3 條(F-03–F-05)、測試強度 8 條(F-07–F-14,chunk E 22 個突變體 + 合成樣本證明非等價)、回看頁顯示 3 條(F-15 / F-16 / F-34)、紀錄與文件 5 條(F-06、F-17–F-20)、一次性證據與部署腳本 13 條(F-21–F-33)。最有分量的是 F-01 —— 引擎在開盤那一刻把撤單寫成成交、吃檔記錯列,而 decode 自檢(成交 ≤ 減量)攔不到、外掛檔又永久保留;它也連帶讓 F-06 的歸因數字失真。
+- 引擎主路徑其餘部分(視野邊界 `_covers` / `_pop_*` 在 bound 為 None / 相等 / 放寬 / 收窄時、「進出視野從不產生掛單」、被擠出價位的待扣成交、清空則判法、encode / decode 對稱、效能 2344 9/17 187,741 則 `replay_books` 2.71 s(main session 重跑 3.23 s,機器負載不同))chunk D 追過無 finding(其中「進出視野從不產生掛單」與「離開當下 0 次殘留同價位待扣」main session 已重跑,見 Search-proof F-03 / 審查工具比較補證);回看頁 JS 主路徑 chunk C 追過無會壞畫面的 bug;結果檔與 verification.md 數字 chunk B / C 逐項對過一致。
+- Codex 中性 / 對抗、Gemini 軸:N-A(user 已停用),重疊率無法計算;4.1 N-A;4.2 由同軸 code-reviewer 獨立複查代替(CONFIRMED 25 / PARTIAL 8 / OUT_OF_SCOPE 1 / REFUTED 0 / INCONCLUSIVE 0),**非跨軸證據**。同軸複查把三條 MEDIUM 校正為 LOW、指出 F-01 修法的兩個副作用、F-18 reviewer 自己的計數錯、F-34 屬拍板格式。
+- 對抗式第三軸增益:N-A。
+- 與 merge 前 two-axis review round 1 的關係:round-1 16 條(Standards 11 / Spec 5)已在 PR 內收修;本輪 34 條全為新條,其中 F-19 / F-21 是 round-1 收修紀錄與證據的說法問題。
+
+## 沒做的部分（結案對帳）
+
+- Codex 中性軸:N-A(user 已停用;本機無 codex CLI)。
+- Codex 對抗軸:N-A(user 已停用)。
+- Gemini Flash / Pro 軸:N-A(user 已停用;本機無 agy CLI;Step 2.96 未問、按前例)。
+- Codex preset(Step 2.98):N-A(未問、按前例)。
+- Cross-axis verification 4.1:N-A(無非 CC finding);4.2:以同軸 code-reviewer subagent 獨立複查代替 PASS,**非獨立跨軸證據**;4.3a:N-A(單軸無 consensus);4.3b:逐條見複查欄 PASS(他軸未執行、不存在「他軸沉默」,不據以降級)。
+- Blast radius(Step 2.9):跑了、空輸出跳過(sem 未安裝)。
+- React-doctor(Step 2.97):N-A(非 React PR)。
+- Formal spec traceability(Step 2.65):SKIPPED (C4_NO_REPO_SPEC_PATH)。
+- Author calibration(Step 2.2):無檔、無套用。
+- 逐檔覆蓋:54/54(covered 20 / no-issues 24 / skipped 10 / missed 0)PASS;chunk B source 846 行略超 800 門檻(「約 800」),未再拆。
+- 行號重定位:33 個逐字 anchor exact 32 / ambiguous 1 / FAILED 0;4 個 `<none>` pin 以最近符號行定位 PASS。
+- Codex config mutation / restore(Step 3 / Step 7):N-A(Codex 未執行,未改 `~/.codex/config.toml`)。
+- 未驗證前提:F-01 修法方向(先扣當則自己的成交)的淨效益未驗證(補證只量到變動列數與分佈,未逐列判斷改後是否正確),已在 comment 保留「要一起想清楚」語式;F-06 的 9/17 歸因比例依修法版本而定(兩個修法版本的分桶數字已重跑,修法本身未定);F-20 為前瞻風險(最早 120 交易日後才會撞到)。原列的 F-25(抽樣窗)與 F-28(puppeteer 行為、暫存大小)已由 Self-Verify 補證驗掉,見「Search-proof 與機制鏈」。
+- 失敗軸 / 工具失敗:無。
+- Self-Verify(Step 6):FAIL → 已修正。`skill-verify-auditor`(requested opus)只讀完整證據草稿,輸出 R1–R10 各一行、順序正確、FAIL 集合與 verdict 一致:`VERDICT: VIOLATIONS: R6, R8`(R1–R5、R7、R9、R10 PASS)。
+  - R6 缺口:F-07「全檔沒有 ask=[(0, …)] 樣本」、F-08「退路從沒被走到」、F-11「六條沒有竄改案」等 absence / runtime 斷言只附 reviewer 的「87 passed」,沒有查詢指令、file:line 與判斷語意。修正:main session 在暫存複本重跑 13 個突變與 F-12 兩個組合對照、插樁量 6 類分支在 87 案中的執行次數、AST 掃價 0 樣本;重跑 reviewer / 複查員留下的 15 支量測腳本與 demo 合成樣本、照 commit 實跑 6 支 PR 證據腳本;34 條逐條寫進「Search-proof 與機制鏈」(查詢 / 工具 / file:line / 判斷條件 / 結果 / 仍成立理由)。
+  - R8 缺口:F-28 修法句把 puppeteer「預設每次一份暫存 profile、關閉時自動刪」寫成定論。修正:讀 `pp_common.mjs` 引用的同一份 bundle 原始碼,並實跑兩次 headless Chrome(給 / 不給 `userDataDir`)驗證,comment 改寫成實測敘述。
+  - 補證過程另校正 5 處描述(severity / action / UID 皆不變):F-01「10 則 / 12 則」→「10 項 / 12 項」(量的是價位變動項);F-17 留言時刻 09:01:38Z → GitHub `created_at` 09:01:42Z;F-24「沒 assert 的靜默改用主 tree」→ 只在帶資料夾參數時成立、不帶參數是 FileNotFoundError / ZeroDivisionError;F-29 補明 tests 已以合成列字面斷言同形樣本;Action Items「範圍限開盤與集合競價時刻」→「以開盤為主」(盤中另有 28 / 20 列、至少一例非集合競價)。
+  - 以上修正**未經第二次獨立稽查**。
