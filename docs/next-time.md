@@ -1,3 +1,14 @@
+## 2026-09-19(PR #281 事後審查收修批留尾)
+
+- [ ] **證據腳本的 `sys.path` 釘死在已消失的 worktree,repo 內共 9 處**(pr-281 review #17,處置 `no-op`;
+  本批 two-axis Spec-b 又確認一次):`.claude/feat/book-replay-auction-segment/evidence/` 的 `check_trial.py` /
+  `no_close.py` / `merged_run.py` 三支釘 `mod-auction-segment-273`,repo 內另有 6 處同款釘著別的已刪 worktree。
+  **現在不爆的原因**:venv 是 editable 安裝(`__editable__.copycat-0.1.0.pth`),不存在的路徑 Python 靜默略過、
+  fallback 到主 tree 的同一份 code —— 實測還原後重跑 `check_trial.py 2026-09-16`,輸出與歸檔 `.txt` 逐位元組相同。
+  **會爆的那天**:主 tree 的那份 code 與當初產生證據的版本分岔時,腳本會安靜地驗到別份 code。
+  修法一律 `sys.path.insert(0, str(Path(__file__).resolve().parents[N]))`(evidence 目錄 N=4),
+  **要收就 9 處一次收**(報告原文:不該只挑某個 PR 的那幾支);本批一度只改三支,已還原。
+
 ## 2026-09-17(feat #269 變動分解 + 重新可見 + 成交明細吃檔欄留尾;引擎在 repo、畫面在 repo 外 `Documents\copycat-trading-review`)
 
 - [ ] **成交明細同一列「外 | 吃 市價買 −n」看起來矛盾**(#269 review 後快篩實測,`.claude/feat/book-replay-changes/evidence/
@@ -33,7 +44,7 @@
 - [ ] **每個交易日盤後補回看頁要手動跑**(尚未排程;**09-17 第一次實跑更正:原寫的「四步」不夠** —— 少了日線那步新日根本進不了
   日期選單(連重播分頁都選不到),少了三支分析群組股當日上方圖與逐筆明細都是「沒有資料」)。研究目錄 `scripts\week0909\` 一律用
   copycat venv `python -X utf8`,依序:
-  1. `python -m copycat book-replay --date <YYYYMMDD> --out <回看頁>\viewer-cdp-book`(repo root;13:45 轉檔後;**2026-09-18 起外掛檔 v3、回看頁讀 v2 / v3**(純加欄位往下相容);v1 檔仍要重產。舊註記:**#269 起回看頁只讀外掛檔 v2**,
+  1. `python -m copycat book-replay --date <YYYYMMDD> --out <回看頁>\viewer-cdp-book`(repo root;13:45 轉檔後;**2026-09-18 起外掛檔 v4、回看頁讀 v2 / v3 / v4**(純加欄位往下相容);v1 檔仍要重產。舊註記:**#269 起回看頁只讀外掛檔 v2**,
      主 tree 要在含 #269 的 master 上跑,舊 CLI 產的 v1 重播分頁會顯示「版本 1(本頁只認 2)」;v2 實測 09-17 80 檔 387 萬則 215 s、49.2 MB、
      **峰值 7.77 GB**(記憶體吃緊時別跑;v1 當時 97 s、25.7 MB))
   2. `fetch_groups_daily.py --keep-groups --end <日>` —— **回看頁日期選單 = `daily_groups.json` 的 TAIEX 日**;跑完核 55 檔都有當日列
