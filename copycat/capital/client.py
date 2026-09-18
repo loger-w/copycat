@@ -368,6 +368,10 @@ class CapitalClient:
         blocked: str | None = None,
         result: OrderResult | None = None,
     ) -> dict[str, object]:
+        """一列審計。除了事後追溯,這份 jsonl 還有一個離線讀者:復盤回看頁的簿重播分頁
+        (`Documents/copycat-trading-review/scripts/week0909/build_viewer_cdp.py`,#272)拿 `action`
+        的 order / cancel、`req` 的 stock_no / buy_sell / price / qty / price_type、下單 `result.seq_no`
+        (刪單要刪的單在 `req.seq_no`)把「我的委託」畫在價格階梯上。改這些鍵名它只會少畫、不會報錯。"""
         return {
             "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
             "env": self._env,

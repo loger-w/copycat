@@ -1,0 +1,11 @@
+{
+ "pairs": 8,
+ "tabs": 5,
+ "unexpected": [],
+ "expectedTabs": [
+  "def",
+  "legend"
+ ],
+ "errorsBefore": [],
+ "errorsAfter": []
+}
