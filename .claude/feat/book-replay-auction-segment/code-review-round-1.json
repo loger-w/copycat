@@ -1,6 +1,16 @@
 {
   "fixed_point": "fdb65455",
-  "commits": ["5506ddf1 feat(book-replay): 簿重播標出集合競價段,回看頁分隔標註 + 無簿日降級 + 五條限制(#273)"],
+  "commits": [
+    "5506ddf1 feat(book-replay): 簿重播標出集合競價段,回看頁分隔標註 + 無簿日降級 + 五條限制(#273)",
+    "c9426ab3 fix(book-replay): two-axis review round 1 收修(增量快篩,見 incremental_screen)"
+  ],
+  "incremental_screen": {
+    "range": "5506ddf1..HEAD",
+    "why": "branch-lifecycle 收尾節 §3:two-axis 跑在 5506ddf1,之後多了收修那一筆 → 只對增量 diff 補一輪機械快篩,不重跑兩軸。",
+    "by": "main agent(機械快篩)",
+    "findings": [],
+    "note": "repo 側增量全部是文件與測試格式:CLAUDE.md 一行措辭(F-5)、book_replay.py 三處 docstring 版本字面(A-1)+ 模組說明兩段文字(F-1 / F-2)、test_book_replay.py fixture 改逐參數一行並把重複的 [(50_050, 40)] 提成 trial_ask(B-4)。copycat/ 的執行邏輯零改動(git diff 5506ddf1..HEAD -- copycat/ 只有 docstring 與註解行)。trial_ask 由三個 _row 共用同一個 list 物件,_side_fields 只讀不改、TickRow frozen,無別名污染。行為改動只在 repo 外的回看頁(F-3 / F-4),已各自做真環境重驗(見 verification.md §4.5)。"
+  },
   "standards": [
     {
       "id": "A-1",
