@@ -12,25 +12,30 @@ dataclass(LevelChange / LeftView / Reappeared / EnteredView / Eaten),不讀外�
 加驗收樣本(2426 買 98.0、2305 09:07:47、2489 掃單)。
 
 用法:python rp269_expected.py <out.json>
+環境變數 RP_BOOKDIR 可改指其他外掛檔資料夾(預設正式 viewer-cdp-book)。
 """
 
 from __future__ import annotations
 
 import bisect
 import json
+import os
 import random
 import re
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-WORKTREE = r"C:\side-project\copycat\.claude\worktrees\feat-book-replay-changes"
+WORKTREE = str(Path(__file__).resolve().parents[4])
 sys.path.insert(0, WORKTREE)
 
 from copycat import book_replay as br  # noqa: E402
 
 assert (br.__file__ or "").startswith(WORKTREE), br.__file__
 
-BOOKDIR = Path(r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book-269")
+BOOKDIR = Path(
+    os.environ.get("RP_BOOKDIR", r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book")
+)
 PLAN = {
     "2026-09-16": ["2426", "2305", "2489", "3441", "8064", "1815", "2344", "6715", "3406", "6770"],
     "2026-09-17": ["2426", "3441", "2303"],
@@ -76,7 +81,10 @@ def at(side: str, price: int) -> str:
 
 def dur(ms: int) -> str:
     if ms < 9950:
-        return f"{ms / 1000:.1f} 秒"
+        # pr-279 review F-25:Python `:.1f` 逢半取偶,頁面 toFixed(1) 不是;250 / 1250 … 9250 ms
+        # 兩邊在恰好卡在 0.05 邊界時會差一碼(例如 2250 ms 頁面「2.3 秒」、`:.1f` 是「2.2 秒」)。
+        # 改成對 ms / 1000 這個 float 的實際二進位值取 ROUND_HALF_UP,0–9949 ms 逐值比過與 toFixed(1) 零差異。
+        return f"{Decimal(ms / 1000).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)} 秒"
     s = int(ms / 1000 + 0.5)
     if s < 60:
         return f"{s} 秒"
@@ -241,10 +249,30 @@ def main() -> None:
             first_book = first_book_of(frames)
             picks = picks_for(code, frames)
             if (code, date) == ("2426", "2026-09-16"):  # 驗收:買 98.0 回到五檔(第 41,957 則)
+                # pr-279 review F-29:期望值一律來自 br.decode,產出前對驗收樣本補字面斷言 ——
+                # 引擎在真資料上把這兩則算壞的話(例如淨掛算成別的值),這裡要先炸,而不是等 verify_changes 594/594 照過。
+                reap = next(c for c in frames[41956].changes if isinstance(c, br.Reappeared))
+                assert (reap.side, reap.price_milli) == ("bid", 98_000), reap
+                assert (reap.left_qty, reap.now_qty, reap.traded_away, reap.net_placed) == (
+                    39,
+                    120,
+                    0,
+                    81,
+                ), reap
+                assert round(reap.away_ms / 1000) == 155, reap.away_ms
                 picks |= set(range(41954, 41960))
             if (code, date) == ("2305", "2026-09-16"):  # 回歸:09:07:47 那三次不再算掛單
                 picks |= {10147, 10148, 10149, 10163, 10164}
-            if (code, date) == ("2489", "2026-09-16"):  # 掃單吃檔
+            if (code, date) == ("2489", "2026-09-16"):  # 掃單吃檔;驗收:賣 39.2 回到五檔(第 11,609 則)
+                reap = next(c for c in frames[11608].changes if isinstance(c, br.Reappeared))
+                assert (reap.side, reap.price_milli) == ("ask", 39_200), reap
+                assert (reap.left_qty, reap.now_qty, reap.traded_away, reap.net_placed) == (
+                    80,
+                    0,
+                    80,
+                    0,
+                ), reap
+                assert round(reap.away_ms / 1000) == 11, reap.away_ms
                 lo = bisect.bisect_left(recv, 10 * 3600000 + 4 * 60000 + 31_208)
                 picks |= set(range(lo, lo + 10))
             for i in sorted(p for p in picks if 0 <= p < len(frames)):

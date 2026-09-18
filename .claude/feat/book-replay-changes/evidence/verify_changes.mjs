@@ -21,30 +21,43 @@ const exp = cases.map((c, k) => {
   return d;
 });
 
+// pr-279 review F-26:被竄改的 3 則原本只拿竄改版比,只要有任何不符就算「抓到竄改」,
+// 從沒對照過原始標準答案 —— 如果那一則同時真的有 bug,會被竄改的差異蓋掉、不會進 mismatches。
+// 改成每一則都先比原始 cases[k](真不符才進 mismatches),被竄改的 3 則另外再比竄改版確認抓得到。
+function diffAgainst(st, ref) {
+  const problems = [];
+  if (st.idx !== qty(ref.i + 1)) problems.push(`則號 ${st.idx} ≠ ${qty(ref.i + 1)}`);
+  if (!same(st.msgs, ref.msgs)) {
+    const k = ref.msgs.findIndex((m, n) => !same(m, st.msgs[n]));
+    problems.push(`中間欄第 ${k} 組不同:頁面 ${JSON.stringify(st.msgs[k])} / 標準 ${JSON.stringify(ref.msgs[k])}`);
+  }
+  if (!same(st.tape, ref.tape)) {
+    const k = ref.tape.findIndex((r, n) => !same(r, st.tape[n]));
+    problems.push(`成交明細第 ${k} 列不同:頁面 ${JSON.stringify(st.tape[k])} / 標準 ${JSON.stringify(ref.tape[k])}`);
+  }
+  return problems;
+}
+
 const browser = await launch({ width: 1400, height: 1000 });
 const result = { total: 0, mismatches: [], tampered_caught: [], errors: [] };
 try {
   const { page, errors } = await openPage(browser, NEW_PAGE);
   let opened = '';
-  for (const c of exp) {
+  for (let k = 0; k < exp.length; k++) {
+    const c = exp[k];
+    const orig = cases[k];
     const key = `${c.code}|${c.date}`;
     if (key !== opened) { await openReplay(page, c.code, c.date); opened = key; }
     await goIndex(page, c.i, c.recv, c.land);
     const st = await readReplay(page);
     result.total++;
     const id = `${c.date}|${c.code}|${c.i}`;
-    const problems = [];
-    if (st.idx !== qty(c.i + 1)) problems.push(`則號 ${st.idx} ≠ ${qty(c.i + 1)}`);
-    if (!same(st.msgs, c.msgs)) {
-      const k = c.msgs.findIndex((m, n) => !same(m, st.msgs[n]));
-      problems.push(`中間欄第 ${k} 組不同:頁面 ${JSON.stringify(st.msgs[k])} / 標準 ${JSON.stringify(c.msgs[k])}`);
+    const realProblems = diffAgainst(st, orig);
+    if (realProblems.length) result.mismatches.push({ id, problems: realProblems });
+    if (tampered.has(id)) {
+      const tamperProblems = diffAgainst(st, c);
+      if (tamperProblems.length) result.tampered_caught.push(id);
     }
-    if (!same(st.tape, c.tape)) {
-      const k = c.tape.findIndex((r, n) => !same(r, st.tape[n]));
-      problems.push(`成交明細第 ${k} 列不同:頁面 ${JSON.stringify(st.tape[k])} / 標準 ${JSON.stringify(c.tape[k])}`);
-    }
-    if (tampered.has(id)) { if (problems.length) result.tampered_caught.push(id); }
-    else if (problems.length) result.mismatches.push({ id, problems });
   }
   result.errors = errors;
 } finally {

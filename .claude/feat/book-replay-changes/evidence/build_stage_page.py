@@ -19,6 +19,7 @@ LIVE_TEMPLATE = REVIEW / "scripts" / "week0909" / "viewer_cdp_template.html"
 STAGE_PAGE = REVIEW / "viewer-cdp.269.html"
 BOOKDIR_LINE = b'const BOOKDIR = DATA.bookdir || "viewer-cdp-book";'
 STAGE_BOOKDIR_LINE = b'const BOOKDIR = DATA.bookdir || "viewer-cdp-book-269";'
+RESULT = Path(__file__).parent / "result_build_stage_page.txt"
 
 
 def main() -> None:
@@ -29,7 +30,15 @@ def main() -> None:
     blob = m.group(1).strip()
     live_template = LIVE_TEMPLATE.read_bytes()
     rebuilt_live = live_template.replace(b"__DATA_B64__", blob)
-    print("現用頁 == 現用模板 + blob:", rebuilt_live == live)
+    check = f"現用頁 == 現用模板 + blob: {rebuilt_live == live}"
+    print(check)
+    RESULT.write_text(check + "\n", encoding="utf-8")
+    if rebuilt_live != live:
+        # pr-279 review F-23:原本只印 True/False、False 也照樣往下寫測試頁;
+        # 現用頁可能被另一個 session 重建過(blob 對不上目前的模板),先停下來確認,不能悄悄用錯資料。
+        sys.exit(
+            "停:現用頁不是現用模板 + blob,先確認另一個 session 的狀態(現用頁可能被重建過,需要重新複製舊頁)"
+        )
     assert work_template.count(b"__DATA_B64__") == 1
     assert work_template.count(BOOKDIR_LINE) == 1
     page = work_template.replace(b"__DATA_B64__", blob).replace(BOOKDIR_LINE, STAGE_BOOKDIR_LINE)

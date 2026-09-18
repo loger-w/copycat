@@ -12,13 +12,14 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-WORKTREE = r"C:\side-project\copycat\.claude\worktrees\feat-book-replay-changes"
+WORKTREE = str(Path(__file__).resolve().parents[4])
 sys.path.insert(0, WORKTREE)
 
 from copycat import book_replay as br  # noqa: E402
 
+assert (br.__file__ or "").startswith(WORKTREE), br.__file__
 assert br.BOOK_LEVEL_FIELDS[0] == "bid0" and br.BOOK_LEVEL_FIELDS[10] == "ask0", br.BOOK_LEVEL_FIELDS
-root = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book-269")
+root = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Users\USER\Documents\copycat-trading-review\viewer-cdp-book")
 for date_dir in sorted(p for p in root.iterdir() if p.is_dir()):
     flags: Counter[tuple[str, str]] = Counter()
     lots: Counter[tuple[str, str]] = Counter()
