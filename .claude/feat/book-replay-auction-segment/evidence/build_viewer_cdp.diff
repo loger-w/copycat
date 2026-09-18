@@ -1,0 +1,16 @@
+--- build_viewer_cdp.py.bak-20260918-pre273	2026-09-18 20:44:32.556399700 +0800
++++ build_viewer_cdp.py	2026-09-18 21:30:32.387652800 +0800
+@@ -261,8 +261,12 @@
+ evsum = dict(n=len(brk), held=len(held), held_lock=sum(int(e["locked"]) for e in held), broke=len(broke), broke_lock=sum(int(e["locked"]) for e in broke),
+              held_ret=sum((float(e["close"]) / float(e["AH"]) - 1) * 100 for e in held) / max(1, len(held)), broke_ret=sum((float(e["close"]) / float(e["AH"]) - 1) * 100 for e in broke) / max(1, len(broke)))
+ 
++# 有簿重播外掛檔的交易日(#273):回看頁靠它把沒有簿的日子「灰掉並說明」,而不是等載入失敗才報錯 ——
++# 2026-09-16 tick 存檔上線前的日子(達錢歷史 TICKS 不含五檔)本來就沒有,那不是故障。
++BOOKDIR = "viewer-cdp-book"
++bookdays = sorted(p.name for p in (ROOT / BOOKDIR).glob("[0-9]" * 4 + "-*") if p.is_dir() and any(p.glob("*.js")))
+ payload = dict(codes=[dict(c=c, n=names.get(c, c), g=code_group[c]) for c in CODES + extras_in if c in day], dates=DATES, names={c: names.get(c, c) for c in CODES + extras_in}, groups=GROUPS, extra_group=(EXTRA_GROUP if extras_in else None), population=len([c for c in CODES if c in day]), daysum=daysum,
+-               d={c: {d: dict(day[c][d], t=dict(day[c][d]["t"]), tt=day[c][d].get("tt", []), ob=day[c][d].get("ob", [])) for d in day[c]} for c in day}, summary=summary, evsum=evsum, touchsum=touchsum, oscsum=oscsum, bar=BAR, nbar=NBAR, tickdir="viewer-cdp-ticks")
++               d={c: {d: dict(day[c][d], t=dict(day[c][d]["t"]), tt=day[c][d].get("tt", []), ob=day[c][d].get("ob", [])) for d in day[c]} for c in day}, summary=summary, evsum=evsum, touchsum=touchsum, oscsum=oscsum, bar=BAR, nbar=NBAR, tickdir="viewer-cdp-ticks", bookdir=BOOKDIR, bookdays=bookdays)
+ raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+ gz = gzip.compress(raw, 9)
+ b64 = base64.b64encode(gz).decode("ascii")

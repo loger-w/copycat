@@ -1246,11 +1246,10 @@ class TestAuctionMatch:
     def test_the_plugin_file_marks_the_auction_message_and_refuses_a_list_that_disagrees(
         self,
     ) -> None:
-        """外掛檔 v3:`auction` 只列集合競價撮合那些成交則(遞增);回看頁靠它印「集合競價撮合」。"""
+        """外掛檔:`auction` 只列集合競價撮合那些成交則(遞增);回看頁靠它印「集合競價撮合」。"""
         day = replay_books(_halt_auction_rows())["9101"]
         wire = _wire(day, keyframe_every=2)
 
-        assert wire["v"] == 3
         assert wire["auction"] == [1]
         assert decode(wire) == day
 
@@ -1269,6 +1268,112 @@ class TestAuctionMatch:
         stale_wire["eat"][0] = [1, 1, 1]  # 第 0 則(開機收到的前一日成交)寫「吃 賣1 −1」
         with pytest.raises(PluginFormatError, match="附舊簿的成交不進待扣,不該有吃檔"):
             decode(stale_wire)
+
+
+def _closing_auction_rows() -> list[TickRow]:
+    """收盤集合競價形狀(2026-09-16 實錄縮寫):13:24 盤中 → 13:25 起整段試撮(達錢 `TradeStatus=1`)
+    → 13:30 撮出收盤那一筆(狀態已回 0)→ 撮後再一則簿。"""
+    live_bid, live_ask = [(50_000, 12), (49_950, 30)], [(50_050, 8), (50_100, 44)]
+    return [
+        _row("book", "9102", 1, recv="13:24:58.100", bid=live_bid, ask=live_ask),
+        _row(
+            "book", "9102", 2, recv="13:25:03.400", bid=[(50_000, 900)], ask=[(50_050, 40)],
+            status="1",
+        ),
+        _row(
+            "book", "9102", 3, recv="13:27:10.200", bid=[(50_000, 2_400)], ask=[(50_050, 40)],
+            status="1",
+        ),
+        _row(
+            "book", "9102", 4, recv="13:29:58.700", bid=[(50_000, 3_300)], ask=[(50_050, 40)],
+            status="1",
+        ),
+        _row(
+            "trade",
+            "9102",
+            5,
+            recv="13:30:12.900",
+            time="13:30:00.000",
+            price=50_050,
+            qty=3_300,
+            side="outer",
+            bid=[(50_000, 5)],
+            ask=[(50_050, 40)],
+        ),
+        _row("book", "9102", 6, recv="13:30:13.050", bid=[(50_000, 5)], ask=[(50_050, 40)]),
+    ]
+
+
+class TestAuctionSegment:
+    """集合競價段(ticket #273):達錢 `TradeStatus` 標「試撮中」的那些則。收盤 13:25–13:30、處置股
+    整天的分盤撮合、盤中暫緩撮合都是這一段 —— 那段揭示的五檔是「撮完剩下的」,委託堆積是集合競價的
+    結果而不是盤中墊單,所以要在回看頁上分隔標註,#271 的厚檔事件也要整段排除。"""
+
+    def test_the_trial_messages_of_the_closing_auction_are_the_segment(self) -> None:
+        """13:25 起的試撮簿列在段內;13:24 的盤中簿與撮出收盤那一筆(狀態已回 0)都不在。"""
+        frames = replay_books(_closing_auction_rows())["9102"].frames
+
+        assert [frame.trial for frame in frames] == [False, True, True, True, False, False]
+        assert frames[4].auction is True
+
+    def test_a_late_delayed_match_trade_carries_the_trial_flag_itself(self) -> None:
+        """暫緩撮合撮出來的成交自己也可能還帶著試撮狀態(7772 於 2026-09-16 11:40:29 成交、11:42:27
+        才收到):旗標讀那一則自己的 `TradeStatus`,不分成交則簿則。"""
+        rows = [
+            _row("book", "7772", 1, recv="11:42:20.000", bid=[(131_500, 4)], ask=[(132_000, 9)],
+                 status="1"),
+            _row(
+                "trade",
+                "7772",
+                2,
+                recv="11:42:27.594",
+                time="11:40:29.000",
+                price=132_000,
+                qty=1,
+                side="outer",
+                bid=[(131_500, 4)],
+                ask=[(132_000, 8)],
+                status="1",
+            ),
+        ]
+
+        frames = replay_books(rows)["7772"].frames
+
+        assert [frame.trial for frame in frames] == [True, True]
+
+    def test_an_intraday_halt_auction_is_the_same_segment(self) -> None:
+        """盤中暫緩撮合與收盤同一套:試撮那幾則在段內,撮合那一筆不在。"""
+        frames = replay_books(_halt_auction_rows())["9101"].frames
+
+        assert [frame.trial for frame in frames] == [True, False, False, False]
+
+    def test_the_plugin_file_carries_the_segment_as_increasing_message_ranges(self) -> None:
+        """外掛檔 v4:`trial` = 攤平的 `[起, 迄]` 則號閉區間(遞增、相鄰的併成一段)。"""
+        day = replay_books(_closing_auction_rows())["9102"]
+        wire = _wire(day, keyframe_every=2)
+
+        assert wire["v"] == 4
+        assert wire["trial"] == [1, 3]
+        assert decode(wire) == day
+
+    @pytest.mark.parametrize(
+        ("ranges", "why"),
+        [
+            ([1], "格數"),
+            ([3, 1], "起迄"),
+            ([1, 3, 3, 4], "遞增"),
+            ([1, 3, 4, 5], "遞增"),  # 相鄰兩段沒併成一段
+            ([1, 9], "落在則號"),
+            ([-1, 1], "落在則號"),
+        ],
+    )
+    def test_decode_refuses_segment_ranges_the_viewer_cannot_draw(
+        self, ranges: list[int], why: str
+    ) -> None:
+        wire = _wire(replay_books(_closing_auction_rows())["9102"], keyframe_every=2)
+        wire["trial"] = ranges
+        with pytest.raises(PluginFormatError, match=why):
+            decode(wire)
 
 
 class TestEaten:
@@ -1739,17 +1844,17 @@ class TestPluginEncoding:
 
         assert decode(wire) == day
 
-    def test_payload_layout_matches_the_documented_v3_literal(self) -> None:
-        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v3」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
+    def test_payload_layout_matches_the_documented_v4_literal(self) -> None:
+        """外掛檔永久保留,回看頁 JS 照模組說明「外掛檔 v4」逐鍵讀。編碼與解碼一起漂的時候 round-trip 照綠,
         只有寫死的字面抓得到(pr-275 review F-01)。v1 → v2(#269)加 `chg` 與 `eat`;
-        v2 → v3(#279 審查收修)加 `auction` 與 `stale`。第 0 則(開機收到的前一日成交)附的是前一日的簿 →
-        列在 `stale`、不當當日第一份五檔,所以第 1 則才是第一份(變動為空)。"""
+        v2 → v3(#279 審查收修)加 `auction` 與 `stale`;v3 → v4(#273)加 `trial`。第 0 則(開機收到的
+        前一日成交)附的是前一日的簿 → 列在 `stale`、不當當日第一份五檔,所以第 1 則才是第一份(變動為空)。"""
         day = replay_books(_golden_rows())["1815"]
 
         payload = encode(day, keyframe_every=2)
 
         assert payload == {
-            "v": 3,
+            "v": 4,
             "code": "1815",
             "date": "2026-09-16",
             "n": 4,
@@ -1766,7 +1871,7 @@ class TestPluginEncoding:
             "anomalous": [0, 3],
             "auction": [],  # 集合競價撮合(前一則是試撮五檔)的成交則號;這四則都不是
             "stale": [0],  # 附舊簿(時刻在未來的異常成交)的成交則號 ⊆ anomalous:不比、也不當基準
-
+            "trial": [],  # 集合競價段(試撮中)的 [起, 迄] 則號閉區間;這四則都在正常盤
             "recv": [27_082_730, 5_317_370, 3_772, 128],
             "trade": [
                 *(52_200_000, 114_500, 2, "inner"),  # 前一日 14:30 的盤後成交,07:31 開機收到

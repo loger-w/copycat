@@ -49,6 +49,14 @@ CONTEXT.md「簿重播」:與分點指紋的引擎回放(`copycat.replay`)是兩
 但**不列入 `auction`** —— 那一則本來就沒有前一份可比,回看頁印「當日第一份五檔」而不是「集合競價撮合」。
 同理,達錢時刻在未來的異常成交(開機補送前一日盤後成交)附的是舊簿(`Frame.stale_book`,見
 `_stamped_in_the_future`):不比、不當基準、不進待扣。
+**集合競價段**(`Frame.trial`,ticket #273):達錢 `TradeStatus` 標「試撮中」(`_TRIAL_STATUS`)的那些則,
+不分成交則簿則 —— 上面那筆「撮出來的成交」是段的**結果**(狀態已回正常盤),這裡標的是段**本身**。三種來源
+同一套判準(user 2026-09-18 拍板用達錢旗標,不用牆鐘窗):收盤集合競價、處置股整天的分盤撮合、盤中暫緩撮合。
+2026-09-16 / 09-17 / 09-18 實測:13:25 起全部 79 / 79 / 83 檔的簿列都是試撮(每檔每分鐘約 10 則),13:25 之前
+只有 2 / 2 / 3 檔處置股是。這一段的委託堆積是**集合競價的結果**,不是盤中墊單:09-16 段內單格最大 5314 賣一
+47,033 張(13:29:43,鎖跌停排隊;09-17 / 09-18 同樣是 5314 的 27,806 / 29,675 張),一般檔如 2305 買 49.40
+也堆到 1,264 張。回看頁要視覺分隔並標註,**#271 的厚檔事件也要整段排除**(否則每天尾盤固定產生一批必然
+出現的假事件)。旗標只標段,差分 / 待扣 / 吃檔都不因它改變(段內的簿照樣逐則比,揭示的量是真的在那裡)。
 價位從賣方換到買方(價格穿過它)一直看得到,是賣方減量 + 買方增量,不是離開視野(user 2026-09-17 拍板;
 grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際賣方只新掛 16 張)。
 
@@ -58,11 +66,11 @@ grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際�
 第五檔之外(外盤看賣方、內盤看買方)= 五檔外(`level` None);其餘看不出吃了哪一檔(開收盤集合競價、同一則
 又掛進來蓋過減量)不列。同一格分幾則扣到合成一項。
 
-**外掛檔 v3**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg` 與
-`eat`;v2 → v3 = #279 審查收修加 `auction` 與 `stale`):
+**外掛檔 v4**(`encode` → `plugin_js`;每檔每日一檔,回看頁 `<script src>` 懶載入;v1 → v2 = #269 加 `chg` 與
+`eat`;v2 → v3 = #279 審查收修加 `auction` 與 `stale`;v3 → v4 = #273 加 `trial`):
 全文一行 `window.__bk("<代號>|<日期>","<base64(gzip(JSON))>");`,JSON 物件鍵:
 
-- `v`:3;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
+- `v`:4;`code`、`date`(YYYY-MM-DD);`n`:則數;`fields`:五檔 20 格欄序(= `BOOK_LEVEL_FIELDS`)
 - `seq`:訊息序號,首項絕對值、其後逐則差值(每一項都 > 0)
 - `kind`:長 n 的字串,`t` 成交 / `b` 簿
 - `recv`:長 n,收到時刻(交易日台北零點起毫秒),首項絕對值、其後逐則差值(恆 ≥ 0)
@@ -73,6 +81,8 @@ grilling 階段把換邊當離開,算出 2426「賣 92.0 淨掛 +154」,實際�
   「集合競價撮合」而不是「五檔沒有變動」
 - `stale`:附舊簿的成交則號(遞增;⊆ `anomalous`,時刻在未來的異常成交)。這些則 `chg` 恆空、也不當下一則的
   比較基準 —— 下一份非空五檔才是「當日第一份」
+- `trial`:集合競價段(見上面「集合競價段」)攤平成 `[起, 迄, 起, 迄, …]` 的**則號閉區間**,遞增且每段極大化
+  (相鄰兩段一定已併成一段,所以 `迄 + 1 < 下一個起`)。回看頁靠它在時間軸上畫色帶、在畫面上標「集合競價」
 - `trade`:每個成交則依序 4 格攤平 `[達錢成交時刻毫秒, 價, 張, 內外盤]`(時刻 = 存檔 `ms` 原值),內外盤為
   `"inner"` / `"outer"` / `"neutral"`;長度 = 4 × `kind` 裡 `t` 的個數,簿則不佔位。列在 `anomalous` 的成交
   時刻照原值保留、不一定是當日(1815 那則是前一日 14:30)
@@ -145,9 +155,10 @@ _PLUGIN_LINE = re.compile(
 )
 
 #: 外掛檔格式版本;改格式 = +1(回看頁依它選解碼規則)。v2 → v3 = #279 審查收修加 `auction` / `stale`
-#: 兩個則號清單(純加欄位);回看頁對**只加欄位**的升版往下相容(舊檔照讀、新欄位當沒有,user 2026-09-18
-#: 拍板),欄位語意真的改掉時才擋版本 —— 外掛檔永久保留,但簿 parquet 只留 120 交易日、過期重產不出來。
-FORMAT_VERSION = 3
+#: 兩個則號清單;v3 → v4 = #273 加 `trial` 集合競價段(都是純加欄位);回看頁對**只加欄位**的升版往下
+#: 相容(舊檔照讀、新欄位當沒有,user 2026-09-18 拍板),欄位語意真的改掉時才擋版本 —— 外掛檔永久保留,
+#: 但簿 parquet 只留 120 交易日、過期重產不出來。
+FORMAT_VERSION = 4
 
 #: 達錢 `TradeStatus` 的試撮值(集合競價 / 盤中延緩撮合進行中的簿更新;正常盤 "0",見 skill tc4-market-facts)
 _TRIAL_STATUS = "1"
@@ -311,6 +322,8 @@ class Frame:
     auction: bool = False
     # 附的五檔不是當下的簿(達錢時刻在未來的異常成交,開機補送前一日盤後成交):不拆、也不當基準
     stale_book: bool = False
+    # 這一則在集合競價段裡(達錢 `TradeStatus` = 試撮中;見模組說明「集合競價段」)
+    trial: bool = False
 
     @property
     def anomalous_trade(self) -> bool:
@@ -346,6 +359,7 @@ class PluginPayload(TypedDict):
     anomalous: list[int]
     auction: list[int]
     stale: list[int]
+    trial: list[int]
     recv: list[int]
     trade: list[int | str | None]
     kf: list[list[int | None]]
@@ -453,6 +467,7 @@ def _frames(rows: list[TickRow]) -> tuple[Frame, ...]:
                 (),
                 auction=auction,
                 stale_book=stale_book,
+                trial=row.trade_status == _TRIAL_STATUS,
             )
         )
     for pending in unmatched:
@@ -837,6 +852,7 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         "anomalous": anomalous,
         "auction": auction,
         "stale": stale,
+        "trial": _trial_ranges(code_day.frames),
         "recv": recv,
         "trade": trades,
         "kf": keyframes,
@@ -844,6 +860,19 @@ def encode(code_day: BookReplay, *, keyframe_every: int = KEYFRAME_EVERY) -> Plu
         "chg": changes,
         "eat": eaten,
     }
+
+
+def _trial_ranges(frames: Sequence[Frame]) -> list[int]:
+    """集合競價段 → `trial` 的攤平 `[起, 迄, …]` 閉區間(每段極大化,所以相鄰兩段不會並存)。"""
+    out: list[int] = []
+    for i, frame in enumerate(frames):
+        if not frame.trial:
+            continue
+        if out and out[-1] == i - 1:
+            out[-1] = i
+        else:
+            out += [i, i]
+    return out
 
 
 def _encode_eaten(eaten: tuple[Eaten, ...]) -> list[int | None]:
@@ -1016,7 +1045,7 @@ def decode(payload: PluginPayload) -> BookReplay:
 
     自檢,不合格一律 PluginFormatError:
     - 檔頭與內容的形狀(`_check_header`:版本、鍵、欄序、各陣列長度、kf_every ≥ 1、kind 字元、
-      anomalous 則號遞增且落在成交則)
+      anomalous 則號遞增且落在成交則、`trial` 是遞增且極大化的則號閉區間)
     - 逐則:訊息序號遞增、收到時刻不倒退、delta 成對且欄號 0–19、內外盤是三值之一;時鐘點成交(沒列在
       `anomalous` 的成交)有達錢時刻且不早於目前的標籤時刻
     - 每個 keyframe 位置,逐則套 delta 的結果與 keyframe 逐格相等 —— 回看頁「播放」走 delta、「跳轉」走
@@ -1040,6 +1069,9 @@ def decode(payload: PluginPayload) -> BookReplay:
     next_auction = next(auction_rows, None)
     stale_rows = iter(payload["stale"])
     next_stale = next(stale_rows, None)
+    trial_at = [False] * payload["n"]
+    for start, end in zip(*[iter(payload["trial"])] * 2, strict=True):
+        trial_at[start : end + 1] = [True] * (end + 1 - start)
     clock: int | None = None
     clock_index = -1
     state: list[int | None] = [None] * len(BOOK_LEVEL_FIELDS)
@@ -1127,6 +1159,7 @@ def decode(payload: PluginPayload) -> BookReplay:
                 eaten,
                 auction=auction,
                 stale_book=stale_book,
+                trial=trial_at[i],
             )
         )
     return BookReplay(code, payload["date"], tuple(frames))
@@ -1310,3 +1343,21 @@ def _check_header(payload: PluginPayload) -> None:
         raise PluginFormatError(
             f"{code} 附舊簿的成交則號 {outside} 不在時刻異常清單裡(時刻在未來 = 不當時鐘點)"
         )
+    _check_trial_ranges(payload["trial"], code, n)
+
+
+def _check_trial_ranges(ranges: Sequence[int], code: str, n: int) -> None:
+    """集合競價段 `trial` 的形狀:攤平的 `[起, 迄]` 閉區間、遞增、每段極大化(相鄰兩段要併成一段)。"""
+    if len(ranges) % 2:
+        raise PluginFormatError(f"{code} 集合競價段格數 {len(ranges)} 不是偶數(每段 [起, 迄])")
+    prev_end = -2
+    for k in range(0, len(ranges), 2):
+        start, end = ranges[k], ranges[k + 1]
+        where = f"{code} 集合競價段 [{start}, {end}]"
+        if start > end:
+            raise PluginFormatError(f"{where}:起迄顛倒")
+        if not (0 <= start and end < n):
+            raise PluginFormatError(f"{where}:沒有落在則號 0–{n - 1}")
+        if start <= prev_end + 1:
+            raise PluginFormatError(f"{where}:沒有遞增(相鄰或重疊的段要併成一段)")
+        prev_end = end
