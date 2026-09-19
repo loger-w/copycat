@@ -8,6 +8,15 @@
   改舊的那幾份既跑不起來也不該改。收法 = **下次再寫回看頁的 DOM 回歸腳本時,把
   `.rp-msg.auc .rp-msg-h::after` 的 `content` 一併存進快照**,不是現在去改哪一支。
 
+- [ ] **回看頁的「同一件事散在多處字面」兩組**(本批 two-axis Standards 軸 Std-3 / Std-2,判斷題,未收):
+  (a)「集合競價」這個詞至少有 6 個顯示點(CSS `::after`、「定義與規則」兩條 li、`rpBuild` 的格式錯誤
+  訊息、`rpTrialName`、`rpChangeLines`、頁頭 chip),改稱呼要動很多處 —— 與 CLAUDE.md §4 的
+  「唯一產生點 + 讀者」不同調。**CSS `content` 那一份收不進 JS**(那正是它最容易被漏的原因),
+  其餘可以收成一顆常數;本批只把註解改成「不是全集、一律先 grep」,是承認不是收斂。
+  (b) `code+"|"+date` 這把鍵在 `loadReplay` / `renderReplay` / `rpBuild` 三處各手搓一次(本批新加的
+  第四處已改走 `rpInFlight()` 述詞,沒有增加),改分隔符要動三處。
+  兩組都是「動了會全頁重測」的改動,不值得夾在 Nice to Have 批裡,要做就單獨一批。
+
 ## 2026-09-19(PR #281 事後審查收修批留尾)
 
 - [ ] **證據腳本的 `sys.path` 釘死在已消失的 worktree,repo 內共 12 處**(pr-281 review #17,處置 `no-op`;

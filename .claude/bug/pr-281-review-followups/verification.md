@@ -89,7 +89,7 @@
 | **D1** 說明文字 | 同上「段的界」那段 | 已是分來源陳述、含「兩個標記各讀各的、不互斥」**PASS** |
 | 回歸 | 正式 `bookdays` 下 09-16 開播 | 15,073 則、段標註「集合競價(盤中暫緩撮合 / 處置股分盤)」**PASS** |
 
-回看頁改動的全文副本與 diff:`viewer_cdp_template.pr281.html` / `.diff`(自 #273 出貨狀態起,`wc -l` 全檔 114 行 = 內容行 105 + hunk 標頭 9)。
+回看頁改動的全文副本與 diff:`viewer_cdp_template.pr281.html` / `.diff`(自 #273 出貨狀態起,`wc -l` 全檔 114 行 = 檔頭 `---`/`+++` 2 + hunk 標頭 9 + 內容行 103:context 65 + 加 32 + 減 6)。
 現用檔備份 `viewer_cdp_template.html.bak-20260919-pr281-followups`;`viewer-cdp.html` 已以
 `build_viewer_cdp.py` 重建(codes 91 / code-days 3,113 / html 8.4 MB)。
 
