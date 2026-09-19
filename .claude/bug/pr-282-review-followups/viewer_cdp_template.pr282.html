@@ -89,9 +89,10 @@ tr.buy td:first-child{border-left:3px solid var(--up)} tr.sell td:first-child{bo
 .rp-ladder.auc{box-shadow:inset 3px 0 0 var(--r-L)}
 /* 「集合競價」藏在 CSS content 的那一份:innerHTML / textContent 快照(dom_regression.mjs 那種)
    讀不到,要 getComputedStyle(el, "::after").content 才讀得到 —— 改稱呼時最容易漏掉這一份
-   (pr-281 review #13;原措辭「JS 讀不到」與枚舉由 pr-282 review #8 更正)。畫面上其餘幾份:
+   (pr-281 review #13;原措辭「JS 讀不到」與枚舉由 pr-282 review #8 更正)。畫面上其他份至少有
    rpTrialName(頁頭 chip 與色帶 title 共用同一份)、rpChangeLines 的「集合競價撮合」、rp-note、
-   說明列,另有 rpBuild 的格式錯誤訊息 —— 會長,改稱呼前 grep 一次比背清單可靠。
+   rpBuild 的格式錯誤訊息、「定義與規則」那幾條 li —— 這串不是全集,改稱呼一律先 grep 全檔、
+   不要照這裡的清單改(上一版正是因為把枚舉寫死才漏掉兩處)。
    .rp-msg-h 是 flex 沒有 justify-content,所以它緊接在標頭文字後面、不貼右緣(說明列照此措辭)。 */
 .rp-msg.auc .rp-msg-h::after{content:"集合競價";color:var(--r-L)}
 .rp-limits{margin:6px 0 0;color:var(--muted);font-size:12px}
@@ -607,6 +608,8 @@ tr.buy td:first-child{border-left:3px solid var(--up)} tr.sell td:first-child{bo
   const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
   const rpActive = () => !$("tab-replay").hidden;
   const rpSettle = (key, ok, v) => { const w = rpWait.get(key); rpWait.delete(key); if(w) (ok ? w.resolve : w.reject)(v); };
+  // 這一檔的外掛檔還在飛:rpSettle 成功與失敗都 delete,所以「rpWait 還有這個 key」= 還沒有結果
+  const rpInFlight = (code, date) => rpWait.has(code+"|"+date);
   window.__bk = (key, b64) => { rpSeen.add(key); gunzipB64(b64).then(p => { const R = rpBuild(key, p); rpCache.set(key, R); while(rpCache.size > RP_KEEP) rpCache.delete(rpCache.keys().next().value); rpSettle(key, true, R); }).catch(e => rpSettle(key, false, e)); };
   function loadReplay(code, date){
     const key = code+"|"+date;
@@ -930,10 +933,9 @@ tr.buy td:first-child{border-left:3px solid var(--up)} tr.sell td:first-child{bo
     e.preventDefault();
     // 沒有簿的交易日 RP 恆 null(2026-09-16 之前每天都是),原本左右鍵既不步進也不換日、零回饋 ——
     // 退回換日,與這一頁自己寫的「用上方 ◀ ▶ 或日期選單換過去」一致(pr-281 review #11)。
-    // 有簿日而 RP 尚未掛上分兩種:還在載入是暫態,不換日免得手一快就跳走;載入失敗(沒有這一檔 / 解不開)
-    // 是永久狀態,畫面自己寫著「換一檔或換一天」,那就讓左右鍵真的能換日 —— rpWait 在成功與失敗都會
-    // delete,所以「還有這個 key」正好等於「還在飛」(pr-282 review #7)。
-    if(!RP){ const k = state.code+"|"+state.date; if(!rpHasBook() || !rpWait.has(k)) stepDay(e.key === "ArrowLeft" ? -1 : 1); return; }
+    // 有簿日而 RP 尚未掛上分兩種:還在載入是暫態,不換日免得手一快就跳走;載入失敗(沒有這一檔 /
+    // 解不開)是永久狀態,畫面自己寫著「換一檔或換一天」,那就讓左右鍵真的能換日(pr-282 review #7)。
+    if(!RP){ if(!rpHasBook() || !rpInFlight(state.code, state.date)) stepDay(e.key === "ArrowLeft" ? -1 : 1); return; }
     rpGo(RP.i + (e.key === "ArrowLeft" ? -1 : 1));
   }
   function rpDraw(scroll){
