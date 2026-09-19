@@ -1,13 +1,31 @@
+## 2026-09-19(PR #282 事後審查收修批留尾)
+
+- [ ] **回看頁「集合競價」那份 CSS `::after` 字面,下一支 DOM 回歸腳本值得加一條 `getComputedStyle` 斷言**
+  (pr-282 review #8 的順帶建議,本批未收):那一份是改稱呼時最容易漏掉的(`innerHTML` / `textContent`
+  快照讀不到),而真 Chrome 的 `getComputedStyle(el, "::after").content` 讀得到,所以它擋得住。
+  **現在沒有活靶可以加** —— `dom_regression.mjs` / `pp_common.mjs` 是每批各複製一份、釘在該批
+  before/after 兩頁的凍結證據(`.claude/feat/book-replay-{changes,playback,myorders}/evidence/`),
+  改舊的那幾份既跑不起來也不該改。收法 = **下次再寫回看頁的 DOM 回歸腳本時,把
+  `.rp-msg.auc .rp-msg-h::after` 的 `content` 一併存進快照**,不是現在去改哪一支。
+
 ## 2026-09-19(PR #281 事後審查收修批留尾)
 
-- [ ] **證據腳本的 `sys.path` 釘死在已消失的 worktree,repo 內共 9 處**(pr-281 review #17,處置 `no-op`;
-  本批 two-axis Spec-b 又確認一次):`.claude/feat/book-replay-auction-segment/evidence/` 的 `check_trial.py` /
-  `no_close.py` / `merged_run.py` 三支釘 `mod-auction-segment-273`,repo 內另有 6 處同款釘著別的已刪 worktree。
+- [ ] **證據腳本的 `sys.path` 釘死在已消失的 worktree,repo 內共 12 處**(pr-281 review #17,處置 `no-op`;
+  本批 two-axis Spec-b 又確認一次;**數字由 pr-282 review #2 更正,原記 9 處**):
+  `.claude/feat/book-replay-auction-segment/evidence/` 的 `check_trial.py` / `no_close.py` / `merged_run.py`
+  三支釘 `mod-auction-segment-273`,repo 內另有 9 處同款釘著別的 worktree。**12 處全部指向沒有 `copycat/`
+  套件的目錄**:10 處目錄已刪,另 2 處(`fix-pr-279-review-followups` 全空、`ws-app-heartbeat` 只剩
+  `frontend/`)是空殼 —— 就這條關心的失效模式而言,12 個全是死的。**數的時候兩種形狀各掃一次**:
+  內聯的 `sys.path.insert(0, r"…\worktrees\…")`,以及先存成具名常數的 `WORKTREE = Path(r"…")` /
+  `WT = r"…"`(`.claude/bug/stkfut-order-channel/evidence/capital_side_server.py`、
+  `.claude/feat/market-overview-r3-limit-list/evidence/breadth_side_server_r3.py` 兩支)—— 上次漏數的就是後者,
+  正是這條自己要記的那種 grep 形狀盲區。
   **現在不爆的原因**:venv 是 editable 安裝(`__editable__.copycat-0.1.0.pth`),不存在的路徑 Python 靜默略過、
   fallback 到主 tree 的同一份 code —— 實測還原後重跑 `check_trial.py 2026-09-16`,輸出與歸檔 `.txt` 逐位元組相同。
   **會爆的那天**:主 tree 的那份 code 與當初產生證據的版本分岔時,腳本會安靜地驗到別份 code。
-  修法一律 `sys.path.insert(0, str(Path(__file__).resolve().parents[N]))`(evidence 目錄 N=4),
-  **要收就 9 處一次收**(報告原文:不該只挑某個 PR 的那幾支);本批一度只改三支,已還原。
+  修法一律 `sys.path.insert(0, str(Path(__file__).resolve().parents[N]))`(`.claude/<flow>/<slug>/evidence/`
+  下 N=4;直接放在 slug 目錄下的 `.claude/bug/pr-279-review-followups/compare_v2_v3.py` 是 N=3),
+  **要收就 12 處一次收**(報告原文:不該只挑某個 PR 的那幾支);本批一度只改三支,已還原。
 
 ## 2026-09-17(feat #269 變動分解 + 重新可見 + 成交明細吃檔欄留尾;引擎在 repo、畫面在 repo 外 `Documents\copycat-trading-review`)
 
