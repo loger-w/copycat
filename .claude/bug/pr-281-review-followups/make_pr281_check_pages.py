@@ -50,6 +50,9 @@ print("D3 頁 bookdays =", d3["bookdays"], "→", repack(d3, "viewer-cdp-pr281-d
 
 # --- (2) #10:trial 不是陣列 ---
 tmp = ROOT / TMP_BOOKDIR / BAD_DAY
+# docstring 承諾「不動真的 viewer-cdp-book/」,而下面是整棵 rmtree —— 這是 .claude/** 證據腳本裡
+# 唯一一處破壞性呼叫,沒有同款前例可以背書,所以把那句承諾釘成機器可驗的(pr-282 review #6)
+assert TMP_BOOKDIR != "viewer-cdp-book" and TMP_BOOKDIR.endswith("-pr281"), TMP_BOOKDIR
 if tmp.parent.exists():
     shutil.rmtree(tmp.parent)
 tmp.mkdir(parents=True)
