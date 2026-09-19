@@ -124,7 +124,19 @@ two-axis 收修**之後**重跑的(收修一樣只動 `.claude/**` 與 `docs/`,�
 
 **收修動到了 #7 的判斷路徑**(`rpWait.has(k)` → `rpInFlight(...)`),所以回看頁四格行為 + #1 四格 +
 #8 兩條事實主張**全部重跑一次**,見 `evidence/viewer_browser_checks.md` 的「第二輪」;
-`rmtree` 真值表也依新的閘重跑。
+`rmtree` 真值表也依新的閘重跑;四條自動化 gate 也在收修後重跑(§4 的數字就是收修後那一輪)。
+
+### 增量快篩(`503353c6..HEAD`,收修波 + artifacts)
+
+two-axis 之後又有 4 個 commit,依 branch-lifecycle 收尾節 §3「補齊缺口不重跑」做 main agent
+機械快篩(增量全是 round 1 的收修本身),結果追記在 `code-review-round-1.json` 的 `increment_screen`。
+**抓到 1 條實錯,已收**:
+
+- **Inc-1** —— `docs/next-time.md` 新條目 (b) 寫「`code+"|"+date` 三處手搓」,那是**照抄 Std-2 的數字
+  而沒有自己重數**。實測全頁 **11 行手搓 12 次**,分屬兩族(逐筆分頁 4 處、重播分頁 7 處),
+  而且 `:633` 是模板字串形狀 `${p.code}|${p.date}`,只 grep `code+"|"+date` 掃不到 ——
+  與本批 #2 要記的 grep 形狀盲區完全同款。條目已改寫成兩族 + 11 行 12 次 + 兩種形狀各掃一次。
+  **這條的教訓與 Std-4 同一個**:照抄別人算出來的數字,正是本批在修的那件事。
 
 ## 8. 沒做的部分
 

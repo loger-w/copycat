@@ -94,5 +94,27 @@
       "disposition": "收。artifacts commit 含整個 `evidence/`。"
     }
   ],
-  "disposition": "Standards 6 條:Std-1 / Std-2(新增處)/ Std-4 / Std-5 全收,Std-3 + Spec-a2 部分收(枚舉改寫、收斂記 next-time),Std-6 反駁不收(引用的鐵則 C 是測試紀律,且有既有前例)。Spec 2 條:Spec-a2 收、Spec-a1 維持延後(reviewer 自己驗過理由為真);Spec-b 無 scope creep。唯一**實錯**是 Std-4 —— 本批照抄了報告 #3 自己的誤算(把 `---`/`+++` 兩行檔頭算進內容行),已改成實測分解。收修後回看頁四格行為 + #1 四格 + #8 兩條事實主張全部重跑,結果見 evidence/viewer_browser_checks.md 第二輪。"
+  "disposition": "Standards 6 條:Std-1 / Std-2(新增處)/ Std-4 / Std-5 全收,Std-3 + Spec-a2 部分收(枚舉改寫、收斂記 next-time),Std-6 反駁不收(引用的鐵則 C 是測試紀律,且有既有前例)。Spec 2 條:Spec-a2 收、Spec-a1 維持延後(reviewer 自己驗過理由為真);Spec-b 無 scope creep。唯一**實錯**是 Std-4 —— 本批照抄了報告 #3 自己的誤算(把 `---`/`+++` 兩行檔頭算進內容行),已改成實測分解。收修後回看頁四格行為 + #1 四格 + #8 兩條事實主張全部重跑,結果見 evidence/viewer_browser_checks.md 第二輪。",
+  "increment_screen": {
+    "range": "503353c6..HEAD(two-axis round 1 之後的收修波 + artifacts)",
+    "method": "main agent 機械快篩(branch-lifecycle 收尾節 §3「補齊缺口不重跑」;增量全是 round 1 的收修本身)",
+    "checks": [
+      "`rpInFlight` 定義(:612)在唯一使用者 `rpKey`(:938)之前,且 `rpKey` 只在 runtime keydown 時才跑 —— 無 TDZ 疑慮",
+      "改寫後的 CSS 註解(:90-96)全段只有一個 `*/`,沒有提早關閉註解",
+      "`make_pr281_check_pages.py` 的新閘實跑一次、真值表五格重驗、真目錄 80 支檔仍在",
+      "Std-4 的新算式自行重算:114 = 檔頭 2 + hunk 9 + 內容行 103(context 65 + 加 32 + 減 6)",
+      "回看頁四格行為 + #1 四格 + #8 兩條事實主張在重建後的頁面上全部重跑(evidence/viewer_browser_checks.md 第二輪)",
+      "四條自動化 gate 在收修後重跑:pytest 3679 passed / ruff / pyright / validate 42/42,全 exit 0"
+    ],
+    "findings": [
+      {
+        "id": "Inc-1",
+        "severity": "實錯(本批自己新引入,快篩自抓)",
+        "finding": "`docs/next-time.md` 新條目的 (b) 寫「`code+\"|\"+date` 在 loadReplay / renderReplay / rpBuild 三處各手搓一次」—— 那是照抄 Std-2 的數字而沒有自己重數。實測全頁 **11 行手搓 12 次**,分屬兩族(逐筆分頁 4 處、重播分頁 7 處),而且 `:633` 是模板字串形狀 `${p.code}|${p.date}`,只 grep `code+\"|\"+date` 掃不到 —— 與本批 #2 要記的 grep 形狀盲區完全同款。",
+        "verdict": "CONFIRMED",
+        "disposition": "收。條目改寫成兩族 + 11 行 12 次 + 兩種形狀各掃一次,並註明行號是 2026-09-19 當下、以及 Std-2 原報「三處」的出處。**這條的教訓與 Std-4 同一個**:照抄別人算出來的數字就是本批在修的東西。"
+      }
+    ],
+    "disposition": "增量快篩 1 條實錯(Inc-1),已收。其餘檢查全過,不重跑整輪 two-axis。"
+  }
 }
