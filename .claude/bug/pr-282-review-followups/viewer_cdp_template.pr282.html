@@ -1,0 +1,1011 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CDP 五軸回看</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F3F4F6; --surface:#FFFFFF; --surface-2:#EAECF0; --ink:#1A1D24; --ink-2:#4B5261; --muted:#8A92A3; --line:#D9DDE5; --grid:#ECEEF2;
+  --accent:#2F5FCF; --up:#D23F31; --down:#1E8E5A; --price:#1A1D24; --vwap:#B8860B; --pc:#9AA3B5;
+  --r-L:#C96A00; --r-M:#0F9F8A; --r-SW:#7A4FCF; --sig:#6B7280; --tip-bg:#1A1D24; --tip-ink:#F6F7F9; --sel:#E8EEFF;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111318; --surface:#181B22; --surface-2:#222632; --ink:#E9EBF0; --ink-2:#B7BDC9; --muted:#7E8697; --line:#2D323D; --grid:#222632;
+    --accent:#7DA3F5; --up:#F06A5C; --down:#3FC28A; --price:#E9EBF0; --vwap:#E2B24A; --pc:#6F7787;
+    --r-L:#CF7A1A; --r-M:#22A08C; --r-SW:#8A66E6; --sig:#9AA3B5; --tip-bg:#E9EBF0; --tip-ink:#111318; --sel:#26304A;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111318; --surface:#181B22; --surface-2:#222632; --ink:#E9EBF0; --ink-2:#B7BDC9; --muted:#7E8697; --line:#2D323D; --grid:#222632;
+  --accent:#7DA3F5; --up:#F06A5C; --down:#3FC28A; --price:#E9EBF0; --vwap:#E2B24A; --pc:#6F7787;
+  --r-L:#CF7A1A; --r-M:#22A08C; --r-SW:#8A66E6; --sig:#9AA3B5; --tip-bg:#E9EBF0; --tip-ink:#111318; --sel:#26304A;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;font-size:14px;line-height:1.45}
+.mono{font-family:"IBM Plex Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+button,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+button{cursor:pointer} button:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible,.chip:focus-visible,.code:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.app{display:grid;grid-template-columns:236px 1fr;grid-template-rows:auto 1fr auto;grid-template-areas:"top top" "rail main" "rail bottom";min-height:100vh}
+.top{grid-area:top;display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:3}
+.top h1{font-size:15px;font-weight:700;margin:0;letter-spacing:.02em}
+.top .nav{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.top .info{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);font-size:12px}
+.pill.up{color:var(--up)} .pill.down{color:var(--down)} .pill.lock{background:var(--up);color:#fff}
+.rail{grid-area:rail;border-right:1px solid var(--line);background:var(--surface);overflow:auto;max-height:calc(100vh - 48px);position:sticky;top:48px}
+.rail ul{list-style:none;margin:0;padding:0 0 12px}
+.rail .grp{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;padding:7px 10px;margin-top:6px;color:#fff;font-weight:700;font-size:12px;letter-spacing:.08em;background:var(--gc,#555);box-shadow:0 1px 0 rgba(0,0,0,.15)}
+.rail .grp .n{font-weight:400;opacity:.85;font-family:"IBM Plex Mono",monospace;font-size:11px}
+.code{display:grid;grid-template-columns:1fr auto;gap:1px 8px;padding:5px 8px 5px 10px;cursor:pointer;color:var(--ink-2);border-left:4px solid var(--gc,#555)}
+.code:hover{background:var(--surface-2)} .code.active{background:var(--surface-2);color:var(--ink);font-weight:500}
+.code .nm{font-size:13px} .code .cd{font-size:11px;color:var(--muted)}
+.code .chg{font-size:12px;align-self:center} .code .chg.up{color:var(--up)} .code .chg.down{color:var(--down)}
+.code .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block;margin-left:4px;vertical-align:middle}
+main{grid-area:main;padding:8px 14px 0;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:999px;background:var(--surface);cursor:pointer;font-size:12px;color:var(--ink-2);user-select:none}
+.chip.on{color:var(--ink);border-color:var(--ink-2)}
+.chip .sw{width:10px;height:10px;border-radius:2px;display:inline-block;opacity:.35} .chip.on .sw{opacity:1}
+.chip select{padding:1px 4px;font-size:12px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:1180px){ .charts{grid-template-columns:1fr} }
+.card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;user-select:none;-webkit-user-drag:none}
+.card svg{cursor:grab;touch-action:none}
+.pill.on{background:var(--accent);color:#fff}
+.card h2{margin:0;padding:6px 10px;font-size:12px;font-weight:500;color:var(--ink-2);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--grid)}
+.card h2 select{padding:0 4px;font-size:12px}
+svg{display:block;width:100%;height:auto}
+.tip{position:absolute;pointer-events:none;background:var(--tip-bg);color:var(--tip-ink);padding:6px 8px;border-radius:6px;font-size:12px;line-height:1.35;max-width:300px;white-space:pre-line;z-index:5}
+.bottom{grid-area:bottom;padding:8px 14px 20px;min-width:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:8px;flex-wrap:wrap}
+.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px;color:var(--ink-2)}
+.tabs button.active{color:var(--ink);border-bottom-color:var(--accent)}
+.tabs button.dim{color:var(--muted);text-decoration:line-through solid} /* 這一天沒有五檔簿(#273):灰掉但仍可點開看原因 */
+.tblwrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:4px 10px;text-align:left;border-bottom:1px solid var(--grid);white-space:nowrap}
+th{color:var(--muted);font-weight:500;font-size:12px;letter-spacing:.04em;position:sticky;top:0;background:var(--surface)}
+td.num,th.num{text-align:right}
+tr.buy td:first-child{border-left:3px solid var(--up)} tr.sell td:first-child{border-left:3px solid var(--down)}
+.pos{color:var(--up)} .neg{color:var(--down)}
+.ticks .tblwrap{max-height:420px;overflow:auto}
+.ticks tr.sel td{background:var(--sel)}
+.ticks tr{cursor:pointer}
+.ticks .bar{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;color:var(--ink-2);font-size:12px}
+.def{max-width:76ch;color:var(--ink-2)} .def h3{color:var(--ink);font-size:14px;margin:14px 0 4px} .def p,.def li{margin:4px 0}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+.kbd{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
+/* 重播(簿重播外掛檔) */
+.rp-head{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-bottom:6px;color:var(--ink-2);font-size:12px}
+.rp-clock{font-size:15px;color:var(--ink);font-weight:500}
+.rp-scrub{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.rp-track{position:relative;flex:1;min-width:0;display:flex;align-items:center}
+.rp-track input{flex:1;min-width:0;accent-color:var(--accent);position:relative;z-index:1}
+/* 集合競價段的色帶(#273):收盤 13:25–13:30、處置股分盤、盤中暫緩撮合都畫在時間軸上 */
+.rp-bands{position:absolute;left:8px;right:8px;top:50%;height:14px;transform:translateY(-50%);pointer-events:none}
+.rp-band{position:absolute;top:0;bottom:0;min-width:2px;background:color-mix(in srgb, var(--r-L) 26%, transparent);border-left:1px solid var(--r-L);border-right:1px solid var(--r-L)}
+.rp-auc{color:var(--r-L);border:1px solid var(--r-L);border-radius:3px;padding:0 5px;font-weight:600}
+.rp-ladder.auc{box-shadow:inset 3px 0 0 var(--r-L)}
+/* 「集合競價」藏在 CSS content 的那一份:innerHTML / textContent 快照(dom_regression.mjs 那種)
+   讀不到,要 getComputedStyle(el, "::after").content 才讀得到 —— 改稱呼時最容易漏掉這一份
+   (pr-281 review #13;原措辭「JS 讀不到」與枚舉由 pr-282 review #8 更正)。畫面上其餘幾份:
+   rpTrialName(頁頭 chip 與色帶 title 共用同一份)、rpChangeLines 的「集合競價撮合」、rp-note、
+   說明列,另有 rpBuild 的格式錯誤訊息 —— 會長,改稱呼前 grep 一次比背清單可靠。
+   .rp-msg-h 是 flex 沒有 justify-content,所以它緊接在標頭文字後面、不貼右緣(說明列照此措辭)。 */
+.rp-msg.auc .rp-msg-h::after{content:"集合競價";color:var(--r-L)}
+.rp-limits{margin:6px 0 0;color:var(--muted);font-size:12px}
+.rp-limits>summary{cursor:pointer}
+.rp-limits ul{margin:4px 0 0;padding-left:20px}
+.rp-note{color:var(--muted);font-size:12px;margin:6px 0 0}
+.rp-ladder{max-width:560px;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.rp-ladder.full{max-height:560px;overflow-y:auto}
+.rp-row{display:grid;grid-template-columns:1fr 84px 1fr;border-bottom:1px solid var(--grid);height:22px;align-items:stretch;font-size:12px}
+.rp-row.hd{height:auto;color:var(--muted);font-size:11px;letter-spacing:.04em;position:sticky;top:0;background:var(--surface);z-index:1}
+.rp-row.hd>div{padding:3px 8px}
+.rp-q{position:relative;display:flex;align-items:center;padding:0 8px}
+.rp-q.buy{justify-content:flex-end} .rp-q.sell{justify-content:flex-start}
+.rp-bar{position:absolute;top:3px;bottom:3px;opacity:.28;border-radius:2px}
+.rp-q.buy .rp-bar{right:0;background:var(--up)} .rp-q.sell .rp-bar{left:0;background:var(--down)}
+.rp-n{position:relative}
+.rp-p{display:flex;align-items:center;justify-content:center;border-left:1px solid var(--grid);border-right:1px solid var(--grid)}
+.rp-p.up{color:var(--up)} .rp-p.down{color:var(--down)}
+.rp-row.cur .rp-p{background:var(--ink);color:var(--surface);font-weight:700}
+.rp-row.lim .rp-p{text-decoration:underline dotted}
+.rp-me{position:relative;display:inline-flex;align-items:center;margin:0 3px;padding:0 4px;border-radius:3px;font-size:10px;font-weight:700;line-height:14px;white-space:nowrap}
+.rp-me.ord{border:1px solid var(--accent);color:var(--accent)}
+.rp-me.ord.unk{border-style:dashed;opacity:.8}
+.rp-me.fill.buy{background:var(--up);color:#fff} .rp-me.fill.sell{background:var(--down);color:#fff}
+.rp-row.me{outline:1px solid var(--accent);outline-offset:-1px}
+.rp-ctrl{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:6px}
+.rp-speed{display:inline-flex}
+.rp-speed button{border-radius:0;margin-left:-1px;padding:4px 8px}
+.rp-speed button:first-child{border-radius:6px 0 0 6px;margin-left:0} .rp-speed button:last-child{border-radius:0 6px 6px 0}
+.rp-ctrl button[aria-pressed="true"]{background:var(--sel);border-color:var(--accent);position:relative}
+.rp-ctrl button:disabled{opacity:.45;cursor:default} .rp-ctrl button:disabled:hover{border-color:var(--line)}
+.rp-body{display:grid;gap:10px;align-items:start;grid-template-columns:minmax(300px,460px) minmax(260px,1fr) minmax(300px,390px);grid-template-areas:"ladder chg tape"}
+.rp-body>.rp-ladder{grid-area:ladder;max-width:none}
+.rp-col{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.rp-col-chg{grid-area:chg} .rp-col-tape{grid-area:tape}
+.rp-col-h{margin:0;padding:4px 10px;font-size:12px;font-weight:500;color:var(--ink-2);border-bottom:1px solid var(--grid);display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline}
+.rp-chg{max-height:500px;overflow-y:auto;font-size:12px}
+.rp-msg{padding:4px 10px;border-bottom:1px solid var(--grid)}
+.rp-msg.cur{background:var(--sel)}
+.rp-msg-h{display:flex;flex-wrap:wrap;gap:0 10px;color:var(--muted);font-size:11px}
+.rp-msg.cur .rp-msg-h{color:var(--ink-2)}
+.rp-line{padding:1px 0 1px 22px;text-indent:-12px}
+.rp-line.dim{color:var(--muted)}
+.rp-msg.cur .rp-line.dim{color:var(--ink-2)}
+.rp-line.rp-cols{display:grid;grid-template-columns:86px 130px 1fr;padding-left:0;text-indent:0;align-items:baseline}
+.rp-cols>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rp-cols .rp-c1{padding-right:8px;border-right:1px solid var(--grid)}
+.rp-cols .rp-c2{text-align:right;padding:0 8px;border-right:1px solid var(--grid)}
+.rp-cols .rp-c3{padding-left:8px;white-space:normal}
+.rp-line .sub{display:block;padding-left:calc(1.4em - 12px);text-indent:0;color:var(--ink-2)}
+.rp-tape{max-height:500px;overflow:auto}
+.rp-tape th,.rp-tape td{padding:2px 8px;font-size:12px}
+.rp-tape tr.cur td{background:var(--sel)}
+.rp-tape td.dim{color:var(--muted)}
+@media (max-width:1180px){ .rp-body{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"ladder tape" "chg chg"} }
+@media (max-width:820px){ .rp-body{grid-template-columns:minmax(0,1fr);grid-template-areas:"ladder" "chg" "tape"} }
+@media (max-width:820px){
+  .app{grid-template-columns:1fr;grid-template-areas:"top" "rail" "main" "bottom"}
+  .rail{position:static;max-height:160px;border-right:0;border-bottom:1px solid var(--line)}
+}
+</style>
+
+<div class="app">
+  <header class="top">
+    <h1>CDP 五軸回看</h1>
+    <div class="nav">
+      <button id="prevDay" title="前一交易日(←)">◀</button>
+      <select id="dateSel"></select>
+      <button id="nextDay" title="後一交易日(→)">▶</button>
+      <select id="codeSel"></select>
+    </div>
+    <div class="info" id="dayInfo"></div>
+  </header>
+  <aside class="rail"><ul id="codeList"></ul></aside>
+  <main>
+    <div class="legend" id="groupInfo" aria-label="族群同伴當日"></div>
+    <div class="legend" id="legend"></div>
+    <div class="charts">
+      <div class="card"><h2>分時 <span class="pill" id="syncInfo">點圖 → 開十字線 + 逐筆追蹤</span></h2><svg id="chartL" role="img" aria-label="分時圖"></svg><div id="tipL" class="tip" hidden></div></div>
+      <div class="card"><h2>K 線 <select id="knSel"></select> 分 K <span class="kbd" id="kInfo">滾輪縮放、拖曳平移、雙擊還原</span></h2><svg id="chartR" role="img" aria-label="K 線圖"></svg><div id="tipR" class="tip" hidden></div></div>
+    </div>
+  </main>
+  <section class="bottom">
+    <div class="tabs"><button data-tab="ticks" class="active">逐筆</button><button data-tab="events">當日事件</button><button data-tab="bt">回測 / 支撐壓力總表</button><button data-tab="idx">活潑日索引</button><button data-tab="def">定義與規則</button><button data-tab="replay">重播</button></div>
+    <div id="tab-ticks" class="ticks"></div>
+    <div id="tab-replay" hidden></div>
+    <div id="tab-events" hidden></div>
+    <div id="tab-bt" hidden></div>
+    <div id="tab-idx" hidden></div>
+    <div id="tab-def" class="def" hidden>
+      <h3>資料</h3>
+      <p>達錢 4 歷史 TICKS(每筆成交價、張數、成交當下買一 / 賣一);圖用 1 分 K 壓縮,逐筆表讀同資料夾 <code>viewer-cdp-ticks/</code> 的分檔(本頁要和該資料夾放在一起)。母體 = copycat 自選的 12 個產業群組 64 檔,2026-07-01 起到最新一個已拉的交易日。盤前篩選與 ALL IN 不在母體。日線來自 FinMind(未還原權息)。</p>
+      <h3>CDP 五軸</h3>
+      <p>用前一交易日的 高 H / 低 L / 收 C:CDP = (H + L + 2C) / 4;AH = CDP + (H − L);NH = 2·CDP − L;NL = 2·CDP − H;AL = CDP − (H − L)。與 copycat 線上 overlay 相同。</p>
+      <h3>標記(兩張圖一樣,依時間與價位放)</h3>
+      <ul>
+        <li><b>你的成交</b>:紅三角買、綠三角賣(券商交易分時明細 + copycat 成交)。</li>
+        <li><b>線上訊號</b>:copycat 當天真的發的訊號;實心紫菱形 = 影子政策列 P / B-a / B-b / S(同檔當日首筆)。</li>
+        <li><b>碰觸測試</b>:價格先離某價位 ≥0.8% 再回到 ±1 檔內 = 碰到;朝上三角 = 由上往下碰(當支撐測)、朝下 = 由下往上碰(當壓力測);綠 = 15 分內先反彈 0.5%(守住)、紅 = 先穿過 0.5%、灰 = 盤整。</li>
+        <li><b>迴盪後打破</b>:進入某價位 ±0.6% 帶內、停留 ≥10 分、穿越 ≥4 次後第一筆跑出帶外;箭頭 = 方向;紅 = 30 分內先走 +1%(續走)、綠 = 先回 0.5%(反轉)、灰 = 盤整;外圈紫 = 打破那一分鐘量 ≥ 迴盪期均量 4 倍。</li>
+        <li><b>CDP 突破事件</b>:過 NH / 過 AH / 回測 NH / 跌破 NH / 跌到 CDP / 站回 CDP。</li>
+        <li><b>回測交易</b>:空心三角進、叉出、虛線連;紅賺綠賠(每筆 50 萬名目)。</li>
+      </ul>
+      <h3>回測策略(每筆 50 萬名目;進場追 1 檔、出場滑 1 檔;手續費 0.1425% × 2、當日稅 0.15%、留倉稅 0.3%;12:30 後不進;同檔同日一筆)</h3>
+      <ul>
+        <li><b>A 過 AH 買,放到尾盤</b>:13:20 未鎖 → 出;鎖死 → 留倉隔日開盤出。</li>
+        <li><b>B 過 AH 買,NH 當失效價</b>。<b>C 回測 NH 買,NH 失效</b>。<b>D 過 NH 買,NH 失效</b>。<b>E CDP 回檔站回買,NL 失效</b>。</li>
+      </ul>
+      <h3>活潑日</h3>
+      <p>當日振幅 =(當日最高 − 當日最低)/ 前收 ≥ 門檻。開「只列活潑日」時左欄只列當天活潑的股票、← → 只在該檔的活潑日之間跳;索引分頁依群組列出全部活潑股票日。</p>
+      <h3>K 線</h3>
+      <p>從 1 分 K 現場合併成 1 到 10 分 K。MA5 / MA20 / 布林通道(20 根、2 倍標準差)都用<b>當前週期的 K 棒</b>算,開盤前幾根不足 20 根時不畫。滾輪縮放(以滑鼠位置為中心)、按住拖曳平移、雙擊還原全天;縮放後價格軸依可視 K 棒自動調整,分時圖維持全天。</p>
+      <p>操作:<span class="kbd">←</span> <span class="kbd">→</span> 逐日換(不跳過);左欄依群組列股票;滑鼠在任一張圖上移動,兩張圖同時出十字線、下方逐筆表跟著捲到那個時間;<b>點圖一下</b>開啟十字線同步與逐筆追蹤(同時固定一條藍色直線在點的時間),<b>再點一下</b>關閉,關閉時拖曳與滾輪縮放 K 線不會被十字線干擾;點逐筆表的一列固定直線。</p>
+      <h3>重播(2026-09-16 起)</h3>
+      <p>資料 = copycat tick 存檔(server 盤中收到的每一則成交與五檔變動),以 <code>book-replay</code> 指令產生、放在同資料夾 <code>viewer-cdp-book/</code>(每檔每日一檔,切到重播分頁才載入;本頁讀外掛檔 v2 / v3 / v4,更舊的要用新版 <code>book-replay</code> 重產)。2026-09-16 之前的交易日沒有簿(見下方「沒有簿的交易日」),重播分頁會灰掉並說明。</p>
+      <ul>
+        <li><b>時間軸</b>:拖曳的是 <b>server 收到時刻</b>(不倒退,比交易所晚約 0.1 秒;前提是本機鐘準)。達錢即時個股成交時刻只到整秒,拿它當軸一秒底下會壓幾十則。</li>
+        <li><b>時刻標籤</b>:「成交 hh:mm:ss 之後第 N 則」= 最近一筆成交的達錢時刻(交易所的尺)之後第幾則訊息;成交本身是第 0 則。達錢時刻比收到時刻晚超過 60 秒(例如開機收到前一日盤後成交)或比目前標籤早的成交,不拿來當標籤時刻。</li>
+        <li><b>價格階梯</b>:買量 | 價格 | 賣量,高價在上。預設現價上下各 10 檔,現價離開中心超過 5 檔才重新置中;「展開漲停–跌停」列出當日全範圍。現價 = 最近一筆成交價(鎖漲停時買一是價 0 的市價佇列、賣方全空,從五檔推不出現價)。價 0 的市價佇列不畫在階梯上,另列文字。</li>
+        <li><b>橫條</b>:按這檔當天 13:25 以前(收到時刻)所有價位裡最大的單格量歸一;13:25 後的收盤集合競價與漲停排隊量常大好幾倍,算進來會把盤中的橫條壓扁,所以不算,超過基準的格子畫滿。</li>
+        <li><b>十字線</b>:拖曳時上方兩張圖的十字線跟著重播時刻與現價走。</li>
+        <li><b>播放</b>:速度 1x / 2x / 5x / 10x 以收到時刻計(1x = 真實時間,11:02:00 播到 11:02:50 要 50 秒)。播到最後一則自動停;播放中拖曳時間軸會從新位置接著播;換檔、換日、切到別的分頁會暫停。</li>
+        <li><b>逐則步進</b>:「前一則 / 後一則」或鍵盤 <span class="kbd">←</span> <span class="kbd">→</span>(重播分頁開著時 ← → 是逐則步進、不換日,換日用上方 ◀ ▶),會先暫停播放。步進照則號走,同一毫秒收到的幾則也能一則一則看;拖曳時間軸仍取收到時刻 ≤ 該時刻的最後一則。</li>
+        <li><b>跳到首次鎖漲停</b>:當日第一筆「成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價」的成交(與線上鎖漲停訊號同條件;只碰到漲停、賣方還有掛單不算),會先暫停播放。當日沒鎖漲停時按鈕停用。</li>
+        <li><b>這一則變了什麼</b>(中間欄):列到目前這一則為止最近 60 則,最新在上、目前這則標亮,往下捲看較早的則。播放時一次重畫常跨過好幾則,跨過的通常也在清單裡;高速播放遇到密集時段,一次可能跨過 60 則以上,要看每一則請暫停後逐則步進。每則以<b>價格</b>跟前一則比,只比兩則都<b>看得到</b>的價位(買方 = 第五檔買價以上、賣方 = 第五檔賣價以下;某側不滿五檔 = 整側看得到):量增加 = 掛單;量減少先扣這個價位的成交,剩下的算撤單。成交則附的五檔常晚幾則才更新(一口氣連吃好幾檔時),所以之後 8 則、1 秒內同價位減少的量仍先算成交;鎖漲跌停時市價排隊減少也先算成交。</li>
+        <li><b>被擠出五檔 / 回到五檔</b>:價位掉到第五檔之外(掛單通常還在,只是看不到)列「被擠出五檔」;回到看得到的範圍列「⟳ 回到五檔」,給離開時量、現在量、離開期間這個價位的成交、淨掛(= 現在 − 離開時 + 期間成交)與離開多久 —— <b>不算掛單</b>,看不到的那段無法分辨是一次掛進或分次堆積;量沒變、期間也沒成交時淡色一行。從沒看過的價位帶量進來列「首次進入五檔」,也不算掛單。價格穿過某個價位(賣方價位變成買方價位)一直看得到,不算被擠出。</li>
+        <li><b>五檔全空</b>:達錢在暫緩撮合開始那一刻會送一則買賣兩側全空的五檔(之後改每 5 秒更新),這一則不算撤單,下一則跟全空之前那一份比。</li>
+        <li><b>成交明細</b>(右欄):到目前這一則為止最近 20 筆成交,跟階梯永遠是同一刻;目前這則是成交時標亮。時間 = 達錢成交時刻(即時只到整秒)。<b>吃檔</b> = 這筆成交扣到成交前那一則五檔的第幾檔,例「吃 賣1 −12」;一口氣連吃好幾檔會依序出現 賣1、賣2…;鎖漲停時吃的是市價排隊(「吃 市價買」);價位在第五檔之外列「五檔外」;看不出吃了哪一檔(開收盤集合競價、同一則又掛進來)列「—」。</li>
+        <li><b>非群組(簿重播)</b>:當天有簿重播、但不在產業群組母體的個股另列一組(左欄最下)。分時 / K 線 / 逐筆來自 copycat tick 存檔(與達錢歷史逐筆比:盤中 1 分 K 逐根相同、少 14:30 盤後定價那一筆、內外盤用成交前真實五檔判);日線 FinMind。不進回測、碰觸、迴盪統計,也沒有 CDP 突破事件(活潑日索引那兩欄印「—」);你的成交與線上訊號照常標。頁頭開高低收與振幅取 FinMind 日線;存檔量不到全日九成時頁頭標「逐筆不完整」(例:6147 09-16 自 11:35 才有逐筆)。</li>
+        <li><b>我的委託 / 成交</b>:格子上的「委 n」= 你自己當時掛在那一格的委託張數,「成 n」= 到目前這一則為止你在那一格成交的張數(有標記的整列外框變色),滑鼠移上去看時刻明細;上方圖例的「你的委託 / 成交」一個開關同時關掉上方圖的成交標記與階梯上這兩種標記。「◀ 上一筆我的成交 / 下一筆我的成交 ▶」跳到自己的成交那一則(會先暫停播放)。委託來源 = 群益審計記錄的下單 / 刪單(<b>送出時刻只到秒</b>,且只知道送出去了,不知道交易所何時收到 / 刪成功);委託自送出畫到「成交」(配對到你的成交那一筆)或「刪單」(刪單送出時刻)。審計的送出時刻是<b>送單呼叫回來之後才蓋的章</b>,系統性地比真正送出去晚一點(全部資料裡有 9 筆的成交回報比它還早,差 0.08–0.95 秒;這種單子的送出時刻會收斂成不晚於成交,因此在畫面上沒有可見的停留時間)。兩者都沒配到時寫「沒配到成交也沒刪單」——<b>可能真的掛到收盤,也可能當日成交清單漏了這筆</b>,分不出來。同一格同一秒掛好幾筆時,滑鼠移上去的每一行都帶<b>委託序號</b>可以分辨。當天的成交資料還沒補時畫成虛線的「委?」並註明不知道何時消失,<b>不假裝它掛到收盤</b>。市價單不畫在格子上(它不停在任何價位),說明列會寫當天有幾筆;成交時刻是<b>回報收到時刻</b>(比交易所成交晚一點)。<b>不顯示委託的佇列順位</b> —— 五檔只有總量,排第幾推不出來,硬推是編數字。預設視野只有現價上下 10 檔,離現價較遠的委託要按「展開漲停–跌停」才看得到。</li>
+        <li><b>集合競價段</b>:時間軸上的橘色帶、頁頭的「收盤集合競價 / 集合競價(盤中…)」標註、階梯左緣的橘色條、中間欄每則標頭末端的「集合競價」,都是同一件事 —— 達錢把那一則標成<b>試撮中</b>。三種來源:收盤 13:25–13:30(當天全部個股)、盤中暫緩撮合、處置股整天的分盤撮合。那一段揭示的五檔是<b>撮完剩下的</b>掛單(要撮掉的單子從沒顯示過),所以委託堆積是集合競價的結果,<b>不是盤中墊單</b>(2026-09-16 段內單格最大是 5314 賣一 47,033 張 = 鎖跌停排隊,一般檔如 2305 買 49.40 也堆到 1,264 張)。段內的差分照常算,只是讀法不同。<b>段的界</b>:色帶只蓋達錢標成「試撮中」的那些則。<b>收盤與處置股分盤</b>撮出來的那一筆,狀態已經回到正常盤,所以它<b>不在色帶裡</b>,中間欄印的是「集合競價撮合」(2026-09-16~18 共 1,169 筆零例外)。但<b>盤中暫緩撮合</b>的延遲成交送來時可能自己還帶著試撮狀態(2026-09-16 7772 於 11:40:29 成交、11:42:27 才送到),那一則就<b>在</b>色帶裡 —— 兩個標記各讀各的、<b>不互斥</b>。處置股的分盤撮合一路連到收盤時,那一段標成「收盤集合競價(自分盤撮合連過來)」。</li>
+        <li><b>沒有簿的交易日</b>:2026-09-16(copycat tick 存檔上線)之前的交易日<b>沒有五檔簿</b> —— 這些日子的逐筆來自達錢 4 歷史 TICKS,它只有每筆成交當下的買一 / 賣一。重播分頁在那些日子會灰掉並說明,<b>不是故障</b>;分時 / K 線 / 逐筆 / 事件 / 回測一格不受影響,逐筆表的內 / 外 / 中判定也維持原樣(成交價 ≥ 賣一 = 外盤)。</li>
+        <li><b>限制(五條)</b>:① 五檔是<b>聚合量</b>,看不到單一委託 ——「同一張大單」永遠是推斷,分不出一張 500 張與十張 50 張同時撤;② 五檔<b>視野外完全看不到</b>;③ 簿列的達錢 <code>PreciseTime</code> 是<b>上一筆成交的殘影</b>,不是簿變動時刻,簿列真正的時刻只有 server 收到時刻;④ 檔案記的是「<b>server 看到的</b>」,不是「交易所發生的」,開盤峰值 ZMQ 掉包會留缺口;⑤ 群益審計記錄(你的委託)的<b>時刻只到秒</b>。同一份也收在重播面板下方的「已知限制(五條)」。</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<script id="blob" type="text/plain">__DATA_B64__</script>
+<script>
+(async function(){
+  const STRATS = {A_AH_hold:"A 過 AH 買,放到尾盤", B_AH_nh:"B 過 AH 買,NH 失效價", C_NHretest:"C 回測 NH 買,NH 失效價", D_NH_nh:"D 過 NH 買,NH 失效價", E_CDPdip:"E CDP 回檔站回買,NL 失效價"};
+  const SIGN = {surge:"爆拉", crash:"爆跌", vol_burst:"爆量", limit_lock:"鎖漲停", limit_open:"打開", surge_pullback:"爆拉回檔", sweep_cluster:"掃單簇", cdp_cross:"CDP 穿越", "policy-P":"政策 P", "policy-B-a":"政策 B-a", "policy-B-b":"政策 B-b", "policy-S":"政策 S"};
+  const LV = {AH:"AH 最高", NH:"NH 進高", CDP:"CDP", NL:"NL 進低", AL:"AL 最低", "前收":"前收", "開盤":"開盤", "隨機":"隨機價位(對照)"};
+  const OUTC = {hold:"守住", break:"穿過", flat:"盤整"};
+  const OB = {cont:"續走(30 分內先 +1%)", rev:"反轉(先回 −0.5%)", flat:"盤整"};
+  const GCOL = ["#2F5FCF","#C96A00","#0F9F8A","#7A4FCF","#B03A7A","#5E6B1D","#1E8E5A","#B8860B","#8A4B2E","#3A7BD5","#D23F31","#5B6470"];
+  const state = {code:null, date:null, show:{fills:true, sig:false, cdp:true, ref:true, tt:false, ob:true, ev:false, ma5:true, ma20:true, boll:true}, bt:"", active:true, act:6, kn:3, sel:null, sync:false};
+  try{ const s = JSON.parse(localStorage.getItem("cdp-viewer-v5")||"null"); if(s){ Object.assign(state.show, s.show||{}); state.bt = s.bt ?? state.bt; state.code=s.code||null; state.date=s.date||null; if(typeof s.active==="boolean") state.active=s.active; if(s.act) state.act=s.act; if(s.kn) state.kn=s.kn; } }catch(e){}
+  function persist(){ try{ localStorage.setItem("cdp-viewer-v5", JSON.stringify({show:state.show, bt:state.bt, code:state.code, date:state.date, active:state.active, act:state.act, kn:state.kn})); }catch(e){} }
+  async function gunzipB64(b64){ const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0)); const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip")); return JSON.parse(await new Response(stream).text()); }
+  let DATA;
+  try{ DATA = await gunzipB64(document.getElementById("blob").textContent.trim()); }catch(e){ document.querySelector("main").innerHTML = '<div class="empty">這個瀏覽器不支援資料解壓(需要 Chrome 80+ / Edge / Firefox 113+)。</div>'; return; }
+  const codes = DATA.codes, dates = DATA.dates, BAR = DATA.bar, TICKDIR = DATA.tickdir || "viewer-cdp-ticks";
+  const gidx = {}; Object.keys(DATA.groups).forEach((g,i) => gidx[g] = i);
+  const gcol = g => GCOL[(gidx[g]||0) % GCOL.length];
+  const isActive = D => D && D.rg >= state.act;
+  if(!state.code || !DATA.d[state.code]) state.code = (codes.find(c=>c.c==="8064")||codes[0]).c;
+  if(!state.date || !dates.includes(state.date)) state.date = dates[dates.length-1];
+  const $ = id => document.getElementById(id);
+  const fmtT = s => { s = Math.round(s); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}`; };
+  const fmtMs = ms => { const s = Math.floor(ms/1000); return fmtT(s) + "." + String(ms%1000).padStart(3,"0"); };
+  const fmtP = p => (Math.abs(p) >= 100 ? p.toFixed(1) : p.toFixed(2)).replace(/\.?0+$/,"");
+  const pct = (p, pc) => ((p/pc-1)*100).toFixed(2)+"%";
+  const cls = v => v>0?"up":v<0?"down":"";
+  const T0 = 32400, T1 = 48600;
+
+  // ---- top selectors
+  const dateSel = $("dateSel"), codeSel = $("codeSel"), knSel = $("knSel");
+  dates.forEach(d => { const o = document.createElement("option"); o.value=d; o.textContent=d.slice(5).replace("-","/"); dateSel.appendChild(o); });
+  codes.forEach(c => { const o = document.createElement("option"); o.value=c.c; o.textContent=`${c.g} · ${c.n} ${c.c}`; codeSel.appendChild(o); });
+  for(let k=1;k<=10;k++){ const o = document.createElement("option"); o.value=k; o.textContent=k; knSel.appendChild(o); }
+  knSel.value = state.kn;
+  dateSel.addEventListener("change", ()=>{ state.date=dateSel.value; state.sel=null; kview=null; render(); });
+  codeSel.addEventListener("change", ()=>{ state.code=codeSel.value; state.sel=null; kview=null; render(); });
+  knSel.addEventListener("change", ()=>{ state.kn=Number(knSel.value); persist(); renderK(); });
+  function stepDay(k){ const i = dates.indexOf(state.date)+k; if(i>=0 && i<dates.length){ state.date = dates[i]; state.sel=null; kview=null; render(); } }
+  $("prevDay").addEventListener("click", ()=>stepDay(-1)); $("nextDay").addEventListener("click", ()=>stepDay(1));
+  document.addEventListener("keydown", e => { if(e.target.tagName==="SELECT") return; if(rpActive()){ rpKey(e); return; } if(e.key==="ArrowLeft") stepDay(-1); if(e.key==="ArrowRight") stepDay(1); });
+
+  // ---- legend
+  const legend = $("legend");
+  [["fills","你的委託 / 成交","var(--up)"],["sig","線上訊號(含政策)","var(--sig)"],["cdp","CDP 五軸線","var(--accent)"],["ref","前收 / 開盤線","var(--pc)"],["tt","碰觸測試(守住 / 穿過)","var(--r-M)"],["ob","迴盪後打破","var(--r-SW)"],["ev","CDP 突破事件","var(--r-L)"],["ma5","MA5(K 線)","var(--r-L)"],["ma20","MA20(K 線)","var(--r-SW)"],["boll","布林 20 · 2σ(K 線)","var(--accent)"]].forEach(([k,label,color]) => {
+    const b = document.createElement("button"); b.className = "chip"+(state.show[k]?" on":""); b.type="button"; b.setAttribute("aria-pressed", String(!!state.show[k]));
+    b.innerHTML = `<span class="sw" style="background:${color}"></span>${label}`;
+    b.addEventListener("click", ()=>{ state.show[k]=!state.show[k]; b.classList.toggle("on", state.show[k]); b.setAttribute("aria-pressed", String(state.show[k])); persist(); render(); });
+    legend.appendChild(b);
+  });
+  const btChip = document.createElement("label"); btChip.className="chip on";
+  btChip.innerHTML = `回測交易 <select id="btSel"><option value="">不顯示</option>${Object.keys(STRATS).map(k=>`<option value="${k}">${STRATS[k]}</option>`).join("")}</select>`;
+  legend.appendChild(btChip);
+  const btSel = $("btSel"); btSel.value = state.bt; btSel.addEventListener("change", ()=>{ state.bt = btSel.value; persist(); render(); });
+  const actChip = document.createElement("label"); actChip.className = "chip"+(state.active?" on":"");
+  actChip.innerHTML = `<button type="button" id="actBtn" style="border:0;background:none;padding:0;color:inherit;cursor:pointer"><span class="sw" style="background:var(--up)"></span>只列活潑日</button> 當日振幅 ≥ <select id="actSel">${[4,5,6,8,10].map(v=>`<option value="${v}">${v}%</option>`).join("")}</select>`;
+  legend.appendChild(actChip);
+  $("actSel").value = String(state.act);
+  $("actBtn").addEventListener("click", ()=>{ state.active=!state.active; actChip.classList.toggle("on", state.active); persist(); render(); });
+  $("actSel").addEventListener("change", ()=>{ state.act = Number($("actSel").value); persist(); renderIdx(); render(); });
+
+  // ---- rail
+  const list = $("codeList");
+  function renderRail(){
+    list.innerHTML = ""; let lastG = null; let hdr = null; let cnt = 0;
+    codes.forEach(c => {
+      const D = DATA.d[c.c][state.date];
+      if(state.active && !isActive(D) && c.c !== state.code) return;
+      if(c.g !== lastG){ if(hdr) hdr.querySelector(".n").textContent = cnt + " 檔"; cnt = 0; hdr = document.createElement("li"); hdr.className="grp"; hdr.style.setProperty("--gc", gcol(c.g)); hdr.innerHTML = `<span>${c.g}</span><span class="n"></span>`; list.appendChild(hdr); lastG = c.g; }
+      cnt++;
+      const li = document.createElement("li");
+      const a = document.createElement("div"); a.className = "code"+(c.c===state.code?" active":""); a.tabIndex=0; a.role="button"; a.style.setProperty("--gc", gcol(c.g));
+      const chg = D ? (D.c/D.pc-1)*100 : null; const hasFill = D && D.f.length>0;
+      a.innerHTML = `<span class="nm">${c.n}${hasFill?'<span class="dot" title="這天有你的成交"></span>':""}</span><span class="chg mono ${chg==null?"":cls(chg)}">${chg==null?"—":(chg>0?"+":"")+chg.toFixed(1)+"%"}</span><span class="cd mono">${c.c}</span><span class="cd">${D?`振 ${D.rg.toFixed(1)}%`:""}${D&&D.c>=D.lim-1e-9?" 鎖":""}</span>`;
+      const go = ()=>{ state.code=c.c; state.sel=null; kview=null; render(); };
+      a.addEventListener("click", go); a.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } });
+      li.appendChild(a); list.appendChild(li);
+    });
+    if(hdr) hdr.querySelector(".n").textContent = cnt + " 檔";
+  }
+
+  // ---- charts
+  const NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for(const k in attrs) e.setAttribute(k, attrs[k]); if(parent) parent.appendChild(e); return e; }
+  const svgL = $("chartL"), svgR = $("chartR"), tipL = $("tipL"), tipR = $("tipR");
+  const CH = {};   // L / R 兩張圖的當前狀態(F、bars、十字線元素)
+  let CUR = null;  // 當前股票日的共用資料 {D, pc, lim, lo, hi}
+  let kview = null; // K 線可視時間範圍 [ta, tb](null = 全天)
+  function showTip(tip, svg, text, ev){ const r = svg.parentElement.getBoundingClientRect(); tip.textContent = text; tip.hidden=false; let left = ev.clientX - r.left + 14, top = ev.clientY - r.top + 14; if(left + 280 > r.width) left = ev.clientX - r.left - 290; if(top + 80 > r.height) top = ev.clientY - r.top - 90; tip.style.left = left+"px"; tip.style.top = top+"px"; }
+
+  function frame(svg, D, pc, lim, lo, hi, ta, tb){
+    const W = Math.max(520, svg.parentElement.clientWidth||700), Hp = 340, Hv = 70, ml = 46, mr = 70, mt = 12, gap = 6, mb = 24;
+    const H = mt + Hp + gap + Hv + mb;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.style.height = H+"px";
+    const pw = W-ml-mr;
+    const x = s => ml + (s-ta)/(tb-ta)*pw;
+    const y = p => mt + (hi-p)/(hi-lo)*Hp;
+    const inView = s => s >= ta && s <= tb;
+    const stepPct = (hi-lo)/pc*100 > 12 ? 2 : (hi-lo)/pc*100 > 6 ? 1 : (hi-lo)/pc*100 > 3 ? 0.5 : 0.25;
+    const g = el("g",{class:"grid"},svg);
+    for(let k = Math.ceil((lo/pc-1)*100/stepPct); k*stepPct <= (hi/pc-1)*100; k++){
+      const p = pc*(1+k*stepPct/100), yy = y(p);
+      el("line",{x1:ml,x2:W-mr,y1:yy,y2:yy,stroke:"var(--grid)","stroke-width":1},g);
+      const tl = el("text",{x:ml-5,y:yy+4,"text-anchor":"end",fill:k===0?"var(--ink-2)":"var(--muted)","font-size":10,class:"mono"},g); tl.textContent = (k>0?"+":"")+(k*stepPct)+"%";
+    }
+    const span = tb-ta; const tick = span > 3*3600 ? 3600 : span > 5400 ? 1800 : span > 1800 ? 600 : span > 600 ? 300 : 60;
+    for(let s = Math.ceil(ta/tick)*tick; s <= tb; s += tick){ const xx = x(s); el("line",{x1:xx,x2:xx,y1:mt,y2:mt+Hp+gap+Hv,stroke:"var(--grid)"},g); const t = el("text",{x:xx,y:H-7,"text-anchor":"middle",fill:"var(--muted)","font-size":10,class:"mono"},g); t.textContent = fmtT(s).slice(0, tick>=60?5:8); }
+    el("line",{x1:ml,x2:W-mr,y1:mt+Hp,y2:mt+Hp,stroke:"var(--line)","stroke-width":1},g);
+    el("line",{x1:ml,x2:W-mr,y1:mt+Hp+gap+Hv,y2:mt+Hp+gap+Hv,stroke:"var(--line)","stroke-width":1},g);
+    el("line",{x1:ml,x2:ml,y1:mt,y2:mt+Hp+gap+Hv,stroke:"var(--line)","stroke-width":1},g);
+    const lab = (p, text, col) => { if(p<lo||p>hi) return; const t = el("text",{x:W-mr+4,y:y(p)+4,fill:col,"font-size":10,class:"mono"},svg); t.textContent = text; };
+    const hline = (p, col, dash, op) => { if(p<lo||p>hi) return; el("line",{x1:ml,x2:W-mr,y1:y(p),y2:y(p),stroke:col,"stroke-dasharray":dash,opacity:op||1},svg); };
+    if(state.show.ref){ hline(pc,"var(--pc)","4 4"); lab(pc, "前收 "+fmtP(pc), "var(--pc)"); hline(D.o,"var(--ink-2)","1 3",.8); lab(D.o, "開盤 "+fmtP(D.o), "var(--ink-2)"); }
+    hline(lim,"var(--up)","2 4",.8); lab(lim, "漲停 "+fmtP(lim), "var(--up)");
+    if(state.show.cdp){ [["AH","var(--r-L)"],["NH","var(--accent)"],["CDP","var(--vwap)"],["NL","var(--accent)"],["AL","var(--r-L)"]].forEach(([k,col]) => { hline(D.cdp[k],col,"6 3",.75); lab(D.cdp[k], `${k} ${fmtP(D.cdp[k])}`, col); }); }
+    return {W,H,ml,mr,mt,Hp,gap,Hv,pw,x,y,ta,tb,inView,lo,hi};
+  }
+
+  function drawMarkers(svg, F, D, pc){
+    const {x,y,W,mr,ml,inView,lo,hi} = F;
+    const lvPx = {AH:D.cdp.AH, NH:D.cdp.NH, CDP:D.cdp.CDP, NL:D.cdp.NL, AL:D.cdp.AL, "前收":pc, "開盤":D.o};
+    const ok = (s,p) => inView(s) && p>=lo && p<=hi;
+    if(state.show.tt && D.tt){ const g = el("g",{},svg); D.tt.forEach(t => { const L = lvPx[t[1]]; if(L==null || !ok(t[0],L)) return; const cx=x(t[0]), cy=y(L); const col = t[3]==="hold"?"var(--r-M)":t[3]==="break"?"var(--down)":"var(--muted)"; const up = t[2]==="sup";
+      el("polygon",{points: up ? `${cx-5},${cy+7} ${cx+5},${cy+7} ${cx},${cy-1}` : `${cx-5},${cy-7} ${cx+5},${cy-7} ${cx},${cy+1}`, fill:col, stroke:"var(--surface)","stroke-width":1.2, opacity:.95, "data-tip":`${LV[t[1]]} ${up?"當支撐(由上碰)":"當壓力(由下碰)"} ${fmtT(t[0])}\n結果:${OUTC[t[3]]}\n當時當日振幅 ${t[4].toFixed(1)}%${t[5]?" · 當天第一次碰這條":""}`},g); }); }
+    if(state.show.ob && D.ob){ const g = el("g",{},svg); D.ob.forEach(o => { const L = lvPx[o[1]]; if(L==null || !ok(o[0],L)) return; const cx=x(o[0]), cy=y(L); const big = o[4]!=null && o[4]>=4; const col = o[3]==="cont"?"var(--up)":o[3]==="rev"?"var(--down)":"var(--muted)"; const up = o[2]>0;
+      const tipText = `迴盪後打破 ${LV[o[1]]} ${fmtT(o[0])} ${up?"向上":"向下"}\n帶內 ${o[7]} 分、穿越 ${o[6]} 次\n打破分鐘量 = 迴盪均量 ${o[4]==null?"—":o[4].toFixed(1)+" 倍"}${big?"(放量)":""}\n結果:${OB[o[3]]}${o[5]?" · 30 分內回帶":""}`;
+      if(big) el("circle",{cx,cy,r:11,fill:"none",stroke:"var(--r-SW)","stroke-width":2,"data-tip":tipText},g);
+      el("path",{d: up ? `M${cx} ${cy-9} L${cx} ${cy+9} M${cx-5} ${cy-4} L${cx} ${cy-9} L${cx+5} ${cy-4}` : `M${cx} ${cy+9} L${cx} ${cy-9} M${cx-5} ${cy+4} L${cx} ${cy+9} L${cx+5} ${cy+4}`, fill:"none", stroke:col, "stroke-width":2.4, "stroke-linecap":"round", "data-tip":tipText},g);
+      const t = el("text",{x:cx, y: up? cy+20 : cy-13, "text-anchor":"middle", fill:col, "font-size":10, "font-weight":700, stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke","data-tip":tipText},g); t.textContent = o[1] + (big?" 量":""); }); }
+    if(state.show.ev){ const g = el("g",{},svg); D.e.forEach(e => { if(!ok(e[0],e[1])) return; const cx=x(e[0]), cy=y(e[1]); const col = (e[2].startsWith("跌破")||e[2].startsWith("跌到"))?"var(--down)":e[2].startsWith("回測")?"var(--accent)":"var(--r-L)"; el("circle",{cx,cy,r:5,fill:col,stroke:"var(--surface)","stroke-width":1.5,"data-tip":`${e[2]} ${fmtT(e[0])} @${fmtP(e[1])}(${pct(e[1],pc)})`},g); const t = el("text",{x:cx,y:cy-9,"text-anchor":"middle",fill:col,"font-size":10,"font-weight":700,stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke"},g); t.textContent = e[2]; }); }
+    if(state.show.sig){ const g = el("g",{},svg); D.s.forEach(s => { if(!ok(s[0],s[1])) return; const cx=x(s[0]), cy=y(s[1]); const isPol = s[2].startsWith("policy"); el("polygon",{points:`${cx},${cy-6} ${cx+6},${cy} ${cx},${cy+6} ${cx-6},${cy}`,fill:isPol?"var(--r-SW)":"none",stroke:isPol?"var(--r-SW)":"var(--sig)","stroke-width":1.5,"data-tip":`線上訊號:${SIGN[s[2]]||s[2]} ${fmtT(s[0])} @${fmtP(s[1])}(${pct(s[1],pc)})`},g); if(isPol){ const t = el("text",{x:cx,y:cy-9,"text-anchor":"middle",fill:"var(--r-SW)","font-size":10,"font-weight":700,stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke"},g); t.textContent = SIGN[s[2]]; } }); }
+    if(state.bt && D.t[state.bt]){ const g = el("g",{},svg); D.t[state.bt].forEach(t => { if(!inView(t[0]) && !(t[2]!=null && inView(t[2]))) return; const x1=Math.max(ml, x(t[0])), y1=y(Math.min(hi,Math.max(lo,t[1]))); const x2 = t[2]!=null ? Math.min(W-mr, x(t[2])) : W-mr; const y2 = y(Math.min(hi, Math.max(lo, t[3]))); const c = t[5]>0?"var(--up)":"var(--down)";
+      el("line",{x1,y1,x2,y2,stroke:c,"stroke-width":1.2,"stroke-dasharray":"3 3",opacity:.9},g); if(t[2]==null){ const lb = el("text",{x:x2-4,y:y2-6,"text-anchor":"end",fill:c,"font-size":10,class:"mono",stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke"},g); lb.textContent = "隔日開 "+fmtP(t[3]); }
+      if(inView(t[0])) el("polygon",{points:`${x1-6},${y1+8} ${x1+6},${y1+8} ${x1},${y1-2}`,fill:"none",stroke:c,"stroke-width":1.8,"data-tip":`回測進場 ${fmtT(t[0])} @${fmtP(t[1])}\n出場 ${t[2]!=null?fmtT(t[2]):"隔日開盤"} @${fmtP(t[3])} ${t[6]}\n${t[4]>0?"+":""}${t[4]}%,${t[5]>0?"+":""}${t[5].toLocaleString()} 元(50 萬名目)`},g);
+      if(t[2]==null || inView(t[2])) el("path",{d:`M${x2-5} ${y2-5}L${x2+5} ${y2+5}M${x2+5} ${y2-5}L${x2-5} ${y2+5}`,stroke:c,"stroke-width":2,"data-tip":`回測出場 ${t[2]!=null?fmtT(t[2]):"隔日開盤"} @${fmtP(t[3])} ${t[6]}`},g); }); }
+    if(state.show.fills){ const g = el("g",{},svg); D.f.forEach(f => { if(!ok(f[0],f[1])) return; const cx=x(f[0]), cy=y(f[1]); const buy=f[3]>0;
+      const m = buy ? el("polygon",{points:`${cx-7},${cy+11} ${cx+7},${cy+11} ${cx},${cy+1}`,fill:"var(--up)",stroke:"var(--surface)","stroke-width":1.5},g) : el("polygon",{points:`${cx-7},${cy-11} ${cx+7},${cy-11} ${cx},${cy-1}`,fill:"var(--down)",stroke:"var(--surface)","stroke-width":1.5},g);
+      m.setAttribute("data-tip", `${f[4]} ${fmtT(f[0])} @${fmtP(f[1])}(${pct(f[1],pc)}) ${f[2]} 張`);
+      const lb = el("text",{x:cx, y: buy? cy+23 : cy-15, "text-anchor":"middle", fill: buy?"var(--up)":"var(--down)", "font-size":10, "font-weight":700, class:"mono", stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke"},g); lb.textContent = (buy?"買 ":"賣 ")+fmtP(f[1]); }); }
+  }
+
+  // 十字線 + 選取線(每張圖一組;hover 由任一張觸發,兩張同步)
+  function makeCross(svg, F){
+    const g = el("g",{style:"display:none","pointer-events":"none"},svg);
+    const vl = el("line",{y1:F.mt,y2:F.mt+F.Hp+F.gap+F.Hv,stroke:"var(--ink-2)","stroke-dasharray":"2 3",opacity:.7},g);
+    const hl = el("line",{x1:F.ml,x2:F.W-F.mr,stroke:"var(--ink-2)","stroke-dasharray":"2 3",opacity:.7,style:"display:none"},g);
+    const dot = el("circle",{r:3.5,fill:"var(--accent)",stroke:"var(--surface)","stroke-width":1.5},g);
+    const plab = el("text",{x:F.W-F.mr+4,"font-size":10,class:"mono",fill:"var(--ink)",style:"display:none"},g);
+    const plabBg = el("rect",{x:F.W-F.mr+2,height:14,width:F.mr-4,fill:"var(--surface-2)",style:"display:none"},g); g.insertBefore(plabBg, plab);
+    const tlab = el("text",{y:F.H-7,"text-anchor":"middle","font-size":10,class:"mono",fill:"var(--ink)",stroke:"var(--surface)","stroke-width":3,"paint-order":"stroke"},g);
+    const sel = el("line",{y1:F.mt,y2:F.mt+F.Hp+F.gap+F.Hv,stroke:"var(--accent)","stroke-width":1.2,"stroke-dasharray":"5 3",style:"display:none"},svg);
+    return {g, vl, hl, dot, plab, plabBg, tlab, sel};
+  }
+  function hoverAll(sec, price, srcKey, ev, follow = true){
+    ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; const {F, cross, bars, bw} = c;
+      if(!F.inView(sec)){ cross.g.style.display="none"; return; }
+      const xx = F.x(sec); cross.g.style.display=""; cross.vl.setAttribute("x1",xx); cross.vl.setAttribute("x2",xx);
+      cross.tlab.setAttribute("x", xx); cross.tlab.textContent = fmtT(sec);
+      let i = Math.floor((sec-T0)/bw); let b=null; for(let q=0;q<6 && !b;q++){ b = c.byIdx.get(i-q) || c.byIdx.get(i+q); }
+      if(b){ cross.dot.setAttribute("cx", F.x(T0+b[0]*bw+bw/2)); cross.dot.setAttribute("cy", F.y(b[4])); cross.dot.style.display=""; } else cross.dot.style.display="none";
+      if(price!=null && price>=F.lo && price<=F.hi){ const yy = F.y(price); cross.hl.style.display=""; cross.hl.setAttribute("y1",yy); cross.hl.setAttribute("y2",yy); cross.plab.style.display=""; cross.plabBg.style.display=""; cross.plab.setAttribute("y", yy+4); cross.plabBg.setAttribute("y", yy-7); cross.plab.textContent = fmtP(price)+" "+pct(price,CUR.pc); }
+      else { cross.hl.style.display="none"; cross.plab.style.display="none"; cross.plabBg.style.display="none"; }
+      if(k===srcKey && b && ev){ const v = c.vw ? c.vw.get(b[0]) : null; showTip(c.tip, c.svg, `${fmtT(T0+b[0]*bw)}${bw>60?"–"+fmtT(T0+(b[0]+1)*bw):""}  收 ${fmtP(b[4])}(${pct(b[4],CUR.pc)})\n開 ${fmtP(b[1])} 高 ${fmtP(b[2])} 低 ${fmtP(b[3])} 量 ${b[5]} 張 外盤 ${b[5]?Math.round(b[6]/b[5]*100):0}%${v!=null?"\n均價 "+fmtP(v):""}`, ev); }
+      else if(k!==srcKey) c.tip.hidden = true;
+    });
+    if(follow) followTick(sec);
+  }
+  function leaveAll(){ ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; c.cross.g.style.display="none"; c.tip.hidden=true; }); }
+  function placeSel(sec){ ["L","R"].forEach(k => { const c = CH[k]; if(!c) return; if(sec==null || !c.F.inView(sec)){ c.cross.sel.style.display="none"; return; } const xx = c.F.x(sec); c.cross.sel.setAttribute("x1",xx); c.cross.sel.setAttribute("x2",xx); c.cross.sel.style.display=""; }); }
+
+  function hookMouse(key){
+    const c = CH[key]; const {svg, F} = c;
+    const secAt = ev => { const r = svg.getBoundingClientRect(); const sx = (ev.clientX - r.left) * F.W / r.width; const sy = (ev.clientY - r.top) * F.H / r.height; return {sx, sy, sec: F.ta + (sx-F.ml)/F.pw*(F.tb-F.ta), price: F.hi - (sy-F.mt)/F.Hp*(F.hi-F.lo)}; };
+    let drag = null;
+    svg.onmousedown = ev => { ev.preventDefault(); drag = {x0:ev.clientX, moved:false, ta:F.ta, tb:F.tb}; };
+    svg.onmousemove = ev => {
+      if(drag && ev.buttons===1 && key==="R"){ const dx = ev.clientX - drag.x0; if(Math.abs(dx) > 4) drag.moved = true; if(drag.moved){ const r = svg.getBoundingClientRect(); const dt = -dx / r.width * F.W / F.pw * (drag.tb-drag.ta); let ta = drag.ta+dt, tb = drag.tb+dt; const span = tb-ta; if(ta < T0){ ta = T0; tb = T0+span; } if(tb > T1){ tb = T1; ta = T1-span; } kview = [ta,tb]; renderK(); return; } }
+      const tgt = ev.target.getAttribute && ev.target.getAttribute("data-tip");
+      const {sx, sy, sec, price} = secAt(ev);
+      if(tgt){ leaveAll(); showTip(c.tip, svg, tgt, ev); return; }
+      if(!state.sync || sx<F.ml || sx>F.W-F.mr){ leaveAll(); return; }
+      hoverAll(Math.max(F.ta, Math.min(F.tb, sec)), (sy>=F.mt && sy<=F.mt+F.Hp) ? price : null, key, ev);
+    };
+    svg.onmouseup = ev => { const d = drag; drag = null; if(!d || d.moved) return; if(ev.target.getAttribute && ev.target.getAttribute("data-tip")) return; const {sx, sy, sec, price} = secAt(ev); if(sx<F.ml || sx>F.W-F.mr) return;
+      state.sync = !state.sync; setSyncUI();
+      if(state.sync){ const s = Math.max(F.ta, Math.min(F.tb, sec)); selectTime(s, true); hoverAll(s, (sy>=F.mt && sy<=F.mt+F.Hp) ? price : null, key, ev); }
+      else { state.sel = null; placeSel(null); leaveAll(); } };
+    svg.onmouseleave = ()=>{ drag = null; leaveAll(); };
+    svg.ondblclick = ev => { ev.preventDefault(); if(key==="R"){ kview = null; renderK(); } };
+    if(key==="R"){ svg.onwheel = ev => { ev.preventDefault(); const {sec} = secAt(ev); const ta = F.ta, tb = F.tb; const span = tb-ta; const f = ev.deltaY < 0 ? 1/1.25 : 1.25; let ns = Math.max(600, Math.min(T1-T0, span*f)); if(ns >= T1-T0){ kview = null; renderK(); return; } const anchor = Math.max(ta, Math.min(tb, sec)); const frac = (anchor-ta)/span; let nta = anchor - frac*ns, ntb = nta + ns; if(nta < T0){ nta = T0; ntb = T0+ns; } if(ntb > T1){ ntb = T1; nta = T1-ns; } kview = [nta, ntb]; renderK(); }; }
+  }
+
+  function aggBars(b1, n){
+    if(n<=1) return b1;
+    const out = new Map();
+    b1.forEach(b => { const i = Math.floor(b[0]/n); const o = out.get(i); if(!o){ out.set(i, [i, b[1], b[2], b[3], b[4], b[5], b[6]]); } else { o[2]=Math.max(o[2],b[2]); o[3]=Math.min(o[3],b[3]); o[4]=b[4]; o[5]+=b[5]; o[6]+=b[6]; } });
+    return [...out.values()].sort((a,b)=>a[0]-b[0]);
+  }
+  function indicators(bars){ // 依 K 棒序列算 MA5 / MA20 / 布林(20, 2σ);回 Map idx → {ma5, ma20, up, dn}
+    const out = new Map(); const cl = bars.map(b=>b[4]);
+    for(let i=0;i<bars.length;i++){ const r = {}; if(i>=4){ r.ma5 = (cl[i]+cl[i-1]+cl[i-2]+cl[i-3]+cl[i-4])/5; } if(i>=19){ let s=0; for(let k=i-19;k<=i;k++) s+=cl[k]; const m = s/20; let v=0; for(let k=i-19;k<=i;k++) v+=(cl[k]-m)*(cl[k]-m); const sd = Math.sqrt(v/20); r.ma20 = m; r.up = m+2*sd; r.dn = m-2*sd; } out.set(bars[i][0], r); }
+    return out;
+  }
+
+  function renderK(){
+    if(!CUR) return; const {D, pc, lim} = CUR; svgR.innerHTML = ""; tipR.hidden = true;
+    const n = state.kn, bw = BAR*n, bars = aggBars(D.b, n), ind = indicators(bars);
+    const ta = kview ? kview[0] : T0, tb = kview ? kview[1] : T1;
+    let lo = CUR.lo, hi = CUR.hi;
+    if(kview){ const vis = bars.filter(b => T0+(b[0]+1)*bw > ta && T0+b[0]*bw < tb); if(vis.length){ lo = Math.min(...vis.map(b=>b[3])); hi = Math.max(...vis.map(b=>b[2])); const sp = Math.max(hi-lo, pc*0.005); lo -= sp*0.08; hi += sp*0.08; } }
+    const F = frame(svgR, D, pc, lim, lo, hi, ta, tb); const {x,y,pw,mt,Hp,gap,Hv} = F;
+    const vis = bars.filter(b => T0+(b[0]+1)*bw > ta && T0+b[0]*bw < tb);
+    const vmax = Math.max(1, ...vis.map(b=>b[5])); const yv = v => mt+Hp+gap + Hv - v/vmax*Hv;
+    const cw = Math.max(1.5, pw/((tb-ta)/bw) - 2);
+    const gv = el("g",{},svgR); const gk = el("g",{},svgR);
+    vis.forEach(b => { const xx = x(T0+b[0]*bw); const up = b[4] >= b[1]; const col = up ? "var(--up)" : "var(--down)"; const xc = xx + cw/2 + 1;
+      el("rect",{x:xx+1, y:yv(b[5]), width:cw, height:mt+Hp+gap+Hv-yv(b[5]), fill:col, opacity:.45},gv);
+      el("line",{x1:xc,x2:xc,y1:y(b[2]),y2:y(b[3]),stroke:col,"stroke-width":1},gk);
+      const yo = y(b[1]), yc = y(b[4]); el("rect",{x:xx+1, y:Math.min(yo,yc), width:cw, height:Math.max(1, Math.abs(yc-yo)), fill: up?col:"var(--surface)", stroke:col, "stroke-width":1},gk); });
+    const line = (key, col, w, dash) => { const pts = vis.map(b => [T0+b[0]*bw+bw/2, ind.get(b[0])[key]]).filter(p => p[1]!=null); if(pts.length<2) return; el("path",{d:pts.map((p,i)=>(i?"L":"M")+x(p[0]).toFixed(1)+" "+y(Math.min(hi,Math.max(lo,p[1]))).toFixed(1)).join(" "),fill:"none",stroke:col,"stroke-width":w,opacity:.9,"stroke-dasharray":dash||"none"},svgR); };
+    if(state.show.boll){ const up = vis.map(b => [T0+b[0]*bw+bw/2, ind.get(b[0]).up]).filter(p=>p[1]!=null), dn = vis.map(b => [T0+b[0]*bw+bw/2, ind.get(b[0]).dn]).filter(p=>p[1]!=null); if(up.length>1){ const cl = p => Math.min(hi,Math.max(lo,p)); el("path",{d: up.map((p,i)=>(i?"L":"M")+x(p[0]).toFixed(1)+" "+y(cl(p[1])).toFixed(1)).join(" ") + " " + dn.slice().reverse().map(p=>"L"+x(p[0]).toFixed(1)+" "+y(cl(p[1])).toFixed(1)).join(" ") + " Z", fill:"var(--accent)", opacity:.08},svgR); line("up","var(--accent)",1,"3 3"); line("dn","var(--accent)",1,"3 3"); } }
+    if(state.show.ma20) line("ma20","var(--r-SW)",1.3);
+    if(state.show.ma5) line("ma5","var(--r-L)",1.3);
+    drawMarkers(svgR, F, D, pc);
+    const cross = makeCross(svgR, F);
+    CH.R = {svg:svgR, tip:tipR, F, bars, bw, byIdx:new Map(bars.map(b=>[b[0],b])), vw:null, cross};
+    hookMouse("R"); placeSel(state.sel);
+    if(RP && rpActive() && RP.R.key === state.code+"|"+state.date) rpCross();
+    $("kInfo").textContent = kview ? `${fmtT(ta).slice(0,5)}–${fmtT(tb).slice(0,5)}(雙擊還原)` : "滾輪縮放、拖曳平移、雙擊還原";
+  }
+
+  function render(){
+    persist();
+    dateSel.value = state.date; codeSel.value = state.code; renderRail(); rpTabState();
+    const D = DATA.d[state.code] && DATA.d[state.code][state.date];
+    const cinfo = codes.find(c=>c.c===state.code); const name = cinfo.n;
+    svgL.innerHTML = ""; svgR.innerHTML = ""; tipL.hidden = tipR.hidden = true; CH.L = CH.R = null; CUR = null;
+    if(!D){ $("dayInfo").innerHTML = `<span class="pill">${name} ${state.date} 沒有資料</span>`; $("groupInfo").innerHTML = ""; $("tab-events").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; $("tab-ticks").innerHTML = '<div class="empty">這天沒有這檔的 tick 資料</div>'; [svgL,svgR].forEach(s => { el("text",{x:20,y:40,fill:"var(--muted)","font-size":14},s).textContent="這天沒有資料"; s.setAttribute("viewBox","0 0 800 80"); s.style.height="80px"; }); if(rpActive()) renderReplay(); return; }
+    const pc = D.pc, lim = D.lim, chg = (D.c/pc-1)*100, locked = D.c >= lim-1e-9;
+    const buys = D.f.filter(f=>f[3]>0), sells = D.f.filter(f=>f[3]<0);
+    const grpName = cinfo.g;
+    const peers = DATA.groups[grpName].filter(c => c!==state.code).map(c => { const ds = DATA.daysum[c] && DATA.daysum[c][state.date]; return ds ? `<span class="pill ${cls(ds[0])}">${DATA.names[c]||c} <b class="mono">${ds[0]>0?"+":""}${ds[0]}%</b>${ds[1]?" 鎖":""}</span>` : `<span class="pill">${DATA.names[c]||c} —</span>`; }).join("");
+    $("groupInfo").innerHTML = grpName === DATA.extra_group ? `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span><span class="pill">不在產業群組母體:只有簿重播的日子,逐筆來自 copycat tick 存檔;沒有 CDP 事件、回測、碰觸與迴盪標記</span>` : `<span class="pill" style="font-weight:700;background:${gcol(grpName)};color:#fff">${grpName}</span>${peers}<span class="pill">族群前 3 日 <b class="mono">${D.g3==null?"—":(D.g3>0?"+":"")+D.g3+"%"}</b> · 前 5 日 <b class="mono">${D.g5==null?"—":(D.g5>0?"+":"")+D.g5+"%"}</b></span>`;
+    const brokeAH = D.e.some(e=>e[2]==="過 AH"), held = brokeAH && !D.e.some(e=>e[2]==="跌破 NH");
+    $("dayInfo").innerHTML = `<span class="pill">前收 <b class="mono">${fmtP(pc)}</b></span><span class="pill">漲停 <b class="mono">${fmtP(lim)}</b></span><span class="pill ${cls(chg)}">收 <b class="mono">${fmtP(D.c)}</b> ${chg>0?"+":""}${chg.toFixed(2)}%</span><span class="pill ${cls(D.hi/pc-1)}">高 <b class="mono">${fmtP(D.hi)}</b> ${pct(D.hi,pc)}</span><span class="pill">振 <b class="mono">${D.rg.toFixed(1)}%</b></span><span class="pill">開在 ${D.op}</span>${brokeAH?`<span class="pill">${D.onepush?"一次拉到 AH":"分段過 AH"} · ${held?"NH 守住":"跌破 NH"}</span>`:""}${locked?'<span class="pill lock">收盤鎖死</span>':""}${D.partial?`<span class="pill" style="color:var(--r-L)">${D.partial}</span>`:""}${buys.length?`<span class="pill up">買 ${buys.length} 筆</span>`:""}${sells.length?`<span class="pill down">賣 ${sells.length} 筆</span>`:""}`;
+    let lo = Math.min(pc, ...D.b.map(b=>b[3])), hi = Math.max(pc, ...D.b.map(b=>b[2]));
+    if(state.show.cdp){ lo = Math.min(lo, D.cdp.NL); hi = Math.max(hi, D.cdp.NH); if(hi >= D.cdp.AH*0.985) hi = Math.max(hi, D.cdp.AH); }
+    if(hi >= lim*0.985) hi = Math.max(hi, lim);
+    const span = Math.max(hi-lo, pc*0.01); lo -= span*0.05; hi += span*0.05;
+    CUR = {D, pc, lim, lo, hi};
+    { const F = frame(svgL, D, pc, lim, lo, hi, T0, T1); const {x,y,pw,mt,Hp,gap,Hv} = F; const bw = Math.max(1, pw/DATA.nbar);
+      const vmax = Math.max(1, ...D.b.map(b=>b[5])); const yv = v => mt+Hp+gap + Hv - v/vmax*Hv;
+      const gv = el("g",{},svgL); D.b.forEach(b => { el("rect",{x:x(T0+b[0]*BAR), y:yv(b[5]), width:bw, height:mt+Hp+gap+Hv-yv(b[5]), fill:(b[6]/b[5])>=0.5?"var(--up)":"var(--down)", opacity:.55},gv); });
+      let cv=0, cpv=0; const vw=new Map(); const vpts=[]; D.b.forEach(b => { cv+=b[5]; cpv+=b[4]*b[5]; vw.set(b[0], cpv/cv); vpts.push([b[0], cpv/cv]); });
+      const path = pts => pts.map((p,i)=>(i?"L":"M")+x(T0+p[0]*BAR+BAR/2).toFixed(1)+" "+y(p[1]).toFixed(1)).join(" ");
+      el("path",{d:path(vpts),fill:"none",stroke:"var(--vwap)","stroke-width":1.2,opacity:.9},svgL);
+      el("path",{d:path(D.b.map(b=>[b[0],b[4]])),fill:"none",stroke:"var(--price)","stroke-width":1.4},svgL);
+      drawMarkers(svgL, F, D, pc);
+      const cross = makeCross(svgL, F);
+      CH.L = {svg:svgL, tip:tipL, F, bars:D.b, bw:BAR, byIdx:new Map(D.b.map(b=>[b[0],b])), vw, cross};
+      hookMouse("L"); }
+    renderK();
+    placeSel(state.sel);
+    renderEvents(D, pc);
+    renderTicks(D, pc, state.sel, false);
+    if(rpActive()) renderReplay();
+  }
+  function setSyncUI(){ const on = state.sync; document.querySelectorAll(".card svg").forEach(s => s.style.cursor = on ? "crosshair" : "grab"); const b = $("syncInfo"); if(b){ b.textContent = on ? "十字線 開(點圖關閉)" : "點圖 → 開十字線 + 逐筆追蹤"; b.classList.toggle("on", on); } }
+  function selectTime(sec, fromChart){ state.sel = sec; placeSel(sec); const D = DATA.d[state.code][state.date]; renderTicks(D, D.pc, sec, true); if(fromChart){ document.querySelector('.tabs button[data-tab="ticks"]').click(); } }
+
+  // ---- ticks(懶載入外掛檔;hover 跟隨)
+  const tickCache = new Map(); const tickWait = new Map();
+  window.__tk = (key, b64) => { gunzipB64(b64).then(rows => { tickCache.set(key, rows); const w = tickWait.get(key); tickWait.delete(key); if(w) w.resolve(rows); }).catch(e => { const w = tickWait.get(key); tickWait.delete(key); if(w) w.reject(e); }); };
+  function loadTicks(code, date){
+    const key = code+"|"+date;
+    if(tickCache.has(key)) return Promise.resolve(tickCache.get(key));
+    if(tickWait.has(key)) return tickWait.get(key).promise;
+    let resolve, reject; const promise = new Promise((a,b)=>{resolve=a; reject=b;}); tickWait.set(key, {promise, resolve, reject});
+    const s = document.createElement("script"); s.src = `${TICKDIR}/${date}/${code}.js`; s.async = true;
+    s.onerror = () => { const w = tickWait.get(key); tickWait.delete(key); if(w) w.reject(new Error("no file")); };
+    document.head.appendChild(s);
+    return promise;
+  }
+  let tickState = {key:null, start:0, rows:null, idx:-1};
+  const PAGE = 250;
+  function tickIndexAt(rows, sec){ let lo=0, hi=rows.length-1, ms = sec*1000; while(lo<hi){ const m=(lo+hi)>>1; if(rows[m][0] < ms) lo=m+1; else hi=m; } return lo; }
+  let followRaf = 0, followPending = null;
+  function followTick(sec){ followPending = sec; if(followRaf) return; followRaf = requestAnimationFrame(()=>{ followRaf = 0; const s = followPending; const key = state.code+"|"+state.date; const rows = tickCache.get(key); if(!rows || tickState.key !== key) return; const idx = tickIndexAt(rows, s); if(idx === tickState.idx) return;
+    if(idx >= tickState.start && idx < tickState.start+PAGE){ const box = $("tab-ticks"); box.querySelectorAll("tr.sel").forEach(x=>x.classList.remove("sel")); const tr = box.querySelector(`tr[data-i="${idx}"]`); if(tr){ tr.classList.add("sel"); const wrap = $("tickWrap"); if(wrap){ const top = tr.offsetTop - wrap.clientHeight/2; wrap.scrollTop = Math.max(0, top); } } tickState.idx = idx; }
+    else { const now = performance.now(); if(!tickState.lastRe || now - tickState.lastRe > 120){ tickState.lastRe = now; const D = DATA.d[state.code][state.date]; renderTicks(D, D.pc, s, true, true); } } }); }
+  function renderTicks(D, pc, sec, scrollTo, keepSel){
+    const box = $("tab-ticks"); const key = state.code+"|"+state.date;
+    const draw = rows => {
+      if(!rows.length){ box.innerHTML = '<div class="empty">這天沒有逐筆</div>'; return; }
+      let idx = sec==null ? rows.length-1 : tickIndexAt(rows, sec); if(idx >= rows.length) idx = rows.length-1;
+      if(tickState.key !== key || scrollTo){ tickState = {key, rows, idx, start: Math.max(0, Math.min(Math.max(0, rows.length-PAGE), idx - Math.floor(PAGE/2))), lastRe: performance.now()}; }
+      const st = tickState.start, en = Math.min(rows.length, st+PAGE);
+      let cum = 0; for(let i=0;i<st;i++) cum += rows[i][2];
+      let h = `<div class="bar"><span>共 <b class="mono">${rows.length.toLocaleString()}</b> 筆,顯示第 <b class="mono">${st+1}–${en}</b> 筆</span><button type="button" data-go="first">開盤</button><button type="button" data-go="prev">前 ${PAGE} 筆</button><button type="button" data-go="next">後 ${PAGE} 筆</button><button type="button" data-go="last">收盤</button>${state.sel!=null?`<span>選取 <b class="mono">${fmtT(state.sel)}</b></span>`:""}<span class="kbd">十字線開著時,滑鼠在圖上移動這裡跟著走;點一列 → 兩張圖畫出該時間</span></div>`;
+      h += `<div class="tblwrap" id="tickWrap"><table><thead><tr><th>時間</th><th class="num">價</th><th class="num">較前收</th><th class="num">張</th><th class="num">買一</th><th class="num">賣一</th><th>內外</th><th class="num">累積張</th></tr></thead><tbody>`;
+      for(let i=st;i<en;i++){ const r = rows[i]; cum += r[2]; const side = (r[4] && r[1] >= r[4]) ? "外" : (r[3] && r[1] <= r[3]) ? "內" : "中"; const sc = side==="外"?"pos":side==="內"?"neg":"";
+        h += `<tr data-i="${i}" class="${i===idx?"sel":""}"><td class="mono">${fmtMs(r[0])}</td><td class="num mono">${fmtP(r[1])}</td><td class="num mono ${cls(r[1]-pc)}">${pct(r[1],pc)}</td><td class="num mono">${r[2]}</td><td class="num mono">${r[3]?fmtP(r[3]):"—"}</td><td class="num mono">${r[4]?fmtP(r[4]):"—"}</td><td class="${sc}">${side}</td><td class="num mono">${cum.toLocaleString()}</td></tr>`; }
+      h += `</tbody></table></div>`;
+      box.innerHTML = h;
+      box.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", ()=>{ const g = b.dataset.go; const maxStart = Math.max(0, rows.length-PAGE); if(g==="first") tickState.start = 0; else if(g==="last") tickState.start = maxStart; else if(g==="prev") tickState.start = Math.max(0, tickState.start-PAGE); else tickState.start = Math.min(maxStart, tickState.start+PAGE); tickState.idx = -1; renderTicks(D, pc, state.sel, false); }));
+      box.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", ()=>{ const r = rows[Number(tr.dataset.i)]; state.sel = r[0]/1000; placeSel(state.sel); box.querySelectorAll("tr.sel").forEach(x=>x.classList.remove("sel")); tr.classList.add("sel"); tickState.idx = Number(tr.dataset.i); }));
+      if(scrollTo){ const selRow = box.querySelector("tr.sel"); const wrap = $("tickWrap"); if(selRow && wrap){ wrap.scrollTop = Math.max(0, selRow.offsetTop - wrap.clientHeight/2); } }
+    };
+    if(tickCache.has(key)) { draw(tickCache.get(key)); return; }
+    box.innerHTML = '<div class="empty">載入逐筆中…</div>';
+    loadTicks(state.code, state.date).then(rows => { if(state.code+"|"+state.date === key) draw(rows); }).catch(() => { box.innerHTML = `<div class="empty">找不到逐筆檔 ${TICKDIR}/${state.date}/${state.code}.js(本頁要和 ${TICKDIR} 資料夾放在同一層)</div>`; });
+  }
+
+  // ---- events / bt / idx
+  function renderEvents(D, pc){
+    const rows = [];
+    const lvPx = {AH:D.cdp.AH, NH:D.cdp.NH, CDP:D.cdp.CDP, NL:D.cdp.NL, AL:D.cdp.AL, "前收":pc, "開盤":D.o};
+    D.f.forEach(f => rows.push([f[0], f[3]>0?"買進":"賣出", f[1], `${f[4]} ${f[2]} 張`, f[3]>0?"buy":"sell"]));
+    if(state.show.sig) D.s.forEach(s => rows.push([s[0], "線上訊號", s[1], SIGN[s[2]]||s[2], ""]));
+    if(state.show.ev) D.e.forEach(e => rows.push([e[0], "CDP 事件", e[1], e[2], ""]));
+    if(state.show.tt && D.tt) D.tt.forEach(t => rows.push([t[0], "碰觸", lvPx[t[1]] ?? 0, `${LV[t[1]]} ${t[2]==="sup"?"當支撐":"當壓力"} → ${OUTC[t[3]]}(振幅 ${t[4].toFixed(1)}%${t[5]?",首次":""})`, t[3]==="hold"?"pos":t[3]==="break"?"neg":""]));
+    if(state.show.ob && D.ob) D.ob.forEach(o => rows.push([o[0], "迴盪後打破", lvPx[o[1]] ?? 0, `${LV[o[1]]} ${o[2]>0?"向上":"向下"};帶內 ${o[7]} 分 穿越 ${o[6]} 次;量 ${o[4]==null?"—":o[4].toFixed(1)+"×"}${o[4]!=null&&o[4]>=4?"(放量)":""} → ${OB[o[3]]}${o[5]?",回帶":""}`, o[3]==="cont"?"pos":o[3]==="rev"?"neg":""]));
+    if(state.bt && D.t[state.bt]) D.t[state.bt].forEach(t => rows.push([t[0], "回測進場", t[1], `${STRATS[state.bt]} → 出場 ${t[2]!=null?fmtT(t[2]):"隔日開盤"} @${fmtP(t[3])} ${t[6]},${t[4]>0?"+":""}${t[4]}%(${t[5]>0?"+":""}${t[5].toLocaleString()} 元)`, t[5]>0?"pos":"neg"]));
+    rows.sort((a,b)=>a[0]-b[0]);
+    const lv = `<p style="color:var(--ink-2);margin:0 0 8px" class="mono">AH ${fmtP(D.cdp.AH)} · NH ${fmtP(D.cdp.NH)} · CDP ${fmtP(D.cdp.CDP)} · NL ${fmtP(D.cdp.NL)} · AL ${fmtP(D.cdp.AL)} · 前收 ${fmtP(pc)} · 開盤 ${fmtP(D.o)}</p>`;
+    if(!rows.length){ $("tab-events").innerHTML = lv + '<div class="empty">這天沒有任何標記(可在上方圖例打開更多層)</div>'; return; }
+    $("tab-events").innerHTML = lv + `<div class="tblwrap"><table><thead><tr><th>時間</th><th>類型</th><th class="num">價</th><th class="num">較前收</th><th>說明</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r[4]}" data-sec="${r[0]}" style="cursor:pointer"><td class="mono">${fmtT(r[0])}</td><td>${r[1]}</td><td class="num mono">${fmtP(r[2])}</td><td class="num mono ${cls(r[2]-pc)}">${pct(r[2],pc)}</td><td>${r[3]}</td></tr>`).join("")}</tbody></table></div>`;
+    $("tab-events").querySelectorAll("tr[data-sec]").forEach(tr => tr.addEventListener("click", ()=> selectTime(Number(tr.dataset.sec), true)));
+  }
+  function renderBt(){
+    const S = DATA.summary, E = DATA.evsum; const f0 = v => v.toLocaleString(undefined,{maximumFractionDigits:0});
+    let h = `<p style="color:var(--ink-2);margin:0 0 8px">母體 = 12 個產業群組 ${DATA.population ?? codes.length} 檔 × ${dates.length} 個交易日(${dates[0].slice(5)}–${dates[dates.length-1].slice(5)});可當沖且非處置;每筆 50 萬名目。</p>`;
+    h += `<p style="color:var(--ink-2);margin:0 0 8px">盤中突破 AH 的股票日 ${E.n} 個:之後 NH 守住 ${E.held} 個(鎖死 ${E.held_lock},收盤 vs AH 均 ${E.held_ret>0?"+":""}${E.held_ret.toFixed(2)}%);跌破 NH ${E.broke} 個(鎖死 ${E.broke_lock},均 ${E.broke_ret.toFixed(2)}%)。</p>`;
+    h += `<div class="tblwrap"><table><thead><tr><th>策略</th><th class="num">筆</th><th class="num">勝率</th><th class="num">均報酬</th><th class="num">每筆均(元)</th><th class="num">鎖死留倉</th><th class="num">破失效價</th></tr></thead><tbody>`;
+    S.forEach(r => { h += `<tr><td>${STRATS[r.strat]}</td><td class="num mono">${r.n}</td><td class="num mono">${r.win.toFixed(0)}%</td><td class="num mono ${cls(r.avg)}">${r.avg>0?"+":""}${r.avg.toFixed(2)}%</td><td class="num mono ${cls(r.per)}">${r.per>0?"+":""}${f0(r.per)}</td><td class="num mono">${r.lock.toFixed(0)}%</td><td class="num mono">${r.fail.toFixed(0)}%</td></tr>`; });
+    h += `</tbody></table></div>`;
+    const OS = DATA.oscsum || [];
+    if(OS.length){ h += `<h3 style="font-size:14px;margin:16px 0 6px">迴盪後打破(帶寬 ±0.6%、帶內 ≥10 分、穿越 ≥4 次;續走 = 30 分內先 +1% 未先 −0.5%;隨機價位基準:續走 24%、回帶 92%,放量 ≥4 倍 37%)</h3><div class="tblwrap"><table><thead><tr><th>價位</th><th class="num">打破次數</th><th class="num">續走</th><th class="num">反轉</th><th class="num">30 分內回帶</th><th class="num">其中放量 ≥4 倍</th><th class="num">放量者續走</th></tr></thead><tbody>${OS.map(r=>`<tr><td>${LV[r.level]}</td><td class="num mono">${r.n}</td><td class="num mono">${r.cont.toFixed(0)}%</td><td class="num mono">${r.rev.toFixed(0)}%</td><td class="num mono">${r.reenter.toFixed(0)}%</td><td class="num mono">${r.nbig}</td><td class="num mono">${r.cont_big==null?"—":r.cont_big.toFixed(0)+"%"}</td></tr>`).join("")}</tbody></table></div>`; }
+    const TS = DATA.touchsum || {}; const sideLab = {sup:"當支撐(由上碰)", res:"當壓力(由下碰)"};
+    const tbl = (rows, cap) => { const base = {sup: rows.find(r=>r.level==="隨機"&&r.side==="sup"), res: rows.find(r=>r.level==="隨機"&&r.side==="res")}; return `<h3 style="font-size:14px;margin:16px 0 6px">${cap}</h3><div class="tblwrap"><table><thead><tr><th>價位</th><th>方向</th><th class="num">碰觸次數</th><th class="num">守住</th><th class="num">穿過</th><th class="num">比隨機價位高</th></tr></thead><tbody>${rows.map(r => { const b = base[r.side]; const diff = b ? r.hold - b.hold : null; return `<tr><td>${LV[r.level]||r.level}</td><td>${sideLab[r.side]}</td><td class="num mono">${r.n.toLocaleString()}</td><td class="num mono">${r.hold.toFixed(0)}%</td><td class="num mono">${r.brk.toFixed(0)}%</td><td class="num mono ${diff==null?"":cls(diff)}">${diff==null||r.level==="隨機"?"—":(diff>0?"+":"")+diff.toFixed(0)}</td></tr>`; }).join("")}</tbody></table></div>`; };
+    h += `<p style="color:var(--ink-2);margin:16px 0 4px">支撐 / 壓力碰觸測試:價格先離某價位 0.8% 以上再回到 ±1 檔內算「碰到」;15 分鐘內先反彈 0.5% = 守住、先穿過 0.5% = 穿過。「隨機價位」= 每個股票日 6 個前收 ±6% 內的亂數價位做同樣測試,當對照。</p>`;
+    if(TS.active) h += tbl(TS.active, "活潑碰觸(碰觸當下當日振幅 ≥ 4%)");
+    if(TS.all) h += tbl(TS.all, "全部碰觸");
+    $("tab-bt").innerHTML = h;
+  }
+  function renderIdx(){
+    const groups = Object.keys(DATA.groups); let h = `<p style="color:var(--ink-2);margin:0 0 8px">當日振幅 ≥ ${state.act}% 的股票日,依群組列、日期由新到舊;點一列跳到那張圖。碰觸欄 = 五軸+前收+開盤的碰觸次數:守住 / 穿過。</p>`;
+    let total = 0;
+    groups.forEach(g => {
+      const rows = [];
+      DATA.groups[g].forEach(c => { const dd = DATA.d[c]; if(!dd) return; Object.keys(dd).forEach(d => { const D = dd[d]; if(!isActive(D)) return; const tt = D.tt||[]; rows.push({c, d, n:DATA.names[c]||c, rg:D.rg, chg:(D.c/D.pc-1)*100, lock:D.c>=D.lim-1e-9, hold:tt.filter(t=>t[3]==="hold").length, brk:tt.filter(t=>t[3]==="break").length, ob:(D.ob||[]).length, fills:D.f.length}); }); });
+      if(!rows.length) return; total += rows.length;
+      rows.sort((a,b)=> a.d===b.d ? b.rg-a.rg : (a.d<b.d?1:-1));
+      h += `<h3 style="font-size:14px;margin:14px 0 6px;padding:4px 10px;border-left:6px solid ${gcol(g)}">${g} <span style="color:var(--muted);font-weight:400">${rows.length} 個活潑日</span></h3><div class="tblwrap"><table><thead><tr><th>日期</th><th>股</th><th class="num">振幅</th><th class="num">收盤漲跌</th><th>鎖</th><th class="num">碰觸 守/穿</th><th class="num">迴盪打破</th><th>你的成交</th></tr></thead><tbody>${rows.map(r=>`<tr class="idx-row" data-c="${r.c}" data-d="${r.d}" style="cursor:pointer"><td class="mono">${r.d.slice(5).replace("-","/")}</td><td>${r.n} <span class="mono" style="color:var(--muted)">${r.c}</span></td><td class="num mono">${r.rg.toFixed(1)}%</td><td class="num mono ${cls(r.chg)}">${r.chg>0?"+":""}${r.chg.toFixed(1)}%</td><td>${r.lock?"鎖":""}</td><td class="num mono">${g===DATA.extra_group?"—":`<span class="pos">${r.hold}</span> / <span class="neg">${r.brk}</span>`}</td><td class="num mono">${g===DATA.extra_group?"—":r.ob}</td><td>${r.fills?`<span class="dot"></span> ${r.fills} 筆`:""}</td></tr>`).join("")}</tbody></table></div>`;
+    });
+    $("tab-idx").innerHTML = `<p style="color:var(--ink-2);margin:0 0 4px">共 ${total} 個活潑股票日。</p>` + h;
+    $("tab-idx").querySelectorAll(".idx-row").forEach(tr => tr.addEventListener("click", ()=>{ state.code = tr.dataset.c; state.date = tr.dataset.d; state.sel = null; kview = null; render(); window.scrollTo({top:0, behavior:"smooth"}); }));
+  }
+  // ---- 重播(簿重播外掛檔 v4;格式唯一來源 = copycat repo copycat/book_replay.py 模組說明「外掛檔 v4」)
+  const BOOKDIR = DATA.bookdir || "viewer-cdp-book";
+  // 有簿重播外掛檔的交易日(build_viewer_cdp.py 掃 viewer-cdp-book/ 得到)。
+  // 鍵**不存在** = 舊版產生器產的頁,沒有這份名單 → 照舊試載、不灰(往下相容)。
+  // 鍵**存在但空的** = 產生頁時一個外掛檔都沒掃到(資料夾改名 / 不在 / 空的)→ 這是壞掉,要大聲說,
+  // 不能安靜退回「每天都試載、每天都報錯」—— 那正是 #273 要避免的「把本來就沒有呈現成故障」。
+  const BOOKDAYS = DATA.bookdays == null ? null : new Set(DATA.bookdays);
+  // BOOKDAYS 載入時就定了,排序與「最早有簿日」算一次就好(pr-281 two-axis Std-4)
+  const BOOK_SORTED = BOOKDAYS == null ? [] : [...BOOKDAYS].sort();
+  const BOOK_FROM = BOOK_SORTED.length ? BOOK_SORTED[0] : null;
+  const RP_KEEP = 3, RP_HALF = 10, RP_RECENTER = 5;
+  const RP_CLOSE_FROM = (13*3600 + 25*60) * 1000; // 收盤集合競價的起點(收到時刻);兩個用途共用同一個 13:25
+  const RP_QMAX_END = RP_CLOSE_FROM; // 橫條基準只看 13:25 前(收盤集合競價 / 漲停排隊量會把盤中橫條壓扁;user 2026-09-17 拍板)
+  const RP_SPEEDS = [1, 2, 5, 10], RP_MAX_DT = 250; // 播放倍速(以收到時刻計,1x = 真實時間);一幀最多推進的真實毫秒(切到別的瀏覽器分頁再回來不整段跳過)
+  const RP_CHG_KEEP = 60, RP_TAPE_KEEP = 20; // 中間欄列幾則變動、成交明細列幾筆(都到目前這一則為止,新的在上;user 2026-09-17 拍板 60 則)
+  const RP_CHG_WIDTH = [7, 3, 8, 3]; // 外掛檔 v4 chg 每項佔幾格(含種類碼),依基本碼 ÷ 2:價位變動 / 被擠出五檔 / 重新可見 / 首次進入五檔(= copycat book_replay 的 _CHANGE_KINDS)
+  const rpCache = new Map(), rpWait = new Map(), rpSeen = new Set();
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+  const rpActive = () => !$("tab-replay").hidden;
+  const rpSettle = (key, ok, v) => { const w = rpWait.get(key); rpWait.delete(key); if(w) (ok ? w.resolve : w.reject)(v); };
+  window.__bk = (key, b64) => { rpSeen.add(key); gunzipB64(b64).then(p => { const R = rpBuild(key, p); rpCache.set(key, R); while(rpCache.size > RP_KEEP) rpCache.delete(rpCache.keys().next().value); rpSettle(key, true, R); }).catch(e => rpSettle(key, false, e)); };
+  function loadReplay(code, date){
+    const key = code+"|"+date;
+    if(rpCache.has(key)) return Promise.resolve(rpCache.get(key));
+    if(rpWait.has(key)) return rpWait.get(key).promise;
+    let resolve, reject; const promise = new Promise((a,b)=>{resolve=a; reject=b;}); rpWait.set(key, {promise, resolve, reject});
+    rpSeen.delete(key);
+    const s = document.createElement("script"); s.src = `${BOOKDIR}/${date}/${code}.js`; s.async = true;
+    s.onerror = () => { s.remove(); rpSettle(key, false, new Error("no file")); };
+    // 檔案執行完才觸發 onload:沒有以這個 key 呼叫 __bk = 檔頭與檔名不符(或不是外掛檔)
+    s.onload = () => { s.remove(); if(!rpSeen.has(key)) rpSettle(key, false, new Error(`檔案沒有以「${key}」呼叫 window.__bk`)); };
+    document.head.appendChild(s);
+    return promise;
+  }
+  // 解碼 + 自檢(一次順播全部 delta:每個 keyframe 逐格比對、順便算最大單格量與出現過的價位)
+  function rpBuild(key, p){
+    const bad = m => { throw new Error("外掛檔格式不符:" + m); };
+    if(p.v !== 2 && p.v !== 3 && p.v !== 4) bad(`版本 ${p.v}(本頁認 2 / 3 / 4;更舊的檔請用新版 copycat book-replay 重產)`);
+    // 只加欄位的升版往下相容:v2 沒有 auction / stale、v3 沒有 trial(集合競價段),當空集合
+    // (舊檔照樣看得到,只是不標集合競價撮合 / 不畫集合競價段色帶)
+    if(`${p.code}|${p.date}` !== key) bad(`檔頭 ${p.code}|${p.date} 與檔名 ${key} 不符`);
+    const n = p.n, K = p.kf_every, F = p.fields;
+    if(!Number.isInteger(n) || n < 1) bad(`則數 ${n}`);
+    if(!Number.isInteger(K) || K < 1) bad(`kf_every ${K}`);
+    if(!Array.isArray(F) || F.length !== 20) bad("fields 不是 20 格");
+    const fi = name => { const i = F.indexOf(name); if(i < 0) bad(`fields 缺 ${name}`); return i; };
+    const BP = [0,1,2,3,4].map(l => fi("bid"+l)), BQ = [0,1,2,3,4].map(l => fi("bidq"+l)), AP = [0,1,2,3,4].map(l => fi("ask"+l)), AQ = [0,1,2,3,4].map(l => fi("askq"+l));
+    const levelOf = new Int8Array(20).fill(-1), sideOf = new Int8Array(20); // 格 → 層、買(0)/賣(1)
+    for(let l=0;l<5;l++){ levelOf[BP[l]] = levelOf[BQ[l]] = l; sideOf[BP[l]] = sideOf[BQ[l]] = 0; levelOf[AP[l]] = levelOf[AQ[l]] = l; sideOf[AP[l]] = sideOf[AQ[l]] = 1; }
+    if(typeof p.kind !== "string" || p.kind.length !== n || p.recv.length !== n || p.seq.length !== n || p.d.length !== n) bad("逐則陣列長度與 n 不符");
+    if(p.kf.length !== Math.ceil(n/K)) bad("keyframe 個數與 n 不符");
+    if(!Array.isArray(p.chg) || p.chg.length !== n) bad("chg(變動分解)長度與 n 不符");
+    const recv = new Float64Array(n);
+    for(let i=0;i<n;i++){ const v = p.recv[i]; if(!Number.isInteger(v) || (i > 0 && v < 0)) bad(`第 ${i} 則收到時刻倒退或非整數`); recv[i] = i ? recv[i-1] + v : v; }
+    for(let i=0;i<n;i++) if(!Number.isInteger(p.seq[i]) || p.seq[i] <= 0) bad(`第 ${i} 則訊息序號沒有遞增`);
+    const anom = new Set(p.anomalous), auction = new Set(p.auction || []), stale = new Set(p.stale || []);
+    // 集合競價段(v4 `trial`):攤平的 [起, 迄] 則號閉區間,遞增且每段已極大化。收盤 13:25–13:30、
+    // 處置股整天的分盤撮合、盤中暫緩撮合都在裡面 —— 那一段的委託堆積是集合競價的結果,不是盤中墊單。
+    const trialFlat = p.trial || [], trial = new Uint8Array(n), trialRuns = [];
+    if(!Array.isArray(trialFlat)) bad(`trial(集合競價段)不是陣列(${typeof trialFlat})`);
+    if(trialFlat.length % 2) bad(`trial(集合競價段)格數 ${trialFlat.length} 不是偶數`);
+    for(let q=0, prevEnd=-2; q<trialFlat.length; q+=2){
+      const a = trialFlat[q], z = trialFlat[q+1];
+      if(!Number.isInteger(a) || !Number.isInteger(z) || a > z) bad(`集合競價段 [${a}, ${z}] 起迄顛倒`);
+      if(a < 0 || z >= n) bad(`集合競價段 [${a}, ${z}] 沒有落在則號 0–${n-1}`);
+      if(a <= prevEnd + 1) bad(`集合競價段 [${a}, ${z}] 沒有遞增(相鄰或重疊的段要併成一段)`);
+      trial.fill(1, a, z+1); trialRuns.push([a, z]); prevEnd = z;
+    }
+    const clockAt = new Int32Array(n), tradeAt = new Int32Array(n); // 則號 ≤ i 的最後一個時鐘點 / 最後一個成交(在 trade 的序號);-1 = 還沒有
+    const tradeIdx = []; // 第 k 筆成交在第幾則
+    let k = -1, ci = -1, clock = -Infinity;
+    for(let i=0;i<n;i++){
+      const ch = p.kind[i];
+      if(ch === "t"){ k++; tradeIdx.push(i); if(!anom.has(i)){ const ms = p.trade[k*4]; if(!Number.isInteger(ms) || ms < clock) bad(`第 ${i} 則時鐘點時刻缺或倒退`); ci = i; clock = ms; } }
+      else if(ch !== "b") bad(`第 ${i} 則種類 ${ch}`);
+      else if(anom.has(i)) bad(`anomalous 列了簿則 ${i}`);
+      clockAt[i] = ci; tradeAt[i] = k;
+    }
+    if(p.trade.length !== (k+1)*4) bad("trade 長度與成交則數不符");
+    if(!Array.isArray(p.eat) || p.eat.length !== k+1) bad("eat(吃檔)長度與成交則數不符");
+    const book = new Array(20).fill(null); let qmax = 0, qmaxDay = 0; const prices = new Set();
+    const cleared = new Uint8Array(n); let filled = 0; // 五檔全空(達錢清空)的則;filled = 目前有值的格數
+    const touched = new Int8Array(10);
+    for(let i=0;i<n;i++){
+      const d = p.d[i]; if(!Array.isArray(d) || d.length % 2) bad(`第 ${i} 則 delta 不成對`);
+      touched.fill(0);
+      for(let j=0;j<d.length;j+=2){ const f = d[j]; if(!Number.isInteger(f) || f < 0 || f > 19) bad(`第 ${i} 則欄號 ${f}`); filled += (d[j+1] != null) - (book[f] != null); book[f] = d[j+1]; touched[sideOf[f]*5 + levelOf[f]] = 1; }
+      cleared[i] = filled === 0;
+      for(let t=0;t<10;t++){ if(!touched[t]) continue; const s = t >= 5, l = t % 5; const px = book[s ? AP[l] : BP[l]], q = book[s ? AQ[l] : BQ[l]]; if(px > 0){ prices.add(px); if(q > qmaxDay) qmaxDay = q; if(q > qmax && recv[i] < RP_QMAX_END) qmax = q; } }
+      if(i % K === 0){ const kf = p.kf[i/K]; for(let f=0;f<20;f++) if(kf[f] !== book[f]) bad(`第 ${i} 則 keyframe 與 delta 對不上(欄 ${F[f]})`); }
+    }
+    // chg / eat 的結構(種類碼、每項格數、吃檔三格一組與值域);數值與前後兩則五檔的一致由 copycat decode 落檔前核對
+    for(let i=0;i<n;i++){ const c = p.chg[i]; if(!Array.isArray(c)) bad(`第 ${i} 則 chg 不是陣列`);
+      for(let q=0;q<c.length;){ const code = c[q]; if(!Number.isInteger(code) || code < 0 || code >= 2*RP_CHG_WIDTH.length) bad(`第 ${i} 則變動種類碼 ${code}`); const w = RP_CHG_WIDTH[code >> 1]; if(q + w > c.length) bad(`第 ${i} 則變動項目格數不足(種類碼 ${code})`); q += w; } }
+    for(let t=0;t<=k;t++){ const e = p.eat[t]; if(!Array.isArray(e) || e.length % 3) bad(`第 ${tradeIdx[t]} 則吃檔不是三格一組`);
+      for(let q=0;q<e.length;q+=3){ const lv = e[q+1]; if((e[q] !== 0 && e[q] !== 1) || !(lv === null || (Number.isInteger(lv) && lv >= 0 && lv <= 5)) || !Number.isInteger(e[q+2]) || e[q+2] <= 0) bad(`第 ${tradeIdx[t]} 則吃檔 [${e[q]}, ${lv}, ${e[q+2]}]`); } }
+    for(let t=0;t<=k;t++){ const px = p.trade[t*4+1]; if(px > 0) prices.add(px); }
+    if(qmax === 0) qmax = qmaxDay; // 13:25 前沒有任何掛單(極冷門)才退回全天
+    return {key, code:p.code, date:p.date, n, K, kf:p.kf, d:p.d, kind:p.kind, recv, trade:p.trade, anom, clockAt, tradeAt, qmax, prices, BP, BQ, AP, AQ, chg:p.chg, eat:p.eat, tradeIdx:Int32Array.from(tradeIdx), cleared, auction, stale, trial, trialRuns, firstBook:(() => { for(let i=0;i<n;i++) if(!cleared[i] && !stale.has(i)) return i; return -1; })()};
+  }
+  // ---- 集合競價段(#273):達錢標「試撮中」的那些則 —— 收盤 13:25–13:30、處置股整天的分盤撮合、盤中暫緩撮合。
+  // 那一段五檔揭示的是「撮完剩下的」掛單,堆起來的量是集合競價的結果,不是盤中墊單,所以時間軸上畫色帶、
+  // 畫面上標註;厚檔事件(尚未實作)也要整段排除。
+  // 段名看的是段跨到哪:整段在 13:25 之後 = 收盤集合競價;13:25 前就開始、一路連到收盤的,是處置股的分盤
+  // 撮合接上收盤那一段(實測 09-16 有檔自 13:24:39 就開始),不能只叫「收盤集合競價」。
+  const rpTrialName = (R, run) => R.recv[run[1]] < RP_CLOSE_FROM ? "集合競價(盤中暫緩撮合 / 處置股分盤)"
+    : R.recv[run[0]] < RP_CLOSE_FROM ? "收盤集合競價(自分盤撮合連過來)" : "收盤集合競價";
+  function rpTrialRun(R, i){ // 第 i 則所在的集合競價段;不在段內 = null(段數少,線性掃夠用)
+    for(const run of R.trialRuns) if(i >= run[0] && i <= run[1]) return run;
+    return null;
+  }
+  function rpBands(R, t0, t1){ // 時間軸色帶:每段以收到時刻換算成百分比(等寬軸,與 range 的取值一致)
+    const span = t1 - t0;
+    if(span <= 0) return "";
+    return R.trialRuns.map(run => {
+      const a = (R.recv[run[0]] - t0) / span * 100, z = (R.recv[run[1]] - t0) / span * 100;
+      return `<span class="rp-band" style="left:${a.toFixed(4)}%;width:${Math.max(0, z-a).toFixed(4)}%" title="${esc(rpTrialName(R, run))}"></span>`;
+    }).join("");
+  }
+  function rpLastPx(R, i){ for(let k=R.tradeAt[i];k>=0;k--){ const v = R.trade[k*4+1]; if(v > 0) return v; } return null; } // 則號 ≤ i 最近一筆成交價(毫元)
+  function rpBookAt(R, i){ const base = Math.floor(i/R.K); const b = R.kf[base].slice(); for(let j=base*R.K+1;j<=i;j++){ const d = R.d[j]; for(let q=0;q<d.length;q+=2) b[d[q]] = d[q+1]; } return b; }
+  function rpIndexAt(R, t){ let lo = 0, hi = R.n-1; if(t < R.recv[0]) return 0; while(lo < hi){ const m = (lo+hi+1) >> 1; if(R.recv[m] <= t) lo = m; else hi = m-1; } return lo; } // 收到時刻 ≤ t 的最後一則
+  const rpTradeTime = (R, i) => fmtT(Math.floor(R.trade[R.tradeAt[i]*4]/1000)); // 成交則 i 的達錢成交時刻 hh:mm:ss
+  // 當日首次鎖漲停的則號(-1 = 沒鎖或不知道漲停價)。與線上鎖漲停訊號同一把尺(copycat signal_state._locked_up,簿面取值同 signal_hub):
+  // 成交則的成交價 = 漲停價,成交後簿限價賣側全空(價 0 的市價佇列不算限價),且買方第一檔是市價佇列、或最佳限價買 = 漲停價
+  function rpFirstLock(R, limUp){
+    if(limUp == null) return -1;
+    for(let i=0;i<R.n;i++){
+      if(R.kind[i] !== "t" || R.trade[R.tradeAt[i]*4+1] !== limUp) continue;
+      const b = rpBookAt(R, i); let askLimit = false, firstBid = null, bestBid = null;
+      for(let l=0;l<5;l++){ const ap = b[R.AP[l]], bp = b[R.BP[l]]; if(ap > 0) askLimit = true; if(bp != null){ if(firstBid == null) firstBid = bp; if(bp > 0 && bestBid == null) bestBid = bp; } }
+      if(!askLimit && (firstBid === 0 || bestBid === limUp)) return i;
+    }
+    return -1;
+  }
+  // ---- 這一則變了什麼 / 成交明細(外掛檔 v4 `chg` / `eat`,copycat 算好寫進檔;這裡只排版,不做加減)
+  const rpSideTxt = s => s ? "賣" : "買";
+  const rpAt = (s, p) => p === 0 ? `市價${rpSideTxt(s)}` : `${rpSideTxt(s)} ${rpPx(p)}`;
+  const rpQty = q => q.toLocaleString();
+  const rpPrice = m => m == null ? "—" : rpPx(m); // 與階梯同一種寫法(依 tick 的固定小數位)
+  const rpDur = ms => { if(ms < 9950) return `${(ms/1000).toFixed(1)} 秒`; const s = Math.round(ms/1000); if(s < 60) return `${s} 秒`; if(s < 3600) return `${Math.floor(s/60)} 分 ${s%60} 秒`; return `${Math.floor(s/3600)} 時 ${Math.floor(s%3600/60)} 分`; };
+  const rpSideCell = side => side === "outer" ? '<span class="pos">外</span>' : side === "inner" ? '<span class="neg">內</span>' : "中";
+  function rpChangeLines(R, j){ // 第 j 則的變動(格式見 copycat book_replay 模組說明「外掛檔 v4」的 chg;rpBuild 已驗種類碼與格數)
+    const c = R.chg[j];
+    if(!c.length) return `<div class="rp-line dim">${R.auction.has(j) ? "集合競價撮合(這一則不拆:試撮揭示的五檔是撮完剩下的,撮掉的單子沒顯示過)" : R.stale.has(j) ? "達錢時刻異常的成交,附的是舊五檔(不當基準)" : j === R.firstBook ? "當日第一份五檔(沒有前一份可比)" : R.cleared[j] ? "五檔全空(達錢清空五檔,常見於暫緩撮合開始;不算撤單)" : "五檔沒有變動"}</div>`;
+    let h = "";
+    for(let q=0; q<c.length; q += RP_CHG_WIDTH[c[q] >> 1]){
+      const at = rpAt(c[q] % 2, c[q+1]);
+      switch(c[q] >> 1){
+        case 0: { const parts = []; // [碼, 價, 前量, 後量, 掛入, 成交, 撤單]
+          if(c[q+4]) parts.push(`+${rpQty(c[q+4])} 掛單`);
+          if(c[q+5]) parts.push(`−${rpQty(c[q+5])} 成交`);
+          if(c[q+6]) parts.push(`−${rpQty(c[q+6])} 撤單`);
+          h += `<div class="rp-line rp-cols" title="${at} ${rpQty(c[q+2])} → ${rpQty(c[q+3])} ${parts.join("、")}"><span class="rp-c1">${at}</span><span class="rp-c2 mono">${rpQty(c[q+2])} → ${rpQty(c[q+3])}</span><span class="rp-c3">${parts.join("、")}</span></div>`; break; }
+        case 1: h += `<div class="rp-line dim">${at} ${rpQty(c[q+2])} 張被擠出五檔</div>`; break; // [碼, 價, 離開前的量]
+        case 2: { const left = c[q+2], now = c[q+3], traded = c[q+4], net = c[q+5], away = rpDur(c[q+7]); // [碼, 價, 離開時量, 現在量, 期間成交, 淨掛, 離開則號, 離開毫秒]
+          h += left === now && !traded
+            ? `<div class="rp-line dim">⟳ ${at} 回到五檔,量沒變(${rpQty(now)} 張,離開 ${away})</div>`
+            : `<div class="rp-line">⟳ ${at} 回到五檔<span class="sub">離開時 ${rpQty(left)} → 現在 ${rpQty(now)}</span><span class="sub">離開期間成交 ${rpQty(traded)} → 淨掛 ${net > 0 ? "+" : net < 0 ? "−" : ""}${rpQty(Math.abs(net))}</span><span class="sub">離開 ${away}</span><span class="sub">(一次掛進或分次堆積無法分辨)</span></div>`;
+          break; }
+        case 3: h += `<div class="rp-line">${at} 首次進入五檔 ${rpQty(c[q+2])} 張(之前沒看過,不算掛單)</div>`; break; // [碼, 價, 量]
+      }
+    }
+    return h;
+  }
+  function rpChanges(R, i){ // 中間欄:第 i 則往前最近 RP_CHG_KEEP 則,新的在上(只看則號,不記上次畫到哪一則)
+    let h = "";
+    for(let j=i; j>=0 && j>i-RP_CHG_KEEP; j--){
+      const t = R.kind[j] === "t" ? R.tradeAt[j]*4 : -1;
+      const tr = t < 0 ? "" : `<span>成交 ${rpPrice(R.trade[t+1])} × ${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])} ${rpSideCell(R.trade[t+3])}</span>`;
+      h += `<div class="rp-msg${j === i ? " cur" : ""}${R.trial[j] ? " auc" : ""}"><div class="rp-msg-h"><span class="mono">第 ${(j+1).toLocaleString()} 則</span><span class="mono">${fmtMs(R.recv[j])} 收到</span>${tr}</div>${rpChangeLines(R, j)}</div>`;
+    }
+    $("rpChg").innerHTML = h;
+  }
+  const rpEatText = e => { if(!e.length) return "—"; const out = []; for(let q=0;q<e.length;q+=3){ const s = rpSideTxt(e[q]), lv = e[q+1]; out.push(`${lv === null ? s + "五檔外" : lv === 0 ? "市價" + s : s + lv} · −${rpQty(e[q+2])}`); } return "吃 " + out.join("、"); };
+  function rpTape(R, i){ // 成交明細:則號 ≤ i 的最後 RP_TAPE_KEEP 筆成交,新的在上
+    const last = R.tradeAt[i]; let h = "";
+    if(last < 0) h = '<tr><td colspan="5" class="dim">這一則之前還沒有成交</td></tr>';
+    for(let k=last; k>=0 && k>last-RP_TAPE_KEEP; k--){
+      const j = R.tradeIdx[k], t = k*4, ms = R.trade[t], anom = R.anom.has(j);
+      h += `<tr class="${j === i ? "cur" : ""}"><td class="mono${anom ? " dim" : ""}"${anom ? ' title="達錢時刻異常,不當標籤時刻"' : ""}>${ms == null ? "—" : fmtT(Math.floor(ms/1000))}</td><td class="num mono">${rpPrice(R.trade[t+1])}</td><td class="num mono">${R.trade[t+2]==null?"—":rpQty(R.trade[t+2])}</td><td>${rpSideCell(R.trade[t+3])}</td><td class="mono">${rpEatText(R.eat[k])}</td></tr>`;
+    }
+    $("rpTape").innerHTML = h;
+  }
+  const rpPx = p => { const tk = tickMilli(p); return (p/1000).toFixed(tk >= 1000 ? 0 : tk >= 100 ? 1 : 2); }; // 階梯價格固定小數位(同一 tick 段對齊)
+  const tickMilli = p => p < 10000 ? 10 : p < 50000 ? 50 : p < 100000 ? 100 : p < 500000 ? 500 : p < 1000000 ? 1000 : 5000;
+  function rpGrid(R){ // 當日漲停到跌停的每個價位(毫元,高到低);沒有前收時退回出現過的價位範圍
+    const D = DATA.d[R.code] && DATA.d[R.code][R.date];
+    let lo, hi, limUp = null, limDn = null;
+    if(D){ const pcm = Math.round(D.pc*1000); limUp = Math.round(D.lim*1000); const c = Math.floor(pcm*9/10), tk = tickMilli(c); limDn = Math.ceil(c/tk)*tk; lo = limDn; hi = limUp; }
+    const seen = [...R.prices]; if(seen.length){ const mn = Math.min(...seen), mx = Math.max(...seen); lo = lo == null ? mn : Math.min(lo, mn); hi = hi == null ? mx : Math.max(hi, mx); }
+    if(lo == null) return {grid:[], limUp, limDn, pc: D ? D.pc : null};
+    const set = new Set(R.prices); let x = lo - lo % tickMilli(lo); while(x <= hi){ if(x >= lo) set.add(x); x += tickMilli(x); }
+    return {grid:[...set].sort((a,b)=>b-a), limUp, limDn, pc: D ? D.pc : null};
+  }
+  // 我的委託 / 成交(#272):委託 = 群益審計的下單 / 刪單,結束時刻(刪單 / 成交 / 到收盤 / 未知)由 build_viewer_cdp.py 配好;
+  // 這裡只把秒換成毫秒、價換成毫元,對齊重播時間軸(審計與 tick 存檔的收到時刻同一台機器的鐘)。市價單不畫在格子上。
+  function rpMy(R){
+    const D = DATA.d[R.code] && DATA.d[R.code][R.date], mo = (D && D.mo) || [], fl = (D && D.f) || [];
+    // 只有限價單停得在某一格;非限價 = 市價(群益 PriceType 只有 limit / market),另外計數由說明列交代,不畫。
+    const ord = mo.filter(o => o[6] === "limit").map(o => ({t0: Math.round(o[0]*1000), t1: o[1] == null ? null : Math.round(o[1]*1000), px: Math.round(o[2]*1000), qty: o[3], side: o[4], kind: o[5], seq: o[7]}));
+    const fill = fl.map(f => ({t: Math.round(f[0]*1000), px: Math.round(f[1]*1000), qty: f[2], side: f[3], label: f[4]}));
+    return {ord, fill, mkt: mo.length - ord.length, idx: [...new Set(fill.map(f => rpIndexAt(R, f.t)))].sort((a,b)=>a-b)};
+  }
+  let RP = null; // 目前掛載的重播 {R, G, i, t, center, full, raf, play, speed, firstLock, el}
+  // RP.i = 目前這一則的則號,是重播畫面的唯一依據:階梯、標籤、現價、十字線、中間欄(這一則變了什麼)與成交明細都讀它,重繪不從時刻回推。
+  // RP.t = 時間軸位置(收到時刻毫秒)= 拖曳值與播放時鐘。位置只走兩條路改:rpSetT(拖曳 / 播放:改 t,取「收到時刻 ≤ t 的
+  // 最後一則」當 i)、rpGo(步進 / 跳鎖板:改 i,t 跟到該則收到時刻)。同一毫秒收到的幾則只有 rpGo 停得到;播放與拖曳一次
+  // 可能跨過好幾則;中間欄不另記狀態,列到 RP.i 為止最近 RP_CHG_KEEP 則,一次跨過更多則時較早的那幾則要逐則步進才看得到。
+  let rpKeepT = null, rpKeepFull = false, rpKeepSpeed = 1; // 換檔 / 換日沿用的重播時刻、展開狀態與播放速度
+  const rpKeepI = new Map(); // 代號|日期 → 最後停的則號:切走再回來、時刻沒動就回到同一則(同一毫秒的第 2 則不會變第 3 則)
+  // 沒有簿的交易日:分頁標題灰掉、面板說明「本來就沒有」而不是報錯(#273)。達錢歷史 TICKS 只有成交當下的
+  // 買一 / 賣一,永遠不會有五檔;簿重播自 tick 存檔上線(2026-09-16)那天起才有。
+  const rpNoBookDir = () => BOOKDAYS != null && BOOKDAYS.size === 0; // 一個外掛檔都沒掃到 = 設定壞了,不是「本來就沒有」
+  const rpHasBook = () => BOOKDAYS == null || BOOKDAYS.has(state.date);
+  // 有簿的最早交易日;日期 >= 它卻不在 BOOKDAYS = 漏跑 book-replay / 外掛檔被刪 / 當天 server 沒開,
+  // 不是「達錢歷史 TICKS 不含五檔」。界取 min 而非 max,中間缺一天也蓋得到(pr-281 review #9)。
+  const rpShouldHaveBook = () => BOOK_FROM != null && state.date >= BOOK_FROM;
+  function rpTabState(){
+    const b = document.querySelector('.tabs button[data-tab="replay"]');
+    if(!b) return;
+    const on = rpHasBook();
+    b.classList.toggle("dim", !on);
+    b.title = on ? "" : rpNoBookDir()
+      ? `產生這一頁時一個簿重播外掛檔都沒掃到(${BOOKDIR}/ 不在或空的?)`
+      : rpShouldHaveBook()
+      ? `${state.date} 應該有五檔簿,但這一頁沒掃到(那天漏跑 book-replay?),重播分頁不能用`
+      : `${state.date} 沒有五檔簿(達錢歷史 TICKS 不含五檔),重播分頁不能用`;
+  }
+  function renderReplay(){
+    const box = $("tab-replay"); const key = state.code+"|"+state.date;
+    if(!rpHasBook()){
+      rpStop(); box.dataset.key = ""; RP = null;
+      if(rpNoBookDir()){ // 這一種要大聲:不是「本來就沒有」,是產生這一頁的時候就沒看到任何外掛檔
+        box.innerHTML = `<div class="empty">產生這一頁時<b>一個簿重播外掛檔都沒掃到</b> —— <b>這是設定壞了,不是本來就沒有</b>。<br>
+          檢查 <code>${esc(BOOKDIR)}/</code> 資料夾在不在、有沒有 <code>&lt;YYYY-MM-DD&gt;/&lt;代號&gt;.js</code>,
+          再重跑 <code>build_viewer_cdp.py</code>(名單是產生頁面時掃出來的,之後補的檔要重產才會出現)。</div>`;
+        return;
+      }
+      const days = BOOK_SORTED;
+      // 界內卻沒掃到 = 漏跑 / 被刪 / 當天 server 沒開,不是「本來就沒有」。界取 min(bookdays) 而非 max,
+      // 中間缺一天也蓋得到(pr-281 review #9;觸發路徑真實 —— docs/next-time.md 記著每個交易日盤後
+      // 要手動跑 book-replay,09-17 第一次實跑就漏過)。
+      if(rpShouldHaveBook()){
+        box.innerHTML = `<div class="empty">${esc(state.date)} <b>應該有五檔簿,但這一頁沒掃到</b> —— 它不早於最早有簿的一天(${esc(days[0])};目前有簿 ${days.length} 天,最後一天 ${esc(days[days.length-1])})。<br>
+          最可能是那天盤後<b>漏跑 <code>book-replay</code></b>(每個交易日要手動跑),也可能是外掛檔被刪掉、或當天 server 沒開所以根本沒有 tick 存檔。<br>
+          補法:<code>python -m copycat book-replay --date ${esc(state.date.replace(/-/g, ""))} --out &lt;回看頁&gt;\\${esc(BOOKDIR)}</code>,再重跑 <code>build_viewer_cdp.py</code>(名單是產生頁面時掃出來的,之後補的檔要重產才會出現)。</div>`;
+        return;
+      }
+      box.innerHTML = `<div class="empty">${esc(state.date)} 沒有五檔簿 —— <b>不是故障</b>。<br>
+        這一天的逐筆來自達錢 4 歷史 TICKS,它只有每筆成交當下的買一 / 賣一,<b>不含五檔</b>,所以重播不出簿;
+        這一天的分時 / K 線 / 逐筆 / 事件 / 回測照舊可用。<br>
+        有簿的是 copycat tick 存檔上線之後的交易日(${esc(days[0] || "—")} 起,目前 ${days.length} 天),用上方 ◀ ▶ 或日期選單換過去。</div>`;
+      return;
+    }
+    if(RP && RP.R.key === key && box.dataset.key === key){ rpDraw(); return; }
+    const mount = R => { if(state.code+"|"+state.date === key && rpActive()) rpMount(R); };
+    if(rpCache.has(key)){ mount(rpCache.get(key)); return; }
+    rpStop(); box.dataset.key = ""; RP = null;
+    box.innerHTML = '<div class="empty">載入簿重播中…</div>';
+    loadReplay(state.code, state.date).then(mount).catch(e => { if(state.code+"|"+state.date !== key) return;
+      box.innerHTML = e.message === "no file" ? `<div class="empty">${esc(state.date)} 有簿重播,但<b>沒有這一檔</b>(${esc(BOOKDIR)}/${esc(state.date)}/${esc(state.code)}.js 不在)<br>當天 server 沒有訂到它的報價,就不會有簿;換一檔或換一天(copycat <code>book-replay</code> 指令產生,本頁要和 ${esc(BOOKDIR)} 資料夾放在同一層)</div>` : `<div class="empty">簿重播檔解不開:${esc(e.message)}</div>`; });
+  }
+  function rpMount(R){
+    const box = $("tab-replay");
+    const G = rpGrid(R), my = rpMy(R);
+    const t0 = R.recv[0], t1 = R.recv[R.n-1];
+    let t = rpKeepT != null ? rpKeepT : state.sel != null ? state.sel*1000 : t0; t = Math.max(t0, Math.min(t1, Math.round(t)));
+    rpStop();
+    const firstLock = rpFirstLock(R, G.limUp), kept = rpKeepI.get(R.key);
+    const i = kept != null && R.recv[kept] === t ? kept : rpIndexAt(R, t);
+    RP = {R, G, my, i, t, center:null, full: rpKeepFull, raf:0, play:null, speed: rpKeepSpeed, firstLock, el:null}; rpKeepT = t; rpKeepI.set(R.key, i);
+    box.dataset.key = R.key;
+    const lockTxt = firstLock >= 0 ? `跳到首次鎖漲停 ${R.anom.has(firstLock) ? fmtMs(R.recv[firstLock]).slice(0,8) : rpTradeTime(R, firstLock)}` : G.limUp == null ? "沒有漲停價,判斷不了鎖漲停" : "當日未鎖漲停";
+    box.innerHTML = `<div class="rp-head"><span>第 <b class="mono" id="rpIdx"></b> / <b class="mono">${R.n.toLocaleString()}</b> 則(成交 ${(R.trade.length/4).toLocaleString()})</span><span class="rp-clock mono" id="rpClock"></span><span id="rpKind"></span><span>收到 <b class="mono" id="rpRecv"></b></span><span id="rpPx"></span><span id="rpMkt"></span><span id="rpAuc"></span><button type="button" id="rpFull"></button></div>
+      <div class="rp-ctrl" role="toolbar" aria-label="播放控制"><button type="button" id="rpPlay"></button><span class="rp-speed" role="group" aria-label="播放速度">${RP_SPEEDS.map(s => `<button type="button" data-speed="${s}">${s}x</button>`).join("")}</span><button type="button" id="rpPrev" title="前一則(←)">◀ 前一則</button><button type="button" id="rpNext" title="後一則(→)">後一則 ▶</button><button type="button" id="rpLock" title="成交價 = 漲停價,且成交後賣方沒有限價掛單、買方第一檔是市價排隊或最高限價買 = 漲停價(與線上鎖漲停訊號同條件)">${lockTxt}</button><button type="button" id="rpFPrev" title="上一筆你自己的成交(回報收到時刻;關掉「你的委託 / 成交」時停用)">◀ 上一筆我的成交</button><button type="button" id="rpFNext" title="下一筆你自己的成交(回報收到時刻;關掉「你的委託 / 成交」時停用)">下一筆我的成交 ▶</button></div>
+      <div class="rp-scrub"><span class="mono kbd">${fmtMs(t0).slice(0,8)}</span><span class="rp-track"><span class="rp-bands" aria-hidden="true">${rpBands(R, t0, t1)}</span><input type="range" id="rpRange" min="${t0}" max="${t1}" step="1" value="${t}" aria-label="重播時刻(server 收到時刻)"></span><span class="mono kbd">${fmtMs(t1).slice(0,8)}</span></div>
+      <div class="rp-body"><div class="rp-ladder" id="rpLadder" role="table" aria-label="價格階梯"></div><section class="rp-col rp-col-chg" aria-label="這一則變了什麼"><h3 class="rp-col-h">這一則變了什麼<span class="kbd">最近 ${RP_CHG_KEEP} 則,新的在上</span></h3><div class="rp-chg" id="rpChg"></div></section><section class="rp-col rp-col-tape" aria-label="成交明細"><h3 class="rp-col-h">成交明細<span class="kbd">到這一則為止最近 ${RP_TAPE_KEEP} 筆,新的在上</span></h3><div class="rp-tape"><table><thead><tr><th>時間</th><th class="num">價</th><th class="num">張</th><th>內外</th><th>吃檔</th></tr></thead><tbody id="rpTape"></tbody></table></div></section></div>
+      <p class="rp-note">拖曳 = server 收到時刻;播放速度也以收到時刻計(1x = 真實時間);前一則 / 後一則(← →)照則號一則一則走,同一毫秒收到的幾則也分得開。標籤 = 最近一筆成交的達錢時刻之後第幾則。橫條按這檔當天 13:25 前最大單格量 ${R.qmax.toLocaleString()} 張歸一(之後的收盤集合競價 / 排隊量超過就畫滿)。階梯上的「委」/「成」= 你自己的委託與成交(上方圖例「你的委託 / 成交」一起開關):委託自送出畫到刪單或成交,不推估佇列順位(五檔只有總量)。${my.mkt ? `這天這檔另有 ${my.mkt} 筆市價委託沒畫在格子上(市價單不停在任何價位)。` : ""}${R.trialRuns.length ? ` 時間軸上的橘色帶 = <b>集合競價段</b>(達錢標著試撮中,共 ${R.trialRuns.length} 段:收盤 13:25–13:30、盤中暫緩撮合、處置股分盤撮合):那一段五檔揭示的是<b>撮完剩下的</b>掛單,堆起來的量是集合競價的結果,<b>不是盤中墊單</b>。` : ""}</p>
+      <details class="rp-limits"><summary>已知限制(五條)</summary><ul>
+        <li>五檔是<b>聚合量</b>,看不到單一委託 ——「同一張大單」永遠是推斷,分不出一張 500 張與十張 50 張同時撤。</li>
+        <li>五檔<b>視野外完全看不到</b>:被擠出第五檔之後,那個價位的掛單通常還在,只是這裡沒有數字。</li>
+        <li>簿列的達錢 <code>PreciseTime</code> 是<b>上一筆成交的殘影</b>,不是簿變動的時刻;簿列真正的時刻只有 server 收到時刻。</li>
+        <li>檔案記的是「<b>server 看到的</b>」,不是「交易所發生的」:開盤峰值 ZMQ 掉包會留缺口。</li>
+        <li>群益審計記錄(你的委託)的<b>時刻只到秒</b>。</li>
+      </ul></details>`;
+    RP.el = {range: $("rpRange"), play: $("rpPlay"), prev: $("rpPrev"), next: $("rpNext"), lock: $("rpLock"), fprev: $("rpFPrev"), fnext: $("rpFNext"), speed: [...box.querySelectorAll("[data-speed]")]};
+    RP.el.range.addEventListener("input", ev => { rpSetT(Number(ev.target.value)); if(!RP.raf) RP.raf = requestAnimationFrame(()=>{ RP.raf = 0; rpDraw(); }); });
+    RP.el.play.addEventListener("click", ()=> rpPlay(!RP.play));
+    RP.el.speed.forEach(b => b.addEventListener("click", ()=>{ RP.speed = rpKeepSpeed = Number(b.dataset.speed); rpCtrl(); }));
+    RP.el.prev.addEventListener("click", ()=> rpGo(RP.i - 1));
+    RP.el.next.addEventListener("click", ()=> rpGo(RP.i + 1));
+    RP.el.lock.addEventListener("click", ()=> rpGo(RP.firstLock));
+    RP.el.fprev.addEventListener("click", ()=> rpGoFill(-1));
+    RP.el.fnext.addEventListener("click", ()=> rpGoFill(1));
+    $("rpFull").addEventListener("click", ()=>{ RP.full = rpKeepFull = !RP.full; rpDraw(true); });
+    rpDraw(true);
+  }
+  function rpSetT(t){ RP.t = rpKeepT = t; RP.i = rpIndexAt(RP.R, t); rpKeepI.set(RP.R.key, RP.i); } // 拖曳 / 播放:改時刻,則號跟著取
+  function rpGo(i){ // 步進 / 跳鎖板:直接改則號(先暫停),時間軸跟到該則收到時刻
+    if(!RP) return; rpPlay(false);
+    const R = RP.R; RP.i = Math.max(0, Math.min(R.n-1, i)); RP.t = rpKeepT = R.recv[RP.i]; rpKeepI.set(R.key, RP.i); RP.el.range.value = RP.t;
+    rpDraw();
+  }
+  // 上一筆 / 下一筆我自己的成交(則號 = 收到時刻 ≤ 該成交回報時刻的最後一則);null = 這個方向沒有了。
+  // 按鈕停用與跳轉讀同一個答案,不會出現「按得下去卻跳不動」。關掉「你的委託 / 成交」= 隱藏,連導航一起停。
+  function rpFillNear(dir){
+    if(!RP || !state.show.fills) return null;
+    const xs = RP.my.idx, i = RP.i;
+    if(dir > 0) return xs.find(k => k > i) ?? null;
+    let to = null; for(const k of xs){ if(k >= i) break; to = k; } return to;
+  }
+  function rpGoFill(dir){ const to = rpFillNear(dir); if(to != null) rpGo(to); }
+  function rpStop(){ if(RP && RP.play){ cancelAnimationFrame(RP.play.raf); RP.play = null; } } // 只停,不碰畫面(卸載前用)
+  function rpPlay(on){
+    if(!RP || on === !!RP.play) return;
+    if(on){ if(RP.i >= RP.R.n-1) return; RP.play = {last: performance.now(), raf: requestAnimationFrame(rpTick)}; }
+    else rpStop();
+    rpCtrl();
+  }
+  function rpTick(now){ // 播放:每幀把時間軸推進(真實經過毫秒 × 速度),則號有變才重畫
+    const P = RP && RP.play; if(!P) return;
+    if(!rpActive()){ rpPlay(false); return; }
+    const end = RP.R.recv[RP.R.n-1], was = RP.i;
+    rpSetT(Math.min(end, RP.t + Math.max(0, Math.min(RP_MAX_DT, now - P.last)) * RP.speed)); P.last = now;
+    RP.el.range.value = Math.round(RP.t);
+    if(RP.i !== was) rpDraw();
+    if(RP.t >= end){ rpPlay(false); return; }
+    P.raf = requestAnimationFrame(rpTick);
+  }
+  function rpCtrl(){
+    if(!RP || !RP.el) return; const {R, i, el} = RP; const last = i >= R.n-1;
+    const txt = RP.play ? "❚❚ 暫停" : "▶ 播放"; if(el.play.textContent !== txt) el.play.textContent = txt;
+    el.play.setAttribute("aria-pressed", String(!!RP.play)); el.play.disabled = !RP.play && last;
+    el.prev.disabled = i <= 0; el.next.disabled = last; el.lock.disabled = RP.firstLock < 0;
+    el.fprev.disabled = rpFillNear(-1) == null; el.fnext.disabled = rpFillNear(1) == null;
+    el.speed.forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === RP.speed)));
+  }
+  function rpKey(e){ // 重播分頁開著時 ← → = 逐則步進(不換日;換日用上方 ◀ ▶)
+    if(e.altKey || e.ctrlKey || e.metaKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    e.preventDefault();
+    // 沒有簿的交易日 RP 恆 null(2026-09-16 之前每天都是),原本左右鍵既不步進也不換日、零回饋 ——
+    // 退回換日,與這一頁自己寫的「用上方 ◀ ▶ 或日期選單換過去」一致(pr-281 review #11)。
+    // 有簿日而 RP 尚未掛上分兩種:還在載入是暫態,不換日免得手一快就跳走;載入失敗(沒有這一檔 / 解不開)
+    // 是永久狀態,畫面自己寫著「換一檔或換一天」,那就讓左右鍵真的能換日 —— rpWait 在成功與失敗都會
+    // delete,所以「還有這個 key」正好等於「還在飛」(pr-282 review #7)。
+    if(!RP){ const k = state.code+"|"+state.date; if(!rpHasBook() || !rpWait.has(k)) stepDay(e.key === "ArrowLeft" ? -1 : 1); return; }
+    rpGo(RP.i + (e.key === "ArrowLeft" ? -1 : 1));
+  }
+  function rpDraw(scroll){
+    if(!RP || !rpActive()) return; const {R, G, i} = RP;
+    const b = rpBookAt(R, i);
+    const ci = R.clockAt[i], ti = R.tradeAt[i], isTrade = R.kind[i] === "t";
+    const clockTxt = ci < 0 ? `首筆成交前第 ${i+1} 則` : `成交 ${rpTradeTime(R, ci)}` + (i === ci ? "" : ` 之後第 ${i-ci} 則`);
+    $("rpIdx").textContent = (i+1).toLocaleString();
+    $("rpClock").textContent = clockTxt;
+    rpCtrl();
+    rpChanges(R, i); rpTape(R, i);
+    const tr = isTrade ? R.trade.slice(ti*4, ti*4+4) : null;
+    $("rpKind").innerHTML = isTrade ? `成交則 <b class="mono">${rpPrice(tr[1])}</b> × <b class="mono">${tr[2]==null?"—":rpQty(tr[2])}</b> 張 ${tr[3]==="outer"?'<span class="pos">外</span>':tr[3]==="inner"?'<span class="neg">內</span>':"中"}${R.anom.has(i)?'(達錢時刻異常 '+esc(tr[0]==null?"—":fmtMs(tr[0]))+',不當標籤時刻)':""}` : "簿則";
+    // 集合競價段:標在頁頭、階梯左緣加一條色條(這一段不是盤中,委託堆積是集合競價的結果)
+    const run = R.trialRuns.length ? rpTrialRun(R, i) : null;
+    $("rpAuc").innerHTML = run ? `<span class="rp-auc" title="達錢標著試撮中:這一段五檔揭示的是撮完剩下的掛單,堆起來的量是集合競價的結果,不是盤中墊單">${esc(rpTrialName(R, run))} 第 ${(i-run[0]+1).toLocaleString()} / ${(run[1]-run[0]+1).toLocaleString()} 則</span>` : "";
+    $("rpLadder").classList.toggle("auc", !!run);
+    $("rpRecv").textContent = fmtMs(R.recv[i]);
+    const px = rpLastPx(R, i);
+    const pc = G.pc;
+    $("rpPx").innerHTML = px == null ? "現價 —(還沒有成交)" : `現價 <b class="mono ${pc?cls(px/1000-pc):""}">${rpPrice(px)}</b>${pc?` ${pct(px/1000,pc)}`:""}`;
+    const buy = new Map(), sell = new Map(), mkt = [];
+    for(let l=0;l<5;l++){ const bp = b[R.BP[l]], bq = b[R.BQ[l]], ap = b[R.AP[l]], aq = b[R.AQ[l]];
+      if(bp === 0) mkt.push(`市價買 ${bq ?? "—"} 張`); else if(bp != null) buy.set(bp, bq);
+      if(ap === 0) mkt.push(`市價賣 ${aq ?? "—"} 張`); else if(ap != null) sell.set(ap, aq); }
+    $("rpMkt").textContent = mkt.join("、");
+    $("rpFull").textContent = RP.full ? "收回現價上下 10 檔" : "展開漲停–跌停";
+    const grid = G.grid; if(!grid.length){ $("rpLadder").innerHTML = '<div class="empty">這天這檔沒有任何價位</div>'; return; }
+    // 置中價:現價;沒有成交時用買一 / 賣一
+    let anchor = px ?? (buy.size ? Math.max(...buy.keys()) : sell.size ? Math.min(...sell.keys()) : grid[Math.floor(grid.length/2)]);
+    let ai = grid.findIndex(g => g <= anchor); if(ai < 0) ai = grid.length-1;
+    if(RP.center == null || Math.abs(ai - RP.center) > RP_RECENTER) RP.center = ai;
+    let from = 0, to = grid.length;
+    if(!RP.full){ from = Math.max(0, Math.min(grid.length - (2*RP_HALF+1), RP.center - RP_HALF)); to = Math.min(grid.length, from + 2*RP_HALF + 1); }
+    const qmax = Math.max(1, R.qmax);
+    // 我的委託 / 成交:委託 = 送出 ≤ 這一則收到時刻 < 結束(結束為 null = 畫到收盤);成交 = 回報收到時刻 ≤ 這一則。
+    // 一個開關(圖例「你的委託 / 成交」)同時管上方圖的成交標記與這裡的兩種標記。
+    const meBuy = new Map(), meSell = new Map();
+    if(state.show.fills){
+      const now = R.recv[i];
+      const bucket = (side, px) => { const m = side > 0 ? meBuy : meSell; let v = m.get(px); if(!v){ v = {oq:0, on:0, unk:0, fq:0, fn:0, tip:[]}; m.set(px, v); } return v; };
+      const endTxt = o => o.t1 != null ? o.kind + " " + fmtT(o.t1/1000)
+        : o.kind === "未知" ? "當日成交資料還沒補,不知道它何時消失"
+        : "沒配到成交也沒刪單(可能掛到收盤,也可能當日成交清單漏了這筆)";
+      RP.my.ord.forEach(o => { if(o.t0 > now || (o.t1 != null && o.t1 <= now)) return;
+        const v = bucket(o.side, o.px); v.oq += o.qty; v.on++; if(o.kind === "未知") v.unk++;
+        v.tip.push(`委託 ${fmtT(o.t0/1000)} ${o.side > 0 ? "買" : "賣"} ${rpPx(o.px)} × ${o.qty} 張(委託序號 ${o.seq}) → ${endTxt(o)}`); });
+      RP.my.fill.forEach(f => { if(f.t > now) return;
+        const v = bucket(f.side, f.px); v.fq += f.qty; v.fn++;
+        v.tip.push(`成交 ${fmtT(f.t/1000)} ${f.label} ${rpPx(f.px)} × ${f.qty} 張(回報收到時刻)`); });
+    }
+    const meTag = (p, side) => { const v = (side === "buy" ? meBuy : meSell).get(p); if(!v) return "";
+      const tip = ` title="${esc(v.tip.join("\n"))}"`;
+      return (v.on ? `<span class="rp-me ord${v.unk ? " unk" : ""}"${tip}>委${v.unk ? "?" : ""} ${v.oq}</span>` : "") + (v.fn ? `<span class="rp-me fill ${side}"${tip}>成 ${v.fq}</span>` : ""); };
+    const cell = (q, side, tag) => {
+      if(q == null) return `<div class="rp-q ${side}" role="cell">${tag}</div>`;
+      const bar = `<span class="rp-bar" style="width:${Math.min(100, q/qmax*100).toFixed(1)}%"></span>`, num = `<span class="rp-n mono">${q.toLocaleString()}</span>`;
+      return `<div class="rp-q ${side}" role="cell">${bar}${side === "buy" ? tag + num : num + tag}</div>`; };
+    let h = `<div class="rp-row hd" role="row"><div style="text-align:right" role="columnheader">買量</div><div style="text-align:center" role="columnheader">價格</div><div role="columnheader">賣量</div></div>`;
+    for(let g=from; g<to; g++){ const p = grid[g];
+      const pcls = pc ? cls(p/1000 - pc) : "";
+      const tb = meTag(p, "buy"), ts = meTag(p, "sell");
+      h += `<div class="rp-row${p===px?" cur":""}${p===G.limUp||p===G.limDn?" lim":""}${tb||ts?" me":""}" role="row" data-p="${p}">${cell(buy.get(p), "buy", tb)}<div class="rp-p mono ${pcls}" role="cell"${p===G.limUp?' title="漲停"':p===G.limDn?' title="跌停"':""}>${rpPx(p)}</div>${cell(sell.get(p), "sell", ts)}</div>`; }
+    const lad = $("rpLadder"); lad.classList.toggle("full", RP.full); lad.innerHTML = h;
+    if(RP.full && scroll){ const row = lad.querySelector(`[data-p="${grid[RP.center]}"]`); if(row) lad.scrollTop = Math.max(0, row.offsetTop - lad.clientHeight/2); }
+    rpCross(i, px);
+  }
+  function rpCross(i, px){ if(!RP) return; if(i == null){ i = RP.i; px = rpLastPx(RP.R, i); } hoverAll(RP.R.recv[i]/1000, px == null ? null : px/1000, null, null, false); }
+
+  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", ()=>{ document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("active", x===b)); ["ticks","events","bt","idx","def","replay"].forEach(t => { $("tab-"+t).hidden = (b.dataset.tab!==t); }); if(b.dataset.tab === "replay") renderReplay(); }));
+  renderBt(); renderIdx();
+  render(); setSyncUI();
+  let rt; window.addEventListener("resize", ()=>{ clearTimeout(rt); rt = setTimeout(render, 150); });
+})();
+</script>
