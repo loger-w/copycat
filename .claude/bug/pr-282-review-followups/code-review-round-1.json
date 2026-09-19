@@ -1,0 +1,98 @@
+{
+  "fixed_point": "9192668a41abb216faa3aabf1d9aa0ee12f69fb4",
+  "branch": "fix/pr-282-review-followups",
+  "date": "2026-09-19",
+  "skill": "code-review-two-axis",
+  "dispatch": "兩個 sub-agent 平行,皆顯式帶 model: opus(CLAUDE.md §G);Standards 軸另附 Fowler smell baseline",
+  "spec_source": [
+    "docs/superpowers/specs/pr-282-review.md(+ .audit.md):PR #282 審查報告 11 條 finding 與其 Action 欄(auto-fix 7 / ask-user 1 / no-op 3);#7 的行為半邊由 user 2026-09-19 當面拍板「收」"
+  ],
+  "standards": [
+    {
+      "id": "Std-1",
+      "severity": "判斷題(Feature Envy)",
+      "finding": "viewer `onKey`(pr282.html:936)直接讀 loader 的私有簿記 `rpWait.has(k)` 來推「還在飛」;沒有 `rpInFlight(code,date)` 這種述詞,得靠三行註解解釋「還有 key = 還在飛」。",
+      "verdict": "CONFIRMED",
+      "verification": "自讀原始碼:`rpWait` 的其餘使用者只有 `rpSettle`(:606)與 `loadReplay`(:608-620),都在 loader 那一段;`rpKey` 是唯一從外面伸手進去的。",
+      "disposition": "收。在 `rpSettle` 下面加 `const rpInFlight = (code, date) => rpWait.has(code+\"|\"+date);`(理由寫在述詞旁邊),`rpKey` 改呼叫它;三行註解縮成兩行。"
+    },
+    {
+      "id": "Std-2",
+      "severity": "判斷題(Duplicated Code / Primitive Obsession)",
+      "finding": "同一 hunk 又手搓 `state.code+\"|\"+state.date`,是全頁第 4 個手搓點(612 `loadReplay`、820 `renderReplay`、628 `${p.code}|${p.date}`);改分隔符要動四處。",
+      "verdict": "CONFIRMED(新增的那一處)",
+      "verification": "Std-1 的修法讓 `rpKey` 完全不再組鍵 —— 第四個手搓點消失,回到既有的三處。",
+      "disposition": "新增的那一處收(隨 Std-1 一起消失)。既有三處**不收**:那是本批之前就有的形狀,收它要全頁重測,不該夾在 Nice to Have 批裡 —— 已記 `docs/next-time.md`。"
+    },
+    {
+      "id": "Std-3",
+      "severity": "判斷題(Shotgun Surgery)",
+      "finding": "「集合競價」字面 ≥6 個顯示點(CSS 96、說明列 214/225、rpBuild 649–655、rpTrialName 695、rpChangeLines 734、chip 952);#8 的收法是把枚舉換成「grep 一次比背清單可靠」,承認而不收斂,與 CLAUDE.md §4「唯一產生點 + 讀者」不同調(CSS content 那份確實收不進 JS,其餘可)。",
+      "verdict": "CONFIRMED(觀察為真)",
+      "verification": "實測 `grep -c` 全檔 28 行命中 / 39 次;:214 橫條 li 與 :222 成交明細 li 確實顯示這個詞而原枚舉沒列(與 Spec-a2 同一件事)。",
+      "disposition": "部分收:枚舉補上「定義與規則」那幾條 li,並明寫「這串不是全集、一律先 grep 全檔」,不再假裝清單是 checklist。**收斂成單一產生點不收**(全頁重測等級的改動)—— 已記 `docs/next-time.md`,含「CSS `content` 那一份收不進 JS」這個前提。"
+    },
+    {
+      "id": "Std-4",
+      "severity": "判斷題(假陳述未除淨)",
+      "finding": "`verification.md` 新句「全檔 114 行 = 內容行 105 + hunk 標頭 9」把 `---`/`+++` 兩行檔頭算進「內容行」;實測 114 = 9 @@ + 2 檔頭 + 6 減 + 32 加 + 65 context,真內容行 103。#3 本意是消歧義,現在換成第三把尺,下一人重數仍會開同一條。",
+      "verdict": "CONFIRMED —— 實錯,且是本批自己新引入的",
+      "verification": "自己重數 `viewer_cdp_template.pr281.diff`:wc -l 114 = 檔頭 2 + hunk 9 + 加 32 + 減 6 + context 65,內容行 103。報告 #3 原文的「context 65 + 加 33 + 減 7 = 105」把 `+++` 算成一筆加、`---` 算成一筆減 —— 本批照抄了那個誤算。",
+      "disposition": "收。改成「`wc -l` 全檔 114 行 = 檔頭 `---`/`+++` 2 + hunk 標頭 9 + 內容行 103:context 65 + 加 32 + 減 6」。本批自己 `verification.md` 對 `.pr282.diff` 的分解原本就是對的口徑,一併對齊。"
+    },
+    {
+      "id": "Std-5",
+      "severity": "判斷題(護欄強度)",
+      "finding": "`make_pr281_check_pages.py:53` 用 `assert` 擋 rmtree,`python -O` 會整行移除、零訊號;判準 `endswith(\"-pr281\")` 是字串約定。守真資料夾宜 `raise SystemExit`。",
+      "verdict": "CONFIRMED",
+      "verification": "`assert` 在 `-O` 下確實被編譯器整行拿掉;這道閘守的是唯一一處破壞性呼叫。",
+      "disposition": "收。改成 `if TMP_BOOKDIR == \"viewer-cdp-book\" or not TMP_BOOKDIR.endswith(\"-pr281\"): raise SystemExit(...)`。`endswith` 仍是字串約定 —— 那是這支腳本的本質(暫用資料夾名本來就是常數),重點是「別刪到真的那個名字」這條擋得住,真值表 `evidence/rmtree_guard_truth_table.txt` 五格全驗。"
+    },
+    {
+      "id": "Std-6",
+      "severity": "判斷題(弱)",
+      "finding": "commit `b3467c38 fix(evidence)` 把純 docstring 修正(#4/#2)與行為改動(#5/#6)混一顆,#2 另一半卻在 `chore(docs)`;依全域鐵則 C + 「純 docstring 一律 chore」,docstring 半邊併進 chore 兩顆才各自單一性質。",
+      "verdict": "REFUTED(引用的規則不支持這個結論)",
+      "verification": "全域鐵則 C 是**測試紀律**,不是 commit 紀律(Scope 紀律是 B)。B 要求的是「🔴 行為 / 🟢 新功能 / 🔵 純重構三類不混」,docstring 修正不屬於那三類。「純文件 / 純 docstring commit 一律 chore」講的是**整顆都是文件**的 commit —— `chore(docs)` 那顆正是。同一支 `.py` 的 docstring 與行為在同一顆 `fix` 裡,是前一批 `b33bcaf8 fix(evidence)` 的既有前例。",
+      "disposition": "不收。拆開會產生「只動一行 docstring、而同檔行為改在隔壁 commit」的紀錄,對日後考古更差。"
+    }
+  ],
+  "spec": [
+    {
+      "id": "Spec-c",
+      "severity": "N-A(反向確認)",
+      "finding": "點名要核的三處(#1 兩格皆真 / #5 真的三分流 / #7 `rpWait` 判準)**皆無誤**:`rpShouldHaveBook()` = `state.date >= BOOK_FROM` 而 `BOOK_FROM = BOOK_SORTED[0]`(min),所以「它不早於最早有簿的一天」在兩格恆真;#5 三句各自到得了且不再互撞,比報告建議的「其餘維持現句」更準;`rpSettle` 無條件 `rpWait.delete(key)`,四條終局路徑全經它 → `has(k)` ⟺ 在飛。",
+      "verdict": "CONFIRMED(無 finding)",
+      "disposition": "無需處置。"
+    },
+    {
+      "id": "Spec-a1",
+      "severity": "低",
+      "finding": "報告 #8 原文:「順手在 `dom_regression.mjs` 加一行 `getComputedStyle` 斷言,就能把「最容易漏掉的一份」變成擋得住的一份,比註解可靠。」本批只改註解,斷言改記 `next-time` 留尾。其理由(三份 mjs 是各批凍結副本)我實地核為真 —— 全 repo 恰 changes / playback / myorders 三份。可接受的延後。",
+      "verdict": "CONFIRMED(且 reviewer 自己驗過延後的理由為真)",
+      "disposition": "維持延後。`dom_regression.mjs` / `pp_common.mjs` 是每批各複製一份、釘在該批 before/after兩頁的凍結證據,沒有活靶可以加;收法寫在 `docs/next-time.md`:下次寫回看頁 DOM 回歸腳本時把`.rp-msg.auc .rp-msg-h::after` 的 `content` 一併存進快照。"
+    },
+    {
+      "id": "Spec-a2",
+      "severity": "低",
+      "finding": "報告 #8 原文:「反過來又漏了兩個會顯示這個詞的地方」。新註解列 rpTrialName / rpChangeLines / rp-note / 說明列 + rpBuild,但 `:214` 橫條、`:222` 成交明細兩個「已知限制」li 仍顯示此詞、未列;改以「會長,改稱呼前 grep 一次比背清單可靠」免責。",
+      "verdict": "CONFIRMED",
+      "disposition": "收(與 Std-3 同一處修改):枚舉補上「定義與規則」那幾條 li,並改寫成「這串不是全集,改稱呼一律先 grep 全檔、不要照這裡的清單改(上一版正是因為把枚舉寫死才漏掉兩處)」。"
+    },
+    {
+      "id": "Spec-b",
+      "severity": "N-A",
+      "finding": "scope creep —— **無**。`sys.path.insert` 12 站點一處未動;#9 / #10 / #11 全未動(pr281→pr282 僅 3 個 hunk);`make_pr282_check_pages.py` 是 #1 順帶點名「date > max 這格沒驗到」的驗證頁產生器,不算 creep。",
+      "verdict": "CONFIRMED(無 finding)",
+      "disposition": "無需處置。(收修後 hunk 數由 3 變 4,多的是 Std-1 的 `rpInFlight` 述詞。)"
+    },
+    {
+      "id": "Spec-流程",
+      "severity": "流程提醒",
+      "finding": "`.claude/bug/pr-282-review-followups/evidence/`(#1 / #7 兩張截圖、rmtree 真值表、路徑清單)目前 untracked,#1 / #7 的真環境證據靠它 —— artifacts commit 前別漏。",
+      "verdict": "CONFIRMED",
+      "disposition": "收。artifacts commit 含整個 `evidence/`。"
+    }
+  ],
+  "disposition": "Standards 6 條:Std-1 / Std-2(新增處)/ Std-4 / Std-5 全收,Std-3 + Spec-a2 部分收(枚舉改寫、收斂記 next-time),Std-6 反駁不收(引用的鐵則 C 是測試紀律,且有既有前例)。Spec 2 條:Spec-a2 收、Spec-a1 維持延後(reviewer 自己驗過理由為真);Spec-b 無 scope creep。唯一**實錯**是 Std-4 —— 本批照抄了報告 #3 自己的誤算(把 `---`/`+++` 兩行檔頭算進內容行),已改成實測分解。收修後回看頁四格行為 + #1 四格 + #8 兩條事實主張全部重跑,結果見 evidence/viewer_browser_checks.md 第二輪。"
+}

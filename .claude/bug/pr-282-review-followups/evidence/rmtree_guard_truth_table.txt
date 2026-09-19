@@ -1,0 +1,10 @@
+原始碼那道閘 :
+   if TMP_BOOKDIR == "viewer-cdp-book" or not TMP_BOOKDIR.endswith("-pr281"):
+       raise SystemExit(f"暫用資料夾名 {TMP_BOOKDIR!r} 不安全(下一行是整棵 rmtree),不往下走")
+閘的下一行   : if tmp.parent.exists():
+腳本現值     : viewer-cdp-book-pr281
+  TMP_BOOKDIR='viewer-cdp-book-pr281'    PASS(往下走到 rmtree)
+  TMP_BOOKDIR='viewer-cdp-book'          SystemExit -> 擋住(暫用資料夾名 'viewer-cdp-book' 不安全(下一行是整棵 rmtree),不往下走)
+  TMP_BOOKDIR='viewer-cdp-book-pr282'    SystemExit -> 擋住(暫用資料夾名 'viewer-cdp-book-pr282' 不安全(下一行是整棵 rmtree),不往下走)
+  TMP_BOOKDIR='viewer-cdp-bookpr281'     SystemExit -> 擋住(暫用資料夾名 'viewer-cdp-bookpr281' 不安全(下一行是整棵 rmtree),不往下走)
+  TMP_BOOKDIR=''                         SystemExit -> 擋住(暫用資料夾名 '' 不安全(下一行是整棵 rmtree),不往下走)
